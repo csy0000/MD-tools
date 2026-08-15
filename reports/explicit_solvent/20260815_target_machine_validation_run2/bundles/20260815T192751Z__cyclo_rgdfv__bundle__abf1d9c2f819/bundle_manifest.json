@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "kind": "explicit-solvent-rest2-bundle",
+  "config_hash": "abf1d9c2f819",
+  "created_utc": "2026-08-15T19:40:57Z",
+  "invocation": {
+    "argv": [
+      "/path/to/miniforge3/envs/escort-ais-explicit-target/bin/escort-explicit",
+      "prepare",
+      "--system",
+      "/path/to/explicit-test-20260815/portable_rest2_handoff/cyclo_rgdfv.yaml",
+      "--experiment",
+      "/path/to/explicit-test-20260815/portable_rest2_handoff/rgd_rest2_10rung.yaml",
+      "--out-root",
+      "/path/to/explicit-test-20260815/rgd_prepare",
+      "--platform",
+      "CUDA",
+      "--device",
+      "0"
+    ],
+    "command": "/path/to/miniforge3/envs/escort-ais-explicit-target/bin/escort-explicit prepare --system /path/to/explicit-test-20260815/portable_rest2_handoff/cyclo_rgdfv.yaml --experiment /path/to/explicit-test-20260815/portable_rest2_handoff/rgd_rest2_10rung.yaml --out-root /path/to/explicit-test-20260815/rgd_prepare --platform CUDA --device 0",
+    "cwd": "/path/to/explicit-test-20260815",
+    "timestamp_utc": "2026-08-15T19:40:57Z"
+  },
+  "system": {
+    "system_id": "cyclo_rgdfv",
+    "display_name": "cyclo-RGDfV",
+    "route": "smiles",
+    "canonical_molecular_hash": "59d4422635f77292ed94c609a76808df5c97110be09cd9779819270363143159",
+    "canonical_isomeric_smiles": "CC(C)[C@@H]1NC(=O)[C@@H](Cc2ccccc2)NC(=O)[C@H](CC(=O)[O-])NC(=O)CNC(=O)[C@H](CCCNC(N)=[NH2+])NC1=O",
+    "formal_charge": 0
+  },
+  "experiment": {
+    "experiment_id": "rgd_rest2_10rung",
+    "ladder_status": "pilot_supported",
+    "n_rungs": 10,
+    "scale_factors": [
+      1.0,
+      0.891975308642,
+      0.79012345679,
+      0.694444444444,
+      0.604938271605,
+      0.521604938272,
+      0.444444444444,
+      0.373456790123,
+      0.308641975309,
+      0.25
+    ],
+    "master_seed": 20260814
+  },
+  "prepared_system": {
+    "fingerprint": "ecba4b5a44d31dac1d186a73b3f9e51fddfda11ab7d0694719f4fbae00337969",
+    "projection": {
+      "system.slug": "cyclo_rgdfv",
+      "system.solute_kind": "ligand",
+      "system.require_input_route": "smiles",
+      "forcefield.protein": "amber19/protein.ff19SB.xml",
+      "forcefield.water": "amber19/tip3pfb.xml",
+      "forcefield.ligand": "openff-2.2.0",
+      "forcefield.ligand_charge_method": "am1bcc",
+      "forcefield.extra_xml": [],
+      "structure.etkdg.version": "ETKDGv3",
+      "structure.etkdg.n_conformers": 10,
+      "structure.etkdg.seed": 20260814,
+      "structure.etkdg.use_random_coords": false,
+      "structure.etkdg.prune_rms_thresh": 0.5,
+      "structure.mmff.variant": "MMFF94s",
+      "structure.mmff.max_iterations": 1000,
+      "protonation.ph": 7.0,
+      "protonation.delete_existing_hydrogens": true,
+      "protonation.variants": null,
+      "protonation.skip_for_ligand": true,
+      "solvation.water_model": "tip3p",
+      "solvation.box_shape": "dodecahedron",
+      "solvation.padding_nm": 1.2,
+      "solvation.padding_semantics": "solute-image-gap",
+      "solvation.cutoff_fit_policy": "grow",
+      "solvation.ionic_strength_molar": 0.15,
+      "solvation.positive_ion": "Na+",
+      "solvation.negative_ion": "Cl-",
+      "solvation.neutralize": true,
+      "system_build.nonbonded_method": "PME",
+      "system_build.nonbonded_cutoff_nm": 1.0,
+      "system_build.switch_distance_nm": null,
+      "system_build.use_dispersion_correction": true,
+      "system_build.ewald_error_tolerance": 0.0005,
+      "system_build.constraints": "HBonds",
+      "system_build.rigid_water": true,
+      "system_build.hydrogen_mass_amu": 3.024,
+      "system_build.hmr_scope": "solute",
+      "system_build.remove_cm_motion": true,
+      "system_build.minimum_image_margin_nm": 0.1,
+      "rest2.omega_selective": true,
+      "rest2.proline_like_residues": [
+        "PRO"
+      ],
+      "rest2.max_proline_ring_size": 7,
+      "equilibration.protocol": "staged",
+      "equilibration.minimize_max_iterations": 0,
+      "equilibration.minimize_tolerance_kj_mol_nm": 10.0,
+      "equilibration.restraint_k_kj_mol_nm2": 4184.0,
+      "equilibration.restraint_selection": "solute-heavy",
+      "equilibration.heat_from_k": 50.0,
+      "equilibration.heat_to_k": null,
+      "equilibration.heat_ps": 200.0,
+      "equilibration.heat_timestep_fs": 1.0,
+      "equilibration.heat_n_windows": 25,
+      "equilibration.npt_restrained_ps": 200.0,
+      "equilibration.release_schedule_kj_mol_nm2": [
+        1046.0,
+        418.0,
+        0.0
+      ],
+      "equilibration.release_ps_each": 200.0,
+      "equilibration.npt_free_ps": 1000.0,
+      "equilibration.timestep_fs": 2.0,
+      "equilibration.nvt_ps": 200.0,
+      "equilibration.npt_ps": 1000.0,
+      "equilibration.pressure_bar": 1.0,
+      "equilibration.barostat_interval": 50,
+      "equilibration.box_average_last_ps": 500.0,
+      "equilibration.seed": 20260815,
+      "integrator.kind": "langevin-middle",
+      "integrator.temperature_k": 300.0,
+      "integrator.friction_per_ps": 1.0
+    },
+    "note": "every setting whose change would make the stored system.xml and equilibrated_state.xml the wrong artifacts; runtime-only settings (duration, chunking, reporting, platform, device, ladder) are excluded"
+  },
+  "parameterization": {
+    "small_molecule_forcefield": "openff-2.2.0",
+    "charge_method": "am1bcc",
+    "protein_forcefield": null,
+    "water_forcefield": "amber19/tip3pfb.xml"
+  },
+  "solvation": {
+    "water_model": "tip3p",
+    "box_shape": "dodecahedron",
+    "padding_nm": 1.2,
+    "requested_ionic_strength_molar": 0.15,
+    "positive_ion": "Na+",
+    "negative_ion": "Cl-",
+    "neutralize": true,
+    "realized_ion_counts": {
+      "Na": 3,
+      "Cl": 3
+    },
+    "realized_ionic_strength_molar": 0.143483
+  },
+  "composition": {
+    "n_atoms": 3226,
+    "n_solute_atoms": 79,
+    "n_water_molecules": 1047,
+    "n_ions": 6,
+    "n_constraints": 3179,
+    "n_degrees_of_freedom": 6496
+  },
+  "box_vectors_nm": [
+    [
+      3.6618000000000004,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      3.6618000000000004,
+      0.0
+    ],
+    [
+      -1.8308999999999997,
+      -1.8308999999999997,
+      2.5892836113488995
+    ]
+  ],
+  "box_geometry": {
+    "box_shape": "dodecahedron",
+    "box_width_nm": 3.66182,
+    "box_width_requested_nm": 3.66182,
+    "grown_for_cutoff": false,
+    "solute_bounding_radius_nm": 0.69465,
+    "padding_nm_requested": 1.2,
+    "padding_semantics": "solute-image-gap",
+    "solute_image_gap_nm": 1.2,
+    "min_image_distance_nm": 2.5893,
+    "nonbonded_cutoff_nm": 1.0,
+    "minimum_image_margin_nm": 0.1,
+    "minimum_image_required_nm": 2.1,
+    "max_legal_cutoff_nm": 1.29465,
+    "box_vectors_nm": [
+      [
+        3.661820337019048,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        3.661820337019048,
+        0.0
+      ],
+      [
+        1.830910168509524,
+        1.830910168509524,
+        2.5892979917929777
+      ]
+    ]
+  },
+  "omega": {
+    "selective_scaling": true,
+    "excluded_central_bonds": null,
+    "note": "solute torsions about these bonds are NOT REST2-scaled; the cis/trans equilibrium they control must not be moved by the ladder"
+  },
+  "seeds": {
+    "master": 20260814,
+    "structure_etkdg": 20260814,
+    "equilibration": 20260815,
+    "production_remd": 20260817
+  },
+  "equilibration": {
+    "protocol": "staged",
+    "summary": {
+      "suffix": "eq",
+      "protocol": "staged",
+      "system_xml": "/path/to/explicit-test-20260815/rgd_prepare/20260815T192751Z__cyclo_rgdfv__bundle__abf1d9c2f819/work/simbox_system.xml",
+      "n_restrained_atoms": 41,
+      "restraint_selection": "solute-heavy",
+      "restraint_k_kj_mol_nm2": 4184.0,
+      "total_equilibration_ps": 2000.0,
+      "box_volume_nm3_mean": 32.214962831153294,
+      "box_volume_nm3_sd": 0.2754944817228188,
+      "n_box_samples": 50,
+      "solute_heavy_rmsd_from_start_nm": 0.1525,
+      "state_xml": "/path/to/explicit-test-20260815/rgd_prepare/20260815T192751Z__cyclo_rgdfv__bundle__abf1d9c2f819/work/eq_state.xml",
+      "production_ensemble": "NVT"
+    }
+  },
+  "environment": {
+    "package_version": "0.1.0",
+    "package_location": "/path/to/miniforge3/envs/escort-ais-explicit-target/lib/python3.11/site-packages/escort_ais",
+    "install": {
+      "wheel": "escort_ais-0.1.0-py3-none-any.whl",
+      "wheel_sha256": "50e9a1a51ecbd3680d43985786813727186d534c486a9501ebd4895fe639a183",
+      "install_kind": "wheel"
+    },
+    "git": {
+      "available": false,
+      "commit": null,
+      "dirty": null
+    },
+    "python": "3.11.15",
+    "toolchain": {
+      "openmm": "8.5.1",
+      "openff-toolkit": "0.17.1",
+      "openmmforcefields": "0.16.0",
+      "rdkit": "2025.3.6",
+      "ambertools": "4.3.1",
+      "mdtraj": "1.11.1",
+      "numpy": "2.4.6",
+      "scipy": "1.17.1"
+    },
+    "sqm_path": "/path/to/miniforge3/envs/escort-ais-explicit-target/bin/sqm",
+    "openmm_platforms": [
+      "Reference",
+      "CPU",
+      "CUDA",
+      "OpenCL"
+    ],
+    "hardware": {
+      "node": "<host>",
+      "system": "Linux",
+      "release": "6.8.0-124-generic",
+      "machine": "x86_64",
+      "processor": "x86_64",
+      "cpu_count": 48,
+      "cuda_devices": [
+        "0, NVIDIA RTX A5000, 580.173.02",
+        "1, NVIDIA GeForce RTX 3080, 580.173.02",
+        "2, NVIDIA GeForce RTX 3080, 580.173.02",
+        "3, NVIDIA GeForce RTX 3080, 580.173.02",
+        "4, NVIDIA GeForce RTX 3080, 580.173.02",
+        "5, NVIDIA GeForce RTX 3080, 580.173.02",
+        "6, NVIDIA GeForce RTX 3080, 580.173.02",
+        "7, NVIDIA GeForce RTX 3080, 580.173.02",
+        "8, NVIDIA GeForce RTX 3080, 580.173.02"
+      ]
+    }
+  },
+  "files": {
+    "system.xml": "c22a7b43c47f3265f3b8f249277143b0f14765c59654516402009a595ea0cec9",
+    "topology.pdb": "9b27612663ac25a8a3fe6e4f658a720bcacad0bdda64cf378d342f9e33ef72f0",
+    "simbox.json": "15e0f155fb507fd79a2c4f57e3520e20fe3ae246158fcab4941ed8538ece0e92",
+    "equilibrated_state.xml": "6b00725844fe5679471026c8bb2b58b72723f6d49b47edf0a3c9d6ed129d1cd0",
+    "system.yaml": "ab6bd85ebf2cb1907c44b0a3449061b6a3fbe0107e01a4d313d10bcde195e789",
+    "experiment.prepare.yaml": "a41a73be487d3f59b95b4d88f08016ab8488e2d8bc62b73668110ea6eb6201e7",
+    "resolved_config.json": "86438c5f064e168113882a3ada9a3f9e9144664bc354fea14daf310cab12076a"
+  },
+  "reproducibility": {
+    "rebuild": "Rebuilding from the same system manifest is scientifically consistent but not bitwise identical: AM1-BCC charges, conformer embedding and water placement depend on library versions and host floating point.",
+    "transfer": "Transfer this bundle when the System and starting state must be identical, e.g. when pooling runs produced on several machines."
+  }
+}

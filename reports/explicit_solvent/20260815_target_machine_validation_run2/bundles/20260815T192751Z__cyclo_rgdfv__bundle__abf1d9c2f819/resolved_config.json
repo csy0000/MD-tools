@@ -1,0 +1,149 @@
+{
+  "run": {
+    "name": "cyclo_rgdfv",
+    "root": null,
+    "seed": 20260814
+  },
+  "system": {
+    "slug": "cyclo_rgdfv",
+    "solute_kind": "ligand",
+    "require_input_route": "smiles"
+  },
+  "structure": {
+    "etkdg": {
+      "version": "ETKDGv3",
+      "n_conformers": 10,
+      "seed": 20260814,
+      "use_random_coords": false,
+      "prune_rms_thresh": 0.5,
+      "num_threads": 0
+    },
+    "mmff": {
+      "variant": "MMFF94s",
+      "max_iterations": 1000,
+      "energy_tolerance": 1e-06,
+      "force_tolerance": 0.0001
+    }
+  },
+  "protonation": {
+    "ph": 7.0,
+    "delete_existing_hydrogens": true,
+    "variants": null,
+    "skip_for_ligand": true
+  },
+  "forcefield": {
+    "protein": "amber19/protein.ff19SB.xml",
+    "water": "amber19/tip3pfb.xml",
+    "ligand": "openff-2.2.0",
+    "ligand_charge_method": "am1bcc",
+    "extra_xml": []
+  },
+  "solvation": {
+    "water_model": "tip3p",
+    "box_shape": "dodecahedron",
+    "padding_nm": 1.2,
+    "padding_semantics": "solute-image-gap",
+    "cutoff_fit_policy": "grow",
+    "ionic_strength_molar": 0.15,
+    "positive_ion": "Na+",
+    "negative_ion": "Cl-",
+    "neutralize": true
+  },
+  "system_build": {
+    "nonbonded_method": "PME",
+    "nonbonded_cutoff_nm": 1.0,
+    "minimum_image_margin_nm": 0.1,
+    "switch_distance_nm": null,
+    "use_dispersion_correction": true,
+    "ewald_error_tolerance": 0.0005,
+    "constraints": "HBonds",
+    "rigid_water": true,
+    "hydrogen_mass_amu": 3.024,
+    "hmr_scope": "solute",
+    "remove_cm_motion": true
+  },
+  "integrator": {
+    "kind": "langevin-middle",
+    "timestep_fs": 4.0,
+    "friction_per_ps": 1.0,
+    "temperature_k": 300.0
+  },
+  "equilibration": {
+    "protocol": "staged",
+    "minimize_max_iterations": 0,
+    "minimize_tolerance_kj_mol_nm": 10.0,
+    "restraint_k_kj_mol_nm2": 4184.0,
+    "restraint_selection": "solute-heavy",
+    "heat_from_k": 50.0,
+    "heat_to_k": null,
+    "heat_ps": 200.0,
+    "heat_timestep_fs": 1.0,
+    "heat_n_windows": 25,
+    "npt_restrained_ps": 200.0,
+    "release_schedule_kj_mol_nm2": [
+      1046.0,
+      418.0,
+      0.0
+    ],
+    "release_ps_each": 200.0,
+    "npt_free_ps": 1000.0,
+    "timestep_fs": 2.0,
+    "nvt_ps": 200.0,
+    "npt_ps": 1000.0,
+    "pressure_bar": 1.0,
+    "barostat_interval": 50,
+    "box_average_last_ps": 500.0,
+    "seed": 20260815
+  },
+  "production": {
+    "ensemble": "NVT",
+    "platform": "CUDA",
+    "precision": "mixed",
+    "device_index": "0",
+    "report": {
+      "all_atom_ps": 10.0,
+      "solute_ps": 2.0,
+      "state_ps": 10.0,
+      "checkpoint_ps": 100.0
+    },
+    "md": {
+      "scale_factor": 1.0,
+      "total_ns": 1000.0,
+      "chunk_ns": 100.0,
+      "seed": 20260816,
+      "label": "cold"
+    },
+    "remd": {
+      "total_ns_per_replica": 2.0,
+      "chunk_ns": 1.0,
+      "scale_factors": [
+        1.0,
+        0.891975308642,
+        0.79012345679,
+        0.694444444444,
+        0.604938271605,
+        0.521604938272,
+        0.444444444444,
+        0.373456790123,
+        0.308641975309,
+        0.25
+      ],
+      "exchange_interval_ps": 10.0,
+      "equilibration_ps": 10.0,
+      "seed": 20260817
+    }
+  },
+  "rest2": {
+    "omega_selective": true,
+    "proline_like_residues": [
+      "PRO"
+    ],
+    "max_proline_ring_size": 7,
+    "ladder": {
+      "s_cold": 1.0,
+      "s_hot": 0.25,
+      "n_rungs": 6,
+      "interp": "sqrt"
+    }
+  }
+}

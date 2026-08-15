@@ -1,0 +1,45 @@
+# Smallest real macrocycle that exercises the whole ligand route, for the portable CPU smoke.
+#
+# cyclo-(Gly-Gly-Gly): a 9-membered cyclic tripeptide, 12 heavy atoms, neutral, no stereocentres.
+# It is chosen to be genuinely small rather than representative — the smoke exists to prove the
+# package installs and runs end to end on a machine that has never seen this repository, not to
+# say anything scientific. Nothing measured from this system means anything about a macrocycle
+# ladder; see PORTABLE_REST2.md.
+schema_version: 1
+system_id: small_macrocycle_smoke
+display_name: cyclo-(Gly-Gly-Gly) smoke system
+
+input:
+  route: smiles
+  smiles: "O=C1CNC(=O)CNC(=O)CN1"
+  canonical_isomeric_smiles: "O=C1CNC(=O)CNC(=O)CN1"
+  canonical_smiles_sha256: "4cda211c8a66082d2b92b6ffebe84a3f6d8ad7681e8c852b889fb797fa9a4d6f"
+  expected_formal_charge: 0
+
+parameterization:
+  small_molecule_forcefield: openff-2.2.0
+  charge_method: am1bcc
+  protein_forcefield: null
+  water_forcefield: amber19/tip3pfb.xml
+
+# Deliberately tight: a small box keeps the CPU smoke to minutes. Not a production solvation
+# setting — 0.8 nm padding is too thin for a production run and is used here only for speed.
+#
+# It is not arbitrary either. The box-growth policy grows an undersized box to EXACTLY twice the
+# cutoff, which leaves no margin at all: the first NPT step then shrinks it below that limit and
+# OpenMM aborts with "periodic box size has decreased to less than twice the nonbonded cutoff".
+# Padding alone cannot fix that — it has to be large enough that the natural box already exceeds
+# the limit and no growth happens. Here 1.2 nm padding gives a ~1.87 nm box against a 1.4 nm
+# requirement at the smoke's 0.7 nm cutoff (set in smoke.yaml): ~34 % margin.
+solvation:
+  water_model: tip3p
+  padding_nm: 1.2
+  box_shape: cube
+  ionic_strength_molar: 0.0
+  positive_ion: Na+
+  negative_ion: Cl-
+
+chemistry:
+  molecular_formula: C6H9N3O3
+  n_stereocentres: 0
+  sequence: cyclo-(Gly-Gly-Gly)

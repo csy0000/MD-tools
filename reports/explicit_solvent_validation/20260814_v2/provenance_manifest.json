@@ -1,0 +1,118 @@
+{
+  "experiment": "cyclo_rgdfv_sage_explicit REST2 ladder comparison, 8 vs 10 rungs",
+  "simulation_code_sha": "9458a312c2f82d068bd00a887cd6412efb672e6e",
+  "analysis_code_sha": "9458a312c2f82d068bd00a887cd6412efb672e6e",
+  "simulation_dirty_state": "119 modified/untracked paths at capture time",
+  "analysis_dirty_state": "119 modified/untracked paths at capture time",
+  "note": "simulation and analysis ran from the same checkout; the SHAs are identical by construction",
+  "hamiltonian": {
+    "solute_route": "smiles",
+    "small_molecule_forcefield": "openff-2.2.0",
+    "charge_method": "am1bcc",
+    "protein_forcefield": null,
+    "water_forcefield": "amber19/tip3pfb.xml",
+    "formal_charge": 0
+  },
+  "protocol": {
+    "production_ns_per_replica": 2.0,
+    "chunk_ns": 0.5,
+    "exchange_interval_ps": 10.0,
+    "pre_exchange_relaxation_ps": 10.0,
+    "timestep_fs": 4.0,
+    "integrator": "langevin-middle",
+    "ensemble": "NVT",
+    "exchange_rounds": 200
+  },
+  "hardware": {
+    "gpu0": "NVIDIA RTX A4500 20470 MiB",
+    "gpu1": "NVIDIA RTX A5000 24564 MiB",
+    "gpu2": "NVIDIA RTX A5000 24564 MiB",
+    "driver": "580.173.02",
+    "cuda_device_order": "PCI_BUS_ID (pinned; CUDA enumeration otherwise differs from nvidia-smi)"
+  },
+  "environment": {
+    "python": "3.11.15",
+    "openmm": "8.5.1",
+    "openff_toolkit": "0.17.1",
+    "openmmforcefields": "0.16.0",
+    "rdkit": "2025.03.6",
+    "ambertools": "24.8",
+    "pymbar": "4.2.0"
+  },
+  "command": "raw_exchange/pilots6_command.sh",
+  "runs": [
+    {
+      "rungs": 8,
+      "repeat": 1,
+      "seed": 20261822,
+      "gpu": 0,
+      "exit_code": 0,
+      "wall_seconds": 908,
+      "exchange_csv": "raw_exchange/rungs8_rep1_exchange_attempts.csv",
+      "exchange_csv_sha256_16": "6e0b94ac24aaccb8",
+      "config": "raw_exchange/rungs8_rep1_rest2-config.json",
+      "config_sha256_16": "4aa90f406c3dd449"
+    },
+    {
+      "rungs": 8,
+      "repeat": 2,
+      "seed": 20262822,
+      "gpu": 1,
+      "exit_code": 0,
+      "wall_seconds": 913,
+      "exchange_csv": "raw_exchange/rungs8_rep2_exchange_attempts.csv",
+      "exchange_csv_sha256_16": "449f3cec5dd53cbf",
+      "config": "raw_exchange/rungs8_rep2_rest2-config.json",
+      "config_sha256_16": "076b4987bc84f8c5"
+    },
+    {
+      "rungs": 8,
+      "repeat": 3,
+      "seed": 20263822,
+      "gpu": 2,
+      "exit_code": 0,
+      "wall_seconds": 921,
+      "exchange_csv": "raw_exchange/rungs8_rep3_exchange_attempts.csv",
+      "exchange_csv_sha256_16": "b7d1137177dc69d2",
+      "config": "raw_exchange/rungs8_rep3_rest2-config.json",
+      "config_sha256_16": "198c1095ebcac49f"
+    },
+    {
+      "rungs": 10,
+      "repeat": 1,
+      "seed": 20261824,
+      "gpu": 0,
+      "exit_code": 0,
+      "wall_seconds": 1139,
+      "exchange_csv": "raw_exchange/rungs10_rep1_exchange_attempts.csv",
+      "exchange_csv_sha256_16": "8edc5bca04880d49",
+      "config": "raw_exchange/rungs10_rep1_rest2-config.json",
+      "config_sha256_16": "c5eef130aceeedad"
+    },
+    {
+      "rungs": 10,
+      "repeat": 2,
+      "seed": 20262824,
+      "gpu": 1,
+      "exit_code": 0,
+      "wall_seconds": 1141,
+      "exchange_csv": "raw_exchange/rungs10_rep2_exchange_attempts.csv",
+      "exchange_csv_sha256_16": "fdf77398ba7a74ca",
+      "config": "raw_exchange/rungs10_rep2_rest2-config.json",
+      "config_sha256_16": "7310a7383e0abea2"
+    },
+    {
+      "rungs": 10,
+      "repeat": 3,
+      "seed": 20263824,
+      "gpu": 2,
+      "exit_code": 0,
+      "wall_seconds": 1153,
+      "exchange_csv": "raw_exchange/rungs10_rep3_exchange_attempts.csv",
+      "exchange_csv_sha256_16": "04335cbfc9d11595",
+      "config": "raw_exchange/rungs10_rep3_rest2-config.json",
+      "config_sha256_16": "096b39afc9baa80a"
+    }
+  ],
+  "not_copied": "trajectories and checkpoints (large binaries) remain only in the job-local run dir"
+}

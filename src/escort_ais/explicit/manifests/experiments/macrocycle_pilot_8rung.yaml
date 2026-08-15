@@ -1,0 +1,33 @@
+# Generic macrocycle REST2 pilot template — EIGHT RUNGS, LADDER NOT VALIDATED.
+#
+# ladder_status: unvalidated, and that is the point of this file. Eight rungs from s=1.0 to
+# s=0.25 is a starting guess, not a result. The only ladder this project has evidence for is
+# cyclo-(RGDfV)'s ten-rung one, and that evidence is a single molecule: on RGD the 8-rung control
+# gave a median worst-pair acceptance of 0.140 and a pooled minimum of 0.173, which is where a
+# ladder starts to bottleneck.
+#
+# Use this to RUN A PAIR-RESOLVED ACCEPTANCE PILOT on a new macrocycle: launch it, read
+# exchange_attempts.csv per neighbouring pair, and size the real ladder from the worst pair. Do
+# not treat a number produced under this template as a converged result, and do not copy it into a
+# production manifest without changing ladder_status and saying what changed it.
+schema_version: 1
+experiment_id: macrocycle_pilot_8rung
+master_seed: 20260814
+ladder_status: unvalidated
+
+integrator:
+  kind: langevin-middle
+  temperature_k: 300.0
+  # 2 fs, not 4: the pilot should not also depend on the unclosed hydrogen-mass-repartitioning
+  # equivalence gate. Raise it only after that gate is closed for the molecule at hand.
+  timestep_fs: 2.0
+
+rest2:
+  scale_factors: [1.0, 0.862245, 0.734694, 0.617347, 0.510204, 0.413265, 0.326531, 0.25]
+  exchange_interval_ps: 10.0
+  relaxation_ps: 10.0
+  total_ns_per_replica: 2.0
+  chunk_ns: 1.0
+
+platform:
+  precision: mixed

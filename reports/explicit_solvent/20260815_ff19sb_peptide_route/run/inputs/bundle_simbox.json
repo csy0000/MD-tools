@@ -1,0 +1,144 @@
+{
+  "suffix": "simbox",
+  "input_route": "pdb",
+  "route": "peptide",
+  "input_smiles": null,
+  "input_pdb": "/path/to/explicit-test-20260815/ff19sb_probe/ace_ala_nme.pdb",
+  "system_xml": "/path/to/explicit-test-20260815/ff19sb_probe/runs_fixed/20260815T214350Z__ace_ala_nme__bundle__dad2e5f8f0ff/work/simbox_system.xml",
+  "topology_pdb": "/path/to/explicit-test-20260815/ff19sb_probe/runs_fixed/20260815T214350Z__ace_ala_nme__bundle__dad2e5f8f0ff/work/simbox_topology.pdb",
+  "prep_dir": "/path/to/explicit-test-20260815/ff19sb_probe/runs_fixed/20260815T214350Z__ace_ala_nme__bundle__dad2e5f8f0ff/work/simbox_prep",
+  "n_solute_atoms": 22,
+  "omega_central_bonds": [
+    [
+      4,
+      6
+    ],
+    [
+      14,
+      16
+    ]
+  ],
+  "omega_unscaled_bonds": [
+    [
+      4,
+      6
+    ],
+    [
+      14,
+      16
+    ]
+  ],
+  "omega_proline_like_scaled_bonds": [],
+  "omega_unclassified_candidates": [],
+  "omega_detection_method": "peptide/residue-aware; proline-like residue names = ['PRO'] applied to the residue containing the amide NITROGEN",
+  "omega_detail": {
+    "unscaled": [
+      {
+        "bond": [
+          4,
+          6
+        ],
+        "carbon": 4,
+        "nitrogen": 6,
+        "carbon_residue": "ACE",
+        "nitrogen_residue": "ALA",
+        "inter_residue": true,
+        "ambiguous": null
+      },
+      {
+        "bond": [
+          14,
+          16
+        ],
+        "carbon": 14,
+        "nitrogen": 16,
+        "carbon_residue": "ALA",
+        "nitrogen_residue": "NME",
+        "inter_residue": true,
+        "ambiguous": null
+      }
+    ],
+    "proline_like_scaled": []
+  },
+  "n_particles": 883,
+  "n_constraints": 873,
+  "degrees_of_freedom": 1773,
+  "hmr": {
+    "target_hydrogen_mass_amu": 3.024,
+    "n_hydrogens_repartitioned": 12,
+    "total_mass_amu": 5314.573988,
+    "scope": "solute"
+  },
+  "nonbonded": {
+    "method": 4,
+    "cutoff_nm": 0.7,
+    "switching": false,
+    "dispersion_correction": true,
+    "ewald_error_tolerance": 0.0005
+  },
+  "geometry": {
+    "box_shape": "cube",
+    "box_width_nm": 2.143,
+    "box_width_requested_nm": 2.143,
+    "grown_for_cutoff": false,
+    "solute_bounding_radius_nm": 0.4715,
+    "padding_nm_requested": 1.2,
+    "padding_semantics": "solute-image-gap",
+    "solute_image_gap_nm": 1.2,
+    "min_image_distance_nm": 2.143,
+    "nonbonded_cutoff_nm": 0.7,
+    "max_legal_cutoff_nm": 1.0715,
+    "box_vectors_nm": [
+      [
+        2.1430038228978714,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        2.1430038228978714,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        2.1430038228978714
+      ]
+    ]
+  },
+  "n_waters": 287,
+  "ions": {},
+  "realised_ionic_strength_molar": 0.0,
+  "forcefield": {
+    "xml": [
+      "amber19/protein.ff19SB.xml",
+      "amber19/tip3pfb.xml"
+    ],
+    "route": "peptide",
+    "protein_forcefield": "amber19/protein.ff19SB.xml",
+    "water": "amber19/tip3pfb.xml",
+    "ligand": null
+  },
+  "hamiltonian_provenance": {
+    "solute_route": "pdb",
+    "small_molecule_forcefield": null,
+    "charge_method": null,
+    "protein_forcefield": "amber19/protein.ff19SB.xml",
+    "water_forcefield": "amber19/tip3pfb.xml",
+    "input_smiles": null,
+    "input_smiles_sha256": null,
+    "formal_charge": null
+  },
+  "structure": {
+    "source": "pdb",
+    "input_pdb": "/path/to/explicit-test-20260815/ff19sb_probe/ace_ala_nme.pdb",
+    "note": "ETKDG skipped: a structure was supplied"
+  },
+  "protonation": {
+    "ph": 7.0,
+    "ph_applies": true,
+    "route": "peptide",
+    "note": "addHydrogens at pH 7.0",
+    "n_hydrogens_after": 12
+  }
+}

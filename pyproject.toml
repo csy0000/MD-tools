@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "escort-ais"
+version = "0.1.0"
+description = "Benchmarks for learned escort potentials in annealed importance sampling (AIS) on alanine dipeptide and macrocycles."
+readme = "README.md"
+requires-python = ">=3.11"
+# Heavy scientific dependencies (openmm, openmmtools, ambertools, rdkit, mdtraj, deeptime, ...)
+# are provided by the conda environment defined in environment.yml — install the package with
+# `pip install -e . --no-deps` inside that env. Only the pure-Python, pip-resolvable core is listed here.
+dependencies = [
+    "numpy",
+    "scipy",
+    "pandas",
+    "matplotlib",
+    "tqdm",
+    "pyyaml",
+    "scikit-learn",
+    "numba",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "build"]
+
+# The portable explicit-solvent entry point. Installing the wheel puts this on PATH, which is what
+# lets a consuming repository run the pipeline without the source checkout.
+[project.scripts]
+escort-explicit = "escort_ais.explicit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["escort_ais*"]
+
+# The shipped system/experiment manifests must travel inside the wheel: `--system cyclo_rgdfv`
+# resolving to a package resource is what keeps the documented commands free of machine-local
+# paths. The directory is `manifests/`, NOT `data/` — this repository gitignores `data/` at any
+# depth, which would silently keep these files out of version control.
+[tool.setuptools.package-data]
+"escort_ais.explicit" = ["manifests/systems/*.yaml", "manifests/experiments/*.yaml",
+                          # The pdb route's manifest points at a sibling structure file, so
+                          # the structure must travel in the wheel too or `--system ace_ala_nme`
+                          # resolves to a manifest whose input does not exist.
+                          "manifests/systems/*.pdb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: end-to-end tests that build an OpenMM Context and propagate MD (deselect with '-m \"not slow\"')",
+]

@@ -1,0 +1,32 @@
+name: escort-ais-explicit-target
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - setuptools[version='>=64']
+  - python-build
+  - pytest
+  - git
+  - openmm=8.5.1
+  - openmmtools=0.26.0
+  - cuda-version=13.0
+  - openmmforcefields=0.16.0
+  - openff-toolkit=0.17.1
+  - openff-interchange=0.4.5
+  - ambertools=24.8
+  - parmed=4.3.1
+  - rdkit=2025.3.6
+  - pymbar=4.2.0
+  - mdtraj=1.11.1
+  - numba
+  - numpy=2.4.6
+  - scipy=1.17.1
+  - pandas=2.3.3
+  - matplotlib=3.10.9
+  - scikit-learn=1.9.0
+  - netcdf4=1.7.2
+  - pyyaml
+  - tqdm
+  - ipykernel
+prefix: /path/to/miniforge3/envs/escort-ais-explicit-target

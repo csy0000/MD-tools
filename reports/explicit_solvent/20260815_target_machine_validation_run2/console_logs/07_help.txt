@@ -1,0 +1,31 @@
+usage: escort-explicit [-h] [--version]
+                       {validate-env,validate-system,validate-bundle,prepare,rest2,smoke}
+                       ...
+
+`escort-explicit` — the installed entry point for portable explicit-solvent REST2.
+
+Every subcommand works from any current directory once the wheel is installed; nothing here
+resolves a path relative to the source checkout, and nothing reads
+`docs/implementation/.../scripts`. Manifests may be given by path, or by the name of one shipped
+inside the package (`--system cyclo_rgdfv`), which is what makes the documented commands free of
+machine-local paths.
+
+    escort-explicit validate-env
+    escort-explicit validate-system  --system system.yaml
+    escort-explicit prepare          --system system.yaml --experiment experiment.yaml                                      --out-root RUN_ROOT
+    escort-explicit validate-bundle  --bundle BUNDLE_DIR
+    escort-explicit rest2            --bundle BUNDLE_DIR --experiment experiment.yaml                                      --out-root RUN_ROOT --platform CUDA --device 0
+    escort-explicit smoke            --system system.yaml --out-root RUN_ROOT --platform CPU
+
+positional arguments:
+  {validate-env,validate-system,validate-bundle,prepare,rest2,smoke}
+    validate-env        check this machine can prepare and run
+    validate-system     validate a system manifest
+    validate-bundle     recompute a bundle's hashes
+    prepare             build a portable bundle from manifests
+    rest2               run REST2 from a prepared bundle
+    smoke               prepare + run the tiny shipped experiment end to end
+
+options:
+  -h, --help            show this help message and exit
+  --version             show program's version number and exit

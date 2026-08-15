@@ -1,0 +1,76 @@
+{
+  "step": "rest2_rest2",
+  "timestamp_utc": "2026-08-15T19:27:36Z",
+  "git": {
+    "commit": "unknown",
+    "dirty": "false"
+  },
+  "command": "/path/to/miniforge3/envs/escort-ais-explicit-target/bin/escort-explicit smoke --system /path/to/explicit-test-20260815/portable_rest2_handoff/small_macrocycle_smoke.yaml --experiment /path/to/explicit-test-20260815/portable_rest2_handoff/smoke.yaml --out-root /path/to/explicit-test-20260815/cuda_smoke --platform CUDA --device 0",
+  "python": "3.11.15",
+  "openmm": "8.5.1",
+  "host": "<host>",
+  "result": {
+    "suffix": "rest2",
+    "n_replicas": 3,
+    "scale_factors": [
+      1.0,
+      0.5625,
+      0.25
+    ],
+    "effective_temperatures_k": [
+      300.0,
+      533.3333333333334,
+      1200.0
+    ],
+    "ladder_source": "production.remd.scale_factors",
+    "exchange_interval_ps": 0.5,
+    "pre_exchange_relaxation": {
+      "performed": true,
+      "reused": false,
+      "discarded_ps": 0.2,
+      "discarded_steps_per_replica": 100,
+      "timestep_fs": 2.0,
+      "temperature_k": 300.0,
+      "exchanges_attempted": 0,
+      "reporters_attached": false,
+      "wall_seconds": 0.1,
+      "per_replica": [
+        {
+          "replica": 0,
+          "scale_factor": 1.0,
+          "velocity_seed": 20261817,
+          "potential_before_kj_mol": -8825.429,
+          "potential_after_kj_mol": -8827.117,
+          "delta_kj_mol": -1.688,
+          "checkpoint": "/path/to/explicit-test-20260815/cuda_smoke/20260815T192735Z__small_macrocycle_smoke__rest2__66321c39db51/rest2/_relaxation/replica_00.chk"
+        },
+        {
+          "replica": 1,
+          "scale_factor": 0.5625,
+          "velocity_seed": 20261818,
+          "potential_before_kj_mol": -8782.652,
+          "potential_after_kj_mol": -8797.711,
+          "delta_kj_mol": -15.059,
+          "checkpoint": "/path/to/explicit-test-20260815/cuda_smoke/20260815T192735Z__small_macrocycle_smoke__rest2__66321c39db51/rest2/_relaxation/replica_01.chk"
+        },
+        {
+          "replica": 2,
+          "scale_factor": 0.25,
+          "velocity_seed": 20261819,
+          "potential_before_kj_mol": -8734.797,
+          "potential_after_kj_mol": -8810.109,
+          "delta_kj_mol": -75.312,
+          "checkpoint": "/path/to/explicit-test-20260815/cuda_smoke/20260815T192735Z__small_macrocycle_smoke__rest2__66321c39db51/rest2/_relaxation/replica_02.chk"
+        }
+      ],
+      "note": "pre-exchange relaxation, DISCARDED; production time and step numbering are reset to zero afterwards, so production logs exclude it"
+    },
+    "n_chunks": 2,
+    "chunk_ns": 0.001,
+    "total_ns_per_replica": 0.002,
+    "acceptance_fraction": 0.25,
+    "n_exchange_attempts": 4,
+    "exchange_log": "/path/to/explicit-test-20260815/cuda_smoke/20260815T192735Z__small_macrocycle_smoke__rest2__66321c39db51/rest2_exchange_attempts.csv",
+    "output_dir": "/path/to/explicit-test-20260815/cuda_smoke/20260815T192735Z__small_macrocycle_smoke__rest2__66321c39db51/rest2"
+  }
+}

@@ -1,0 +1,141 @@
+{
+  "suffix": "pilot",
+  "n_replicas": 10,
+  "scale_factors": [
+    1.0,
+    0.891975308642,
+    0.79012345679,
+    0.694444444444,
+    0.604938271605,
+    0.521604938272,
+    0.444444444444,
+    0.373456790123,
+    0.308641975309,
+    0.25
+  ],
+  "effective_temperatures_k": [
+    300.0,
+    336.33217993078654,
+    379.68750000005934,
+    432.0000000002765,
+    495.91836734688815,
+    575.1479289936472,
+    675.000000000675,
+    803.3057851249496,
+    971.9999999988725,
+    1200.0
+  ],
+  "ladder_source": "production.remd.scale_factors",
+  "exchange_interval_ps": 10.0,
+  "pre_exchange_relaxation": {
+    "performed": true,
+    "reused": false,
+    "discarded_ps": 10.0,
+    "discarded_steps_per_replica": 2500,
+    "timestep_fs": 4.0,
+    "temperature_k": 300.0,
+    "exchanges_attempted": 0,
+    "reporters_attached": false,
+    "wall_seconds": 5.8,
+    "per_replica": [
+      {
+        "replica": 0,
+        "scale_factor": 1.0,
+        "velocity_seed": 20264827,
+        "potential_before_kj_mol": -54151.862,
+        "potential_after_kj_mol": -54561.985,
+        "delta_kj_mol": -410.123,
+        "checkpoint": "pilot/_relaxation/replica_00.chk"
+      },
+      {
+        "replica": 1,
+        "scale_factor": 0.891975308642,
+        "velocity_seed": 20264828,
+        "potential_before_kj_mol": -54033.158,
+        "potential_after_kj_mol": -54495.614,
+        "delta_kj_mol": -462.457,
+        "checkpoint": "pilot/_relaxation/replica_01.chk"
+      },
+      {
+        "replica": 2,
+        "scale_factor": 0.79012345679,
+        "velocity_seed": 20264829,
+        "potential_before_kj_mol": -53918.449,
+        "potential_after_kj_mol": -54651.953,
+        "delta_kj_mol": -733.505,
+        "checkpoint": "pilot/_relaxation/replica_02.chk"
+      },
+      {
+        "replica": 3,
+        "scale_factor": 0.694444444444,
+        "velocity_seed": 20264830,
+        "potential_before_kj_mol": -53807.734,
+        "potential_after_kj_mol": -53955.21,
+        "delta_kj_mol": -147.476,
+        "checkpoint": "pilot/_relaxation/replica_03.chk"
+      },
+      {
+        "replica": 4,
+        "scale_factor": 0.604938271605,
+        "velocity_seed": 20264831,
+        "potential_before_kj_mol": -53701.014,
+        "potential_after_kj_mol": -54013.778,
+        "delta_kj_mol": -312.764,
+        "checkpoint": "pilot/_relaxation/replica_04.chk"
+      },
+      {
+        "replica": 5,
+        "scale_factor": 0.521604938272,
+        "velocity_seed": 20264832,
+        "potential_before_kj_mol": -53598.288,
+        "potential_after_kj_mol": -54118.99,
+        "delta_kj_mol": -520.702,
+        "checkpoint": "pilot/_relaxation/replica_05.chk"
+      },
+      {
+        "replica": 6,
+        "scale_factor": 0.444444444444,
+        "velocity_seed": 20264833,
+        "potential_before_kj_mol": -53499.557,
+        "potential_after_kj_mol": -54217.822,
+        "delta_kj_mol": -718.266,
+        "checkpoint": "pilot/_relaxation/replica_06.chk"
+      },
+      {
+        "replica": 7,
+        "scale_factor": 0.373456790123,
+        "velocity_seed": 20264834,
+        "potential_before_kj_mol": -53404.82,
+        "potential_after_kj_mol": -53899.347,
+        "delta_kj_mol": -494.527,
+        "checkpoint": "pilot/_relaxation/replica_07.chk"
+      },
+      {
+        "replica": 8,
+        "scale_factor": 0.308641975309,
+        "velocity_seed": 20264835,
+        "potential_before_kj_mol": -53314.078,
+        "potential_after_kj_mol": -53972.971,
+        "delta_kj_mol": -658.893,
+        "checkpoint": "pilot/_relaxation/replica_08.chk"
+      },
+      {
+        "replica": 9,
+        "scale_factor": 0.25,
+        "velocity_seed": 20264836,
+        "potential_before_kj_mol": -53227.33,
+        "potential_after_kj_mol": -53697.095,
+        "delta_kj_mol": -469.765,
+        "checkpoint": "pilot/_relaxation/replica_09.chk"
+      }
+    ],
+    "note": "pre-exchange relaxation, DISCARDED; production time and step numbering are reset to zero afterwards, so production logs exclude it"
+  },
+  "n_chunks": 4,
+  "chunk_ns": 0.5,
+  "total_ns_per_replica": 2.0,
+  "acceptance_fraction": 0.31777777777777777,
+  "n_exchange_attempts": 900,
+  "exchange_log": "pilot_exchange_attempts.csv",
+  "output_dir": "pilot"
+}

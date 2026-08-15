@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "kind": "explicit-solvent-rest2-bundle",
+  "config_hash": "dad2e5f8f0ff",
+  "created_utc": "2026-08-15T21:44:28Z",
+  "invocation": {
+    "argv": [
+      "-c"
+    ],
+    "command": "-c",
+    "cwd": "/path/to/explicit-test-20260815/ff19sb_probe",
+    "timestamp_utc": "2026-08-15T21:44:28Z"
+  },
+  "system": {
+    "system_id": "ace_ala_nme",
+    "display_name": "ACE-ALA-NME (alanine dipeptide), ff19SB peptide route",
+    "route": "pdb",
+    "canonical_molecular_hash": "dd50bd9cb68713d7705e204fbc84897e2c3a9b33c135fd3574bda0edebaa3bd4",
+    "canonical_isomeric_smiles": null,
+    "formal_charge": 0
+  },
+  "experiment": {
+    "experiment_id": "smoke",
+    "ladder_status": "unvalidated",
+    "n_rungs": 3,
+    "scale_factors": [
+      1.0,
+      0.5625,
+      0.25
+    ],
+    "master_seed": 20260814
+  },
+  "parameterization": {
+    "small_molecule_forcefield": null,
+    "charge_method": null,
+    "protein_forcefield": "amber19/protein.ff19SB.xml",
+    "water_forcefield": "amber19/tip3pfb.xml"
+  },
+  "solvation": {
+    "water_model": "tip3p",
+    "box_shape": "cube",
+    "padding_nm": 1.2,
+    "requested_ionic_strength_molar": 0.0,
+    "positive_ion": "Na+",
+    "negative_ion": "Cl-",
+    "neutralize": true,
+    "realized_ion_counts": {},
+    "realized_ionic_strength_molar": 0.0
+  },
+  "composition": {
+    "n_atoms": 883,
+    "n_solute_atoms": 22,
+    "n_water_molecules": 287,
+    "n_ions": 0,
+    "n_constraints": 873,
+    "n_degrees_of_freedom": 1773
+  },
+  "box_vectors_nm": [
+    [
+      2.1430000000000002,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      2.1430000000000002,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      2.1430000000000002
+    ]
+  ],
+  "omega": {
+    "selective_scaling": true,
+    "excluded_central_bonds": null,
+    "note": "solute torsions about these bonds are NOT REST2-scaled; the cis/trans equilibrium they control must not be moved by the ladder"
+  },
+  "seeds": {
+    "master": 20260814,
+    "structure_etkdg": 20260814,
+    "equilibration": 20260815,
+    "production_remd": 20260817
+  },
+  "equilibration": {
+    "protocol": "simple",
+    "summary": {
+      "suffix": "eq",
+      "protocol": "simple",
+      "system_xml": "/path/to/explicit-test-20260815/ff19sb_probe/runs_fixed/20260815T214350Z__ace_ala_nme__bundle__dad2e5f8f0ff/work/simbox_system.xml",
+      "n_restrained_atoms": 10,
+      "restraint_selection": "solute-heavy",
+      "restraint_k_kj_mol_nm2": 4184.0,
+      "total_equilibration_ps": 4.0,
+      "box_volume_nm3_mean": 9.52551691076459,
+      "box_volume_nm3_sd": 0.06129845187085073,
+      "n_box_samples": 20,
+      "solute_heavy_rmsd_from_start_nm": 0.0622,
+      "state_xml": "/path/to/explicit-test-20260815/ff19sb_probe/runs_fixed/20260815T214350Z__ace_ala_nme__bundle__dad2e5f8f0ff/work/eq_state.xml",
+      "production_ensemble": "NVT"
+    }
+  },
+  "environment": {
+    "package_version": "0.1.0",
+    "package_location": "/path/to/explicit-test-20260815/src-checkout/src/escort_ais",
+    "install": {
+      "wheel": null,
+      "wheel_sha256": null,
+      "install_kind": "index-or-unknown"
+    },
+    "git": {
+      "available": true,
+      "commit": "104672eb1b914bf00fa4f047f3e833e7081c1ee1",
+      "dirty": true
+    },
+    "python": "3.11.15",
+    "toolchain": {
+      "openmm": "8.5.1",
+      "openff-toolkit": "0.17.1",
+      "openmmforcefields": "0.16.0",
+      "rdkit": "2025.3.6",
+      "ambertools": "4.3.1",
+      "mdtraj": "1.11.1",
+      "numpy": "2.4.6",
+      "scipy": "1.17.1"
+    },
+    "sqm_path": "/path/to/miniforge3/envs/escort-ais-explicit-target/bin/sqm",
+    "openmm_platforms": [
+      "Reference",
+      "CPU",
+      "CUDA",
+      "OpenCL"
+    ],
+    "hardware": {
+      "node": "<host>",
+      "system": "Linux",
+      "release": "6.8.0-124-generic",
+      "machine": "x86_64",
+      "processor": "x86_64",
+      "cpu_count": 48,
+      "cuda_devices": [
+        "0, NVIDIA RTX A5000, 580.173.02",
+        "1, NVIDIA GeForce RTX 3080, 580.173.02",
+        "2, NVIDIA GeForce RTX 3080, 580.173.02",
+        "3, NVIDIA GeForce RTX 3080, 580.173.02",
+        "4, NVIDIA GeForce RTX 3080, 580.173.02",
+        "5, NVIDIA GeForce RTX 3080, 580.173.02",
+        "6, NVIDIA GeForce RTX 3080, 580.173.02",
+        "7, NVIDIA GeForce RTX 3080, 580.173.02",
+        "8, NVIDIA GeForce RTX 3080, 580.173.02"
+      ]
+    }
+  },
+  "files": {
+    "system.xml": "9a07c451193f0c01bcb20491d18731f7dabdb1c6586b4ab812a7a64fb720992e",
+    "topology.pdb": "69d001d9df7a975301064bded82495b474bc64be8b46fa4405bd61747f4a20a5",
+    "simbox.json": "5568bac941bd8d4ab3ee5e61796583fed59116b9207c9f68ecdab529693f33b8",
+    "equilibrated_state.xml": "fe244a1948012012f0408772406aa760cf2d7d92187d2e68a191f94c7adc127b",
+    "system.yaml": "cff1f102e3a894e8630d9588272037dd6673c5c6a45c17bbceb4f88bdd94e361",
+    "experiment.prepare.yaml": "06dcdd5ee0e713625075668c9c5e3d80348785bb173e39773bcbec6aa7cfaf92",
+    "resolved_config.json": "632dec4939c9c2b3026f436655e9287e92b35cfd175b4e665ec827a309b85bcc"
+  },
+  "reproducibility": {
+    "rebuild": "Rebuilding from the same system manifest is scientifically consistent but not bitwise identical: AM1-BCC charges, conformer embedding and water placement depend on library versions and host floating point.",
+    "transfer": "Transfer this bundle when the System and starting state must be identical, e.g. when pooling runs produced on several machines."
+  }
+}

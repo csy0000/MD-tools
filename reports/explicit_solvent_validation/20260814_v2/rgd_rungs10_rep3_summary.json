@@ -1,0 +1,86 @@
+{
+  "system": "rgd_10rung_rep3",
+  "exchange_log": "~/.claude/jobs/29daa285/tmp/20260814T1600_rgd_ladder/rungs10_rep3/pilot_exchange_attempts.csv",
+  "n_replicas": 10,
+  "n_rounds_logged": 200,
+  "overall_acceptance": 0.31778,
+  "worst_pair_acceptance": 0.24,
+  "worst_pair": "5-6",
+  "classification": "provisionally acceptable",
+  "classification_thresholds": {
+    "provisionally_acceptable": ">= 0.20",
+    "borderline": "0.10 - 0.20",
+    "failed": "< 0.10"
+  },
+  "missing_adjacent_pairs": [],
+  "attempt_count_check": {
+    "expected_total_attempts": 900,
+    "observed_total_attempts": 900,
+    "matches": true
+  },
+  "round_trips": [
+    {
+      "replica": 0,
+      "traversals": 1,
+      "round_trips": 0
+    },
+    {
+      "replica": 1,
+      "traversals": 1,
+      "round_trips": 0
+    },
+    {
+      "replica": 2,
+      "traversals": 0,
+      "round_trips": 0
+    },
+    {
+      "replica": 3,
+      "traversals": 1,
+      "round_trips": 0
+    },
+    {
+      "replica": 4,
+      "traversals": 1,
+      "round_trips": 0
+    },
+    {
+      "replica": 5,
+      "traversals": 2,
+      "round_trips": 1
+    },
+    {
+      "replica": 6,
+      "traversals": 2,
+      "round_trips": 1
+    },
+    {
+      "replica": 7,
+      "traversals": 0,
+      "round_trips": 0
+    },
+    {
+      "replica": 8,
+      "traversals": 1,
+      "round_trips": 0
+    },
+    {
+      "replica": 9,
+      "traversals": 1,
+      "round_trips": 0
+    }
+  ],
+  "walker_occupancy_final": [
+    2,
+    8,
+    6,
+    3,
+    0,
+    5,
+    1,
+    9,
+    4,
+    7
+  ],
+  "note": "A pilot diagnoses the ladder; it does not converge anything.  Absence of a round trip in 2 ns/replica means 'not observed within the pilot', not 'cannot occur'."
+}

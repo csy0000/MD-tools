@@ -1,0 +1,10 @@
+start 2026-08-15T19:01:35Z
+conda-forge/linux-64                                        Using cache
+conda-forge/noarch                                          Using cache
+
+error    libmamba Could not solve for environment specs
+    The following package could not be installed
+    └─ build =* * does not exist (perhaps a typo or a missing channel).
+critical libmamba Could not solve for environment specs
+EXITCODE=1
+end 2026-08-15T19:13:51Z

@@ -1,0 +1,32 @@
+# cyclo-(RGDfV) REST2: the ten-rung working ladder.
+#
+# VALIDATED FOR RGD ONLY. Selected by three matched 2 ns/replica pilots against the 8-rung control
+# (median worst-pair acceptance 0.140 -> 0.240, pooled minimum 0.173 -> 0.277). The evidence is one
+# molecule. Applying this ladder to cyclosporin or to the RGD derivatives is not supported by it —
+# use macrocycle_pilot_8rung.yaml and run a new pair-resolved acceptance pilot.
+#
+# Spacing is even in sqrt(s) from s=1.0 to s=0.25: exchange acceptance depends on the overlap of
+# neighbouring rungs' energy distributions, whose width scales roughly as sqrt(s), so even spacing
+# there gives roughly even acceptance along the chain.
+schema_version: 1
+experiment_id: rgd_rest2_10rung
+master_seed: 20260814
+ladder_status: validated
+
+integrator:
+  kind: langevin-middle
+  temperature_k: 300.0
+  # 4 fs requires hydrogen-mass repartitioning; the 2 fs / 4 fs equivalence gate is NOT closed,
+  # which is one of the two reasons long production remains blocked. See PORTABLE_REST2.md.
+  timestep_fs: 4.0
+
+rest2:
+  scale_factors: [1.0, 0.891975, 0.790123, 0.694444, 0.604938, 0.521605, 0.444444, 0.373457,
+                  0.308642, 0.25]
+  exchange_interval_ps: 10.0
+  relaxation_ps: 10.0
+  total_ns_per_replica: 2.0
+  chunk_ns: 1.0
+
+platform:
+  precision: mixed

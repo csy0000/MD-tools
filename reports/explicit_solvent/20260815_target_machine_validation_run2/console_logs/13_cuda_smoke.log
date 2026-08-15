@@ -1,0 +1,22 @@
+/path/to/miniforge3/envs/escort-ais-explicit-target/lib/python3.11/site-packages/openff/interchange/smirnoff/_create.py:151: PresetChargesAndVirtualSitesWarning: Preset charges were provided (via `charge_from_molecules`) alongside a force field that includes virtual site parameters. Note that virtual sites will be applied charges from the force field and cannot be given preset charges. Virtual sites may also affect the charges of their orientation atoms, even if those atoms are given preset charges.
+  warnings.warn(
+/path/to/miniforge3/envs/escort-ais-explicit-target/lib/python3.11/site-packages/openff/interchange/smirnoff/_create.py:151: PresetChargesAndVirtualSitesWarning: Preset charges were provided (via `charge_from_molecules`) alongside a force field that includes virtual site parameters. Note that virtual sites will be applied charges from the force field and cannot be given preset charges. Virtual sites may also affect the charges of their orientation atoms, even if those atoms are given preset charges.
+  warnings.warn(
+[smoke] preparing small_macrocycle_smoke (smoke) ...
+[equil] initial            U =       6592.8 kJ/mol  V =     6.54 nm^3  solute RMSD = 0.000 nm
+[equil] min_free           U =      -9233.0 kJ/mol  V =     6.54 nm^3  solute RMSD = 0.022 nm
+[equil] nvt                U =      -8897.1 kJ/mol  V =     6.54 nm^3  solute RMSD = 0.027 nm
+[equil] npt_free           U =      -8869.5 kJ/mol  V =     6.34 nm^3  solute RMSD = 0.019 nm
+[equil] box handoff: sample 9/20 at 6.368 nm^3, -0.12 % from the tail mean 6.375 nm^3
+[smoke] bundle: /path/to/explicit-test-20260815/cuda_smoke/20260815T192710Z__small_macrocycle_smoke__bundle__66321c39db51
+[smoke] running REST2 ...
+[remd] relax replica 00 s=1.0000: U -8825.4 -> -8827.1 kJ/mol
+[remd] relax replica 01 s=0.5625: U -8782.7 -> -8797.7 kJ/mol
+[remd] relax replica 02 s=0.2500: U -8734.8 -> -8810.1 kJ/mol
+[remd] 3 replicas, s = [1.0, 0.5625, 0.25], T_eff = [300, 533, 1200] K, exchange every 0.5 ps, 2 chunk(s) of 0.001 ns to go
+[remd] chunk 1/2 in 0.00 h; acceptance 0.500
+[remd] chunk 2/2 in 0.00 h; acceptance 0.250
+[smoke] run: /path/to/explicit-test-20260815/cuda_smoke/20260815T192735Z__small_macrocycle_smoke__rest2__66321c39db51
+[smoke] status: completed  exchange rounds 4/4
+[smoke] OK — installable and mechanically executable on this machine.
+[smoke] This says nothing about a macrocycle ladder; see PORTABLE_REST2.md.

@@ -1,0 +1,9 @@
+valid bundle: /path/to/explicit-test-20260815/cuda_smoke/20260815T192710Z__small_macrocycle_smoke__bundle__66321c39db51
+system      small_macrocycle_smoke  (cyclo-(Gly-Gly-Gly) smoke system)
+  route     smiles   formal charge 0
+  molecule  4cda211c8a66082d2b92b6ffebe84a3f6d8ad7681e8c852b889fb797fa9a4d6f
+experiment  smoke   3 rungs   ladder_status=unvalidated
+config hash 66321c39db51
+composition 585 atoms  (21 solute, 188 waters, 0 ions)  1179 DOF
+built       2026-08-15T19:27:35Z  escort-ais 0.1.0  openmm 8.5.1
+  NOTE: this ladder is NOT validated for this system; treat any number from it as a pilot.

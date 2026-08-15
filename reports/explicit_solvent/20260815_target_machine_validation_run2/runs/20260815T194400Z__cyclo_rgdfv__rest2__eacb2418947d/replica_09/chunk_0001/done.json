@@ -1,0 +1,7 @@
+{
+  "chunk": 1,
+  "replica": 9,
+  "scale_factor": 0.25,
+  "effective_temperature_k": 1200.0,
+  "wall_seconds": 0.6
+}

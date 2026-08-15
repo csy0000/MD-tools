@@ -1,0 +1,9 @@
+escort_ais-0.1.0-py3-none-any.whl: OK
+environment.yml: OK
+cyclo_rgdfv.yaml: OK
+macrocycle_pilot_8rung.yaml: OK
+rgd_rest2_10rung.yaml: OK
+small_macrocycle_smoke.yaml: OK
+smoke.yaml: OK
+HANDOFF_README.md: OK
+50e9a1a51ecbd3680d43985786813727186d534c486a9501ebd4895fe639a183  escort_ais-0.1.0-py3-none-any.whl

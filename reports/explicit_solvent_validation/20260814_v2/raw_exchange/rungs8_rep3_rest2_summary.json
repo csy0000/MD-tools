@@ -1,0 +1,119 @@
+{
+  "suffix": "pilot",
+  "n_replicas": 8,
+  "scale_factors": [
+    1.0,
+    0.862244897959,
+    0.734693877551,
+    0.617346938776,
+    0.510204081633,
+    0.413265306122,
+    0.326530612245,
+    0.25
+  ],
+  "effective_temperatures_k": [
+    300.0,
+    347.92899408291436,
+    408.3333333333447,
+    485.95041322275495,
+    587.9999999996002,
+    725.9259259267145,
+    918.7499999997128,
+    1200.0
+  ],
+  "ladder_source": "production.remd.scale_factors",
+  "exchange_interval_ps": 10.0,
+  "pre_exchange_relaxation": {
+    "performed": true,
+    "reused": false,
+    "discarded_ps": 10.0,
+    "discarded_steps_per_replica": 2500,
+    "timestep_fs": 4.0,
+    "temperature_k": 300.0,
+    "exchanges_attempted": 0,
+    "reporters_attached": false,
+    "wall_seconds": 4.4,
+    "per_replica": [
+      {
+        "replica": 0,
+        "scale_factor": 1.0,
+        "velocity_seed": 20264825,
+        "potential_before_kj_mol": -54151.862,
+        "potential_after_kj_mol": -54972.579,
+        "delta_kj_mol": -820.717,
+        "checkpoint": "pilot/_relaxation/replica_00.chk"
+      },
+      {
+        "replica": 1,
+        "scale_factor": 0.862244897959,
+        "velocity_seed": 20264826,
+        "potential_before_kj_mol": -53999.976,
+        "potential_after_kj_mol": -54390.261,
+        "delta_kj_mol": -390.285,
+        "checkpoint": "pilot/_relaxation/replica_01.chk"
+      },
+      {
+        "replica": 2,
+        "scale_factor": 0.734693877551,
+        "velocity_seed": 20264827,
+        "potential_before_kj_mol": -53854.694,
+        "potential_after_kj_mol": -54242.028,
+        "delta_kj_mol": -387.334,
+        "checkpoint": "pilot/_relaxation/replica_02.chk"
+      },
+      {
+        "replica": 3,
+        "scale_factor": 0.617346938776,
+        "velocity_seed": 20264828,
+        "potential_before_kj_mol": -53716.015,
+        "potential_after_kj_mol": -54282.559,
+        "delta_kj_mol": -566.544,
+        "checkpoint": "pilot/_relaxation/replica_03.chk"
+      },
+      {
+        "replica": 4,
+        "scale_factor": 0.510204081633,
+        "velocity_seed": 20264829,
+        "potential_before_kj_mol": -53583.939,
+        "potential_after_kj_mol": -54486.775,
+        "delta_kj_mol": -902.836,
+        "checkpoint": "pilot/_relaxation/replica_04.chk"
+      },
+      {
+        "replica": 5,
+        "scale_factor": 0.413265306122,
+        "velocity_seed": 20264830,
+        "potential_before_kj_mol": -53458.466,
+        "potential_after_kj_mol": -54057.998,
+        "delta_kj_mol": -599.532,
+        "checkpoint": "pilot/_relaxation/replica_05.chk"
+      },
+      {
+        "replica": 6,
+        "scale_factor": 0.326530612245,
+        "velocity_seed": 20264831,
+        "potential_before_kj_mol": -53339.597,
+        "potential_after_kj_mol": -53719.4,
+        "delta_kj_mol": -379.803,
+        "checkpoint": "pilot/_relaxation/replica_06.chk"
+      },
+      {
+        "replica": 7,
+        "scale_factor": 0.25,
+        "velocity_seed": 20264832,
+        "potential_before_kj_mol": -53227.33,
+        "potential_after_kj_mol": -53718.945,
+        "delta_kj_mol": -491.615,
+        "checkpoint": "pilot/_relaxation/replica_07.chk"
+      }
+    ],
+    "note": "pre-exchange relaxation, DISCARDED; production time and step numbering are reset to zero afterwards, so production logs exclude it"
+  },
+  "n_chunks": 4,
+  "chunk_ns": 0.5,
+  "total_ns_per_replica": 2.0,
+  "acceptance_fraction": 0.1957142857142857,
+  "n_exchange_attempts": 700,
+  "exchange_log": "pilot_exchange_attempts.csv",
+  "output_dir": "pilot"
+}

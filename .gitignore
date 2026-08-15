@@ -1,0 +1,62 @@
+# --- generated data / outputs ---
+# data/ includes data/runs/ (relocated from the old top-level runs/)
+data/
+graphify-out/
+logs/
+
+# --- python bytecode ---
+__pycache__/
+*.pyc
+
+# --- LaTeX build artifacts + PDF policy ---
+#   docs/*.pdf are regenerable derivations -> ignored (keep only the .tex source),
+#   EXCEPT docs/theory/*.pdf, the canonical rendered theory references -> tracked.
+#   reports/<system>/**/*.pdf are ACCEPTED report-bundle deliverables -> tracked (see
+#   docs/protocols/report_and_run_provenance.md). This asymmetry is intentional.
+*.aux
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+docs/*.pdf
+docs/protocols/*.pdf
+!docs/theory/*.pdf
+
+# --- results/: generated figures/analysis are ignored; the CANONICAL (accepted, tracked)
+#     result dirs below are whitelisted. Everything else under results/ is regenerable output. ---
+results/*
+!results/endpoint_bar/          # canonical: endpoint-BAR accepted outputs
+!results/notebooks/             # tracked exploration notebooks
+!results/notebooks/*
+
+# --- tests/: tracked normally. Ignore only generated testing artifacts. ---
+.pytest_cache/
+tests/**/__pycache__/
+tests/**/output/
+tests/**/tmp/
+
+# regenerable project-structure dumps
+docs/project_structure/
+
+.venv/
+
+# --- local Claude instruction scratch ---
+claude-instruction/
+
+# --- expensive reference data: archive externally with checksums, never in git ---
+# The all-replica MBAR cold references are 7-34 MB each. The call to keep them out of git was made
+# for cyclosporin in commit 3028263 and applies to every system; they are regenerated from the REMD
+# runs under data/ by the *_remd_ground_truth drivers.
+reports/*/remd_ground_truth/cold_reference.npz
+
+# Raw per-block AIS output of the forward-PREP burn-in campaign (43 MB). The campaign's CONCLUSIONS
+# live in its parquets, decision.json, status.json and report.md, all of which ARE committed.
+campaigns/*/blocked_ais/
+campaigns/*/blocked_ais_rgd/
+campaigns/*/phase1_controls/
+
+# Python build artifacts. `python -m build` is part of the documented explicit-solvent workflow
+# (docs/implementation/explicit_solvent/PORTABLE_REST2.md), so the wheel and sdist land here on
+# any machine that follows it; they are rebuildable and must not be committed.
+build/
+dist/
+*.egg-info/

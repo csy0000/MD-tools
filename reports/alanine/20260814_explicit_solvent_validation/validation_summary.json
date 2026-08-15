@@ -1,0 +1,95 @@
+{
+  "date": "2026-08-14",
+  "commit": "476a56a35959cff0d70aa191451d01aa3f64b4c9",
+  "branch": "flatbottom-basin-cft-mixture",
+  "verdict": {
+    "alanine": "GO",
+    "cyclo_rgdfv": "QUALIFIED - cold-end pair not securely above the failure threshold"
+  },
+  "unit_tests": {
+    "focused": "63 passed",
+    "full_not_slow": "759 passed / 3 skipped / 0 failed (at this commit)"
+  },
+  "smoke": {
+    "alanine": {
+      "ff_route": "ff19SB (--pdb)",
+      "atoms": 1817,
+      "replicas": 6,
+      "omega": {
+        "unscaled": 2,
+        "proline_like": 0,
+        "unclassified": 0
+      },
+      "box_gap_nm": 1.2,
+      "max_cutoff_nm": 1.073,
+      "result": "all rc=0"
+    },
+    "cyclo_rgdfv_sage_explicit": {
+      "ff_route": "Sage 2.2 + AM1BCC (--smiles)",
+      "atoms": 3226,
+      "replicas": 8,
+      "omega": {
+        "unscaled": 5,
+        "proline_like": 0,
+        "unclassified": 0
+      },
+      "box_gap_nm": 1.2,
+      "max_cutoff_nm": 1.295,
+      "net_charge_e": 1.44e-15,
+      "result": "all rc=0",
+      "note": "system.yaml records ff19SB; this explicit run is Sage 2.2 and the metadata was NOT rewritten"
+    }
+  },
+  "pilots": {
+    "alanine": {
+      "n_replicas": 6,
+      "n_rounds_logged": 200,
+      "overall_acceptance": 0.458,
+      "worst_pair_acceptance": 0.4,
+      "worst_pair": "4-5",
+      "classification": "provisionally acceptable",
+      "missing_adjacent_pairs": [],
+      "attempt_count_check": {
+        "expected_total_attempts": 500,
+        "observed_total_attempts": 500,
+        "matches": true
+      },
+      "wall_s": 374,
+      "production_ns_per_replica": 2.0,
+      "relaxation_ps": 10.0,
+      "aggregate_replica_ns": 12.0,
+      "round_trips": 13,
+      "traversals": 31,
+      "gpu": "1 (A5000)"
+    },
+    "cyclo_rgdfv": {
+      "n_replicas": 8,
+      "n_rounds_logged": 200,
+      "overall_acceptance": 0.19571,
+      "worst_pair_acceptance": 0.13,
+      "worst_pair": "0-1",
+      "classification": "borderline",
+      "missing_adjacent_pairs": [],
+      "attempt_count_check": {
+        "expected_total_attempts": 700,
+        "observed_total_attempts": 700,
+        "matches": true
+      },
+      "wall_s": 924,
+      "production_ns_per_replica": 2.0,
+      "relaxation_ps": 10.0,
+      "aggregate_replica_ns": 16.0,
+      "round_trips": 1,
+      "traversals": 4,
+      "gpu": "0 (A4500)",
+      "caveat": "worst pair 0-1 Wilson [0.078, 0.210] straddles the 0.10 failure boundary"
+    }
+  },
+  "not_performed": [
+    "1 us production",
+    "restart/relaxation regression tests (\u00a76)",
+    "conda env create solve",
+    "ff19SB vs OPC water comparison",
+    "4 fs vs 2 fs check"
+  ]
+}
