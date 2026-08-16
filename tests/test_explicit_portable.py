@@ -326,7 +326,15 @@ def test_shipped_manifests_are_not_hidden_from_git():
     """
     d = schemas.manifests_dir()
     assert d.name == "manifests", d
-    assert "/data/" not in str(d), d
+    # Check the PACKAGE-RELATIVE path, never the absolute one. The concern is a package directory
+    # named `data`, which .gitignore erases at any depth; where the checkout happens to live on
+    # disk has nothing to do with it. Substring-matching "/data/" against the absolute path fails
+    # for anyone whose clone sits under a directory named `data` -- e.g. /path/to/... --
+    # which is a spurious failure about the user's filesystem, not about the package.
+    pkg_relative = d.parts[d.parts.index("escort_ais"):] if "escort_ais" in d.parts else d.parts
+    assert "data" not in pkg_relative, (
+        f"a package directory is named 'data', which .gitignore erases at any depth: {d}"
+    )
     res = subprocess.run(["git", "check-ignore", str(shipped_system("cyclo_rgdfv"))],
                          cwd=REPO_ROOT, capture_output=True, text=True)
     assert res.returncode != 0, (
