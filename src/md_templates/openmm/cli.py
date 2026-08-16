@@ -110,6 +110,12 @@ def cmd_validate_bundle(args) -> int:
 
 
 def cmd_prepare(args) -> int:
+    if getattr(args, "config", None):
+        return _prepare_from_canonical(args)
+    if not args.system or not args.experiment:
+        print("prepare needs either --config CANONICAL_DOCUMENT, or both --system and "
+              "--experiment (the legacy manifest pair)", file=sys.stderr)
+        return runner.EXIT_MANIFEST
     system = load_system(_resolve_manifest(args.system, "system"))
     experiment = load_experiment(_resolve_manifest(args.experiment, "experiment"))
     envcheck.require_ok(platform=args.platform, device=args.device,
@@ -400,6 +406,106 @@ def cmd_config_init(args) -> int:
     return runner.EXIT_OK
 
 
+
+def _prepare_from_canonical(args) -> int:
+    """Prepare a bundle from a canonical configuration document.
+
+    The canonical model is the source of truth; the manifest path reaches the same builder by being
+    migrated into this model first. There is one configuration engine, not two.
+    """
+    canonical, _, _, resolve = _spec_modules()
+    from .spec.adapter import spec_to_runtime_cfg
+
+    result = resolve.resolve_spec(resolve.load_document(Path(args.config)),
+                                  overrides=getattr(args, "set", None),
+                                  profile_id=getattr(args, "profile", None))
+    spec = result["spec"]
+    cfg = spec_to_runtime_cfg(spec)
+    if spec.system.route != "smiles":
+        print("prepare from a canonical document currently supports the smiles route only; "
+              "the pdb route still uses --system/--experiment", file=sys.stderr)
+        return runner.EXIT_MANIFEST
+
+    system = _synthetic_system_manifest(spec)
+    experiment = load_experiment(_resolve_manifest("smoke", "experiment"))
+    envcheck.require_ok(platform=args.platform, device=args.device,
+                        precision=spec.execution.precision, route=spec.system.route)
+    runner.configure_device(args.platform, args.device)
+    out = bundle_mod.prepare(
+        system, experiment, Path(args.out_root), platform=args.platform, device=args.device,
+        name=args.name, resolved_cfg=cfg,
+        canonical={"profile": result["profile"], "hashes": result["hashes"],
+                   "sources": result["sources"],
+                   # to_plain, not dump_model: the stored record must be in CANONICAL form
+                   # (value + unit), not a bare tuple whose meaning depends on field order.
+                   "configuration": canonical.to_plain(canonical.dump_model(spec))},
+    )
+    print(f"bundle: {out}")
+    print(f"  profile {result['profile']['profile_id']}  "
+          f"system_build {result['hashes']['system_build_sha256'][:12]}")
+    return runner.EXIT_OK
+
+
+def _synthetic_system_manifest(spec):
+    """A SystemManifest view of the canonical system section, for the existing builder.
+
+    The builder still addresses molecular identity through a manifest object; this adapts the
+    canonical model onto that interface rather than duplicating the builder.
+    """
+    import tempfile
+
+    import yaml
+
+    from .schemas import load_system
+
+    doc = {
+        "schema_version": 1,
+        "system_id": spec.system.system_id,
+        "display_name": spec.system.display_name or spec.system.system_id,
+        "input": {"route": "smiles", "smiles": spec.system.smiles,
+                  "expected_formal_charge": spec.system.expected_formal_charge},
+        "parameterization": {
+            "small_molecule_forcefield": spec.build.forcefield.small_molecule,
+            "charge_method": spec.build.forcefield.charge_method,
+            "protein_forcefield": spec.build.forcefield.protein,
+            "water_forcefield": spec.build.forcefield.water,
+        },
+        "solvation": {
+            "water_model": spec.build.solvation.water_model,
+            "box_shape": spec.build.solvation.box_shape,
+            "padding_nm": spec.build.solvation.padding.value,
+            "ionic_strength_molar": spec.build.solvation.ionic_strength_molar,
+            "positive_ion": spec.build.solvation.positive_ion,
+            "negative_ion": spec.build.solvation.negative_ion,
+        },
+    }
+    # The canonical model treats the canonical SMILES and its hash as OPTIONAL, because they are
+    # derived from the declared SMILES rather than independently chosen. Derive them here when the
+    # document did not state them, and check them when it did -- a stated value that disagrees with
+    # RDKit means the document names one molecule and describes another.
+    from .schemas import sha256_text
+
+    canonical_smiles = spec.system.canonical_isomeric_smiles
+    if canonical_smiles is None:
+        try:
+            from rdkit import Chem
+        except ImportError:                                    # pragma: no cover
+            raise SystemExit(
+                "system.canonical_isomeric_smiles is absent and RDKit is unavailable to derive it; "
+                "state it explicitly in the document."
+            ) from None
+        mol = Chem.MolFromSmiles(spec.system.smiles)
+        if mol is None:
+            raise SystemExit(f"system.smiles {spec.system.smiles!r} is not parseable by RDKit")
+        canonical_smiles = Chem.MolToSmiles(mol, isomericSmiles=True)
+    doc["input"]["canonical_isomeric_smiles"] = canonical_smiles
+    doc["input"]["canonical_smiles_sha256"] = (spec.system.canonical_smiles_sha256
+                                               or sha256_text(canonical_smiles))
+    tmp = Path(tempfile.mkdtemp()) / f"{spec.system.system_id}.yaml"
+    tmp.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    return load_system(tmp, check_chemistry=False)
+
+
 def build_parser() -> argparse.ArgumentParser:
     shipped = list_shipped()
     p = argparse.ArgumentParser(
@@ -440,9 +546,15 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--bundle", required=True, metavar="BUNDLE_DIR")
     b.set_defaults(func=cmd_validate_bundle)
 
-    pr = sub.add_parser("prepare", help="build a portable bundle from manifests")
-    pr.add_argument("--system", required=True)
-    pr.add_argument("--experiment", required=True,
+    pr = sub.add_parser("prepare", help="build a portable bundle")
+    pr.add_argument("--config", default=None,
+                    help="canonical configuration document (.yaml/.yml/.json). Preferred; the "
+                         "--system/--experiment manifest pair is the legacy front end and is "
+                         "migrated into the same canonical model by `config migrate`.")
+    pr.add_argument("--profile", default=None, help="pin a profile when using --config")
+    pr.add_argument("--set", action="append", default=None, metavar="dotted.path=value")
+    pr.add_argument("--system", required=False)
+    pr.add_argument("--experiment", required=False,
                     help=f"path, or a shipped manifest: {', '.join(shipped['experiments'])}")
     pr.add_argument("--out-root", required=True, metavar="RUN_ROOT")
     pr.add_argument("--name", default=None, help="bundle directory name (default: timestamped)")

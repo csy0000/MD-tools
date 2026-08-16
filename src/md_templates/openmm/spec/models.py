@@ -179,9 +179,21 @@ class IntegratorSpec(Strict):
 
 
 class EquilibrationSpec(Strict):
+    """Equilibration before production.
+
+    `staged` is restrained minimisation, a heating ramp, and NPT with the restraint released in
+    steps -- appropriate for a flexible solute dropped into a freshly packed box. `simple` is
+    minimise/NVT/NPT with no restraints, for a small rigid solute. The fields each protocol reads
+    differ, which is why the unused ones are optional rather than invented.
+    """
+
     protocol: Literal["staged", "simple"] = "staged"
     minimize_max_iterations: int = Field(ge=0, default=0)
     npt_free: Time
+    timestep: Optional[Time] = None                # equilibration may integrate more cautiously
+    nvt: Optional[Time] = None                     # `simple` only
+    npt: Optional[Time] = None                     # `simple` only
+    box_average_last: Optional[Time] = None
     seed: Optional[int] = None
 
 

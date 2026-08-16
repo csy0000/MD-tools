@@ -28,6 +28,7 @@ partially copied fails before it can contaminate a run.
 """
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 from pathlib import Path
@@ -77,8 +78,14 @@ def prepare(
     device: Optional[str] = None,
     name: Optional[str] = None,
     omega_exclusion: Optional[bool] = None,
+    resolved_cfg: Optional[dict] = None,
+    canonical: Optional[dict] = None,
 ) -> Path:
-    """Build a bundle from manifests. Returns the bundle directory.
+    """Build a bundle. Returns the bundle directory.
+
+    `resolved_cfg` is a configuration already resolved from the canonical model; when given it is
+    used as-is and the manifests are not consulted for scientific values. That keeps ONE builder
+    behind both front ends rather than a second execution path for canonical documents.
 
     Preparation is deliberately platform-agnostic in its *output*: the platform argument only
     decides where the equilibration runs, not what is written. A bundle prepared on CPU and one
@@ -86,8 +93,13 @@ def prepare(
     """
     from .equilibration import build_simbox, minimize_equilibrate
 
-    cfg = resolve_config(system, experiment, platform=platform, device=device,
-                         omega_exclusion=omega_exclusion)
+    if resolved_cfg is not None:
+        cfg = copy.deepcopy(resolved_cfg)
+        cfg["production"]["platform"] = platform
+        cfg["production"]["device_index"] = device
+    else:
+        cfg = resolve_config(system, experiment, platform=platform, device=device,
+                             omega_exclusion=omega_exclusion)
     chash = config_hash(system.doc, experiment.doc)
     stamp = provenance.run_stamp()
     bundle_dir = Path(out_root).resolve() / (name or f"{stamp}__{system.system_id}__bundle__{chash}")
@@ -126,6 +138,9 @@ def prepare(
         shutil.copy2(system.input_path(), bundle_dir / system.input_path().name)
     shutil.copy2(experiment.source, bundle_dir / "experiment.prepare.yaml")
     provenance.write_json(bundle_dir / "resolved_config.json", cfg)
+
+    if canonical:
+        provenance.write_json(bundle_dir / "canonical_configuration.json", canonical)
 
     manifest = build_bundle_manifest(
         bundle_dir, system, experiment, cfg, simbox_info=info, equilibration_info=eq,

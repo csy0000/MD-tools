@@ -48,9 +48,13 @@
         "friction": "1 /ps"
       },
       "equilibration": {
-        "protocol": "staged",
-        "minimize_max_iterations": 0,
-        "npt_free": "1000 ps",
+        "protocol": "simple",
+        "minimize_max_iterations": 200,
+        "timestep": "1 fs",
+        "nvt": "2 ps",
+        "npt": "2 ps",
+        "npt_free": "2 ps",
+        "box_average_last": "1 ps",
         "seed": null
       },
       "production": {
