@@ -1246,3 +1246,87 @@ def test_unclassified_amide_blocks_only_while_the_exclusion_is_on():
     with pytest.raises(ValueError, match="could not be classified"):
         _assert_omega_classified(bundle, omega_exclusion=True)
     assert _assert_omega_classified(bundle, omega_exclusion=False) == []
+
+
+# ==================================================================================================
+# requirement 2: the chunk count is an input, never a rounded quotient
+# ==================================================================================================
+from md_templates.openmm.config import resolve_chunk_plan  # noqa: E402
+
+
+def _plan(n, chunk, dt=4.0, exchange=None):
+    return resolve_chunk_plan(n, chunk, timestep_fs=dt, where="production.remd",
+                              exchange_interval_ps=exchange)
+
+
+def test_totals_are_derived_from_the_plan():
+    p = _plan(7, 0.5)
+    assert (p["n_chunks"], p["chunk_ns"], p["total_ns"]) == (7, 0.5, 3.5)
+    assert p["steps_per_chunk"] == 125000          # 0.5 ns at 4 fs
+
+
+@pytest.mark.parametrize("bad", [0, -1, -10])
+def test_non_positive_chunk_counts_are_rejected(bad):
+    with pytest.raises(ValueError, match="greater than zero"):
+        _plan(bad, 1.0)
+
+
+@pytest.mark.parametrize("bad", [2.0, 2.5, "2", None])
+def test_non_integer_chunk_counts_are_rejected(bad):
+    with pytest.raises(ValueError, match="must be an integer"):
+        _plan(bad, 1.0)
+
+
+def test_boolean_chunk_count_is_rejected_even_though_bool_is_an_int():
+    """`True` is an int in Python; accepting it as "one chunk" would read a config error as a plan."""
+    with pytest.raises(ValueError, match="must be an integer"):
+        _plan(True, 1.0)
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("inf"), float("nan")])
+def test_chunk_length_must_be_finite_and_positive(bad):
+    with pytest.raises(ValueError, match="finite and positive"):
+        _plan(2, bad)
+
+
+def test_chunk_must_be_a_whole_number_of_steps():
+    with pytest.raises(ValueError, match="whole number of .* fs steps"):
+        _plan(2, 0.000003, dt=4.0)          # 3 ps / 4 fs = 0.75 steps
+
+
+def test_rest2_chunk_must_be_a_whole_number_of_exchange_intervals():
+    with pytest.raises(ValueError, match="whole number of exchange intervals"):
+        _plan(2, 1.0, exchange=300.0)       # 1000 ps / 300 ps = 3.33 intervals
+
+
+def test_a_schema_v1_experiment_is_refused_with_a_migration_message(tmp_path):
+    """Silently reinterpreting the old field is what the explicit plan exists to stop."""
+    doc = yaml.safe_load(shipped_experiment("smoke").read_text(encoding="utf-8"))
+    doc["schema_version"] = 1
+    doc["rest2"].pop("n_chunks")
+    doc["rest2"]["total_ns_per_replica"] = 0.002       # 2 x 0.001, exactly representable
+    path = write_yaml(tmp_path / "e.yaml", doc)
+    with pytest.raises(ManifestError) as excinfo:
+        load_experiment(path)
+    message = str(excinfo.value)
+    assert "total_ns_per_replica" in message
+    assert "n_chunks: 2" in message, "the message should name the plan this manifest meant"
+    assert "chunk_ns: 0.001" in message
+
+
+def test_a_v1_total_that_was_never_a_whole_number_of_chunks_says_so(tmp_path):
+    """The old code rounded this and ran a different length than the manifest declared."""
+    doc = yaml.safe_load(shipped_experiment("smoke").read_text(encoding="utf-8"))
+    doc["schema_version"] = 1
+    doc["rest2"].pop("n_chunks")
+    doc["rest2"]["total_ns_per_replica"] = 0.0025      # 2.5 chunks of 0.001
+    with pytest.raises(ManifestError, match="NOT a whole number of chunks"):
+        load_experiment(write_yaml(tmp_path / "e.yaml", doc))
+
+
+def test_shipped_experiments_declare_an_explicit_plan():
+    for name in ("smoke", "rgd_rest2_10rung", "macrocycle_pilot_8rung"):
+        doc = yaml.safe_load(shipped_experiment(name).read_text(encoding="utf-8"))
+        assert doc["schema_version"] == 2, name
+        assert isinstance(doc["rest2"]["n_chunks"], int), name
+        assert "total_ns_per_replica" not in doc["rest2"], name

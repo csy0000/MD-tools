@@ -173,13 +173,15 @@ DEFAULTS: dict[str, Any] = {
         # ONE walker per invocation of md.py; the scale factor selects cold (s = 1) or hot.
         "md": {
             "scale_factor": 1.0,
-            "total_ns": 1000.0,
+            # Both are INPUTS. total_ns is derived (n_chunks * chunk_ns) and reported; it is never
+            # an input and is never read back to recover n_chunks.
+            "n_chunks": 10,
             "chunk_ns": 100.0,
             "seed": None,
             "label": "cold",                 # free-text, recorded and used in log lines
         },
         "remd": {
-            "total_ns_per_replica": 1000.0,
+            "n_chunks": 10,
             "chunk_ns": 100.0,
             "scale_factors": None,           # None -> built from rest2.ladder
             "exchange_interval_ps": 10.0,
@@ -242,6 +244,63 @@ def rest2_ladder(s_cold: float = 1.0, s_hot: float = 0.25, n_rungs: int = 6,
     else:
         raise ValueError(f"unknown interp {interp!r}; use sqrt | linear | geometric")
     return [float(round(v, 12)) for v in values]
+
+
+# ---------------------------------------------------------------------------------------------
+# Chunk planning
+#
+# The number of chunks is an INPUT. It used to be int(round(total_ns / chunk_ns)), which silently
+# accepted a total that was not a whole number of chunks and then ran a different length than the
+# manifest declared. Totals are now derived from the plan and are outputs only -- nothing ever
+# reconstructs n_chunks from them.
+# ---------------------------------------------------------------------------------------------
+
+def resolve_chunk_plan(n_chunks: Any, chunk_ns: Any, *, timestep_fs: float, where: str,
+                       exchange_interval_ps: Optional[float] = None) -> dict[str, Any]:
+    """Validate an explicit (n_chunks, chunk_ns) plan and derive its totals.
+
+    `bool` is rejected explicitly: `True` is an `int` in Python and would otherwise be accepted as
+    "one chunk", which is a silent misreading of a configuration error.
+    """
+    if isinstance(n_chunks, bool) or not isinstance(n_chunks, int):
+        raise ValueError(
+            f"{where}.n_chunks must be an integer, got {n_chunks!r} ({type(n_chunks).__name__}). "
+            "The number of chunks is an input, not a rounded quotient."
+        )
+    if n_chunks <= 0:
+        raise ValueError(f"{where}.n_chunks must be greater than zero, got {n_chunks}")
+
+    try:
+        chunk = float(chunk_ns)
+    except (TypeError, ValueError):
+        raise ValueError(f"{where}.chunk_ns must be a number, got {chunk_ns!r}") from None
+    if not math.isfinite(chunk) or chunk <= 0:
+        raise ValueError(f"{where}.chunk_ns must be finite and positive, got {chunk_ns!r}")
+
+    steps_per_chunk = chunk * 1e6 / float(timestep_fs)
+    if abs(steps_per_chunk - round(steps_per_chunk)) > 1e-6:
+        raise ValueError(
+            f"{where}.chunk_ns ({chunk} ns) is not a whole number of {timestep_fs} fs steps "
+            f"({steps_per_chunk:.6f}). A rounded chunk runs a different length than it declares."
+        )
+    steps_per_chunk = int(round(steps_per_chunk))
+
+    if exchange_interval_ps is not None:
+        per_chunk = chunk * 1000.0 / float(exchange_interval_ps)
+        if abs(per_chunk - round(per_chunk)) > 1e-6:
+            raise ValueError(
+                f"{where}.chunk_ns ({chunk} ns) is not a whole number of exchange intervals "
+                f"({exchange_interval_ps} ps): {per_chunk:.6f}. A chunk boundary that falls "
+                "mid-interval would drop or duplicate an exchange attempt across a resume."
+            )
+
+    return {
+        "n_chunks": int(n_chunks),
+        "chunk_ns": chunk,
+        "steps_per_chunk": steps_per_chunk,
+        # DERIVED, and reported only. Never read back to recover n_chunks.
+        "total_ns": round(n_chunks * chunk, 12),
+    }
 
 
 def dump_defaults(path: Optional[Path] = None) -> str:
@@ -413,7 +472,9 @@ def resolve_config(
     remd["scale_factors"] = [float(v) for v in rest2["scale_factors"]]
     remd["exchange_interval_ps"] = float(rest2["exchange_interval_ps"])
     remd["equilibration_ps"] = float(rest2["relaxation_ps"])
-    remd["total_ns_per_replica"] = float(rest2["total_ns_per_replica"])
+    # The external manifest carries the same two canonical fields; they map straight through, so
+    # there is one source of truth rather than a manifest total and a config total to keep in step.
+    remd["n_chunks"] = int(rest2["n_chunks"])
     remd["chunk_ns"] = float(rest2["chunk_ns"])
     cfg["production"]["precision"] = edoc["platform"]["precision"]
 
@@ -498,9 +559,15 @@ def _check_exchange_divisibility(cfg: dict, experiment: ExperimentManifest) -> N
 
 
 def exchange_rounds(cfg: dict) -> int:
-    """How many exchange attempts the configured budget will make, in total."""
+    """How many exchange attempts the configured plan will make, in total.
+
+    Derived from the plan (n_chunks x steps_per_chunk), never from a stored total: a total that had
+    drifted out of step with the plan would silently change this count.
+    """
     dt_fs = float(cfg["integrator"]["timestep_fs"])
     remd = cfg["production"]["remd"]
     exchange_steps = round(float(remd["exchange_interval_ps"]) * 1000.0 / dt_fs)
-    total_steps = round(float(remd["total_ns_per_replica"]) * 1e6 / dt_fs)
-    return int(total_steps // exchange_steps)
+    plan = resolve_chunk_plan(remd["n_chunks"], remd["chunk_ns"], timestep_fs=dt_fs,
+                              where="production.remd",
+                              exchange_interval_ps=float(remd["exchange_interval_ps"]))
+    return int(plan["n_chunks"] * plan["steps_per_chunk"] // exchange_steps)

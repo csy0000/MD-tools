@@ -10,7 +10,7 @@
 # exchange_attempts.csv per neighbouring pair, and size the real ladder from the worst pair. Do
 # not treat a number produced under this template as a converged result, and do not copy it into a
 # production manifest without changing ladder_status and saying what changed it.
-schema_version: 1
+schema_version: 2
 experiment_id: macrocycle_pilot_8rung
 master_seed: 20260814
 ladder_status: unvalidated
@@ -26,7 +26,9 @@ rest2:
   scale_factors: [1.0, 0.862245, 0.734694, 0.617347, 0.510204, 0.413265, 0.326531, 0.25]
   exchange_interval_ps: 10.0
   relaxation_ps: 10.0
-  total_ns_per_replica: 2.0
+  # n_chunks * chunk_ns = 2 * 1.0 = 2.0 ns per replica,
+  # derived and reported; the plan is what is declared.
+  n_chunks: 2
   chunk_ns: 1.0
 
 platform:

@@ -15,7 +15,7 @@ from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 
-from .config import rest2_ladder, write_manifest
+from .config import resolve_chunk_plan, rest2_ladder, write_manifest
 from .equilibration import (_apply_coords, _load_bundle, _make_simulation,
                             _scaled_system, _steps)
 from .md import (_assert_omega_classified, _attach_chunk_reporters, _close_chunk,
@@ -166,10 +166,13 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
         simulations.append(_make_simulation(pdb.topology, system, cfg, int(rcfg["seed"]) + r))
 
     exchange_steps = _steps(float(rcfg["exchange_interval_ps"]), dt_fs)
-    chunk_steps = _steps(float(rcfg["chunk_ns"]) * 1000.0, dt_fs)
+    plan = resolve_chunk_plan(rcfg["n_chunks"], rcfg["chunk_ns"], timestep_fs=dt_fs,
+                              where="production.remd",
+                              exchange_interval_ps=float(rcfg["exchange_interval_ps"]))
+    chunk_steps = plan["steps_per_chunk"]
     if chunk_steps % exchange_steps != 0:
         raise ValueError("remd.chunk_ns must be a whole number of exchange intervals")
-    n_chunks = int(round(float(rcfg["total_ns_per_replica"]) / float(rcfg["chunk_ns"])))
+    n_chunks = plan["n_chunks"]
     rounds_per_chunk = chunk_steps // exchange_steps
 
     replica_dirs = [run_dir / f"replica_{r:02d}" for r in range(n_replicas)]
@@ -327,8 +330,9 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
         "exchange_interval_ps": float(rcfg["exchange_interval_ps"]),
         "pre_exchange_relaxation": relaxation,
         "n_chunks": n_chunks,
-        "chunk_ns": float(rcfg["chunk_ns"]),
-        "total_ns_per_replica": float(rcfg["total_ns_per_replica"]),
+        "chunk_ns": plan["chunk_ns"],
+        # derived from the plan, reported only
+        "total_ns_per_replica": plan["total_ns"],
         "acceptance_fraction": n_accepted / max(1, n_attempts),
         "n_exchange_attempts": n_attempts,
         "exchange_log": str(log_path),

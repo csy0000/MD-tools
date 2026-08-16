@@ -235,7 +235,8 @@ def launch_rest2(
             "n_rungs": experiment.n_rungs,
             "scale_factors": experiment.scale_factors,
             "master_seed": experiment.master_seed,
-            "total_ns_per_replica": cfg["production"]["remd"]["total_ns_per_replica"],
+            "n_chunks": cfg["production"]["remd"]["n_chunks"],
+            "chunk_ns": cfg["production"]["remd"]["chunk_ns"],
             "planned_exchange_rounds": planned_rounds,
         },
         "platform": {

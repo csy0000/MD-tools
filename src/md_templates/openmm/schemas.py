@@ -31,7 +31,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-SCHEMA_VERSION = 1
+#: System and experiment manifests version INDEPENDENTLY. The explicit chunk plan changed the
+#: experiment schema only; forcing every system manifest to re-version for an unrelated change
+#: would be churn, and would make "which schema broke" unanswerable from the number alone.
+SYSTEM_SCHEMA_VERSION = 1
+EXPERIMENT_SCHEMA_VERSION = 2
+
+#: Backwards-compatible alias for the system version, which is what most callers mean.
+SCHEMA_VERSION = SYSTEM_SCHEMA_VERSION
 
 #: Routes a portable manifest may declare. ``auto`` is deliberately absent: it is resolvable only
 #: against a specific invocation, which is the opposite of portable.
@@ -216,10 +223,10 @@ def validate_system(doc: dict, *, source: Path, check_chemistry: bool = True) ->
             f"{where}: unknown top-level key(s) {unknown}; allowed: {sorted(SYSTEM_KEYS)}"
         )
     version = _require(doc, "schema_version", where)
-    if int(version) != SCHEMA_VERSION:
+    if int(version) != SYSTEM_SCHEMA_VERSION:
         raise ManifestError(
-            f"{where}: schema_version {version} is not supported (this build reads "
-            f"schema_version {SCHEMA_VERSION})"
+            f"{where}: schema_version {version} is not supported (this build reads system "
+            f"schema_version {SYSTEM_SCHEMA_VERSION})"
         )
     system_id = str(_require(doc, "system_id", where))
     if not re.fullmatch(r"[a-z0-9_]+", system_id):
@@ -408,6 +415,29 @@ class ExperimentManifest:
         return str(self.doc.get("ladder_status", "unvalidated"))
 
 
+def _chunk_plan_migration_message(where: str, rest2: dict) -> str:
+    """Say what this specific manifest should become, not merely that it is old."""
+    total = rest2.get("total_ns_per_replica")
+    chunk = rest2.get("chunk_ns")
+    suggestion = ""
+    if total and chunk:
+        n = float(total) / float(chunk)
+        if abs(n - round(n)) < 1e-9:
+            suggestion = (f"\n  For this manifest that is exactly n_chunks: {int(round(n))}, "
+                          f"chunk_ns: {chunk}.")
+        else:
+            suggestion = (f"\n  Note {total} / {chunk} = {n:.6f}, which is NOT a whole number of "
+                          "chunks -- the old code rounded it and ran a different length than this "
+                          "manifest declared. Choose the plan you meant.")
+    return (
+        f"{where}:rest2 uses `total_ns_per_replica`, which experiment schema_version "
+        f"{EXPERIMENT_SCHEMA_VERSION} replaced with an explicit chunk plan.\n"
+        "  The number of chunks is now an input, not a rounded quotient: give `n_chunks` and "
+        "`chunk_ns`, and the total is derived from them." + suggestion +
+        f"\n  Then set schema_version: {EXPERIMENT_SCHEMA_VERSION}."
+    )
+
+
 def load_experiment(path: Path) -> ExperimentManifest:
     path = Path(path).resolve()
     doc = _load_yaml(path)
@@ -423,8 +453,15 @@ def validate_experiment(doc: dict, *, source: Path) -> None:
             f"{where}: unknown top-level key(s) {unknown}; allowed: {sorted(EXPERIMENT_KEYS)}"
         )
     version = _require(doc, "schema_version", where)
-    if int(version) != SCHEMA_VERSION:
-        raise ManifestError(f"{where}: schema_version {version} is not supported")
+    if int(version) != EXPERIMENT_SCHEMA_VERSION:
+        rest2_block = doc.get("rest2") if isinstance(doc.get("rest2"), dict) else {}
+        if "total_ns_per_replica" in rest2_block:
+            # The version number alone is not actionable. Say what changed and what to write.
+            raise ManifestError(_chunk_plan_migration_message(where, rest2_block))
+        raise ManifestError(
+            f"{where}: schema_version {version} is not supported (this build reads experiment "
+            f"schema_version {EXPERIMENT_SCHEMA_VERSION})"
+        )
     _require(doc, "experiment_id", where)
     seed = _require(doc, "master_seed", where)
     if not isinstance(seed, int):
@@ -451,14 +488,16 @@ def validate_experiment(doc: dict, *, source: Path) -> None:
         raise ManifestError(f"{where}:rest2.scale_factors must be strictly descending: {vals}")
     if not all(0.0 < v <= 1.0 for v in vals):
         raise ManifestError(f"{where}:rest2.scale_factors must all lie in (0, 1]")
-    for key in ("exchange_interval_ps", "relaxation_ps", "total_ns_per_replica", "chunk_ns"):
+    if "total_ns_per_replica" in rest2:
+        raise ManifestError(_chunk_plan_migration_message(where, rest2))
+    for key in ("exchange_interval_ps", "relaxation_ps", "chunk_ns"):
         v = float(_require(rest2, key, f"{where}:rest2"))
         if v <= 0:
             raise ManifestError(f"{where}:rest2.{key} must be positive, got {v}")
-    if float(rest2["chunk_ns"]) > float(rest2["total_ns_per_replica"]) + 1e-12:
+    n_chunks = _require(rest2, "n_chunks", f"{where}:rest2")
+    if isinstance(n_chunks, bool) or not isinstance(n_chunks, int) or n_chunks <= 0:
         raise ManifestError(
-            f"{where}:rest2.chunk_ns ({rest2['chunk_ns']}) exceeds total_ns_per_replica "
-            f"({rest2['total_ns_per_replica']})"
+            f"{where}:rest2.n_chunks must be an integer greater than zero, got {n_chunks!r}"
         )
 
     plat = _require(doc, "platform", where)

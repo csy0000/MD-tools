@@ -15,7 +15,7 @@ from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 
-from .config import write_manifest
+from .config import resolve_chunk_plan, write_manifest
 from .equilibration import (_apply_coords, _load_bundle, _make_simulation,
                             _scaled_system, _steps)
 
@@ -180,13 +180,10 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
     dt_fs = float(cfg["integrator"]["timestep_fs"])
     sim = _make_simulation(pdb.topology, system, cfg, int(mcfg["seed"]))
 
-    chunk_steps = _steps(float(mcfg["chunk_ns"]) * 1000.0, dt_fs)
-    n_chunks = int(round(float(mcfg["total_ns"]) / float(mcfg["chunk_ns"])))
-    if not math.isclose(n_chunks * float(mcfg["chunk_ns"]), float(mcfg["total_ns"]), rel_tol=1e-9):
-        raise ValueError(
-            f"total_ns ({mcfg['total_ns']}) is not an integer multiple of chunk_ns "
-            f"({mcfg['chunk_ns']})"
-        )
+    plan = resolve_chunk_plan(mcfg["n_chunks"], mcfg["chunk_ns"],
+                              timestep_fs=dt_fs, where="production.md")
+    chunk_steps = plan["steps_per_chunk"]
+    n_chunks = plan["n_chunks"]
     for name, interval_ps in (("all_atom_ps", cfg["production"]["report"]["all_atom_ps"]),
                               ("solute_ps", cfg["production"]["report"]["solute_ps"])):
         if chunk_steps % _steps(float(interval_ps), dt_fs) != 0:
@@ -247,8 +244,9 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
 
     info = {
         "suffix": suffix, "label": label, "scale_factor": scale,
-        "n_chunks": n_chunks, "chunk_ns": float(mcfg["chunk_ns"]),
-        "total_ns": float(mcfg["total_ns"]), "timestep_fs": dt_fs,
+        "n_chunks": n_chunks, "chunk_ns": plan["chunk_ns"],
+        # derived from the plan, reported only
+        "total_ns": plan["total_ns"], "timestep_fs": dt_fs,
         "input_coords": origin, "output_dir": str(run_dir),
         "mean_ns_per_day": (
             round(float(mcfg["chunk_ns"]) * 86400.0 / float(np.mean(times)), 2) if times else None
