@@ -22,7 +22,7 @@ Read this before quoting any number produced by these commands.
   `macrocycle_pilot_8rung` (`ladder_status: unvalidated`), read `exchange_attempts.csv` per
   neighbouring pair, and size the real ladder from the worst pair.
 * **cyclo-(RGDfV) retains the ten-rung working ladder** (`rgd_rest2_10rung`,
-  `ladder_status: validated`). That status is specific to RGD: it comes from three matched
+  `ladder_status: pilot_supported`). That status is specific to RGD: it comes from three matched
   2 ns/replica pilots against the 8-rung control (median worst-pair acceptance 0.140 → 0.240,
   pooled minimum 0.173 → 0.277). One molecule is the whole evidence base; it does not transfer to
   cyclosporin or to the RGD derivatives.
@@ -31,6 +31,25 @@ Read this before quoting any number produced by these commands.
   are resolved, treat these runs as pilots.
 
 ---
+
+## Ladder status vocabulary
+
+Two values, and deliberately no third:
+
+| status | meaning |
+|---|---|
+| `unvalidated` | no system-specific pair-resolved evidence. An **absent** status resolves here — silence is not evidence. |
+| `pilot_supported` | adopted as the working ladder on declared, **system-specific** pilot evidence. |
+
+`pilot_supported` is the strongest status this vocabulary offers, and it is deliberately weaker
+than "validated". It does **not** assert convergence, production readiness, or a formal pass of
+every predeclared acceptance condition — cyclo-(RGDfV)'s ladder was adopted after three matched
+pilots while the predeclared conjunctive rule was *not* formally satisfied, because condition 5
+was under-specified. It is also a claim about one system only: copying a `pilot_supported`
+manifest to another molecule silently transfers a claim that was never made about it.
+
+An unknown value fails manifest validation rather than being carried as a free-text note, and run
+and bundle manifests record the status verbatim.
 
 ## Install
 
@@ -166,6 +185,24 @@ it is resolvable only against a specific invocation, which is the opposite of po
 macrocycle carrying that `system_id` is rejected, because "a neutral macrocycle called RGD" is
 precisely what a copy-paste error produces.
 
+**The RGD box shape is evidence, not a default.** `box_shape: dodecahedron` is proven from the
+Phase-A prepared system that fed all six matched ladder pilots — they copy its `rgd_simbox.json`
+(see `reports/explicit_solvent_validation/20260814_v2/raw_exchange/pilots6_command.sh`). Preserved
+in-repo, because the original lived in a job temp directory:
+
+```
+reports/explicit_solvent_validation/20260814_v2/phaseA_prepared_system/rgd_simbox.json
+sha256 ea1c14edb7c9fc949d892fb41fb733750179555c235b3d6a0a54c7bda821ac61
+  geometry.box_shape              dodecahedron
+  geometry.box_width_nm           3.66182       (grown_for_cutoff: false)
+  geometry.min_image_distance_nm  2.5893        at a 1.0 nm cutoff
+  realised_ionic_strength_molar   0.15903       (Na+ 3 / Cl- 3, 1047 waters, 3226 particles)
+```
+
+An earlier revision of this manifest said `cube`, which would have attached the ten-rung
+acceptance statistics to a box geometry the pilots never ran in. A regression test pins the
+manifest to this artifact.
+
 > Note: `systems/cyclo_rgdfv/system.yaml` in the source tree records `forcefield: ff19SB`. That is
 > the **scientific system definition** for the implicit-solvent AIS work and its REMD reference; it
 > is a different artifact for a different calculation and is not interchangeable with the portable
@@ -255,6 +292,58 @@ one-GPU machine the second and third jobs landed back on device 0, where two RES
 sharing a card without CUDA MPS run about **3.7× slower each** — wrong, but not visibly wrong.
 
 ---
+
+## Running a different experiment against a prepared bundle
+
+`rest2 --bundle B --experiment E` lets a new experiment run against an already-prepared bundle.
+That is the point of a transferable bundle — run longer, or on another device, from the identical
+starting state. It is also the obvious way to produce a silently wrong result, because nothing in
+the file layout stops a new experiment from declaring a different force field or a different box,
+neither of which can take effect: `system.xml` and `equilibrated_state.xml` were built under the
+old settings.
+
+So a bundle records a **build-defining projection** of its resolved configuration and that
+projection's SHA-256 (`prepared_system.fingerprint` in `bundle_manifest.json`). An override
+recomputes the projection and must match it exactly.
+
+| accepted — the prepared System is still right | rejected — the prepared System would be wrong |
+|---|---|
+| total duration, chunk length | force field, charge method, water model |
+| exchange interval, relaxation | box shape, padding, salt, neutralisation |
+| reporting intervals | cutoff, PME settings, constraints, rigid water, HMR |
+| platform, device, precision | minimum-image margin |
+| production timestep, run seeds | omega selection and classification |
+| the REST2 ladder itself | anything that produced `equilibrated_state.xml` |
+
+Rejection happens **before** the run directory or any OpenMM context is created, and names the
+differing dotted paths with both values. The comparison is against the recorded projection, not
+against the fingerprint alone, so rehashing an edited manifest does not bypass it. Both the bundle
+fingerprint and the run's own config hash are recorded in `run_manifest.json`. Exit code `8`.
+
+## Box geometry: the minimum-image margin
+
+OpenMM refuses a cutoff larger than half the minimum image distance, and aborts mid-run if the box
+contracts past it. When a requested box is too small for the cutoff, the preparation grows it —
+and growing it to *exactly* twice the cutoff leaves it sitting on the limit, so the first NPT step
+crosses it and the run dies with "The periodic box size has decreased to less than twice the
+nonbonded cutoff".
+
+`system_build.minimum_image_margin_nm` (default **0.10 nm**) is the headroom required when growth
+is necessary:
+
+```
+minimum image distance  >=  2 * nonbonded_cutoff + minimum_image_margin_nm
+```
+
+A box that is already large enough is left exactly as requested — the rule only ever grows. A
+negative margin is rejected before any box is built, and `0.0` restores the old
+grow-to-the-limit behaviour for anyone who needs it deliberately. The `refuse` policy reports the
+padding that would satisfy the same margin. Every number is recorded in the simbox and bundle
+manifests: cutoff, requested margin, minimum required image distance, the actual image distance,
+and whether growth occurred.
+
+This is the general fix. The smoke's small cutoff is a **speed** choice, not the remedy — the
+margin protects any preparation, including production ones with a tight box at a 1.0 nm cutoff.
 
 ## Verify an installation
 

@@ -25,12 +25,11 @@ parameterization:
 # Deliberately tight: a small box keeps the CPU smoke to minutes. Not a production solvation
 # setting — 0.8 nm padding is too thin for a production run and is used here only for speed.
 #
-# It is not arbitrary either. The box-growth policy grows an undersized box to EXACTLY twice the
-# cutoff, which leaves no margin at all: the first NPT step then shrinks it below that limit and
-# OpenMM aborts with "periodic box size has decreased to less than twice the nonbonded cutoff".
-# Padding alone cannot fix that — it has to be large enough that the natural box already exceeds
-# the limit and no growth happens. Here 1.2 nm padding gives a ~1.87 nm box against a 1.4 nm
-# requirement at the smoke's 0.7 nm cutoff (set in smoke.yaml): ~34 % margin.
+# The small cutoff paired with this padding is a SPEED choice, not a bug workaround. The
+# grow-to-exactly-twice-the-cutoff defect that once aborted this smoke on its first NPT step is
+# fixed generally by system_build.minimum_image_margin_nm (default 0.10 nm), which applies to every
+# preparation including production ones — see PORTABLE_REST2.md. Nothing here is a production
+# solvation setting.
 solvation:
   water_model: tip3p
   padding_nm: 1.2

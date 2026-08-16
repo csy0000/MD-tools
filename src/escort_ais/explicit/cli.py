@@ -82,6 +82,23 @@ def cmd_validate_system(args) -> int:
     par = system.doc["parameterization"]
     print(f"  forcefields   small_molecule={par['small_molecule_forcefield']} "
           f"protein={par['protein_forcefield']} water={par['water_forcefield']}")
+    solv = system.doc.get("solvation") or {}
+    if solv:
+        # box shape is part of the identity of the prepared system, not a cosmetic default: the
+        # ladder evidence was measured in one geometry and is not transferable to another
+        print(f"  solvation     box_shape={solv.get('box_shape')} "
+              f"padding_nm={solv.get('padding_nm')} "
+              f"ionic_strength_molar={solv.get('ionic_strength_molar')} "
+              f"water_model={solv.get('water_model')}")
+    if args.experiment:
+        experiment = load_experiment(_resolve_manifest(args.experiment, "experiment"))
+        print(f"  experiment    {experiment.experiment_id}   {experiment.n_rungs} rungs   "
+              f"ladder_status={experiment.ladder_status}")
+        if experiment.ladder_status != "pilot_supported":
+            print("                (no system-specific pilot evidence stands behind this ladder)")
+        else:
+            print("                (system-specific pilot evidence; NOT convergence or "
+                  "production readiness)")
     return runner.EXIT_OK
 
 
@@ -193,6 +210,8 @@ def build_parser() -> argparse.ArgumentParser:
     v = sub.add_parser("validate-system", help="validate a system manifest")
     v.add_argument("--system", required=True,
                    help=f"path, or a shipped manifest: {', '.join(shipped['systems'])}")
+    v.add_argument("--experiment", default=None,
+                   help="also validate this experiment and report its ladder status")
     v.add_argument("--no-chemistry", action="store_true",
                    help="skip the RDKit checks (structure only); never used by prepare/rest2")
     v.set_defaults(func=cmd_validate_system)
@@ -238,6 +257,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     except bundle_mod.BundleError as exc:
         print(f"bundle error: {exc}", file=sys.stderr)
         return runner.EXIT_BUNDLE
+    except runner.IncompatibleExperiment as exc:
+        print(f"incompatible experiment: {exc}", file=sys.stderr)
+        return runner.EXIT_INCOMPATIBLE
     except runner.RunExists as exc:
         print(f"{exc}", file=sys.stderr)
         return runner.EXIT_RUN_EXISTS

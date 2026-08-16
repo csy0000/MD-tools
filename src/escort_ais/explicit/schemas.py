@@ -39,6 +39,20 @@ ROUTES = ("smiles", "pdb")
 
 PRECISIONS = ("single", "mixed", "double")
 
+#: How much system-specific evidence stands behind a ladder. Deliberately only two rungs, and
+#: neither of them is "validated":
+#:
+#: * ``unvalidated``     — no system-specific pair-resolved evidence at all.
+#: * ``pilot_supported`` — adopted as the working ladder on declared, system-specific pilot
+#:   evidence. It is NOT a claim of convergence, of production readiness, or of a formal pass of
+#:   every predeclared acceptance condition. cyclo-(RGDfV)'s ten-rung ladder is `pilot_supported`:
+#:   three matched 2 ns/replica pilots beat the 8-rung control, but the predeclared conjunctive
+#:   rule was not formally satisfied because condition 5 was under-specified.
+#:
+#: An absent status resolves to ``unvalidated`` — silence is not evidence. An unknown value fails
+#: validation rather than being treated as a free-text note.
+LADDER_STATUSES = ("unvalidated", "pilot_supported")
+
 #: Top-level keys each manifest may carry. Unknown keys are rejected rather than ignored: a typo
 #: in a portable manifest otherwise leaves the default silently in force while the file appears to
 #: set something.
@@ -390,7 +404,7 @@ class ExperimentManifest:
 
     @property
     def ladder_status(self) -> str:
-        """``validated`` | ``unvalidated``. Absent means unvalidated — silence is not evidence."""
+        """One of `LADDER_STATUSES`. Absent resolves to ``unvalidated`` — silence is not evidence."""
         return str(self.doc.get("ladder_status", "unvalidated"))
 
 
@@ -457,9 +471,12 @@ def validate_experiment(doc: dict, *, source: Path) -> None:
             raise ManifestError(f"{where}: '{optional}' must be a mapping")
 
     status = str(doc.get("ladder_status", "unvalidated"))
-    if status not in ("validated", "unvalidated"):
+    if status not in LADDER_STATUSES:
         raise ManifestError(
-            f"{where}: ladder_status {status!r} must be 'validated' or 'unvalidated'"
+            f"{where}: ladder_status {status!r} must be one of {LADDER_STATUSES}. "
+            "Note that 'validated' is deliberately NOT available: the strongest status this "
+            "vocabulary offers is 'pilot_supported', which asserts system-specific pilot "
+            "evidence and explicitly not convergence or production readiness."
         )
 
 

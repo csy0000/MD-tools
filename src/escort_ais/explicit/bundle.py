@@ -35,6 +35,7 @@ from typing import Any, Optional
 
 from . import provenance
 from .config import resolve_config
+from .fingerprint import build_projection, fingerprint
 from .schemas import (
     ExperimentManifest,
     ManifestError,
@@ -43,6 +44,7 @@ from .schemas import (
     canonical_json,
     config_hash,
     sha256_file,
+    sha256_text,
 )
 
 #: Every file a bundle must contain. `validate-bundle` rejects a bundle missing any of them.
@@ -164,6 +166,16 @@ def build_bundle_manifest(
             "scale_factors": experiment.scale_factors,
             "master_seed": experiment.master_seed,
         },
+        # What makes this the System it is. A launch-time --experiment override is compared
+        # against the PROJECTION, not merely against the fingerprint, so rehashing an edited
+        # manifest cannot bypass the check.
+        "prepared_system": {
+            "fingerprint": fingerprint(cfg),
+            "projection": build_projection(cfg),
+            "note": "every setting whose change would make the stored system.xml and "
+                    "equilibrated_state.xml the wrong artifacts; runtime-only settings "
+                    "(duration, chunking, reporting, platform, device, ladder) are excluded",
+        },
         "parameterization": dict(system.doc["parameterization"]),
         "solvation": {
             "water_model": solv["water_model"],
@@ -185,6 +197,8 @@ def build_bundle_manifest(
             "n_degrees_of_freedom": counts["n_degrees_of_freedom"],
         },
         "box_vectors_nm": counts["box_vectors_nm"],
+        # the minimum-image margin rule, and what it actually produced
+        "box_geometry": simbox_info.get("geometry", {}),
         "omega": {
             "selective_scaling": cfg["rest2"]["omega_selective"],
             "excluded_central_bonds": simbox_info.get("omega_bonds")
@@ -336,6 +350,16 @@ def validate_bundle(bundle_dir: Path) -> dict[str, Any]:
             f"{sys_doc.get('system_id')!r} but the bundle manifest records "
             f"{manifest['system']['system_id']!r}"
         )
+    prepared = manifest.get("prepared_system") or {}
+    if prepared.get("projection") is not None:
+        recomputed_fp = sha256_text(canonical_json(prepared["projection"]))
+        if recomputed_fp != prepared.get("fingerprint"):
+            raise BundleError(
+                f"{bundle_dir}: the recorded prepared-system projection does not hash to the "
+                f"recorded fingerprint (recorded {prepared.get('fingerprint')}, recomputed "
+                f"{recomputed_fp}); the bundle manifest has been edited"
+            )
+
     recomputed = config_hash(sys_doc, exp_doc)
     if recomputed != manifest.get("config_hash"):
         raise BundleError(

@@ -52,6 +52,7 @@
   "system_build": {
     "nonbonded_method": "PME",
     "nonbonded_cutoff_nm": 1.0,
+    "minimum_image_margin_nm": 0.1,
     "switch_distance_nm": null,
     "use_dispersion_correction": true,
     "ewald_error_tolerance": 0.0005,

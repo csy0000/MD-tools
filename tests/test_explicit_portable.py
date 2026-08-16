@@ -229,6 +229,7 @@ def test_pdb_hash_mismatch_is_rejected(tmp_path):
 # ---------------------------------------------------------------------------------------------
 
 def test_rgd_ladder_is_the_ten_rung_working_ladder():
+    """Shape of the ladder. Its exact values and its status are pinned separately below."""
     exp = load_experiment(shipped_experiment("rgd_rest2_10rung"))
     scales = exp.scale_factors
     assert exp.n_rungs == 10
@@ -239,7 +240,8 @@ def test_rgd_ladder_is_the_ten_rung_working_ladder():
     roots = [s ** 0.5 for s in scales]
     gaps = [a - b for a, b in zip(roots, roots[1:])]
     assert max(gaps) - min(gaps) < 1e-6, gaps
-    assert exp.ladder_status == "validated"
+    # `validated` was too broad: the predeclared conjunctive rule was not formally satisfied
+    assert exp.ladder_status == "pilot_supported"
 
 
 def test_generic_macrocycle_template_is_marked_unvalidated():
@@ -670,3 +672,491 @@ def test_cpu_smoke_prepares_propagates_and_exchanges(tmp_path):
     assert bundle_manifest["system"]["formal_charge"] == 0
     assert bundle_manifest["parameterization"]["charge_method"] == "am1bcc"
     assert bundle_manifest["environment"]["toolchain"]["openmm"]
+
+
+# ---------------------------------------------------------------------------------------------
+# fix 8 — RGD box-shape provenance
+# ---------------------------------------------------------------------------------------------
+
+#: The Phase-A prepared system that fed all six matched ladder pilots. They copy `rgd_simbox.json`
+#: out of it (see `raw_exchange/pilots6_command.sh`), so its geometry IS the geometry the ten-rung
+#: evidence was measured in. Preserved in-repo because the original lived in a job temp directory.
+RGD_PILOT_SIMBOX = (
+    REPO_ROOT
+    / "reports/explicit_solvent_validation/20260814_v2/phaseA_prepared_system/rgd_simbox.json"
+)
+RGD_PILOT_SIMBOX_SHA256 = "ea1c14edb7c9fc949d892fb41fb733750179555c235b3d6a0a54c7bda821ac61"
+
+
+def test_rgd_box_shape_matches_the_pilot_evidence():
+    """The ladder evidence and the shipped manifest must describe the same solvent geometry.
+
+    The manifest said `cube` while the pilots ran in a dodecahedron. That silently attaches the
+    ten-rung acceptance statistics to a different box, so this pins the shape to the artifact
+    rather than to anybody's memory. If the evidence file is ever moved, this fails loudly instead
+    of the manifest quietly drifting.
+    """
+    assert RGD_PILOT_SIMBOX.is_file(), (
+        f"pilot evidence missing: {RGD_PILOT_SIMBOX}. The RGD box shape is only defensible while "
+        "this artifact is preserved."
+    )
+    assert schemas.sha256_file(RGD_PILOT_SIMBOX) == RGD_PILOT_SIMBOX_SHA256
+
+    evidence = json.loads(RGD_PILOT_SIMBOX.read_text(encoding="utf-8"))
+    pilot_shape = evidence["geometry"]["box_shape"]
+    assert pilot_shape == "dodecahedron"
+
+    shipped = load_system(shipped_system("cyclo_rgdfv"))
+    assert shipped.doc["solvation"]["box_shape"] == pilot_shape
+    # padding and salt come from the same artifact and must not drift either
+    assert shipped.doc["solvation"]["padding_nm"] == evidence["geometry"]["padding_nm_requested"]
+    assert shipped.doc["solvation"]["ionic_strength_molar"] == pytest.approx(0.15)
+
+
+def test_rgd_manifest_still_enforces_the_full_identity():
+    """The box-shape change must not have loosened anything else."""
+    s = load_system(shipped_system("cyclo_rgdfv"))
+    assert s.canonical_hash == schemas.RGD_CANONICAL_SMILES_SHA256
+    assert s.formal_charge == 0
+    par = s.doc["parameterization"]
+    assert par["small_molecule_forcefield"] == "openff-2.2.0"
+    assert par["charge_method"] == "am1bcc"
+    assert par["water_forcefield"] == "amber19/tip3pfb.xml"
+    assert par["protein_forcefield"] is None
+
+
+# ---------------------------------------------------------------------------------------------
+# fix 8 — exact ladder
+# ---------------------------------------------------------------------------------------------
+
+def test_shipped_rgd_ladder_equals_the_authoritative_rule_exactly():
+    """One definition, serialised — not two hand-written lists that can drift apart."""
+    from escort_ais.systems.explicit_baseline import rest2_ladder
+
+    shipped_vals = load_experiment(shipped_experiment("rgd_rest2_10rung")).scale_factors
+    rule = rest2_ladder(1.0, 0.25, 10, "sqrt")
+    assert len(shipped_vals) == 10
+    for got, want in zip(shipped_vals, rule):
+        assert abs(got - want) < 1e-12, (got, want)
+
+
+def test_shipped_ladder_is_not_truncated():
+    """Six-decimal rounding is a silent perturbation of the ladder the pilots ran."""
+    vals = load_experiment(shipped_experiment("rgd_rest2_10rung")).scale_factors
+    assert vals[1] == pytest.approx(0.891975308642, abs=1e-12)
+    assert vals[7] == pytest.approx(0.373456790123, abs=1e-12)
+    # a 6 dp value would be exactly representable at 6 dp; the exact one is not
+    assert round(vals[1], 6) != vals[1]
+
+
+def test_ladder_values_survive_serialisation_and_wheel_loading():
+    """Full precision must survive YAML round-trip and package-resource loading."""
+    from escort_ais.systems.explicit_baseline import rest2_ladder
+
+    raw = yaml.safe_load(shipped_experiment("rgd_rest2_10rung").read_text(encoding="utf-8"))
+    rule = rest2_ladder(1.0, 0.25, 10, "sqrt")
+    for got, want in zip(raw["rest2"]["scale_factors"], rule):
+        assert abs(float(got) - want) < 1e-12
+    round_tripped = yaml.safe_load(yaml.safe_dump(raw))
+    for got, want in zip(round_tripped["rest2"]["scale_factors"], rule):
+        assert abs(float(got) - want) < 1e-12
+
+
+def test_config_hash_changes_if_any_single_scale_factor_changes():
+    s = load_system(shipped_system("cyclo_rgdfv")).doc
+    e = load_experiment(shipped_experiment("rgd_rest2_10rung")).doc
+    base = config_hash(s, e)
+    for i in range(len(e["rest2"]["scale_factors"])):
+        other = json.loads(json.dumps(e))
+        other["rest2"]["scale_factors"][i] += 1e-9
+        assert config_hash(s, other) != base, f"scale factor {i} does not affect the hash"
+
+
+# ---------------------------------------------------------------------------------------------
+# fix 8 — ladder-status vocabulary
+# ---------------------------------------------------------------------------------------------
+
+def test_ladder_status_vocabulary_excludes_validated():
+    assert schemas.LADDER_STATUSES == ("unvalidated", "pilot_supported")
+
+
+def test_rgd_is_pilot_supported_not_validated():
+    assert load_experiment(shipped_experiment("rgd_rest2_10rung")).ladder_status \
+        == "pilot_supported"
+
+
+def test_other_shipped_experiments_stay_unvalidated():
+    for name in ("macrocycle_pilot_8rung", "smoke"):
+        assert load_experiment(shipped_experiment(name)).ladder_status == "unvalidated"
+
+
+def test_absent_status_resolves_conservatively(tmp_path):
+    doc = yaml.safe_load(shipped_experiment("rgd_rest2_10rung").read_text(encoding="utf-8"))
+    doc.pop("ladder_status")
+    assert load_experiment(write_yaml(tmp_path / "e.yaml", doc)).ladder_status == "unvalidated"
+
+
+@pytest.mark.parametrize("bad", ["validated", "production_validated", "converged", "yes"])
+def test_unknown_or_overclaiming_status_fails_validation(tmp_path, bad):
+    doc = yaml.safe_load(shipped_experiment("smoke").read_text(encoding="utf-8"))
+    doc["ladder_status"] = bad
+    with pytest.raises(ManifestError, match="ladder_status"):
+        load_experiment(write_yaml(tmp_path / "e.yaml", doc))
+
+
+def test_status_is_preserved_verbatim_in_manifests():
+    """A run or bundle manifest must not soften or re-derive the status."""
+    exp = load_experiment(shipped_experiment("rgd_rest2_10rung"))
+    assert exp.ladder_status == "pilot_supported"
+    doc_text = shipped_experiment("rgd_rest2_10rung").read_text(encoding="utf-8")
+    assert "ladder_status: pilot_supported" in doc_text
+
+
+def test_documentation_defines_pilot_supported_without_overclaiming():
+    text = (REPO_ROOT / "docs/implementation/explicit_solvent/PORTABLE_REST2.md").read_text(
+        encoding="utf-8")
+    assert "pilot_supported" in text
+    low = text.lower()
+    assert "not" in low and "convergence" in low
+    assert "production-ready" in low or "production readiness" in low
+
+
+# ---------------------------------------------------------------------------------------------
+# fix 8 — prepared-system fingerprint
+# ---------------------------------------------------------------------------------------------
+
+def _cfg(**exp_overrides):
+    """Resolved config for RGD + the 10-rung experiment, with experiment-doc tweaks applied."""
+    from escort_ais.explicit.config import resolve_config
+    from escort_ais.explicit.schemas import ExperimentManifest
+
+    s = load_system(shipped_system("cyclo_rgdfv"))
+    e = load_experiment(shipped_experiment("rgd_rest2_10rung"))
+    doc = json.loads(json.dumps(e.doc))
+    for dotted, value in exp_overrides.items():
+        node = doc
+        parts = dotted.split(".")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = value
+    return resolve_config(s, ExperimentManifest(doc=doc, source=e.source), platform="CPU")
+
+
+def _sysdoc_cfg(**sys_overrides):
+    from escort_ais.explicit.config import resolve_config
+    from escort_ais.explicit.schemas import SystemManifest
+
+    s = load_system(shipped_system("cyclo_rgdfv"))
+    e = load_experiment(shipped_experiment("rgd_rest2_10rung"))
+    doc = json.loads(json.dumps(s.doc))
+    for dotted, value in sys_overrides.items():
+        node = doc
+        parts = dotted.split(".")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = value
+    return resolve_config(SystemManifest(doc=doc, source=s.source), e, platform="CPU")
+
+
+def _bundle_manifest_for(cfg) -> dict:
+    from escort_ais.explicit.fingerprint import build_projection, fingerprint
+
+    return {"prepared_system": {"fingerprint": fingerprint(cfg),
+                                "projection": build_projection(cfg)}}
+
+
+def test_fingerprint_is_deterministic_and_order_independent():
+    from escort_ais.explicit.fingerprint import fingerprint
+
+    a, b = _cfg(), _cfg()
+    assert fingerprint(a) == fingerprint(b)
+    reordered = dict(reversed(list(a.items())))
+    assert fingerprint(reordered) == fingerprint(a)
+
+
+@pytest.mark.parametrize("dotted,value", [
+    ("rest2.total_ns_per_replica", 50.0),          # run longer against the same System
+    ("rest2.chunk_ns", 0.5),                       # restart granularity
+    ("rest2.exchange_interval_ps", 5.0),           # exchange cadence
+    ("platform.precision", "double"),              # propagation precision
+    ("integrator.timestep_fs", 2.0),               # production timestep
+])
+def test_runtime_only_changes_are_accepted(dotted, value):
+    from escort_ais.explicit.fingerprint import check_compatible
+
+    manifest = _bundle_manifest_for(_cfg())
+    assert check_compatible(manifest, _cfg(**{dotted: value})) is None, dotted
+
+
+def test_reporting_interval_change_is_accepted():
+    from escort_ais.explicit.fingerprint import check_compatible
+
+    manifest = _bundle_manifest_for(_cfg())
+    proposed = _cfg(**{"overrides.production.report.state_ps": 1.0})
+    assert check_compatible(manifest, proposed) is None
+
+
+def test_platform_and_device_changes_are_accepted():
+    from escort_ais.explicit.config import resolve_config
+    from escort_ais.explicit.fingerprint import check_compatible
+
+    s = load_system(shipped_system("cyclo_rgdfv"))
+    e = load_experiment(shipped_experiment("rgd_rest2_10rung"))
+    manifest = _bundle_manifest_for(resolve_config(s, e, platform="CPU"))
+    on_gpu = resolve_config(s, e, platform="CUDA", device="1")
+    assert check_compatible(manifest, on_gpu) is None
+
+
+@pytest.mark.parametrize("dotted,value,label", [
+    ("parameterization.small_molecule_forcefield", "openff-2.1.0", "force field"),
+    ("parameterization.charge_method", "gasteiger", "charge method"),
+    ("parameterization.water_forcefield", "amber14/tip3p.xml", "water model"),
+    ("solvation.box_shape", "cube", "box shape"),
+    ("solvation.padding_nm", 1.5, "padding"),
+    ("solvation.ionic_strength_molar", 0.0, "salt"),
+])
+def test_system_defining_changes_are_rejected(dotted, value, label):
+    from escort_ais.explicit.fingerprint import check_compatible
+
+    manifest = _bundle_manifest_for(_sysdoc_cfg())
+    reason = check_compatible(manifest, _sysdoc_cfg(**{dotted: value}))
+    assert reason is not None, f"{label} change was accepted"
+    assert "DIFFERENT prepared System" in reason
+
+
+@pytest.mark.parametrize("dotted,value,label", [
+    ("overrides.system_build.nonbonded_cutoff_nm", 1.2, "cutoff"),
+    ("overrides.system_build.nonbonded_method", "CutoffPeriodic", "PME"),
+    ("overrides.system_build.constraints", "AllBonds", "constraints"),
+    ("overrides.system_build.rigid_water", False, "rigid water"),
+    ("overrides.system_build.hydrogen_mass_amu", 1.008, "HMR"),
+    ("overrides.system_build.minimum_image_margin_nm", 0.0, "box margin"),
+    ("overrides.rest2.omega_selective", False, "omega selection"),
+    ("overrides.rest2.max_proline_ring_size", 6, "omega classification"),
+    ("equilibration.protocol", "simple", "equilibration protocol"),
+    ("equilibration.npt_free_ps", 10.0, "equilibration length"),
+])
+def test_build_defining_experiment_changes_are_rejected(dotted, value, label):
+    from escort_ais.explicit.fingerprint import check_compatible
+
+    manifest = _bundle_manifest_for(_cfg())
+    reason = check_compatible(manifest, _cfg(**{dotted: value}))
+    assert reason is not None, f"{label} change was accepted"
+    assert "DIFFERENT prepared System" in reason
+
+
+def test_rejection_names_the_differing_paths_and_values():
+    from escort_ais.explicit.fingerprint import check_compatible
+
+    manifest = _bundle_manifest_for(_sysdoc_cfg())
+    reason = check_compatible(manifest, _sysdoc_cfg(**{"solvation.box_shape": "cube"}))
+    assert "solvation.box_shape" in reason
+    assert "dodecahedron" in reason and "cube" in reason
+
+
+def test_rehashing_an_edited_bundle_manifest_cannot_bypass_the_check():
+    """The comparison is against the recorded PROJECTION, not the fingerprint alone."""
+    from escort_ais.explicit.fingerprint import build_projection, check_compatible
+    from escort_ais.explicit.schemas import canonical_json, sha256_text
+
+    tampered_cfg = _sysdoc_cfg(**{"solvation.box_shape": "cube"})
+    manifest = {"prepared_system": {"projection": build_projection(_sysdoc_cfg()),
+                                    "fingerprint": "0" * 64}}
+    # a stale fingerprint is caught as tampering
+    assert "edited" in check_compatible(manifest, tampered_cfg)
+
+    # and recomputing the fingerprint over the ORIGINAL projection does not help either: the
+    # values still differ from the proposed configuration
+    manifest["prepared_system"]["fingerprint"] = sha256_text(
+        canonical_json(manifest["prepared_system"]["projection"]))
+    reason = check_compatible(manifest, tampered_cfg)
+    assert reason is not None and "DIFFERENT prepared System" in reason
+
+
+def test_bundle_without_a_fingerprint_is_refused_for_overrides():
+    from escort_ais.explicit.fingerprint import check_compatible
+
+    assert "no prepared-system fingerprint" in check_compatible({}, _cfg())
+
+
+def test_runtime_only_paths_are_disjoint_from_build_defining_paths():
+    from escort_ais.explicit.fingerprint import BUILD_DEFINING_PATHS, RUNTIME_ONLY_PATHS
+
+    overlap = set(BUILD_DEFINING_PATHS) & set(RUNTIME_ONLY_PATHS)
+    assert not overlap, f"a path cannot be both build-defining and runtime-only: {overlap}"
+
+
+def test_incompatible_override_is_rejected_before_the_run_directory_exists(tmp_path):
+    """Rejection must happen before any directory or OpenMM context is created."""
+    from escort_ais.explicit import runner as r
+
+    b = _fake_bundle(tmp_path)
+    m = json.loads((b / bundle_mod.BUNDLE_MANIFEST).read_text(encoding="utf-8"))
+    m.update(_bundle_manifest_for(_sysdoc_cfg()))
+    (b / bundle_mod.BUNDLE_MANIFEST).write_text(json.dumps(m, indent=2), encoding="utf-8")
+    m["files"][bundle_mod.BUNDLE_MANIFEST] = None      # not hashed; harmless for this path
+
+    out_root = tmp_path / "runs"
+    out_root.mkdir()
+    other = tmp_path / "other_experiment.yaml"
+    doc = yaml.safe_load(shipped_experiment("rgd_rest2_10rung").read_text(encoding="utf-8"))
+    doc.setdefault("overrides", {}).setdefault("system_build", {})["nonbonded_cutoff_nm"] = 1.4
+    write_yaml(other, doc)
+
+    with pytest.raises((r.IncompatibleExperiment, bundle_mod.BundleError)) as excinfo:
+        r.launch_rest2(b, other, out_root, platform="CPU")
+    if isinstance(excinfo.value, r.IncompatibleExperiment):
+        assert list(out_root.iterdir()) == [], "a run directory was created before rejection"
+
+
+# ---------------------------------------------------------------------------------------------
+# fix 8 — minimum-image margin
+# ---------------------------------------------------------------------------------------------
+
+def test_margin_is_a_runtime_default_and_is_dumped():
+    from escort_ais.systems.explicit_baseline import DEFAULTS, dump_defaults
+
+    assert DEFAULTS["system_build"]["minimum_image_margin_nm"] == pytest.approx(0.10)
+    assert "minimum_image_margin_nm" in dump_defaults()
+
+
+class _FakeModeller:
+    """Positions only — `_resolve_box` needs nothing else."""
+
+    def __init__(self, radius_nm: float) -> None:
+        from openmm import unit
+
+        import numpy as np
+
+        pts = np.array([[-radius_nm, 0.0, 0.0], [radius_nm, 0.0, 0.0]])
+        self.positions = unit.Quantity(pts, unit.nanometer)
+
+
+def _box_cfg(shape: str, padding: float, cutoff: float, margin: float) -> dict:
+    from escort_ais.systems.explicit_baseline import DEFAULTS
+    import copy
+
+    cfg = copy.deepcopy(DEFAULTS)
+    cfg["solvation"].update(box_shape=shape, padding_nm=padding,
+                            padding_semantics="solute-image-gap", cutoff_fit_policy="grow")
+    cfg["system_build"].update(nonbonded_cutoff_nm=cutoff, minimum_image_margin_nm=margin)
+    return cfg
+
+
+@pytest.mark.parametrize("shape", ["cube", "dodecahedron"])
+def test_grown_box_clears_the_hard_limit_by_the_margin(shape):
+    pytest.importorskip("openmm")
+    from escort_ais.systems.explicit_baseline import _resolve_box
+
+    cutoff, margin = 1.0, 0.10
+    info = _resolve_box(_FakeModeller(0.35), _box_cfg(shape, 0.2, cutoff, margin))
+    assert info["grown_for_cutoff"] is True
+    assert info["min_image_distance_nm"] >= 2 * cutoff + margin - 1e-9
+    assert info["minimum_image_margin_nm"] == pytest.approx(margin)
+    assert info["minimum_image_required_nm"] == pytest.approx(2 * cutoff + margin)
+    # the recorded geometry must match the vectors actually produced
+    import numpy as np
+
+    vectors = np.array(info["box_vectors_nm"])
+    frac = float(np.min(np.diag(vectors))) / info["box_width_nm"]
+    assert frac * info["box_width_nm"] == pytest.approx(info["min_image_distance_nm"], abs=1e-4)
+
+
+@pytest.mark.parametrize("shape", ["cube", "dodecahedron"])
+def test_a_box_already_above_the_threshold_is_left_alone(shape):
+    pytest.importorskip("openmm")
+    from escort_ais.systems.explicit_baseline import _resolve_box
+
+    info = _resolve_box(_FakeModeller(0.35), _box_cfg(shape, 3.0, 1.0, 0.10))
+    assert info["grown_for_cutoff"] is False
+    assert info["box_width_nm"] == pytest.approx(info["box_width_requested_nm"])
+
+
+def test_zero_margin_is_selectable_only_deliberately():
+    pytest.importorskip("openmm")
+    from escort_ais.systems.explicit_baseline import DEFAULTS, _resolve_box
+
+    assert DEFAULTS["system_build"]["minimum_image_margin_nm"] > 0
+    info = _resolve_box(_FakeModeller(0.35), _box_cfg("cube", 0.2, 1.0, 0.0))
+    assert info["min_image_distance_nm"] == pytest.approx(2.0, abs=1e-6)
+
+
+def test_negative_margin_is_rejected_before_any_box_is_built():
+    pytest.importorskip("openmm")
+    from escort_ais.systems.explicit_baseline import _resolve_box
+
+    with pytest.raises(ValueError, match="minimum_image_margin_nm"):
+        _resolve_box(_FakeModeller(0.35), _box_cfg("cube", 0.2, 1.0, -0.05))
+
+
+def test_refuse_policy_reports_what_would_satisfy_the_margin():
+    pytest.importorskip("openmm")
+    from escort_ais.systems.explicit_baseline import _resolve_box
+
+    cfg = _box_cfg("dodecahedron", 0.2, 1.0, 0.10)
+    cfg["solvation"]["cutoff_fit_policy"] = "refuse"
+    with pytest.raises(ValueError) as excinfo:
+        _resolve_box(_FakeModeller(0.35), cfg)
+    msg = str(excinfo.value)
+    assert "margin" in msg and "padding_nm" in msg and "2.100" in msg
+
+
+@pytest.mark.slow
+def test_grown_box_survives_npt_without_the_box_size_abort(tmp_path):
+    """The regression the margin exists for: a real NPT integration in a grown box.
+
+    Before the margin, a box grown to exactly 2*cutoff aborted on the first NPT step with "The
+    periodic box size has decreased to less than twice the nonbonded cutoff". Here the box is
+    forced to grow (padding far below what the cutoff needs) and then actually integrated under a
+    barostat, which is where the abort used to happen.
+
+    The solute is a single water so that no protein/ligand template is involved — this test is
+    about box geometry surviving NPT, and a solute that needs parameterising would only add an
+    unrelated way to fail.
+    """
+    openmm = pytest.importorskip("openmm")
+    import numpy as np
+    from openmm import MonteCarloBarostat, unit
+    from openmm.app import ForceField, HBonds, Modeller, PDBFile, PME, Simulation
+
+    from escort_ais.systems.explicit_baseline import _resolve_box
+
+    pdb_path = tmp_path / "wat.pdb"
+    pdb_path.write_text(
+        "HETATM    1  O   HOH A   1       0.000   0.000   0.000  1.00  0.00           O\n"
+        "HETATM    2  H1  HOH A   1       0.957   0.000   0.000  1.00  0.00           H\n"
+        "HETATM    3  H2  HOH A   1      -0.240   0.927   0.000  1.00  0.00           H\n"
+        "END\n",
+        encoding="utf-8",
+    )
+    pdb = PDBFile(str(pdb_path))
+    ff = ForceField("amber14/tip3pfb.xml")
+
+    cutoff, margin = 0.9, 0.10
+    cfg = _box_cfg("cube", 0.2, cutoff, margin)      # padding far too small: growth is forced
+    modeller = Modeller(pdb.topology, pdb.positions)
+    info = _resolve_box(modeller, cfg)
+    assert info["grown_for_cutoff"] is True, "this test is only meaningful for a grown box"
+    assert info["min_image_distance_nm"] >= 2 * cutoff + margin - 1e-9
+
+    vectors = np.array(info["box_vectors_nm"]) * unit.nanometer
+    modeller.addSolvent(ff, model="tip3p", boxVectors=vectors, neutralize=False)
+
+    system = ff.createSystem(modeller.topology, nonbondedMethod=PME,
+                             nonbondedCutoff=cutoff * unit.nanometer, constraints=HBonds,
+                             rigidWater=True)
+    system.addForce(MonteCarloBarostat(1.0 * unit.bar, 300.0 * unit.kelvin, 5))
+    integrator = openmm.LangevinMiddleIntegrator(
+        300.0 * unit.kelvin, 1.0 / unit.picosecond, 1.0 * unit.femtosecond)
+    sim = Simulation(modeller.topology, system, integrator,
+                     openmm.Platform.getPlatformByName("CPU"))
+    sim.context.setPositions(modeller.positions)
+    sim.minimizeEnergy(maxIterations=200)
+    sim.context.setVelocitiesToTemperature(300.0 * unit.kelvin)
+    sim.step(2000)                                    # 2 ps of NPT: where the abort used to happen
+
+    final = sim.context.getState().getPeriodicBoxVectors(asNumpy=True).value_in_unit(
+        unit.nanometer)
+    assert float(np.min(np.diag(final))) > 2 * cutoff, (
+        "the box contracted below twice the cutoff; the margin did not protect the run"
+    )

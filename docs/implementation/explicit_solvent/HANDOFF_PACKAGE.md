@@ -39,37 +39,19 @@ Renaming keeps the packaging toolchain the file's own comment says it wants; del
 would serve consumers equally well. The rename was chosen because it is the minimal change and
 matches the fix already on `validation/explicit-portability-20260815` byte-for-byte.
 
-## THE GAP: this branch's source is BEHIND the shipped wheel
+## Source provenance — RESOLVED
 
-**The wheel was built from commit `10809c7`, which does not exist in this repository**, and no
-clone on `<host>` contains it. Only the built artefact survives here. Concretely, the wheel
-contains code and settings this branch's `src/` does not:
+The wheel was built from commit `10809c7` of the originating repository, recovered from
+`pharma-jay` on 2026-08-16. All nine modules of `escort_ais/explicit/` are **byte-identical**
+between that commit and the shipped wheel, so this tree is the wheel's source, not a generation
+behind it. `explicit/fingerprint.py`, the dodecahedron box, `ladder_status: pilot_supported` and the
+exact ten scale factors are all present here.
 
-| | this branch's `src/escort_ais/explicit/` | the shipped wheel |
-|---|---|---|
-| `fingerprint.py` | **absent** | present — the build-defining-projection guard |
-| `cyclo_rgdfv` box shape | `cube` | `dodecahedron` |
-| `rgd_rest2_10rung` ladder status | `validated` | `pilot_supported` |
-| ten scale factors | six-decimal truncations | exact, test-locked to the sqrt rule |
-| `common/gpu_lock.py`, `analysis/window_strat_convergence.py` | absent | present |
+`reports/explicit_solvent_validation/20260814_v2/phaseA_prepared_system/rgd_simbox.json` — which
+`cyclo_rgdfv.yaml` cites as the durable copy of the box geometry — was recovered in the same commit
+and hashes to `ea1c14edb7c9fc949d892fb41fb733750179555c235b3d6a0a54c7bda821ac61`, exactly the value
+the manifest declares. An earlier revision of this document reported both as missing; they were
+never lost, they had simply not reached the machine the package was validated on.
 
-Roughly twenty modules differ in total.
-
-### What follows from that
-
-* **Do not rebuild the wheel from this branch.** It would regress to the cube box, drop the
-  fingerprint guard, and re-assert the stronger `validated` ladder claim — silently undoing
-  everything that makes the current package better, while keeping the same version number.
-* **The committed tarball is currently the only copy of that code** anywhere on this machine.
-  That is why the artefact is tracked here rather than left loose in a scratch directory.
-* **This branch is not yet "everything you need for explicit solvent" at source level.** It has
-  every explicit-solvent document, script, report and the full validation evidence, and its
-  `environment.yml` is correct — but its `src/` is one generation behind the package it ships.
-
-### Closing the gap
-
-The `10809c7` source must be recovered from wherever the package was built, then merged here.
-Until then, treat the wheel as the authority on behaviour and this branch's `src/` as history.
-Reconstructing the source by unpacking the wheel is possible — every `.py` is in there — but it
-would be a reconstruction with no commit history, no tests, and no `pyproject.toml` diff, and it
-should not be done silently or without a decision record.
+Rebuilding the wheel from this tree is therefore safe, and would additionally pick up the
+`environment.yml` and `pdb`-route bundle fixes that the shipped wheel predates.

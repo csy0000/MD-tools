@@ -95,22 +95,21 @@ matters; it now passes from a pristine checkout of this branch (`status: complet
 * **No ladder is validated for any peptide.** `ace_ala_nme` proves the ff19SB route runs; it says
   nothing about rung spacing for a peptide of any size.
 
-## Known gaps
+## Source provenance — the wheel and this tree agree
 
-**The shipped wheel is ahead of this source.** The distributed package was built from commit
-`10809c7`, which exists in no clone on `<host>`; this branch's `src/` lacks
-`explicit/fingerprint.py` and still carries `box_shape: cube`, `ladder_status: validated` and
-six-decimal scale factors, where the wheel has dodecahedron, `pilot_supported` and exact values.
-**Do not rebuild the wheel from this branch** — it would silently regress all four under the same
-version number. Details and the recovery path are in `HANDOFF_PACKAGE.md`.
+The distributed wheel `escort_ais-0.1.0-py3-none-any.whl`
+(sha256 `50e9a1a51ecbd3680d43985786813727186d534c486a9501ebd4895fe639a183`) was built from commit
+`10809c7` of the originating repository. That source is the source in this tree: all nine modules of
+`escort_ais/explicit/` are **byte-identical** between `10809c7` and the shipped wheel, verified by
+comparison rather than assumed from a version string.
 
-**A cited evidence file is missing.** `src/escort_ais/explicit/manifests/systems/cyclo_rgdfv.yaml`
-names `reports/explicit_solvent_validation/20260814_v2/phaseA_prepared_system/rgd_simbox.json`
-as the durable repository copy to cite for the dodecahedron box geometry — and that file is not
-tracked anywhere in this repository. The geometry it records (box width 3.66182 nm, minimum-image
-distance 2.5893 nm, 1047 waters, 3226 particles) is corroborated independently: a bundle prepared
-from scratch on 2026-08-15 reproduced every one of those values exactly. See
-`reports/explicit_solvent/20260815_target_machine_validation_run2/README.md` §7.
+Two fixes sit on top of it, both found by running the pipeline rather than reading it:
+
+* `environment.yml` asked for the conda package `build`, which conda-forge packages as
+  `python-build`. With `channels: [conda-forge, nodefaults]` pinned, `conda env create` was
+  unsatisfiable — the package could not be installed by following its own instructions.
+* a `pdb`-route bundle did not copy the structure its own manifest points at, so it could not be
+  re-validated and the peptide route could build a system but never use one.
 
 ## Evidence
 

@@ -37,6 +37,7 @@ from typing import Any, Optional
 from . import provenance
 from .bundle import BUNDLE_MANIFEST, validate_bundle
 from .config import exchange_rounds, resolve_config
+from .fingerprint import check_compatible, fingerprint
 from .schemas import (
     ExperimentManifest,
     PLATFORMS,
@@ -55,6 +56,7 @@ EXIT_ENVIRONMENT = 4
 EXIT_BUNDLE = 5
 EXIT_RUN_EXISTS = 6
 EXIT_RUNTIME = 7
+EXIT_INCOMPATIBLE = 8
 EXIT_INTERRUPTED = 130
 
 STATUS_RUNNING = "running"
@@ -65,6 +67,10 @@ STATUS_INTERRUPTED = "interrupted"
 
 class RunExists(RuntimeError):
     """The target run directory already exists; runs are immutable."""
+
+
+class IncompatibleExperiment(RuntimeError):
+    """An overriding experiment describes a different System than the bundle contains."""
 
 
 def run_dir_name(system_id: str, chash: str, *, stamp: Optional[str] = None) -> str:
@@ -169,6 +175,15 @@ def launch_rest2(
 
     configure_device(platform, device)
     cfg = resolve_config(system, experiment, platform=platform, device=device)
+
+    # BEFORE the run directory exists and before any OpenMM context: an overriding experiment may
+    # change how long and where the run goes, never what System it runs. Checked whenever an
+    # override was supplied; the bundle's own experiment is compatible by construction.
+    if experiment_path is not None:
+        reason = check_compatible(manifest, cfg)
+        if reason:
+            raise IncompatibleExperiment(reason)
+
     chash = config_hash(system.doc, experiment.doc)
     run_dir = create_run_dir(out_root, system.system_id, chash)
 
@@ -200,11 +215,15 @@ def launch_rest2(
         "kind": "explicit-solvent-rest2-run",
         "run_id": run_dir.name,
         "config_hash": chash,
+        "prepared_system_fingerprint": fingerprint(cfg),
         "started_utc": provenance.utc_timestamp(),
         "invocation": provenance.invocation(),
         "bundle": {
             "path_name": bundle_dir.name,
             "config_hash": manifest.get("config_hash"),
+            "prepared_system_fingerprint": (manifest.get("prepared_system") or {}).get(
+                "fingerprint"),
+            "experiment_overridden": experiment_path is not None,
             "files": manifest.get("files", {}),
         },
         "system": manifest["system"],

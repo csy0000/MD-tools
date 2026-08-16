@@ -152,7 +152,17 @@ DEFAULTS: dict[str, Any] = {
     # ---- step 4: System ----------------------------------------------------------------------
     "system_build": {
         "nonbonded_method": "PME",
-        "nonbonded_cutoff_nm": 1.0,          # electrostatics AND vdW
+        "nonbonded_cutoff_nm": 1.0,
+        # Headroom above OpenMM's hard minimum-image limit, in nm, applied ONLY when the box has
+        # to be grown to fit the cutoff.  Growing to exactly 2*cutoff leaves the box sitting on
+        # the limit, and the first NPT contraction then crosses it: OpenMM aborts with "The
+        # periodic box size has decreased to less than twice the nonbonded cutoff".  Measured on a
+        # 12-heavy-atom macrocycle, that abort happened on the first NPT step, twice, with two
+        # different cutoffs -- the box is grown to the limit by construction, so the failure is
+        # deterministic rather than unlucky.  0.10 nm is ~5 % of a 2.0 nm requirement, which
+        # comfortably exceeds equilibration-scale contraction.  0.0 restores the old behaviour and
+        # must be set deliberately.
+        "minimum_image_margin_nm": 0.10,          # electrostatics AND vdW
         "switch_distance_nm": None,          # None -> hard vdW cutoff at nonbonded_cutoff_nm
         "use_dispersion_correction": True,
         "ewald_error_tolerance": 5.0e-4,
@@ -777,22 +787,36 @@ def _resolve_box(modeller, cfg: dict) -> dict:
     else:
         raise ValueError(f"unknown solvation.padding_semantics {semantics!r}")
 
+    margin = float(cfg["system_build"]["minimum_image_margin_nm"])
+    if margin < 0.0:
+        raise ValueError(
+            f"system_build.minimum_image_margin_nm must be >= 0, got {margin}.  A negative margin "
+            "would ask for a box below OpenMM's hard minimum-image limit."
+        )
+
     width_requested = width
     min_image = frac * width
-    needed = 2.0 * cutoff
+    hard_limit = 2.0 * cutoff
+    # A grown box must clear the hard limit BY THE MARGIN.  Growing to exactly 2*cutoff leaves no
+    # room for the NPT contraction that immediately follows, and OpenMM's check is a hard abort.
+    needed = hard_limit + margin
     policy = str(scfg["cutoff_fit_policy"])
     grown = False
     if min_image < needed:
         required_width = needed / frac
         if policy == "grow":
+            # Only ever grow.  A box that is already large enough is left exactly as requested --
+            # shrinking it to the threshold would silently change a system the user sized.
             width = required_width
             grown = True
         elif policy == "refuse":
             raise ValueError(
                 f"a {shape} box with padding {padding} nm gives a minimum image distance of "
-                f"{min_image:.3f} nm, but a {cutoff} nm cutoff needs {needed:.3f} nm.  Increase "
-                f"solvation.padding_nm to at least {frac * required_width - 2 * radius:.3f} nm, "
-                f"lower system_build.nonbonded_cutoff_nm to {min_image / 2:.3f} nm, or set "
+                f"{min_image:.3f} nm, but a {cutoff} nm cutoff with a "
+                f"{margin:.3f} nm margin needs {needed:.3f} nm.  Increase solvation.padding_nm to "
+                f"at least {frac * required_width - 2 * radius:.3f} nm, lower "
+                f"system_build.nonbonded_cutoff_nm to {(min_image - margin) / 2:.3f} nm, reduce "
+                f"system_build.minimum_image_margin_nm, or set "
                 "solvation.cutoff_fit_policy='grow'."
             )
         else:
@@ -811,13 +835,16 @@ def _resolve_box(modeller, cfg: dict) -> dict:
         "solute_image_gap_nm": round(min_image - 2 * radius, 5),
         "min_image_distance_nm": round(min_image, 5),
         "nonbonded_cutoff_nm": cutoff,
+        "minimum_image_margin_nm": margin,
+        "minimum_image_required_nm": round(needed, 5),
         "max_legal_cutoff_nm": round(min_image / 2, 5),
         "box_vectors_nm": vectors.tolist(),
     }
     if grown:
         print(
             f"[solvate] box grown for the cutoff: minimum image {width_requested * frac:.3f} -> "
-            f"{min_image:.3f} nm so a {cutoff} nm cutoff fits (needs {needed:.3f} nm).  The "
+            f"{min_image:.3f} nm so a {cutoff} nm cutoff fits with a {margin:.3f} nm margin "
+            f"(needs {needed:.3f} nm, hard limit {hard_limit:.3f}).  The "
             f"solute-to-image gap is now {info['solute_image_gap_nm']:.3f} nm, above the "
             f"{padding} nm requested.",
             flush=True,

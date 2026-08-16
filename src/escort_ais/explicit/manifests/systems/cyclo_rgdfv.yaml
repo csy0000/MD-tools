@@ -31,10 +31,25 @@ parameterization:
   protein_forcefield: null
   water_forcefield: amber19/tip3pfb.xml
 
+# BOX SHAPE IS EVIDENCE, NOT A DEFAULT. The ten-rung ladder was selected on a system prepared as a
+# DODECAHEDRON, and attaching that evidence to a cube would silently change the solvent geometry
+# the acceptance statistics were measured in. Proven, not inferred, from the Phase-A prepared
+# system that fed all six matched pilots (they copy rgd_simbox.json from it; see
+# reports/explicit_solvent_validation/20260814_v2/raw_exchange/pilots6_command.sh):
+#
+#   reports/explicit_solvent_validation/20260814_v2/phaseA_prepared_system/rgd_simbox.json
+#   sha256 ea1c14edb7c9fc949d892fb41fb733750179555c235b3d6a0a54c7bda821ac61
+#     geometry.box_shape             dodecahedron
+#     geometry.box_width_nm          3.66182      (grown_for_cutoff: false)
+#     geometry.min_image_distance_nm 2.5893       at a 1.0 nm cutoff
+#     realised_ionic_strength_molar  0.15903      (Na+ 3 / Cl- 3, 1047 waters, 3226 particles)
+#
+# That file was copied out of a job temp directory, which is not durable storage; the repository
+# copy above is the one to cite.
 solvation:
   water_model: tip3p
   padding_nm: 1.2
-  box_shape: cube
+  box_shape: dodecahedron
   ionic_strength_molar: 0.15
   positive_ion: Na+
   negative_ion: Cl-
