@@ -80,9 +80,12 @@ $ python -m pytest tests/ -q -m "not slow"
 
 $ python -m compileall -q src scripts                       # clean
 $ md-openmm --help | md-openmm md --help | md-openmm rest2 --help   # all exit 0
-$ rg -n -i 'escort|\bais\b|annealed importance sampling' . \
-     -g '!*.pyc' -g '!build/**' -g '!dist/**' -g '!.git/**'
+$ rg -n -i '<retired-identity pattern>' . -g '!*.pyc' -g '!build/**' -g '!dist/**' -g '!.git/**'
 0 matches
+
+# The pattern itself is deliberately not spelled here. Quoting it verbatim makes this file match
+# the audit, so the gate would report one hit forever and stop being a useful signal. The literal
+# command is in the refactor instruction under claudecode-instructions/, which is gitignored.
 ```
 
 End-to-end on CPU, from `/tmp` with no source checkout on the path:
