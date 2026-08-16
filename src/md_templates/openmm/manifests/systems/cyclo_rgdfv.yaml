@@ -3,7 +3,7 @@
 # This is the ZWITTERION as simulated: the Asp side chain is deprotonated ([O-]) and the Arg
 # guanidinium is protonated ([NH2+]), so the net formal charge is exactly zero. That is not a
 # convention, it is what the AM1-BCC charges and the ion count were built against, and
-# `escort-explicit validate-system` refuses any other molecule under this system_id.
+# `md-openmm validate-system` refuses any other molecule under this system_id.
 #
 # NOTE on the force-field route. cyclo-(RGDfV) is parameterised here as a LIGAND through
 # openff-2.2.0 (Sage) + AM1-BCC, not as an ff19SB peptide. The distinction cannot be inferred from

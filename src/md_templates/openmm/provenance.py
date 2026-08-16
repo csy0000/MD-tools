@@ -64,16 +64,16 @@ def toolchain_versions() -> dict[str, Optional[str]]:
 
 def package_version() -> str:
     try:
-        return metadata.version("escort-ais")
+        return metadata.version("md-templates")
     except metadata.PackageNotFoundError:
         return "unknown"
 
 
 def package_location() -> str:
     """Where the installed package actually lives — the fastest way to catch a shadowed import."""
-    import escort_ais
+    import md_templates
 
-    return str(Path(escort_ais.__file__).resolve().parent)
+    return str(Path(md_templates.__file__).resolve().parent)
 
 
 def installed_from_wheel() -> dict[str, Optional[str]]:
@@ -85,7 +85,7 @@ def installed_from_wheel() -> dict[str, Optional[str]]:
     """
     out: dict[str, Optional[str]] = {"wheel": None, "wheel_sha256": None, "install_kind": None}
     try:
-        dist = metadata.distribution("escort-ais")
+        dist = metadata.distribution("md-templates")
     except metadata.PackageNotFoundError:
         out["install_kind"] = "not-installed"
         return out

@@ -3,9 +3,9 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "escort-ais"
+name = "md-templates"
 version = "0.1.0"
-description = "Benchmarks for learned escort potentials in annealed importance sampling (AIS) on alanine dipeptide and macrocycles."
+description = "Reusable OpenMM templates for explicit-water molecular dynamics and omega-selective REST2."
 readme = "README.md"
 requires-python = ">=3.11"
 # Heavy scientific dependencies (openmm, openmmtools, ambertools, rdkit, mdtraj, deeptime, ...)
@@ -25,21 +25,21 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "build"]
 
-# The portable explicit-solvent entry point. Installing the wheel puts this on PATH, which is what
-# lets a consuming repository run the pipeline without the source checkout.
+# The entry point. Installing the wheel puts `md-openmm` on PATH, which is what lets a
+# consuming project run the pipeline without a source checkout.
 [project.scripts]
-escort-explicit = "escort_ais.explicit.cli:main"
+md-openmm = "md_templates.openmm.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["escort_ais*"]
+include = ["md_templates*"]
 
 # The shipped system/experiment manifests must travel inside the wheel: `--system cyclo_rgdfv`
 # resolving to a package resource is what keeps the documented commands free of machine-local
 # paths. The directory is `manifests/`, NOT `data/` — this repository gitignores `data/` at any
 # depth, which would silently keep these files out of version control.
 [tool.setuptools.package-data]
-"escort_ais.explicit" = ["manifests/systems/*.yaml", "manifests/experiments/*.yaml",
+"md_templates.openmm" = ["manifests/systems/*.yaml", "manifests/experiments/*.yaml",
                           # The pdb route's manifest points at a sibling structure file, so
                           # the structure must travel in the wheel too or `--system ace_ala_nme`
                           # resolves to a manifest whose input does not exist.

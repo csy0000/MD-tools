@@ -27,10 +27,10 @@ import pytest
 
 yaml = pytest.importorskip("yaml")
 
-from escort_ais.explicit import bundle as bundle_mod          # noqa: E402
-from escort_ais.explicit import runner, schemas               # noqa: E402
-from escort_ais.explicit.cli import build_parser, main        # noqa: E402
-from escort_ais.explicit.schemas import (                     # noqa: E402
+from md_templates.openmm import bundle as bundle_mod          # noqa: E402
+from md_templates.openmm import runner, schemas               # noqa: E402
+from md_templates.openmm.cli import build_parser, main        # noqa: E402
+from md_templates.openmm.schemas import (                     # noqa: E402
     ManifestError,
     config_hash,
     load_experiment,
@@ -79,7 +79,7 @@ def test_cli_help_lists_every_documented_subcommand():
 def test_entry_point_is_declared_in_pyproject():
     text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "[project.scripts]" in text
-    assert "escort-explicit = \"escort_ais.explicit.cli:main\"" in text
+    assert "md-openmm = \"md_templates.openmm.cli:main\"" in text
 
 
 def test_invocation_outside_the_checkout(tmp_path):
@@ -91,7 +91,7 @@ def test_invocation_outside_the_checkout(tmp_path):
     """
     env = dict(os.environ, PYTHONPATH=str(REPO_ROOT / "src"))
     res = subprocess.run(
-        [sys.executable, "-m", "escort_ais.explicit.cli", "validate-system",
+        [sys.executable, "-m", "md_templates.openmm.cli", "validate-system",
          "--system", "cyclo_rgdfv", "--no-chemistry"],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=300,
     )
@@ -299,7 +299,7 @@ def test_hash_is_stable_across_processes():
     env = dict(os.environ, PYTHONPATH=str(REPO_ROOT / "src"), PYTHONHASHSEED="12345")
     code = textwrap.dedent(
         """
-        from escort_ais.explicit.schemas import (config_hash, load_system, load_experiment,
+        from md_templates.openmm.schemas import (config_hash, load_system, load_experiment,
                                                  shipped_system, shipped_experiment)
         s = load_system(shipped_system("cyclo_rgdfv"), check_chemistry=False).doc
         e = load_experiment(shipped_experiment("rgd_rest2_10rung")).doc
@@ -331,7 +331,7 @@ def test_shipped_manifests_are_not_hidden_from_git():
     # disk has nothing to do with it. Substring-matching "/data/" against the absolute path fails
     # for anyone whose clone sits under a directory named `data` -- e.g. /path/to/... --
     # which is a spurious failure about the user's filesystem, not about the package.
-    pkg_relative = d.parts[d.parts.index("escort_ais"):] if "escort_ais" in d.parts else d.parts
+    pkg_relative = d.parts[d.parts.index("md_templates"):] if "md_templates" in d.parts else d.parts
     assert "data" not in pkg_relative, (
         f"a package directory is named 'data', which .gitignore erases at any depth: {d}"
     )
@@ -419,7 +419,7 @@ def _executable_source(path: Path) -> str:
 
 
 def test_no_device_index_is_hardcoded_anywhere_in_the_package():
-    for path in sorted((REPO_ROOT / "src/escort_ais/explicit").rglob("*.py")):
+    for path in sorted((REPO_ROOT / "src/md_templates/explicit").rglob("*.py")):
         body = _executable_source(path)
         assert "CUDA_VISIBLE_DEVICES=0" not in body, path
         assert not schemas.find_developer_paths(body), path
@@ -582,7 +582,7 @@ def test_edited_manifest_inside_a_bundle_is_detected(tmp_path):
 # ---------------------------------------------------------------------------------------------
 
 def test_environment_block_records_what_a_reproducer_needs():
-    from escort_ais.explicit import provenance
+    from md_templates.openmm import provenance
 
     env = provenance.environment_block()
     for key in ("package_version", "package_location", "install", "git", "python", "toolchain",
@@ -597,7 +597,7 @@ def test_environment_block_records_what_a_reproducer_needs():
 
 
 def test_invocation_records_the_actual_command():
-    from escort_ais.explicit import provenance
+    from md_templates.openmm import provenance
 
     inv = provenance.invocation()
     assert inv["argv"] == list(sys.argv)
@@ -739,7 +739,7 @@ def test_rgd_manifest_still_enforces_the_full_identity():
 
 def test_shipped_rgd_ladder_equals_the_authoritative_rule_exactly():
     """One definition, serialised — not two hand-written lists that can drift apart."""
-    from escort_ais.systems.explicit_baseline import rest2_ladder
+    from md_templates.openmm import rest2_ladder
 
     shipped_vals = load_experiment(shipped_experiment("rgd_rest2_10rung")).scale_factors
     rule = rest2_ladder(1.0, 0.25, 10, "sqrt")
@@ -759,7 +759,7 @@ def test_shipped_ladder_is_not_truncated():
 
 def test_ladder_values_survive_serialisation_and_wheel_loading():
     """Full precision must survive YAML round-trip and package-resource loading."""
-    from escort_ais.systems.explicit_baseline import rest2_ladder
+    from md_templates.openmm import rest2_ladder
 
     raw = yaml.safe_load(shipped_experiment("rgd_rest2_10rung").read_text(encoding="utf-8"))
     rule = rest2_ladder(1.0, 0.25, 10, "sqrt")
@@ -835,8 +835,8 @@ def test_documentation_defines_pilot_supported_without_overclaiming():
 
 def _cfg(**exp_overrides):
     """Resolved config for RGD + the 10-rung experiment, with experiment-doc tweaks applied."""
-    from escort_ais.explicit.config import resolve_config
-    from escort_ais.explicit.schemas import ExperimentManifest
+    from md_templates.openmm.config import resolve_config
+    from md_templates.openmm.schemas import ExperimentManifest
 
     s = load_system(shipped_system("cyclo_rgdfv"))
     e = load_experiment(shipped_experiment("rgd_rest2_10rung"))
@@ -851,8 +851,8 @@ def _cfg(**exp_overrides):
 
 
 def _sysdoc_cfg(**sys_overrides):
-    from escort_ais.explicit.config import resolve_config
-    from escort_ais.explicit.schemas import SystemManifest
+    from md_templates.openmm.config import resolve_config
+    from md_templates.openmm.schemas import SystemManifest
 
     s = load_system(shipped_system("cyclo_rgdfv"))
     e = load_experiment(shipped_experiment("rgd_rest2_10rung"))
@@ -867,14 +867,14 @@ def _sysdoc_cfg(**sys_overrides):
 
 
 def _bundle_manifest_for(cfg) -> dict:
-    from escort_ais.explicit.fingerprint import build_projection, fingerprint
+    from md_templates.openmm.fingerprint import build_projection, fingerprint
 
     return {"prepared_system": {"fingerprint": fingerprint(cfg),
                                 "projection": build_projection(cfg)}}
 
 
 def test_fingerprint_is_deterministic_and_order_independent():
-    from escort_ais.explicit.fingerprint import fingerprint
+    from md_templates.openmm.fingerprint import fingerprint
 
     a, b = _cfg(), _cfg()
     assert fingerprint(a) == fingerprint(b)
@@ -890,14 +890,14 @@ def test_fingerprint_is_deterministic_and_order_independent():
     ("integrator.timestep_fs", 2.0),               # production timestep
 ])
 def test_runtime_only_changes_are_accepted(dotted, value):
-    from escort_ais.explicit.fingerprint import check_compatible
+    from md_templates.openmm.fingerprint import check_compatible
 
     manifest = _bundle_manifest_for(_cfg())
     assert check_compatible(manifest, _cfg(**{dotted: value})) is None, dotted
 
 
 def test_reporting_interval_change_is_accepted():
-    from escort_ais.explicit.fingerprint import check_compatible
+    from md_templates.openmm.fingerprint import check_compatible
 
     manifest = _bundle_manifest_for(_cfg())
     proposed = _cfg(**{"overrides.production.report.state_ps": 1.0})
@@ -905,8 +905,8 @@ def test_reporting_interval_change_is_accepted():
 
 
 def test_platform_and_device_changes_are_accepted():
-    from escort_ais.explicit.config import resolve_config
-    from escort_ais.explicit.fingerprint import check_compatible
+    from md_templates.openmm.config import resolve_config
+    from md_templates.openmm.fingerprint import check_compatible
 
     s = load_system(shipped_system("cyclo_rgdfv"))
     e = load_experiment(shipped_experiment("rgd_rest2_10rung"))
@@ -924,7 +924,7 @@ def test_platform_and_device_changes_are_accepted():
     ("solvation.ionic_strength_molar", 0.0, "salt"),
 ])
 def test_system_defining_changes_are_rejected(dotted, value, label):
-    from escort_ais.explicit.fingerprint import check_compatible
+    from md_templates.openmm.fingerprint import check_compatible
 
     manifest = _bundle_manifest_for(_sysdoc_cfg())
     reason = check_compatible(manifest, _sysdoc_cfg(**{dotted: value}))
@@ -945,7 +945,7 @@ def test_system_defining_changes_are_rejected(dotted, value, label):
     ("equilibration.npt_free_ps", 10.0, "equilibration length"),
 ])
 def test_build_defining_experiment_changes_are_rejected(dotted, value, label):
-    from escort_ais.explicit.fingerprint import check_compatible
+    from md_templates.openmm.fingerprint import check_compatible
 
     manifest = _bundle_manifest_for(_cfg())
     reason = check_compatible(manifest, _cfg(**{dotted: value}))
@@ -954,7 +954,7 @@ def test_build_defining_experiment_changes_are_rejected(dotted, value, label):
 
 
 def test_rejection_names_the_differing_paths_and_values():
-    from escort_ais.explicit.fingerprint import check_compatible
+    from md_templates.openmm.fingerprint import check_compatible
 
     manifest = _bundle_manifest_for(_sysdoc_cfg())
     reason = check_compatible(manifest, _sysdoc_cfg(**{"solvation.box_shape": "cube"}))
@@ -964,8 +964,8 @@ def test_rejection_names_the_differing_paths_and_values():
 
 def test_rehashing_an_edited_bundle_manifest_cannot_bypass_the_check():
     """The comparison is against the recorded PROJECTION, not the fingerprint alone."""
-    from escort_ais.explicit.fingerprint import build_projection, check_compatible
-    from escort_ais.explicit.schemas import canonical_json, sha256_text
+    from md_templates.openmm.fingerprint import build_projection, check_compatible
+    from md_templates.openmm.schemas import canonical_json, sha256_text
 
     tampered_cfg = _sysdoc_cfg(**{"solvation.box_shape": "cube"})
     manifest = {"prepared_system": {"projection": build_projection(_sysdoc_cfg()),
@@ -982,13 +982,13 @@ def test_rehashing_an_edited_bundle_manifest_cannot_bypass_the_check():
 
 
 def test_bundle_without_a_fingerprint_is_refused_for_overrides():
-    from escort_ais.explicit.fingerprint import check_compatible
+    from md_templates.openmm.fingerprint import check_compatible
 
     assert "no prepared-system fingerprint" in check_compatible({}, _cfg())
 
 
 def test_runtime_only_paths_are_disjoint_from_build_defining_paths():
-    from escort_ais.explicit.fingerprint import BUILD_DEFINING_PATHS, RUNTIME_ONLY_PATHS
+    from md_templates.openmm.fingerprint import BUILD_DEFINING_PATHS, RUNTIME_ONLY_PATHS
 
     overlap = set(BUILD_DEFINING_PATHS) & set(RUNTIME_ONLY_PATHS)
     assert not overlap, f"a path cannot be both build-defining and runtime-only: {overlap}"
@@ -996,7 +996,7 @@ def test_runtime_only_paths_are_disjoint_from_build_defining_paths():
 
 def test_incompatible_override_is_rejected_before_the_run_directory_exists(tmp_path):
     """Rejection must happen before any directory or OpenMM context is created."""
-    from escort_ais.explicit import runner as r
+    from md_templates.openmm import runner as r
 
     b = _fake_bundle(tmp_path)
     m = json.loads((b / bundle_mod.BUNDLE_MANIFEST).read_text(encoding="utf-8"))
@@ -1022,7 +1022,7 @@ def test_incompatible_override_is_rejected_before_the_run_directory_exists(tmp_p
 # ---------------------------------------------------------------------------------------------
 
 def test_margin_is_a_runtime_default_and_is_dumped():
-    from escort_ais.systems.explicit_baseline import DEFAULTS, dump_defaults
+    from md_templates.openmm import DEFAULTS, dump_defaults
 
     assert DEFAULTS["system_build"]["minimum_image_margin_nm"] == pytest.approx(0.10)
     assert "minimum_image_margin_nm" in dump_defaults()
@@ -1041,7 +1041,7 @@ class _FakeModeller:
 
 
 def _box_cfg(shape: str, padding: float, cutoff: float, margin: float) -> dict:
-    from escort_ais.systems.explicit_baseline import DEFAULTS
+    from md_templates.openmm import DEFAULTS
     import copy
 
     cfg = copy.deepcopy(DEFAULTS)
@@ -1054,7 +1054,7 @@ def _box_cfg(shape: str, padding: float, cutoff: float, margin: float) -> dict:
 @pytest.mark.parametrize("shape", ["cube", "dodecahedron"])
 def test_grown_box_clears_the_hard_limit_by_the_margin(shape):
     pytest.importorskip("openmm")
-    from escort_ais.systems.explicit_baseline import _resolve_box
+    from md_templates.openmm.solvation import _resolve_box
 
     cutoff, margin = 1.0, 0.10
     info = _resolve_box(_FakeModeller(0.35), _box_cfg(shape, 0.2, cutoff, margin))
@@ -1073,7 +1073,7 @@ def test_grown_box_clears_the_hard_limit_by_the_margin(shape):
 @pytest.mark.parametrize("shape", ["cube", "dodecahedron"])
 def test_a_box_already_above_the_threshold_is_left_alone(shape):
     pytest.importorskip("openmm")
-    from escort_ais.systems.explicit_baseline import _resolve_box
+    from md_templates.openmm.solvation import _resolve_box
 
     info = _resolve_box(_FakeModeller(0.35), _box_cfg(shape, 3.0, 1.0, 0.10))
     assert info["grown_for_cutoff"] is False
@@ -1082,7 +1082,8 @@ def test_a_box_already_above_the_threshold_is_left_alone(shape):
 
 def test_zero_margin_is_selectable_only_deliberately():
     pytest.importorskip("openmm")
-    from escort_ais.systems.explicit_baseline import DEFAULTS, _resolve_box
+    from md_templates.openmm import DEFAULTS
+    from md_templates.openmm.solvation import _resolve_box
 
     assert DEFAULTS["system_build"]["minimum_image_margin_nm"] > 0
     info = _resolve_box(_FakeModeller(0.35), _box_cfg("cube", 0.2, 1.0, 0.0))
@@ -1091,7 +1092,7 @@ def test_zero_margin_is_selectable_only_deliberately():
 
 def test_negative_margin_is_rejected_before_any_box_is_built():
     pytest.importorskip("openmm")
-    from escort_ais.systems.explicit_baseline import _resolve_box
+    from md_templates.openmm.solvation import _resolve_box
 
     with pytest.raises(ValueError, match="minimum_image_margin_nm"):
         _resolve_box(_FakeModeller(0.35), _box_cfg("cube", 0.2, 1.0, -0.05))
@@ -1099,7 +1100,7 @@ def test_negative_margin_is_rejected_before_any_box_is_built():
 
 def test_refuse_policy_reports_what_would_satisfy_the_margin():
     pytest.importorskip("openmm")
-    from escort_ais.systems.explicit_baseline import _resolve_box
+    from md_templates.openmm.solvation import _resolve_box
 
     cfg = _box_cfg("dodecahedron", 0.2, 1.0, 0.10)
     cfg["solvation"]["cutoff_fit_policy"] = "refuse"
@@ -1127,7 +1128,7 @@ def test_grown_box_survives_npt_without_the_box_size_abort(tmp_path):
     from openmm import MonteCarloBarostat, unit
     from openmm.app import ForceField, HBonds, Modeller, PDBFile, PME, Simulation
 
-    from escort_ais.systems.explicit_baseline import _resolve_box
+    from md_templates.openmm.solvation import _resolve_box
 
     pdb_path = tmp_path / "wat.pdb"
     pdb_path.write_text(

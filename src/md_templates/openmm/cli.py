@@ -1,4 +1,4 @@
-"""`escort-explicit` — the installed entry point for portable explicit-solvent REST2.
+"""`md-openmm` — the installed entry point for portable explicit-solvent REST2.
 
 Every subcommand works from any current directory once the wheel is installed; nothing here
 resolves a path relative to the source checkout, and nothing reads
@@ -6,14 +6,14 @@ resolves a path relative to the source checkout, and nothing reads
 inside the package (`--system cyclo_rgdfv`), which is what makes the documented commands free of
 machine-local paths.
 
-    escort-explicit validate-env
-    escort-explicit validate-system  --system system.yaml
-    escort-explicit prepare          --system system.yaml --experiment experiment.yaml \
+    md-openmm validate-env
+    md-openmm validate-system  --system system.yaml
+    md-openmm prepare          --system system.yaml --experiment experiment.yaml \
                                      --out-root RUN_ROOT
-    escort-explicit validate-bundle  --bundle BUNDLE_DIR
-    escort-explicit rest2            --bundle BUNDLE_DIR --experiment experiment.yaml \
+    md-openmm validate-bundle  --bundle BUNDLE_DIR
+    md-openmm rest2            --bundle BUNDLE_DIR --experiment experiment.yaml \
                                      --out-root RUN_ROOT --platform CUDA --device 0
-    escort-explicit smoke            --system system.yaml --out-root RUN_ROOT --platform CPU
+    md-openmm smoke            --system system.yaml --out-root RUN_ROOT --platform CPU
 """
 from __future__ import annotations
 
@@ -183,12 +183,12 @@ def cmd_smoke(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     shipped = list_shipped()
     p = argparse.ArgumentParser(
-        prog="escort-explicit",
+        prog="md-openmm",
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--version", action="version",
-                   version=f"escort-ais {provenance.package_version()}")
+                   version=f"md-templates {provenance.package_version()}")
     sub = p.add_subparsers(dest="command", required=True)
 
     def add_platform(sp, default: str = "CUDA") -> None:

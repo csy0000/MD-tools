@@ -1,6 +1,6 @@
 """What makes a prepared System *that* System, and nothing else.
 
-`escort-explicit rest2 --bundle B --experiment E` lets a new experiment run against an
+`md-openmm rest2 --bundle B --experiment E` lets a new experiment run against an
 already-prepared bundle. That is genuinely useful — running longer, or on another device, against
 the identical starting state is the whole point of a transferable bundle. It is also the obvious
 way to produce a silently wrong result: nothing in the file layout stops a new experiment from

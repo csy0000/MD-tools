@@ -75,7 +75,7 @@ def run_checks(
 
     pkg_version = provenance.package_version()
     checks.append(Check(
-        "escort-ais",
+        "md-templates",
         "ok" if pkg_version != "unknown" else "error",
         f"{pkg_version} at {provenance.package_location()}",
     ))
@@ -190,7 +190,7 @@ def require_ok(*, platform: Optional[str] = None, device: Optional[str] = None,
         raise EnvironmentError(
             "this environment cannot run the requested work:\n"
             + "\n".join(c.line() for c in bad)
-            + "\n\nRun `escort-explicit validate-env` for the full report."
+            + "\n\nRun `md-openmm validate-env` for the full report."
         )
 
 

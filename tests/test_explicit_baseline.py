@@ -40,19 +40,22 @@ from openmm import (  # noqa: E402
 from openmm import app  # noqa: E402
 from openmm.app import element as elem  # noqa: E402
 
-from escort_ais.systems.explicit_baseline import (  # noqa: E402
+from md_templates.openmm import (  # noqa: E402
     DEFAULTS,
+    build_rest2_scaled_system,
     classify_omega_bonds,
     completed_prefix,
     load_config,
     repartition_hydrogen_mass,
     resolve_route,
     rest2_ladder,
-    _box_vectors,
-    _resolve_box,
-    _steps,
 )
-from escort_ais.systems.openmm_system import build_rest2_scaled_system  # noqa: E402
+
+# Module-private helpers are imported from the module that owns them rather than re-exported
+# through the package: the package surface is the supported API, and widening it to keep a test
+# import short would make every private helper a de-facto public one.
+from md_templates.openmm.equilibration import _steps  # noqa: E402
+from md_templates.openmm.solvation import _box_vectors, _resolve_box  # noqa: E402
 
 S_VALUES = (1.0, 0.64, 0.25)
 TOL = 1e-9
@@ -698,7 +701,7 @@ def test_ligand_route_does_not_load_the_protein_forcefield():
     while it was loaded unconditionally it appeared in the recorded force-field list of a Sage
     calculation, misdescribing the Hamiltonian that ran.
     """
-    from escort_ais.systems.explicit_baseline import build_forcefield
+    from md_templates.openmm import build_forcefield
 
     cfg = load_config()
     _, info = build_forcefield(cfg, None, route="ligand")
@@ -728,10 +731,20 @@ def test_rgd_system_yaml_is_not_consumed_by_the_explicit_workflow():
     The explicit path never reads that file -- it takes the SMILES on the command line -- so the
     field cannot leak into an explicit run. This pins that, so a future refactor that starts
     reading system.yaml has to confront the question rather than inherit ff19SB silently.
+
+    Scans the whole simulation package rather than one file. The implementation used to be a
+    single module; splitting it into config/system/solvation/equilibration/md/rest2 would have
+    silently retired this check if it kept naming one path.
     """
-    src = (Path(__file__).resolve().parents[1]
-           / "src/escort_ais/systems/explicit_baseline.py").read_text()
-    assert "system.yaml" not in src, "the explicit baseline must not read system.yaml implicitly"
+    pkg = Path(__file__).resolve().parents[1] / "src/md_templates/openmm"
+    simulation_modules = ["config.py", "system.py", "solvation.py",
+                          "equilibration.py", "md.py", "rest2.py"]
+    for name in simulation_modules:
+        path = pkg / name
+        assert path.is_file(), f"{name} is missing: the scan would silently pass"
+        assert "system.yaml" not in path.read_text(), (
+            f"{name} must not read system.yaml implicitly"
+        )
 
 
 # ==================================================================================================
@@ -808,7 +821,7 @@ def test_rgd_config_rejects_a_pdb_route_before_parameterisation():
 
 
 def test_rgd_build_simbox_rejects_a_missing_smiles(tmp_path):
-    from escort_ais.systems.explicit_baseline import build_simbox
+    from md_templates.openmm import build_simbox
 
     cfg = load_config()
     cfg["system"].update(solute_kind="ligand", require_input_route="smiles")
@@ -822,7 +835,7 @@ def test_rgd_manifest_records_the_full_hamiltonian_provenance(tmp_path):
     """The recorded provenance must name Sage 2.2, AM1-BCC, charge 0, the SMILES hash, no protein FF."""
     import hashlib
 
-    from escort_ais.systems.explicit_baseline import build_forcefield
+    from md_templates.openmm import build_forcefield
 
     cfg = load_config()
     cfg["system"].update(solute_kind="ligand", require_input_route="smiles")
@@ -836,7 +849,7 @@ def test_rgd_manifest_records_the_full_hamiltonian_provenance(tmp_path):
 
 def test_dumped_defaults_equal_the_runtime_tree():
     """config_defaults.json must be a FUNCTION of DEFAULTS, not a second hand-edited copy."""
-    from escort_ais.systems.explicit_baseline import dump_defaults
+    from md_templates.openmm import dump_defaults
 
     path = (Path(__file__).resolve().parents[1]
             / "docs/implementation/explicit_solvent/scripts/config_defaults.json")

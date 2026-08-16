@@ -160,7 +160,7 @@ def launch_rest2(
     Returns `(exit_code, run_dir)`. The run directory exists whenever one could be created, so a
     failure is still inspectable — `status.json` and `stderr.log` are inside it.
     """
-    from escort_ais.systems.explicit_baseline import run_rest2_remd
+    from .rest2 import run_rest2_remd
 
     bundle_dir = Path(bundle_dir).resolve()
     manifest = validate_bundle(bundle_dir)

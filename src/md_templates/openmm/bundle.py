@@ -82,7 +82,7 @@ def prepare(
     decides where the equilibration runs, not what is written. A bundle prepared on CPU and one
     prepared on CUDA are interchangeable as inputs.
     """
-    from escort_ais.systems.explicit_baseline import build_simbox, minimize_equilibrate
+    from .equilibration import build_simbox, minimize_equilibrate
 
     cfg = resolve_config(system, experiment, platform=platform, device=device)
     chash = config_hash(system.doc, experiment.doc)
@@ -384,7 +384,7 @@ def summarise(manifest: dict) -> str:
         f"composition {c['n_atoms']} atoms  ({c['n_solute_atoms']} solute, "
         f"{c['n_water_molecules']} waters, {c['n_ions']} ions)  "
         f"{c['n_degrees_of_freedom']} DOF",
-        f"built       {manifest['created_utc']}  escort-ais {env['package_version']}  "
+        f"built       {manifest['created_utc']}  md-templates {env['package_version']}  "
         f"openmm {env['toolchain'].get('openmm')}",
     ]
     if e["ladder_status"] != "validated":

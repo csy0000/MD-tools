@@ -342,7 +342,7 @@ def validate_system(doc: dict, *, source: Path, check_chemistry: bool = True) ->
     except ImportError as exc:                    # pragma: no cover - env-dependent
         raise ManifestError(
             f"{where}: RDKit is required to validate a smiles-route manifest "
-            "(run `escort-explicit validate-env`)"
+            "(run `md-openmm validate-env`)"
         ) from exc
 
     RDLogger.DisableLog("rdApp.*")
