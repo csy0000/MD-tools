@@ -73,22 +73,65 @@ class IncompatibleExperiment(RuntimeError):
     """An overriding experiment describes a different System than the bundle contains."""
 
 
-def run_dir_name(system_id: str, chash: str, *, stamp: Optional[str] = None) -> str:
-    return f"{stamp or provenance.run_stamp()}__{system_id}__rest2__{chash}"
+def run_dir_name(system_id: str, chash: str, *, method: str = "rest2",
+                 stamp: Optional[str] = None) -> str:
+    """The DEFAULT name for a fresh unnamed run: timestamped, and identifying enough to sort.
+
+    A user-supplied `--run-name` is used verbatim instead -- no timestamp, system or hash is
+    appended to it. A name the user chose that then arrives decorated is not the name they chose,
+    and it makes the directory unpredictable to anything scripted around it.
+    """
+    return f"{stamp or provenance.run_stamp()}__{system_id}__{method}__{chash}"
+
+
+def resolve_run_dir(out_root: Path, system_id: str, chash: str, *, method: str = "rest2",
+                    run_name: Optional[str] = None, resume_run: Optional[Path] = None,
+                    stamp: Optional[str] = None) -> tuple[Path, bool]:
+    """Return `(run_dir, is_resume)` for the fresh-run / resume contract.
+
+    Exactly one of `run_name` and `resume_run` may be given. A fresh run refuses to write into an
+    existing directory; a resume writes into the directory it was given and never creates a
+    sibling, because a resume that silently starts a new run produces two partial trajectories and
+    no error.
+    """
+    if run_name is not None and resume_run is not None:
+        raise ValueError(
+            "--run-name and --resume-run are mutually exclusive: the first names a NEW run, the "
+            "second continues an existing one. Pick which of the two this is."
+        )
+
+    if resume_run is not None:
+        path = Path(resume_run).resolve()
+        if not path.is_dir():
+            raise RunExists(
+                f"--resume-run {path} does not exist. A resume continues an existing run in place; "
+                "it does not create one. Start a fresh run instead."
+            )
+        return path, True
+
+    root = Path(out_root).resolve()
+    if run_name is not None:
+        name = str(run_name).strip()
+        if not name or "/" in name or name in (".", ".."):
+            raise ValueError(f"--run-name {run_name!r} is not a usable directory name")
+        path = root / name
+    else:
+        path = root / run_dir_name(system_id, chash, method=method, stamp=stamp)
+
+    if path.exists():
+        raise RunExists(
+            f"run directory already exists: {path}\n"
+            "A fresh run will not overwrite one. Choose another --run-name or --out-root, or pass "
+            "--resume-run to continue this run in place."
+        )
+    path.mkdir(parents=True)
+    return path, False
 
 
 def create_run_dir(out_root: Path, system_id: str, chash: str, *,
                    stamp: Optional[str] = None) -> Path:
-    """Create the immutable run directory, refusing to reuse one."""
-    root = Path(out_root).resolve()
-    path = root / run_dir_name(system_id, chash, stamp=stamp)
-    if path.exists():
-        raise RunExists(
-            f"run directory already exists: {path}\n"
-            "Runs are immutable. Launch again (the timestamp will differ) or choose another "
-            "--out-root; do not write a second run into an existing directory."
-        )
-    path.mkdir(parents=True)
+    """Create a fresh, default-named run directory, refusing to reuse one."""
+    path, _ = resolve_run_dir(out_root, system_id, chash, stamp=stamp)
     return path
 
 

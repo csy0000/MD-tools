@@ -1330,3 +1330,60 @@ def test_shipped_experiments_declare_an_explicit_plan():
         assert doc["schema_version"] == 2, name
         assert isinstance(doc["rest2"]["n_chunks"], int), name
         assert "total_ns_per_replica" not in doc["rest2"], name
+
+
+# ==================================================================================================
+# requirement 1: the fresh-run / resume naming contract
+# ==================================================================================================
+from md_templates.openmm.runner import RunExists, resolve_run_dir, run_dir_name  # noqa: E402
+
+
+def test_a_named_fresh_run_gets_exactly_that_directory(tmp_path):
+    """No timestamp, system or hash appended: a decorated name is not the name the user chose."""
+    path, is_resume = resolve_run_dir(tmp_path, "sys", "abc123", run_name="my_run")
+    assert path == (tmp_path / "my_run").resolve()
+    assert path.is_dir() and not is_resume
+
+
+def test_an_unnamed_fresh_run_gets_a_timestamped_default(tmp_path):
+    path, is_resume = resolve_run_dir(tmp_path, "sys", "abc123", method="md", stamp="20260816T101500Z")
+    assert path.name == "20260816T101500Z__sys__md__abc123"
+    assert path.is_dir() and not is_resume
+
+
+def test_a_fresh_run_refuses_to_overwrite(tmp_path):
+    (tmp_path / "taken").mkdir()
+    with pytest.raises(RunExists, match="will not overwrite"):
+        resolve_run_dir(tmp_path, "sys", "abc123", run_name="taken")
+
+
+def test_a_resume_uses_the_given_directory_and_creates_no_sibling(tmp_path):
+    existing = tmp_path / "run_a"
+    existing.mkdir()
+    before = set(p.name for p in tmp_path.iterdir())
+    path, is_resume = resolve_run_dir(tmp_path, "sys", "abc123", resume_run=existing)
+    assert path == existing.resolve() and is_resume
+    assert set(p.name for p in tmp_path.iterdir()) == before, "a resume created a sibling directory"
+
+
+def test_resuming_a_directory_that_does_not_exist_is_refused(tmp_path):
+    with pytest.raises(RunExists, match="does not exist"):
+        resolve_run_dir(tmp_path, "sys", "abc123", resume_run=tmp_path / "never_ran")
+
+
+def test_run_name_and_resume_run_are_mutually_exclusive(tmp_path):
+    (tmp_path / "r").mkdir()
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        resolve_run_dir(tmp_path, "sys", "abc123", run_name="x", resume_run=tmp_path / "r")
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "a/b", ".", ".."])
+def test_unusable_run_names_are_refused(tmp_path, bad):
+    with pytest.raises(ValueError, match="not a usable directory name"):
+        resolve_run_dir(tmp_path, "sys", "abc123", run_name=bad)
+
+
+def test_default_names_carry_the_method_so_md_and_rest2_do_not_collide():
+    md = run_dir_name("sys", "abc123", method="md", stamp="S")
+    rest2 = run_dir_name("sys", "abc123", method="rest2", stamp="S")
+    assert md != rest2 and "__md__" in md and "__rest2__" in rest2
