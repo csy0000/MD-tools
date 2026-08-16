@@ -234,6 +234,17 @@ def read_run_state(run_dir: Path) -> dict:
 
 
 def write_run_state(run_dir: Path, *, method: str, continuity: dict, **extra: Any) -> Path:
+    """Record the run's method and its continuity contract.
+
+    The two must agree: a state file saying "md" while its contract says "rest2" would let a
+    mismatched resume pass the very check that exists to catch it.
+    """
+    declared = continuity.get("method")
+    if declared is not None and str(declared) != str(method):
+        raise RunStateError(
+            f"run state says method {method!r} but its continuity contract says {declared!r}; "
+            "these must agree or the contract cannot detect a method mismatch."
+        )
     payload = {
         "schema_version": RUN_STATE_SCHEMA,
         "kind": "md-templates-run-state",

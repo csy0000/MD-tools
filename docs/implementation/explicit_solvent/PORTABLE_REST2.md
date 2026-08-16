@@ -261,7 +261,30 @@ calculation gets the same hash on any machine and any change to a seed or a scie
 changes it. It deliberately excludes the platform and device: the same calculation on CPU and CUDA
 is the same configuration.
 
-**Runs are immutable.** An existing directory is refused rather than reused or extended.
+**A run is created fresh or continued in place.** `--run-name NAME` creates exactly
+`RUN_ROOT/NAME` with no timestamp appended; omitting it gives a timestamped default that also
+carries the method, so an MD run and a REST2 run of the same configuration cannot collide. A fresh
+run refuses an existing directory rather than reusing it, and says to resume explicitly.
+
+**`--resume-run` continues a run in the SAME directory** -- no sibling, no child. `n_chunks` means
+the chunks this invocation ADDS, so a resume extends the run. Before anything is loaded or
+appended, the continuity contract recorded in `run_state.json` is compared with the requested
+configuration, and a mismatch is refused with the differing fields listed. Chunk length, force
+field, integrator, constraints, ladder and the omega-exclusion setting are all part of that
+contract; the number of chunks deliberately is not.
+
+**Restarts are committed, not merely written.** At each chunk boundary both an OpenMM checkpoint
+and a portable serialized State are written into a generation directory, and only then does a
+single atomic replacement of `restart/committed.json` make that generation current. A crash
+part-way through leaves the previous generation in force. On resume the binary checkpoint is
+preferred; if it is missing, corrupt or from another platform the State is used instead, which
+preserves positions, velocities, box, time and parameters but NOT the stochastic integrator's
+stream -- reported, never silent.
+
+**REST2 statistics are lifetime statistics.** The exchange log carries a global `attempt_index`;
+counters are rebuilt from it when a run is opened rather than starting at zero, and the summary
+reports lifetime and this-invocation figures separately. An attempt counts only once the generation
+holding its resulting state is committed, so an uncommitted tail is discarded on recovery.
 
 **`completed` means the requested budget was reached.** A smoke run, an interrupted run and a
 crashed run write `interrupted` or `failed` and a non-zero exit code. A preempted job gets

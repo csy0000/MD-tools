@@ -9,14 +9,22 @@ card without CUDA MPS run about 3.7x slower each.
 So: one process controls its own configured replicas on one selected device, scheduling is the
 consuming repository's problem, and every artifact goes inside the run directory.
 
-Run directories are immutable and named
+A run directory is either created fresh or continued in place -- never overwritten, and never
+silently reused.
 
-    RUN_ROOT/YYYYMMDDTHHMMSSZ__SYSTEM_ID__rest2__CONFIG_HASH/
+    --run-name NAME    exactly RUN_ROOT/NAME, with nothing appended
+    (omitted)          RUN_ROOT/YYYYMMDDTHHMMSSZ__SYSTEM_ID__METHOD__CONFIG_HASH/
+    --resume-run DIR   that same directory, extended by this invocation
 
 The config hash derives from the canonical serialisation of the two manifests, so the same
 calculation gets the same hash on any machine, and any change to a seed or a scientific setting
-changes it. The timestamp keeps repeated launches of the same configuration distinct, and the
-directory is refused if it already exists.
+changes it. The timestamp keeps repeated launches distinct; a user-supplied name is used verbatim,
+because a name that arrives decorated is not the name that was asked for.
+
+A fresh run refuses an existing directory and says to resume it explicitly. A resume validates the
+continuity contract in `run_state.json` BEFORE loading any state, and refuses with the differing
+fields named if the configuration describes a different calculation. `n_chunks` is what THIS
+invocation adds, so resuming extends the run rather than finding it already finished.
 
 `status.json` distinguishes running / completed / failed / interrupted. `completed` means the
 requested budget was reached — a smoke run or an interrupted run never writes it, because
@@ -66,7 +74,7 @@ STATUS_INTERRUPTED = "interrupted"
 
 
 class RunExists(RuntimeError):
-    """The target run directory already exists; runs are immutable."""
+    """The target run directory already exists, or a resume target does not."""
 
 
 class IncompatibleExperiment(RuntimeError):

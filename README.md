@@ -42,7 +42,36 @@ md-openmm prepare         --system cyclo_rgdfv --experiment rgd_rest2_10rung \
                                 --out-root ./runs --platform CUDA --device 0
 md-openmm rest2           --bundle ./runs/<TIMESTAMP>__cyclo_rgdfv__bundle__<HASH> \
                                 --out-root ./runs --platform CUDA --device 0
+md-openmm md              --bundle ./runs/<BUNDLE> --out-root ./runs --platform CUDA --device 0
 ```
+
+### Run directories, and continuing a run
+
+Both `md` and `rest2` take the same naming options:
+
+```bash
+md-openmm rest2 --bundle B --out-root ./runs --run-name production_a   # exactly ./runs/production_a
+md-openmm rest2 --bundle B --out-root ./runs                           # timestamped default
+md-openmm rest2 --bundle B --out-root ./runs --resume-run production_a # continue IN PLACE
+```
+
+* `--run-name` is used verbatim: no timestamp, system or hash is appended.
+* A fresh run refuses an existing directory rather than reusing it.
+* `--resume-run` continues the same directory -- never a sibling or a child -- and
+  **`n_chunks` is the work this invocation adds**, so resuming extends the run.
+* Before a resume loads anything, the continuity contract in `run_state.json` is compared with the
+  requested configuration. Force field, integrator, constraints, chunk length, ladder and the
+  omega-exclusion setting must match; the number of chunks deliberately need not. A mismatch is
+  refused with the differing fields listed, before a byte is appended.
+* At each chunk boundary a restart *generation* (OpenMM checkpoint + portable State) is written and
+  then committed by one atomic replacement. On resume the checkpoint is preferred; a corrupt or
+  foreign-platform checkpoint falls back to the State, which is physically valid but not bitwise
+  identical, and says so.
+* REST2 reports **lifetime** and **this-invocation** exchange statistics separately; lifetime
+  counters are rebuilt from the durable log and never restart at zero.
+
+Conventional MD declares its own plan. An experiment with only a `rest2:` block is refused for
+`md`, rather than falling back to the package default -- which is 1000 ns.
 
 ## What is here
 

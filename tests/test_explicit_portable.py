@@ -1387,3 +1387,203 @@ def test_default_names_carry_the_method_so_md_and_rest2_do_not_collide():
     md = run_dir_name("sys", "abc123", method="md", stamp="S")
     rest2 = run_dir_name("sys", "abc123", method="rest2", stamp="S")
     assert md != rest2 and "__md__" in md and "__rest2__" in rest2
+
+
+# ==================================================================================================
+# follow-up: continuity contract, crash-safe restarts, lifetime statistics
+# ==================================================================================================
+from md_templates.openmm import runstate  # noqa: E402
+
+
+def _contract(**over):
+    cfg = {"integrator": {"timestep_fs": 4.0, "kind": "langevin-middle", "temperature_k": 300.0,
+                          "friction_per_ps": 1.0},
+           "system_build": {"constraints": "HBonds", "nonbonded_cutoff_nm": 1.0},
+           "production": {"remd": {"chunk_ns": 0.001, "n_chunks": 2,
+                                   "exchange_interval_ps": 0.5, "scale_factors": [1.0, 0.5]},
+                          "md": {"chunk_ns": 0.001, "n_chunks": 2, "scale_factor": 1.0}},
+           "rest2": {"omega_exclusion": True}}
+    for dotted, value in over.items():
+        node = cfg
+        parts = dotted.replace("__", ".").split(".")
+        for k in parts[:-1]:
+            node = node.setdefault(k, {})
+        node[parts[-1]] = value
+    return runstate.continuity_contract(cfg, method="rest2", fingerprint_value="fp", n_particles=99)
+
+
+def test_more_chunks_is_an_extension_not_an_incompatibility():
+    """Asking for more work must not look like a different calculation, or resume is impossible."""
+    base = _contract()
+    more = _contract(production__remd__n_chunks=50)
+    assert runstate.compare_continuity(base, more) == []
+
+
+@pytest.mark.parametrize("field,value", [
+    ("integrator__timestep_fs", 2.0),
+    ("integrator__temperature_k", 310.0),
+    ("system_build__constraints", "AllBonds"),
+    ("rest2__omega_exclusion", False),
+    ("production__remd__chunk_ns", 0.002),
+    ("production__remd__exchange_interval_ps", 1.0),
+])
+def test_hamiltonian_changes_are_incompatible_continuations(field, value):
+    diffs = runstate.compare_continuity(_contract(), _contract(**{field: value}))
+    assert diffs, f"{field} changed but the continuation was accepted"
+    assert any(field.replace("__", ".") == name for name, _, _ in diffs)
+
+
+def test_resuming_as_the_other_method_is_refused(tmp_path):
+    """An MD run and a REST2 run are different runs even when every other setting agrees."""
+    md_contract = dict(_contract(), method="md")
+    runstate.write_run_state(tmp_path, method="md", continuity=md_contract)
+    rest2_contract = dict(_contract(), method="rest2")
+    with pytest.raises(runstate.IncompatibleContinuation, match="method"):
+        runstate.assert_continuable(tmp_path, rest2_contract)
+
+
+def test_incompatible_continuation_names_every_differing_field(tmp_path):
+    runstate.write_run_state(tmp_path, method="rest2", continuity=_contract())
+    with pytest.raises(runstate.IncompatibleContinuation) as excinfo:
+        runstate.assert_continuable(tmp_path, _contract(integrator__timestep_fs=2.0))
+    message = str(excinfo.value)
+    assert "integrator.timestep_fs" in message and "recorded 4.0" in message
+
+
+def test_a_directory_without_run_state_cannot_be_continued(tmp_path):
+    with pytest.raises(runstate.RunStateError, match="does not exist"):
+        runstate.assert_continuable(tmp_path, _contract())
+
+
+def test_an_unknown_run_state_version_is_refused_not_reinterpreted(tmp_path):
+    runstate.atomic_write_json(tmp_path / runstate.RUN_STATE_FILE,
+                               {"schema_version": 99, "continuity": {}})
+    with pytest.raises(runstate.RunStateError, match="schema_version"):
+        runstate.read_run_state(tmp_path)
+
+
+def test_a_generation_cannot_be_committed_before_it_is_written(tmp_path):
+    """The commit record must point only at a complete restart."""
+    with pytest.raises(runstate.RunStateError, match="missing"):
+        runstate.commit_generation(tmp_path, 0, members=["walker.chk", "walker.state.xml"])
+    assert runstate.committed_generation(tmp_path) is None
+
+
+def test_a_failed_generation_does_not_replace_the_committed_one(tmp_path):
+    gdir0 = runstate.generation_dir(tmp_path, 0)
+    gdir0.mkdir(parents=True)
+    for m in ("walker.chk", "walker.state.xml"):
+        (gdir0 / m).write_text("x")
+    runstate.commit_generation(tmp_path, 0, members=["walker.chk", "walker.state.xml"])
+    assert runstate.committed_generation(tmp_path) == 0
+
+    # generation 1 starts but never finishes: only one of its two members is written
+    gdir1 = runstate.generation_dir(tmp_path, 1)
+    gdir1.mkdir(parents=True)
+    (gdir1 / "walker.chk").write_text("partial")
+    with pytest.raises(runstate.RunStateError):
+        runstate.commit_generation(tmp_path, 1, members=["walker.chk", "walker.state.xml"])
+    assert runstate.committed_generation(tmp_path) == 0, "a failed generation took over the commit"
+
+
+def test_the_previous_generation_is_retained(tmp_path):
+    for gen in (0, 1, 2):
+        gdir = runstate.generation_dir(tmp_path, gen)
+        gdir.mkdir(parents=True)
+        for m in ("walker.chk", "walker.state.xml"):
+            (gdir / m).write_text("x")
+        runstate.commit_generation(tmp_path, gen, members=["walker.chk", "walker.state.xml"])
+    kept = sorted(p.name for p in (tmp_path / runstate.RESTART_DIR).iterdir() if p.is_dir())
+    assert kept == ["gen_0001", "gen_0002"], kept
+
+
+def test_atomic_write_leaves_no_partial_file_behind(tmp_path):
+    target = tmp_path / "record.json"
+    runstate.atomic_write_json(target, {"a": 1})
+    assert json.loads(target.read_text()) == {"a": 1}
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith(".")], "temporary left behind"
+
+
+def test_duplicate_attempt_indices_are_corruption_not_data():
+    from md_templates.openmm.rest2 import _assert_monotonic_attempts
+
+    rows = [{"attempt_index": "0"}, {"attempt_index": "1"}, {"attempt_index": "1"}]
+    with pytest.raises(ValueError, match="more than once"):
+        _assert_monotonic_attempts(rows, "log.csv")
+
+
+def test_non_monotonic_attempt_indices_are_refused():
+    from md_templates.openmm.rest2 import _assert_monotonic_attempts
+
+    with pytest.raises(ValueError, match="not\n?.*monotonic|monotonic"):
+        _assert_monotonic_attempts([{"attempt_index": "5"}, {"attempt_index": "2"}], "log.csv")
+
+
+def test_summary_regeneration_is_idempotent(tmp_path):
+    """Rebuilding lifetime statistics from the log must not accumulate."""
+    from md_templates.openmm.rest2 import summarise_exchange_log
+
+    log = tmp_path / "exchange_attempts.csv"
+    log.write_text("attempt_index,step,i,j,accepted\n"
+                   "0,250,0,1,1\n1,500,0,1,0\n2,750,1,2,1\n")
+    first = summarise_exchange_log(tmp_path)
+    second = summarise_exchange_log(tmp_path)
+    assert first == second
+    assert first["lifetime_exchange_attempts"] == 3
+    assert first["lifetime_exchange_accepted"] == 2
+
+
+def test_lifetime_counts_span_the_whole_log():
+    """The counter a resumed run starts from is the history, not zero."""
+    from md_templates.openmm.rest2 import _lifetime_counts
+    import tempfile as _tf
+
+    d = Path(_tf.mkdtemp())
+    log = d / "exchange_attempts.csv"
+    log.write_text("attempt_index,accepted\n0,1\n1,0\n2,1\n3,1\n")
+    assert _lifetime_counts(log) == (4, 3)
+
+
+def test_md_command_passes_naming_options_into_the_execution_path(monkeypatch):
+    """The CLI option must reach the runner, not merely parse."""
+    from md_templates.openmm import cli
+
+    seen = {}
+
+    def fake_launch_md(bundle, exp, out_root, **kw):
+        seen.update(kw)
+        return 0, None
+
+    monkeypatch.setattr(cli.runner, "launch_md", fake_launch_md)
+    monkeypatch.setattr(cli.runner, "install_signal_handlers", lambda: None)
+    parser = build_parser()
+    args = parser.parse_args(["md", "--bundle", "b", "--out-root", "o", "--run-name", "chosen"])
+    args.func(args)
+    assert seen["run_name"] == "chosen" and seen["resume_run"] is None
+
+
+def test_rest2_command_passes_naming_options_into_the_execution_path(monkeypatch, tmp_path):
+    from md_templates.openmm import cli
+
+    seen = {}
+
+    def fake_launch_rest2(bundle, exp, out_root, **kw):
+        seen.update(kw)
+        return 0, None
+
+    monkeypatch.setattr(cli.runner, "launch_rest2", fake_launch_rest2)
+    monkeypatch.setattr(cli.runner, "install_signal_handlers", lambda: None)
+    (tmp_path / "existing").mkdir()
+    parser = build_parser()
+    args = parser.parse_args(["rest2", "--bundle", "b", "--out-root", str(tmp_path),
+                              "--resume-run", "existing"])
+    args.func(args)
+    assert seen["resume_run"] == tmp_path / "existing" and seen["run_name"] is None
+
+
+def test_md_and_resume_options_are_mutually_exclusive_on_both_commands():
+    parser = build_parser()
+    for argv in (["md", "--bundle", "b", "--out-root", "o"],
+                 ["rest2", "--bundle", "b", "--out-root", "o"]):
+        with pytest.raises(SystemExit):
+            parser.parse_args(argv + ["--run-name", "a", "--resume-run", "b"])
