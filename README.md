@@ -45,6 +45,21 @@ md-openmm rest2           --bundle ./runs/<TIMESTAMP>__cyclo_rgdfv__bundle__<HAS
 md-openmm md              --bundle ./runs/<BUNDLE> --out-root ./runs --platform CUDA --device 0
 ```
 
+### Configuration
+
+Simulations are described by one canonical model that YAML and JSON both compile into, with
+versioned default profiles and explicit units. See **[docs/configuration.md](docs/configuration.md)**.
+
+```bash
+md-openmm config list-profiles
+md-openmm config init --method rest2 --route smiles --output run.yaml
+md-openmm config validate run.yaml
+md-openmm prepare --config run.yaml --out-root ./runs --platform CPU
+```
+
+`--system`/`--experiment` remain as the legacy front end; `config migrate` lifts them into the same
+model.
+
 ### Run directories, and continuing a run
 
 Both `md` and `rest2` take the same naming options:
