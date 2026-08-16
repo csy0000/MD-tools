@@ -534,8 +534,42 @@ def minimize_equilibrate(cfg: dict, system_xml: Path, coords: Path, out_dir: Pat
     mean_box = sel_box
     state_xml = out_dir / f"{suffix}_state.xml"
     state_xml.write_text(XmlSerializer.serialize(final), encoding="utf-8")
+
+    # The human-readable structure must carry the SAME cell as the state it was taken from.
+    # `sim.topology` still holds the box it was built with -- the pre-NPT one -- so writing through
+    # it stamps a CRYST1 record describing a cell these coordinates were never equilibrated in.
+    # Nothing downstream reads the PDB for production (the serialized State is authoritative), which
+    # is exactly why the mismatch could sit here unnoticed and mislead anyone who opened the file.
+    #
+    # The topology is COPIED before its box is set: `sim.topology` is shared with the running
+    # Simulation and with anything else holding a reference, and mutating it here would silently
+    # change unrelated artifacts written later.
+    eq_topology = copy.deepcopy(sim.topology)
+    eq_topology.setPeriodicBoxVectors(final.getPeriodicBoxVectors())
     with (out_dir / f"{suffix}_equilibrated.pdb").open("w") as fh:
-        app.PDBFile.writeFile(sim.topology, final.getPositions(), fh)
+        app.PDBFile.writeFile(eq_topology, final.getPositions(), fh)
+
+    # PDB cannot round-trip a triclinic cell faithfully. CRYST1 stores lengths and angles to three
+    # decimals in angstrom, and reading it back yields OpenMM's REDUCED lattice form, which for a
+    # dodecahedral box flips the sign of the third vector's x/y components. Volume survives; the
+    # vectors as written do not. So an mmCIF copy is written alongside, and the authority order is
+    # stated rather than left to be discovered:
+    #
+    #   {suffix}_state.xml  AUTHORITATIVE -- exact box, positions and velocities; production input
+    #   {suffix}_equilibrated.cif         -- faithful cell for tools that read mmCIF
+    #   {suffix}_equilibrated.pdb         -- for viewing; cell correct to PDB precision and form
+    with (out_dir / f"{suffix}_equilibrated.cif").open("w") as fh:
+        app.PDBxFile.writeFile(eq_topology, final.getPositions(), fh)
+
+    box_handoff["selected_box_vectors_nm"] = [[round(float(x), 6) for x in row] for row in sel_box]
+    box_handoff["structure_files"] = {
+        "authoritative": f"{suffix}_state.xml",
+        "mmcif": f"{suffix}_equilibrated.cif",
+        "pdb": f"{suffix}_equilibrated.pdb",
+        "note": "both structures carry the SELECTED NPT box, not the pre-NPT topology box; PDB "
+                "CRYST1 is limited to 1e-4 nm and to OpenMM's reduced lattice form, so the "
+                "serialized State is authoritative and the mmCIF is the faithful structure copy",
+    }
 
     volumes = [float(np.abs(np.linalg.det(b))) for b in boxes]
     info = {

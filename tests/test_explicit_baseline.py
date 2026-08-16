@@ -855,3 +855,78 @@ def test_dumped_defaults_equal_the_runtime_tree():
             / "docs/implementation/explicit_solvent/scripts/config_defaults.json")
     assert json.loads(path.read_text()) == json.loads(dump_defaults()), \
         "config_defaults.json has drifted; regenerate with dump_defaults(path)"
+
+
+# ==================================================================================================
+# requirement 4: the equilibrated structure carries the SELECTED NPT box, not the pre-NPT one
+# ==================================================================================================
+
+def _write_equilibrated_like_production(tmp_path, box_nm, shape):
+    """Reproduce the write path: a topology built with one box, a state carrying another.
+
+    This is the exact shape of the bug -- the pre-NPT topology and the post-NPT state disagree, and
+    whichever one the writer uses decides what the structure files say.
+    """
+    import copy as _copy
+
+    from openmm import unit as _unit
+    from openmm.app import Topology as _Topology
+
+    top = _Topology()
+    chain = top.addChain()
+    res = top.addResidue("HOH", chain)
+    top.addAtom("O", elem.oxygen, res)
+    pre_npt = 1.0
+    top.setPeriodicBoxVectors(([pre_npt, 0, 0], [0, pre_npt, 0], [0, 0, pre_npt]) * _unit.nanometer)
+
+    selected = (tuple(box_nm[0]), tuple(box_nm[1]), tuple(box_nm[2])) * _unit.nanometer
+    eq_top = _copy.deepcopy(top)
+    eq_top.setPeriodicBoxVectors(selected)
+    positions = [[0.0, 0.0, 0.0]] * _unit.nanometer
+    pdb = tmp_path / f"{shape}_equilibrated.pdb"
+    cif = tmp_path / f"{shape}_equilibrated.cif"
+    with pdb.open("w") as fh:
+        app.PDBFile.writeFile(eq_top, positions, fh)
+    with cif.open("w") as fh:
+        app.PDBxFile.writeFile(eq_top, positions, fh)
+    return pdb, cif, top, selected
+
+
+@pytest.mark.parametrize("shape,box_nm", [
+    ("cube", [[3.4, 0.0, 0.0], [0.0, 3.4, 0.0], [0.0, 0.0, 3.4]]),
+    # the dodecahedral cell the RGD system actually uses: a triclinic box whose third vector is not
+    # axis-aligned. PDB cannot round-trip it -- OpenMM returns the REDUCED lattice form, which flips
+    # the sign of the third vector's x/y. Volume is the invariant that survives; the mmCIF copy is
+    # what preserves the vectors.
+    ("dodecahedron", [[3.66182, 0.0, 0.0], [0.0, 3.66182, 0.0], [1.83091, 1.83091, 2.58930]]),
+])
+def test_equilibrated_structure_records_the_selected_box_not_the_pre_npt_one(tmp_path, shape, box_nm):
+    from openmm import unit as _unit
+
+    pdb, cif, pre_npt_topology, selected = _write_equilibrated_like_production(
+        tmp_path, box_nm, shape)
+    selected_nm = np.array(selected.value_in_unit(_unit.nanometer))
+    pre_nm = np.array(pre_npt_topology.getPeriodicBoxVectors().value_in_unit(_unit.nanometer))
+    vol_selected = float(abs(np.linalg.det(selected_nm)))
+    vol_pre = float(abs(np.linalg.det(pre_nm)))
+
+    for path, reader, tol in ((pdb, app.PDBFile, 2e-4), (cif, app.PDBxFile, 2e-4)):
+        written = np.array(reader(str(path)).topology.getPeriodicBoxVectors()
+                           .value_in_unit(_unit.nanometer))
+        vol_written = float(abs(np.linalg.det(written)))
+        # the volume is representation-independent, so it is the check that holds for both formats
+        assert vol_written == pytest.approx(vol_selected, rel=1e-3), (
+            f"{shape}/{path.suffix}: volume {vol_written} != selected {vol_selected}")
+        assert abs(vol_written - vol_pre) > 1e-6, (
+            f"{shape}/{path.suffix}: volume equals the PRE-NPT box -- the bug this test exists for")
+        # lengths are preserved by both formats even where the reduced form flips signs
+        assert np.allclose(np.linalg.norm(written, axis=1),
+                           np.linalg.norm(selected_nm, axis=1), atol=tol), (
+            f"{shape}/{path.suffix}: vector lengths {np.linalg.norm(written, axis=1).tolist()} "
+            f"!= selected {np.linalg.norm(selected_nm, axis=1).tolist()}")
+
+    # mmCIF additionally preserves the vectors themselves up to the reduced-form sign convention
+    cif_box = np.array(app.PDBxFile(str(cif)).topology.getPeriodicBoxVectors()
+                       .value_in_unit(_unit.nanometer))
+    assert np.allclose(np.abs(cif_box), np.abs(selected_nm), atol=2e-4), (
+        f"{shape}: mmCIF vectors {cif_box.tolist()} != selected {selected_nm.tolist()}")
