@@ -939,7 +939,7 @@ def test_system_defining_changes_are_rejected(dotted, value, label):
     ("overrides.system_build.rigid_water", False, "rigid water"),
     ("overrides.system_build.hydrogen_mass_amu", 1.008, "HMR"),
     ("overrides.system_build.minimum_image_margin_nm", 0.0, "box margin"),
-    ("overrides.rest2.omega_selective", False, "omega selection"),
+    ("overrides.rest2.omega_exclusion", False, "omega selection"),
     ("overrides.rest2.max_proline_ring_size", 6, "omega classification"),
     ("equilibration.protocol", "simple", "equilibration protocol"),
     ("equilibration.npt_free_ps", 10.0, "equilibration length"),
@@ -1169,3 +1169,80 @@ def test_grown_box_survives_npt_without_the_box_size_abort(tmp_path):
     assert float(np.min(np.diag(final))) > 2 * cutoff, (
         "the box contracted below twice the cutoff; the margin did not protect the run"
     )
+
+
+# ==================================================================================================
+# requirement 7: omega exclusion is the default, and toggling it is a Hamiltonian change
+# ==================================================================================================
+
+def test_omega_exclusion_defaults_to_true():
+    from md_templates.openmm import DEFAULTS
+
+    assert DEFAULTS["rest2"]["omega_exclusion"] is True
+
+
+def test_cli_accepts_the_exact_documented_form():
+    parser = build_parser()
+    for cmd in ("prepare", "rest2", "smoke"):
+        argv = {"prepare": ["prepare", "--system", "s", "--experiment", "e", "--out-root", "o"],
+                "rest2": ["rest2", "--bundle", "b", "--out-root", "o"],
+                "smoke": ["smoke", "--system", "s", "--out-root", "o"]}[cmd]
+        assert parser.parse_args(argv + ["--omega-exclusion", "true"]).omega_exclusion is True
+        assert parser.parse_args(argv + ["--omega-exclusion", "false"]).omega_exclusion is False
+        # the optional spelling maps onto the SAME canonical setting, not a second one
+        assert parser.parse_args(argv + ["--no-omega-exclusion"]).omega_exclusion is False
+        # unset means "whatever the manifests resolved to", not False
+        assert parser.parse_args(argv).omega_exclusion is None
+
+
+def test_unparseable_omega_value_is_refused_not_defaulted():
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["smoke", "--system", "s", "--out-root", "o",
+                           "--omega-exclusion", "maybe"])
+
+
+def test_omega_exclusion_is_build_defining_so_it_enters_the_fingerprint():
+    """Changing it changes which torsions are scaled, so a bundle cannot be reused across it."""
+    from md_templates.openmm.fingerprint import BUILD_DEFINING_PATHS
+
+    assert "rest2.omega_exclusion" in BUILD_DEFINING_PATHS
+
+
+def test_cli_override_is_recorded_in_the_resolved_configuration():
+    """A setting that changes the Hamiltonian must say where its value came from."""
+    from md_templates.openmm.config import resolve_config
+
+    system = load_system(shipped_system("cyclo_rgdfv"), check_chemistry=False)
+    experiment = load_experiment(shipped_experiment("rgd_rest2_10rung"))
+
+    default_cfg = resolve_config(system, experiment)
+    assert default_cfg["rest2"]["omega_exclusion"] is True
+    assert "_overrides" not in default_cfg
+
+    off = resolve_config(system, experiment, omega_exclusion=False)
+    assert off["rest2"]["omega_exclusion"] is False
+    assert off["_overrides"]["rest2.omega_exclusion"] == {"value": False, "source": "command line"}
+
+
+def test_toggling_omega_exclusion_changes_the_config_hash():
+    """Two runs differing only in this setting are different calculations and must not share a hash."""
+    from md_templates.openmm.config import resolve_config
+    from md_templates.openmm.fingerprint import fingerprint
+
+    system = load_system(shipped_system("cyclo_rgdfv"), check_chemistry=False)
+    experiment = load_experiment(shipped_experiment("rgd_rest2_10rung"))
+    on = fingerprint(resolve_config(system, experiment, omega_exclusion=True))
+    off = fingerprint(resolve_config(system, experiment, omega_exclusion=False))
+    assert on != off, "the omega setting does not reach the prepared-system fingerprint"
+
+
+def test_unclassified_amide_blocks_only_while_the_exclusion_is_on():
+    """With the exclusion off, no bond is treated specially, so an unnamed amide changes nothing."""
+    from md_templates.openmm.md import _assert_omega_classified
+
+    bundle = {"omega_unclassified_candidates": [
+        {"bond": [3, 4], "carbon_residue": "XXX", "nitrogen_residue": "YYY", "ambiguous": "?"}]}
+    with pytest.raises(ValueError, match="could not be classified"):
+        _assert_omega_classified(bundle, omega_exclusion=True)
+    assert _assert_omega_classified(bundle, omega_exclusion=False) == []

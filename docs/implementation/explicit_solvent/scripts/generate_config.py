@@ -98,7 +98,7 @@ def simbox_config(args, preset: dict) -> dict:
             "hydrogen_mass_amu": args.hydrogen_mass_amu,
         },
         "protonation": {"ph": args.ph},
-        "rest2": {"omega_selective": not args.no_omega_selective},
+        "rest2": {"omega_exclusion": not args.no_omega_exclusion},
     }
     if args.water is not None:
         cfg["forcefield"] = {"water": args.water}

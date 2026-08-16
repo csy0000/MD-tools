@@ -123,7 +123,7 @@
     }
   },
   "rest2": {
-    "omega_selective": true,
+    "omega_exclusion": true,
     "proline_like_residues": [
       "PRO"
     ],

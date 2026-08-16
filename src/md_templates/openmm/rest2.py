@@ -146,7 +146,8 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
 
     base, pdb, bundle = _load_bundle(system_xml)
     n_solute = int(bundle["n_solute_atoms"])
-    omega = _assert_omega_classified(bundle)
+    omega = _assert_omega_classified(
+        bundle, omega_exclusion=bool(cfg["rest2"]["omega_exclusion"]))
 
     requested = rcfg["scale_factors"]
     if requested is None:

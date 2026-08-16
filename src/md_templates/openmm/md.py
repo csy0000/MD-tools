@@ -114,14 +114,21 @@ def completed_prefix(run_dir: Path, n_chunks: int, *, what: str = "chunk") -> in
     return prefix
 
 
-def _assert_omega_classified(bundle: dict) -> list:
+def _assert_omega_classified(bundle: dict, *, omega_exclusion: bool = True) -> list:
     """Refuse to run production while any amide candidate is unclassified.
 
     An unclassified candidate means a solute C-N bond was found that neither the residue rule nor
     the RDKit rule could name.  Scaling it or not scaling it are different Hamiltonians, so
     guessing would silently change the estimand.  Review it and either extend
     ``rest2.proline_like_residues`` / ``rest2.max_proline_ring_size`` or fix the input chemistry.
+
+    The block applies only when ``rest2.omega_exclusion`` is enabled. With the exclusion off every
+    eligible torsion is scaled and no bond is treated specially, so an amide the classifier could
+    not name changes nothing -- blocking there would refuse a run over a distinction the
+    Hamiltonian no longer makes.
     """
+    if not omega_exclusion:
+        return []
     unknown = bundle.get("omega_unclassified_candidates") or []
     if unknown:
         lines = "\n".join(
@@ -166,7 +173,8 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
     n_solute = int(bundle["n_solute_atoms"])
     scale = float(mcfg["scale_factor"])
     label = str(mcfg.get("label") or ("cold" if scale == 1.0 else "hot"))
-    omega = _assert_omega_classified(bundle)
+    omega = _assert_omega_classified(
+        bundle, omega_exclusion=bool(cfg["rest2"]["omega_exclusion"]))
     system = _scaled_system(base, cfg, n_solute, scale, omega)
 
     dt_fs = float(cfg["integrator"]["timestep_fs"])

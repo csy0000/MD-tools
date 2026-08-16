@@ -193,7 +193,7 @@ DEFAULTS: dict[str, Any] = {
         },
     },
     "rest2": {
-        "omega_selective": True,             # leave ORDINARY amide omega torsions unscaled
+        "omega_exclusion": True,             # leave ORDINARY amide omega torsions unscaled
         # A proline-like peptide bond stays ELIGIBLE for scaling: its nitrogen is ring-locked, so
         # the torsion is not the near-planar two-state coordinate the exclusion protects.
         "proline_like_residues": ["PRO"],
@@ -361,11 +361,17 @@ def resolve_config(
     *,
     platform: str = "CPU",
     device: Optional[str] = None,
+    omega_exclusion: Optional[bool] = None,
 ) -> dict[str, Any]:
-    """The fully resolved `explicit_baseline` config for this (system, experiment, machine).
+    """The fully resolved config for this (system, experiment, machine).
 
     Machine choices (`platform`, `device`) are applied last and are deliberately NOT part of the
     config hash: the same calculation on CPU and on CUDA is the same configuration.
+
+    `omega_exclusion` is the opposite: it selects which torsions REST2 scales, so it changes the
+    Hamiltonian. It is a build-defining setting, it enters the config hash and the continuation
+    contract, and a run cannot be resumed across a change to it. `None` means "leave whatever the
+    manifests resolved to"; True/False is an explicit CLI override and is recorded as one.
     """
     cfg = copy.deepcopy(DEFAULTS)
     sdoc, edoc = system.doc, experiment.doc
@@ -424,6 +430,17 @@ def resolve_config(
     overrides = edoc.get("overrides")
     if overrides:
         cfg = _deep_merge(cfg, copy.deepcopy(overrides))
+
+    # ---- the omega-exclusion override ----------------------------------------------------------
+    # Applied after the manifests and before the seeds, and recorded as an override so the resolved
+    # configuration says where the value came from. This is NOT a machine choice: it decides which
+    # torsions are scaled, so two runs differing in it are different Hamiltonians.
+    if omega_exclusion is not None:
+        cfg["rest2"]["omega_exclusion"] = bool(omega_exclusion)
+        cfg.setdefault("_overrides", {})["rest2.omega_exclusion"] = {
+            "value": bool(omega_exclusion),
+            "source": "command line",
+        }
 
     # ---- machine choices, applied last and excluded from the config hash -----------------------
     cfg["production"]["platform"] = platform

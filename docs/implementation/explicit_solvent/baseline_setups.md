@@ -243,7 +243,7 @@ hot rungs isomerise cis/trans where the reference never does. The central bonds 
 topology (a carbon bonded to exactly one oxygen and to a nitrogen — a topology carries no bond
 orders) and the detected list is written into `system_build.json → omega_central_bonds` so it can be
 **audited rather than trusted**. On ACE-ALA-NME it finds `[(4, 6), (14, 16)]`, the two backbone
-amides. Set `rest2.omega_selective = false` to scale everything.
+amides. Set `rest2.omega_exclusion = false` to scale everything.
 
 The scaling itself is `openmm_system.build_rest2_scaled_system`, unchanged and shared with the
 implicit-solvent path: solute charges × `√s`, solute epsilons × `s`, solute–solute exceptions × `s`,

@@ -683,9 +683,9 @@ def test_relaxation_field_exists_and_is_validated(tmp_path):
         load_config(bad)
 
 
-def test_omega_selective_disabled_scales_everything():
+def test_omega_exclusion_disabled_scales_everything():
     cfg = load_config()
-    assert cfg["rest2"]["omega_selective"] is True
+    assert cfg["rest2"]["omega_exclusion"] is True
     assert cfg["rest2"]["proline_like_residues"] == ["PRO"]
     assert cfg["rest2"]["max_proline_ring_size"] == 7
 
@@ -785,7 +785,7 @@ def test_rgd_preset_slug_and_enforced_route():
 
     a = argparse.Namespace(seed=1, slug=None, system="cyclo_rgdfv", padding_nm=1.2,
                            box_shape="dodecahedron", salt_molar=0.15, cutoff_nm=1.0,
-                           hydrogen_mass_amu=3.024, ph=7.0, no_omega_selective=False, water=None)
+                           hydrogen_mass_amu=3.024, ph=7.0, no_omega_exclusion=False, water=None)
     a.slug = "cyclo_rgdfv_sage_explicit"
     cfg = mod.simbox_config(a, P)
     assert cfg["system"]["slug"] == "cyclo_rgdfv_sage_explicit"

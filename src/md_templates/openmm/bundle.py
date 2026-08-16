@@ -76,6 +76,7 @@ def prepare(
     platform: str = "CPU",
     device: Optional[str] = None,
     name: Optional[str] = None,
+    omega_exclusion: Optional[bool] = None,
 ) -> Path:
     """Build a bundle from manifests. Returns the bundle directory.
 
@@ -85,7 +86,8 @@ def prepare(
     """
     from .equilibration import build_simbox, minimize_equilibrate
 
-    cfg = resolve_config(system, experiment, platform=platform, device=device)
+    cfg = resolve_config(system, experiment, platform=platform, device=device,
+                         omega_exclusion=omega_exclusion)
     chash = config_hash(system.doc, experiment.doc)
     stamp = provenance.run_stamp()
     bundle_dir = Path(out_root).resolve() / (name or f"{stamp}__{system.system_id}__bundle__{chash}")
@@ -201,7 +203,7 @@ def build_bundle_manifest(
         # the minimum-image margin rule, and what it actually produced
         "box_geometry": simbox_info.get("geometry", {}),
         "omega": {
-            "selective_scaling": cfg["rest2"]["omega_selective"],
+            "selective_scaling": cfg["rest2"]["omega_exclusion"],
             "excluded_central_bonds": simbox_info.get("omega_bonds")
             or simbox_info.get("omega", {}).get("central_bonds"),
             "note": "solute torsions about these bonds are NOT REST2-scaled; the cis/trans "

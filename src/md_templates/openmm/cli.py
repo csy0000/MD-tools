@@ -116,7 +116,8 @@ def cmd_prepare(args) -> int:
                         precision=experiment.doc["platform"]["precision"], route=system.route)
     runner.configure_device(args.platform, args.device)
     out = bundle_mod.prepare(system, experiment, Path(args.out_root),
-                             platform=args.platform, device=args.device, name=args.name)
+                             platform=args.platform, device=args.device, name=args.name,
+                             omega_exclusion=args.omega_exclusion)
     print(f"bundle: {out}")
     print(bundle_mod.summarise(json.loads((out / "bundle_manifest.json").read_text())))
     return runner.EXIT_OK
@@ -127,7 +128,7 @@ def cmd_rest2(args) -> int:
     exp = _resolve_manifest(args.experiment, "experiment") if args.experiment else None
     code, run_dir = runner.launch_rest2(
         Path(args.bundle), exp, Path(args.out_root),
-        platform=args.platform, device=args.device,
+        platform=args.platform, device=args.device, omega_exclusion=args.omega_exclusion,
     )
     if run_dir is not None:
         status = runner.read_status(run_dir)
@@ -155,7 +156,8 @@ def cmd_smoke(args) -> int:
     out_root = Path(args.out_root)
     print(f"[smoke] preparing {system.system_id} ({experiment.experiment_id}) ...")
     bundle_dir = bundle_mod.prepare(system, experiment, out_root,
-                                    platform=args.platform, device=args.device)
+                                    platform=args.platform, device=args.device,
+                                    omega_exclusion=args.omega_exclusion)
     print(f"[smoke] bundle: {bundle_dir}")
     print("[smoke] running REST2 ...")
     code, run_dir = runner.launch_rest2(bundle_dir, experiment.source, out_root,
@@ -179,6 +181,35 @@ def cmd_smoke(args) -> int:
 # ---------------------------------------------------------------------------------------------
 # parser
 # ---------------------------------------------------------------------------------------------
+
+def _bool_flag(text: str) -> bool:
+    """Parse `true|false` for a setting that changes the Hamiltonian.
+
+    Deliberately strict. `--omega-exclusion maybe` must not fall through to a default: the two
+    values are different physics, so an unparsed one is an error, not a preference.
+    """
+    lowered = str(text).strip().lower()
+    if lowered in ("true", "1", "yes", "on"):
+        return True
+    if lowered in ("false", "0", "no", "off"):
+        return False
+    raise argparse.ArgumentTypeError(
+        f"expected true or false, got {text!r}; this setting selects which torsions REST2 scales, "
+        "so it is not guessed"
+    )
+
+
+def add_omega_exclusion(sp) -> None:
+    """`--omega-exclusion true|false`, plus `--no-omega-exclusion` onto the same setting."""
+    group = sp.add_mutually_exclusive_group()
+    group.add_argument("--omega-exclusion", dest="omega_exclusion", type=_bool_flag,
+                       default=None, metavar="true|false",
+                       help="exclude ordinary amide omega torsions from REST2 scaling "
+                            "(default: true, from rest2.omega_exclusion)")
+    group.add_argument("--no-omega-exclusion", dest="omega_exclusion",
+                       action="store_false",
+                       help="equivalent to --omega-exclusion false")
+
 
 def build_parser() -> argparse.ArgumentParser:
     shipped = list_shipped()
@@ -227,6 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--out-root", required=True, metavar="RUN_ROOT")
     pr.add_argument("--name", default=None, help="bundle directory name (default: timestamped)")
     add_platform(pr)
+    add_omega_exclusion(pr)
     pr.set_defaults(func=cmd_prepare)
 
     r = sub.add_parser("rest2", help="run REST2 from a prepared bundle")
@@ -235,6 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="override the experiment the bundle was prepared with")
     r.add_argument("--out-root", required=True, metavar="RUN_ROOT")
     add_platform(r)
+    add_omega_exclusion(r)
     r.set_defaults(func=cmd_rest2)
 
     s = sub.add_parser("smoke", help="prepare + run the tiny shipped experiment end to end")
@@ -242,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--experiment", default="smoke")
     s.add_argument("--out-root", required=True, metavar="RUN_ROOT")
     add_platform(s, default="CPU")
+    add_omega_exclusion(s)
     s.set_defaults(func=cmd_smoke)
     return p
 

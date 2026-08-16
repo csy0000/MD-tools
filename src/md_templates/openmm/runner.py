@@ -154,6 +154,7 @@ def launch_rest2(
     *,
     platform: str,
     device: Optional[str] = None,
+    omega_exclusion: Optional[bool] = None,
 ) -> tuple[int, Optional[Path]]:
     """Run REST2 from a prepared bundle into a fresh immutable run directory.
 
@@ -174,7 +175,8 @@ def launch_rest2(
     experiment = load_experiment(exp_path)
 
     configure_device(platform, device)
-    cfg = resolve_config(system, experiment, platform=platform, device=device)
+    cfg = resolve_config(system, experiment, platform=platform, device=device,
+                         omega_exclusion=omega_exclusion)
 
     # BEFORE the run directory exists and before any OpenMM context: an overriding experiment may
     # change how long and where the run goes, never what System it runs. Checked whenever an

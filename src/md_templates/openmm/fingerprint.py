@@ -71,7 +71,7 @@ BUILD_DEFINING_PATHS: tuple[str, ...] = (
     "system_build.remove_cm_motion",
     "system_build.minimum_image_margin_nm",
     # --- REST2 omega selection: decides which torsions the stored simbox metadata excludes ------
-    "rest2.omega_selective",
+    "rest2.omega_exclusion",
     "rest2.proline_like_residues",
     "rest2.max_proline_ring_size",
     # --- what produced equilibrated_state.xml ---------------------------------------------------
@@ -148,7 +148,20 @@ def build_projection(cfg: dict) -> dict[str, Any]:
 
 
 def fingerprint(cfg: dict) -> str:
-    """SHA-256 of the build-defining projection. Same prepared System <=> same fingerprint."""
+    """SHA-256 of the build-defining projection. Same prepared System <=> same fingerprint.
+
+    Takes the RESOLVED CONFIG, not a projection. Passing an already-built projection used to
+    succeed and return a constant: every dotted lookup missed on the flat mapping, so the hash was
+    of `{path: None, ...}` and two different systems compared equal. A wrong answer that looks like
+    a hash is worse than an error, so this refuses.
+    """
+    if cfg and all("." in str(k) for k in cfg):
+        raise TypeError(
+            "fingerprint() takes a resolved configuration, but was given what looks like a "
+            "build-defining projection (every key is dotted). Passing a projection would hash a "
+            "mapping of Nones and make unrelated systems compare equal. Call fingerprint(cfg), or "
+            "sha256_text(canonical_json(projection)) if you really have a projection."
+        )
     return sha256_text(canonical_json(build_projection(cfg)))
 
 

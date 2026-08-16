@@ -667,7 +667,7 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
     )
 
     rcfg = cfg["rest2"]
-    if rcfg["omega_selective"]:
+    if rcfg["omega_exclusion"]:
         omega_info = classify_omega_bonds(
             pdb.topology, range(n_solute_atoms), route=route, ligand_sdf=ligand_sdf,
             proline_like_residues=rcfg["proline_like_residues"],
@@ -677,7 +677,7 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
         omega_info = {
             "omega_unscaled_bonds": [], "omega_proline_like_scaled_bonds": [],
             "omega_unclassified_candidates": [],
-            "omega_detection_method": "disabled (rest2.omega_selective = false): every torsion "
+            "omega_detection_method": "disabled (rest2.omega_exclusion = false): every torsion "
                                       "is scaled, including ordinary amide omegas",
             "omega_detail": {"unscaled": [], "proline_like_scaled": []},
         }
