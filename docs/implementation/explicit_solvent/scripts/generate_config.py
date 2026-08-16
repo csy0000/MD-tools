@@ -2,7 +2,7 @@
 """Write the per-stage JSON config files the explicit-solvent stages take.
 
 Each stage reads `--config <stage>-config.json`, a JSON of values that DIFFER from the baseline in
-`escort_ais.systems.explicit_baseline.DEFAULTS`. All four files are slices of that one schema, so
+`md_templates.openmm.DEFAULTS`. All four files are slices of that one schema, so
 nothing can drift between stages, and an unknown key is rejected rather than silently ignored.
 
   generate_config.py --all                          every stage, macrocycle defaults (8 rungs)
@@ -37,7 +37,7 @@ import json
 import sys
 from pathlib import Path
 
-from escort_ais.systems.explicit_baseline import DEFAULTS, load_config, rest2_ladder
+from md_templates.openmm import DEFAULTS, load_config, rest2_ladder
 
 # Per-system defaults. The ladder length is the only thing that differs today, and it differs
 # because REST2's solute-solvent cross term grows with solute size: a dipeptide's rungs overlap far
@@ -78,7 +78,7 @@ SYSTEM_PRESETS: dict[str, dict] = {
 
 WALKER_PRESETS: dict[str, dict] = {
     "cold": {"scale_factor": 1.0, "total_ns": 1000.0, "chunk_ns": 100.0, "label": "cold"},
-    # 1 ns chunks: this trajectory is an AIS seed source, so a chunk should be one cBAR generation
+    # 1 ns chunks: when this trajectory seeds another method, one chunk should be one generation
     "hot": {"scale_factor": 0.25, "total_ns": 200.0, "chunk_ns": 1.0, "label": "hot"},
 }
 

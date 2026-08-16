@@ -3,14 +3,14 @@
 **Status:** authoritative for explicit solvent · **Written:** 2026-08-14 · **Scope:** REST2-REMD
 references and free cold/hot walkers (conditional BAR is *not* part of this baseline yet)
 
-Implementation: `src/escort_ais/systems/explicit_baseline.py`.
+Implementation: `src/md_templates/systems/explicit_baseline.py`.
 Runnable stages: `scripts/` — `simbox-setup.py`, `min-eq.py`, `md.py`, `md_REST2.py`, with
 `generate_config.py` writing their configs. Every parameter lives in one tree;
 `scripts/config_defaults.json` is that tree dumped, and each stage's config carries only the values
 that differ.
 
 ```bash
-conda activate escort-ais-explicit  # REQUIRED -- see "AmberTools must be on PATH" below
+conda activate md-templates  # REQUIRED -- see "AmberTools must be on PATH" below
 S=docs/implementation/explicit_solvent/scripts
 
 # configs: 4 REST2 rungs for alanine, 6 for macrocycles
@@ -182,9 +182,9 @@ topology, so this is the documented way to build a TIP3P-FB box.
 
 **AmberTools must be on `PATH`.** The OpenFF toolkit registry discovers `AmberToolsToolkitWrapper`
 by looking for `sqm`/`antechamber` on `PATH`. In a bare shell they are not found even though they
-are installed in the `escort-ais` environment, and AM1BCC then silently becomes unavailable.
+are installed in the `md-templates` environment, and AM1BCC then silently becomes unavailable.
 `build_forcefield` checks the registry and **fails loudly** rather than letting the charges fall back
-to a different method under an AM1BCC label. Always `conda activate escort-ais-explicit`.
+to a different method under an AM1BCC label. Always `conda activate md-templates`.
 
 **ff19SB was parameterised with OPC water, not TIP3P-FB.** The combination requested here is what
 this baseline implements, and it is a common and defensible pairing (TIP3P-FB is markedly better
@@ -361,7 +361,7 @@ the origin, which nothing here cares about. `traj_all.dcd` stays wrapped, so the
 as a box.
 
 **Why the hot walker chunks at 1 ns.** It is a *seed source*, not a trajectory to be analysed on its
-own: conditional BAR draws its forward AIS seeds per generation from ~1 ns slices of the hot chain,
+own: the originating project drew per-generation seeds from ~1 ns slices of the hot chain,
 so the chunk boundary and the generation boundary should coincide. 200 chunk directories is the
 point, not an accident.
 
@@ -398,7 +398,7 @@ as such in the manifest.
 ## 6. Configuration and the REST2 ladder
 
 Four config files, one per stage, each a **slice of the same schema**
-(`escort_ais.systems.explicit_baseline.DEFAULTS`, dumped in full as `scripts/config_defaults.json`).
+(`md_templates.openmm.DEFAULTS`, dumped in full as `scripts/config_defaults.json`).
 One schema means nothing can drift between stages; a config carries only what differs from the
 baseline, and an unknown key **raises** rather than leaving a baseline value silently in force while
 the run's own `config.json` claims otherwise.

@@ -541,25 +541,32 @@ def minimize_equilibrate(cfg: dict, system_xml: Path, coords: Path, out_dir: Pat
     # Nothing downstream reads the PDB for production (the serialized State is authoritative), which
     # is exactly why the mismatch could sit here unnoticed and mislead anyone who opened the file.
     #
-    # The topology is COPIED before its box is set: `sim.topology` is shared with the running
-    # Simulation and with anything else holding a reference, and mutating it here would silently
-    # change unrelated artifacts written later.
-    eq_topology = copy.deepcopy(sim.topology)
-    eq_topology.setPeriodicBoxVectors(final.getPeriodicBoxVectors())
-    with (out_dir / f"{suffix}_equilibrated.pdb").open("w") as fh:
-        app.PDBFile.writeFile(eq_topology, final.getPositions(), fh)
-
-    # PDB cannot round-trip a triclinic cell faithfully. CRYST1 stores lengths and angles to three
-    # decimals in angstrom, and reading it back yields OpenMM's REDUCED lattice form, which for a
-    # dodecahedral box flips the sign of the third vector's x/y components. Volume survives; the
-    # vectors as written do not. So an mmCIF copy is written alongside, and the authority order is
-    # stated rather than left to be discovered:
+    # `sim.topology` is shared with the running Simulation, so its box is set for the write and
+    # restored in a `finally`: the mutation window is this block only, and an exception inside it
+    # cannot leave the shared topology carrying a box it never had.
+    #
+    # NOT copy.deepcopy(sim.topology). deepcopy produces new Atom objects while the copied Bond
+    # tuples still reference the ORIGINALS, so PDBFile.writeFooter builds its atom index from the
+    # new atoms and then dies with KeyError on the first bond. Found by running the pipeline; a
+    # topology with no bonds -- which is what a unit test naturally builds -- never reaches it.
+    #
+    # PDB cannot round-trip a triclinic cell faithfully either: CRYST1 stores lengths and angles to
+    # three decimals in angstrom, and reading it back yields OpenMM's REDUCED lattice form, which
+    # for a dodecahedral box flips the sign of the third vector's x/y. Volume survives; the vectors
+    # as written do not. So an mmCIF copy is written alongside and the authority order is stated:
     #
     #   {suffix}_state.xml  AUTHORITATIVE -- exact box, positions and velocities; production input
     #   {suffix}_equilibrated.cif         -- faithful cell for tools that read mmCIF
     #   {suffix}_equilibrated.pdb         -- for viewing; cell correct to PDB precision and form
-    with (out_dir / f"{suffix}_equilibrated.cif").open("w") as fh:
-        app.PDBxFile.writeFile(eq_topology, final.getPositions(), fh)
+    original_box = sim.topology.getPeriodicBoxVectors()
+    try:
+        sim.topology.setPeriodicBoxVectors(final.getPeriodicBoxVectors())
+        with (out_dir / f"{suffix}_equilibrated.pdb").open("w") as fh:
+            app.PDBFile.writeFile(sim.topology, final.getPositions(), fh)
+        with (out_dir / f"{suffix}_equilibrated.cif").open("w") as fh:
+            app.PDBxFile.writeFile(sim.topology, final.getPositions(), fh)
+    finally:
+        sim.topology.setPeriodicBoxVectors(original_box)
 
     box_handoff["selected_box_vectors_nm"] = [[round(float(x), 6) for x in row] for row in sel_box]
     box_handoff["structure_files"] = {

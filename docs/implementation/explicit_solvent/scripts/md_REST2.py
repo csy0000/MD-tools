@@ -7,7 +7,7 @@ N replicas in one process, neighbour exchange every 10 ps, 100 ns chunks per rep
 the physical rung (s = 1).  The ladder comes from production.remd.scale_factors, or is built from
 rest2.ladder (s_cold, s_hot, n_rungs, interp) when that is null.
 
-The exchange criterion and the even/odd schedule are reused from escort_ais.methods.md_run, so
+The exchange criterion and the even/odd schedule are reused from md_templates.openmm.md_run, so
 acceptance and round-trip statistics are comparable with the implicit-solvent references, and
 <SUFFIX>_exchange_attempts.csv is written in the schema analysis/remd_reliability.py reads.
 
@@ -20,7 +20,7 @@ Outputs
 
 from __future__ import annotations
 
-from escort_ais.systems.explicit_baseline import run_rest2_remd
+from md_templates.openmm import run_rest2_remd
 
 from _stage_cli import resolve, stage_parser
 

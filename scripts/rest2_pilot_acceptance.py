@@ -103,14 +103,16 @@ def main(argv=None) -> int:
         attempt_note = {"expected_total_attempts": want, "observed_total_attempts": got,
                         "matches": want == got}
 
-    occ = round_trips = None
-    try:
-        from escort_ais.analysis.remd_reliability import round_trips as _rt, rung_occupancy
-        occ_arr, _ = rung_occupancy(str(a.exchange_log), n_rep)
-        occ = occ_arr.tolist()
-        round_trips = _rt(occ_arr)
-    except Exception as exc:                              # diagnostics must not break the report
-        round_trips = [{"error": f"{type(exc).__name__}: {exc}"}]
+    # Rung occupancy and round-trip counting came from the originating research project's analysis
+    # package, which is not part of this template. The call sat inside a bare `except` that turned
+    # any failure into a diagnostic string, so once that package went away it would have reported
+    # an ImportError as a "result" indefinitely. Named as unavailable instead of faked.
+    occ = None
+    round_trips = [{
+        "unavailable": "rung occupancy and round-trip counting are not implemented in this "
+                       "template; the acceptance statistics below are computed here and are "
+                       "unaffected",
+    }]
 
     overall = float(df.accepted.mean())
     summary = {

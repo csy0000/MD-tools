@@ -31,7 +31,7 @@ scripts/md.py                     (c) one free walker, cold or hot by config
 scripts/md_REST2.py               (d) REST2-REMD reference
 scripts/run_all.sh                (a)+(b) then (c)/(c)/(d), one per GPU
 scripts/config_defaults.json      the whole parameter tree, dumped
-src/escort_ais/systems/explicit_baseline.py     the implementation (all of it)
+src/md_templates/systems/explicit_baseline.py     the implementation (all of it)
 ```
 
 Stage **(e)** — `md_cBAR.py` and `pREST2.py` — is not built. `generate_config.py --cbar/--prest2`
@@ -73,11 +73,11 @@ Override with `--s_cold / --s_hot / --N_rungs / --interp`, or by setting
 
 ```bash
 conda env create -f docs/implementation/explicit_solvent/environment.yml
-conda activate escort-ais-explicit
+conda activate md-templates
 pip install -e . --no-deps            # from the repository root
 ```
 
-The existing repo-root `environment.yml` (unpinned, `escort-ais`) also works and is what the
+The existing repo-root `environment.yml` (unpinned, `md-templates`) also works and is what the
 measurements below were actually made in; the pinned file exists so a future reader can reproduce
 them exactly.
 
@@ -85,7 +85,7 @@ them exactly.
 |---|---|---|
 | python | 3.11.15 | |
 | **openmm** | **8.5.1** | the engine. `Modeller.addSolvent(boxShape='dodecahedron')` and `DCDReporter(atomSubset=…, enforcePeriodicBox=…)` are both required, so an older OpenMM may simply not have them |
-| openmmtools | 0.26.0 | NEQ integrators — the AIS path, not this baseline |
+| openmmtools | 0.26.0 | NEQ integrators — not used by this template |
 | **openmmforcefields** | **0.16.0** | `SMIRNOFFTemplateGenerator`, which supplies Sage 2.2 (`openff-2.2.0`) |
 | openff-toolkit | 0.17.1 | `Molecule`, charge assignment, the toolkit registry |
 | openff-interchange | 0.4.5 | SMIRNOFF → OpenMM conversion under the generator |

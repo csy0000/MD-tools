@@ -1,11 +1,11 @@
 # `scripts/` — the explicit-solvent stages
 
 Specification and every scientific decision: **`../baseline_setups.md`**.
-Implementation: **`escort_ais.systems.explicit_baseline`** — these scripts only parse arguments and
+Implementation: **`md_templates.openmm`** — these scripts only parse arguments and
 call it, per the project's code-boundary rule.
 
 ```bash
-conda activate escort-ais-explicit   # REQUIRED: AM1BCC needs AmberTools' sqm on PATH
+conda activate md-templates   # REQUIRED: AM1BCC needs AmberTools' sqm on PATH
 ```
 
 | stage | script | in | out |
@@ -37,7 +37,7 @@ does not.
 ## Configs
 
 Each stage's `--config` is a JSON of values that **differ** from
-`escort_ais.systems.explicit_baseline.DEFAULTS`; `config_defaults.json` is that tree dumped in full.
+`md_templates.openmm.DEFAULTS`; `config_defaults.json` is that tree dumped in full.
 All four files are slices of the same schema, so nothing drifts between stages, and an unknown key
 raises rather than leaving a baseline value silently in force.
 

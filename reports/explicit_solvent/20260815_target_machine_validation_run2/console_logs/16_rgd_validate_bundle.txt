@@ -1,9 +1,0 @@
-valid bundle: /path/to/explicit-test-20260815/rgd_prepare/20260815T192751Z__cyclo_rgdfv__bundle__abf1d9c2f819
-system      cyclo_rgdfv  (cyclo-RGDfV)
-  route     smiles   formal charge 0
-  molecule  59d4422635f77292ed94c609a76808df5c97110be09cd9779819270363143159
-experiment  rgd_rest2_10rung   10 rungs   ladder_status=pilot_supported
-config hash abf1d9c2f819
-composition 3226 atoms  (79 solute, 1047 waters, 6 ions)  6496 DOF
-built       2026-08-15T19:40:57Z  escort-ais 0.1.0  openmm 8.5.1
-  NOTE: this ladder is NOT validated for this system; treat any number from it as a pilot.

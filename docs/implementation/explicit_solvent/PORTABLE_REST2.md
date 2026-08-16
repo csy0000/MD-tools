@@ -4,7 +4,7 @@ How to run this project's explicit-solvent REST2 from **another repository or an
 through an installed package, without the source checkout, without `/home/...` paths, without
 fixed GPU numbers, and without undocumented molecular inputs.
 
-Everything below is executed through one console script, `escort-explicit`, which the wheel puts
+Everything below is executed through one console script, `md-openmm`, which the wheel puts
 on `PATH`. No command needs `docs/implementation/explicit_solvent/scripts/`.
 
 ---
@@ -54,10 +54,10 @@ and bundle manifests record the status verbatim.
 ## Install
 
 ```bash
-conda env create -f environment.yml          # name: escort-ais-explicit
-conda activate escort-ais-explicit
-python -m build                              # writes dist/escort_ais-<version>-py3-none-any.whl
-python -m pip install dist/escort_ais-*.whl --no-deps
+conda env create -f environment.yml          # name: md-templates
+conda activate md-templates
+python -m build                              # writes dist/md_templates-<version>-py3-none-any.whl
+python -m pip install dist/md_templates-*.whl --no-deps
 ```
 
 `--no-deps` is deliberate: the heavy scientific stack (OpenMM, OpenFF, AmberTools, RDKit) comes
@@ -70,7 +70,7 @@ sees this source tree.
 Check the machine before paying for anything:
 
 ```bash
-escort-explicit validate-env --platform CUDA --device 0
+md-openmm validate-env --platform CUDA --device 0
 ```
 
 It reports the Python version, the importability and version of every package that can change a
@@ -85,15 +85,15 @@ lives. Any **FAIL** line blocks `prepare` and `rest2`, which run the same checks
 Use when the consuming machine should construct its own solvated box.
 
 ```bash
-escort-explicit validate-system --system cyclo_rgdfv
+md-openmm validate-system --system cyclo_rgdfv
 
-escort-explicit prepare \
+md-openmm prepare \
   --system     cyclo_rgdfv \
   --experiment rgd_rest2_10rung \
   --out-root   ./runs \
   --platform   CUDA --device 0
 
-escort-explicit rest2 \
+md-openmm rest2 \
   --bundle   ./runs/<TIMESTAMP>__cyclo_rgdfv__bundle__<HASH> \
   --out-root ./runs \
   --platform CUDA --device 0
@@ -119,9 +119,9 @@ tar czf bundle.tgz <TIMESTAMP>__cyclo_rgdfv__bundle__<HASH>
 
 # on the consuming machine
 tar xzf bundle.tgz
-escort-explicit validate-bundle --bundle <TIMESTAMP>__cyclo_rgdfv__bundle__<HASH>
+md-openmm validate-bundle --bundle <TIMESTAMP>__cyclo_rgdfv__bundle__<HASH>
 
-escort-explicit rest2 \
+md-openmm rest2 \
   --bundle   <TIMESTAMP>__cyclo_rgdfv__bundle__<HASH> \
   --out-root ./runs \
   --platform CUDA --device 0
@@ -204,7 +204,7 @@ acceptance statistics to a box geometry the pilots never ran in. A regression te
 manifest to this artifact.
 
 > Note: `systems/cyclo_rgdfv/system.yaml` in the source tree records `forcefield: ff19SB`. That is
-> the **scientific system definition** for the implicit-solvent AIS work and its REMD reference; it
+> the **scientific system definition** for the originating project's implicit-solvent work and its REMD reference; it
 > is a different artifact for a different calculation and is not interchangeable with the portable
 > manifest above, which parameterises the same molecule as a Sage/AM1-BCC ligand.
 
@@ -279,7 +279,7 @@ One process controls its own configured replicas on one selected device. Multi-j
 the consuming repository's problem.
 
 ```bash
-escort-explicit rest2 --bundle BUNDLE --out-root ROOT --platform CUDA --device 1
+md-openmm rest2 --bundle BUNDLE --out-root ROOT --platform CUDA --device 1
 ```
 
 `CUDA_DEVICE_ORDER=PCI_BUS_ID` is set at launch so `--device 1` is the card `nvidia-smi` calls 1.
@@ -349,10 +349,10 @@ margin protects any preparation, including production ones with a tight box at a
 
 ```bash
 cd "$(mktemp -d)"                      # anywhere outside the checkout
-escort-explicit --help
-escort-explicit validate-env
-escort-explicit validate-system --system cyclo_rgdfv
-escort-explicit smoke --system small_macrocycle_smoke --out-root ./test-runs --platform CPU
+md-openmm --help
+md-openmm validate-env
+md-openmm validate-system --system cyclo_rgdfv
+md-openmm smoke --system small_macrocycle_smoke --out-root ./test-runs --platform CPU
 ```
 
 The smoke must exit `0` with `status: completed` and at least two exchange rounds. It takes about

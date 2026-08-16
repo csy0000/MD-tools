@@ -5,7 +5,7 @@
 
 production.md.scale_factor selects the walker: s = 1 is the cold walker (1 us in 100 ns chunks by
 default), s = 0.25 the hot one (200 ns in 1 ns chunks -- short chunks because that trajectory is an
-AIS seed source and the chunk boundary should coincide with a cBAR generation).  Nothing else
+seed source, so a chunk boundary should coincide with a generation).  Nothing else
 differs between them, which is why there is one script and not two.
 
 Resumable: re-running continues at the first chunk without a done.json and does NOT re-minimise.
@@ -19,7 +19,7 @@ Outputs
 
 from __future__ import annotations
 
-from escort_ais.systems.explicit_baseline import run_md
+from md_templates.openmm import run_md
 
 from _stage_cli import resolve, stage_parser
 

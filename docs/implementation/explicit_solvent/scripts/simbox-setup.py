@@ -20,7 +20,7 @@ Outputs
 
 from __future__ import annotations
 
-from escort_ais.systems.explicit_baseline import build_simbox
+from md_templates.openmm import build_simbox
 
 from _stage_cli import resolve, stage_parser
 

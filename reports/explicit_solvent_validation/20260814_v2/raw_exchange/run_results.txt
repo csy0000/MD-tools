@@ -1,6 +1,0 @@
-rungs=8 rep=1 seed=20261822 gpu=0 rc=0 wall_s=908
-rungs=8 rep=2 seed=20262822 gpu=1 rc=0 wall_s=913
-rungs=8 rep=3 seed=20263822 gpu=2 rc=0 wall_s=921
-rungs=10 rep=1 seed=20261824 gpu=0 rc=0 wall_s=1139
-rungs=10 rep=2 seed=20262824 gpu=1 rc=0 wall_s=1141
-rungs=10 rep=3 seed=20263824 gpu=2 rc=0 wall_s=1153

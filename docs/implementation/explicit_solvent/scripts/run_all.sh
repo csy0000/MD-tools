@@ -1,6 +1,6 @@
 #!/bin/bash
 # Thin compatibility wrapper around the installed CLI. The pipeline lives in the package
-# (`escort_ais.explicit`), not here; this file exists so an existing muscle-memory invocation still
+# (`md_templates.openmm`), not here; this file exists so an existing muscle-memory invocation still
 # works and so there is one obvious place that shows the portable command.
 #
 #   ./run_all.sh --system cyclo_rgdfv --experiment rgd_rest2_10rung --out-root /path/to/runs \
@@ -10,8 +10,8 @@
 #
 # You do not need this script. It is exactly equivalent to:
 #
-#   escort-explicit prepare --system SYS --experiment EXP --out-root ROOT [--platform P] [--device D]
-#   escort-explicit rest2   --bundle BUNDLE --out-root ROOT [--platform P] [--device D]
+#   md-openmm prepare --system SYS --experiment EXP --out-root ROOT [--platform P] [--device D]
+#   md-openmm rest2   --bundle BUNDLE --out-root ROOT [--platform P] [--device D]
 #
 # WHAT CHANGED, AND WHY. The previous version hardcoded CUDA_VISIBLE_DEVICES=0/1/2, assumed the
 # machine had three GPUs, backgrounded three jobs with `nohup`, and wrote logs to a
@@ -40,10 +40,10 @@ for required in SYSTEM EXPERIMENT OUT_ROOT; do
   fi
 done
 
-if ! command -v escort-explicit >/dev/null 2>&1; then
-  echo "escort-explicit is not on PATH. Activate the environment and install the package:" >&2
-  echo "  conda activate escort-ais-explicit" >&2
-  echo "  python -m build && python -m pip install dist/escort_ais-*.whl --no-deps" >&2
+if ! command -v md-openmm >/dev/null 2>&1; then
+  echo "md-openmm is not on PATH. Activate the environment and install the package:" >&2
+  echo "  conda activate md-templates" >&2
+  echo "  python -m build && python -m pip install dist/md_templates-*.whl --no-deps" >&2
   exit 4
 fi
 
@@ -54,11 +54,11 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID
 DEVICE_ARGS=()
 if [ -n "$DEVICE" ]; then DEVICE_ARGS=(--device "$DEVICE"); fi
 
-escort-explicit validate-env --platform "$PLATFORM" "${DEVICE_ARGS[@]}"
+md-openmm validate-env --platform "$PLATFORM" "${DEVICE_ARGS[@]}"
 
 # `prepare` prints the bundle path as the first line of its output; capture it rather than
 # guessing the timestamped directory name.
-BUNDLE=$(escort-explicit prepare \
+BUNDLE=$(md-openmm prepare \
   --system "$SYSTEM" --experiment "$EXPERIMENT" --out-root "$OUT_ROOT" \
   --platform "$PLATFORM" "${DEVICE_ARGS[@]}" | sed -n 's/^bundle: //p' | head -1)
 if [ -z "$BUNDLE" ]; then
@@ -69,6 +69,6 @@ echo "bundle: $BUNDLE"
 
 # No nohup and no `&`: one process, in the foreground, so the caller's scheduler owns the job and
 # a non-zero exit is actually observed. stdout/stderr are also written inside the run directory.
-exec escort-explicit rest2 \
+exec md-openmm rest2 \
   --bundle "$BUNDLE" --out-root "$OUT_ROOT" \
   --platform "$PLATFORM" "${DEVICE_ARGS[@]}"

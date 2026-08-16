@@ -12,7 +12,7 @@
 # therefore declared, and `protein_forcefield: null` makes an accidental ff19SB load an error.
 #
 # `systems/cyclo_rgdfv/system.yaml` in the source tree is the SCIENTIFIC system definition used by
-# the implicit-solvent AIS work and records `forcefield: ff19SB` for its REMD reference; it is a
+# the originating project's implicit-solvent work and records `forcefield: ff19SB` for its REMD reference; it is a
 # different artifact for a different calculation and is not interchangeable with this one.
 schema_version: 1
 system_id: cyclo_rgdfv

@@ -3,7 +3,7 @@
 data/
 graphify-out/
 logs/
-claudecode-instructions/
+# claudecode-instructions/
 
 # --- python bytecode ---
 __pycache__/

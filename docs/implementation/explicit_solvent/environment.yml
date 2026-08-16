@@ -1,13 +1,13 @@
 # Environment for the explicit-solvent baseline.
 #
 #   conda env create -f docs/implementation/explicit_solvent/environment.yml
-#   conda activate escort-ais-explicit
+#   conda activate md-templates
 #
 # then EITHER build and install a wheel (the portable route, and what a consuming repository
 # does -- no source checkout required afterwards):
 #
-#   python -m build                       # from the repository root; writes dist/escort_ais-*.whl
-#   python -m pip install dist/escort_ais-*.whl --no-deps
+#   python -m build                       # from the repository root; writes dist/md_templates-*.whl
+#   python -m pip install dist/md_templates-*.whl --no-deps
 #
 # OR install the checkout in place, for development:
 #
@@ -15,7 +15,7 @@
 #
 # Either way it is `--no-deps`, so EVERY runtime dependency declared in pyproject.toml must be
 # listed HERE -- pip will not pull them in.  numba is the one that is easy to miss.  The wheel
-# route additionally puts the `escort-explicit` console script on PATH; see
+# route additionally puts the `md-openmm` console script on PATH; see
 # docs/implementation/explicit_solvent/PORTABLE_REST2.md.
 #
 # THIS IS NOT A LOCK FILE.  It pins the primary package versions the baseline was validated
@@ -30,7 +30,7 @@
 # toolkit registry, and AM1BCC becomes unavailable.  build_forcefield() checks and fails loudly
 # rather than letting the charges fall back to another method under an AM1BCC label.
 
-name: escort-ais-explicit
+name: md-templates
 
 channels:
   - conda-forge
@@ -52,7 +52,7 @@ dependencies:
   # 8.5.1 supplies both Modeller.addSolvent(boxShape=...) and
   # DCDReporter(atomSubset=..., enforcePeriodicBox=...), which the baseline depends on.
   - openmm=8.5.1
-  - openmmtools=0.26.0        # NEQ integrators; not used by this baseline, needed by the AIS path
+  - openmmtools=0.26.0        # NEQ integrators; not used by this template
 
   # LINUX / CUDA environment.  For a CPU-only or non-NVIDIA machine, DELETE the next line --
   # OpenMM still provides the Reference and CPU platforms, and every stage runs on

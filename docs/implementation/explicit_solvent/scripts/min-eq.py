@@ -19,7 +19,7 @@ Outputs
 
 from __future__ import annotations
 
-from escort_ais.systems.explicit_baseline import minimize_equilibrate
+from md_templates.openmm import minimize_equilibrate
 
 from _stage_cli import resolve, stage_parser
 

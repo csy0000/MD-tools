@@ -4,7 +4,7 @@ Every stage takes ``--config <stage>-config.json`` (only the values that differ 
 unknown keys are rejected) and ``--out-suffix``, which names its outputs.  Stages after the first
 also take ``--p`` (the parameterised System) and ``--c`` (coordinates).
 
-No scientific logic lives in this folder; it is all in ``escort_ais.systems.explicit_baseline``.
+No scientific logic lives in this folder; it is all in ``md_templates.openmm``.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from escort_ais.systems.explicit_baseline import load_config
+from md_templates.openmm import load_config
 
 
 def stage_parser(description: str, *, needs_input: bool = False,
