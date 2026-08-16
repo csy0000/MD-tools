@@ -50,6 +50,20 @@ class IncompatibleContinuation(RuntimeError):
 # atomic filesystem primitives
 # ---------------------------------------------------------------------------------------------
 
+def _fsync_dir(path: Path) -> None:
+    """Persist a directory entry, so a rename survives a crash as well as its contents do."""
+    try:
+        fd = os.open(str(path), os.O_DIRECTORY)
+    except (AttributeError, OSError):
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def atomic_write_bytes(path: Path, payload: bytes) -> Path:
     """Write via a temporary file in the SAME directory, then `os.replace`.
 
@@ -66,6 +80,7 @@ def atomic_write_bytes(path: Path, payload: bytes) -> Path:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
+        _fsync_dir(path.parent)
     except BaseException:
         with open(os.devnull, "w"):
             pass
@@ -123,6 +138,10 @@ CONTINUITY_PATHS: tuple[str, ...] = (
     # the plan's granularity -- chunk LENGTH is continuity-defining, chunk COUNT is not
     "production.md.chunk_ns",
     "production.md.scale_factor",
+    # A changed production seed gives a different trajectory from the same state, so continuing
+    # across one is not the run the directory claims to hold.
+    "production.md.seed",
+    "production.remd.seed",
     "production.remd.chunk_ns",
     "production.remd.exchange_interval_ps",
     "production.remd.scale_factors",
@@ -277,6 +296,119 @@ def record_invocation(run_dir: Path, entry: dict) -> dict:
 # restart generations
 # ---------------------------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------------------------
+# The committed boundary is the ONLY authority for where a run resumes
+# ---------------------------------------------------------------------------------------------
+
+QUARANTINE_DIR = "recovery"
+
+
+def resume_boundary(run_dir: Path) -> int:
+    """The next chunk index to run, derived from the COMMIT RECORD alone.
+
+    Not from `done.json`, not from directory or glob counts, not from log length. Those describe
+    what was written; only the commit record describes what was durably finished, and the two
+    differ exactly in the crash window this function exists to close: a chunk can have written its
+    outputs and its `done.json` and still not be committed. Resuming from the older restart while
+    trusting the newer `done.json` would advance the chunk counter past physics that was never
+    performed.
+
+    Committed generation N means chunks 0..N are finished, so the next chunk is N + 1. No committed
+    generation means nothing is finished, so the next chunk is 0.
+    """
+    gen = committed_generation(run_dir)
+    return 0 if gen is None else int(gen) + 1
+
+
+def quarantine_uncommitted_tail(run_dir: Path, boundary: int, *,
+                                subdirs: Optional[list[Path]] = None) -> list[str]:
+    """Move chunk output at or beyond `boundary` out of the way, and say what was moved.
+
+    Never deleted and never adopted: a tail is the product of a process that died, so it may hold
+    the only copy of something a user wants to look at, but it is not part of the run's committed
+    history and must not be appended to. It goes under `recovery/` with its original name.
+    """
+    run_dir = Path(run_dir)
+    moved: list[str] = []
+    roots = [Path(s) for s in (subdirs or [run_dir])]
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for child in sorted(root.glob("chunk_*")):
+            if not child.is_dir():
+                continue
+            try:
+                index = int(child.name.split("_")[1])
+            except (IndexError, ValueError):
+                continue
+            if index < boundary:
+                continue
+            dest_parent = run_dir / QUARANTINE_DIR / root.relative_to(run_dir) \
+                if root != run_dir else run_dir / QUARANTINE_DIR
+            dest_parent.mkdir(parents=True, exist_ok=True)
+            dest = dest_parent / child.name
+            n = 1
+            while dest.exists():                      # a second recovery must not clobber the first
+                dest = dest_parent / f"{child.name}.recovered{n}"
+                n += 1
+            child.rename(dest)
+            moved.append(str(dest.relative_to(run_dir)))
+    return moved
+
+
+def assert_committed_outputs(run_dir: Path, boundary: int, *, required: list[str],
+                             subdirs: Optional[list[Path]] = None) -> None:
+    """Every chunk at or below the committed boundary must still have its outputs.
+
+    A committed chunk whose artifacts are gone is corruption, not something to work around: the run
+    claims physics that has no record. Stopping is the only honest response.
+    """
+    roots = [Path(s) for s in (subdirs or [run_dir])]
+    missing: list[str] = []
+    for root in roots:
+        for index in range(boundary):
+            cdir = root / f"chunk_{index:04d}"
+            if not cdir.is_dir():
+                missing.append(f"{cdir} (directory)")
+                continue
+            for name in required:
+                if not (cdir / name).exists():
+                    missing.append(str(cdir / name))
+    if missing:
+        raise RunStateError(
+            f"{run_dir}: {len(missing)} artifact(s) are missing from chunks the commit record says "
+            f"are finished:\n    " + "\n    ".join(missing[:10]) +
+            ("\n    ..." if len(missing) > 10 else "") +
+            "\n  The run claims physics for which no record survives. Refusing to continue."
+        )
+
+
+def assert_restart_consistent(*, loaded_step: int, loaded_time_ps: Optional[float],
+                              record: dict, timestep_fs: float,
+                              time_tolerance_ps: float = 1e-6) -> None:
+    """The restored state must be where the commit record says it is.
+
+    A checkpoint that loads without error but sits at the wrong step would let a resume advance the
+    counter over propagation that never happened -- the same skipped-physics failure the commit
+    record exists to prevent, arriving through a different door.
+    """
+    expected = record.get("steps")
+    if expected is None:
+        return
+    if int(loaded_step) != int(expected):
+        raise RunStateError(
+            f"restart is at step {loaded_step} but the commit record says {expected}. The restart "
+            "and the record disagree about how much physics has been done; refusing to continue."
+        )
+    if loaded_time_ps is not None:
+        expected_time = int(expected) * float(timestep_fs) * 1e-3
+        if abs(float(loaded_time_ps) - expected_time) > time_tolerance_ps:
+            raise RunStateError(
+                f"restart reports {loaded_time_ps} ps but step {expected} at {timestep_fs} fs is "
+                f"{expected_time} ps (tolerance {time_tolerance_ps} ps)."
+            )
+
+
 def generation_dir(run_dir: Path, generation: int) -> Path:
     return Path(run_dir) / RESTART_DIR / f"gen_{int(generation):04d}"
 
@@ -385,7 +517,12 @@ def save_restart(sim, gdir: Path, *, replica: Optional[int] = None) -> tuple[Pat
     fd, tmp_chk = tempfile.mkstemp(dir=str(gdir), prefix=f".{chk_name}.", suffix=".tmp")
     os.close(fd)
     sim.saveCheckpoint(tmp_chk)
+    # OpenMM closes the file it wrote, but the bytes may still be in the page cache. fsync before
+    # the rename, or a commit record could point at a checkpoint that a power loss truncates.
+    with open(tmp_chk, "rb+") as fh:
+        os.fsync(fh.fileno())
     os.replace(tmp_chk, gdir / chk_name)
+    _fsync_dir(gdir)
 
     state = sim.context.getState(getPositions=True, getVelocities=True, getParameters=True,
                                  enforcePeriodicBox=False)

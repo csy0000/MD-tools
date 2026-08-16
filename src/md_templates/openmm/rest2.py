@@ -307,14 +307,28 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
     # The bound is only the "more chunks than configured" guard, and with n_chunks meaning
     # ADDITIONAL work there is no lifetime ceiling to check discovery against -- the completed
     # prefix is whatever the directory already holds.
-    prefixes = {r: completed_prefix(d, _NO_CHUNK_CEILING) for r, d in enumerate(replica_dirs)}
-    start_chunk = min(prefixes.values())
-    if len(set(prefixes.values())) > 1:
+    # THE COMMIT RECORD IS THE AUTHORITY, for every replica at once. A per-replica scan of
+    # done.json can disagree with it, and the disagreement IS the crash window: a replica can have
+    # written its chunk and its done.json while the generation that holds its state was never
+    # committed.
+    start_chunk = runstate.resume_boundary(run_dir)
+    runstate.assert_committed_outputs(run_dir, start_chunk, required=["done.json", "end.chk"],
+                                      subdirs=replica_dirs)
+    # Every replica must be able to reach the committed boundary: they advance in lockstep between
+    # exchange rounds, so a ragged set cannot be continued consistently.
+    written = {r: completed_prefix(d, _NO_CHUNK_CEILING) for r, d in enumerate(replica_dirs)}
+    behind = {r: n for r, n in written.items() if n < start_chunk}
+    if behind:
         raise ValueError(
-            f"replicas have different completed prefixes {prefixes}.  REST2 replicas advance in "
-            "lockstep between exchange rounds, so this cannot be resumed consistently.  Delete "
-            f"every replica's chunk_{start_chunk:04d} and later, then resume."
+            f"the commit record says chunk {start_chunk - 1} is finished, but replicas {behind} "
+            "have fewer completed chunks than that. The committed generation and the replica "
+            "outputs disagree; refusing to resume."
         )
+    quarantined = runstate.quarantine_uncommitted_tail(run_dir, start_chunk, subdirs=replica_dirs)
+    if quarantined:
+        print(f"[remd] {len(quarantined)} uncommitted chunk(s) moved to "
+              f"{runstate.QUARANTINE_DIR}/: beyond the committed boundary, so not part of this "
+              "run's history.", flush=True)
     n_chunks = start_chunk + chunks_this_invocation
 
     log_path = out_dir / (f"{suffix}_exchange_attempts.csv" if suffix
@@ -349,6 +363,13 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
         gdir = runstate.generation_dir(run_dir, gen)
         restored_from = {r: runstate.load_restart(sim, gdir, replica=r)
                          for r, sim in enumerate(simulations)}
+        for r, sim in enumerate(simulations):
+            st = sim.context.getState()
+            runstate.assert_restart_consistent(
+                loaded_step=int(sim.context.getStepCount()),
+                loaded_time_ps=float(st.getTime().value_in_unit(unit.picosecond)),
+                record=committed, timestep_fs=dt_fs,
+            )
         if "state" in restored_from.values():
             print("[remd] one or more replicas restored from the portable State rather than a "
                   "binary checkpoint: the continuation is physically valid but NOT bitwise "
@@ -363,6 +384,12 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
         # between writing rows and committing, and adopting it would double-count on the next run.
         watermark = (committed.get("attempts_committed")
                      if isinstance(committed.get("attempts_committed"), int) else None)
+        if watermark is not None and len(rows) < watermark:
+            raise ValueError(
+                f"{log_path} holds {len(rows)} attempts but the commit record says {watermark} "
+                "are committed. Rows that were committed have gone missing, so the exchange "
+                "history is corrupt; refusing to continue."
+            )
         if watermark is not None and len(rows) > watermark:
             print(f"[remd] exchange log has {len(rows)} rows but only {watermark} are committed; "
                   "discarding the uncommitted tail", flush=True)

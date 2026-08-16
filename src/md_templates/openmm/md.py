@@ -198,7 +198,17 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
                 "boundaries and the first frame of each chunk would drift."
             )
 
-    start_chunk = completed_prefix(run_dir, _NO_CHUNK_CEILING)
+    # THE COMMIT RECORD IS THE AUTHORITY. `done.json` says a chunk finished writing; only the
+    # commit record says its restart is durable. Between them is the crash window: trusting
+    # done.json here would advance the counter past physics whose state was never committed.
+    committed = runstate.committed_record(run_dir)
+    start_chunk = runstate.resume_boundary(run_dir)
+    runstate.assert_committed_outputs(run_dir, start_chunk, required=["done.json", "end.chk"])
+    quarantined = runstate.quarantine_uncommitted_tail(run_dir, start_chunk)
+    if quarantined:
+        print(f"[md] {len(quarantined)} uncommitted chunk(s) moved to "
+              f"{runstate.QUARANTINE_DIR}/: {quarantined}. They are beyond the committed "
+              "boundary and are not part of this run's history.", flush=True)
     n_chunks = start_chunk + chunks_this_invocation
     if start_chunk == 0:
         origin = _apply_coords(sim, coords, require_velocities=True)
@@ -216,6 +226,12 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
                   "continuation is physically valid but NOT bitwise identical to an "
                   "uninterrupted run", flush=True)
         origin = {"coords": str(gdir), "kind": kind, "generation": gen}
+        state = sim.context.getState()
+        runstate.assert_restart_consistent(
+            loaded_step=int(sim.context.getStepCount()),
+            loaded_time_ps=float(state.getTime().value_in_unit(unit.picosecond)),
+            record=committed, timestep_fs=dt_fs,
+        )
     sim.currentStep = start_chunk * chunk_steps
     sim.context.setTime(start_chunk * chunk_steps * dt_fs * 1e-3 * unit.picosecond)
 

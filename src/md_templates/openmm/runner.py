@@ -176,10 +176,18 @@ def configure_device(platform: str, device: Optional[str]) -> dict[str, Optional
 
 
 class _Tee:
-    """Write to a file and to the original stream, so a run is watchable and also self-contained."""
+    """Write to a file and to the original stream, so a run is watchable and also self-contained.
 
-    def __init__(self, path: Path, mirror) -> None:
-        self._fh = open(path, "w", encoding="utf-8", buffering=1)
+    Opened for APPEND. Truncating on resume destroyed the record of every earlier invocation --
+    the log of a run that had been continued described only the process that happened to finish
+    it, which is the same failure the lifetime exchange statistics had.
+    """
+
+    def __init__(self, path: Path, mirror, *, banner: Optional[str] = None) -> None:
+        existed = Path(path).exists() and Path(path).stat().st_size > 0
+        self._fh = open(path, "a", encoding="utf-8", buffering=1)
+        if existed and banner:
+            self._fh.write(f"\n{'=' * 78}\n{banner}\n{'=' * 78}\n")
         self._mirror = mirror
 
     def write(self, text: str) -> int:
@@ -346,12 +354,19 @@ def launch_rest2(
         },
         "environment": provenance.environment_block(),
     }
-    provenance.write_json(run_dir / "run_manifest.json", run_manifest)
+    # Written ONCE. The original manifest records how the run began -- its start time, its first
+    # invocation, the bundle it came from -- and a resume rewriting it would erase exactly the
+    # provenance a continued run needs most. Later invocations go to run_state.json's append-only
+    # history instead.
+    if not (run_dir / "run_manifest.json").is_file():
+        provenance.write_json(run_dir / "run_manifest.json", run_manifest)
     write_status(run_dir, STATUS_RUNNING, run_id=run_dir.name,
                  planned_exchange_rounds=planned_rounds)
 
-    out_tee = _Tee(run_dir / "stdout.log", sys.stdout)
-    err_tee = _Tee(run_dir / "stderr.log", sys.stderr)
+    stamp = provenance.utc_timestamp()
+    banner = f"invocation at {stamp}  |  resume={is_resume}  |  platform={platform}"
+    out_tee = _Tee(run_dir / "stdout.log", sys.stdout, banner=banner)
+    err_tee = _Tee(run_dir / "stderr.log", sys.stderr, banner=banner)
     real_out, real_err = sys.stdout, sys.stderr
     sys.stdout, sys.stderr = out_tee, err_tee
     code = EXIT_OK
@@ -451,7 +466,8 @@ def launch_md(
 
     mcfg = cfg["production"]["md"]
     planned_chunks = int(mcfg["n_chunks"])
-    provenance.write_json(run_dir / "run_manifest.json", {
+    if not (run_dir / "run_manifest.json").is_file():
+        provenance.write_json(run_dir / "run_manifest.json", {
         "schema_version": 1,
         "kind": "explicit-solvent-md-run",
         "run_id": run_dir.name,
@@ -475,8 +491,10 @@ def launch_md(
     write_status(run_dir, STATUS_RUNNING, run_id=run_dir.name, method="md",
                  planned_chunks=planned_chunks)
 
-    out_tee = _Tee(run_dir / "stdout.log", sys.stdout)
-    err_tee = _Tee(run_dir / "stderr.log", sys.stderr)
+    stamp = provenance.utc_timestamp()
+    banner = f"invocation at {stamp}  |  resume={is_resume}  |  platform={platform}"
+    out_tee = _Tee(run_dir / "stdout.log", sys.stdout, banner=banner)
+    err_tee = _Tee(run_dir / "stderr.log", sys.stderr, banner=banner)
     real_out, real_err = sys.stdout, sys.stderr
     sys.stdout, sys.stderr = out_tee, err_tee
     code = EXIT_OK
