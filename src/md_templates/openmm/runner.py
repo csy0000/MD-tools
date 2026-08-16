@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from . import provenance
+from . import provenance, runstate
 from .bundle import BUNDLE_MANIFEST, validate_bundle
 from .config import exchange_rounds, resolve_config
 from .fingerprint import check_compatible, fingerprint
@@ -190,6 +190,65 @@ class _Tee:
             self._fh.close()
 
 
+def _stage_run_directory(bundle_dir: Path, exp_path: Path, cfg: dict, manifest: dict,
+                         system, experiment, out_root: Path, *, method: str, chash: str,
+                         run_name: Optional[str], resume_run: Optional[Path],
+                         platform: str, device: Optional[str]) -> tuple[Path, bool]:
+    """Create or reopen the run directory, enforcing the continuity contract on a resume.
+
+    Returns `(run_dir, is_resume)`. On a resume, the contract is checked BEFORE any file is opened
+    or copied, so an incompatible continuation cannot append a single byte to an existing run.
+    """
+    contract = runstate.continuity_contract(
+        cfg, method=method, fingerprint_value=fingerprint(cfg),
+        n_particles=(manifest.get("composition") or {}).get("n_atoms"),
+        bundle_config_hash=manifest.get("config_hash"),
+    )
+    run_dir, is_resume = resolve_run_dir(
+        out_root, system.system_id, chash, method=method,
+        run_name=run_name, resume_run=resume_run,
+    )
+    if is_resume:
+        runstate.assert_continuable(run_dir, contract)     # refuses before anything is written
+        runstate.record_invocation(run_dir, {
+            "started_utc": provenance.utc_timestamp(),
+            "invocation": provenance.invocation(),
+            "adds_chunks": cfg["production"]["remd" if method == "rest2" else "md"]["n_chunks"],
+            "platform": platform, "device": device,
+        })
+        return run_dir, True
+
+    # fresh run: copy the inputs in before anything that can fail, so even an immediate crash
+    # leaves a directory that says what was attempted
+    (run_dir / "system.yaml").write_text(
+        (bundle_dir / "system.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+    (run_dir / "experiment.yaml").write_text(exp_path.read_text(encoding="utf-8"), encoding="utf-8")
+    provenance.write_json(run_dir / "resolved_config.json", cfg)
+    (run_dir / BUNDLE_MANIFEST).write_text(
+        (bundle_dir / BUNDLE_MANIFEST).read_text(encoding="utf-8"), encoding="utf-8")
+
+    staged = run_dir / "inputs"
+    staged.mkdir(exist_ok=True)
+    for src, dst in (("system.xml", "bundle_system.xml"),
+                     ("topology.pdb", "bundle_topology.pdb"),
+                     ("simbox.json", "bundle_simbox.json")):
+        shutil.copy2(bundle_dir / src, staged / dst)
+    shutil.copy2(bundle_dir / "equilibrated_state.xml", staged / "equilibrated_state.xml")
+
+    runstate.write_run_state(
+        run_dir, method=method, continuity=contract,
+        run_id=run_dir.name, config_hash=chash,
+        created_utc=provenance.utc_timestamp(),
+        invocations=[{
+            "started_utc": provenance.utc_timestamp(),
+            "invocation": provenance.invocation(),
+            "adds_chunks": cfg["production"]["remd" if method == "rest2" else "md"]["n_chunks"],
+            "platform": platform, "device": device,
+        }],
+    )
+    return run_dir, False
+
+
 def launch_rest2(
     bundle_dir: Path,
     experiment_path: Optional[Path],
@@ -198,8 +257,10 @@ def launch_rest2(
     platform: str,
     device: Optional[str] = None,
     omega_exclusion: Optional[bool] = None,
+    run_name: Optional[str] = None,
+    resume_run: Optional[Path] = None,
 ) -> tuple[int, Optional[Path]]:
-    """Run REST2 from a prepared bundle into a fresh immutable run directory.
+    """Run REST2 from a prepared bundle, into a new run directory or an existing one.
 
     Returns `(exit_code, run_dir)`. The run directory exists whenever one could be created, so a
     failure is still inspectable — `status.json` and `stderr.log` are inside it.
@@ -230,29 +291,16 @@ def launch_rest2(
             raise IncompatibleExperiment(reason)
 
     chash = config_hash(system.doc, experiment.doc)
-    run_dir = create_run_dir(out_root, system.system_id, chash)
-
-    # copy the inputs in before doing anything that can fail, so even an immediate crash leaves a
-    # directory that says what was attempted
-    (run_dir / "system.yaml").write_text(
-        (bundle_dir / "system.yaml").read_text(encoding="utf-8"), encoding="utf-8")
-    (run_dir / "experiment.yaml").write_text(
-        exp_path.read_text(encoding="utf-8"), encoding="utf-8")
-    provenance.write_json(run_dir / "resolved_config.json", cfg)
-    (run_dir / BUNDLE_MANIFEST).write_text(
-        (bundle_dir / BUNDLE_MANIFEST).read_text(encoding="utf-8"), encoding="utf-8")
-
+    run_dir, is_resume = _stage_run_directory(
+        bundle_dir, exp_path, cfg, manifest, system, experiment, out_root,
+        method="rest2", chash=chash, run_name=run_name, resume_run=resume_run,
+        platform=platform, device=device,
+    )
     # `_load_bundle` addresses a System by the `<stem>_system.xml` convention and reads
-    # `<stem>_topology.pdb` and `<stem>_simbox.json` beside it. The portable bundle uses bare
-    # names, so stage a view of it under that convention inside the run directory. Copies, not
-    # symlinks: the run directory has to stay meaningful after the bundle is deleted or moved.
+    # `<stem>_topology.pdb` and `<stem>_simbox.json` beside it, so the bundle is staged under that
+    # convention inside the run directory. Copies, not symlinks: the run directory has to stay
+    # meaningful after the bundle is deleted or moved.
     staged = run_dir / "inputs"
-    staged.mkdir()
-    for src, dst in (("system.xml", "bundle_system.xml"),
-                     ("topology.pdb", "bundle_topology.pdb"),
-                     ("simbox.json", "bundle_simbox.json")):
-        shutil.copy2(bundle_dir / src, staged / dst)
-    shutil.copy2(bundle_dir / "equilibrated_state.xml", staged / "equilibrated_state.xml")
 
     planned_rounds = exchange_rounds(cfg)
     run_manifest = {
@@ -301,9 +349,9 @@ def launch_rest2(
     code = EXIT_OK
     try:
         result = run_rest2_remd(
-            cfg, staged / "bundle_system.xml", staged / "equilibrated_state.xml", run_dir, "rest2"
+            cfg, staged / "bundle_system.xml", staged / "equilibrated_state.xml", run_dir, ""
         )
-        _flatten_outputs(run_dir)
+        _flatten_outputs(run_dir)          # no-op for runs written directly; kept for older trees
         observed = count_exchange_rounds(run_dir)
         complete = observed >= planned_rounds and str(
             result.get("status", "")) != "already-complete"
@@ -333,6 +381,116 @@ def launch_rest2(
         write_status(run_dir, STATUS_FAILED, run_id=run_dir.name,
                      planned_exchange_rounds=planned_rounds,
                      observed_exchange_rounds=count_exchange_rounds(run_dir),
+                     error=f"{type(exc).__name__}: {exc}")
+        code = EXIT_RUNTIME
+    finally:
+        sys.stdout, sys.stderr = real_out, real_err
+        out_tee.close()
+        err_tee.close()
+    return code, run_dir
+
+
+def launch_md(
+    bundle_dir: Path,
+    experiment_path: Optional[Path],
+    out_root: Path,
+    *,
+    platform: str,
+    device: Optional[str] = None,
+    run_name: Optional[str] = None,
+    resume_run: Optional[Path] = None,
+) -> tuple[int, Optional[Path]]:
+    """Run conventional explicit-water MD from a prepared bundle.
+
+    One walker at `production.md.scale_factor`; no replicas, no ladder, no exchange machinery is
+    constructed. It shares the run directory, provenance, continuity, restart and reporting
+    implementation with REST2 -- only the propagation differs, which is the point of keeping the
+    two algorithms in separate modules but one launcher.
+    """
+    from .md import run_md
+
+    bundle_dir = Path(bundle_dir).resolve()
+    manifest = validate_bundle(bundle_dir)
+    exp_path = Path(experiment_path).resolve() if experiment_path else (
+        bundle_dir / "experiment.prepare.yaml"
+    )
+    system = load_system(bundle_dir / "system.yaml")
+    experiment = load_experiment(exp_path)
+
+    configure_device(platform, device)
+    cfg = resolve_config(system, experiment, platform=platform, device=device)
+    if experiment_path is not None:
+        reason = check_compatible(manifest, cfg)
+        if reason:
+            raise IncompatibleExperiment(reason)
+
+    if (cfg.get("_declared") or {}).get("production.md") != "experiment":
+        raise IncompatibleExperiment(
+            f"{exp_path} declares no `md:` block, so it does not say how long a conventional-MD "
+            "run should be. A REST2 plan describes a ladder, not a single walker, and falling back "
+            "to the package default would silently launch "
+            f"{cfg['production']['md']['n_chunks']} x {cfg['production']['md']['chunk_ns']} ns. "
+            "Add an `md:` block with n_chunks and chunk_ns."
+        )
+
+    chash = config_hash(system.doc, experiment.doc)
+    run_dir, is_resume = _stage_run_directory(
+        bundle_dir, exp_path, cfg, manifest, system, experiment, out_root,
+        method="md", chash=chash, run_name=run_name, resume_run=resume_run,
+        platform=platform, device=device,
+    )
+    staged = run_dir / "inputs"
+
+    mcfg = cfg["production"]["md"]
+    planned_chunks = int(mcfg["n_chunks"])
+    provenance.write_json(run_dir / "run_manifest.json", {
+        "schema_version": 1,
+        "kind": "explicit-solvent-md-run",
+        "run_id": run_dir.name,
+        "config_hash": chash,
+        "prepared_system_fingerprint": fingerprint(cfg),
+        "started_utc": provenance.utc_timestamp(),
+        "invocation": provenance.invocation(),
+        "method": "md",
+        "system": manifest["system"],
+        "experiment": {
+            "experiment_id": experiment.experiment_id,
+            "master_seed": experiment.master_seed,
+            "n_chunks": planned_chunks,
+            "chunk_ns": mcfg["chunk_ns"],
+            "scale_factor": mcfg["scale_factor"],
+        },
+        "platform": {"platform": platform, "device": device,
+                     "precision": cfg["production"]["precision"]},
+        "environment": provenance.environment_block(),
+    })
+    write_status(run_dir, STATUS_RUNNING, run_id=run_dir.name, method="md",
+                 planned_chunks=planned_chunks)
+
+    out_tee = _Tee(run_dir / "stdout.log", sys.stdout)
+    err_tee = _Tee(run_dir / "stderr.log", sys.stderr)
+    real_out, real_err = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = out_tee, err_tee
+    code = EXIT_OK
+    try:
+        result = run_md(cfg, staged / "bundle_system.xml", staged / "equilibrated_state.xml",
+                        run_dir, "")
+        complete = str(result.get("status", "")) != "interrupted"
+        write_status(run_dir, STATUS_COMPLETED if complete else STATUS_INTERRUPTED,
+                     run_id=run_dir.name, method="md", planned_chunks=planned_chunks,
+                     driver_status=result.get("status"),
+                     lifetime_chunks=result.get("lifetime_chunks_completed"))
+        if not complete:
+            code = EXIT_RUNTIME
+    except KeyboardInterrupt:
+        write_status(run_dir, STATUS_INTERRUPTED, run_id=run_dir.name, method="md",
+                     note="interrupted by signal; the budget was NOT reached")
+        code = EXIT_INTERRUPTED
+    except BaseException as exc:                   # noqa: BLE001 - status must always be written
+        import traceback
+
+        traceback.print_exc()
+        write_status(run_dir, STATUS_FAILED, run_id=run_dir.name, method="md",
                      error=f"{type(exc).__name__}: {exc}")
         code = EXIT_RUNTIME
     finally:

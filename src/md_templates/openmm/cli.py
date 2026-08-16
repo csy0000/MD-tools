@@ -129,6 +129,7 @@ def cmd_rest2(args) -> int:
     code, run_dir = runner.launch_rest2(
         Path(args.bundle), exp, Path(args.out_root),
         platform=args.platform, device=args.device, omega_exclusion=args.omega_exclusion,
+        run_name=args.run_name, resume_run=_resolve_resume(args),
     )
     if run_dir is not None:
         status = runner.read_status(run_dir)
@@ -136,6 +137,24 @@ def cmd_rest2(args) -> int:
         print(f"status: {status.get('status')}  "
               f"exchange rounds {status.get('observed_exchange_rounds')}"
               f"/{status.get('planned_exchange_rounds')}")
+    return code
+
+
+
+def cmd_md(args) -> int:
+    """Conventional explicit-water MD: one walker, no replicas, no exchange."""
+    runner.install_signal_handlers()
+    exp = _resolve_manifest(args.experiment, "experiment") if args.experiment else None
+    code, run_dir = runner.launch_md(
+        Path(args.bundle), exp, Path(args.out_root),
+        platform=args.platform, device=args.device,
+        run_name=args.run_name, resume_run=_resolve_resume(args),
+    )
+    if run_dir is not None:
+        status = runner.read_status(run_dir)
+        print(f"run: {run_dir}")
+        print(f"status: {status.get('status')}  chunks {status.get('lifetime_chunks')}"
+              f"/{status.get('planned_chunks')} (lifetime/this invocation's target)")
     return code
 
 
@@ -211,6 +230,28 @@ def add_omega_exclusion(sp) -> None:
                        help="equivalent to --omega-exclusion false")
 
 
+
+def add_run_naming(sp) -> None:
+    """`--run-name` for a fresh run, `--resume-run` to continue one, never both."""
+    group = sp.add_mutually_exclusive_group()
+    group.add_argument("--run-name", default=None, metavar="NAME",
+                       help="directory name for a FRESH run: creates exactly <out-root>/<NAME>, "
+                            "with no timestamp or hash appended. Omit for a timestamped default.")
+    group.add_argument("--resume-run", default=None, metavar="PATH_OR_NAME",
+                       help="continue an existing run IN PLACE. Not a new directory, not a "
+                            "sibling: the same run, extended by this invocation's n_chunks.")
+
+
+def _resolve_resume(args) -> Optional[Path]:
+    """`--resume-run` may be a path or a bare name under --out-root."""
+    if getattr(args, "resume_run", None) is None:
+        return None
+    candidate = Path(args.resume_run)
+    if candidate.is_dir():
+        return candidate
+    return Path(args.out_root) / args.resume_run
+
+
 def build_parser() -> argparse.ArgumentParser:
     shipped = list_shipped()
     p = argparse.ArgumentParser(
@@ -268,7 +309,17 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--out-root", required=True, metavar="RUN_ROOT")
     add_platform(r)
     add_omega_exclusion(r)
+    add_run_naming(r)
     r.set_defaults(func=cmd_rest2)
+
+    m = sub.add_parser("md", help="conventional explicit-water MD from a prepared bundle")
+    m.add_argument("--bundle", required=True, metavar="BUNDLE_DIR")
+    m.add_argument("--experiment", default=None,
+                   help="override the experiment the bundle was prepared with")
+    m.add_argument("--out-root", required=True, metavar="RUN_ROOT")
+    add_platform(m)
+    add_run_naming(m)
+    m.set_defaults(func=cmd_md)
 
     s = sub.add_parser("smoke", help="prepare + run the tiny shipped experiment end to end")
     s.add_argument("--system", required=True)

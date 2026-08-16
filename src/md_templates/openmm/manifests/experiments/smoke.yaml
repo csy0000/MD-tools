@@ -28,6 +28,13 @@ rest2:
   n_chunks: 2
   chunk_ns: 0.001
 
+# Conventional MD declares its own plan: a REST2 ladder says nothing about how long ONE walker
+# should run, and this template refuses to guess rather than fall back to a package default.
+md:
+  n_chunks: 2
+  chunk_ns: 0.001
+  scale_factor: 1.0
+
 platform:
   precision: mixed
 

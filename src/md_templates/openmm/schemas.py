@@ -69,6 +69,10 @@ SYSTEM_KEYS = frozenset({
 })
 EXPERIMENT_KEYS = frozenset({
     "schema_version", "experiment_id", "master_seed", "ladder_status", "integrator", "rest2",
+    # Conventional MD declares its own plan. A REST2 plan says nothing about how long a single
+    # walker should run, so an MD launch against a rest2-only experiment is refused rather than
+    # falling back to a package default -- that default is 1000 ns.
+    "md",
     "platform", "equilibration", "overrides", "notes",
 })
 PLATFORMS = ("CPU", "CUDA", "OpenCL")
@@ -488,6 +492,18 @@ def validate_experiment(doc: dict, *, source: Path) -> None:
         raise ManifestError(f"{where}:rest2.scale_factors must be strictly descending: {vals}")
     if not all(0.0 < v <= 1.0 for v in vals):
         raise ManifestError(f"{where}:rest2.scale_factors must all lie in (0, 1]")
+    md_block = doc.get("md")
+    if md_block is not None:
+        if not isinstance(md_block, dict):
+            raise ManifestError(f"{where}:md must be a mapping")
+        n = md_block.get("n_chunks")
+        if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
+            raise ManifestError(
+                f"{where}:md.n_chunks must be an integer greater than zero, got {n!r}")
+        chunk = md_block.get("chunk_ns")
+        if not isinstance(chunk, (int, float)) or isinstance(chunk, bool) or float(chunk) <= 0:
+            raise ManifestError(f"{where}:md.chunk_ns must be a positive number, got {chunk!r}")
+
     if "total_ns_per_replica" in rest2:
         raise ManifestError(_chunk_plan_migration_message(where, rest2))
     for key in ("exchange_interval_ps", "relaxation_ps", "chunk_ns"):

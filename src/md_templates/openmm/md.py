@@ -15,6 +15,7 @@ from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 
+from . import runstate
 from .config import resolve_chunk_plan, write_manifest
 from .equilibration import (_apply_coords, _load_bundle, _make_simulation,
                             _scaled_system, _steps)
@@ -113,6 +114,9 @@ def completed_prefix(run_dir: Path, n_chunks: int, *, what: str = "chunk") -> in
         raise ValueError(f"{run_dir}: {prefix} completed chunks exceeds the configured {n_chunks}")
     return prefix
 
+#: Discovery has no lifetime ceiling: n_chunks is additional work, not a total.
+_NO_CHUNK_CEILING = 1_000_000_000
+
 
 def _assert_omega_classified(bundle: dict, *, omega_exclusion: bool = True) -> list:
     """Refuse to run production while any amide candidate is unclassified.
@@ -183,7 +187,9 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
     plan = resolve_chunk_plan(mcfg["n_chunks"], mcfg["chunk_ns"],
                               timestep_fs=dt_fs, where="production.md")
     chunk_steps = plan["steps_per_chunk"]
-    n_chunks = plan["n_chunks"]
+    # `n_chunks` is what THIS invocation adds, so a resume extends the run instead of finding it
+    # already finished and doing nothing.
+    chunks_this_invocation = plan["n_chunks"]
     for name, interval_ps in (("all_atom_ps", cfg["production"]["report"]["all_atom_ps"]),
                               ("solute_ps", cfg["production"]["report"]["solute_ps"])):
         if chunk_steps % _steps(float(interval_ps), dt_fs) != 0:
@@ -192,15 +198,24 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
                 "boundaries and the first frame of each chunk would drift."
             )
 
-    start_chunk = completed_prefix(run_dir, n_chunks)
-    if start_chunk >= n_chunks:
-        return {"status": "already-complete", "n_chunks": n_chunks, "output_dir": str(run_dir)}
+    start_chunk = completed_prefix(run_dir, _NO_CHUNK_CEILING)
+    n_chunks = start_chunk + chunks_this_invocation
     if start_chunk == 0:
         origin = _apply_coords(sim, coords, require_velocities=True)
     else:
-        prev = run_dir / f"chunk_{start_chunk - 1:04d}" / "end.chk"
-        sim.loadCheckpoint(str(prev))          # same System within a run: a checkpoint is valid
-        origin = {"coords": str(prev), "kind": "checkpoint"}
+        gen = runstate.committed_generation(run_dir)
+        if gen is None:
+            raise ValueError(
+                f"{run_dir} has completed chunks but no committed restart generation, so no state "
+                "is known to be complete. Refusing to append output."
+            )
+        gdir = runstate.generation_dir(run_dir, gen)
+        kind = runstate.load_restart(sim, gdir)
+        if kind == "state":
+            print("[md] restored from the portable State rather than a binary checkpoint: the "
+                  "continuation is physically valid but NOT bitwise identical to an "
+                  "uninterrupted run", flush=True)
+        origin = {"coords": str(gdir), "kind": kind, "generation": gen}
     sim.currentStep = start_chunk * chunk_steps
     sim.context.setTime(start_chunk * chunk_steps * dt_fs * 1e-3 * unit.picosecond)
 
@@ -219,6 +234,10 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
         wall_s = time.time() - t0
         _close_chunk(sim)
         sim.saveCheckpoint(str(chunk_dir / "end.chk"))
+        gdir = runstate.generation_dir(run_dir, chunk)
+        runstate.save_restart(sim, gdir)
+        runstate.commit_generation(run_dir, chunk, members=list(runstate.restart_members()),
+                                   steps=int(sim.currentStep))
         (chunk_dir / "done.json").write_text(
             json.dumps(
                 {
@@ -244,7 +263,10 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
 
     info = {
         "suffix": suffix, "label": label, "scale_factor": scale,
-        "n_chunks": n_chunks, "chunk_ns": plan["chunk_ns"],
+        "n_chunks": n_chunks,
+        "chunks_this_invocation": chunks_this_invocation,
+        "lifetime_chunks_completed": n_chunks,
+        "chunk_ns": plan["chunk_ns"],
         # derived from the plan, reported only
         "total_ns": plan["total_ns"], "timestep_fs": dt_fs,
         "input_coords": origin, "output_dir": str(run_dir),

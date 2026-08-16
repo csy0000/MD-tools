@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import math
+import os
 import platform as _platform
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 
+from . import runstate
 from .config import resolve_chunk_plan, rest2_ladder, write_manifest
 from .equilibration import (_apply_coords, _load_bundle, _make_simulation,
                             _scaled_system, _steps)
@@ -111,6 +113,118 @@ def _pre_exchange_relaxation(simulations, coords: Path, cfg: dict, run_dir: Path
     return info
 
 
+# ---------------------------------------------------------------------------------------------
+# Durable exchange history
+# ---------------------------------------------------------------------------------------------
+#: Discovery has no lifetime ceiling: see the note where this is used.
+_NO_CHUNK_CEILING = 1_000_000_000
+
+
+def _rng_state(rng) -> dict:
+    """Serialisable state of the exchange RNG, so a resume CONTINUES the sequence.
+
+    Re-seeding from (seed, chunk) is unbiased for Metropolis accept/reject, but it restarts the
+    stream: the same proposals recur across a resume boundary in a way that is not the sequence an
+    uninterrupted run would have drawn. Persisting the generator state removes that difference.
+    """
+    return rng.bit_generator.state
+
+
+def _restore_rng(state: Optional[dict]):
+    """Rebuild the exchange RNG from a persisted state, or return None if there is nothing to use."""
+    import numpy as _np
+
+    if not isinstance(state, dict) or "bit_generator" not in state:
+        return None
+    rng = _np.random.default_rng()
+    try:
+        rng.bit_generator.state = state
+    except (ValueError, KeyError, TypeError):
+        return None
+    return rng
+
+
+def _assert_monotonic_attempts(rows: list, log_path) -> None:
+    """Duplicate or out-of-order attempt indices are corruption, not something to average over.
+
+    Silently double-counting them would inflate lifetime statistics in a way nothing downstream
+    could detect, so this refuses instead.
+    """
+    seen = set()
+    previous = -1
+    for row in rows:
+        raw = row.get("attempt_index")
+        if raw in (None, ""):
+            return                      # a log from before the index existed; nothing to check
+        idx = int(raw)
+        if idx in seen:
+            raise ValueError(
+                f"{log_path}: attempt_index {idx} appears more than once. The exchange history is "
+                "corrupt; counting it would double-count that attempt."
+            )
+        if idx <= previous:
+            raise ValueError(
+                f"{log_path}: attempt_index {idx} follows {previous}, so the history is not "
+                "monotonic. Refusing to continue from an inconsistent log."
+            )
+        seen.add(idx)
+        previous = idx
+
+
+def _lifetime_counts(log_path) -> tuple[int, int]:
+    """(attempts, accepted) over the WHOLE durable log, for counters that must not restart at zero."""
+    import csv as _csv
+    from pathlib import Path as _Path
+
+    path = _Path(log_path)
+    if not path.is_file():
+        return 0, 0
+    attempts = accepted = 0
+    with path.open(encoding="utf-8", newline="") as fh:
+        for row in _csv.DictReader(fh):
+            attempts += 1
+            accepted += int(str(row.get("accepted", "0")) in ("1", "True", "true"))
+    return attempts, accepted
+
+
+def summarise_exchange_log(run_dir) -> dict:
+    """Rebuild lifetime statistics from the durable log alone.
+
+    Idempotent by construction: it reads the log and nothing else, so deleting a summary and
+    regenerating it gives the same numbers rather than adding to them.
+    """
+    import csv as _csv
+    from collections import Counter
+    from pathlib import Path as _Path
+
+    run_dir = _Path(run_dir)
+    path = run_dir / "exchange_attempts.csv"
+    if not path.is_file():
+        path = run_dir / "rest2_exchange_attempts.csv"
+    if not path.is_file():
+        return {"lifetime_exchange_attempts": 0, "lifetime_exchange_accepted": 0, "pairs": {}}
+    rows = list(_csv.DictReader(path.open(encoding="utf-8", newline="")))
+    _assert_monotonic_attempts(rows, path)
+    attempts = Counter()
+    accepts = Counter()
+    for row in rows:
+        key = f"{row.get('i')}-{row.get('j')}"
+        attempts[key] += 1
+        accepts[key] += int(str(row.get("accepted", "0")) in ("1", "True", "true"))
+    total = sum(attempts.values())
+    total_acc = sum(accepts.values())
+    return {
+        "source": str(path),
+        "lifetime_exchange_attempts": total,
+        "lifetime_exchange_accepted": total_acc,
+        "lifetime_acceptance_fraction": total_acc / max(1, total),
+        "pairs": {k: {"attempts": attempts[k], "accepted": accepts[k],
+                      "acceptance": accepts[k] / max(1, attempts[k])}
+                  for k in sorted(attempts)},
+        "distinct_rounds": len({r.get("step") for r in rows}),
+    }
+
+
 def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
                    suffix: str) -> dict:
     """Stage (d): REST2-REMD -- N replicas, neighbour exchange, chunked per replica.
@@ -135,7 +249,10 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
 
 
     out_dir = Path(out_dir)
-    run_dir = out_dir / suffix
+    # An empty suffix means "this IS the run directory". Writing into a subdirectory and moving the
+    # results up afterwards is what broke resume: the second invocation looked for prior chunks in
+    # the subdirectory, found none, and silently started over from chunk 0.
+    run_dir = out_dir / suffix if suffix else out_dir
     run_dir.mkdir(parents=True, exist_ok=True)
     rcfg = cfg["production"]["remd"]
     if str(cfg["production"]["ensemble"]).upper() != "NVT":
@@ -172,7 +289,9 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
     chunk_steps = plan["steps_per_chunk"]
     if chunk_steps % exchange_steps != 0:
         raise ValueError("remd.chunk_ns must be a whole number of exchange intervals")
-    n_chunks = plan["n_chunks"]
+    # `n_chunks` is what THIS invocation adds. A resume that reinterpreted it as a lifetime total
+    # would do nothing at all once the first invocation had reached it.
+    chunks_this_invocation = plan["n_chunks"]
     rounds_per_chunk = chunk_steps // exchange_steps
 
     replica_dirs = [run_dir / f"replica_{r:02d}" for r in range(n_replicas)]
@@ -182,7 +301,13 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
     # every replica must share the SAME completed prefix: they advance in lockstep between
     # exchange rounds, so a ragged set means one process died mid-round and the ladder's state is
     # not reconstructible from what survived
-    prefixes = {r: completed_prefix(d, n_chunks) for r, d in enumerate(replica_dirs)}
+    # The commit record is the only thing that says what is durably finished. Read before any
+    # decision about where to resume, and before a single output file is opened.
+    committed = runstate.committed_record(run_dir)
+    # The bound is only the "more chunks than configured" guard, and with n_chunks meaning
+    # ADDITIONAL work there is no lifetime ceiling to check discovery against -- the completed
+    # prefix is whatever the directory already holds.
+    prefixes = {r: completed_prefix(d, _NO_CHUNK_CEILING) for r, d in enumerate(replica_dirs)}
     start_chunk = min(prefixes.values())
     if len(set(prefixes.values())) > 1:
         raise ValueError(
@@ -190,11 +315,15 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
             "lockstep between exchange rounds, so this cannot be resumed consistently.  Delete "
             f"every replica's chunk_{start_chunk:04d} and later, then resume."
         )
-    if start_chunk >= n_chunks:
-        return {"status": "already-complete", "n_chunks": n_chunks, "output_dir": str(run_dir)}
+    n_chunks = start_chunk + chunks_this_invocation
 
-    log_path = out_dir / f"{suffix}_exchange_attempts.csv"
+    log_path = out_dir / (f"{suffix}_exchange_attempts.csv" if suffix
+                          else "exchange_attempts.csv")
     fieldnames = [
+        # A stable GLOBAL index across every invocation. Without it, "the third attempt" means
+        # something different in each process that touched the run, and duplicate or non-monotonic
+        # rows cannot be told apart from legitimate ones.
+        "attempt_index",
         "step", "time_ps", "phase", "replica_i", "replica_j", "i", "j",
         "effective_temperature_i_k", "effective_temperature_j_k",
         "scale_factor_i", "scale_factor_j",
@@ -211,13 +340,34 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
         )
         log_mode = "w"
     else:
-        for r, sim in enumerate(simulations):
-            sim.loadCheckpoint(str(replica_dirs[r] / f"chunk_{start_chunk - 1:04d}" / "end.chk"))
+        gen = runstate.committed_generation(run_dir)
+        if gen is None:
+            raise ValueError(
+                f"{run_dir} has completed chunks but no committed restart generation, so there is "
+                "no state that is known to be complete. Refusing to append output."
+            )
+        gdir = runstate.generation_dir(run_dir, gen)
+        restored_from = {r: runstate.load_restart(sim, gdir, replica=r)
+                         for r, sim in enumerate(simulations)}
+        if "state" in restored_from.values():
+            print("[remd] one or more replicas restored from the portable State rather than a "
+                  "binary checkpoint: the continuation is physically valid but NOT bitwise "
+                  "identical to an uninterrupted run", flush=True)
         # the exchange log must end exactly at the production boundary the chunks reached, or a
         # resume would either duplicate rows or leave a silent hole in the swap history
         rows = list(csv.DictReader(log_path.open())) if log_path.exists() else []
         if not rows:
             raise ValueError(f"{log_path} has no rows; cannot restore the rung occupancy")
+        # An attempt counts only once the restart generation holding its resulting state is
+        # committed. Anything past that watermark is an uncommitted tail from a process that died
+        # between writing rows and committing, and adopting it would double-count on the next run.
+        watermark = (committed.get("attempts_committed")
+                     if isinstance(committed.get("attempts_committed"), int) else None)
+        if watermark is not None and len(rows) > watermark:
+            print(f"[remd] exchange log has {len(rows)} rows but only {watermark} are committed; "
+                  "discarding the uncommitted tail", flush=True)
+            rows = rows[:watermark]
+        _assert_monotonic_attempts(rows, log_path)
         boundary = start_chunk * chunk_steps
         keep = [r for r in rows if int(r["step"]) <= boundary]
         if len(keep) != len(rows):
@@ -244,7 +394,13 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
 
     # exchange RNG: re-seeded on resume.  That is unbiased for Metropolis accept/reject, so a
     # continuation is faithful distributionally rather than bit-exact.
-    rng = np.random.default_rng(int(rcfg["seed"]) + 977 * (start_chunk + 1))
+    # Prefer the persisted generator state so the exchange sequence continues rather than
+    # restarting; fall back to the derived seed for a run committed before this was recorded.
+    rng = _restore_rng(committed.get("rng_state")) if start_chunk else None
+    rng_source = "restored"
+    if rng is None:
+        rng = np.random.default_rng(int(rcfg["seed"]) + 977 * (start_chunk + 1))
+        rng_source = "reseeded" if start_chunk else "fresh"
     beta0 = 1.0 / (0.008314462618 * temperature)
     solute_atoms = list(range(n_solute))
 
@@ -255,12 +411,19 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
         flush=True,
     )
 
-    n_attempts = n_accepted = 0
+    # LIFETIME counters, reconstructed from durable history. Starting them at zero is what made a
+    # resumed run report only the last invocation's statistics.
+    lifetime_attempts, lifetime_accepted = _lifetime_counts(log_path) if start_chunk else (0, 0)
+    invocation_attempts = invocation_accepted = 0
     with log_path.open(log_mode, newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         if log_mode == "w":
             writer.writeheader()
-        phase = start_chunk * rounds_per_chunk
+        # The scheduler phase is restored from the commit record when present; the derived value
+        # is the fallback and agrees with it for an uninterrupted history.
+        stored_phase = committed.get("exchange_phase")
+        phase = int(stored_phase) if isinstance(stored_phase, int) and start_chunk else \
+            start_chunk * rounds_per_chunk
         for chunk in range(start_chunk, n_chunks):
             for r, sim in enumerate(simulations):
                 _attach_chunk_reporters(
@@ -272,15 +435,18 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
                     sim.step(exchange_steps)
                 for i, j in exchange_pairs(n_replicas, phase):
                     result = attempt_rest2_exchange(simulations[i], simulations[j], beta0, rng)
-                    n_attempts += 1
+                    lifetime_attempts += 1
+                    invocation_attempts += 1
                     if result["accepted"]:
-                        n_accepted += 1
+                        lifetime_accepted += 1
+                        invocation_accepted += 1
                         walker_by_replica[i], walker_by_replica[j] = (
                             walker_by_replica[j], walker_by_replica[i],
                         )
                     step = simulations[0].currentStep
                     writer.writerow(
                         {
+                            "attempt_index": lifetime_attempts - 1,
                             "step": step, "time_ps": step * dt_fs * 1e-3, "phase": phase % 2,
                             "replica_i": i, "replica_j": j, "i": i, "j": j,
                             "effective_temperature_i_k": t_eff[i],
@@ -298,8 +464,16 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
                 phase += 1
                 fh.flush()
             wall_s = time.time() - t0
+            fh.flush()
+            os.fsync(fh.fileno())          # the log must be durable BEFORE the commit names it
+            gdir = runstate.generation_dir(run_dir, chunk)
+            members: list[str] = []
             for r, sim in enumerate(simulations):
                 _close_chunk(sim)
+                # Both restart forms, written to temporaries and renamed. Nothing points at this
+                # generation until every replica's files exist.
+                runstate.save_restart(sim, gdir, replica=r)
+                members.extend(runstate.restart_members(r))
                 cdir = replica_dirs[r] / f"chunk_{chunk:04d}"
                 sim.saveCheckpoint(str(cdir / "end.chk"))
                 (cdir / "done.json").write_text(
@@ -314,9 +488,20 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
                     + "\n",
                     encoding="utf-8",
                 )
+            # One atomic replacement makes the whole generation committed. Everything above is
+            # written first; a crash before this line leaves the previous generation in force.
+            runstate.commit_generation(
+                run_dir, chunk, members=members,
+                attempts_committed=lifetime_attempts,
+                exchange_phase=phase,
+                walker_by_replica=list(walker_by_replica),
+                rng_state=_rng_state(rng),
+                steps=int(simulations[0].currentStep),
+            )
             print(
                 f"[remd] chunk {chunk + 1}/{n_chunks} in {wall_s / 3600:.2f} h; acceptance "
-                f"{n_accepted / max(1, n_attempts):.3f}",
+                f"{lifetime_accepted / max(1, lifetime_attempts):.3f} (lifetime, "
+                f"{lifetime_attempts} attempts)",
                 flush=True,
             )
 
@@ -333,15 +518,24 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
         "chunk_ns": plan["chunk_ns"],
         # derived from the plan, reported only
         "total_ns_per_replica": plan["total_ns"],
-        "acceptance_fraction": n_accepted / max(1, n_attempts),
-        "n_exchange_attempts": n_attempts,
+        # Both are reported and unambiguously labelled: lifetime describes the run directory,
+        # invocation describes this process only.
+        "lifetime_exchange_attempts": lifetime_attempts,
+        "lifetime_exchange_accepted": lifetime_accepted,
+        "lifetime_acceptance_fraction": lifetime_accepted / max(1, lifetime_attempts),
+        "invocation_exchange_attempts": invocation_attempts,
+        "invocation_exchange_accepted": invocation_accepted,
+        "exchange_rng": rng_source,
+        "restart_restored_from": (restored_from if start_chunk else None),
+        "acceptance_fraction": lifetime_accepted / max(1, lifetime_attempts),
+        "n_exchange_attempts": lifetime_attempts,
         "exchange_log": str(log_path),
         "output_dir": str(run_dir),
     }
-    (out_dir / f"{suffix}_rest2.json").write_text(
+    (out_dir / (f"{suffix}_rest2.json" if suffix else "rest2_summary.json")).write_text(
         json.dumps(info, indent=2) + "\n", encoding="utf-8"
     )
-    write_manifest(out_dir, f"{suffix}_rest2", cfg, {"result": info})
+    write_manifest(out_dir, f"{suffix}_rest2" if suffix else "rest2", cfg, {"result": info})
     return info
 
 

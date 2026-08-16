@@ -474,6 +474,15 @@ def resolve_config(
     remd["equilibration_ps"] = float(rest2["relaxation_ps"])
     # The external manifest carries the same two canonical fields; they map straight through, so
     # there is one source of truth rather than a manifest total and a config total to keep in step.
+    md_block = edoc.get("md")
+    if md_block:
+        mcfg = cfg["production"]["md"]
+        mcfg["n_chunks"] = int(md_block["n_chunks"])
+        mcfg["chunk_ns"] = float(md_block["chunk_ns"])
+        if md_block.get("scale_factor") is not None:
+            mcfg["scale_factor"] = float(md_block["scale_factor"])
+        cfg.setdefault("_declared", {})["production.md"] = "experiment"
+
     remd["n_chunks"] = int(rest2["n_chunks"])
     remd["chunk_ns"] = float(rest2["chunk_ns"])
     cfg["production"]["precision"] = edoc["platform"]["precision"]
