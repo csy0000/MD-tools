@@ -224,9 +224,17 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
         "padding_nm": float(scfg["padding_nm"]),
         "box_vectors_nm": [[float(x) for x in v] for v in box],
         "box_volume_nm3": volume_nm3,
-        # 55.5 mol/L is the concentration of pure water; this is the salt molarity actually built
-        "realised_ionic_strength_molar": (
-            round(min(ions.values()) * 55.5 / n_water, 5) if ions and n_water else 0.0
+        # Added salt and neutralising counterions are separated and named; see salt_accounting.
+        # This field used to be min(ion counts) * 55.5 / n_water, which reported a salt
+        # concentration for a box whose only ions were neutralising counterions.
+        "salt": salt_accounting(
+            ions,
+            n_water=n_water,
+            volume_nm3=volume_nm3,
+            solute_formal_charge=(cfg.get("system") or {}).get("expected_formal_charge"),
+            positive_ion=scfg.get("positive_ion"),
+            negative_ion=scfg.get("negative_ion"),
+            requested_molar=scfg.get("ionic_strength_molar"),
         ),
         "water_model_template": scfg["water_model"],
         "forcefield": ff_info,
@@ -236,3 +244,101 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
     return info
 
 
+
+
+# ---------------------------------------------------------------------------------------------
+# Salt accounting
+#
+# Neutralising counterions are NOT salt. A solvated box of a -1 solute at zero requested salt
+# contains one Na+ and no Cl-; calling that "0.15 M ionic strength" because some ion exists, or
+# because half the ions were assumed to be pairs, misdescribes the system. The two quantities are
+# reported separately and named for what they are.
+# ---------------------------------------------------------------------------------------------
+
+#: Ions OpenMM's `Modeller.addSolvent` can place, by element symbol -> valence. All monovalent.
+MONOVALENT_IONS = {"NA": +1, "K": +1, "LI": +1, "RB": +1, "CS": +1,
+                   "CL": -1, "BR": -1, "F": -1, "I": -1}
+
+#: Recognised but unsupported here: the monovalent salt-pair formula does not describe them, and
+#: guessing is worse than refusing. Listed so the error can say what was found.
+MULTIVALENT_IONS = {"MG": +2, "CA": +2, "ZN": +2}
+
+AVOGADRO = 6.02214076e23
+#: Molarity of pure water, for the per-water convention reported alongside the volume-based one.
+WATER_MOLAR = 55.5
+
+
+def salt_accounting(ion_counts: dict, *, n_water: int, volume_nm3: float,
+                    solute_formal_charge: Optional[int], positive_ion: Optional[str],
+                    negative_ion: Optional[str], requested_molar: Optional[float]) -> dict:
+    """Separate added salt from neutralising counterions, and report both.
+
+    `ion_counts` maps element symbol (any case) to count. A species that is absent is zero, not
+    missing: `min()` over "whatever happens to be there" is what made a counterion-only box report
+    a salt concentration.
+
+    Added salt pairs are `min(n_positive, n_negative)`. Whatever is left over is attributed to
+    charge neutralisation, and its signed charge is checked against the solute's declared formal
+    charge -- if those disagree, the box is not what the manifest says it is.
+    """
+    counts = {str(k).upper().strip("+-0123456789"): int(v) for k, v in (ion_counts or {}).items()}
+    unsupported = {k: v for k, v in counts.items() if k in MULTIVALENT_IONS and v}
+    if unsupported:
+        raise ValueError(
+            f"multivalent ions present ({unsupported}); this template's salt accounting is "
+            f"monovalent only. Applying the monovalent formula would misreport ionic strength, so "
+            f"it refuses instead. Supported: {sorted(MONOVALENT_IONS)}."
+        )
+    unknown = {k: v for k, v in counts.items() if k not in MONOVALENT_IONS and v}
+    if unknown:
+        raise ValueError(
+            f"unrecognised ion species {sorted(unknown)}; valence is unknown so ionic strength "
+            f"cannot be computed. Supported: {sorted(MONOVALENT_IONS)}."
+        )
+
+    n_pos = sum(v for k, v in counts.items() if MONOVALENT_IONS.get(k, 0) > 0)
+    n_neg = sum(v for k, v in counts.items() if MONOVALENT_IONS.get(k, 0) < 0)
+    n_salt_pairs = min(n_pos, n_neg)
+    n_neutralising = abs(n_pos - n_neg)
+    neutralising_charge = (n_pos - n_neg)          # signed, in elementary charges
+
+    volume_l = float(volume_nm3) * 1e-24 if volume_nm3 else 0.0
+    salt_molar = (n_salt_pairs / AVOGADRO / volume_l) if volume_l > 0 else 0.0
+    # I = 0.5 * sum(c_i z_i^2); for a monovalent salt pair this equals the salt-pair molarity, but
+    # it is computed from the valences rather than assumed, so multivalent support is a data change
+    ionic_strength = 0.0
+    if volume_l > 0:
+        for sym, n in counts.items():
+            z = MONOVALENT_IONS.get(sym, 0)
+            ionic_strength += (n / AVOGADRO / volume_l) * z * z
+        ionic_strength *= 0.5
+
+    balanced = None
+    if solute_formal_charge is not None:
+        balanced = (neutralising_charge + int(solute_formal_charge)) == 0
+
+    return {
+        "requested_salt_molar": (float(requested_molar) if requested_molar is not None else None),
+        "realized_salt_pair_molar": round(salt_molar, 6),
+        "ionic_strength_molar": round(ionic_strength, 6),
+        "n_salt_pairs": int(n_salt_pairs),
+        "n_neutralizing_ions": int(n_neutralising),
+        "neutralizing_charge_e": int(neutralising_charge),
+        "solute_formal_charge": (int(solute_formal_charge)
+                                 if solute_formal_charge is not None else None),
+        "charge_balanced": balanced,
+        "n_positive_ions": int(n_pos),
+        "n_negative_ions": int(n_neg),
+        "n_ions_total": int(n_pos + n_neg),
+        "ion_counts": {k: int(v) for k, v in counts.items() if v},
+        "positive_ion_requested": positive_ion,
+        "negative_ion_requested": negative_ion,
+        "n_water_molecules": int(n_water),
+        "box_volume_nm3": (round(float(volume_nm3), 6) if volume_nm3 else 0.0),
+        "salt_pairs_per_55p5_mol_water": (
+            round(n_salt_pairs * WATER_MOLAR / n_water, 6) if n_water else 0.0
+        ),
+        "note": "realized_salt_pair_molar counts ADDED salt only: min(n_positive, n_negative) over "
+                "the box volume. Excess ions are neutralising counterions and are reported "
+                "separately; they are not salt and are not ionic strength.",
+    }

@@ -36,6 +36,7 @@ from typing import Any, Optional
 from . import provenance
 from .config import resolve_config
 from .fingerprint import build_projection, fingerprint
+from .solvation import salt_accounting
 from .schemas import (
     ExperimentManifest,
     ManifestError,
@@ -186,7 +187,7 @@ def build_bundle_manifest(
             "negative_ion": solv["negative_ion"],
             "neutralize": solv["neutralize"],
             "realized_ion_counts": counts["ions"],
-            "realized_ionic_strength_molar": counts["realized_ionic_strength_molar"],
+            "salt": counts["salt"],
         },
         "composition": {
             "n_atoms": counts["n_atoms"],
@@ -267,10 +268,18 @@ def _composition(topology_pdb: Path, simbox_info: dict) -> dict[str, Any]:
 
     box = system.getDefaultPeriodicBoxVectors()
     box_nm = [[float(v.value_in_unit(unit.nanometer)) for v in row] for row in box]
-    volume_l = abs(_det3(box_nm)) * 1e-24            # nm^3 -> litre
     n_ions = sum(ion_counts.values())
-    avogadro = 6.02214076e23
-    realized = (n_ions / 2.0) / avogadro / volume_l if volume_l > 0 and n_ions else 0.0
+    # NOT n_ions/2: that treats every ion as half a salt pair, so a box whose only ions are
+    # neutralising counterions reports a salt concentration it does not have.
+    salt = salt_accounting(
+        ion_counts,
+        n_water=n_water,
+        volume_nm3=abs(_det3(box_nm)),
+        solute_formal_charge=simbox_info.get("solute_formal_charge"),
+        positive_ion=simbox_info.get("positive_ion"),
+        negative_ion=simbox_info.get("negative_ion"),
+        requested_molar=simbox_info.get("requested_ionic_strength_molar"),
+    )
 
     return {
         "n_atoms": int(n_atoms),
@@ -281,7 +290,7 @@ def _composition(topology_pdb: Path, simbox_info: dict) -> dict[str, Any]:
         "n_constraints": int(n_constraints),
         "n_degrees_of_freedom": int(dof),
         "box_vectors_nm": box_nm,
-        "realized_ionic_strength_molar": round(float(realized), 6),
+        "salt": salt,
     }
 
 

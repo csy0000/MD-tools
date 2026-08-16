@@ -224,7 +224,7 @@ def build_simbox(cfg: dict, out_dir: Path, suffix: str, *, smiles: Optional[str]
         "geometry": solv["geometry"],
         "n_waters": solv["n_waters"],
         "ions": solv["ions"],
-        "realised_ionic_strength_molar": solv["realised_ionic_strength_molar"],
+        "salt": solv.get("salt"),
         "forcefield": build["forcefield"],
         # explicit, unambiguous provenance of the Hamiltonian that actually ran
         "hamiltonian_provenance": {

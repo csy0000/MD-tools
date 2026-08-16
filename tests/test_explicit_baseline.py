@@ -930,3 +930,94 @@ def test_equilibrated_structure_records_the_selected_box_not_the_pre_npt_one(tmp
                        .value_in_unit(_unit.nanometer))
     assert np.allclose(np.abs(cif_box), np.abs(selected_nm), atol=2e-4), (
         f"{shape}: mmCIF vectors {cif_box.tolist()} != selected {selected_nm.tolist()}")
+
+
+# ==================================================================================================
+# requirement 5: added salt and neutralising counterions are different things
+# ==================================================================================================
+from md_templates.openmm.solvation import salt_accounting  # noqa: E402
+
+# ~30 nm^3, the scale of the RGD box; 1 ion here is ~0.055 M
+BOX_NM3 = 30.0
+N_WATER = 1000
+
+
+def _salt(ions, charge=0, requested=0.15, volume=BOX_NM3):
+    return salt_accounting(ions, n_water=N_WATER, volume_nm3=volume,
+                           solute_formal_charge=charge, positive_ion="Na+",
+                           negative_ion="Cl-", requested_molar=requested)
+
+
+def test_counterion_only_box_reports_zero_salt():
+    """A -1 solute neutralised by one Na+ contains NO salt. The old code called this 0.0555 M."""
+    r = _salt({"NA": 1}, charge=-1)
+    assert r["n_salt_pairs"] == 0
+    assert r["realized_salt_pair_molar"] == 0.0
+    assert r["n_neutralizing_ions"] == 1
+    assert r["neutralizing_charge_e"] == +1
+    assert r["charge_balanced"] is True
+
+
+def test_positive_solute_is_neutralised_by_anions():
+    r = _salt({"CL": 2}, charge=+2)
+    assert (r["n_salt_pairs"], r["n_neutralizing_ions"], r["neutralizing_charge_e"]) == (0, 2, -2)
+    assert r["charge_balanced"] is True
+    assert r["realized_salt_pair_molar"] == 0.0
+
+
+def test_charge_imbalance_is_detected():
+    """Counterions that do not balance the declared formal charge mean the box is not as described."""
+    assert _salt({"NA": 1}, charge=-2)["charge_balanced"] is False
+    assert _salt({"NA": 3, "CL": 1}, charge=0)["charge_balanced"] is False
+
+
+def test_salt_and_counterions_are_separated_in_the_same_box():
+    """3 Na+ / 1 Cl- around a -2 solute: one salt pair, two neutralising ions."""
+    r = _salt({"NA": 3, "CL": 1}, charge=-2)
+    assert r["n_salt_pairs"] == 1
+    assert r["n_neutralizing_ions"] == 2
+    assert r["neutralizing_charge_e"] == +2
+    assert r["charge_balanced"] is True
+    assert r["n_ions_total"] == 4
+
+
+def test_neutral_solute_with_salt_reports_pairs_not_total_ions():
+    r = _salt({"NA": 3, "CL": 3}, charge=0)
+    assert r["n_salt_pairs"] == 3
+    assert r["n_neutralizing_ions"] == 0
+    # 3 pairs in 30 nm^3, NOT 6 ions / 2 (which coincides here) -- and not min() over species
+    expected = 3 / 6.02214076e23 / (BOX_NM3 * 1e-24)
+    assert r["realized_salt_pair_molar"] == pytest.approx(expected, rel=1e-6)
+    # for a monovalent salt, ionic strength equals the pair molarity -- computed, not assumed
+    assert r["ionic_strength_molar"] == pytest.approx(expected, rel=1e-6)
+
+
+def test_small_box_where_requested_salt_rounds_to_zero_pairs():
+    """Requesting 0.15 M in a box too small to hold a pair must report zero, not the request."""
+    r = _salt({}, charge=0, requested=0.15, volume=2.0)
+    assert r["n_salt_pairs"] == 0
+    assert r["realized_salt_pair_molar"] == 0.0
+    assert r["requested_salt_molar"] == 0.15          # the request is still recorded, separately
+
+
+def test_zero_requested_salt_on_a_neutral_solute_is_an_empty_box():
+    r = _salt({}, charge=0, requested=0.0)
+    assert (r["n_ions_total"], r["n_salt_pairs"], r["ionic_strength_molar"]) == (0, 0, 0.0)
+
+
+def test_multivalent_ions_are_refused_rather_than_misreported():
+    with pytest.raises(ValueError, match="monovalent only"):
+        _salt({"NA": 2, "MG": 1}, charge=0)
+
+
+def test_unknown_ion_species_is_refused():
+    with pytest.raises(ValueError, match="unrecognised ion species"):
+        _salt({"NA": 1, "XX": 1}, charge=0)
+
+
+def test_counterions_are_never_called_ionic_strength():
+    """The field names must not let a counterion count be read as a concentration."""
+    r = _salt({"NA": 1}, charge=-1)
+    assert r["ionic_strength_molar"] > 0        # one charged particle does carry ionic strength
+    assert r["realized_salt_pair_molar"] == 0.0  # but it is not SALT
+    assert "realised_ionic_strength_molar" not in r
