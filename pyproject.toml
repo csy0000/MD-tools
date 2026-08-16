@@ -12,6 +12,9 @@ requires-python = ">=3.11"
 # are provided by the conda environment defined in environment.yml — install the package with
 # `pip install -e . --no-deps` inside that env. Only the pure-Python, pip-resolvable core is listed here.
 dependencies = [
+    # Strict typed configuration: unknown-key rejection, cross-field validation, discriminated
+    # method models and machine-readable JSON Schema. Present in the documented conda environment.
+    "pydantic>=2",
     "numpy",
     "scipy",
     "pandas",
@@ -39,6 +42,11 @@ include = ["md_templates*"]
 # paths. The directory is `manifests/`, NOT `data/` — this repository gitignores `data/` at any
 # depth, which would silently keep these files out of version control.
 [tool.setuptools.package-data]
+"md_templates.openmm.spec" = [
+    # Versioned default profiles ARE the scientific defaults. A wheel without them has a
+    # `config` command that cannot resolve anything, so they must travel with the package.
+    "profiles/*.json",
+]
 "md_templates.openmm" = ["manifests/systems/*.yaml", "manifests/experiments/*.yaml",
                           # The pdb route's manifest points at a sibling structure file, so
                           # the structure must travel in the wheel too or `--system ace_ala_nme`

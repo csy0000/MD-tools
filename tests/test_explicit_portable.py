@@ -72,7 +72,8 @@ def test_cli_help_lists_every_documented_subcommand():
     assert excinfo.value.code == 0
     sub = {a.dest: a for a in parser._actions if a.dest == "command"}["command"]
     assert set(sub.choices) == {
-        "validate-env", "validate-system", "prepare", "validate-bundle", "rest2", "md", "smoke",
+        "validate-env", "validate-system", "prepare", "validate-bundle", "rest2", "md",
+        "smoke", "config",
     }
 
 

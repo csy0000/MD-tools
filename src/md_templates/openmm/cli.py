@@ -252,6 +252,154 @@ def _resolve_resume(args) -> Optional[Path]:
     return Path(args.out_root) / args.resume_run
 
 
+
+# ---------------------------------------------------------------------------------------------
+# `config` -- the canonical configuration front end
+# ---------------------------------------------------------------------------------------------
+
+def _spec_modules():
+    from .spec import canonical, diffs, migrate, resolve
+    return canonical, diffs, migrate, resolve
+
+
+def _emit(payload, args) -> None:
+    """Write JSON or YAML to --output or stdout, so every config command composes with a pipe."""
+    canonical, _, _, _ = _spec_modules()
+    fmt = getattr(args, "format", "json") or "json"
+    if fmt == "yaml":
+        import yaml
+        text = yaml.safe_dump(canonical.to_plain(payload), sort_keys=False)
+    else:
+        text = json.dumps(canonical.to_plain(payload), indent=2, sort_keys=False) + "\n"
+    out = getattr(args, "output", None)
+    if out:
+        Path(out).write_text(text, encoding="utf-8")
+        print(f"written: {out}")
+    else:
+        sys.stdout.write(text)
+
+
+def cmd_config_list_profiles(args) -> int:
+    canonical, _, _, resolve = _spec_modules()
+    rows = []
+    for doc in resolve.list_profiles():
+        rows.append({"profile_id": doc["profile_id"],
+                     "profile_schema_version": doc["profile_schema_version"],
+                     "route": doc.get("route"), "method": doc.get("method"),
+                     "description": doc.get("description"),
+                     "sha256": canonical.sha256_of({k: v for k, v in doc.items()
+                                                    if k != "_path"})})
+    _emit(rows, args)
+    return runner.EXIT_OK
+
+
+def cmd_config_validate(args) -> int:
+    """Full schema and cross-field validation, without constructing anything in OpenMM."""
+    _, _, _, resolve = _spec_modules()
+    document = resolve.load_document(Path(args.input))
+    result = resolve.resolve_spec(document, overrides=args.set, profile_id=args.profile)
+    print(f"valid: {args.input}")
+    print(f"  profile  {result['profile']['profile_id']} "
+          f"(v{result['profile']['profile_schema_version']})")
+    print(f"  method   {result['spec'].method}   route {result['spec'].system.route}")
+    for name, value in result["hashes"].items():
+        print(f"  {name:22} {value}")
+    return runner.EXIT_OK
+
+
+def cmd_config_resolve(args) -> int:
+    canonical, _, _, resolve = _spec_modules()
+    document = resolve.load_document(Path(args.input))
+    result = resolve.resolve_spec(document, overrides=args.set, profile_id=args.profile)
+    _emit({"profile": result["profile"],
+           "hashes": result["hashes"],
+           "sources": result["sources"],
+           "derived": {"protocol.production.total_ps": result["spec"].protocol.production.total},
+           "configuration": canonical.dump_model(result["spec"])}, args)
+    return runner.EXIT_OK
+
+
+def cmd_config_diff(args) -> int:
+    _, diffs, _, resolve = _spec_modules()
+    a = resolve.resolve_spec(resolve.load_document(Path(args.input_a)))["spec"]
+    b = resolve.resolve_spec(resolve.load_document(Path(args.input_b)))["spec"]
+    rows = diffs.diff_specs(a, b)
+    if not rows:
+        print("identical: the two documents resolve to the same canonical configuration")
+        return runner.EXIT_OK
+    width = max(len(r["field"]) for r in rows)
+    for row in rows:
+        print(f"  {row['consequence']:<20} {row['field']:<{width}}  {row['a']!r} -> {row['b']!r}")
+    consequences = sorted({r["consequence"] for r in rows})
+    print(f"\n{len(rows)} difference(s); consequences: {', '.join(consequences)}")
+    return runner.EXIT_OK
+
+
+def cmd_config_explain(args) -> int:
+    _, diffs, _, resolve = _spec_modules()
+    result = resolve.resolve_spec(resolve.load_document(Path(args.input)))
+    try:
+        info = diffs.explain_field(result["spec"], args.field, result["sources"])
+    except KeyError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return runner.EXIT_MANIFEST
+    _emit(info, args)
+    return runner.EXIT_OK
+
+
+def cmd_config_migrate(args) -> int:
+    _, _, migrate, resolve = _spec_modules()
+    from .schemas import load_experiment, load_system
+
+    system = load_system(_resolve_manifest(args.input, "system"), check_chemistry=False)
+    experiment = load_experiment(_resolve_manifest(args.experiment, "experiment"))
+    document, notes = migrate.migrate_manifests(system.doc, experiment.doc)
+    print("semantic changes:")
+    for note in notes:
+        print(f"  - {note}")
+    if args.output:
+        target = Path(args.output)
+        if target.exists() and not args.overwrite:
+            print(f"refusing to overwrite {target} (pass --overwrite)", file=sys.stderr)
+            return runner.EXIT_MANIFEST
+        target.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        print(f"written: {target}")
+    else:
+        sys.stdout.write(json.dumps(document, indent=2) + "\n")
+    return runner.EXIT_OK
+
+
+def cmd_config_init(args) -> int:
+    _, _, _, resolve = _spec_modules()
+    profile = (resolve.load_profile(args.profile) if args.profile
+               else resolve.select_profile(args.route, args.method))
+    example_system = ({"system_id": "my_ligand", "route": "smiles", "smiles": "CCO"}
+                      if args.route == "smiles"
+                      else {"system_id": "my_peptide", "route": "pdb", "pdb": "input.pdb"})
+    document = {
+        "profile": profile["profile_id"],
+        "system": example_system,
+        "protocol": {"production": {"method": args.method, "n_chunks": 2, "chunk": "10 ps"}},
+        "execution": {"platform": "CPU"},
+    }
+    header = (f"# Generated by `md-openmm config init`.\n"
+              f"# Defaults come from profile {profile['profile_id']} "
+              f"(v{profile['profile_schema_version']}).\n"
+              f"# Only the fields you want to override need to appear here.\n"
+              f"# Validate with:  md-openmm config validate THIS_FILE\n")
+    target = Path(args.output)
+    if target.exists() and not args.overwrite:
+        print(f"refusing to overwrite {target} (pass --overwrite)", file=sys.stderr)
+        return runner.EXIT_MANIFEST
+    if target.suffix.lower() in (".yaml", ".yml"):
+        import yaml
+        target.write_text(header + yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    else:
+        target.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    print(f"written: {target}   (profile {profile['profile_id']})")
+    return runner.EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     shipped = list_shipped()
     p = argparse.ArgumentParser(
@@ -311,6 +459,55 @@ def build_parser() -> argparse.ArgumentParser:
     add_omega_exclusion(r)
     add_run_naming(r)
     r.set_defaults(func=cmd_rest2)
+
+    c = sub.add_parser("config", help="inspect and resolve simulation configuration")
+    csub = c.add_subparsers(dest="config_command", required=True)
+
+    lp = csub.add_parser("list-profiles", help="the packaged versioned default profiles")
+    lp.add_argument("--format", choices=("json", "yaml"), default="json")
+    lp.add_argument("--output", default=None)
+    lp.set_defaults(func=cmd_config_list_profiles)
+
+    ci = csub.add_parser("init", help="write a runnable template document")
+    ci.add_argument("--method", required=True, choices=("md", "rest2"))
+    ci.add_argument("--route", required=True, choices=("pdb", "smiles"))
+    ci.add_argument("--profile", default=None)
+    ci.add_argument("--output", required=True)
+    ci.add_argument("--overwrite", action="store_true")
+    ci.set_defaults(func=cmd_config_init)
+
+    cv = csub.add_parser("validate", help="schema and cross-field validation, no OpenMM")
+    cv.add_argument("input")
+    cv.add_argument("--profile", default=None)
+    cv.add_argument("--set", action="append", default=None, metavar="dotted.path=value")
+    cv.set_defaults(func=cmd_config_validate)
+
+    cr = csub.add_parser("resolve", help="the fully expanded configuration, sources and hashes")
+    cr.add_argument("input")
+    cr.add_argument("--profile", default=None)
+    cr.add_argument("--set", action="append", default=None, metavar="dotted.path=value")
+    cr.add_argument("--format", choices=("json", "yaml"), default="json")
+    cr.add_argument("--output", default=None)
+    cr.set_defaults(func=cmd_config_resolve)
+
+    cd = csub.add_parser("diff", help="classify differences by their consequence")
+    cd.add_argument("input_a")
+    cd.add_argument("input_b")
+    cd.set_defaults(func=cmd_config_diff)
+
+    ce = csub.add_parser("explain", help="type, unit, source, allowed values, scientific effect")
+    ce.add_argument("input")
+    ce.add_argument("field", metavar="DOTTED.FIELD")
+    ce.add_argument("--format", choices=("json", "yaml"), default="json")
+    ce.add_argument("--output", default=None)
+    ce.set_defaults(func=cmd_config_explain)
+
+    cm = csub.add_parser("migrate", help="convert shipped system+experiment manifests")
+    cm.add_argument("input", help="system manifest (path or shipped name)")
+    cm.add_argument("--experiment", required=True)
+    cm.add_argument("--output", default=None)
+    cm.add_argument("--overwrite", action="store_true")
+    cm.set_defaults(func=cmd_config_migrate)
 
     m = sub.add_parser("md", help="conventional explicit-water MD from a prepared bundle")
     m.add_argument("--bundle", required=True, metavar="BUNDLE_DIR")
