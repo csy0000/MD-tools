@@ -71,6 +71,41 @@ md-openmm prepare --config run.yaml --out-root ./runs --platform CPU
 `--system`/`--experiment` remain as the legacy front end; `config migrate` lifts them into the same
 model.
 
+### Template catalog — metadata, not yet a dispatcher
+
+`registry.yaml` indexes the templates this repository publishes, and each one describes itself in
+`templates/<method>/<engine>/<variant>/template.yaml`:
+
+| template | method | engine |
+|---|---|---|
+| `templates/conventional-md/openmm/explicit-water/template.yaml` | `conventional-md` (alias `md`) | `openmm` |
+| `templates/rest2/openmm/explicit-water/template.yaml` | `rest2` | `openmm` |
+
+**Nothing dispatches through these files.** Runs still go through `md-openmm` over
+`md_templates.openmm`, and every descriptor states that in `implementation.dispatch: legacy-direct`.
+What the descriptors add is a machine-readable answer to "what is this template, what can it do,
+which persistent schemas does it read and write, and how far has it actually been validated?" —
+with implementation status and scientific status kept as separate fields, because a template that
+runs is not a template that has been validated.
+
+A template's immutable identity is its repository URL, the **full 40-character commit SHA**, and its
+exact path:
+
+```
+https://github.com/csy0000/MD-templates@<40-hex-sha>#templates/rest2/openmm/explicit-water/template.yaml
+```
+
+```python
+from md_templates.core import load_catalog, resolve_identity
+catalog = load_catalog(".")
+resolve_identity(catalog, "rest2/openmm/explicit-water").canonical
+```
+
+A **dirty checkout has no immutable identity** and this raises rather than quietly resolving to
+HEAD — HEAD describes what was committed, not the files on disk. Branch names, tags, abbreviated
+SHAs, package versions and timestamps are refused outright. Loading and validating the catalog
+imports no OpenMM, OpenFF or RDKit, so it works on a machine that could never run a simulation.
+
 ### Run directories, and continuing a run
 
 Both `md` and `rest2` take the same naming options:

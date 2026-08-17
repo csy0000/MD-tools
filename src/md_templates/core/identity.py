@@ -240,7 +240,7 @@ def resolve_identity(catalog, template_ref: str, *,
     entry = catalog.require(template_ref)
 
     if commit_sha is not None:
-        sha, _ = normalise_commit_sha(commit_sha), "explicit"
+        sha = normalise_commit_sha(commit_sha)
     elif trusted is not None:
         sha = normalise_commit_sha(trusted.commit_sha, field="trusted.commit_sha")
     else:

@@ -4,6 +4,35 @@ Entries describe behaviour changes and the migration each one needs. No release 
 
 ## Unreleased
 
+### Template catalog and immutable template identity (metadata only)
+
+First step of the multi-method migration. **No runtime behaviour changes.** `md-openmm` still
+executes through `md_templates.openmm`; nothing dispatches through the catalog, and every descriptor
+records `implementation.dispatch: legacy-direct` to say so in the file itself.
+
+* `registry.yaml` at the repository root — a discovery index over the templates, with
+  `schema_version: 1`, **independent** of the bundle, canonical-configuration and run-state versions.
+* `templates/conventional-md/openmm/explicit-water/template.yaml` and
+  `templates/rest2/openmm/explicit-water/template.yaml` — strict typed descriptors covering method
+  and engine identity, input routes, operational capabilities, readable/writable bundle schema
+  versions, restart guarantees, the current implementation binding, and implementation status and
+  scientific status as **separate** fields.
+* `md_templates.core` — engine-neutral registry, descriptor, identity and path modules. They import
+  YAML and pydantic and nothing else, so the catalog can be listed and validated in an environment
+  with no OpenMM, OpenFF or RDKit.
+* Immutable template identity is `(canonical repository URL, full 40-character Git commit SHA,
+  exact normalised template path)`, canonically
+  `https://github.com/csy0000/MD-templates@<sha>#templates/<method>/<engine>/<variant>/template.yaml`.
+  Branch names, tags, abbreviated SHAs, package versions, template semantic versions and timestamps
+  are all refused. A **dirty checkout raises** rather than resolving to HEAD; a non-Git directory
+  with no explicitly supplied trusted SHA raises too. Resolution reads local Git metadata only and
+  makes no network request.
+* Compatibility goldens under `tests/goldens/`, captured before any structural edit and regenerated
+  only by the explicit `scripts/capture_goldens.py`.
+
+**Migration:** none. No bundle, run directory, manifest or hash gained a template identity, and no
+profile, default or schema moved.
+
 ### Bundle schema version 2
 
 New bundles are written with `bundle_schema_version: 2`, a version **independent** of the system
