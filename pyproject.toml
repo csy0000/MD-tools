@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=64"]
+# pyyaml and pydantic are BUILD requirements, not just runtime ones: the build stages the template
+# catalog into the distribution and validates it first with the same strict loader the runtime uses.
+# Validating with a different implementation than the one shipped would prove nothing.
+requires = ["setuptools>=64", "pyyaml", "pydantic>=2"]
 build-backend = "setuptools.build_meta"
 
 [project]
