@@ -66,7 +66,21 @@ echo "  ok: commands work with no checkout on the path"
 step "4b. the packaged catalog, from outside the checkout"
 # Still in WORKDIR: this exercises the INSTALLED distribution. The script sets no sys.path of its
 # own, blocks sockets before importing, and refuses if md_templates resolves into the checkout.
-python "$REPO_ROOT/scripts/ci/check_packaged_catalog.py"
+#
+# The supported gate REQUIRES resolved provenance naming exactly this checkout's HEAD. A gate that
+# accepted an unresolved build would pass on precisely the wheels that cannot name their own source.
+# Set FAST_CHECKS_ALLOW_UNRESOLVED=1 to test the refusal path from a dirty tree during development;
+# CI must never set it, and the mode is printed on every run.
+EXPECT_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
+PACKAGED_ARGS=()
+if [ -n "$EXPECT_SHA" ]; then
+    PACKAGED_ARGS+=(--expect-commit "$EXPECT_SHA")
+fi
+if [ "${FAST_CHECKS_ALLOW_UNRESOLVED:-0}" = "1" ]; then
+    echo "  NOTE: FAST_CHECKS_ALLOW_UNRESOLVED=1 -- local development mode, not the supported gate"
+    PACKAGED_ARGS+=(--allow-unresolved)
+fi
+python "$REPO_ROOT/scripts/ci/check_packaged_catalog.py" "${PACKAGED_ARGS[@]}"
 
 step "5. validate every shipped profile"
 python - <<'PY'
