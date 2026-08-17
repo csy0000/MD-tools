@@ -262,10 +262,81 @@ The only changes outside `md_templates/core` and the build files are documentati
 
 ## CI status actually observed
 
-**No GitHub Actions run has been observed for this branch.** The evidence above is local. Both CI
-scripts were run locally and are reported as such; that is not proof of a remote passing run. PR 1's
-head carried zero commit-status contexts, and whether Actions is enabled for this repository remains
-unsettled — it should be resolved before merge.
+**Reported by the reviewer on PR #2: GitHub Actions is now running, and both the `fast` and
+`integration-cpu` workflows passed.** That resolves the question left open by PR 1, where the head
+carried zero commit-status contexts.
+
+**I could not independently confirm it from this machine, and am not claiming to have.** The API
+token available here lacks Actions and Checks read permission — `actions/runs`,
+`commits/<sha>/check-runs` and `commits/<sha>/status` all return **HTTP 403 "Resource not accessible
+by personal access token"**. So the workflow result above is recorded as *reviewer-observed*, and
+everything else in this journal is local evidence produced and checked here. Anyone wanting a
+first-hand check should look at the Actions tab for this branch, or re-run with a token carrying
+`actions: read`.
+
+Note that the workflows the reviewer observed ran against the commit **before** this review round.
+The gate changed in review finding 3 — it is now strict — so the next Actions run is the first that
+exercises the strict path remotely.
+
+## Review round 1: three findings, all real
+
+Review on PR #2 raised three, each a case where something that looked verified was not.
+
+**1. Provenance could be inherited from an enclosing repository.** `git -C <dir>` walks upwards, so a
+source tree unpacked anywhere inside an unrelated repository reported *that* repository's HEAD — and
+reported it **clean**, because the enclosing tree genuinely is clean while ignoring the copy. Every
+check passed and the identity named a commit from a different project. `inspect_provenance` now
+requires `git rev-parse --show-toplevel` to resolve to the directory it was asked about, compared by
+`realpath`, checked before HEAD. A directory inside a repository is treated as having no Git metadata
+at all, which is the honest description. This fixed source-tree identity as well as build provenance
+— `resolve_identity(catalog, root=...)` had the same hazard.
+
+**2. Archive verification bound only the catalog.** The resource manifest covers `registry.yaml` and
+the descriptors, which leaves the code that reads and verifies them unbound: unpack an sdist, rewrite
+`packaged.py`, `build_support/catalog.py` or any engine module, rebuild, and the wheel inherited the
+archive's clean commit — a commit naming code it never contained. `BuildProvenance` gains
+`source_tree_sha256`, one digest over `setup.py`, `pyproject.toml`, `MANIFEST.in`, `registry.yaml`
+and everything under `src/`, `build_support/` and `templates/`. An archive is taken at its word only
+when **both** digests agree. `.egg-info` and `__pycache__` are excluded because they appear *during* a
+build; including them would make the digest depend on whether anything had been built before.
+
+**3. The gate accepted either branch.** A clean build was verified and an unresolved one merely had
+to refuse — so the gate passed on precisely the wheels that cannot name their own source, silently,
+because an unresolved build looks healthy until something asks it for an identity. Strict is now the
+default: resolved provenance is required and `--expect-commit` must match it exactly, with
+`fast_checks.sh` passing `git rev-parse HEAD`. `--allow-unresolved` remains for a dirty tree but must
+be selected explicitly via `FAST_CHECKS_ALLOW_UNRESOLVED=1`, defaulting to off, and the mode is
+printed on every run.
+
+Sixteen regression tests were added. The finding-1 group first asserts that plain `git -C` *does*
+resolve to the outer repository from the vendored directory — the hazard is demonstrated before it is
+fixed, so the test cannot pass vacuously.
+
+```console
+$ python -m pytest tests/test_packaged_catalog.py -q
+63 passed                                                                  23.66 s
+
+$ python -m pytest tests/test_template_catalog.py tests/test_template_identity.py -q
+131 passed                                                                  5.71 s
+
+$ python -m pytest tests/ -q -m "not slow"
+507 passed, 17 deselected                                                  32.73 s
+
+$ python scripts/capture_goldens.py --check
+7/7 ok, exit 0
+
+$ env -u PYTHONPATH bash scripts/ci/fast_checks.sh       # clean tree, STRICT mode
+  source state:       clean-git-checkout (resolved=True)
+  mode:               strict
+  expected commit:    21b7f3a2deff067264a536eb6f7fcad5a67da4df (matches)
+  identity:           ...@21b7f3a2...#templates/conventional-md/openmm/explicit-water/template.yaml
+  identity:           ...@21b7f3a2...#templates/rest2/openmm/explicit-water/template.yaml
+  ok: offline, no heavy dependencies, no checkout, no Git
+507 passed, 17 deselected
+fast checks: PASSED                                                        exit 0
+```
+
+`507 = 491 + 16`. No golden was regenerated and no existing test was weakened.
 
 ## Limitations and deferred work
 

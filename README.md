@@ -134,6 +134,15 @@ What an installed copy may claim depends entirely on how it was built:
 | tree with uncommitted or untracked changes | `dirty-source-tree` | **refused** |
 | tree whose `git status` failed | `unverifiable-git-status` | **refused** |
 | no Git and no verified archive record | `no-verifiable-git-provenance` | **refused** |
+| a tree inside an unrelated repository | `no-verifiable-git-provenance` | **refused** |
+
+Provenance is never inherited from an enclosing repository: the Git worktree root must *be* the
+source root, not merely contain it. A source tree unpacked inside another project — vendored, or in
+an ignored directory — would otherwise report that project's HEAD, and report it clean.
+
+An unmodified sdist inherits its commit only while **both** its catalog bytes and every
+build- and runtime-relevant source file still hash to what the archive recorded, so an archive whose
+implementation was edited after unpacking cannot carry the original commit forward.
 
 A refusal raises `UnresolvedBuildProvenanceError` and names the state. Listing still works in every
 case: knowing *what* a distribution contains is useful even when its bytes cannot be named.

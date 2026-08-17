@@ -34,8 +34,16 @@ travels inside the built distribution, and an installed copy can resolve a real 
   catalog reports its `reference_policy` rather than silently skipping the check.
 * `pyyaml` and `pydantic` are now **build** requirements as well as runtime ones: the build validates
   the catalog with the same strict loader it ships.
+* Git provenance is **never inherited from an enclosing repository**: the detected worktree root must
+  be the source root itself, so a tree unpacked inside an unrelated (and clean) repository reports no
+  Git metadata rather than that repository's HEAD.
+* Archive provenance binds **every build- and runtime-relevant source file** via `source_tree_sha256`,
+  not just the catalog, so an unpacked sdist whose implementation or build hook was edited cannot
+  inherit the original commit.
 * `scripts/ci/check_packaged_catalog.py`, called by `scripts/ci/fast_checks.sh`, exercises all of
-  this against the installed wheel from outside the checkout with sockets blocked.
+  this against the installed wheel from outside the checkout with sockets blocked. It **requires
+  resolved provenance matching the checkout's HEAD**; `--allow-unresolved`
+  (`FAST_CHECKS_ALLOW_UNRESOLVED=1`) is a local-development mode that must be selected explicitly.
 
 **Migration:** none. No bundle, run directory, manifest or hash gained a template identity.
 
