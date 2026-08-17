@@ -12,7 +12,11 @@ map to one identity while a reviewer reading the registry sees only one of them.
 """
 from __future__ import annotations
 
-__all__ = ["PathError", "normalise_repo_relative", "TEMPLATES_ROOT", "DESCRIPTOR_FILENAME"]
+import os
+from pathlib import Path
+
+__all__ = ["PathError", "normalise_repo_relative", "resolve_within_repository",
+           "TEMPLATES_ROOT", "DESCRIPTOR_FILENAME"]
 
 TEMPLATES_ROOT = "templates"
 DESCRIPTOR_FILENAME = "template.yaml"
@@ -60,6 +64,54 @@ def normalise_repo_relative(value: object, *, field: str) -> str:
                 f"normalised path."
             )
     return value
+
+
+def resolve_within_repository(root: Path, relative: str, *, field: str) -> Path:
+    """Return `root/relative`, refusing any symlink along the way.
+
+    String normalisation is not enough. A committed `template.yaml` can be a *symlink* to bytes
+    outside the checkout: `Path.is_file()`, `read_text()` and `exists()` all follow it silently,
+    Git reports the tree clean because the link itself is unchanged, and identity resolution then
+    hands back `SHA + path` for content the commit does not contain. The identity would name bytes
+    nobody can reproduce, which is the one thing it exists to prevent.
+
+    Every component below `root` is checked, not just the last: a symlinked *directory* redirects
+    everything beneath it just as effectively as a symlinked file.
+
+    Symlinks are refused outright rather than resolved-and-permitted, including links that stay
+    inside the repository. Allowing them would mean deciding, per link, whether the target is both
+    inside the tree and represented by the same commit -- a judgement that is easy to get subtly
+    wrong and that buys nothing the catalog needs. A template directory holding real files is not a
+    hardship.
+
+    `root` itself is not component-checked, since a repository legitimately sits under a symlinked
+    parent (`/tmp` on macOS, a symlinked home). Containment is verified against its resolved form
+    instead, which covers that case correctly.
+    """
+    root = Path(root)
+    normalise_repo_relative(relative, field=field)
+
+    current = root
+    for part in relative.split("/"):
+        current = current / part
+        if current.is_symlink():
+            raise PathError(
+                f"{field}: {relative!r} passes through a symlink at {part!r} ({current} -> "
+                f"{os.readlink(current)}). Symlinked components are refused: they let a clean "
+                f"checkout parse bytes the commit does not contain, so the commit SHA would no "
+                f"longer identify what was read."
+            )
+
+    # Belt and braces. With no symlinked component this holds by construction; it also catches a
+    # link swapped in between the walk above and the read that follows.
+    resolved_root = os.path.realpath(root)
+    resolved = os.path.realpath(current)
+    if resolved != resolved_root and not resolved.startswith(resolved_root + os.sep):
+        raise PathError(
+            f"{field}: {relative!r} resolves to {resolved}, which is outside the repository at "
+            f"{resolved_root}"
+        )
+    return current
 
 
 def assert_under_templates(value: str, *, field: str) -> str:

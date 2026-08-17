@@ -6,6 +6,7 @@ the developer's checkout, so the suite means the same thing on a clean tree and 
 from __future__ import annotations
 
 import copy
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -501,6 +502,110 @@ def test_descriptor_template_id_must_match_declared_method_and_engine():
 def test_parse_descriptor_rejects_a_non_mapping():
     with pytest.raises(TemplateError, match="expected a mapping"):
         parse_descriptor(["not", "a", "mapping"])
+
+
+# ================================================================================================
+# review finding 2: catalog loading must not follow symlinks
+#
+# `is_file()`, `read_text()` and `exists()` all follow symlinks silently. A committed template.yaml
+# symlink can point at mutable bytes outside the checkout while Git still reports the tree clean --
+# the link itself is unchanged. SHA + path would then name content the commit does not contain.
+# ================================================================================================
+
+def test_descriptor_symlink_pointing_outside_the_repository_is_refused(catalog_dir, tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    external = outside / "template.yaml"
+    external.write_bytes((catalog_dir / "templates" / REST2_ID / "template.yaml").read_bytes())
+
+    descriptor = catalog_dir / "templates" / REST2_ID / "template.yaml"
+    descriptor.unlink()
+    descriptor.symlink_to(external)
+
+    # the decisive detail: the descriptor still PARSES, so only the symlink rule catches this
+    assert read_yaml(descriptor)["template_id"] == REST2_ID
+
+    with pytest.raises(RegistryError, match="symlink"):
+        load_catalog(catalog_dir)
+
+
+def test_symlinked_directory_component_is_refused(catalog_dir, tmp_path):
+    """A symlinked directory redirects everything beneath it, so components are checked too."""
+    outside = tmp_path / "outside-engine"
+    outside.mkdir(parents=True)
+    variant = outside / "explicit-water"
+    variant.mkdir()
+    variant.joinpath("template.yaml").write_bytes(
+        (catalog_dir / "templates" / REST2_ID / "template.yaml").read_bytes())
+
+    engine_dir = catalog_dir / "templates" / "rest2" / "openmm"
+    shutil.rmtree(engine_dir)
+    engine_dir.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(RegistryError, match="symlink"):
+        load_catalog(catalog_dir)
+
+
+def test_repository_reference_symlink_pointing_outside_is_refused(catalog_dir, tmp_path):
+    outside = tmp_path / "outside-docs"
+    outside.mkdir()
+    (outside / "note.md").write_text("external\n", encoding="utf-8")
+
+    link = catalog_dir / "docs" / "external-link.md"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside / "note.md")
+    mutate_descriptor(catalog_dir, MD_ID,
+                      lambda d: d["repository_references"].append("docs/external-link.md"))
+
+    assert link.exists(), "exists() follows the link -- which is exactly the problem"
+    with pytest.raises(RegistryError, match="symlink"):
+        load_catalog(catalog_dir)
+
+
+def test_a_symlink_that_stays_inside_the_repository_is_also_refused(catalog_dir):
+    """Refused outright rather than resolved-and-permitted.
+
+    An internal link is representable in the commit, so this case is arguably safe. It is still
+    refused: permitting it would mean deciding per link whether the target is both inside the tree
+    and covered by the same commit, which is easy to get subtly wrong and buys the catalog nothing.
+    """
+    real = catalog_dir / "templates" / REST2_ID / "template.yaml"
+    inside = catalog_dir / "templates" / "rest2" / "shared-template.yaml"
+    inside.write_bytes(real.read_bytes())
+    real.unlink()
+    real.symlink_to(inside)
+
+    with pytest.raises(RegistryError, match="symlink"):
+        load_catalog(catalog_dir)
+
+
+def test_registry_symlink_is_refused(catalog_dir, tmp_path):
+    """The index is read under the same rule as everything it points at."""
+    outside = tmp_path / "outside-registry"
+    outside.mkdir()
+    external = outside / "registry.yaml"
+    external.write_bytes((catalog_dir / "registry.yaml").read_bytes())
+
+    (catalog_dir / "registry.yaml").unlink()
+    (catalog_dir / "registry.yaml").symlink_to(external)
+
+    with pytest.raises(RegistryError, match="symlink"):
+        load_catalog(catalog_dir)
+
+
+def test_the_real_repository_contains_no_symlinked_catalog_paths():
+    """The shipped catalog satisfies the rule it enforces."""
+    catalog = load_catalog(REPO_ROOT)
+    for entry in catalog.entries:
+        current = REPO_ROOT
+        for part in entry.template_path.split("/"):
+            current = current / part
+            assert not current.is_symlink(), current
+        for ref in catalog.descriptor(entry.template_id).repository_references:
+            current = REPO_ROOT
+            for part in ref.split("/"):
+                current = current / part
+                assert not current.is_symlink(), current
 
 
 # ================================================================================================

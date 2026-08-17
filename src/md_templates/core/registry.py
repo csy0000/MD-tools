@@ -24,7 +24,12 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .identity import UnknownTemplateError
-from .paths import PathError, assert_under_templates, normalise_repo_relative
+from .paths import (
+    PathError,
+    assert_under_templates,
+    normalise_repo_relative,
+    resolve_within_repository,
+)
 from .template import TemplateDescriptor, TemplateError, parse_descriptor
 
 __all__ = [
@@ -256,11 +261,15 @@ def _check_entry_against_tree(root: Path, entry: RegistryEntry) -> TemplateDescr
             f"relative to templates/, which is {directory!r}"
         )
 
-    path = root / entry.template_path
+    field = f"templates[{entry.template_id!r}].template_path"
+    try:
+        path = resolve_within_repository(root, entry.template_path, field=field)
+    except PathError as exc:
+        raise RegistryError(str(exc)) from exc
     if not path.is_file():
         raise RegistryError(
-            f"templates[{entry.template_id!r}].template_path: {entry.template_path} does not exist "
-            f"under {root}. A registry entry with no descriptor is a broken index, not a plan."
+            f"{field}: {entry.template_path} does not exist under {root}. A registry entry with no "
+            f"descriptor is a broken index, not a plan."
         )
 
     import yaml
@@ -286,11 +295,14 @@ def _check_entry_against_tree(root: Path, entry: RegistryEntry) -> TemplateDescr
             f"{entry.template_path}: descriptor engine {descriptor.engine.id!r} disagrees with the "
             f"registry entry {entry.engine!r}"
         )
-    for ref in descriptor.repository_references:
-        if not (root / ref).exists():
-            raise RegistryError(
-                f"{entry.template_path}: repository_references entry {ref!r} does not exist"
-            )
+    for i, ref in enumerate(descriptor.repository_references):
+        ref_field = f"{entry.template_path}: repository_references[{i}]"
+        try:
+            target = resolve_within_repository(root, ref, field=ref_field)
+        except PathError as exc:
+            raise RegistryError(str(exc)) from exc
+        if not target.exists():
+            raise RegistryError(f"{ref_field}: {ref!r} does not exist")
     return descriptor
 
 
@@ -302,11 +314,17 @@ def load_catalog(root: Path, *, registry_filename: str = REGISTRY_FILENAME) -> T
     validates while disagreeing with the descriptor it points at is worse than one that fails.
     """
     root = Path(root)
-    document = load_registry_document(root / registry_filename)
+    # The registry is read under the same rule as everything it points at: a symlinked
+    # `registry.yaml` would let a clean checkout be indexed by bytes the commit does not contain.
+    try:
+        registry_path = resolve_within_repository(root, registry_filename, field="registry")
+    except PathError as exc:
+        raise RegistryError(str(exc)) from exc
+    document = load_registry_document(registry_path)
     try:
         registry = Registry.model_validate(document)
     except Exception as exc:
-        raise RegistryError(f"{root / registry_filename}: {exc}") from exc
+        raise RegistryError(f"{registry_path}: {exc}") from exc
 
     seen_ids: dict[str, int] = {}
     seen_paths: dict[str, int] = {}
