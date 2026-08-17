@@ -17,6 +17,11 @@ from typing import Any, Iterable, Optional, Sequence
 import numpy as np
 
 from ....core import persistence as runstate
+# save_restart/load_restart need a running Simulation and therefore live with the
+# provider, not in core. Imported from their real home rather than relying on the legacy
+# compatibility shim to attach them onto the core module -- which is what happened, and
+# what the crash test caught: the engine ran fine until nothing had imported the shim.
+from ..restart import load_restart, save_restart
 from ..config import resolve_chunk_plan, rest2_ladder, write_manifest
 from ..equilibration import (_apply_coords, _load_bundle, _make_simulation,
                             _scaled_system, _steps)
@@ -361,7 +366,7 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
                 "no state that is known to be complete. Refusing to append output."
             )
         gdir = runstate.generation_dir(run_dir, gen)
-        restored_from = {r: runstate.load_restart(sim, gdir, replica=r)
+        restored_from = {r: load_restart(sim, gdir, replica=r)
                          for r, sim in enumerate(simulations)}
         for r, sim in enumerate(simulations):
             st = sim.context.getState()
@@ -499,7 +504,7 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
                 _close_chunk(sim)
                 # Both restart forms, written to temporaries and renamed. Nothing points at this
                 # generation until every replica's files exist.
-                runstate.save_restart(sim, gdir, replica=r)
+                save_restart(sim, gdir, replica=r)
                 members.extend(runstate.restart_members(r))
                 cdir = replica_dirs[r] / f"chunk_{chunk:04d}"
                 sim.saveCheckpoint(str(cdir / "end.chk"))

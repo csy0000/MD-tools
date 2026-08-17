@@ -16,6 +16,11 @@ from typing import Any, Iterable, Optional, Sequence
 import numpy as np
 
 from ....core import persistence as runstate
+# save_restart/load_restart need a running Simulation and therefore live with the
+# provider, not in core. Imported from their real home rather than relying on the legacy
+# compatibility shim to attach them onto the core module -- which is what happened, and
+# what the crash test caught: the engine ran fine until nothing had imported the shim.
+from ..restart import load_restart, save_restart
 from ..config import resolve_chunk_plan, write_manifest
 from ..equilibration import (_apply_coords, _load_bundle, _make_simulation,
                             _scaled_system, _steps)
@@ -220,7 +225,7 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
                 "is known to be complete. Refusing to append output."
             )
         gdir = runstate.generation_dir(run_dir, gen)
-        kind = runstate.load_restart(sim, gdir)
+        kind = load_restart(sim, gdir)
         if kind == "state":
             print("[md] restored from the portable State rather than a binary checkpoint: the "
                   "continuation is physically valid but NOT bitwise identical to an "
@@ -251,7 +256,7 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
         _close_chunk(sim)
         sim.saveCheckpoint(str(chunk_dir / "end.chk"))
         gdir = runstate.generation_dir(run_dir, chunk)
-        runstate.save_restart(sim, gdir)
+        save_restart(sim, gdir)
         runstate.commit_generation(run_dir, chunk, members=list(runstate.restart_members()),
                                    steps=int(sim.currentStep))
         (chunk_dir / "done.json").write_text(

@@ -286,7 +286,16 @@ def test_killed_subprocess_resumes_from_the_last_committed_chunk(prepared_bundle
                 committed = gen
                 break
             time.sleep(0.5)
-        assert committed is not None, "no generation was committed before the deadline"
+        if committed is None:
+            # The loop also exits when the child dies. Reporting only "no generation was committed"
+            # hides the actual cause -- an import error inside the child looks identical to a slow
+            # machine here, and one of those is a bug.
+            detail = ""
+            if proc.poll() is not None:
+                out, err = proc.communicate(timeout=60)
+                detail = (f"\nthe child exited with {proc.returncode} before committing:\n"
+                          f"{out.decode()[-2000:]}\n{err.decode()[-3000:]}")
+            raise AssertionError("no generation was committed before the deadline" + detail)
         proc.send_signal(signal.SIGKILL)
     finally:
         proc.wait(timeout=120)

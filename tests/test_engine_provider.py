@@ -173,3 +173,64 @@ def test_the_shipped_manifests_travel_with_the_engine():
     resolved = shipped_system("cyclo_rgdfv")
     assert Path(resolved).is_file() and "engines" in str(resolved), resolved
     assert load_system(resolved) is not None
+
+
+# ------------------------------------------------------------------------------------------------
+# the engine must not depend on a compatibility shim's side effects
+# ------------------------------------------------------------------------------------------------
+
+def run_clean(body: str) -> subprocess.CompletedProcess:
+    import os
+    import textwrap
+
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(PACKAGE.parent)
+    return subprocess.run([sys.executable, "-c", textwrap.dedent(body)],
+                          capture_output=True, text=True, timeout=300, env=env,
+                          cwd=str(REPO_ROOT))
+
+
+def test_the_engine_does_not_rely_on_the_legacy_shim_attaching_functions_to_core():
+    """The crash test found this the expensive way.
+
+    Phase 3 left `save_restart`/`load_restart` with the provider and had the legacy
+    `md_templates.openmm.runstate` shim attach them onto `md_templates.core.persistence`, so the
+    historical `runstate.save_restart(...)` kept working. The engine then called them through the
+    core module — which works only if something imported the shim first. Nothing did, on the path
+    that matters, and REST2 died four minutes into a run with `AttributeError: module
+    'md_templates.core.persistence' has no attribute 'save_restart'`.
+
+    Run in a subprocess that imports ONLY the engine: core must still be clean, and the engine must
+    still have what it needs.
+    """
+    result = run_clean("""
+        import md_templates.core.persistence as persistence
+        import md_templates.core.bundle as bundle
+
+        assert not hasattr(persistence, "save_restart"), (
+            "core.persistence carries save_restart without the shim being imported; something "
+            "attached it as a side effect")
+        assert not hasattr(bundle, "topology_counts"), (
+            "core.bundle carries topology_counts without the shim being imported")
+
+        import md_templates.engines.openmm.methods.rest2 as rest2
+        import md_templates.engines.openmm.methods.md as md
+        for module in (rest2, md):
+            assert callable(module.save_restart), module.__name__
+            assert callable(module.load_restart), module.__name__
+        print("OK")
+        """)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip().endswith("OK")
+
+
+def test_the_legacy_shim_still_attaches_them_for_historical_callers():
+    """The complement: importing the legacy path must keep the old API working."""
+    result = run_clean("""
+        from md_templates.openmm.runstate import save_restart, load_restart, commit_generation
+        from md_templates.openmm.bundlev2 import topology_counts, forcefield_provenance
+        assert all(callable(f) for f in (save_restart, load_restart, topology_counts,
+                                         forcefield_provenance, commit_generation))
+        print("OK")
+        """)
+    assert result.returncode == 0, result.stdout + result.stderr
