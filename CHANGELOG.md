@@ -4,6 +4,41 @@ Entries describe behaviour changes and the migration each one needs. No release 
 
 ## Unreleased
 
+### Packaged template catalog and build provenance (metadata only)
+
+The catalog introduced in the previous entry was usable only from a repository checkout. It now
+travels inside the built distribution, and an installed copy can resolve a real immutable identity.
+**No runtime behaviour changes**; `md-openmm` and every simulation path are untouched.
+
+* `md_templates.core.load_packaged_catalog()` and `resolve_packaged_identity(template_ref)` read the
+  catalog built into the installation — no repository root, no Git, no working-directory assumption
+  and no network. `load_catalog(root)` is unchanged for checkouts.
+* The wheel carries the exact canonical `registry.yaml` bytes, every registered descriptor,
+  `resource_manifest.json` (schema version 1) and `build_provenance.json` (schema version 1). Both
+  schema versions are **independent** of the registry, template, bundle, canonical-configuration and
+  run-state versions.
+* **Single source of truth.** The tracked root `registry.yaml` and `templates/**/template.yaml`
+  remain the only editable copy; the packaged copy is generated into the build tree by a `build_py`
+  hook and is never written back into the working tree.
+* **Provenance is decided from the source being built**, never supplied: a clean checkout contributes
+  its exact full `HEAD`; an unmodified sdist from a clean checkout inherits that commit; a dirty
+  tree, a failed `git status`, or a tree with no Git and no verified archive record all record an
+  unresolved state and make identity resolution raise `UnresolvedBuildProvenanceError`. There is no
+  environment-variable override and no "allow dirty but trust HEAD" option.
+* Build metadata is deterministic — no build time, hostname, user, absolute path or branch name — so
+  two builds of one commit produce byte-identical records.
+* Identities always use the **logical repository path**; a wheel-internal path can never appear in
+  one.
+* `repository_references` keep their source-tree existence check in a checkout. In a wheel they are
+  recorded as `validated-at-build`, because those paths name documentation that does not ship; the
+  catalog reports its `reference_policy` rather than silently skipping the check.
+* `pyyaml` and `pydantic` are now **build** requirements as well as runtime ones: the build validates
+  the catalog with the same strict loader it ships.
+* `scripts/ci/check_packaged_catalog.py`, called by `scripts/ci/fast_checks.sh`, exercises all of
+  this against the installed wheel from outside the checkout with sockets blocked.
+
+**Migration:** none. No bundle, run directory, manifest or hash gained a template identity.
+
 ### Template catalog and immutable template identity (metadata only)
 
 First step of the multi-method migration. **No runtime behaviour changes.** `md-openmm` still
