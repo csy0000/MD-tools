@@ -80,6 +80,8 @@ def prepare(
     omega_exclusion: Optional[bool] = None,
     resolved_cfg: Optional[dict] = None,
     canonical: Optional[dict] = None,
+    original_config: Optional[Path] = None,
+    original_input: Optional[Path] = None,
 ) -> Path:
     """Build a bundle. Returns the bundle directory.
 
@@ -137,10 +139,16 @@ def prepare(
     if system.route == "pdb":
         shutil.copy2(system.input_path(), bundle_dir / system.input_path().name)
     shutil.copy2(experiment.source, bundle_dir / "experiment.prepare.yaml")
-    provenance.write_json(bundle_dir / "resolved_config.json", cfg)
 
-    if canonical:
-        provenance.write_json(bundle_dir / "canonical_configuration.json", canonical)
+    # ---- version-2 contract ------------------------------------------------------------------
+    # mmCIF alongside PDB: PDB's CRYST1 record cannot round-trip a triclinic cell faithfully, and
+    # a bundle should not force a consumer through that limitation to learn its box.
+    _write_topology_cif(bundle_dir)
+    _write_v2_artifacts(
+        bundle_dir, cfg=cfg, system=system, experiment=experiment,
+        canonical=canonical, original_config=original_config, original_input=original_input,
+    )
+    provenance.write_json(bundle_dir / "resolved_config.json", cfg)
 
     manifest = build_bundle_manifest(
         bundle_dir, system, experiment, cfg, simbox_info=info, equilibration_info=eq,
@@ -148,6 +156,128 @@ def prepare(
     )
     provenance.write_json(bundle_dir / BUNDLE_MANIFEST, manifest)
     return bundle_dir
+
+
+def bundlev2_module():
+    from . import bundlev2
+
+    return bundlev2
+
+
+def _v2_manifest_block(bundle_dir: Path, cfg: dict) -> dict[str, Any]:
+    """The version-2 additions: counts kept apart, roles mapped to paths, and stated limitations."""
+    from openmm import XmlSerializer, app
+
+    from . import bundlev2
+
+    system_xml = bundle_dir / "system.xml"
+    counts: dict[str, Any] = {}
+    if system_xml.is_file() and (bundle_dir / "topology.pdb").is_file():
+        omm_system = XmlSerializer.deserialize(system_xml.read_text(encoding="utf-8"))
+        topology = app.PDBFile(str(bundle_dir / "topology.pdb")).topology
+        counts = bundlev2.topology_counts(topology, omm_system)
+
+    roles = {role: rel for role, rel in bundlev2.REQUIRED_ROLES.items()
+             if (bundle_dir / rel).is_file()}
+    originals = bundle_dir / bundlev2.ORIGINAL_INPUTS_DIR
+    if originals.is_dir():
+        roles["original_inputs"] = bundlev2.ORIGINAL_INPUTS_DIR
+    if (bundle_dir / bundlev2.CHECKSUMS_FILE).is_file():
+        roles["checksums"] = bundlev2.CHECKSUMS_FILE
+
+    return {
+        "bundle_id": bundle_dir.name,
+        "package_version": provenance.package_version(),
+        "source_commit": (provenance.git_state() or {}).get("commit"),
+        "counts": counts,
+        "roles": dict(sorted(roles.items())),
+        # Named distinctly from the v1 `seeds` block, which the manifest also carries: two keys
+        # spelled the same would have one silently shadow the other.
+        "resolved_stage_seeds": (cfg.get("_canonical") or {}).get("stage_seeds"),
+        "resolved_stage_seed_sources": (cfg.get("_canonical") or {}).get("stage_seed_sources"),
+        "canonical_master_seed": (cfg.get("_canonical") or {}).get("master_seed"),
+        "portability": {
+            "prepared_artifacts": "byte-identical after transfer when the checksums match",
+            "binary_checkpoints": "environment-specific; never assume they are portable",
+            "serialized_state": "a physically valid portable fallback, but not a bitwise "
+                                "continuation of stochastic dynamics",
+            "rebuild_from_inputs": "may be scientifically consistent without being bitwise "
+                                   "identical unless the recorded environment is reproduced",
+        },
+    }
+
+
+def _write_topology_cif(bundle_dir: Path) -> None:
+    """Write topology.cif from topology.pdb, preserving atom order and the periodic box."""
+    from openmm import app
+
+    pdb = app.PDBFile(str(bundle_dir / "topology.pdb"))
+    with (bundle_dir / "topology.cif").open("w") as fh:
+        app.PDBxFile.writeFile(pdb.topology, pdb.positions, fh)
+
+
+def _write_v2_artifacts(bundle_dir: Path, *, cfg: dict, system, experiment,
+                        canonical: Optional[dict], original_config: Optional[Path],
+                        original_input: Optional[Path]) -> list[str]:
+    """Original inputs, provenance and checksums. Returns the checksummed relative paths."""
+    from openmm import XmlSerializer, app
+
+    from . import bundlev2
+
+    originals = bundle_dir / bundlev2.ORIGINAL_INPUTS_DIR
+    originals.mkdir(exist_ok=True)
+
+    # The EXACT documents the user supplied, so the bundle can be understood without them.
+    if original_config is not None and Path(original_config).is_file():
+        shutil.copy2(original_config, originals / Path(original_config).name)
+    if original_input is not None and Path(original_input).is_file():
+        shutil.copy2(original_input, originals / Path(original_input).name)
+    if system.route == "smiles":
+        # There is no input FILE for an inline SMILES, so record the identity instead: what was
+        # declared, what it canonicalises to, and the hash that ties the two together.
+        provenance.write_json(originals / "input_smiles.json", {
+            "declared_smiles": system.doc["input"].get("smiles"),
+            "canonical_isomeric_smiles": system.doc["input"].get("canonical_isomeric_smiles"),
+            "canonical_molecular_sha256": system.canonical_hash,
+            "expected_formal_charge": system.formal_charge,
+        })
+    # the legacy front end's exact manifests, when that is how the bundle was made
+    if canonical is None:
+        shutil.copy2(system.source, originals / "legacy_system.yaml")
+        shutil.copy2(experiment.source, originals / "legacy_experiment.yaml")
+
+    provenance.write_json(bundle_dir / "resolved_runtime_config.json", cfg)
+    provenance.write_json(bundle_dir / "forcefield_provenance.json",
+                          bundlev2.forcefield_provenance(cfg))
+    provenance.write_json(bundle_dir / "environment.json", bundlev2.environment_provenance())
+    if canonical is None:
+        # A legacy-front-end bundle still gets a canonical record, by migrating its manifests.
+        from .spec import canonical as canon_mod
+        from .spec import migrate as migrate_mod
+        from .spec import resolve as resolve_mod
+
+        try:
+            doc, notes = migrate_mod.migrate_manifests(system.doc, experiment.doc)
+            result = resolve_mod.resolve_spec(doc)
+            canonical = {"profile": result["profile"], "hashes": result["hashes"],
+                         "sources": result["sources"], "migrated_from": "legacy manifests",
+                         "migration_notes": notes,
+                         "configuration": canon_mod.to_plain(canon_mod.dump_model(result["spec"]))}
+        except Exception as exc:                             # noqa: BLE001
+            canonical = {"unavailable": f"{type(exc).__name__}: {exc}",
+                         "note": "this bundle was prepared from legacy manifests that could not be "
+                                 "migrated automatically; it does not carry a canonical projection"}
+    provenance.write_json(bundle_dir / "canonical_configuration.json", canonical)
+
+    checksummed = [rel for rel in bundlev2.REQUIRED_ROLES.values()
+                   if (bundle_dir / rel).is_file()]
+    checksummed += [f"{bundlev2.ORIGINAL_INPUTS_DIR}/{p.name}"
+                    for p in sorted(originals.iterdir()) if p.is_file()]
+    for extra in ("system.yaml", "experiment.prepare.yaml"):
+        if (bundle_dir / extra).is_file():
+            checksummed.append(extra)
+    bundlev2.write_checksums(bundle_dir, checksummed)
+    return checksummed
 
 
 def build_bundle_manifest(
@@ -163,9 +293,14 @@ def build_bundle_manifest(
     """The provenance object. Every field here is one a reader would otherwise have to guess."""
     counts = _composition(bundle_dir / "topology.pdb", simbox_info)
     solv = cfg["solvation"]
+    v2 = _v2_manifest_block(bundle_dir, cfg)
     return {
-        "schema_version": SCHEMA_VERSION,
+        # INDEPENDENT of the system, experiment, canonical-config and run-state versions: they
+        # describe different things and must be free to move separately.
+        "bundle_schema_version": bundlev2_module().BUNDLE_SCHEMA_VERSION,
+        "schema_version": SCHEMA_VERSION,      # legacy field, retained for v1 readers
         "kind": "explicit-solvent-rest2-bundle",
+        **v2,
         "config_hash": config_hash_value,
         "created_utc": provenance.utc_timestamp(),
         "invocation": provenance.invocation(),

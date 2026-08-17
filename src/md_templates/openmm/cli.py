@@ -434,6 +434,10 @@ def _prepare_from_canonical(args) -> int:
     out = bundle_mod.prepare(
         system, experiment, Path(args.out_root), platform=args.platform, device=args.device,
         name=args.name, resolved_cfg=cfg,
+        # the EXACT document the user supplied travels into the bundle
+        original_config=Path(args.config),
+        original_input=(Path(args.config).parent / spec.system.pdb
+                        if spec.system.route == "pdb" and spec.system.pdb else None),
         canonical={"profile": result["profile"], "hashes": result["hashes"],
                    "sources": result["sources"],
                    # to_plain, not dump_model: the stored record must be in CANONICAL form
@@ -504,6 +508,69 @@ def _synthetic_system_manifest(spec):
     tmp = Path(tempfile.mkdtemp()) / f"{spec.system.system_id}.yaml"
     tmp.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
     return load_system(tmp, check_chemistry=False)
+
+
+
+# ---------------------------------------------------------------------------------------------
+# `bundle` -- validate, inspect, relocate-check
+# ---------------------------------------------------------------------------------------------
+
+def cmd_bundle_validate(args) -> int:
+    from . import bundlecheck
+
+    report = bundlecheck.validate_bundle_v2(Path(args.bundle), deep=args.deep)
+    print(f"{'valid' if report.ok else 'INVALID'}: {report['bundle']}")
+    print(f"  contract: {report.get('contract')}")
+    for warning in report.get("warnings") or []:
+        print(f"  [warn]  {warning}")
+    for error in report.get("errors") or []:
+        print(f"  [error] {error}")
+    return runner.EXIT_OK if report.ok else runner.EXIT_BUNDLE
+
+
+def cmd_bundle_inspect(args) -> int:
+    from . import bundlecheck
+
+    info = bundlecheck.inspect_bundle(Path(args.bundle))
+    if args.format in ("json", "yaml"):
+        _emit(info, args)
+        return runner.EXIT_OK
+    counts = info["counts"]
+    print(f"bundle {info['bundle_id']}   schema v{info['bundle_schema_version']}")
+    print(f"  system      {info['identity']['system_id']}  route {info['identity']['route']}")
+    print(f"  methods     {', '.join(info['methods_supported'])}")
+    print(f"  profile     {info['profile'].get('profile_id')} "
+          f"v{info['profile'].get('profile_schema_version')}")
+    ff = info["forcefields"]
+    print(f"  forcefield  small_molecule={ff['small_molecule']} protein={ff['protein']} "
+          f"water={ff['water']}")
+    print(f"  counts      topology_atoms={counts.get('topology_atoms')} "
+          f"openmm_particles={counts.get('openmm_particles')} "
+          f"virtual_sites={counts.get('virtual_sites')} "
+          f"massless={counts.get('massless_particles')} "
+          f"constraints={counts.get('constraints')} dof={counts.get('degrees_of_freedom')}")
+    for name, value in (info["hashes"] or {}).items():
+        print(f"  {name:26} {value[:16]}")
+    print(f"  validation  {'ok' if info['validation']['ok'] else 'FAILED'} "
+          f"({info['validation']['contract']})")
+    for warning in info["validation"]["warnings"] or []:
+        print(f"  [warn]      {warning}")
+    for error in info["validation"]["errors"] or []:
+        print(f"  [error]     {error}")
+    return runner.EXIT_OK if info["validation"]["ok"] else runner.EXIT_BUNDLE
+
+
+def cmd_bundle_relocate_check(args) -> int:
+    from . import bundlecheck
+
+    result = bundlecheck.relocate_check(Path(args.bundle))
+    print(f"{result['verdict']}: {result['source']}")
+    print(f"  validated after copying to an unrelated directory: {result['relocated_ok']}")
+    for item in result["references_escaping_the_bundle"]:
+        print(f"  [escape] {item}")
+    for error in result["errors_after_relocation"] or []:
+        print(f"  [error]  {error}")
+    return runner.EXIT_OK if result["verdict"] == "relocatable" else runner.EXIT_BUNDLE
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -620,6 +687,26 @@ def build_parser() -> argparse.ArgumentParser:
     cm.add_argument("--output", default=None)
     cm.add_argument("--overwrite", action="store_true")
     cm.set_defaults(func=cmd_config_migrate)
+
+    bl = sub.add_parser("bundle", help="validate, inspect and relocation-check a bundle")
+    blsub = bl.add_subparsers(dest="bundle_command", required=True)
+
+    bv = blsub.add_parser("validate", help="schema, roles, paths, checksums, hashes, counts")
+    bv.add_argument("bundle", metavar="BUNDLE")
+    bv.add_argument("--deep", action="store_true",
+                    help="also deserialize the System/State and cross-check; still runs no dynamics")
+    bv.set_defaults(func=cmd_bundle_validate)
+
+    bi = blsub.add_parser("inspect", help="summarize a bundle without constructing a Context")
+    bi.add_argument("bundle", metavar="BUNDLE")
+    bi.add_argument("--format", choices=("text", "json", "yaml"), default="text")
+    bi.add_argument("--output", default=None)
+    bi.set_defaults(func=cmd_bundle_inspect)
+
+    br = blsub.add_parser("relocate-check",
+                          help="copy elsewhere, validate there, report anything that escaped")
+    br.add_argument("bundle", metavar="BUNDLE")
+    br.set_defaults(func=cmd_bundle_relocate_check)
 
     m = sub.add_parser("md", help="conventional explicit-water MD from a prepared bundle")
     m.add_argument("--bundle", required=True, metavar="BUNDLE_DIR")
