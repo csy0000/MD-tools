@@ -1,0 +1,8 @@
+# The canonical catalog and the build hook must travel in an sdist, or a wheel built from that
+# sdist would have nothing to package and no way to validate it.
+include registry.yaml
+recursive-include templates *.yaml
+recursive-include build_support *.py
+include setup.py
+include CHANGELOG.md
+include environment-ci.yml

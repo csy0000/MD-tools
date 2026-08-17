@@ -111,6 +111,62 @@ refused so the commit SHA always identifies the bytes actually parsed.
 Loading and validating the catalog imports no OpenMM, OpenFF or RDKit, so it works on a machine that
 could never run a simulation.
 
+#### From an installed wheel, with no checkout
+
+The catalog travels inside the distribution, so an installed copy can list templates and resolve
+identities without a repository, without Git and without network access:
+
+```python
+from md_templates.core import load_packaged_catalog, resolve_packaged_identity
+sorted(load_packaged_catalog().descriptors)          # both template IDs
+resolve_packaged_identity("rest2/openmm/explicit-water").canonical
+```
+
+The identity always uses the **logical repository path** — `templates/rest2/openmm/explicit-water/
+template.yaml` — never a path inside the wheel, so it stays lookupable in the repository it names.
+
+What an installed copy may claim depends entirely on how it was built:
+
+| source it was built from | packaged `source_state` | identity |
+|---|---|---|
+| clean Git checkout | `clean-git-checkout` | resolves to that exact commit |
+| unmodified sdist from a clean checkout | `verified-source-archive` | resolves to the inherited commit |
+| tree with uncommitted or untracked changes | `dirty-source-tree` | **refused** |
+| tree whose `git status` failed | `unverifiable-git-status` | **refused** |
+| no Git and no verified archive record | `no-verifiable-git-provenance` | **refused** |
+| a tree inside an unrelated repository | `no-verifiable-git-provenance` | **refused** |
+
+Provenance is never inherited from an enclosing repository: the Git worktree root must *be* the
+source root, not merely contain it. A source tree unpacked inside another project — vendored, or in
+an ignored directory — would otherwise report that project's HEAD, and report it clean.
+
+An unmodified sdist inherits its commit only while **both** its catalog bytes and a digest over
+**every regular file in the archive** still hash to what it recorded. That digest is closed-world:
+everything is covered except generated artifacts (`__pycache__`, `*.pyc`, `*.egg-info/`, top-level
+`build/` and `dist/`, `.git/`) and the provenance record itself. An archive edited anywhere — source,
+README, build configuration, a referenced document — cannot carry the original commit forward.
+
+A refusal raises `UnresolvedBuildProvenanceError` and names the state. Listing still works in every
+case: knowing *what* a distribution contains is useful even when its bytes cannot be named.
+
+Two records travel beside the catalog. `resource_manifest.json` hashes the exact bytes of every
+packaged file; `build_provenance.json` names the commit and binds itself to that manifest by hash,
+so a commit cannot be paired with a catalog it did not describe. Both are verified before any
+identity is returned, and both are deterministic — two builds of one commit produce identical
+metadata.
+
+**Trust boundary, stated plainly.** This detects bytes that drifted, a resource that went missing, a
+metadata record paired with the wrong catalog, and a build from a tree nobody can name. It does
+**not** authenticate GitHub, and it does not defend against someone who can rewrite a wheel *and*
+both of its metadata records consistently. Nothing here is a signature.
+
+The single tracked source stays `registry.yaml` and `templates/**/template.yaml` at the repository
+root. The packaged copy is generated at build time into the build tree and is never written back
+into the working tree, so there is exactly one file to edit.
+
+Still true, and worth repeating: **the catalog dispatches nothing**, and template identity is **not**
+written into any bundle or run manifest.
+
 ### Run directories, and continuing a run
 
 Both `md` and `rest2` take the same naming options:

@@ -14,6 +14,33 @@ mkdir -p "$WORKDIR"
 
 step() { printf '\n=== %s ===\n' "$1"; }
 
+step "0. the expected commit"
+# The supported gate REQUIRES resolved packaged provenance naming exactly this checkout's HEAD, so
+# the SHA must be acquired BEFORE anything is built -- a checkout that cannot name itself should fail
+# in a second, not after a wheel build and an install.
+#
+# FAST_CHECKS_ALLOW_UNRESOLVED=1 is the local-development escape: it permits an unresolved build and
+# a missing SHA. It must be selected explicitly, it defaults to off, and it is announced here. CI
+# must never set it.
+ALLOW_UNRESOLVED="${FAST_CHECKS_ALLOW_UNRESOLVED:-0}"
+EXPECT_SHA=""
+if SHA_OUTPUT="$(bash "$REPO_ROOT/scripts/ci/expect_commit.sh" "$REPO_ROOT" 2>&1)"; then
+    EXPECT_SHA="$SHA_OUTPUT"
+    echo "  expected commit: $EXPECT_SHA"
+elif [ "$ALLOW_UNRESOLVED" = "1" ]; then
+    echo "  NOTE: no expected commit ($SHA_OUTPUT)"
+else
+    echo "fast checks FAILED: $SHA_OUTPUT" >&2
+    echo "The supported gate requires a checkout whose full commit SHA can be determined, so the" >&2
+    echo "packaged wheel can be checked against it. Run from a Git checkout with at least one" >&2
+    echo "commit, or set FAST_CHECKS_ALLOW_UNRESOLVED=1 for local development." >&2
+    exit 1
+fi
+
+if [ "$ALLOW_UNRESOLVED" = "1" ]; then
+    echo "  NOTE: FAST_CHECKS_ALLOW_UNRESOLVED=1 -- local development mode, not the supported gate"
+fi
+
 step "1. build the wheel"
 cd "$REPO_ROOT"
 rm -rf dist
@@ -34,6 +61,12 @@ required = {
     "peptide structure":   "manifests/systems/ace_ala_nme.pdb",
     "spec package":        "md_templates/openmm/spec/models.py",
     "bundle contract":     "md_templates/openmm/bundlev2.py",
+    # A wheel whose catalog is missing ships a packaged loader that cannot resolve anything, so the
+    # catalog resources and BOTH metadata records are checked rather than assumed.
+    "packaged registry":   "md_templates/core/_packaged/registry.yaml",
+    "packaged templates":  "md_templates/core/_packaged/templates/",
+    "resource manifest":   "md_templates/core/_packaged/resource_manifest.json",
+    "build provenance":    "md_templates/core/_packaged/build_provenance.json",
 }
 missing = []
 for label, pattern in required.items():
@@ -56,6 +89,21 @@ md-openmm --help >/dev/null
 md-openmm config list-profiles >/dev/null
 md-openmm bundle --help >/dev/null
 echo "  ok: commands work with no checkout on the path"
+
+step "4b. the packaged catalog, from outside the checkout"
+# Still in WORKDIR: this exercises the INSTALLED distribution. The script sets no sys.path of its
+# own, blocks sockets before importing, and refuses if md_templates resolves into the checkout.
+#
+# The expected commit was acquired in step 0, before anything was built, so a checkout that cannot
+# name itself fails in a second rather than after a wheel build.
+PACKAGED_ARGS=()
+if [ -n "$EXPECT_SHA" ]; then
+    PACKAGED_ARGS+=(--expect-commit "$EXPECT_SHA")
+fi
+if [ "$ALLOW_UNRESOLVED" = "1" ]; then
+    PACKAGED_ARGS+=(--allow-unresolved)
+fi
+python "$REPO_ROOT/scripts/ci/check_packaged_catalog.py" "${PACKAGED_ARGS[@]}"
 
 step "5. validate every shipped profile"
 python - <<'PY'
