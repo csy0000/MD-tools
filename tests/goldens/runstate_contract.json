@@ -1,0 +1,59 @@
+{
+  "committed_file": "committed.json",
+  "continuity_paths": [
+    "system.slug",
+    "forcefield.protein",
+    "forcefield.water",
+    "forcefield.ligand",
+    "forcefield.ligand_charge_method",
+    "solvation.water_model",
+    "solvation.box_shape",
+    "solvation.padding_nm",
+    "solvation.positive_ion",
+    "solvation.negative_ion",
+    "solvation.neutralize",
+    "system_build.nonbonded_method",
+    "system_build.nonbonded_cutoff_nm",
+    "system_build.switch_distance_nm",
+    "system_build.use_dispersion_correction",
+    "system_build.ewald_error_tolerance",
+    "system_build.constraints",
+    "system_build.rigid_water",
+    "system_build.hydrogen_mass_amu",
+    "system_build.hmr_scope",
+    "system_build.remove_cm_motion",
+    "system_build.minimum_image_margin_nm",
+    "rest2.omega_exclusion",
+    "rest2.proline_like_residues",
+    "rest2.max_proline_ring_size",
+    "integrator.kind",
+    "integrator.timestep_fs",
+    "integrator.temperature_k",
+    "integrator.friction_per_ps",
+    "production.ensemble",
+    "production.precision",
+    "production.md.chunk_ns",
+    "production.md.scale_factor",
+    "production.md.seed",
+    "production.remd.seed",
+    "production.remd.chunk_ns",
+    "production.remd.exchange_interval_ps",
+    "production.remd.scale_factors"
+  ],
+  "extension_paths": [
+    "production.md.n_chunks",
+    "production.remd.n_chunks"
+  ],
+  "quarantine_dir": "recovery",
+  "restart_dir": "restart",
+  "restart_members_replica_0": [
+    "replica_00.chk",
+    "replica_00.state.xml"
+  ],
+  "restart_members_single": [
+    "walker.chk",
+    "walker.state.xml"
+  ],
+  "run_state_file": "run_state.json",
+  "run_state_schema": 1
+}

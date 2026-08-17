@@ -1,0 +1,174 @@
+# REST2 replica exchange, explicit water, OpenMM.
+#
+# METADATA ONLY. Validating this file changes no runtime behaviour: the ladder, the exchange
+# criterion, the omega classification and the default omega-exclusion setting all live in the
+# implementation and its profiles, and PR 1 changes none of them. `implementation.dispatch:
+# legacy-direct` records that nothing routes through this descriptor yet.
+
+schema_version: 1
+
+template_id: rest2/openmm/explicit-water
+display_name: Omega-selective REST2 in explicit water (OpenMM)
+summary: >-
+  Replica exchange with solute tempering over a declared scale-factor ladder in TIP3P-FB water,
+  with neighbour exchange and per-replica chunking, from a hash-checked, transportable prepared
+  bundle. Solute torsion scaling excludes omega torsions by default.
+
+method:
+  id: rest2
+  api_version: 1
+  aliases: [replica-exchange-solute-tempering]
+
+engine:
+  id: openmm
+  api_version: 1
+
+identity:
+  mode: git-commit-plus-template-path
+
+implementation:
+  binding: current-openmm-implementation
+  dispatch: legacy-direct
+  python_namespace: md_templates.openmm
+  cli_command: md-openmm
+  notes:
+    - "Generic template dispatch is NOT active. This descriptor names the implementation that
+       currently provides the method; it does not route to it."
+    - "The implementation is expected to move under src/md_templates/engines/openmm/ in a later
+       migration PR. Nothing was moved in PR 1."
+
+input_routes:
+  - id: smiles
+    description: >-
+      Small-molecule/ligand route. Sage/openff-2.2.0 with AM1-BCC charges. The route is declared,
+      never inferred from the input's contents.
+  - id: pdb
+    description: >-
+      Peptide route. ff19SB with CMAP, from a supplied structure whose declared hash is verified
+      and whose bytes are copied into the bundle.
+
+capabilities:
+  - id: prepare-bundle
+    supported: true
+    description: Build a solvated, equilibrated, self-contained bundle from a declared route.
+  - id: run-production
+    supported: true
+    description: Chunked production across the replica ladder from a prepared bundle.
+  - id: resume
+    supported: true
+    description: Continue an interrupted run from the committed-generation record.
+  - id: bundle-validate
+    supported: true
+    description: "`md-openmm bundle validate [--deep]`, constructing no Context by default."
+  - id: relocate-check
+    supported: true
+    description: Copy the bundle elsewhere and validate it there, which validating in place cannot do.
+  - id: replica-exchange
+    supported: true
+    description: Neighbour-pair exchange on a declared scale-factor ladder, with per-pair statistics.
+
+method_features:
+  - id: omega-exclusion
+    supported: true
+    default_enabled: true
+    disableable: true
+    description: >-
+      Omega (backbone amide) torsions are held at full strength while the rest of the solute's
+      torsions are scaled, so tempering does not drive cis/trans isomerisation that the ladder was
+      never meant to sample. Enabled by default and explicitly disableable via the canonical
+      configuration. This field RECORDS the runtime default; it does not set it. The default lives
+      in md_templates.openmm.config.DEFAULTS and in the shipped REST2 profiles, and PR 1 changes
+      neither.
+  - id: proline-classification
+    supported: true
+    default_enabled: true
+    disableable: true
+    description: >-
+      Proline-like residues are classified by ring closure rather than by name alone, because a
+      residue whose omega sits inside a ring behaves differently under scaling.
+
+bundle_schema:
+  readable: [1, 2]
+  writable: [2]
+
+restart:
+  resumable: true
+  authority: committed-generation-record
+  guarantees:
+    - "The committed-generation record is the sole restart authority. Directory listings, glob
+       counts, done markers and log length describe what happened to exist, not what completed."
+    - "An uncommitted tail is quarantined rather than trusted or deleted."
+    - "Append-only logs keep contiguous exchange-attempt indices and a single CSV header across
+       invocations."
+    - "Every replica restarts from its own committed checkpoint."
+  limitations:
+    - "Binary checkpoints are environment-specific and are never described as portable."
+    - "The serialized-State fallback is physically valid but not bitwise: it does not restore a
+       stochastic integrator's internal stream. Its use is announced and recorded."
+
+profiles:
+  provider: current-openmm-implementation
+  template_local: false
+  python_resource: md_templates.openmm.spec.profiles
+  profile_ids:
+    - explicit-rest2-ligand-v1
+    - explicit-rest2-peptide-v1
+    - cpu-smoke-v1
+  note: >-
+    A transitional reference to the provider that currently ships these profiles. The files are
+    package resources inside the OpenMM implementation, NOT template-local resources, and PR 1
+    neither moves nor copies them. Template-local profile migration is deferred to the
+    method-activation PRs.
+
+validation:
+  implementation_status: implemented-and-tested
+  scientific_status: unvalidated
+  open_gates:
+    - "The general REST2 template is scientifically UNVALIDATED."
+    - "Suitability of an arbitrary REST2 ladder is open: nothing here selects or validates a ladder
+       for a system it has not been run on."
+    - "The 2 fs versus 4 fs hydrogen-mass-repartitioning equivalence gate is open."
+  limitations:
+    - "Running is not validation. This template executes, relocates and resumes; none of that is
+       evidence about the physics."
+    - "Per-pair acceptance must be judged on the MINIMUM pair, never the mean: a healthy-looking
+       mean can hide one broken rung that disconnects the ladder."
+    - "Cross-machine bitwise reproducibility of dynamics is not claimed in any configuration."
+  evidence:
+    - id: unit-and-contract-suite
+      description: >-
+        The repository's non-slow suite over the canonical configuration models, the ladder rule,
+        the exchange criterion, the bundle contract and run-continuity behaviour.
+      kind: regression
+      scope: general
+      establishes_general_scientific_validation: false
+    - id: rgd-10rung-pilot
+      description: >-
+        The cyclo-RGDfV ten-rung result (manifest rgd_rest2_10rung). System-specific pilot evidence
+        about that molecule on that ladder. It does NOT elevate the general REST2 status, and the
+        model refuses to let it: system-specific scope cannot establish general validation.
+      kind: pilot
+      scope: system-specific
+      establishes_general_scientific_validation: false
+    - id: macrocycle-8rung-example
+      description: >-
+        The eight-rung macrocycle example (manifest macrocycle_pilot_8rung). An example
+        configuration, unvalidated.
+      kind: pilot
+      scope: example
+      establishes_general_scientific_validation: false
+    - id: cpu-smoke
+      description: >-
+        Picosecond CPU smoke runs proving the pipeline executes end to end. Explicitly prohibited as
+        scientific evidence.
+      kind: cpu-smoke
+      scope: example
+      establishes_general_scientific_validation: false
+
+repository_references:
+  - src/md_templates/openmm
+  - src/md_templates/openmm/spec/profiles
+  - src/md_templates/openmm/manifests/experiments/rgd_rest2_10rung.yaml
+  - src/md_templates/openmm/manifests/experiments/macrocycle_pilot_8rung.yaml
+  - docs/support-matrix.md
+  - docs/configuration.md

@@ -1,0 +1,36 @@
+# Root template registry -- a minimal discovery index, and nothing more.
+#
+# Settings, profiles, scientific defaults and validation evidence live in each template's
+# descriptor. Duplicating them here would create a second copy of the truth, and the two copies
+# would disagree the first time someone edited one.
+#
+# There is deliberately NO commit SHA in this file. Immutable template identity is
+# (canonical URL, full 40-character commit SHA, exact template path), and the SHA comes from
+# whichever commit contains this file -- see src/md_templates/core/identity.py. Writing a SHA here
+# would be stale the instant it was committed, because committing it changes the commit.
+#
+# As of PR 1 of the multi-method migration this catalog is metadata only: nothing dispatches
+# through it, and the runtime remains the `md-openmm` command over src/md_templates/openmm/.
+
+schema_version: 1
+
+repository:
+  canonical_url: https://github.com/csy0000/MD-templates
+
+identity:
+  scheme: git-commit-plus-template-path
+  canonical_form: "{canonical_url}@{full_commit_sha}#{template_path}"
+
+templates:
+  - template_id: conventional-md/openmm/explicit-water
+    template_path: templates/conventional-md/openmm/explicit-water/template.yaml
+    method: conventional-md
+    method_aliases: [md]
+    engine: openmm
+    tags: [explicit-water, portable-bundle, restartable]
+
+  - template_id: rest2/openmm/explicit-water
+    template_path: templates/rest2/openmm/explicit-water/template.yaml
+    method: rest2
+    engine: openmm
+    tags: [explicit-water, replica-exchange, portable-bundle, restartable]
