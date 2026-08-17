@@ -278,12 +278,13 @@ def test_14_both_shipped_descriptors_validate():
 def test_dispatch_status_matches_what_is_actually_activated():
     """Each descriptor states whether the generic route reaches it, and it must be true.
 
-    Phase 5 activated conventional MD: `md-templates prepare|run|resume` dispatches to the provider.
-    REST2 is still `legacy-direct` until Phase 6, and saying so is the point -- a descriptor that
-    claimed activation before the route existed would be the most expensive kind of documentation.
+    Phase 5 activated conventional MD and Phase 6 activated REST2: `md-templates prepare|run|resume`
+    dispatches both to the provider. Each descriptor was `legacy-direct` until its own phase ran --
+    a descriptor claiming activation before the route existed would be the most expensive kind of
+    documentation.
     """
     catalog = load_catalog(REPO_ROOT)
-    expected = {MD_ID: "catalog", REST2_ID: "legacy-direct"}
+    expected = {MD_ID: "catalog", REST2_ID: "catalog"}
     for tid, dispatch in expected.items():
         impl = catalog.descriptor(tid).implementation
         assert impl.dispatch == dispatch, tid
@@ -302,11 +303,18 @@ def test_an_activated_template_resolves_to_a_registered_provider():
 
 
 def test_a_template_that_is_not_activated_is_refused_by_dispatch():
+    """Both shipped templates are active now, so the refusal is exercised on a synthetic one.
+
+    The check still matters: it is what stops a descriptor being dispatched before its route works,
+    and it is the first thing a new template will hit.
+    """
     from md_templates.core.dispatch import DispatchNotActive, provider_for
 
     catalog = load_catalog(REPO_ROOT)
+    descriptor = catalog.descriptor(REST2_ID).model_copy(deep=True)
+    descriptor.implementation.dispatch = "legacy-direct"
     with pytest.raises(DispatchNotActive, match="legacy-direct"):
-        provider_for(catalog.descriptor(REST2_ID))
+        provider_for(descriptor)
 
 
 def test_profile_ownership_is_stated_honestly_per_template():
@@ -320,15 +328,19 @@ def test_profile_ownership_is_stated_honestly_per_template():
         assert (REPO_ROOT / "templates" / MD_ID / "profiles" / f"{profile_id}.json").is_file()
 
     rest2_profiles = catalog.descriptor(REST2_ID).profiles
-    assert rest2_profiles.provider == "current-openmm-implementation"
-    assert rest2_profiles.template_local is False
-    assert rest2_profiles.python_resource == "md_templates.core.config.profiles"
+    assert rest2_profiles.provider == "template-local"
+    assert rest2_profiles.template_local is True
+    for profile_id in rest2_profiles.profile_ids:
+        assert (REPO_ROOT / "templates" / REST2_ID / "profiles" / f"{profile_id}.json").is_file()
+    # the CPU smoke profile is a REST2 profile and belongs with the REST2 template
+    assert "cpu-smoke-v1" in rest2_profiles.profile_ids
 
 
 def test_the_model_refuses_a_descriptor_that_mixes_the_two_claims(catalog_dir):
     """Owning files you do not own is how a duplicate copy gets made later."""
-    mutate_descriptor(catalog_dir, REST2_ID, lambda d: d["profiles"].update({"template_local": True}))
-    with pytest.raises(RegistryError, match="Claiming"):
+    mutate_descriptor(catalog_dir, REST2_ID, lambda d: d["profiles"].update(
+        {"provider": "current-openmm-implementation"}))
+    with pytest.raises(RegistryError, match="owns its profiles|Claiming to own"):
         load_catalog(catalog_dir)
 
 

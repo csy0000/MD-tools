@@ -87,7 +87,7 @@ def test_list_reports_both_templates_with_their_dispatch_state():
     entries = {e["template_id"]: e for e in json.loads(result.stdout)}
     assert set(entries) == {MD_ID, REST2_ID}
     assert entries[MD_ID]["dispatch"] == "catalog"
-    assert entries[REST2_ID]["dispatch"] == "legacy-direct"
+    assert entries[REST2_ID]["dispatch"] == "catalog"
     for entry in entries.values():
         assert entry["scientific_status"] == "unvalidated"
 
@@ -139,9 +139,12 @@ def test_an_unregistered_method_is_refused_with_the_registered_set():
 
 
 def test_an_inactive_template_names_the_command_that_does_work():
+    """Both shipped templates are active, so this uses a copy that is not."""
     catalog = load_catalog(REPO_ROOT)
+    descriptor = catalog.descriptor(REST2_ID).model_copy(deep=True)
+    descriptor.implementation.dispatch = "legacy-direct"
     with pytest.raises(DispatchNotActive) as exc:
-        provider_for(catalog.descriptor(REST2_ID))
+        provider_for(descriptor)
     assert "md-openmm" in str(exc.value)
 
 
@@ -215,12 +218,15 @@ def test_resume_requires_the_run_to_be_named(descriptors):
 # template-local profiles resolve identically wherever they are read from
 # ------------------------------------------------------------------------------------------------
 
-def test_the_md_profiles_live_in_the_template_directory():
-    directory = REPO_ROOT / "templates" / MD_ID / "profiles"
-    assert sorted(p.name for p in directory.glob("*.json")) == [
+def test_every_profile_lives_in_the_template_that_owns_it():
+    assert sorted(p.name for p in (REPO_ROOT / "templates" / MD_ID / "profiles").glob("*.json")) == [
         "explicit-md-ligand-v1.json", "explicit-md-peptide-v1.json"]
+    assert sorted(p.name for p in (REPO_ROOT / "templates" / REST2_ID / "profiles").glob("*.json")) == [
+        "cpu-smoke-v1.json", "explicit-rest2-ligand-v1.json", "explicit-rest2-peptide-v1.json"]
+
     builtin = SRC / "md_templates" / "core" / "config" / "profiles"
-    assert not (builtin / "explicit-md-ligand-v1.json").exists(), "the files must not be duplicated"
+    remaining = sorted(p.name for p in builtin.glob("*.json")) if builtin.is_dir() else []
+    assert remaining == [], f"profiles left behind in core: {remaining}"
 
 
 def test_profile_discovery_never_consults_the_working_directory(tmp_path):

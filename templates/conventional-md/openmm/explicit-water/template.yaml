@@ -138,6 +138,5 @@ validation:
 
 repository_references:
   - src/md_templates/engines/openmm
-  - src/md_templates/core/config/profiles
   - docs/support-matrix.md
   - docs/configuration.md

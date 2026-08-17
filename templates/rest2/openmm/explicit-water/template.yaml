@@ -28,12 +28,14 @@ identity:
 
 implementation:
   binding: current-openmm-implementation
-  dispatch: legacy-direct
+  dispatch: catalog
   python_namespace: md_templates.engines.openmm
   cli_command: md-openmm
   notes:
-    - "Generic template dispatch is NOT active. This descriptor names the implementation that
-       currently provides the method; it does not route to it."
+    - "Generic dispatch IS active for this template: `md-templates prepare|run|resume` routes here
+       through md_templates.core.dispatch, which hands the work to the provider named above."
+    - "`md-openmm` remains supported and unchanged. The generic route translates to exactly the same
+       engine command, so both produce identical canonical artifacts and hashes."
     - "The implementation now lives under src/md_templates/engines/openmm/ as the single reusable
        provider for this engine. src/md_templates/openmm/ remains as documented compatibility
        aliases so every historical import path keeps working."
@@ -108,18 +110,19 @@ restart:
        stochastic integrator's internal stream. Its use is announced and recorded."
 
 profiles:
-  provider: current-openmm-implementation
-  template_local: false
-  python_resource: md_templates.core.config.profiles
+  provider: template-local
+  template_local: true
+  python_resource: templates/rest2/openmm/explicit-water/profiles
   profile_ids:
     - explicit-rest2-ligand-v1
     - explicit-rest2-peptide-v1
     - cpu-smoke-v1
   note: >-
-    A transitional reference to the provider that currently ships these profiles. The files are
-    package resources inside the OpenMM implementation, NOT template-local resources, and PR 1
-    neither moves nor copies them. Template-local profile migration is deferred to the
-    method-activation PRs.
+    This template owns its versioned default profiles, including the CPU smoke profile, which is a
+    REST2 profile and belongs with the REST2 template rather than in a shared pile. Their bytes are
+    unchanged from when they were package resources inside the engine, so the ladders, the omega
+    settings and every profile hash are identical -- the move relocated files without touching a
+    single scientific value. cpu-smoke-v1 remains prohibited as scientific evidence.
 
 validation:
   implementation_status: implemented-and-tested
@@ -168,7 +171,6 @@ validation:
 
 repository_references:
   - src/md_templates/engines/openmm
-  - src/md_templates/core/config/profiles
   - src/md_templates/engines/openmm/manifests/experiments/rgd_rest2_10rung.yaml
   - src/md_templates/engines/openmm/manifests/experiments/macrocycle_pilot_8rung.yaml
   - docs/support-matrix.md
