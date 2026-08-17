@@ -23,6 +23,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .identity import UnknownTemplateError
 from .paths import PathError, assert_under_templates, normalise_repo_relative
 from .template import TemplateDescriptor, TemplateError, parse_descriptor
 
@@ -223,8 +224,6 @@ class TemplateCatalog:
     def require(self, ref: str) -> RegistryEntry:
         entry = self.get(ref)
         if entry is None:
-            from .identity import UnknownTemplateError
-
             known = sorted(e.template_id for e in self.registry.templates)
             raise UnknownTemplateError(
                 f"{ref!r} is not a registered template. An identity is only ever minted for a "

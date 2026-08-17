@@ -386,6 +386,26 @@ def test_18b_repository_reference_must_exist(catalog_dir):
         load_catalog(catalog_dir)
 
 
+def test_declared_profile_ids_exist_and_belong_to_the_declared_method():
+    """Cross-checked in the test, not in the model.
+
+    The catalog package may not import the OpenMM implementation, so the descriptor cannot validate
+    its own profile references against the shipped files. A test can, and this is the pairing that
+    keeps the dependency boundary from turning into an unchecked claim.
+    """
+    from md_templates.openmm.spec import resolve
+
+    shipped = {d["profile_id"]: d for d in resolve.list_profiles()}
+    for tid, method in ((MD_ID, "md"), (REST2_ID, "rest2")):
+        declared = load_catalog(REPO_ROOT).descriptor(tid).profiles.profile_ids
+        assert declared, tid
+        for pid in declared:
+            assert pid in shipped, f"{tid} names profile {pid!r}, which is not shipped"
+            assert shipped[pid]["method"] == method, (
+                f"{tid} names profile {pid!r}, which is a {shipped[pid]['method']!r} profile"
+            )
+
+
 def test_19_rest2_declares_omega_exclusion_enabled_by_default():
     d = load_catalog(REPO_ROOT).descriptor(REST2_ID)
     feature = d.feature("omega-exclusion")

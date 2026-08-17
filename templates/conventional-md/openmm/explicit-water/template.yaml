@@ -93,7 +93,6 @@ profiles:
   profile_ids:
     - explicit-md-ligand-v1
     - explicit-md-peptide-v1
-    - cpu-smoke-v1
   note: >-
     A transitional reference to the provider that currently ships these profiles. The files are
     package resources inside the OpenMM implementation, NOT template-local resources, and PR 1
