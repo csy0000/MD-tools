@@ -1,0 +1,141 @@
+# Conventional MD, explicit water, OpenMM.
+#
+# METADATA ONLY. Validating this file changes no runtime behaviour: execution still goes through
+# `md-openmm` over src/md_templates/openmm/, which is what `implementation.dispatch: legacy-direct`
+# records. PR 1 of the multi-method migration adds the catalog; it does not activate it.
+
+schema_version: 1
+
+template_id: conventional-md/openmm/explicit-water
+display_name: Conventional MD in explicit water (OpenMM)
+summary: >-
+  One free walker in TIP3P-FB water at a fixed Hamiltonian, run in chunks from a hash-checked,
+  transportable prepared bundle. Parameterisation is by declared route: Sage/openff-2.2.0 with
+  AM1-BCC for ligands, ff19SB for peptides.
+
+method:
+  id: conventional-md
+  api_version: 1
+  aliases: [md]
+
+engine:
+  id: openmm
+  api_version: 1
+
+identity:
+  mode: git-commit-plus-template-path
+
+implementation:
+  binding: current-openmm-implementation
+  dispatch: legacy-direct
+  python_namespace: md_templates.openmm
+  cli_command: md-openmm
+  notes:
+    - "Generic template dispatch is NOT active. This descriptor names the implementation that
+       currently provides the method; it does not route to it."
+    - "The implementation is expected to move under src/md_templates/engines/openmm/ in a later
+       migration PR. Nothing was moved in PR 1, so the namespace above is current, not aspirational."
+
+input_routes:
+  - id: smiles
+    description: >-
+      Small-molecule/ligand route. Sage/openff-2.2.0 with AM1-BCC charges. The route is declared,
+      never inferred from the input's contents.
+  - id: pdb
+    description: >-
+      Peptide route. ff19SB with CMAP, from a supplied structure whose declared hash is verified
+      and whose bytes are copied into the bundle.
+
+capabilities:
+  - id: prepare-bundle
+    supported: true
+    description: Build a solvated, equilibrated, self-contained bundle from a declared route.
+  - id: run-production
+    supported: true
+    description: Chunked production MD from a prepared bundle.
+  - id: resume
+    supported: true
+    description: Continue an interrupted run from the committed-generation record.
+  - id: bundle-validate
+    supported: true
+    description: "`md-openmm bundle validate [--deep]`, constructing no Context by default."
+  - id: relocate-check
+    supported: true
+    description: Copy the bundle elsewhere and validate it there, which validating in place cannot do.
+  - id: replica-exchange
+    supported: false
+    description: Not this method. See templates/rest2/openmm/explicit-water.
+
+method_features: []
+
+bundle_schema:
+  readable: [1, 2]
+  writable: [2]
+
+restart:
+  resumable: true
+  authority: committed-generation-record
+  guarantees:
+    - "The committed-generation record is the sole restart authority. Directory listings, glob
+       counts, done markers and log length describe what happened to exist, not what completed."
+    - "An uncommitted tail is quarantined rather than trusted or deleted."
+    - "Append-only logs keep contiguous chunk indices and a single CSV header across invocations."
+    - "A binary checkpoint gives exact same-environment continuation."
+  limitations:
+    - "Binary checkpoints are environment-specific and are never described as portable."
+    - "The serialized-State fallback is physically valid but not bitwise: it does not restore a
+       stochastic integrator's internal stream. Its use is announced and recorded."
+
+profiles:
+  provider: current-openmm-implementation
+  template_local: false
+  python_resource: md_templates.openmm.spec.profiles
+  profile_ids:
+    - explicit-md-ligand-v1
+    - explicit-md-peptide-v1
+    - cpu-smoke-v1
+  note: >-
+    A transitional reference to the provider that currently ships these profiles. The files are
+    package resources inside the OpenMM implementation, NOT template-local resources, and PR 1
+    neither moves nor copies them. Template-local profile migration is deferred to the
+    method-activation PRs.
+
+validation:
+  implementation_status: implemented-and-tested
+  scientific_status: unvalidated
+  open_gates:
+    - "The 2 fs versus 4 fs hydrogen-mass-repartitioning equivalence gate is open."
+    - "No production-length conventional-MD convergence study has been run with this template."
+  limitations:
+    - "Running is not validation. This template executes, relocates and resumes; none of that is
+       evidence about the physics."
+    - "Cross-machine bitwise reproducibility of dynamics is not claimed in any configuration."
+    - "CPU-only in CI. No accelerator is gated."
+  evidence:
+    - id: unit-and-contract-suite
+      description: >-
+        The repository's non-slow suite over the canonical configuration models, bundle contract and
+        run-continuity behaviour.
+      kind: regression
+      scope: general
+      establishes_general_scientific_validation: false
+    - id: cpu-smoke
+      description: >-
+        Picosecond CPU smoke runs proving the pipeline executes end to end. Explicitly prohibited as
+        scientific evidence.
+      kind: cpu-smoke
+      scope: example
+      establishes_general_scientific_validation: false
+    - id: ff19sb-peptide-route-report
+      description: >-
+        The 2026-08-15 ff19SB peptide-route report under reports/explicit_solvent/. Route-specific
+        implementation evidence, not a validation of the method.
+      kind: regression
+      scope: system-specific
+      establishes_general_scientific_validation: false
+
+repository_references:
+  - src/md_templates/openmm
+  - src/md_templates/openmm/spec/profiles
+  - docs/support-matrix.md
+  - docs/configuration.md
