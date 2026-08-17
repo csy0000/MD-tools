@@ -101,10 +101,15 @@ catalog = load_catalog(".")
 resolve_identity(catalog, "rest2/openmm/explicit-water").canonical
 ```
 
-A **dirty checkout has no immutable identity** and this raises rather than quietly resolving to
-HEAD — HEAD describes what was committed, not the files on disk. Branch names, tags, abbreviated
-SHAs, package versions and timestamps are refused outright. Loading and validating the catalog
-imports no OpenMM, OpenFF or RDKit, so it works on a machine that could never run a simulation.
+Resolution **proves** provenance — the commit is never supplied by the caller. In a checkout the tree
+must be clean and the commit is HEAD; outside a checkout only explicitly trusted build provenance is
+accepted. A **dirty checkout has no immutable identity** and this raises rather than quietly resolving
+to HEAD, because HEAD describes what was committed, not the files on disk. Branch names, tags,
+abbreviated SHAs, package versions and timestamps are refused outright, and symlinked paths are
+refused so the commit SHA always identifies the bytes actually parsed.
+
+Loading and validating the catalog imports no OpenMM, OpenFF or RDKit, so it works on a machine that
+could never run a simulation.
 
 ### Run directories, and continuing a run
 

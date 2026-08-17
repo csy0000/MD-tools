@@ -158,11 +158,17 @@ Both the structured fields and the string are kept: the string is what gets quot
 fields are what a consumer compares, so nobody has to parse the string back apart to ask "same
 repository, different commit?".
 
-Resolution order, with exactly one source of the commit:
+**The caller cannot supply the commit.** `resolve_identity` has no `commit_sha` parameter: an
+identity asserts "these bytes are in that commit", and a caller-supplied SHA asserts nothing. Where
+the commit comes from is decided by whether the root is a Git checkout:
 
-1. an explicit `commit_sha=` argument, for callers that already know the commit;
-2. an explicit `TrustedProvenance`, the hook a packaged catalog needs;
-3. the Git checkout at the catalog root, which must be clean.
+1. **in a checkout** — the tree must be clean and the commit is HEAD. A `TrustedProvenance` may also
+   be given, but it must *equal* HEAD; it is a cross-check on build metadata, never an override;
+2. **outside a checkout** — only explicit `TrustedProvenance` is accepted, and absent that this
+   raises rather than inventing an identity.
+
+`build_identity` remains for purely syntactic construction — parsing, formatting, comparison — where
+nothing is being claimed about a working tree.
 
 Refusals, each of them typed:
 
@@ -194,6 +200,24 @@ stubs.
 
 Template identity is **not** part of any scientific or continuity hash in PR 1, and a test asserts
 that no runtime module under `src/md_templates/openmm/` references `md_templates.core` at all.
+
+**Catalog loading refuses symlinks.** `is_file()`, `read_text()` and `exists()` all follow symlinks
+silently, so a committed `template.yaml` *symlink* could point at mutable bytes outside the checkout
+while Git still reported the tree clean — the link itself is unchanged. SHA plus path would then name
+content the commit does not contain, which is the one thing the identity exists to prevent.
+
+`resolve_within_repository()` walks every component below the repository root and refuses any that is
+a symlink — components, not just the final name, because a symlinked *directory* redirects everything
+beneath it just as effectively. It then verifies containment against `realpath` as a second line,
+which also catches a link swapped in between the walk and the read. It guards the descriptor path,
+every `repository_references` entry, and `registry.yaml` itself.
+
+Links that stay inside the repository are refused too. An internal link is representable in the
+commit, so that case is arguably safe; permitting it would mean deciding per link whether the target
+is both inside the tree and covered by the same commit, which is easy to get subtly wrong and buys
+the catalog nothing. The root itself is not component-checked, since a repository legitimately sits
+under a symlinked parent — containment is checked against its resolved form instead, which handles
+that correctly.
 
 ## Compatibility goldens, and how they were generated
 
@@ -255,15 +279,12 @@ OpenMM 8.5.1, pydantic 2.11.10, with the environment's `bin` on `PATH` so AmberT
 $ python -m pytest tests/ -q -m "not slow"
 293 passed, 17 deselected                                                   4.37 s
 
-# after PR 1
+# after PR 1, including the two review fixes
 $ python -m pytest tests/ -q -m "not slow"
-431 passed, 17 deselected                                                   8.72 s
+444 passed, 17 deselected                                                   9.80 s
 
-$ python -m pytest tests/test_template_catalog.py -q
-82 passed                                                                   3.83 s
-
-$ python -m pytest tests/test_template_identity.py -q
-36 passed                                                                   1.21 s
+$ python -m pytest tests/test_template_catalog.py tests/test_template_identity.py -q
+131 passed                                                                  7.03 s
 
 $ python -m pytest tests/test_compat_goldens.py -q
 20 passed                                                                   1.91 s
@@ -285,7 +306,7 @@ above has `PATH` set and passes.
 # the repository's supported full gate, against the INSTALLED WHEEL with no checkout on the path
 $ env -u PYTHONPATH bash scripts/ci/fast_checks.sh
 wheel built and inspected, installed, public commands run from outside the checkout,
-all 5 profiles validated, YAML/JSON hashes identical, 431 passed / 17 deselected
+all 5 profiles validated, YAML/JSON hashes identical, 444 passed / 17 deselected
 fast checks: PASSED
 
 $ env -u PYTHONPATH bash scripts/ci/integration_cpu.sh
@@ -302,14 +323,52 @@ path, and it refuses to start if `md_templates` resolves into the repository. It
 is what shows the catalog changed no runtime behaviour — the same prepare, relocate, run, resume and
 offline-validate sequence produces the same result it did before.
 
-The 138 new tests are 82 catalog + 36 identity + 20 compatibility. No existing test was deleted,
-skipped, weakened or rewritten; the non-slow count moves by exactly the number added (293 → 431).
+The 151 new tests are 87 catalog + 44 identity + 20 compatibility. No existing test was deleted,
+skipped, weakened or rewritten; the non-slow count moves by exactly the number added (293 → 444).
+
+The slow gate and `integration_cpu.sh` were run before the review fixes and not rerun after. Both
+exercise `md_templates.openmm` only — the review fixes touch `md_templates.core` exclusively, which
+no runtime module imports, and the 0-line runtime diff below still holds. The four gates the review
+asked to rerun were all rerun.
 
 One descriptor defect was found by a test rather than by reading: the conventional-MD template listed
 `cpu-smoke-v1` among its provided profiles, and that profile is `method: rest2`. Fixed in `bd4fe43`.
 The cross-check lives in a test, not in the model — the catalog package may not import the OpenMM
 implementation, so a descriptor cannot validate its own profile references against the shipped files.
 That pairing is what keeps the dependency boundary from becoming an unchecked claim.
+
+## Review round 1: two identity-integrity defects, both real
+
+Review on PR #1 requested changes on two counts. Both were genuine holes in the property the whole
+design exists to provide — that an identity names bytes that reproduce — and both are fixed.
+
+**1. The explicit-SHA shortcut bypassed provenance.** `resolve_identity(..., commit_sha=...)` skipped
+the dirty-tree check *and* any comparison with HEAD, so a dirty checkout could pass its own HEAD and
+receive a resolved identity, and a clean checkout could be stamped with any unrelated 40-hex string.
+The parameter is removed rather than documented against: an identity asserts a relationship between
+bytes and a commit, and a caller-supplied SHA asserts nothing. Resolution now proves provenance — in
+a checkout the tree must be clean and the commit is HEAD, with trusted provenance permitted only as
+an equality cross-check; outside a checkout only trusted build provenance is accepted.
+`build_identity` keeps the syntactic path, with a docstring saying plainly what it does not check.
+
+**2. Catalog loading followed symlinks.** Described above under the identity algorithm. Fixed with
+`resolve_within_repository()`, applied to the descriptor path, every `repository_references` entry,
+and `registry.yaml` itself.
+
+**Nine regression tests, verified to fail against the pre-fix code.** They were run against a
+worktree at `b7f25c1`, the commit under review: 9 failed, 122 passed. Against the fix: 131 passed.
+A regression test that has never been seen to fail is a hope, not a test.
+
+* identity: the `commit_sha` parameter is gone from the signature; dirty checkout naming its own
+  HEAD; dirty checkout with matching trusted provenance; clean checkout with a mismatched trusted
+  SHA; clean checkout with an agreeing one; trusted provenance outside Git.
+* symlinks: external descriptor symlink (which still *parses*, so only the symlink rule catches it);
+  symlinked directory component; external `repository_references` symlink; an internal symlink; a
+  symlinked `registry.yaml`; and a check that the shipped catalog contains no symlinked path.
+
+The reviewer's remaining observation is accepted as stated: the PR head carries **zero commit-status
+contexts**, no GitHub Actions run has been observed, and all evidence in this journal is labelled
+local. Whether Actions is enabled for the repository should be settled before merge.
 
 ## Checks not run, and why
 
@@ -377,6 +436,9 @@ No other deviation.
   guarantees are reviewed text, and drift in them would not fail a test.
 * **`repository_references` are checked for existence, not for meaning.** A reference can point at a
   file that has stopped being relevant.
+* **Symlinks are refused, not resolved.** A repository that legitimately wanted a symlinked template
+  directory could not use this catalog. No such case exists here, and the stricter rule is the safer
+  default.
 * **Dirtiness is whole-tree.** Any uncommitted or untracked path makes the checkout dirty, including
   one unrelated to the template being resolved. That is deliberately conservative — narrowing it to
   "paths this template depends on" would require deciding what a template depends on, which is

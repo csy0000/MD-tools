@@ -24,9 +24,13 @@ records `implementation.dispatch: legacy-direct` to say so in the file itself.
   exact normalised template path)`, canonically
   `https://github.com/csy0000/MD-templates@<sha>#templates/<method>/<engine>/<variant>/template.yaml`.
   Branch names, tags, abbreviated SHAs, package versions, template semantic versions and timestamps
-  are all refused. A **dirty checkout raises** rather than resolving to HEAD; a non-Git directory
-  with no explicitly supplied trusted SHA raises too. Resolution reads local Git metadata only and
-  makes no network request.
+  are all refused. Resolution **proves** provenance: the commit is never supplied by the caller, a
+  **dirty checkout raises** rather than resolving to HEAD, trusted provenance must equal HEAD inside
+  a checkout, and outside one only explicitly trusted build provenance is accepted. Resolution reads
+  local Git metadata only and makes no network request.
+* Catalog loading **refuses symlinked paths** — descriptor, `repository_references` and
+  `registry.yaml` alike. A symlink can point at mutable bytes outside the checkout while Git reports
+  the tree clean, which would let a commit SHA name content that commit does not contain.
 * Compatibility goldens under `tests/goldens/`, captured before any structural edit and regenerated
   only by the explicit `scripts/capture_goldens.py`.
 
