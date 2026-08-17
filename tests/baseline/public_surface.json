@@ -1254,10 +1254,6 @@
         "kind": "callable",
         "origin": "md_templates.core.packaged"
       },
-      "identity": {
-        "kind": "module",
-        "origin": "md_templates.core.identity"
-      },
       "inspect_provenance": {
         "kind": "callable",
         "origin": "md_templates.core.identity"
@@ -1282,10 +1278,6 @@
         "kind": "callable",
         "origin": "md_templates.core.paths"
       },
-      "packaged": {
-        "kind": "module",
-        "origin": "md_templates.core.packaged"
-      },
       "packaged_catalog_available": {
         "kind": "callable",
         "origin": "md_templates.core.packaged"
@@ -1298,14 +1290,6 @@
         "kind": "callable",
         "origin": "md_templates.core.template"
       },
-      "paths": {
-        "kind": "module",
-        "origin": "md_templates.core.paths"
-      },
-      "registry": {
-        "kind": "module",
-        "origin": "md_templates.core.registry"
-      },
       "resolve_identity": {
         "kind": "callable",
         "origin": "md_templates.core.identity"
@@ -1313,14 +1297,6 @@
       "resolve_packaged_identity": {
         "kind": "callable",
         "origin": "md_templates.core.packaged"
-      },
-      "resources": {
-        "kind": "module",
-        "origin": "md_templates.core.resources"
-      },
-      "template": {
-        "kind": "module",
-        "origin": "md_templates.core.template"
       },
       "verify_packaged_catalog": {
         "kind": "callable",
@@ -1372,25 +1348,13 @@
         "kind": "callable",
         "origin": "md_templates.openmm.system"
       },
-      "bundle": {
-        "kind": "module",
-        "origin": "md_templates.openmm.bundle"
-      },
       "classify_omega_bonds": {
         "kind": "callable",
         "origin": "md_templates.openmm.system"
       },
-      "cli": {
-        "kind": "module",
-        "origin": "md_templates.openmm.cli"
-      },
       "completed_prefix": {
         "kind": "callable",
         "origin": "md_templates.openmm.md"
-      },
-      "config": {
-        "kind": "module",
-        "origin": "md_templates.openmm.config"
       },
       "config_hash": {
         "kind": "callable",
@@ -1400,14 +1364,6 @@
         "kind": "callable",
         "origin": "md_templates.openmm.config"
       },
-      "envcheck": {
-        "kind": "module",
-        "origin": "md_templates.openmm.envcheck"
-      },
-      "equilibration": {
-        "kind": "module",
-        "origin": "md_templates.openmm.equilibration"
-      },
       "exchange_pairs": {
         "kind": "callable",
         "origin": "md_templates.openmm.rest2"
@@ -1415,10 +1371,6 @@
       "exchange_rounds": {
         "kind": "callable",
         "origin": "md_templates.openmm.config"
-      },
-      "fingerprint": {
-        "kind": "module",
-        "origin": "md_templates.openmm.fingerprint"
       },
       "initial_structure": {
         "kind": "callable",
@@ -1440,10 +1392,6 @@
         "kind": "callable",
         "origin": "md_templates.openmm.equilibration"
       },
-      "md": {
-        "kind": "module",
-        "origin": "md_templates.openmm.md"
-      },
       "minimize_equilibrate": {
         "kind": "callable",
         "origin": "md_templates.openmm.equilibration"
@@ -1455,10 +1403,6 @@
       "protonate": {
         "kind": "callable",
         "origin": "md_templates.openmm.system"
-      },
-      "provenance": {
-        "kind": "module",
-        "origin": "md_templates.openmm.provenance"
       },
       "repartition_hydrogen_mass": {
         "kind": "callable",
@@ -1476,10 +1420,6 @@
         "kind": "callable",
         "origin": "md_templates.openmm.system"
       },
-      "rest2": {
-        "kind": "module",
-        "origin": "md_templates.openmm.rest2"
-      },
       "rest2_ladder": {
         "kind": "callable",
         "origin": "md_templates.openmm.config"
@@ -1492,29 +1432,9 @@
         "kind": "callable",
         "origin": "md_templates.openmm.rest2"
       },
-      "runner": {
-        "kind": "module",
-        "origin": "md_templates.openmm.runner"
-      },
-      "runstate": {
-        "kind": "module",
-        "origin": "md_templates.openmm.runstate"
-      },
-      "schemas": {
-        "kind": "module",
-        "origin": "md_templates.openmm.schemas"
-      },
       "solvate": {
         "kind": "callable",
         "origin": "md_templates.openmm.solvation"
-      },
-      "solvation": {
-        "kind": "module",
-        "origin": "md_templates.openmm.solvation"
-      },
-      "system": {
-        "kind": "module",
-        "origin": "md_templates.openmm.system"
       },
       "write_manifest": {
         "kind": "callable",

@@ -85,6 +85,13 @@ def _module_surface(module_name: str) -> dict:
         value = getattr(module, name)
         origin = getattr(value, "__module__", None)
         if inspect.ismodule(value):
+            # A package gains an attribute for every submodule ANY code has imported, so `dir()`
+            # here depends on what else ran first -- in a full pytest session it is much larger than
+            # in a fresh interpreter. Submodules are inventoried separately and deterministically by
+            # `_packaged_modules()`; skipping them keeps this section a statement about the API
+            # rather than about import order.
+            if value.__name__.startswith(module_name + "."):
+                continue
             kind, origin = "module", value.__name__
         elif inspect.isclass(value):
             kind = "class"
