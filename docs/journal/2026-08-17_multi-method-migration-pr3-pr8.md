@@ -463,3 +463,80 @@ Worth recording because each is the system refusing something it should refuse:
 * `report:` instead of `reporting:` — refused as an unknown key rather than silently ignored.
 
 All three are the strict-configuration rules working. The gate had to ask for something coherent.
+
+---
+
+## Phase 8 — partially completed
+
+Done, and gated:
+
+* **`docs/architecture.md`** — the three layers, the import boundary and why it is enforced by
+  parsing rather than grepping, the aliasing decision and its cost, and what deliberately is not
+  here.
+* **`docs/support-matrix.md`** — the four-level table the campaign asks for, separating
+  implemented+CI-tested, implemented+contract-tested-only, system-specific pilot-supported, and
+  scientifically unvalidated. CPU smoke is named as engineering evidence.
+* **GPU/platform contract**, 18 tests: properties passed verbatim, both routes parsing to the same
+  namespace, precision carried through the configuration to the OpenMM property dict, no injected
+  defaults, REST2 still one process and one device, explicit failure with no CPU fallback, and
+  `CUDA_DEVICE_ORDER=PCI_BUS_ID` still pinned. One test asserts the support matrix keeps saying
+  real-GPU runs were not performed.
+* **CI**: `integration-cpu` now runs the generic-route gate beside the existing ones; `pyflakes` was
+  added to the dev extra and the CI environment so the undefined-name gate stops being skipped
+  there — it was skipping silently, which is how it would have missed the very defect it was
+  written for.
+
+**Not done: the test reorganisation into core / engine / template / compatibility / packaging /
+integration directories.** The tests exist and pass; they are not filed into the new layout. This is
+churn with a real chance of losing coverage in the move, and the campaign's own rule is that a move
+must be accompanied by a mapping — `tests/baseline/module_map.json` carries the planned destinations
+and every entry is still marked `planned`, which is the honest state.
+
+## Phase 7 — not started
+
+Artifact dispatch metadata, identity persistence and the full interruption matrix were **not
+implemented**. Nothing was half-built: no artifact format changed, and the existing v1/v2 read and
+resume behaviour is exactly as it was at the campaign base.
+
+This is the riskiest phase in the campaign — it writes new fields into artifacts whose formats are
+frozen by invariant, and it touches the committed-generation restart path that every other guarantee
+rests on. Attempting it at the end of a long session, with each verification cycle costing a
+four-minute slow gate, is how a migration acquires the defect nobody finds until a real run needs to
+resume. It is left for its own PR with its own gates.
+
+What already holds, and is tested, is the invariant Phase 7 must not break: **no template identity
+or catalog metadata reaches any bundle, run manifest, or scientific or continuity hash.** A test
+parses every runtime module for imports of the catalog and identity modules, and the frozen
+configuration projections are asserted to contain no template field.
+
+## Campaign status
+
+| phase | state | gate |
+|---|---|---|
+| 0 — characterize and freeze | complete | PASSED |
+| 3 — engine-neutral core | complete | PASSED |
+| 4 — reusable OpenMM provider | complete | PASSED |
+| 5 — activate conventional MD | complete | PASSED |
+| 6 — activate REST2 | complete | PASSED |
+| 7 — artifact dispatch, identity, restart | **not started** | — |
+| 8 — tests, docs, evidence, CI | **partial**: docs, support matrix, GPU contract and CI done; test reorganisation not done | partial |
+
+### Invariants, at the end
+
+* the seven goldens are **byte-identical** to the campaign base — verified by SHA-256, not by
+  recomputation;
+* no force field, integrator, thermodynamic setting, seed, chunk rule, omega semantic, REST2 ladder,
+  restraint, timestep or HMR setting changed. The profile files moved; their bytes did not;
+* v1 and v2 bundles remain readable and committed runs resumable — the slow gate is the same 15
+  tests, passing in the same time as at the base;
+* core imports no engine at any level, proven by making the engines unimportable;
+* identity is still exactly full Git SHA plus logical template path;
+* one authoritative source for every profile, catalog asset and engine implementation;
+* general conventional MD and REST2 remain **scientifically unvalidated**; RGD remains
+  system-specific pilot-supported; CPU smoke is engineering evidence only.
+
+### Remote CI
+
+Not observed for this branch. The token available here lacks Actions and Checks read permission
+(HTTP 403 on `actions/runs`, `check-runs` and `status`), so every result in this journal is local
+evidence produced and checked on this machine.
