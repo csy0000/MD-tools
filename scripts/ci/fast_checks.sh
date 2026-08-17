@@ -34,6 +34,12 @@ required = {
     "peptide structure":   "manifests/systems/ace_ala_nme.pdb",
     "spec package":        "md_templates/openmm/spec/models.py",
     "bundle contract":     "md_templates/openmm/bundlev2.py",
+    # A wheel whose catalog is missing ships a packaged loader that cannot resolve anything, so the
+    # catalog resources and BOTH metadata records are checked rather than assumed.
+    "packaged registry":   "md_templates/core/_packaged/registry.yaml",
+    "packaged templates":  "md_templates/core/_packaged/templates/",
+    "resource manifest":   "md_templates/core/_packaged/resource_manifest.json",
+    "build provenance":    "md_templates/core/_packaged/build_provenance.json",
 }
 missing = []
 for label, pattern in required.items():
@@ -56,6 +62,11 @@ md-openmm --help >/dev/null
 md-openmm config list-profiles >/dev/null
 md-openmm bundle --help >/dev/null
 echo "  ok: commands work with no checkout on the path"
+
+step "4b. the packaged catalog, from outside the checkout"
+# Still in WORKDIR: this exercises the INSTALLED distribution. The script sets no sys.path of its
+# own, blocks sockets before importing, and refuses if md_templates resolves into the checkout.
+python "$REPO_ROOT/scripts/ci/check_packaged_catalog.py"
 
 step "5. validate every shipped profile"
 python - <<'PY'
