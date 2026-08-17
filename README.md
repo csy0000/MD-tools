@@ -45,6 +45,17 @@ md-openmm rest2           --bundle ./runs/<TIMESTAMP>__cyclo_rgdfv__bundle__<HAS
 md-openmm md              --bundle ./runs/<BUNDLE> --out-root ./runs --platform CUDA --device 0
 ```
 
+### Bundles, portability and CI
+
+A prepared bundle is self-contained: `md-openmm bundle validate|inspect|relocate-check`. What is
+and is not guaranteed across machines is in **[docs/support-matrix.md](docs/support-matrix.md)**;
+schema changes are in **[CHANGELOG.md](CHANGELOG.md)**.
+
+```bash
+md-openmm bundle validate BUNDLE --deep
+md-openmm bundle relocate-check BUNDLE      # copies elsewhere and validates there
+```
+
 ### Configuration
 
 Simulations are described by one canonical model that YAML and JSON both compile into, with
