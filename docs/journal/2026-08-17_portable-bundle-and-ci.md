@@ -126,11 +126,21 @@ Pushing works because the remote is SSH (`git@github.com:...`); the Actions REST
 and none is available here. So the workflows' status on GitHub is **unknown to me**, and nothing in
 this repository should be read as evidence that they passed.
 
+**The environment risk was measured rather than left as a worry.** A cold dry-run solve of
+`environment-ci.yml` on this machine: **exit 0, 419 packages, 711 s (11 min)**, resolving Python
+3.11.15, OpenMM 8.5.1, pydantic 2.11.10, RDKit 2025.03.6 and AmberTools 24.8 -- the same versions
+the gates above were run against, and without the CUDA pin. Against the 45-minute `fast` and
+90-minute `integration-cpu` timeouts that leaves ample margin, and `cache-environment: true` makes
+it a first-run cost. The 11 minutes is the solve alone; a cold runner also downloads roughly 4 GB,
+so the first run costs more than later ones. No trimming of the CI environment is warranted on this
+evidence.
+
 What someone with access should check, in order: that Actions is enabled for the repository at all;
-that `fast` and `integration-cpu` were triggered by the push to `openmm`; and that
-`integration-cpu` completes within its 90-minute timeout, since micromamba must solve the full
-environment on a cold cache and that step is the most likely first failure. If they fail for
-environment reasons rather than code reasons, `environment-ci.yml` is the file to adjust.
+that `fast` and `integration-cpu` were triggered by the push to `openmm`; and whether the two third-party actions
+(`actions/checkout@v4`, `mamba-org/setup-micromamba@v2`) resolve on the runner. Those are the only
+failure modes the local evidence cannot cover. If a job fails for environment rather than code
+reasons, `environment-ci.yml` is the file to adjust -- though the solve measurement above says it
+should not need to be.
 
 Until then the correct description is **configured and locally reproduced, awaiting remote
 observation.**
