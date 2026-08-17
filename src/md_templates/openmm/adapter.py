@@ -1,4 +1,13 @@
-"""The single bridge from the canonical model into the runtime configuration.
+"""Canonical spec -> the OpenMM runtime configuration dictionary.
+
+ENGINE CODE, and it belongs here rather than in `md_templates.core.config`. Phase 3 moved the
+canonical model into core because it is genuinely engine-neutral; this adapter is the opposite --
+it exists to translate that model into the shape one specific engine's runtime expects, and it
+reads that engine's `DEFAULTS`. Leaving it in core made core import the engine, which the Phase 3
+slow gate caught immediately.
+
+Reachable as `md_templates.openmm.spec.adapter` for compatibility.
+The single bridge from the canonical model into the runtime configuration.
 
 There is one configuration engine. The canonical `SimulationSpec` is the source of truth; this
 module projects it into the flat dictionary the runners already consume, and the legacy
@@ -18,7 +27,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from .models import SimulationSpec
+from ..core.config.models import SimulationSpec
 
 __all__ = ["spec_to_runtime_cfg"]
 
@@ -30,7 +39,7 @@ def spec_to_runtime_cfg(spec: SimulationSpec, *, base: dict | None = None) -> di
     equilibration staging detail and reporter plumbing. Every scientific value that the model does
     carry overwrites it, so the model wins wherever the two overlap.
     """
-    from ..config import DEFAULTS
+    from .config import DEFAULTS
 
     cfg = copy.deepcopy(base if base is not None else DEFAULTS)
 

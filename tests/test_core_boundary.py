@@ -155,7 +155,10 @@ def test_the_legacy_and_core_modules_are_the_same_objects_not_copies():
     import md_templates.openmm.runstate as legacy_runstate
     import md_templates.openmm.spec as legacy_spec
 
-    assert legacy_spec is core_config
+    # `spec` is a compatibility PACKAGE rather than an alias, because `adapter` stayed with the
+    # engine -- see its docstring. Its engine-neutral members are still the same objects.
+    assert legacy_spec.resolve is core_config.resolve
+    assert legacy_spec.canonical is core_config.canonical
     assert legacy_runstate is core_persistence
     assert legacy_bundle is core_bundle
     assert legacy_fingerprint is core_fingerprint
@@ -187,3 +190,64 @@ def test_profiles_resolve_from_their_new_home_with_unchanged_identity():
                                 "explicit-rest2-ligand-v1", "explicit-rest2-peptide-v1"]
     assert resolve.PROFILE_DIR.parent.name == "config"
     assert resolve.select_profile("smiles", "rest2")["profile_id"] == "explicit-rest2-ligand-v1"
+
+
+def test_no_core_module_imports_the_engine_package_at_any_level():
+    """Including inside functions -- this is the check that would have caught the adapter.
+
+    `core.config.adapter` translated the canonical model into the OpenMM runtime dictionary and read
+    that engine's `DEFAULTS` through a deferred import. Deferred, so the import-time boundary test
+    passed; it still made core depend on an engine, and only a slow end-to-end run noticed. A
+    dependency-direction check is cheap and does not care whether the import is deferred.
+    """
+    import ast
+
+    offenders = []
+    for path in sorted((REPO_ROOT / "src" / "md_templates" / "core").rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.ImportFrom):
+                if node.module and "md_templates.openmm" in node.module:
+                    offenders.append(f"{path.name}: from {node.module}")
+                # a relative import that climbs out of `core` reaches a sibling package
+                if node.level and node.level >= 2 and path.parent.name == "core":
+                    offenders.append(f"{path.name}: relative import above core ({node.level} dots)")
+                if node.level and node.level >= 3 and path.parent.parent.name == "core":
+                    offenders.append(f"{path.name}: relative import above core ({node.level} dots)")
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if "md_templates.openmm" in alias.name:
+                        offenders.append(f"{path.name}: import {alias.name}")
+    assert offenders == [], offenders
+
+
+def test_the_runtime_adapter_translates_a_resolved_spec():
+    """Fast coverage for the path that only an end-to-end prepare exercised before.
+
+    `spec_to_runtime_cfg` is the seam between the canonical model and the engine's runtime
+    dictionary. Nothing in the non-slow suite called it, so a broken import there survived every
+    fast gate and surfaced four minutes into a slow one.
+    """
+    from md_templates.core.config import resolve
+    from md_templates.openmm.adapter import spec_to_runtime_cfg
+
+    for name, document in sorted(CONFIGURATIONS.items()):
+        resolved = resolve.resolve_spec(json.loads(json.dumps(document)))
+        cfg = spec_to_runtime_cfg(resolved["spec"])
+        assert {"forcefield", "integrator", "equilibration", "production", "_canonical"} <= set(cfg), name
+        # the adapter records identity, route, method and the resolved seeds -- the fields the
+        # runtime needs to know which canonical document it is executing
+        assert cfg["_canonical"]["route"] == document["system"]["route"], name
+        assert cfg["_canonical"]["method"] == document["protocol"]["production"]["method"], name
+        assert set(cfg["_canonical"]["stage_seeds"]) == {"structure", "equilibration", "md", "rest2"}, name
+        # and the method's own block is populated, under the runtime's historical key
+        block = "remd" if cfg["_canonical"]["method"] == "rest2" else "md"
+        assert cfg["production"][block], (name, block)
+        assert {"platform", "precision", "device_index"} <= set(cfg["production"]), name
+
+
+def test_the_legacy_adapter_path_is_the_same_object():
+    from md_templates.openmm import adapter as engine_adapter
+    from md_templates.openmm.spec import adapter as legacy_adapter
+
+    assert legacy_adapter is engine_adapter

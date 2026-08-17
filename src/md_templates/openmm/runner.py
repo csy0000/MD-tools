@@ -420,7 +420,7 @@ def launch_rest2(
         canonical_run = resolve_canonical_run(bundle_dir, "rest2", config=config,
                                               overrides=set_overrides)
     if canonical_run is not None:
-        from ..core.config.adapter import spec_to_runtime_cfg
+        from .adapter import spec_to_runtime_cfg
 
         cfg = spec_to_runtime_cfg(canonical_run["spec"])
         cfg["production"]["platform"] = platform
@@ -600,7 +600,7 @@ def launch_md(
         canonical_run = resolve_canonical_run(bundle_dir, "md", config=config,
                                               overrides=set_overrides)
     if canonical_run is not None:
-        from ..core.config.adapter import spec_to_runtime_cfg
+        from .adapter import spec_to_runtime_cfg
 
         cfg = spec_to_runtime_cfg(canonical_run["spec"])
         cfg["production"]["platform"] = platform

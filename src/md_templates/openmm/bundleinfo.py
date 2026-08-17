@@ -16,7 +16,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-from ..core.bundle import BundleContractError, normalise_relative, sha256_file  # noqa: F401
+from ..core.bundle import (  # noqa: F401
+    BUNDLE_SCHEMA_VERSION,
+    BundleContractError,
+    normalise_relative,
+    sha256_file,
+)
 
 __all__ = ["topology_counts", "forcefield_provenance"]
 

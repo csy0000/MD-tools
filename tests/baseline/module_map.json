@@ -50,10 +50,10 @@
       "status": "unchanged"
     },
     "md_templates.openmm.spec": {
-      "destination": "md_templates.core.config",
+      "destination": "md_templates.openmm.spec",
       "phase": 3,
-      "status": "moved",
-      "compat_shim": true
+      "status": "unchanged",
+      "note": "a compatibility PACKAGE, not an alias. Its engine-neutral submodules are aliases for md_templates.core.config.*; `adapter` stayed with the engine, and aliasing the package itself would force core.config to carry it."
     },
     "md_templates.openmm.spec.units": {
       "destination": "md_templates.core.config.units",
@@ -87,12 +87,6 @@
     },
     "md_templates.openmm.spec.migrate": {
       "destination": "md_templates.core.config.migrate",
-      "phase": 3,
-      "status": "moved",
-      "compat_shim": true
-    },
-    "md_templates.openmm.spec.adapter": {
-      "destination": "md_templates.core.config.adapter",
       "phase": 3,
       "status": "moved",
       "compat_shim": true
@@ -262,9 +256,10 @@
       "status": "unchanged"
     },
     "md_templates.core.config.adapter": {
-      "destination": "md_templates.core.config.adapter",
+      "destination": "md_templates.openmm.adapter",
       "phase": 3,
-      "status": "unchanged"
+      "status": "moved",
+      "note": "engine code: translates the canonical model into this engine's runtime cfg"
     },
     "md_templates.core.persistence": {
       "destination": "md_templates.core.persistence",
@@ -280,6 +275,12 @@
       "destination": "md_templates.core.fingerprint",
       "phase": 3,
       "status": "unchanged"
+    },
+    "md_templates.openmm.adapter": {
+      "destination": "md_templates.openmm.adapter",
+      "phase": 3,
+      "status": "unchanged",
+      "note": "reachable as md_templates.openmm.spec.adapter"
     }
   },
   "tests": {

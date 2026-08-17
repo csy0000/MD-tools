@@ -30,10 +30,14 @@ import posixpath
 from pathlib import Path
 from typing import Any, Optional
 
+#: `topology_counts` and `forcefield_provenance` are deliberately absent: they need a built OpenMM
+#: system and live in `md_templates.openmm.bundleinfo`. The legacy `md_templates.openmm.bundlev2`
+#: path attaches them onto this module at import time, so the historical API is unbroken, but core
+#: must not advertise names it does not define -- `from ... import *` would fail on them.
 __all__ = [
     "BUNDLE_SCHEMA_VERSION", "CHECKSUMS_FILE", "ORIGINAL_INPUTS_DIR", "REQUIRED_ROLES",
     "BundleContractError", "normalise_relative", "sha256_file", "write_checksums",
-    "verify_checksums", "topology_counts", "forcefield_provenance", "environment_provenance",
+    "verify_checksums", "environment_provenance",
 ]
 
 #: Independent of every other schema version in the package.

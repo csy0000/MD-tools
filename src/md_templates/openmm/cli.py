@@ -418,7 +418,7 @@ def _prepare_from_canonical(args) -> int:
     migrated into this model first. There is one configuration engine, not two.
     """
     canonical, _, _, resolve = _spec_modules()
-    from ..core.config.adapter import spec_to_runtime_cfg
+    from .adapter import spec_to_runtime_cfg
 
     result = resolve.resolve_spec(resolve.load_document(Path(args.config)),
                                   overrides=getattr(args, "set", None),
