@@ -92,4 +92,153 @@ $ python -m pytest tests/test_phase0_characterization.py -q
 16 passed                                                                   1.89 s
 ```
 
-PHASE0_GATES_PLACEHOLDER
+```console
+$ env -u PYTHONPATH bash scripts/ci/fast_checks.sh        # strict, installed wheel, clean tree
+543 passed, 17 deselected; identities resolved to 2f0c25d0...
+fast checks: PASSED                                                        exit 0
+
+$ python -m pytest tests/test_crash_recovery.py tests/test_bundle_portability.py -q -m slow
+15 passed, 21 deselected                                                  273.08 s
+```
+
+One defect, found by the gate rather than by review: the surface capture used `dir()` on a package,
+which gains an attribute for every submodule *anything* has imported. The baseline was recorded in a
+fresh interpreter and checked inside a full pytest session, where half the tree is already imported,
+so the numbers disagreed — 96 names against 76 that are actually API. Fixed in the capture, not the
+assertion: submodules are inventoried separately and deterministically, so this section states the
+API rather than import order.
+
+---
+
+## Phase 3 — engine-neutral core
+
+**What moved.** The Phase 0 survey found **zero** top-level heavy imports in `spec/`, so this phase
+is a move, not a rewrite.
+
+| from | to | what it is |
+|---|---|---|
+| `openmm/spec/*` (7 modules + 5 profiles) | `core/config/*` | typed models, units, resolution, precedence and source attribution, canonical serialisation, the five hash projections |
+| `openmm/runstate.py` | `core/persistence.py` | atomic writes, generation layout, committed-generation bookkeeping, quarantine |
+| `openmm/bundlev2.py` | `core/bundle.py` | normalised relative paths, checksum domain, environment provenance |
+| `openmm/fingerprint.py` | `core/fingerprint.py` | the projection, unchanged |
+| *(extracted)* | `core/hashing.py` | `canonical_json` / `sha256_text` / `sha256_file` |
+
+**Two splits, drawn where the engine actually starts.** `save_restart`/`load_restart` take a running
+`Simulation` and serialize OpenMM objects, so they became `openmm/restart.py`; `topology_counts` and
+`forcefield_provenance` need a built `System` — only the toolkit can say that a virtual site is not
+a topology atom, or where a force-field XML resolved from — so they became `openmm/bundleinfo.py`.
+Both are re-attached to the legacy module objects, so `runstate.save_restart(...)` and
+`bundlev2.topology_counts(...)` still work from the paths every existing caller uses.
+
+**`schemas.py` deliberately did not move**, against the initial plan. The shipped system and
+experiment manifests are OpenMM assets, and core reaching into an engine's data directory would
+invert the dependency the phase exists to establish. Only its hashing helpers were genuinely
+neutral; they now have exactly one definition, which the manifest reader re-exports. Recorded in
+`module_map.json` with the reason, rather than quietly left as planned.
+
+**Compatibility decision: alias, do not re-export.** `md_templates.openmm.runstate` **is**
+`md_templates.core.persistence` — the same object in `sys.modules`, not a module that copies names
+out of it. A copying shim would let `monkeypatch.setattr("md_templates.openmm.runstate.f", ...)`
+patch a shadow while the code under test reads the original: the test passes and tests nothing.
+Shared module state and private names keep working for the same reason. A test asserts identity
+(`is`), not merely importability.
+
+The cost is real and is recorded rather than hidden: `__module__` on the moved objects now reports
+the new location, so the full surface baseline was regenerated. The *names* are pinned separately in
+`public_names_phase0.json`, which is never regenerated — a name that disappears is a compatibility
+break, while an origin that moves is the architectural change this campaign exists to make. Nothing
+was lost: 0 names, 0 commands, 0 exceptions missing from the Phase 0 pin.
+
+**Catalog references updated** because the profiles travelled with their resolver:
+`python_resource` and one `repository_references` entry in both descriptors, plus the `package-data`
+key in `pyproject.toml`. The catalog's own reference check caught this immediately — the build and
+every catalog test failed until the descriptors matched the tree, which is the guard working.
+
+### Tests, and what each proves
+
+Two tests changed because the move made their question obsolete, both rewritten to state the
+invariant more precisely rather than to pass:
+
+* the catalog's engine-boundary test was a substring scan for `"from openmm"`, which flags every
+  legitimate deferred import. It now parses the AST and looks only at **column-zero** imports across
+  the whole core tree — the actual invariant is about import *time*.
+* `test_identity_is_not_written_into_bundles_or_runs` asserted the runtime imports no `core` module
+  at all. After Phase 3 that is false by design. Rescoped to what actually matters: the runtime must
+  not reach the **catalog and identity** modules, so template metadata cannot enter a bundle, a
+  manifest or a hash. A complement test asserts the runtime *does* use core, so the first cannot
+  pass by the runtime importing nothing.
+
+New in `tests/test_core_boundary.py` (26 tests):
+
+* **import boundary, proven by removal.** A subprocess installs a `sys.meta_path` blocker that makes
+  `openmm`, `openff`, `rdkit`, `mdtraj`, `parmed`, `openmmtools`, `numpy`, `scipy` and `pandas`
+  *unimportable*, then imports core and resolves a real configuration, loads the catalog and reads
+  Git provenance. A source scan asks "does it mention OpenMM"; this asks the question that matters.
+  One test asserts the blocker itself fails on `import openmm`, because a guard that cannot fail
+  proves nothing. Every core module is additionally imported alone under the blocker.
+* **differential equivalence.** All four representative configurations resolved through the legacy
+  path and the core path, comparing all five projection hashes, the profile record, the full source
+  attribution map, and the canonical bytes. Plus a test that the two paths are the *same objects*,
+  without which the differential test would be comparing a thing with itself.
+
+### Gate
+
+**PASSED.**
+
+```console
+$ python -m pytest tests/ -q -m "not slow"
+574 passed, 17 deselected                                                  45.13 s
+
+$ python -m pytest tests/test_core_boundary.py -q
+26 passed                                                                   4.64 s
+
+$ python scripts/capture_goldens.py --check
+7/7 ok, exit 0                       (and byte-identical: the SHA-256 pins still match)
+
+$ env -u PYTHONPATH bash scripts/ci/fast_checks.sh        # strict, installed wheel
+574 passed, 17 deselected; both identities on 566cbf17...
+fast checks: PASSED                                                        exit 0
+```
+
+```console
+$ python -m pytest tests/test_crash_recovery.py tests/test_bundle_portability.py -q -m slow
+15 passed, 21 deselected                                                  273.64 s
+```
+
+Identical to the Phase 0 baseline: same 15 tests, same 273 s, unchanged v1/v2 reads and resume.
+
+### Three defects, all found by the gates, none by review
+
+The slow gate failed three times before it passed. That is the phase working as designed, and each
+failure produced a fast test so the class cannot cost four minutes again.
+
+**1. The adapter reached back into the engine.** `core/config/adapter.py` imported `DEFAULTS` from
+the OpenMM package. It translates the canonical model into *one* engine's runtime dictionary, so it
+was never core code — moved to `openmm/adapter.py`, still reachable as
+`md_templates.openmm.spec.adapter`. This is also what settled the design of the `spec` compatibility
+package: aliasing `spec` onto `core.config` would force `core.config` to carry `adapter` so the old
+import kept working, reinstating the exact dependency the phase removed. A package of aliased
+members keeps both promises.
+
+**2. Two call sites still imported the old adapter path.** Deferred imports inside functions, so no
+test touched them until an end-to-end prepare ran.
+
+**3. A moved function used a name that was no longer in scope.** `forcefield_provenance` kept
+referring to `BUNDLE_SCHEMA_VERSION` after moving to the engine — a `NameError` that fires only when
+the function runs.
+
+**The guards added in response**, `tests/test_import_integrity.py`, 44 tests in 1.7 s:
+
+* every import in every module is resolved by walking the AST — **including deferred imports inside
+  functions**, which is where all of this hid. Verified against the real regression: reintroducing
+  the broken adapter import fails the guard in 1.5 s rather than four minutes.
+* pyflakes over the whole package for undefined names. It immediately found a fourth, quieter
+  defect nobody had noticed: `core/bundle.py` still advertised `topology_counts` and
+  `forcefield_provenance` in `__all__` after they moved to the engine, so `from ... import *` would
+  have failed on them.
+
+**Risk accepted.** The legacy aliases mean `__module__` on moved objects reports the new location;
+anything that pickles by qualified name, or asserts on `__module__`, sees the change. The names,
+commands and exceptions are pinned separately and none was lost. No scientific value moved: the
+seven goldens are byte-identical and the four representative configurations produce identical hashes
+through both import paths.
