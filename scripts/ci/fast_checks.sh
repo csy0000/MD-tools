@@ -55,12 +55,18 @@ python - "$WHEEL" <<'PY'
 import sys, zipfile
 names = zipfile.ZipFile(sys.argv[1]).namelist()
 required = {
-    "profiles":            "md_templates/openmm/spec/profiles/",
-    "system manifests":    "md_templates/openmm/manifests/systems/",
-    "experiment manifests":"md_templates/openmm/manifests/experiments/",
+    # Profiles are template-local since Phase 5/6 and travel inside the packaged catalog.
+    "profiles":            "_packaged/templates/conventional-md/openmm/explicit-water/profiles/",
+    "rest2 profiles":      "_packaged/templates/rest2/openmm/explicit-water/profiles/",
+    # The engine's shipped assets moved under engines/ in Phase 4.
+    "system manifests":    "md_templates/engines/openmm/manifests/systems/",
+    "experiment manifests":"md_templates/engines/openmm/manifests/experiments/",
     "peptide structure":   "manifests/systems/ace_ala_nme.pdb",
-    "spec package":        "md_templates/openmm/spec/models.py",
-    "bundle contract":     "md_templates/openmm/bundlev2.py",
+    # The canonical configuration package moved to core in Phase 3.
+    "config package":      "md_templates/core/config/models.py",
+    "bundle contract":     "md_templates/core/bundle.py",
+    "engine provider":     "md_templates/engines/openmm/provider.py",
+    "generic cli":         "md_templates/cli.py",
     # A wheel whose catalog is missing ships a packaged loader that cannot resolve anything, so the
     # catalog resources and BOTH metadata records are checked rather than assumed.
     "packaged registry":   "md_templates/core/_packaged/registry.yaml",
