@@ -868,6 +868,93 @@ def test_f3_the_gate_rejects_a_malformed_expected_commit(clean_install):
     assert "not a full 40-character hex SHA" in result.stdout + result.stderr
 
 
+def test_f3_strict_mode_requires_an_expected_commit(clean_install):
+    """Resolved provenance alone only shows the wheel names SOME commit."""
+    result = run_gate(clean_install["target"], clean_install["elsewhere"])
+    assert result.returncode != 0, result.stdout
+    assert "--expect-commit is required in strict mode" in result.stdout + result.stderr
+
+
+def test_f3_development_mode_does_not_require_an_expected_commit(dirty_install):
+    result = run_gate(dirty_install["target"], dirty_install["elsewhere"], "--allow-unresolved")
+    assert result.returncode == 0, result.stderr
+    assert "local-development" in result.stdout
+
+
+EXPECT_COMMIT_SH = REPO_ROOT / "scripts" / "ci" / "expect_commit.sh"
+
+
+def run_expect_commit(root) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", str(EXPECT_COMMIT_SH), str(root)],
+                          capture_output=True, text=True, timeout=120)
+
+
+def test_f3_expect_commit_prints_the_full_sha_for_a_real_checkout(clean_install):
+    result = run_expect_commit(clean_install["repo"])
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == clean_install["head"]
+
+
+def test_f3_expect_commit_fails_outside_a_repository(tmp_path):
+    result = run_expect_commit(tmp_path)
+    assert result.returncode == 3
+    assert "produced no SHA" in result.stderr
+
+
+def test_f3_expect_commit_fails_when_git_itself_fails(tmp_path):
+    """A broken or absent git must fail loudly, never degrade to 'no expected commit'."""
+    import os
+
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    stub = stub_dir / "git"
+    stub.write_text("#!/usr/bin/env bash\nexit 128\n", encoding="utf-8")
+    stub.chmod(0o755)
+
+    env = dict(os.environ)
+    env["PATH"] = f"{stub_dir}:{env['PATH']}"
+    result = subprocess.run(["bash", str(EXPECT_COMMIT_SH), str(tmp_path)],
+                            capture_output=True, text=True, timeout=120, env=env)
+    assert result.returncode == 3
+    assert result.stdout.strip() == ""
+    assert "produced no SHA" in result.stderr
+
+
+def test_f3_the_strict_shell_gate_fails_fast_when_no_sha_can_be_acquired(tmp_path):
+    """The whole gate, with a failing git. It must refuse BEFORE building anything."""
+    import os
+    import time
+
+    stub_dir = tmp_path / "stub"
+    stub_dir.mkdir()
+    stub = stub_dir / "git"
+    stub.write_text("#!/usr/bin/env bash\nexit 128\n", encoding="utf-8")
+    stub.chmod(0o755)
+
+    env = dict(os.environ)
+    env["PATH"] = f"{stub_dir}:{env['PATH']}"
+    env.pop("PYTHONPATH", None)
+    env.pop("FAST_CHECKS_ALLOW_UNRESOLVED", None)
+
+    started = time.monotonic()
+    result = subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts" / "ci" / "fast_checks.sh"), str(tmp_path / "work")],
+        capture_output=True, text=True, timeout=900, env=env)
+    elapsed = time.monotonic() - started
+
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "fast checks FAILED" in combined
+    assert "FAST_CHECKS_ALLOW_UNRESOLVED=1" in combined
+    assert "build the wheel" not in combined, "it must refuse before building"
+    assert elapsed < 60, f"the guard should be immediate, took {elapsed:.1f}s"
+
+
+def test_f3_the_shipped_fast_gate_acquires_the_sha_before_building():
+    script = (REPO_ROOT / "scripts" / "ci" / "fast_checks.sh").read_text()
+    assert script.index("expect_commit.sh") < script.index('step "1. build the wheel"')
+
+
 def test_f3_the_shipped_fast_gate_does_not_hardcode_the_development_escape():
     script = (REPO_ROOT / "scripts" / "ci" / "fast_checks.sh").read_text()
     assert "--expect-commit" in script
@@ -877,6 +964,127 @@ def test_f3_the_shipped_fast_gate_does_not_hardcode_the_development_escape():
     unconditional = [line for line in script.splitlines()
                      if "--allow-unresolved" in line and "FAST_CHECKS_ALLOW_UNRESOLVED" not in line]
     assert all("PACKAGED_ARGS+=" in line for line in unconditional), unconditional
+
+
+# ================================================================================================
+# review finding 4: the source digest is CLOSED-WORLD
+#
+# An allowlist covered src/, build_support/, templates/ and four root files, so README.md, build
+# configuration, a descriptor's referenced documentation and any newly added file were all invisible.
+# Coverage that has to be remembered is eventually forgotten; the digest now hashes everything except
+# a short, explicit list of generated artifacts.
+# ================================================================================================
+
+def build_modified_archive(sdist_tree, tmp_path, mutate) -> Path:
+    """Copy the unpacked archive, apply `mutate`, build and install — return the packaged root."""
+    modified = tmp_path / "modified"
+    shutil.copytree(sdist_tree["unpacked"], modified)
+    mutate(modified)
+    wheel = build_wheel(modified, tmp_path / "dist")
+    installed = install_wheel(wheel, tmp_path / "site")
+    return installed / "md_templates" / "core" / PACKAGED_SUBDIR
+
+
+def append(root: Path, relative: str, text: str) -> None:
+    target = root / relative
+    assert target.is_file(), f"{relative} is not in the archive"
+    target.write_text(target.read_text() + text, encoding="utf-8")
+
+
+@pytest.mark.parametrize("label,mutate", [
+    ("readme", lambda root: append(root, "README.md", "\n<!-- edited after unpacking -->\n")),
+    # setup.cfg is *generated* into the sdist by setuptools, so this edits rather than creates it.
+    # Either way it is build configuration the old allowlist never covered. The edit is a comment
+    # rather than a real directive, so the build still succeeds and the digest is what decides.
+    ("setup.cfg", lambda root: append(root, "setup.cfg", "\n# tampered\n")),
+    ("referenced doc", lambda root: append(root, "docs/support-matrix.md", "\nedited\n")),
+    ("unrecognised file", lambda root: (root / "NOTES.txt").write_text(
+        "an entirely new file\n", encoding="utf-8")),
+])
+def test_f4_any_edit_anywhere_in_the_archive_breaks_inheritance(sdist_tree, tmp_path,
+                                                                label, mutate):
+    root = build_modified_archive(sdist_tree, tmp_path, mutate)
+    packaged = verify_packaged_catalog(root)
+    assert packaged.provenance.resolved is False, label
+    assert packaged.provenance.source_state == "no-verifiable-git-provenance", label
+    assert sdist_tree["head"].encode() not in (root / BUILD_PROVENANCE_FILENAME).read_bytes()
+    with pytest.raises(UnresolvedBuildProvenanceError):
+        resolve_packaged_identity(REST2_ID, root=root)
+
+
+@pytest.mark.parametrize("relative", [
+    "README.md", "setup.cfg", "docs/support-matrix.md", "PKG-INFO", "pyproject.toml",
+])
+def test_f4_the_digest_covers_files_the_old_allowlist_missed(sdist_tree, tmp_path, relative):
+    from build_support.catalog import source_tree_digest
+
+    copy = tmp_path / "copy"
+    shutil.copytree(sdist_tree["unpacked"], copy)
+    baseline = source_tree_digest(copy)
+    target = copy / relative
+    assert target.is_file(), relative
+    target.write_text(target.read_text() + "\nedited\n", encoding="utf-8")
+    assert source_tree_digest(copy) != baseline, relative
+
+
+def test_f4_a_brand_new_file_anywhere_moves_the_digest(sdist_tree, tmp_path):
+    from build_support.catalog import source_tree_digest
+
+    copy = tmp_path / "copy"
+    shutil.copytree(sdist_tree["unpacked"], copy)
+    baseline = source_tree_digest(copy)
+    (copy / "docs" / "smuggled.md").write_text("new\n", encoding="utf-8")
+    assert source_tree_digest(copy) != baseline
+
+
+def test_f4_replacing_a_file_with_a_symlink_moves_the_digest(sdist_tree, tmp_path):
+    """Hashing the link target rather than what it points at."""
+    from build_support.catalog import source_tree_digest
+
+    copy = tmp_path / "copy"
+    shutil.copytree(sdist_tree["unpacked"], copy)
+    baseline = source_tree_digest(copy)
+    outside = tmp_path / "outside.md"
+    outside.write_bytes((copy / "README.md").read_bytes())
+    (copy / "README.md").unlink()
+    (copy / "README.md").symlink_to(outside)
+    assert source_tree_digest(copy) != baseline
+
+
+def test_f4_ordinary_sdist_generated_metadata_does_not_disturb_the_digest(sdist_tree, tmp_path):
+    """Everything excluded is excluded because a build REGENERATES it."""
+    from build_support.catalog import source_tree_digest
+    from md_templates.core.resources import SOURCE_PROVENANCE_FILENAME
+
+    copy = tmp_path / "copy"
+    shutil.copytree(sdist_tree["unpacked"], copy)
+    baseline = source_tree_digest(copy)
+
+    egg = copy / "src" / "md_templates.egg-info"
+    egg.mkdir(parents=True, exist_ok=True)
+    (egg / "SOURCES.txt").write_text("regenerated, in a different order\n", encoding="utf-8")
+    (egg / "PKG-INFO").write_text("Metadata-Version: 2.1\n", encoding="utf-8")
+    (copy / "src" / "md_templates" / "__pycache__").mkdir(parents=True, exist_ok=True)
+    (copy / "src" / "md_templates" / "__pycache__" / "x.cpython-311.pyc").write_bytes(b"\x00")
+    (copy / "build" / "lib").mkdir(parents=True, exist_ok=True)
+    (copy / "build" / "lib" / "anything.py").write_text("staged\n", encoding="utf-8")
+    (copy / "dist").mkdir(exist_ok=True)
+    (copy / "dist" / "md_templates-0.1.0.whl").write_bytes(b"PK\x03\x04")
+    (copy / SOURCE_PROVENANCE_FILENAME).write_text('{"rewritten": true}', encoding="utf-8")
+
+    assert source_tree_digest(copy) == baseline
+
+
+def test_f4_the_provenance_record_is_not_part_of_its_own_digest(sdist_tree):
+    """It cannot be: the record's digest field is written from this value."""
+    from build_support.catalog import _digest_entries
+    from md_templates.core.resources import SOURCE_PROVENANCE_FILENAME
+
+    entries = _digest_entries(sdist_tree["unpacked"])
+    assert SOURCE_PROVENANCE_FILENAME not in entries
+    # ...but the ordinary content of the archive is there, in bulk
+    assert "README.md" in entries and "setup.cfg" in entries and "PKG-INFO" in entries
+    assert len(entries) > 40, len(entries)
 
 
 def test_f2_the_archive_record_carries_a_source_tree_digest(sdist_tree):
