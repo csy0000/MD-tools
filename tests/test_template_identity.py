@@ -175,18 +175,20 @@ def test_path_is_normalised_before_identity_is_constructed(bad):
 
 
 def test_27_unregistered_template_path_fails(catalog):
+    """Checked before provenance, so it fails the same way on any tree."""
     with pytest.raises(UnknownTemplateError, match="not a registered template"):
-        resolve_identity(catalog, "templates/rest2/openmm/implicit-water/template.yaml",
-                         commit_sha=SHA_A)
+        resolve_identity(catalog, "templates/rest2/openmm/implicit-water/template.yaml")
     with pytest.raises(UnknownTemplateError):
-        resolve_identity(catalog, "umbrella-sampling/gromacs/explicit-water", commit_sha=SHA_A)
+        resolve_identity(catalog, "umbrella-sampling/gromacs/explicit-water")
 
 
-def test_registered_template_resolves_by_id_or_by_path(catalog):
-    by_id = resolve_identity(catalog, REST2_ID, commit_sha=SHA_A)
-    by_path = resolve_identity(catalog, REST2_PATH, commit_sha=SHA_A)
+def test_registered_template_resolves_by_id_or_by_path(clean_repo):
+    head = git(clean_repo, "rev-parse", "HEAD").stdout.strip()
+    cat = load_catalog(clean_repo)
+    by_id = resolve_identity(cat, REST2_ID)
+    by_path = resolve_identity(cat, REST2_PATH)
     assert by_id == by_path
-    assert by_id.canonical == f"{URL}@{SHA_A}#{REST2_PATH}"
+    assert by_id.canonical == f"{URL}@{head}#{REST2_PATH}"
 
 
 # ================================================================================================
@@ -269,6 +271,81 @@ def test_30c_trusted_provenance_must_still_be_a_full_sha(tmp_path):
     for bad in ("0.1.0", "4d21838", "main"):
         with pytest.raises(IdentityError, match="trusted.commit_sha"):
             resolve_identity(catalog, MD_ID, trusted=TrustedProvenance(commit_sha=bad))
+
+
+# ================================================================================================
+# review finding 1: resolution must PROVE provenance, never accept a caller's word for it
+#
+# The first implementation had a `commit_sha=` shortcut that skipped both the dirty-tree check and
+# any comparison with HEAD. A dirty checkout could name its own HEAD and be handed a resolved
+# identity; a clean checkout could be stamped with any unrelated 40-hex string. Either way the
+# identity named bytes that do not reproduce.
+# ================================================================================================
+
+def test_resolve_identity_has_no_caller_supplied_commit_parameter():
+    """The shortcut is gone from the signature, not merely discouraged in a docstring."""
+    import inspect
+
+    params = inspect.signature(resolve_identity).parameters
+    assert "commit_sha" not in params
+    assert set(params) == {"catalog", "template_ref", "root", "trusted"}
+
+
+def test_dirty_checkout_cannot_be_rescued_by_naming_its_own_head(dirty_repo):
+    """The exact bypass: pass HEAD to a dirty tree and demand an identity."""
+    catalog = load_catalog(dirty_repo)
+    head = git(dirty_repo, "rev-parse", "HEAD").stdout.strip()
+
+    with pytest.raises(TypeError):
+        resolve_identity(catalog, MD_ID, commit_sha=head)  # the shortcut no longer exists
+
+    with pytest.raises(DirtyWorkingTreeError):
+        resolve_identity(catalog, MD_ID, trusted=TrustedProvenance(commit_sha=head))
+
+
+def test_dirty_checkout_refuses_trusted_provenance_even_when_it_matches(dirty_repo):
+    """Trusted provenance is a cross-check on a build, not an override for a working tree."""
+    head = git(dirty_repo, "rev-parse", "HEAD").stdout.strip()
+    with pytest.raises(DirtyWorkingTreeError, match="uncommitted"):
+        resolve_identity(load_catalog(dirty_repo), REST2_ID,
+                         trusted=TrustedProvenance(commit_sha=head))
+
+
+def test_clean_checkout_refuses_a_mismatched_trusted_sha(clean_repo):
+    """A clean tree cannot be stamped with an unrelated commit."""
+    catalog = load_catalog(clean_repo)
+    head = git(clean_repo, "rev-parse", "HEAD").stdout.strip()
+    assert SHA_A != head
+
+    with pytest.raises(IdentityError) as exc:
+        resolve_identity(catalog, MD_ID, trusted=TrustedProvenance(commit_sha=SHA_A))
+    message = str(exc.value)
+    assert SHA_A in message and head in message
+    assert "never overrides" in message
+
+
+def test_clean_checkout_accepts_trusted_provenance_that_agrees_with_head(clean_repo):
+    head = git(clean_repo, "rev-parse", "HEAD").stdout.strip()
+    identity = resolve_identity(load_catalog(clean_repo), MD_ID,
+                                trusted=TrustedProvenance(commit_sha=head.upper()))
+    assert identity.commit_sha == head
+
+
+def test_trusted_provenance_is_only_authoritative_outside_git(tmp_path):
+    """Outside a checkout there is nothing to cross-check against, so the build metadata stands."""
+    root = tmp_path / "installed"
+    make_catalog_tree(root)
+    assert not (root / ".git").exists()
+    identity = resolve_identity(load_catalog(root), REST2_ID,
+                                trusted=TrustedProvenance(commit_sha=SHA_A))
+    assert identity.canonical == f"{URL}@{SHA_A}#{REST2_PATH}"
+
+
+def test_build_identity_remains_purely_syntactic():
+    """Kept for parsing, formatting and comparison -- it asserts nothing about a tree."""
+    identity = build_identity(URL, SHA_B, MD_PATH)
+    assert identity.commit_sha == SHA_B
+    assert identity.canonical == f"{URL}@{SHA_B}#{MD_PATH}"
 
 
 def test_dirty_state_is_assumed_when_it_cannot_be_disproved(clean_repo, monkeypatch):

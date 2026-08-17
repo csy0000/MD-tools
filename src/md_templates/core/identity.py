@@ -158,7 +158,13 @@ def normalise_commit_sha(value: object, *, field: str = "commit_sha") -> str:
 
 
 def build_identity(canonical_url: str, commit_sha: object, template_path: object) -> TemplateIdentity:
-    """Construct an identity, normalising the path **before** the identity is formed."""
+    """Construct an identity from parts, normalising the path **before** the identity is formed.
+
+    Purely syntactic. It checks that the SHA is a full 40-hex string and that the path is a
+    normalised template path; it does **not** and cannot check that the commit contains those bytes.
+    Use it to parse, format and compare identities. To *mint* one for a working tree, use
+    `resolve_identity`, which proves provenance instead of taking the caller's word for it.
+    """
     path = assert_under_templates(
         template_path if isinstance(template_path, str) else str(template_path),
         field="template_path",
@@ -226,41 +232,61 @@ def inspect_provenance(root: Path) -> GitProvenance:
 
 def resolve_identity(catalog, template_ref: str, *,
                      root: Optional[Path] = None,
-                     trusted: Optional[TrustedProvenance] = None,
-                     commit_sha: Optional[str] = None) -> TemplateIdentity:
-    """Resolve one registered template to its immutable identity.
+                     trusted: Optional[TrustedProvenance] = None) -> TemplateIdentity:
+    """Resolve one registered template to its immutable identity, proving provenance.
 
     `template_ref` may be a `template_id` or a `template_path`; either way it must name a template
-    the registry lists, so an identity can never be minted for a file that is not in the catalog.
+    the registry lists, so an identity is never minted for a file outside the catalog.
 
-    The commit comes from exactly one of three sources, in this order: an explicit `commit_sha`
-    (used by callers that already know the commit, and by tests), a `TrustedProvenance`, or the
-    checkout at `root` -- which must be clean. Absent all three, this raises rather than guessing.
+    **The caller cannot supply the commit.** There is deliberately no `commit_sha` parameter: an
+    identity asserts "these bytes are in that commit", and a caller-supplied SHA asserts nothing.
+    The earlier shortcut let a dirty checkout name its own HEAD and receive a resolved identity, and
+    let a clean checkout be stamped with any unrelated 40-hex string — in both cases producing an
+    identity that does not reproduce the files on disk. `build_identity` remains available for
+    syntactic construction, where nothing is being claimed about a working tree.
+
+    The commit therefore comes from exactly one place, decided by whether `root` is a Git checkout:
+
+    * **In a checkout** the tree must be clean, and the commit is HEAD. If `trusted` is also given
+      it must *equal* HEAD — it is a cross-check on build metadata, never an override.
+    * **Outside a checkout** only explicitly trusted build provenance is accepted, and absent that
+      this raises rather than inventing an identity.
     """
     entry = catalog.require(template_ref)
+    where = Path(root) if root is not None else catalog.root
+    provenance = inspect_provenance(where)
 
-    if commit_sha is not None:
-        sha = normalise_commit_sha(commit_sha)
-    elif trusted is not None:
-        sha = normalise_commit_sha(trusted.commit_sha, field="trusted.commit_sha")
-    else:
-        provenance = inspect_provenance(Path(root) if root is not None else catalog.root)
-        if provenance.commit_sha is None:
+    if provenance.commit_sha is None:
+        if trusted is None:
             raise NoProvenanceError(
-                f"no Git metadata under {root or catalog.root} and no trusted commit provenance "
-                f"supplied, so there is no immutable identity for {entry.template_id!r}. An "
-                f"installed copy must carry an explicit full commit SHA from its build metadata; "
-                f"nothing is inferred from a package version or a timestamp. ({provenance.detail})"
+                f"no Git metadata under {where} and no trusted commit provenance supplied, so "
+                f"there is no immutable identity for {entry.template_id!r}. An installed copy must "
+                f"carry an explicit full commit SHA from its build metadata; nothing is inferred "
+                f"from a package version or a timestamp. ({provenance.detail})"
             )
-        if provenance.dirty:
-            raise DirtyWorkingTreeError(
-                f"the checkout at {root or catalog.root} has uncommitted changes "
-                f"({provenance.detail}), so no commit describes the files on disk and "
-                f"{entry.template_id!r} has no immutable identity. HEAD is "
-                f"{provenance.commit_sha}, which is deliberately NOT used: stamping it here would "
-                f"claim an identity that does not reproduce these files. Commit the tree, or call "
-                f"inspect_provenance() for an explicitly unresolved development view."
-            )
-        sha = provenance.commit_sha
+        return build_identity(
+            catalog.canonical_url,
+            normalise_commit_sha(trusted.commit_sha, field="trusted.commit_sha"),
+            entry.template_path,
+        )
 
-    return build_identity(catalog.canonical_url, sha, entry.template_path)
+    if provenance.dirty:
+        raise DirtyWorkingTreeError(
+            f"the checkout at {where} has uncommitted changes ({provenance.detail}), so no commit "
+            f"describes the files on disk and {entry.template_id!r} has no immutable identity. "
+            f"HEAD is {provenance.commit_sha}, which is deliberately NOT used: stamping it here "
+            f"would claim an identity that does not reproduce these files. Commit the tree, or "
+            f"call inspect_provenance() for an explicitly unresolved development view."
+        )
+
+    if trusted is not None:
+        declared = normalise_commit_sha(trusted.commit_sha, field="trusted.commit_sha")
+        if declared != provenance.commit_sha:
+            raise IdentityError(
+                f"trusted.commit_sha {declared} does not match HEAD {provenance.commit_sha} at "
+                f"{where}. Trusted provenance cross-checks a checkout; it never overrides one. A "
+                f"mismatch means the build metadata and the tree describe different commits, and "
+                f"which of them the files on disk belong to is exactly what is in doubt."
+            )
+
+    return build_identity(catalog.canonical_url, provenance.commit_sha, entry.template_path)
