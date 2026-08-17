@@ -25,6 +25,7 @@ the loader than the one being shipped would prove nothing.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -46,47 +47,63 @@ class CatalogBuildError(RuntimeError):
     """The source catalog could not be validated or staged. The build must stop."""
 
 
-#: Files whose contents decide what a build produces and how the result behaves. The catalog
-#: manifest binds only registry.yaml and the descriptors; these bind the rest, so an unpacked archive
-#: cannot have its implementation rewritten and still inherit the commit the archive named.
-RELEVANT_FILES = ("setup.py", "pyproject.toml", "MANIFEST.in", "registry.yaml")
-RELEVANT_TREES = ("src", "build_support", "templates")
+#: The digest below is CLOSED-WORLD: every regular file in the tree is hashed, and only the entries
+#: named here are skipped. An allowlist was the previous design and it was the wrong shape -- it
+#: covered `src/`, `build_support/`, `templates/` and four root files, so README.md, a build-
+#: configuration file, a descriptor's referenced documentation and any newly added file were all
+#: invisible. A digest whose coverage has to be remembered will eventually be forgotten; the only
+#: maintainable version is "everything, minus a short list of things that are generated".
+#:
+#: Each exclusion earns its place by being REGENERATED during a build. Including any of them would
+#: make the digest depend on whether something had been built before, and two builds of one commit
+#: must produce identical metadata.
+EXCLUDED_COMPONENTS = frozenset({"__pycache__", ".git"})       # bytecode caches, VCS internals
+EXCLUDED_COMPONENT_SUFFIXES = (".egg-info",)                    # rewritten by every egg_info run
+EXCLUDED_FILE_SUFFIXES = (".pyc", ".pyo")
+EXCLUDED_TOP_LEVEL_DIRS = frozenset({"build", "dist"})          # `python -m build` output
 
 
-def _relevant_source_files(root: Path):
-    """Yield `(logical path, Path)` for every build- and runtime-relevant file under `root`.
+def _is_excluded(relative: Path, provenance_filename: str) -> bool:
+    parts = relative.parts
+    if relative.as_posix() == provenance_filename:
+        # The record cannot describe itself: its own digest field is written from this value.
+        return True
+    if parts and parts[0] in EXCLUDED_TOP_LEVEL_DIRS:
+        return True
+    for part in parts:
+        if part in EXCLUDED_COMPONENTS:
+            return True
+        if part.endswith(EXCLUDED_COMPONENT_SUFFIXES):
+            return True
+    return relative.suffix in EXCLUDED_FILE_SUFFIXES
 
-    Build artifacts are excluded because they appear *during* a build: including `.egg-info` or
-    `__pycache__` would make the digest depend on whether anything had been built before, and two
-    builds of one commit must produce identical metadata.
-    """
+
+def _digest_entries(root: Path) -> dict:
+    """`{normalised logical path: content digest}` for every regular file that is not generated."""
+    _, _, resources_mod = _import_core()
     root = Path(root)
-    for name in RELEVANT_FILES:
-        candidate = root / name
-        if candidate.is_file():
-            yield name, candidate
-    for tree in RELEVANT_TREES:
-        base = root / tree
-        if not base.is_dir():
+    entries: dict[str, str] = {}
+    for candidate in root.rglob("*"):
+        relative = candidate.relative_to(root)
+        if _is_excluded(relative, resources_mod.SOURCE_PROVENANCE_FILENAME):
             continue
-        for candidate in sorted(base.rglob("*")):
-            if not candidate.is_file():
-                continue
-            relative = candidate.relative_to(root)
-            if any(part == "__pycache__" or part.endswith(".egg-info") for part in relative.parts):
-                continue
-            if candidate.suffix in (".pyc", ".pyo"):
-                continue
-            yield relative.as_posix(), candidate
+        key = relative.as_posix()
+        if candidate.is_symlink():
+            # Hash the link target, not what it points at: replacing a file with a symlink is a
+            # change to the tree and must move the digest.
+            entries[key] = resources_mod.sha256_bytes(
+                b"symlink:" + os.readlink(candidate).encode("utf-8"))
+        elif candidate.is_file():
+            entries[key] = resources_mod.sha256_bytes(candidate.read_bytes())
+    return entries
 
 
 def source_tree_digest(root: Path) -> str:
-    """One digest over the exact bytes of every relevant source file, keyed by logical path."""
+    """One digest over every regular file in the source tree, keyed by normalised logical path."""
     _, _, resources_mod = _import_core()
-    files = {relative: resources_mod.sha256_bytes(path.read_bytes())
-             for relative, path in _relevant_source_files(root)}
+    entries = _digest_entries(root)
     return resources_mod.sha256_bytes(
-        resources_mod.canonical_json_bytes({"files": dict(sorted(files.items()))}))
+        resources_mod.canonical_json_bytes({"files": dict(sorted(entries.items()))}))
 
 
 def decide_provenance(source_root: Path, manifest_sha256: str, canonical_url: str,
