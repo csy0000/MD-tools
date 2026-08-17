@@ -28,6 +28,7 @@ offline compute node, a locked-down runner -- where reproducibility matters most
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -118,6 +119,9 @@ class GitProvenance:
     #: be shown clean has not been shown clean -- but a caller that must record *why* can tell the
     #: two apart without parsing `detail`.
     status_known: bool = True
+    #: The Git worktree root that was found, when one was found but was NOT this directory. Set only
+    #: in that case, which is the enclosing-repository refusal.
+    worktree_root: Optional[str] = None
 
     @property
     def resolved(self) -> bool:
@@ -126,7 +130,7 @@ class GitProvenance:
     def as_dict(self) -> dict:
         return {"commit_sha": self.commit_sha, "dirty": self.dirty, "source": self.source,
                 "resolved": self.resolved, "detail": self.detail,
-                "status_known": self.status_known}
+                "status_known": self.status_known, "worktree_root": self.worktree_root}
 
 
 @dataclass(frozen=True)
@@ -200,10 +204,36 @@ def inspect_provenance(root: Path) -> GitProvenance:
     root = Path(root)
     if not root.is_dir():
         return GitProvenance(None, False, "absent", f"{root} is not a directory")
+
+    # The worktree root must BE this directory, not merely contain it. `git -C <dir>` walks upwards,
+    # so an unpacked source tree sitting anywhere inside an unrelated repository -- vendored, or
+    # dropped in an ignored directory -- would otherwise report that repository's HEAD, and report it
+    # clean, because the enclosing tree genuinely is clean while ignoring the copy. The identity would
+    # then name a commit from a different project entirely. Checked before HEAD so the refusal says
+    # what actually happened.
     try:
-        head = _git(root, "rev-parse", "HEAD")
+        toplevel = _git(root, "rev-parse", "--show-toplevel")
     except FileNotFoundError:
         return GitProvenance(None, False, "absent", "git executable not found on PATH")
+    except subprocess.TimeoutExpired:
+        return GitProvenance(None, False, "absent",
+                             f"git timed out after {GIT_TIMEOUT_SECONDS} s")
+    if toplevel.returncode != 0:
+        return GitProvenance(None, False, "absent",
+                             (toplevel.stderr or "git rev-parse --show-toplevel failed").strip())
+
+    worktree = toplevel.stdout.strip()
+    if not worktree or os.path.realpath(worktree) != os.path.realpath(root):
+        return GitProvenance(
+            None, False, "absent",
+            f"{root} is not the root of a Git worktree: it lies inside the repository at "
+            f"{worktree or '<unknown>'}, whose commits describe different content. Provenance is "
+            f"never inherited from an enclosing repository.",
+            worktree_root=worktree or None,
+        )
+
+    try:
+        head = _git(root, "rev-parse", "HEAD")
     except subprocess.TimeoutExpired:
         return GitProvenance(None, False, "absent",
                              f"git timed out after {GIT_TIMEOUT_SECONDS} s")
@@ -229,7 +259,8 @@ def inspect_provenance(root: Path) -> GitProvenance:
 
     changed = [line for line in status.stdout.splitlines() if line.strip()]
     return GitProvenance(sha, bool(changed), "git-checkout",
-                         f"{len(changed)} uncommitted path(s)" if changed else "clean")
+                         f"{len(changed)} uncommitted path(s)" if changed else "clean",
+                         worktree_root=worktree)
 
 
 # ------------------------------------------------------------------------------------------------
