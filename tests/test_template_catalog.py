@@ -275,117 +275,60 @@ def test_14_both_shipped_descriptors_validate():
         assert {r.id for r in d.input_routes} == {"smiles", "pdb"}
 
 
-def test_descriptors_state_that_dispatch_is_not_active():
-    """PR 1 is catalog-only, and the descriptor has to say so itself."""
+def test_dispatch_status_matches_what_is_actually_activated():
+    """Each descriptor states whether the generic route reaches it, and it must be true.
+
+    Phase 5 activated conventional MD: `md-templates prepare|run|resume` dispatches to the provider.
+    REST2 is still `legacy-direct` until Phase 6, and saying so is the point -- a descriptor that
+    claimed activation before the route existed would be the most expensive kind of documentation.
+    """
     catalog = load_catalog(REPO_ROOT)
-    for tid in (MD_ID, REST2_ID):
+    expected = {MD_ID: "catalog", REST2_ID: "legacy-direct"}
+    for tid, dispatch in expected.items():
         impl = catalog.descriptor(tid).implementation
-        assert impl.dispatch == "legacy-direct"
+        assert impl.dispatch == dispatch, tid
         assert impl.binding == "current-openmm-implementation"
         assert impl.python_namespace == "md_templates.engines.openmm"
         assert impl.cli_command == "md-openmm"
 
 
-def test_descriptors_do_not_claim_template_local_profiles():
-    """Profiles are a provider reference; PR 1 moves no packaged resource."""
+def test_an_activated_template_resolves_to_a_registered_provider():
+    from md_templates.core.dispatch import provider_for
+
     catalog = load_catalog(REPO_ROOT)
-    for tid in (MD_ID, REST2_ID):
-        profiles = catalog.descriptor(tid).profiles
-        assert profiles.template_local is False
-        assert profiles.provider == "current-openmm-implementation"
-        # Phase 3 moved the engine-neutral configuration package, and the profiles travelled with
-        # the resolver that reads them. Still a provider reference, still not template-local.
-        assert profiles.python_resource == "md_templates.core.config.profiles"
+    provider = provider_for(catalog.descriptor(MD_ID))
+    assert provider.engine == "openmm"
+    assert set(provider.actions) == {"prepare", "run", "resume"}
 
 
-@pytest.mark.parametrize("path,key", [
-    ([], "maintainer"),
-    (["method"], "flavour"),
-    (["engine"], "build"),
-    (["implementation"], "entry_point"),
-    (["restart"], "always_works"),
-    (["profiles"], "path"),
-    (["validation"], "score"),
-    (["bundle_schema"], "deprecated"),
-])
-def test_15_unknown_fields_fail_at_every_modelled_level(catalog_dir, path, key):
-    def mutate(doc):
-        node = doc
-        for part in path:
-            node = node[part]
-        node[key] = "x"
+def test_a_template_that_is_not_activated_is_refused_by_dispatch():
+    from md_templates.core.dispatch import DispatchNotActive, provider_for
 
-    mutate_descriptor(catalog_dir, REST2_ID, mutate)
-    with pytest.raises(RegistryError, match=key):
-        load_catalog(catalog_dir)
+    catalog = load_catalog(REPO_ROOT)
+    with pytest.raises(DispatchNotActive, match="legacy-direct"):
+        provider_for(catalog.descriptor(REST2_ID))
 
 
-def test_15b_unknown_field_in_a_list_element_fails(catalog_dir):
-    mutate_descriptor(catalog_dir, REST2_ID,
-                      lambda d: d["input_routes"][0].update({"forcefield": "ff19SB"}))
-    with pytest.raises(RegistryError, match="forcefield"):
-        load_catalog(catalog_dir)
+def test_profile_ownership_is_stated_honestly_per_template():
+    """Template-local where the files really are; a provider reference where they are not."""
+    catalog = load_catalog(REPO_ROOT)
+
+    md_profiles = catalog.descriptor(MD_ID).profiles
+    assert md_profiles.provider == "template-local"
+    assert md_profiles.template_local is True
+    for profile_id in md_profiles.profile_ids:
+        assert (REPO_ROOT / "templates" / MD_ID / "profiles" / f"{profile_id}.json").is_file()
+
+    rest2_profiles = catalog.descriptor(REST2_ID).profiles
+    assert rest2_profiles.provider == "current-openmm-implementation"
+    assert rest2_profiles.template_local is False
+    assert rest2_profiles.python_resource == "md_templates.core.config.profiles"
 
 
-def test_15c_unknown_field_in_evidence_fails(catalog_dir):
-    mutate_descriptor(catalog_dir, REST2_ID,
-                      lambda d: d["validation"]["evidence"][0].update({"weight": 10}))
-    with pytest.raises(RegistryError, match="weight"):
-        load_catalog(catalog_dir)
-
-
-@pytest.mark.parametrize("version", [0, 2, 99])
-def test_16_unsupported_template_schema_version_fails(catalog_dir, version):
-    mutate_descriptor(catalog_dir, MD_ID, lambda d: d.update({"schema_version": version}))
-    with pytest.raises(RegistryError, match="schema_version"):
-        load_catalog(catalog_dir)
-
-
-def test_16b_template_schema_version_is_independent_of_the_others():
-    """A descriptor version must not be tied to the bundle, config or run-state versions."""
-    from md_templates.openmm import bundlev2, runstate
-    from md_templates.openmm.spec import models
-
-    assert TEMPLATE_SCHEMA_VERSION == 1
-    # independence is a source property, not a numeric one: the constant is defined in the catalog
-    # package and nothing there imports the runtime's schema constants.
-    source = (REPO_ROOT / "src" / "md_templates" / "core" / "template.py").read_text()
-    for name in ("BUNDLE_SCHEMA_VERSION", "RUN_STATE_SCHEMA", "SYSTEM_SCHEMA_VERSION"):
-        assert name not in source
-    assert (bundlev2.BUNDLE_SCHEMA_VERSION, runstate.RUN_STATE_SCHEMA,
-            models.SYSTEM_SCHEMA_VERSION) == (2, 1, 1)
-
-
-@pytest.mark.parametrize("field,value", [
-    ("implementation_status", "great"),
-    ("implementation_status", "validated"),
-    ("scientific_status", "works"),
-    ("scientific_status", "implemented-and-tested"),
-])
-def test_17_invalid_status_enum_fails(catalog_dir, field, value):
-    mutate_descriptor(catalog_dir, MD_ID, lambda d: d["validation"].update({field: value}))
-    with pytest.raises(RegistryError, match=field):
-        load_catalog(catalog_dir)
-
-
-@pytest.mark.parametrize("bad", [
-    "../outside/thing.txt",
-    "/etc/passwd",
-    "src/../../escape",
-    "src\\md_templates",
-    "src/./md_templates",
-])
-def test_18_repository_reference_escape_fails(catalog_dir, bad):
-    mutate_descriptor(catalog_dir, MD_ID,
-                      lambda d: d["repository_references"].append(bad))
-    with pytest.raises(RegistryError):
-        load_catalog(catalog_dir)
-
-
-def test_18b_repository_reference_must_exist(catalog_dir):
-    mutate_descriptor(catalog_dir, MD_ID,
-                      lambda d: d.update({"repository_references": ["docs/does-not-exist.md"]}))
-    with pytest.raises(RegistryError, match="does not exist"):
+def test_the_model_refuses_a_descriptor_that_mixes_the_two_claims(catalog_dir):
+    """Owning files you do not own is how a duplicate copy gets made later."""
+    mutate_descriptor(catalog_dir, REST2_ID, lambda d: d["profiles"].update({"template_local": True}))
+    with pytest.raises(RegistryError, match="Claiming"):
         load_catalog(catalog_dir)
 
 

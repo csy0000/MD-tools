@@ -376,6 +376,30 @@
       "destination": "md_templates.engines.openmm.cli",
       "phase": 4,
       "status": "unchanged"
+    },
+    "md_templates.cli": {
+      "destination": "md_templates.cli",
+      "phase": 5,
+      "status": "unchanged",
+      "note": "the generic md-templates command"
+    },
+    "md_templates.core.dispatch": {
+      "destination": "md_templates.core.dispatch",
+      "phase": 5,
+      "status": "unchanged",
+      "note": "the explicit (method, engine) -> provider table"
+    },
+    "md_templates.core.config.sources": {
+      "destination": "md_templates.core.config.sources",
+      "phase": 5,
+      "status": "unchanged",
+      "note": "where profiles are discovered from, without using cwd"
+    },
+    "md_templates.engines.openmm.provider": {
+      "destination": "md_templates.engines.openmm.provider",
+      "phase": 5,
+      "status": "unchanged",
+      "note": "maps a generic action onto md-openmm"
     }
   },
   "tests": {

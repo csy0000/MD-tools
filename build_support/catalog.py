@@ -195,6 +195,19 @@ def build_manifest(source_root: Path):
         payloads[entry.template_path] = (source_root / entry.template_path).read_bytes()
         references.update(catalog.descriptor(entry.template_id).repository_references)
 
+        # Everything else the template directory owns -- profiles, examples -- travels with it.
+        # A template that carries its scientific defaults in source but not in the wheel would
+        # resolve different profiles depending on how it was installed, which is precisely the
+        # failure that "one authoritative source" is supposed to prevent.
+        template_dir = Path(entry.template_path).parent
+        for extra in sorted((source_root / template_dir).rglob("*")):
+            if not extra.is_file() or extra.is_symlink():
+                continue
+            relative = extra.relative_to(source_root).as_posix()
+            if relative in payloads or "__pycache__" in extra.parts:
+                continue
+            payloads[relative] = extra.read_bytes()
+
     manifest = resources_mod.ResourceManifest(
         schema_version=resources_mod.RESOURCE_MANIFEST_SCHEMA_VERSION,
         resources={path: resources_mod.sha256_bytes(data)

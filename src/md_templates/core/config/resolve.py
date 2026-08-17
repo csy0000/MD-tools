@@ -89,20 +89,36 @@ def load_document(path: Path) -> dict:
 # ---------------------------------------------------------------------------------------------
 
 def list_profiles() -> list[dict]:
-    out = []
-    for path in sorted(PROFILE_DIR.glob("*.json")):
-        doc = json.loads(path.read_text(encoding="utf-8"))
-        doc["_path"] = str(path)
-        out.append(doc)
-    return out
+    """Every versioned default profile this installation can see, built-in and template-local.
+
+    A profile ID may appear once. Two files claiming one ID means one of them is silently ignored,
+    and which one would depend on directory ordering -- so it is refused with both paths named.
+    """
+    from .sources import profile_directories
+
+    out: list[dict] = []
+    seen: dict[str, str] = {}
+    for directory in profile_directories(PROFILE_DIR):
+        for path in sorted(directory.glob("*.json")):
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            profile_id = doc.get("profile_id")
+            if profile_id in seen:
+                raise ResolutionError(
+                    f"two profiles claim the id {profile_id!r}: {seen[profile_id]} and {path}. "
+                    f"One of them would be ignored depending on directory order."
+                )
+            seen[profile_id] = str(path)
+            doc["_path"] = str(path)
+            out.append(doc)
+    return sorted(out, key=lambda d: d["profile_id"])
 
 
 def load_profile(profile_id: str) -> dict:
-    path = PROFILE_DIR / f"{profile_id}.json"
-    if not path.is_file():
-        available = sorted(p["profile_id"] for p in list_profiles())
-        raise ResolutionError(f"unknown profile {profile_id!r}. Available: {available}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    for doc in list_profiles():
+        if doc["profile_id"] == profile_id:
+            return json.loads(Path(doc["_path"]).read_text(encoding="utf-8"))
+    available = sorted(p["profile_id"] for p in list_profiles())
+    raise ResolutionError(f"unknown profile {profile_id!r}. Available: {available}")
 
 
 def select_profile(route: str, method: str) -> dict:

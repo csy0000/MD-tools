@@ -38,7 +38,10 @@ dev = ["pytest", "build", "pyflakes"]
 # The entry point. Installing the wheel puts `md-openmm` on PATH, which is what lets a
 # consuming project run the pipeline without a source checkout.
 [project.scripts]
+# The engine-specific command, unchanged and still supported.
 md-openmm = "md_templates.openmm.cli:main"
+# The generic command over the catalog. Its list/inspect/identity path imports no engine.
+md-templates = "md_templates.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -202,27 +202,37 @@ class RestartBlock(Strict):
 
 
 class ProfileProviderBlock(Strict):
-    """Where the scientific default profiles currently come from.
+    """Where this template's versioned default profiles come from.
 
-    Deliberately named as a *provider* reference rather than a template-local resource list.
-    The profile files live inside the current OpenMM implementation package and PR 1 does not move
-    or copy them; pretending they were template-local would make the descriptor describe a layout
-    that does not exist. `template_local: false` is the field that keeps that honest, and template-
-    local profile migration is deferred to the method-activation PRs.
+    Two honest states, and the model refuses any mixture of them:
+
+    `template-local` -- the profiles live in this template's own `profiles/` directory, which is the
+    end state the migration is for: a template that carries its scientific defaults is a template
+    someone can copy, version and reason about as one thing.
+
+    `current-openmm-implementation` -- a transitional provider reference, for a template whose
+    profiles are still package resources inside the engine implementation. Recorded as a provider
+    rather than dressed up as template-local, because a descriptor that claims to own files it does
+    not own is worse than one that admits the transition is unfinished.
     """
 
-    provider: Literal["current-openmm-implementation"]
+    provider: Literal["current-openmm-implementation", "template-local"]
     template_local: bool
     python_resource: str
     profile_ids: list[str]
     note: str
 
     @model_validator(mode="after")
-    def _check(self):
-        if self.template_local:
+    def _provider_and_locality_agree(self):
+        if self.provider == "template-local" and not self.template_local:
             raise ValueError(
-                "profiles.template_local must be false until profiles actually move into the "
-                "template directory; PR 1 does not move packaged resources"
+                "profiles.provider is 'template-local' but template_local is false; a template "
+                "either owns its profiles or it does not"
+            )
+        if self.provider != "template-local" and self.template_local:
+            raise ValueError(
+                f"profiles.template_local is true but the provider is {self.provider!r}. Claiming "
+                f"to own files that live in the engine package is how a copy gets made later."
             )
         return self
 
