@@ -309,3 +309,44 @@ def test_inspect_produces_structured_output_offline(smiles_bundle, no_network):
     assert info["counts"]["openmm_particles"] > 0
     assert info["validation"]["ok"]
     assert info["portability"]["binary_checkpoints"]
+
+
+# ---------------------------------------------------------------------------------------------
+# the legacy compatibility path must survive auto-migration
+# ---------------------------------------------------------------------------------------------
+
+def test_migration_refuses_to_guess_when_both_methods_are_declared():
+    """A legacy experiment may declare both blocks; if/elif order is not a decision procedure.
+
+    This regressed once: the shipped smoke experiment declares `md:` and `rest2:`, migration picked
+    `md` because it was tested first, and a legacy REST2 bundle then refused to run as REST2.
+    """
+    from md_templates.openmm.spec import migrate
+
+    system = {"system_id": "x", "input": {"route": "smiles", "smiles": "C"}}
+    experiment = {"integrator": {"timestep_fs": 4.0, "temperature_k": 300.0},
+                  "md": {"n_chunks": 1, "chunk_ns": 1.0},
+                  "rest2": {"n_chunks": 1, "chunk_ns": 1.0, "scale_factors": [1.0, 0.5],
+                            "exchange_interval_ps": 1.0, "relaxation_ps": 1.0}}
+    with pytest.raises(migrate.MigrationError, match="ambiguous"):
+        migrate.migrate_manifests(system, experiment)
+
+    # naming the method resolves it, in both directions
+    for method in ("md", "rest2"):
+        doc, _ = migrate.migrate_manifests(system, experiment, method=method)
+        assert doc["protocol"]["production"]["method"] == method
+
+
+def test_an_unusable_canonical_record_is_treated_as_absent(tmp_path):
+    """A bundle whose manifests could not be migrated stays on the compatibility path."""
+    from md_templates.openmm import runner
+
+    bundle = tmp_path / "b"
+    bundle.mkdir()
+    (bundle / "canonical_configuration.json").write_text(
+        json.dumps({"unavailable": "MigrationError: ambiguous"}))
+    assert runner._has_usable_canonical(bundle) is False
+
+    (bundle / "canonical_configuration.json").write_text(
+        json.dumps({"hashes": {}, "configuration": {}, "profile": {}}))
+    assert runner._has_usable_canonical(bundle) is True

@@ -265,6 +265,35 @@ def _stage_run_directory(bundle_dir: Path, exp_path: Path, cfg: dict, manifest: 
     return run_dir, False
 
 
+def _has_usable_canonical(bundle_dir: Path) -> bool:
+    """True only when the bundle carries a canonical projection that can actually be used.
+
+    A record that says `unavailable` -- a legacy bundle whose manifests could not be migrated
+    unambiguously -- is the ABSENCE of a canonical configuration, not a broken one. Treating it as
+    present would block the documented compatibility path for bundles that are perfectly runnable
+    through it.
+    """
+    path = Path(bundle_dir) / "canonical_configuration.json"
+    if not path.is_file():
+        return False
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    return not doc.get("unavailable")
+
+
+def _canonical_front_end(bundle_dir: Path) -> Optional[str]:
+    """Which front end prepared this bundle: "legacy" (migrated manifests) or None (canonical)."""
+    path = Path(bundle_dir) / "canonical_configuration.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("front_end")
+    except json.JSONDecodeError:
+        return None
+
+
 def resolve_canonical_run(bundle_dir: Path, method: str, *, config: Optional[Path] = None,
                           overrides: Optional[list] = None) -> dict:
     """Resolve the configuration a run should use, from the bundle and any override.
@@ -375,12 +404,18 @@ def launch_rest2(
     # back to the legacy path is exactly the silent reinterpretation this design exists to stop.
     # Only the ABSENCE of a canonical configuration selects the compatibility path.
     canonical_run = None
-    has_canonical = (bundle_dir / "canonical_configuration.json").is_file()
+    has_canonical = _has_usable_canonical(bundle_dir)
     if config is not None and not has_canonical:
         raise IncompatibleExperiment(
             f"--config was given but {bundle_dir} carries no canonical configuration; it is a "
             "version-1 bundle and cannot be run through the canonical path."
         )
+    if has_canonical and experiment_path is not None and config is None:
+        # An explicit legacy --experiment is a direct statement of intent about THIS run. A bundle
+        # prepared through the legacy front end carries an auto-migrated canonical record; letting
+        # that record override the flag the user actually typed would ignore them silently.
+        if _canonical_front_end(bundle_dir) == "legacy":
+            has_canonical = False
     if has_canonical:
         canonical_run = resolve_canonical_run(bundle_dir, "rest2", config=config,
                                               overrides=set_overrides)
@@ -549,12 +584,18 @@ def launch_md(
     # back to the legacy path is the silent reinterpretation this design exists to stop. Only the
     # ABSENCE of a canonical configuration selects the compatibility path.
     canonical_run = None
-    has_canonical = (bundle_dir / "canonical_configuration.json").is_file()
+    has_canonical = _has_usable_canonical(bundle_dir)
     if config is not None and not has_canonical:
         raise IncompatibleExperiment(
             f"--config was given but {bundle_dir} carries no canonical configuration; it is a "
             "version-1 bundle and cannot be run through the canonical path."
         )
+    if has_canonical and experiment_path is not None and config is None:
+        # An explicit legacy --experiment is a direct statement of intent about THIS run. A bundle
+        # prepared through the legacy front end carries an auto-migrated canonical record; letting
+        # that record override the flag the user actually typed would ignore them silently.
+        if _canonical_front_end(bundle_dir) == "legacy":
+            has_canonical = False
     if has_canonical:
         canonical_run = resolve_canonical_run(bundle_dir, "md", config=config,
                                               overrides=set_overrides)

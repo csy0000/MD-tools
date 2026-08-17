@@ -261,6 +261,7 @@ def _write_v2_artifacts(bundle_dir: Path, *, cfg: dict, system, experiment,
             result = resolve_mod.resolve_spec(doc)
             canonical = {"profile": result["profile"], "hashes": result["hashes"],
                          "sources": result["sources"], "migrated_from": "legacy manifests",
+                         "front_end": "legacy",
                          "migration_notes": notes,
                          "configuration": canon_mod.to_plain(canon_mod.dump_model(result["spec"]))}
         except Exception as exc:                             # noqa: BLE001

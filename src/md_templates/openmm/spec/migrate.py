@@ -25,7 +25,8 @@ def _q(value: Any, unit: str) -> Optional[str]:
     return None if value is None else f"{value} {unit}"
 
 
-def migrate_manifests(system_doc: dict, experiment_doc: dict) -> tuple[dict, list[str]]:
+def migrate_manifests(system_doc: dict, experiment_doc: dict, *,
+                      method: Optional[str] = None) -> tuple[dict, list[str]]:
     """Return `(canonical_document, notes)`.
 
     `notes` lists every semantic change, including the ones that are merely a renaming, so a
@@ -91,7 +92,17 @@ def migrate_manifests(system_doc: dict, experiment_doc: dict) -> tuple[dict, lis
 
     rest2 = experiment_doc.get("rest2") or {}
     md = experiment_doc.get("md") or {}
-    if md:
+    if md and rest2 and method is None:
+        # A legacy experiment may declare BOTH, because the pair described a system that could be
+        # run either way. The canonical model has ONE method, so choosing by if/elif order would
+        # silently label a REST2 experiment "md" -- which it did, and a legacy REST2 bundle then
+        # refused to run. Ambiguity is reported, not resolved by statement order.
+        raise MigrationError(
+            "this experiment declares BOTH an `md:` and a `rest2:` block, so the canonical method "
+            "is ambiguous. Pass method='md' or method='rest2' to say which calculation this is; "
+            "it is not inferred from the order the blocks appear in."
+        )
+    if method == "md" or (md and not rest2):
         protocol["production"] = {
             "method": "md",
             "n_chunks": md.get("n_chunks"),
@@ -99,7 +110,7 @@ def migrate_manifests(system_doc: dict, experiment_doc: dict) -> tuple[dict, lis
             "scale_factor": md.get("scale_factor", 1.0),
         }
         notes.append("md.chunk_ns -> protocol.production.chunk ('ns')")
-    elif rest2:
+    elif rest2 or method == "rest2":
         if "total_ns_per_replica" in rest2:
             raise MigrationError(
                 "rest2.total_ns_per_replica belongs to a retired schema: the chunk count is an "
