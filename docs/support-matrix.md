@@ -16,6 +16,41 @@ gates it, and is described as *locally verified* until then.
 No second Python or OpenMM version is listed, because none has been run. Adding one means adding it
 to the workflow matrix and seeing it pass first.
 
+## What is implemented, and how far it is tested
+
+Four levels, kept apart because they are different claims. The campaign's whole documentation
+discipline is that nothing moves up a row without evidence.
+
+| capability | level |
+|---|---|
+| catalog listing, inspection, identity (`md-templates list/inspect/identity`) | **implemented + CI-tested**, engine-free, gated by the fast checks |
+| packaged catalog, resource integrity, build provenance | **implemented + CI-tested** in the strict wheel gate |
+| conventional MD: prepare, run, resume — generic and legacy routes | **implemented + CI-tested** on CPU, both routes proven to produce identical canonical hashes |
+| REST2: prepare, run, resume — generic and legacy routes | **implemented + CI-tested** on CPU, three replicas committed and resumed |
+| bundle relocation, crash recovery, State fallback | **implemented + CI-tested** (slow gate, real SIGKILL) |
+| CUDA / OpenCL / `--device` / `Precision` | **implemented, contract-tested, real GPU not run here** — see below |
+| cyclo-RGDfV ten-rung REST2 | **system-specific pilot-supported evidence**, not general validation |
+| macrocycle eight-rung example | **unvalidated example** |
+| general conventional MD, general REST2 | **scientifically unvalidated** |
+
+CPU smoke runs are engineering evidence that the pipeline executes. They are not scientific
+validation, and `cpu-smoke-v1` is refused as scientific evidence by the descriptor model itself.
+
+## GPU and platform contract
+
+CI is CPU-only, but GPU support is an operational contract and is preserved deliberately:
+
+* `CUDA` and `OpenCL` remain selectable, with explicit `--device` validation;
+* OpenMM `DeviceIndex` and `Precision` (`single` / `mixed` / `double`) are passed through unchanged,
+  and the effective default is unchanged;
+* an unavailable platform or device fails explicitly — there is **no silent fallback to CPU**;
+* REST2 remains one process with one selected device. No implicit multi-GPU replica distribution was
+  added; external one-process-per-GPU launching remains the approach.
+
+**Status, stated honestly: implemented and contract-tested; real-GPU runs were not performed for
+this work.** No CUDA runner was available. Mocked selection tests and CPU runs are not CUDA
+validation, and nothing here should be read as such.
+
 ## What portability means here
 
 **Precise claims, in descending strength.**
