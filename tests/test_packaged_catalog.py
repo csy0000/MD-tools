@@ -705,6 +705,218 @@ def test_a_source_tree_with_neither_git_nor_an_archive_record_is_unresolved(tmp_
 
 
 # ================================================================================================
+# review finding 1: provenance must never be inherited from an enclosing repository
+#
+# `git -C <dir>` walks upwards. An unpacked source tree dropped anywhere inside an unrelated
+# repository would otherwise report THAT repository's HEAD -- and report it clean, because the
+# enclosing tree genuinely is clean while ignoring the copy. The identity would name a commit from a
+# different project.
+# ================================================================================================
+
+@pytest.fixture(scope="module")
+def enclosed_install(tmp_path_factory):
+    """A source tree unpacked into an ignored directory of an unrelated, clean Git repository."""
+    base = tmp_path_factory.mktemp("enclosed")
+    outer = base / "unrelated-project"
+    outer.mkdir()
+    (outer / "README.md").write_text("an unrelated project\n", encoding="utf-8")
+    (outer / ".gitignore").write_text("vendor/\n", encoding="utf-8")
+
+    git(base, "init", "--quiet", str(outer))
+    git(outer, "config", "user.email", "test@example.invalid")
+    git(outer, "config", "user.name", "Unrelated Project")
+    git(outer, "config", "commit.gpgsign", "false")
+    git(outer, "add", "-A")
+    git(outer, "commit", "--quiet", "-m", "unrelated project")
+
+    vendored = make_source_tree(outer / "vendor" / "md-templates")
+    # the decisive setup: the enclosing repository is CLEAN, because it ignores the vendored copy
+    assert git(outer, "status", "--porcelain").stdout.strip() == ""
+
+    wheel = build_wheel(vendored, base / "dist")
+    target = install_wheel(wheel, base / "site")
+    return {"outer": outer, "outer_head": git(outer, "rev-parse", "HEAD").stdout.strip(),
+            "vendored": vendored, "target": target,
+            "packaged": target / "md_templates" / "core" / PACKAGED_SUBDIR}
+
+
+def test_f1_git_reports_the_enclosing_repository_from_the_vendored_directory(enclosed_install):
+    """The hazard is real: plain `git -C` does resolve to the outer repository from there."""
+    result = subprocess.run(["git", "-C", str(enclosed_install["vendored"]), "rev-parse", "HEAD"],
+                            capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0
+    assert result.stdout.strip() == enclosed_install["outer_head"]
+
+
+def test_f1_inspect_provenance_refuses_a_directory_that_is_not_the_worktree_root(enclosed_install):
+    from md_templates.core import inspect_provenance
+
+    provenance = inspect_provenance(enclosed_install["vendored"])
+    assert provenance.commit_sha is None
+    assert provenance.resolved is False
+    assert "not the root of a Git worktree" in provenance.detail
+    assert provenance.worktree_root is not None
+
+
+def test_f1_source_identity_refuses_an_enclosed_checkout(enclosed_install):
+    from md_templates.core import NoProvenanceError, load_catalog, resolve_identity
+
+    catalog = load_catalog(enclosed_install["vendored"])
+    with pytest.raises(NoProvenanceError):
+        resolve_identity(catalog, REST2_ID)
+
+
+def test_f1_a_wheel_built_there_does_not_inherit_the_outer_commit(enclosed_install):
+    packaged = verify_packaged_catalog(enclosed_install["packaged"])
+    assert packaged.provenance.resolved is False
+    assert packaged.provenance.source_state == "no-verifiable-git-provenance"
+    assert packaged.provenance.commit_sha is None
+
+    blob = (enclosed_install["packaged"] / BUILD_PROVENANCE_FILENAME).read_bytes()
+    assert enclosed_install["outer_head"].encode() not in blob
+
+    with pytest.raises(UnresolvedBuildProvenanceError):
+        resolve_packaged_identity(REST2_ID, root=enclosed_install["packaged"])
+
+
+# ================================================================================================
+# review finding 2: archive provenance must bind the implementation, not just the catalog
+#
+# Binding registry.yaml and the descriptors alone leaves the code that reads and verifies them
+# unbound: unpack, rewrite the loader or the build hook, rebuild, and the wheel would inherit a
+# commit that never contained that code.
+# ================================================================================================
+
+@pytest.mark.parametrize("relative,edit", [
+    ("src/md_templates/core/packaged.py", "\n# tampered loader\n"),
+    ("src/md_templates/openmm/bundlev2.py", "\n# tampered engine module\n"),
+    ("build_support/catalog.py", "\n# tampered build hook\n"),
+])
+def test_f2_editing_any_relevant_source_in_an_archive_breaks_inheritance(sdist_tree, tmp_path,
+                                                                        relative, edit):
+    modified = tmp_path / "modified"
+    shutil.copytree(sdist_tree["unpacked"], modified)
+    target = modified / relative
+    assert target.is_file(), target
+    target.write_text(target.read_text() + edit, encoding="utf-8")
+
+    wheel = build_wheel(modified, tmp_path / "dist")
+    installed = install_wheel(wheel, tmp_path / "site")
+    root = installed / "md_templates" / "core" / PACKAGED_SUBDIR
+
+    packaged = verify_packaged_catalog(root)
+    assert packaged.provenance.resolved is False, relative
+    assert packaged.provenance.source_state == "no-verifiable-git-provenance"
+    assert sdist_tree["head"].encode() not in (root / BUILD_PROVENANCE_FILENAME).read_bytes()
+    with pytest.raises(UnresolvedBuildProvenanceError):
+        resolve_packaged_identity(REST2_ID, root=root)
+
+
+# ================================================================================================
+# review finding 3: the supported gate must require resolved provenance, not accept either branch
+# ================================================================================================
+
+GATE = REPO_ROOT / "scripts" / "ci" / "check_packaged_catalog.py"
+
+
+def run_gate(target: Path, cwd: Path, *args: str) -> subprocess.CompletedProcess:
+    import os
+
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    env["PYTHONPATH"] = str(target)
+    return subprocess.run([sys.executable, str(GATE), *args],
+                          capture_output=True, text=True, timeout=900, cwd=str(cwd), env=env)
+
+
+def test_f3_the_gate_fails_on_an_unresolved_build_by_default(dirty_install):
+    result = run_gate(dirty_install["target"], dirty_install["elsewhere"])
+    assert result.returncode != 0, result.stdout
+    assert "build provenance is unresolved" in result.stdout + result.stderr
+    assert "dirty-source-tree" in result.stdout + result.stderr
+
+
+def test_f3_local_development_mode_must_be_selected_explicitly(dirty_install):
+    result = run_gate(dirty_install["target"], dirty_install["elsewhere"], "--allow-unresolved")
+    assert result.returncode == 0, result.stderr
+    assert "local-development" in result.stdout
+    assert "identity refused" in result.stdout
+
+
+def test_f3_the_gate_passes_on_a_clean_build_with_the_matching_commit(clean_install):
+    result = run_gate(clean_install["target"], clean_install["elsewhere"],
+                      "--expect-commit", clean_install["head"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "mode:               strict" in result.stdout
+    assert "(matches)" in result.stdout
+    assert clean_install["head"] in result.stdout
+
+
+def test_f3_the_gate_fails_when_the_wheel_was_built_from_a_different_commit(clean_install):
+    """A stale wheel next to a moved checkout is the realistic version of this."""
+    other = "0" * 39 + "1"
+    result = run_gate(clean_install["target"], clean_install["elsewhere"],
+                      "--expect-commit", other)
+    assert result.returncode != 0
+    assert "built from different source" in result.stdout + result.stderr
+
+
+def test_f3_the_gate_rejects_a_malformed_expected_commit(clean_install):
+    result = run_gate(clean_install["target"], clean_install["elsewhere"],
+                      "--expect-commit", "4d21838")
+    assert result.returncode != 0
+    assert "not a full 40-character hex SHA" in result.stdout + result.stderr
+
+
+def test_f3_the_shipped_fast_gate_does_not_hardcode_the_development_escape():
+    script = (REPO_ROOT / "scripts" / "ci" / "fast_checks.sh").read_text()
+    assert "--expect-commit" in script
+    assert "FAST_CHECKS_ALLOW_UNRESOLVED:-0" in script, "the escape must default to off"
+    assert "--allow-unresolved" in script
+    # the flag may only be added inside the opt-in branch
+    unconditional = [line for line in script.splitlines()
+                     if "--allow-unresolved" in line and "FAST_CHECKS_ALLOW_UNRESOLVED" not in line]
+    assert all("PACKAGED_ARGS+=" in line for line in unconditional), unconditional
+
+
+def test_f2_the_archive_record_carries_a_source_tree_digest(sdist_tree):
+    from md_templates.core.resources import SOURCE_PROVENANCE_FILENAME
+
+    record = json.loads((sdist_tree["unpacked"] / SOURCE_PROVENANCE_FILENAME).read_text())
+    assert len(record["source_tree_sha256"]) == 64
+    assert record["source_tree_sha256"] != record["resource_manifest_sha256"]
+
+
+def test_f2_the_source_digest_covers_more_than_the_catalog(sdist_tree, tmp_path):
+    """It must move when implementation code moves, not only when a descriptor does."""
+    from build_support.catalog import source_tree_digest
+
+    baseline = source_tree_digest(sdist_tree["unpacked"])
+    copy = tmp_path / "copy"
+    shutil.copytree(sdist_tree["unpacked"], copy)
+    assert source_tree_digest(copy) == baseline
+
+    edited = copy / "src" / "md_templates" / "core" / "packaged.py"
+    edited.write_text(edited.read_text() + "\n# moved\n", encoding="utf-8")
+    assert source_tree_digest(copy) != baseline
+
+
+def test_f2_build_artifacts_do_not_disturb_the_source_digest(sdist_tree, tmp_path):
+    """`.egg-info` and `__pycache__` appear during a build; the digest must ignore them."""
+    from build_support.catalog import source_tree_digest
+
+    copy = tmp_path / "copy"
+    shutil.copytree(sdist_tree["unpacked"], copy)
+    baseline = source_tree_digest(copy)
+
+    (copy / "src" / "md_templates.egg-info").mkdir(parents=True, exist_ok=True)
+    (copy / "src" / "md_templates.egg-info" / "SOURCES.txt").write_text("x\n", encoding="utf-8")
+    (copy / "src" / "md_templates" / "__pycache__").mkdir(parents=True, exist_ok=True)
+    (copy / "src" / "md_templates" / "__pycache__" / "x.cpython-311.pyc").write_bytes(b"\x00")
+    assert source_tree_digest(copy) == baseline
+
+
+# ================================================================================================
 # 7. single source of truth
 # ================================================================================================
 
