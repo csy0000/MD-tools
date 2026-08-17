@@ -29,7 +29,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "build"]
+# pyflakes backs the undefined-name gate in tests/test_import_integrity.py, which is a
+# correctness check rather than a style one: it catches a moved function still naming a
+# symbol that is no longer in scope. Without it that test skips, and the gate is weaker
+# exactly where a migration needs it most.
+dev = ["pytest", "build", "pyflakes"]
 
 # The entry point. Installing the wheel puts `md-openmm` on PATH, which is what lets a
 # consuming project run the pipeline without a source checkout.
@@ -50,7 +54,7 @@ include = ["md_templates*"]
     # `config` command that cannot resolve anything, so they must travel with the package.
     "profiles/*.json",
 ]
-"md_templates.openmm" = ["manifests/systems/*.yaml", "manifests/experiments/*.yaml",
+"md_templates.engines.openmm" = ["manifests/systems/*.yaml", "manifests/experiments/*.yaml",
                           # The pdb route's manifest points at a sibling structure file, so
                           # the structure must travel in the wheel too or `--system ace_ala_nme`
                           # resolves to a manifest whose input does not exist.

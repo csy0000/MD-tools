@@ -1,7 +1,7 @@
 # Conventional MD, explicit water, OpenMM.
 #
 # METADATA ONLY. Validating this file changes no runtime behaviour: execution still goes through
-# `md-openmm` over src/md_templates/openmm/, which is what `implementation.dispatch: legacy-direct`
+# `md-openmm` over src/md_templates/engines/openmm/, which is what `implementation.dispatch: legacy-direct`
 # records. PR 1 of the multi-method migration adds the catalog; it does not activate it.
 
 schema_version: 1
@@ -28,13 +28,14 @@ identity:
 implementation:
   binding: current-openmm-implementation
   dispatch: legacy-direct
-  python_namespace: md_templates.openmm
+  python_namespace: md_templates.engines.openmm
   cli_command: md-openmm
   notes:
     - "Generic template dispatch is NOT active. This descriptor names the implementation that
        currently provides the method; it does not route to it."
-    - "The implementation is expected to move under src/md_templates/engines/openmm/ in a later
-       migration PR. Nothing was moved in PR 1, so the namespace above is current, not aspirational."
+    - "The implementation now lives under src/md_templates/engines/openmm/ as the single reusable
+       provider for this engine. src/md_templates/openmm/ remains as documented compatibility
+       aliases so every historical import path keeps working."
 
 input_routes:
   - id: smiles
@@ -134,7 +135,7 @@ validation:
       establishes_general_scientific_validation: false
 
 repository_references:
-  - src/md_templates/openmm
+  - src/md_templates/engines/openmm
   - src/md_templates/core/config/profiles
   - docs/support-matrix.md
   - docs/configuration.md

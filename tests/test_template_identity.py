@@ -438,7 +438,7 @@ def test_template_identity_is_not_reachable_from_the_runtime():
     """Catalog metadata must not reach a bundle, a run manifest or a hash."""
     import ast
 
-    runtime = REPO_ROOT / "src" / "md_templates" / "openmm"
+    runtime = REPO_ROOT / "src" / "md_templates" / "engines" / "openmm"
     offenders = []
     for path in sorted(runtime.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
@@ -459,5 +459,6 @@ def test_template_identity_is_not_reachable_from_the_runtime():
 
 def test_the_runtime_does_use_core_for_shared_contracts():
     """The complement, so the test above cannot pass by the runtime importing nothing at all."""
-    text = (REPO_ROOT / "src" / "md_templates" / "openmm" / "runner.py").read_text(encoding="utf-8")
+    text = (REPO_ROOT / "src" / "md_templates" / "engines" / "openmm"
+            / "runner.py").read_text(encoding="utf-8")
     assert "core.config" in text or "core.persistence" in text or "core.bundle" in text

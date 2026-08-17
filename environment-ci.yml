@@ -49,6 +49,7 @@ dependencies:
   - setuptools>=64            # PEP 660 editable installs
   - python-build                     # `python -m build` -> the wheel a consuming repository installs
   - pytest
+  - pyflakes
   - git
 
   # --- simulation engine -----------------------------------------------------------------------

@@ -282,7 +282,7 @@ def test_descriptors_state_that_dispatch_is_not_active():
         impl = catalog.descriptor(tid).implementation
         assert impl.dispatch == "legacy-direct"
         assert impl.binding == "current-openmm-implementation"
-        assert impl.python_namespace == "md_templates.openmm"
+        assert impl.python_namespace == "md_templates.engines.openmm"
         assert impl.cli_command == "md-openmm"
 
 

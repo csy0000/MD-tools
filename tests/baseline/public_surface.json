@@ -1310,11 +1310,11 @@
       },
       "ExperimentManifest": {
         "kind": "class",
-        "origin": "md_templates.openmm.schemas"
+        "origin": "md_templates.engines.openmm.schemas"
       },
       "ManifestError": {
         "kind": "class",
-        "origin": "md_templates.openmm.schemas"
+        "origin": "md_templates.engines.openmm.schemas"
       },
       "SCHEMA_VERSION": {
         "kind": "int",
@@ -1322,7 +1322,7 @@
       },
       "SystemManifest": {
         "kind": "class",
-        "origin": "md_templates.openmm.schemas"
+        "origin": "md_templates.engines.openmm.schemas"
       },
       "annotations": {
         "kind": "_Feature",
@@ -1330,115 +1330,115 @@
       },
       "attempt_rest2_exchange": {
         "kind": "callable",
-        "origin": "md_templates.openmm.rest2"
+        "origin": "md_templates.engines.openmm.methods.rest2"
       },
       "build_forcefield": {
         "kind": "callable",
-        "origin": "md_templates.openmm.system"
+        "origin": "md_templates.engines.openmm.system"
       },
       "build_rest2_scaled_system": {
         "kind": "callable",
-        "origin": "md_templates.openmm.system"
+        "origin": "md_templates.engines.openmm.system"
       },
       "build_simbox": {
         "kind": "callable",
-        "origin": "md_templates.openmm.equilibration"
+        "origin": "md_templates.engines.openmm.equilibration"
       },
       "build_system": {
         "kind": "callable",
-        "origin": "md_templates.openmm.system"
+        "origin": "md_templates.engines.openmm.system"
       },
       "classify_omega_bonds": {
         "kind": "callable",
-        "origin": "md_templates.openmm.system"
+        "origin": "md_templates.engines.openmm.system"
       },
       "completed_prefix": {
         "kind": "callable",
-        "origin": "md_templates.openmm.md"
+        "origin": "md_templates.engines.openmm.methods.md"
       },
       "config_hash": {
         "kind": "callable",
-        "origin": "md_templates.openmm.schemas"
+        "origin": "md_templates.engines.openmm.schemas"
       },
       "dump_defaults": {
         "kind": "callable",
-        "origin": "md_templates.openmm.config"
+        "origin": "md_templates.engines.openmm.config"
       },
       "exchange_pairs": {
         "kind": "callable",
-        "origin": "md_templates.openmm.rest2"
+        "origin": "md_templates.engines.openmm.methods.rest2"
       },
       "exchange_rounds": {
         "kind": "callable",
-        "origin": "md_templates.openmm.config"
+        "origin": "md_templates.engines.openmm.config"
       },
       "initial_structure": {
         "kind": "callable",
-        "origin": "md_templates.openmm.system"
+        "origin": "md_templates.engines.openmm.system"
       },
       "load_config": {
         "kind": "callable",
-        "origin": "md_templates.openmm.config"
+        "origin": "md_templates.engines.openmm.config"
       },
       "load_experiment": {
         "kind": "callable",
-        "origin": "md_templates.openmm.schemas"
+        "origin": "md_templates.engines.openmm.schemas"
       },
       "load_system": {
         "kind": "callable",
-        "origin": "md_templates.openmm.schemas"
+        "origin": "md_templates.engines.openmm.schemas"
       },
       "make_integrator": {
         "kind": "callable",
-        "origin": "md_templates.openmm.equilibration"
+        "origin": "md_templates.engines.openmm.equilibration"
       },
       "minimize_equilibrate": {
         "kind": "callable",
-        "origin": "md_templates.openmm.equilibration"
+        "origin": "md_templates.engines.openmm.equilibration"
       },
       "omega_central_bonds": {
         "kind": "callable",
-        "origin": "md_templates.openmm.system"
+        "origin": "md_templates.engines.openmm.system"
       },
       "protonate": {
         "kind": "callable",
-        "origin": "md_templates.openmm.system"
+        "origin": "md_templates.engines.openmm.system"
       },
       "repartition_hydrogen_mass": {
         "kind": "callable",
-        "origin": "md_templates.openmm.system"
+        "origin": "md_templates.engines.openmm.system"
       },
       "resolve_config": {
         "kind": "callable",
-        "origin": "md_templates.openmm.config"
+        "origin": "md_templates.engines.openmm.config"
       },
       "resolve_remd_scale_ladder": {
         "kind": "callable",
-        "origin": "md_templates.openmm.rest2"
+        "origin": "md_templates.engines.openmm.methods.rest2"
       },
       "resolve_route": {
         "kind": "callable",
-        "origin": "md_templates.openmm.system"
+        "origin": "md_templates.engines.openmm.system"
       },
       "rest2_ladder": {
         "kind": "callable",
-        "origin": "md_templates.openmm.config"
+        "origin": "md_templates.engines.openmm.config"
       },
       "run_md": {
         "kind": "callable",
-        "origin": "md_templates.openmm.md"
+        "origin": "md_templates.engines.openmm.methods.md"
       },
       "run_rest2_remd": {
         "kind": "callable",
-        "origin": "md_templates.openmm.rest2"
+        "origin": "md_templates.engines.openmm.methods.rest2"
       },
       "solvate": {
         "kind": "callable",
-        "origin": "md_templates.openmm.solvation"
+        "origin": "md_templates.engines.openmm.solvation"
       },
       "write_manifest": {
         "kind": "callable",
-        "origin": "md_templates.openmm.config"
+        "origin": "md_templates.engines.openmm.config"
       }
     }
   },
@@ -1462,6 +1462,25 @@
     "md_templates.core.registry",
     "md_templates.core.resources",
     "md_templates.core.template",
+    "md_templates.engines",
+    "md_templates.engines.openmm",
+    "md_templates.engines.openmm.adapter",
+    "md_templates.engines.openmm.bundle",
+    "md_templates.engines.openmm.bundlecheck",
+    "md_templates.engines.openmm.bundleinfo",
+    "md_templates.engines.openmm.cli",
+    "md_templates.engines.openmm.config",
+    "md_templates.engines.openmm.equilibration",
+    "md_templates.engines.openmm.methods",
+    "md_templates.engines.openmm.methods.md",
+    "md_templates.engines.openmm.methods.rest2",
+    "md_templates.engines.openmm.platform",
+    "md_templates.engines.openmm.provenance",
+    "md_templates.engines.openmm.restart",
+    "md_templates.engines.openmm.runner",
+    "md_templates.engines.openmm.schemas",
+    "md_templates.engines.openmm.solvation",
+    "md_templates.engines.openmm.system",
     "md_templates.openmm",
     "md_templates.openmm._compat",
     "md_templates.openmm.adapter",

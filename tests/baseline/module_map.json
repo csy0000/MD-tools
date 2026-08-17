@@ -105,10 +105,10 @@
       "note": "topology_counts needs an engine and stays in the OpenMM provider"
     },
     "md_templates.openmm.schemas": {
-      "destination": "md_templates.openmm.schemas",
-      "phase": 3,
-      "status": "unchanged",
-      "note": "kept with the engine: the shipped system/experiment manifests are OpenMM assets and core must not reach into an engine's data directory. Its hashing helpers moved to md_templates.core.hashing and are re-exported from here, so there is one definition."
+      "destination": "md_templates.engines.openmm.schemas",
+      "phase": 4,
+      "status": "moved",
+      "compat_shim": true
     },
     "md_templates.openmm.fingerprint": {
       "destination": "md_templates.core.fingerprint",
@@ -119,81 +119,81 @@
     "md_templates.openmm.system": {
       "destination": "md_templates.engines.openmm.system",
       "phase": 4,
-      "status": "planned",
+      "status": "moved",
       "compat_shim": true
     },
     "md_templates.openmm.solvation": {
       "destination": "md_templates.engines.openmm.solvation",
       "phase": 4,
-      "status": "planned",
+      "status": "moved",
       "compat_shim": true
     },
     "md_templates.openmm.equilibration": {
       "destination": "md_templates.engines.openmm.equilibration",
       "phase": 4,
-      "status": "planned",
+      "status": "moved",
       "compat_shim": true
     },
     "md_templates.openmm.md": {
       "destination": "md_templates.engines.openmm.methods.md",
       "phase": 4,
-      "status": "planned",
+      "status": "moved",
       "compat_shim": true
     },
     "md_templates.openmm.rest2": {
       "destination": "md_templates.engines.openmm.methods.rest2",
       "phase": 4,
-      "status": "planned",
+      "status": "moved",
       "compat_shim": true
     },
     "md_templates.openmm.bundle": {
       "destination": "md_templates.engines.openmm.bundle",
       "phase": 4,
-      "status": "planned",
+      "status": "moved",
       "compat_shim": true
     },
     "md_templates.openmm.bundlecheck": {
       "destination": "md_templates.engines.openmm.bundlecheck",
       "phase": 4,
-      "status": "planned",
+      "status": "moved",
       "compat_shim": true
     },
     "md_templates.openmm.provenance": {
       "destination": "md_templates.engines.openmm.provenance",
       "phase": 4,
-      "status": "planned",
+      "status": "moved",
       "compat_shim": true
     },
     "md_templates.openmm.envcheck": {
       "destination": "md_templates.engines.openmm.platform",
       "phase": 4,
-      "status": "planned",
+      "status": "moved",
       "compat_shim": true
     },
     "md_templates.openmm.runner": {
       "destination": "md_templates.engines.openmm.runner",
       "phase": 4,
-      "status": "planned",
+      "status": "moved",
       "compat_shim": true
     },
     "md_templates.openmm.config": {
       "destination": "md_templates.engines.openmm.config",
       "phase": 4,
-      "status": "planned",
+      "status": "moved",
       "compat_shim": true
     },
     "md_templates.openmm.cli": {
       "destination": "md_templates.engines.openmm.cli",
       "phase": 4,
-      "status": "planned",
+      "status": "moved",
       "compat_shim": true,
-      "note": "md-openmm entry point must keep working unchanged"
+      "note": "the shim also handles `python -m md_templates.openmm.cli`, which an alias alone cannot"
     },
     "md_templates.openmm": {
       "destination": "md_templates.openmm",
       "phase": 4,
-      "status": "planned",
-      "note": "becomes a thin documented compatibility namespace"
+      "status": "unchanged",
+      "note": "now a thin documented compatibility namespace: aliases only, no implementation"
     },
     "md_templates.core.hashing": {
       "destination": "md_templates.core.hashing",
@@ -208,16 +208,16 @@
       "note": "the moved canonical configuration package"
     },
     "md_templates.openmm.restart": {
-      "destination": "md_templates.openmm.restart",
-      "phase": 3,
-      "status": "unchanged",
-      "note": "save_restart/load_restart: they take a running Simulation, so they stayed with the provider"
+      "destination": "md_templates.engines.openmm.restart",
+      "phase": 4,
+      "status": "moved",
+      "compat_shim": true
     },
     "md_templates.openmm.bundleinfo": {
-      "destination": "md_templates.openmm.bundleinfo",
-      "phase": 3,
-      "status": "unchanged",
-      "note": "topology_counts/forcefield_provenance: need a built OpenMM system"
+      "destination": "md_templates.engines.openmm.bundleinfo",
+      "phase": 4,
+      "status": "moved",
+      "compat_shim": true
     },
     "md_templates.openmm._compat": {
       "destination": "md_templates.openmm._compat",
@@ -277,10 +277,105 @@
       "status": "unchanged"
     },
     "md_templates.openmm.adapter": {
-      "destination": "md_templates.openmm.adapter",
-      "phase": 3,
-      "status": "unchanged",
-      "note": "reachable as md_templates.openmm.spec.adapter"
+      "destination": "md_templates.engines.openmm.adapter",
+      "phase": 4,
+      "status": "moved",
+      "compat_shim": true
+    },
+    "md_templates.engines": {
+      "destination": "md_templates.engines",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm": {
+      "destination": "md_templates.engines.openmm",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.methods": {
+      "destination": "md_templates.engines.openmm.methods",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.adapter": {
+      "destination": "md_templates.engines.openmm.adapter",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.bundle": {
+      "destination": "md_templates.engines.openmm.bundle",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.bundlecheck": {
+      "destination": "md_templates.engines.openmm.bundlecheck",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.bundleinfo": {
+      "destination": "md_templates.engines.openmm.bundleinfo",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.config": {
+      "destination": "md_templates.engines.openmm.config",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.equilibration": {
+      "destination": "md_templates.engines.openmm.equilibration",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.methods.md": {
+      "destination": "md_templates.engines.openmm.methods.md",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.methods.rest2": {
+      "destination": "md_templates.engines.openmm.methods.rest2",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.platform": {
+      "destination": "md_templates.engines.openmm.platform",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.provenance": {
+      "destination": "md_templates.engines.openmm.provenance",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.restart": {
+      "destination": "md_templates.engines.openmm.restart",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.runner": {
+      "destination": "md_templates.engines.openmm.runner",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.schemas": {
+      "destination": "md_templates.engines.openmm.schemas",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.solvation": {
+      "destination": "md_templates.engines.openmm.solvation",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.system": {
+      "destination": "md_templates.engines.openmm.system",
+      "phase": 4,
+      "status": "unchanged"
+    },
+    "md_templates.engines.openmm.cli": {
+      "destination": "md_templates.engines.openmm.cli",
+      "phase": 4,
+      "status": "unchanged"
     }
   },
   "tests": {

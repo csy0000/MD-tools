@@ -97,8 +97,8 @@ def test_every_import_in_the_module_resolves(path: Path, module_name: str):
 
 def test_the_check_covers_deferred_imports_not_just_top_level_ones():
     """A guard that only saw module-level imports would have caught neither Phase 3 failure."""
-    path = PACKAGE_ROOT / "openmm" / "cli.py"
-    targets = list(import_targets(path, "md_templates.openmm.cli"))
+    path = PACKAGE_ROOT / "engines" / "openmm" / "cli.py"
+    targets = list(import_targets(path, "md_templates.engines.openmm.cli"))
     top_level = {alias.name for node in ast.parse(path.read_text()).body
                  if isinstance(node, ast.Import) for alias in node.names}
     assert len(targets) > len(top_level) + 5, (len(targets), len(top_level))
