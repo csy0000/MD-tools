@@ -21,7 +21,8 @@ from .models import SimulationSpec
 from .units import Quantity
 
 __all__ = ["canonical_json", "sha256_of", "system_build_projection", "protocol_projection",
-           "execution_projection", "hashes", "to_plain"]
+           "prepared_state_projection", "protocol_at_prepare_projection",
+           "execution_projection", "hashes", "to_plain", "dump_model"]
 
 #: Fields that are execution-only: they may change performance or output volume, never the
 #: Hamiltonian, so they are recorded in provenance and excluded from every compatibility hash.
@@ -83,9 +84,35 @@ def _dump(spec: SimulationSpec) -> dict:
 
 
 def system_build_projection(spec: SimulationSpec) -> dict:
-    """Everything that decides the prepared System. A change here needs a new bundle."""
+    """Molecular identity and parameterisation: what the System is made of."""
     data = _dump(spec)
     return {"system": data["system"], "build": data["build"]}
+
+
+def prepared_state_projection(spec: SimulationSpec) -> dict:
+    """Everything that decides the prepared ARTIFACTS -- system.xml AND equilibrated_state.xml.
+
+    Wider than system/build, deliberately. A field belongs here if changing it would make the
+    stored starting state the wrong one, regardless of which model section it happens to live in:
+    the equilibration protocol and its duration, the integrator used to reach that state, and the
+    structure/equilibration seeds all qualify. Classifying by section rather than by consequence
+    would leave a bundle reusable across an equilibration change that produced a different state.
+    """
+    data = _dump(spec)
+    seeds = spec.randomness.resolve()
+    return {
+        "system": data["system"],
+        "build": data["build"],
+        "equilibration": data["protocol"]["equilibration"],
+        "integrator": data["protocol"]["integrator"],
+        # the seeds that shaped the stored artifacts; the production seed does not belong here
+        "seeds": {"structure": seeds["structure"], "equilibration": seeds["equilibration"]},
+    }
+
+
+def protocol_at_prepare_projection(spec: SimulationSpec) -> dict:
+    """The protocol as it stood when the bundle was prepared, recorded for comparison later."""
+    return {"protocol": _dump(spec)["protocol"]}
 
 
 def protocol_projection(spec: SimulationSpec) -> dict:
@@ -97,6 +124,11 @@ def protocol_projection(spec: SimulationSpec) -> dict:
     data = _dump(spec)
     protocol = json.loads(json.dumps(data["protocol"]))
     protocol.get("production", {}).pop("n_chunks", None)
+    # The resolved PRODUCTION seed is continuity-defining: the same state advanced under a
+    # different seed is a different trajectory. The master seed is not hashed as a label.
+    seeds = spec.randomness.resolve()
+    method = spec.protocol.production.method
+    protocol["production_seed"] = seeds["md" if method == "md" else "rest2"]
     return {"protocol": protocol}
 
 
@@ -108,6 +140,8 @@ def execution_projection(spec: SimulationSpec) -> dict:
 def hashes(spec: SimulationSpec) -> dict[str, str]:
     return {
         "system_build_sha256": sha256_of(system_build_projection(spec)),
+        "prepared_state_sha256": sha256_of(prepared_state_projection(spec)),
         "protocol_sha256": sha256_of(protocol_projection(spec)),
+        "protocol_at_prepare_sha256": sha256_of(protocol_at_prepare_projection(spec)),
         "execution_sha256": sha256_of(execution_projection(spec)),
     }

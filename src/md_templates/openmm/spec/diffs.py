@@ -20,12 +20,22 @@ from .models import SimulationSpec
 
 __all__ = ["classify", "diff_specs", "explain_field", "CATEGORIES"]
 
-CATEGORIES = ("bundle-defining", "continuity-defining", "extension-only", "execution-only")
+CATEGORIES = ("bundle-defining", "continuity-defining", "extension-only",
+              "execution-only", "seed-label")
 
 
 def classify(dotted: str) -> str:
     if dotted in EXTENSION_ONLY or dotted.endswith(".n_chunks"):
         return "extension-only"
+    if dotted.startswith("randomness."):
+        # The master seed is a label; what changes physics is the RESOLVED stage seed. Structure
+        # and equilibration seeds shape the prepared artifacts, the production seed shapes the run,
+        # and a master seed whose stage seeds are all pinned changes neither.
+        if dotted.endswith(("stage_seeds.structure", "stage_seeds.equilibration")):
+            return "bundle-defining"
+        if dotted.endswith(("stage_seeds.md", "stage_seeds.rest2")):
+            return "continuity-defining"
+        return "seed-label"
     if dotted.startswith("execution."):
         return "execution-only"
     if dotted.startswith(("system.", "build.")):
@@ -81,6 +91,11 @@ _EFFECTS: dict[str, str] = {
     "execution.platform": "OpenMM platform. Performance only; not part of any compatibility hash.",
     "execution.precision": "CUDA/OpenCL precision. Single silently changes energies; mixed is the "
                            "default here.",
+    "randomness.master_seed":
+        "the seed stage seeds DERIVE from (master + offset: structure 0, equilibration 1, md 2, "
+        "rest2 3). Changing it normally changes every derived seed and therefore both physical "
+        "hashes -- but if every affected stage seed is explicitly pinned to its old value, the "
+        "hashes are unchanged, because what is hashed is the resolved stage seed, not the label.",
 }
 
 

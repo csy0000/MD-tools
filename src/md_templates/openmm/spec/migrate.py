@@ -130,11 +130,15 @@ def migrate_manifests(system_doc: dict, experiment_doc: dict) -> tuple[dict, lis
             "model: it is a claim about evidence, not a simulation setting. Record it in "
             "documentation or bundle provenance instead."
         )
+    randomness = {"schema_version": 1}
     if experiment_doc.get("master_seed") is not None:
+        randomness["master_seed"] = int(experiment_doc["master_seed"])
         notes.append(
-            f"master_seed {experiment_doc['master_seed']} is not copied automatically; set "
-            "protocol.production.seed explicitly if the run must reproduce a previous stream."
+            f"master_seed {experiment_doc['master_seed']} -> randomness.master_seed. Stage seeds "
+            "derive from it by the unchanged rule (master + structure/equilibration/md/rest2 "
+            "offset 0..3), so migrated inputs reproduce their existing trajectories."
         )
 
-    document = {"system": system, "build": build, "protocol": protocol, "execution": execution}
+    document = {"system": system, "build": build, "protocol": protocol,
+                "execution": execution, "randomness": randomness}
     return document, notes

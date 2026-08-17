@@ -269,6 +269,56 @@ class ProtocolSpec(Strict):
 
 
 # ---------------------------------------------------------------------------------------------
+# RandomnessSpec -- seeds, explicitly
+# ---------------------------------------------------------------------------------------------
+
+#: Stage order defines the derivation offsets and MUST NOT be reordered: a stage seed is
+#: `master_seed + index`, and this is the rule migrated inputs reproduce.
+STAGE_ORDER = ("structure", "equilibration", "md", "rest2")
+
+RANDOMNESS_SCHEMA_VERSION = 1
+
+
+class StageSeeds(Strict):
+    """Per-stage seeds. `None` means "derive from the master seed"."""
+
+    structure: Optional[int] = None
+    equilibration: Optional[int] = None
+    md: Optional[int] = None
+    rest2: Optional[int] = None
+
+
+class RandomnessSpec(Strict):
+    """The master seed and the stage seeds derived from it.
+
+    `master_seed` is a LABEL until it is derived: what changes a trajectory is the resolved stage
+    seed, so the projections hash the resolved stage seeds rather than the master. Pinning every
+    affected stage seed to its old value therefore leaves the physical hashes unchanged even when
+    the master seed differs -- which is the honest behaviour, and `config diff` explains it.
+    """
+
+    schema_version: int = RANDOMNESS_SCHEMA_VERSION
+    master_seed: int = 20260814
+    stage_seeds: StageSeeds = Field(default_factory=StageSeeds)
+
+    def resolve(self) -> dict[str, int]:
+        """Stage seeds after derivation: `master_seed + index`, explicit values preserved.
+
+        This is the legacy rule, unchanged, so a migrated input reproduces its existing
+        trajectories rather than merely a valid one.
+        """
+        out: dict[str, int] = {}
+        for offset, stage in enumerate(STAGE_ORDER):
+            explicit = getattr(self.stage_seeds, stage)
+            out[stage] = int(explicit) if explicit is not None else self.master_seed + offset
+        return out
+
+    def sources(self) -> dict[str, str]:
+        return {stage: ("explicit" if getattr(self.stage_seeds, stage) is not None else "derived")
+                for stage in STAGE_ORDER}
+
+
+# ---------------------------------------------------------------------------------------------
 # ExecutionSpec -- machine choices only
 # ---------------------------------------------------------------------------------------------
 
@@ -307,6 +357,7 @@ class SimulationSpec(Strict):
     build: BuildSpec
     protocol: ProtocolSpec
     execution: ExecutionSpec
+    randomness: RandomnessSpec = Field(default_factory=RandomnessSpec)
 
     @model_validator(mode="after")
     def _route_and_parameters_agree(self):

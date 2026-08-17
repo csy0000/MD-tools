@@ -129,13 +129,17 @@ def spec_to_runtime_cfg(spec: SimulationSpec, *, base: dict | None = None) -> di
             "max_proline_ring_size": prod.max_proline_ring_size,
         })
 
-    # Per-stage seeds derive from the run seed exactly as the legacy resolver derives them. The
-    # canonical model does not carry a master seed, and inventing a different derivation here
-    # would change trajectories for no reason -- this refactor preserves defaults, it does not
-    # retune them. An explicit protocol seed still wins, having been set above.
-    from ..config import _resolve_seeds
-
-    _resolve_seeds(cfg)
+    # Seeds come from the canonical randomness block, which reproduces the legacy derivation
+    # (master + stage offset) exactly. The runtime tree is filled from the RESOLVED values, so the
+    # legacy `_resolve_seeds` has nothing left to derive.
+    seeds = spec.randomness.resolve()
+    cfg["run"]["seed"] = spec.randomness.master_seed
+    cfg["structure"]["etkdg"]["seed"] = seeds["structure"]
+    cfg["equilibration"]["seed"] = seeds["equilibration"]
+    cfg["production"]["md"]["seed"] = seeds["md"]
+    cfg["production"]["remd"]["seed"] = seeds["rest2"]
+    # A production seed stated on the production block is the same setting by another name; the
+    # randomness block is canonical, so it is folded in rather than allowed to disagree.
     if prod.seed is not None:
         key = "md" if prod.method == "md" else "remd"
         cfg["production"][key]["seed"] = prod.seed
@@ -144,6 +148,9 @@ def spec_to_runtime_cfg(spec: SimulationSpec, *, base: dict | None = None) -> di
     cfg["_canonical"] = {
         "method": prod.method,
         "route": system.route,
+        "master_seed": spec.randomness.master_seed,
+        "stage_seeds": seeds,
+        "stage_seed_sources": spec.randomness.sources(),
         "schema_versions": {
             "system": system.schema_version, "build": build.schema_version,
             "protocol": protocol.schema_version, "execution": execution.schema_version,

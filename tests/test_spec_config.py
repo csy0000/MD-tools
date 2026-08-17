@@ -342,4 +342,4 @@ def test_a_build_change_changes_only_the_build_hash():
 def test_the_model_exposes_machine_readable_json_schema():
     schema = SimulationSpec.model_json_schema()
     assert schema["type"] == "object"
-    assert set(schema["properties"]) == {"system", "build", "protocol", "execution"}
+    assert set(schema["properties"]) == {"system", "build", "protocol", "execution", "randomness"}
