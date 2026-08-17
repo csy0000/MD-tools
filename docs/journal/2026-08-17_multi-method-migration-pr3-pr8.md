@@ -242,3 +242,81 @@ anything that pickles by qualified name, or asserts on `__module__`, sees the ch
 commands and exceptions are pinned separately and none was lost. No scientific value moved: the
 seven goldens are byte-identical and the four representative configurations produce identical hashes
 through both import paths.
+
+---
+
+## Phase 4 — reusable OpenMM provider
+
+**What moved.** Sixteen modules and the shipped manifest data to `src/md_templates/engines/openmm/`,
+methods in their own subpackage. `src/md_templates/openmm/` is now aliases and re-exports only — a
+test asserts no module there *defines* a function or class.
+
+| layer | modules |
+|---|---|
+| legacy front end | `schemas`, `config`, `adapter` |
+| building | `system`, `solvation`, `equilibration` |
+| methods | `methods/md`, `methods/rest2` |
+| artifacts | `bundle`, `bundlecheck`, `bundleinfo`, `restart` |
+| execution | `platform` (was `envcheck`), `provenance`, `runner`, `cli` |
+
+`envcheck` was renamed `platform`, which is what it does: choose and validate a platform and device.
+
+**Compatibility matrix**, checked rather than described: 26 legacy import paths, each asserted to
+resolve to the *same module object* as its new home — 16 from this phase, 10 from Phase 3.
+
+### Four defects, each caught by a gate
+
+**1. `python -m md_templates.openmm.cli` printed nothing and exited 0.** Running a module as
+`__main__` executes the shim file, not the alias target, so it imported, aliased and stopped. A
+command that silently succeeds at doing nothing is worse than one that fails. The shim now carries an
+explicit `__main__` guard and deliberately skips aliasing in that case, because rebinding
+`sys.modules["__main__"]` would replace the running program.
+
+**2. `bundlev2` inside the engine no longer meant one thing.** Phase 3 split the contract; call sites
+each had to know which half they wanted. Assembled once now, in `bundlev2_module()`, as the core file
+format plus this engine's counts and force-field provenance.
+
+**3. Three test paths pointed at files the move had emptied.** The peptide PDB literal is the
+instructive one: the fast suite stayed green while the PDB-route slow test died with
+`FileNotFoundError` three minutes in. `test_explicit_baseline`'s module scan had a docstring warning
+that naming one file would retire the check silently — which is nearly what happened.
+
+**4. The engine depended on a compatibility shim's side effect.** This is the one worth remembering.
+Phase 3 left `save_restart`/`load_restart` with the provider and had the legacy `runstate` shim
+attach them onto `core.persistence`, so the historical API kept working. The methods then called them
+*through the core module* — correct only while something had imported the shim. On the REST2 run path
+nothing had:
+
+```
+AttributeError: module 'md_templates.core.persistence' has no attribute 'save_restart'
+```
+
+Four minutes into a run, in a subprocess whose stderr the crash test discarded. The methods now
+import from `..restart` where the functions live; the shim keeps attaching them for legacy callers.
+
+Two subprocess guards now state the invariant directly: importing **only** the engine, core must not
+carry `save_restart` or `topology_counts` while the methods must have both; importing **only** the
+legacy path, the historical API must still work. And the crash test now reports the child's exit
+code and output, because "no generation was committed before the deadline" made an import error
+inside the child indistinguishable from a slow machine.
+
+### Gate
+
+**PASSED.**
+
+```console
+$ python -m pytest tests/ -q -m "not slow"
+676 passed, 17 deselected                                                  49.11 s
+
+$ python -m pytest tests/test_engine_provider.py -q
+36 passed                                                                   3.59 s
+
+$ python -m pytest tests/test_crash_recovery.py tests/test_bundle_portability.py -q -m slow
+15 passed, 21 deselected                                                  272.76 s
+
+$ env -u PYTHONPATH bash scripts/ci/fast_checks.sh        # strict, installed wheel
+fast checks: PASSED                                                        exit 0
+```
+
+Goldens byte-identical; `md-openmm` help, `python -m`, and the entry point all verified; slow timing
+matches the Phase 0 baseline (272.8 s against 273.1 s).
