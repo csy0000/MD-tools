@@ -320,3 +320,146 @@ fast checks: PASSED                                                        exit 
 
 Goldens byte-identical; `md-openmm` help, `python -m`, and the entry point all verified; slow timing
 matches the Phase 0 baseline (272.8 s against 273.1 s).
+
+---
+
+## Phases 5 and 6 — activating conventional MD, then REST2
+
+The two phases are symmetric, so they are recorded together with their differences called out.
+
+### The generic command, and what it deliberately is not
+
+`md-templates` is a **router**, not a second implementation. `prepare`, `run` and `resume` translate
+into exactly one `md-openmm` command and pass the user's arguments through untouched:
+
+```
+md-templates prepare --template conventional-md/openmm/explicit-water -- --config run.yaml
+                                    becomes
+md-openmm prepare --config run.yaml
+```
+
+If the router assembled its own argument list, or applied a default of its own, the two routes could
+agree today and diverge on the next edit — and the divergence would surface as a scientific
+difference nobody was looking for. Keeping the translation to "prepend a subcommand" is what makes
+the equivalence claim checkable at all, and it is checked twice: on the translated argument list, in
+milliseconds, and end to end against real bundles.
+
+`list`, `inspect` and `identity` import nothing heavier than YAML and pydantic. Proven by running
+them in a subprocess where `openmm`, `openff`, `rdkit`, `mdtraj`, `parmed`, `openmmtools`, `numpy`,
+`scipy` and `pandas` are made **unimportable** — not by reading imports.
+
+### Dispatch is a table
+
+`(method, engine) -> provider module`. No entry-point scanning, no plugin protocol, no import-time
+side effects, and nothing imports an engine until a provider is actually requested. Three failures
+are kept apart because they need different answers:
+
+| situation | error | what it tells the user |
+|---|---|---|
+| descriptor says `legacy-direct` | `DispatchNotActive` | metadata only; use the named `cli_command` |
+| no `(method, engine)` entry | `DispatchError` | this build cannot run that template at all |
+| entry exists, engine missing | `ProviderUnavailable` | install the engine — named explicitly |
+
+The third is the common one and the easiest to report badly: `md-templates list` works with no OpenMM
+installed, so a user can reach `prepare` without ever having installed one. The message names the
+missing package rather than surfacing an `ImportError` from four frames down.
+
+### Template-local profiles, and the trap underneath them
+
+Every profile now lives in the template that owns it. `core/config/profiles/` is empty.
+
+| template | profiles |
+|---|---|
+| `conventional-md/openmm/explicit-water` | `explicit-md-ligand-v1`, `explicit-md-peptide-v1` |
+| `rest2/openmm/explicit-water` | `explicit-rest2-ligand-v1`, `explicit-rest2-peptide-v1`, `cpu-smoke-v1` |
+
+`cpu-smoke-v1` is a REST2 profile and belongs with the REST2 template rather than in a shared pile —
+which the campaign found out the hard way when the first draft of the CPU gate named it for an MD
+run and dispatch refused. That refusal is correct and is now covered by a unit test.
+
+**Discovery never consults the working directory.** A resolver that walked up from `cwd` would find
+different profiles depending on where the user stood, and would find *nothing* when a wheel-installed
+run executes from an unrelated directory — the exact case the packaging work exists to support. The
+roots come from the package's own location: the catalog packaged into the distribution, else the
+repository the package is imported from.
+
+The same inconsistency appeared once and was removed rather than patched: `md-templates` originally
+found its catalog by walking up from `cwd` while profiles walked up from the package, so from an
+unrelated directory the catalog was "not found" while its profiles resolved perfectly. Both now use
+one function, and a test runs the command from a temporary directory to keep it that way.
+
+Two files claiming one profile ID is an error naming both paths, not a precedence puzzle: one of them
+would be ignored depending on directory order.
+
+### Nothing scientific moved
+
+The profile files are byte-identical to where they were. `profiles.json` and
+`configuration_hashes.json` are still byte-identical to the campaign base, all four route/method
+default selections resolve to the same profile IDs, and a wheel-installed resolution hashes
+`explicit-md-ligand-v1` to `4b2a922b419a3928…`, matching the frozen golden.
+
+### Evidence
+
+The end-to-end gate builds a wheel, installs it into an empty directory, and runs from a working
+directory with no checkout in sight. Its central comparison prepares the **same document through both
+routes** and compares the resulting bundles:
+
+```
+=== 2. the two bundles must carry identical canonical hashes ===
+  ok  execution_sha256:            6f0a213589d37798...
+  ok  prepared_state_sha256:       bb4318fed3d58a2d...
+  ok  protocol_at_prepare_sha256:  86d325f24e02d9e9...
+  ok  protocol_sha256:             01c3ff8e09f83c62...
+  ok  system_build_sha256:         8607bf8b2e8c4e1f...
+  identical canonical configuration, profile (explicit-md-ligand-v1) and source attribution
+  identical on all five projection hashes
+```
+
+Then both methods run and resume through the generic route, from that wheel:
+
+```
+=== 3. run and resume through the GENERIC route ===
+=== 4. the resumed run is contiguous and committed ===
+  committed generation: 3
+  invocations recorded: 2
+=== 5. resume refuses to guess which run to continue ===
+  ok: refused without --resume-run
+=== 6. REST2 through the generic route, from the same wheel ===
+  REST2 committed generation: 3
+  committed replicas: ['replica_00', 'replica_01', 'replica_02']
+  invocations recorded: 2
+
+generic route: PASSED                                                      exit 0
+```
+
+Resume without `--resume-run` is refused rather than resolved: continuing "the most recent run" is
+how the wrong directory gets extended.
+
+### Gate
+
+**PASSED**, both phases.
+
+```console
+$ python -m pytest tests/ -q -m "not slow"
+681 passed, 17 deselected                                                  50.8 s
+
+$ python -m pytest tests/test_generic_dispatch.py -q
+22 passed                                                                   4.2 s
+
+$ python scripts/capture_goldens.py --check
+7/7 ok, exit 0                       (still byte-identical to the campaign base)
+
+$ bash scripts/ci/generic_route_cpu.sh          # installed wheel, no checkout, both methods
+generic route: PASSED                                                      exit 0
+```
+
+### Three defects the gate found in its own configuration
+
+Worth recording because each is the system refusing something it should refuse:
+
+* naming `cpu-smoke-v1` for an MD run — refused, because it is a REST2 profile;
+* 1 ps chunks with the default reporting interval — refused, because frames would not align to chunk
+  boundaries and the first frame of each chunk would drift;
+* `report:` instead of `reporting:` — refused as an unknown key rather than silently ignored.
+
+All three are the strict-configuration rules working. The gate had to ask for something coherent.

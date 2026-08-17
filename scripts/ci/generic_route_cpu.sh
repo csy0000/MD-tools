@@ -52,10 +52,11 @@ execution:
   # 1 ps chunks need reporting intervals that divide 1 ps, or the engine refuses -- frames would not
   # align to chunk boundaries and the first frame of each chunk would drift. Refusing is right; the
   # gate just has to ask for something coherent.
-  report:
-    all_atom_ps: 0.5
-    solute_ps: 0.5
-    log_ps: 0.5
+  reporting:
+    all_atom: 0.5 ps
+    solute: 0.5 ps
+    state: 0.5 ps
+    checkpoint: 0.5 ps
 YAML
 printf '%s\n' "$CONFIG" > "$WORKDIR/generic/sim.yaml"
 printf '%s\n' "$CONFIG" > "$WORKDIR/legacy/sim.yaml"
@@ -130,6 +131,49 @@ if md-templates resume --template conventional-md/openmm/explicit-water -- \
     fail "resume without --resume-run should have been refused"
 fi
 echo "  ok: refused without --resume-run"
+
+step "6. REST2 through the generic route, from the same wheel"
+mkdir -p "$WORKDIR/rest2"
+cd "$WORKDIR/rest2"
+cat > sim.yaml <<'YAML'
+profile: cpu-smoke-v1
+system: {system_id: ggg, route: smiles, smiles: "O=C1CNC(=O)CNC(=O)CN1"}
+protocol:
+  production:
+    method: rest2
+    n_chunks: 2
+    chunk: 0.001 ns
+    scale_factors: [1.0, 0.5625, 0.25]
+    exchange_interval: 0.5 ps
+    relaxation: 1 ps
+execution: {platform: CPU}
+YAML
+md-templates prepare --template rest2/openmm/explicit-water -- \
+    --config sim.yaml --out-root ./runs --platform CPU
+REST2_BUNDLE="$(find "$WORKDIR/rest2/runs" -maxdepth 1 -name '*bundle*' | head -1)"
+[ -n "$REST2_BUNDLE" ] || fail "the generic route produced no REST2 bundle"
+
+md-templates run --template rest2/openmm/explicit-water -- \
+    --bundle "$REST2_BUNDLE" --out-root ./runs --run-name r1 --platform CPU
+md-templates resume --template rest2/openmm/explicit-water -- \
+    --bundle "$REST2_BUNDLE" --out-root ./runs --resume-run r1 --platform CPU
+
+python - "$WORKDIR/rest2/runs/r1" <<'PY'
+import json, pathlib, sys
+
+run = pathlib.Path(sys.argv[1])
+committed = json.loads((run / "restart" / "committed.json").read_text())
+print(f"  REST2 committed generation: {committed.get('generation')}")
+members = committed.get("members", [])
+replicas = sorted({m.split('.')[0] for m in members if m.startswith("replica_")})
+print(f"  committed replicas: {replicas}")
+if len(replicas) != 3:
+    sys.exit(f"expected three committed replicas, got {replicas}")
+state = json.loads((run / "run_state.json").read_text())
+if len(state.get("invocations", [])) < 2:
+    sys.exit("REST2 resume did not record a second invocation")
+print(f"  invocations recorded: {len(state['invocations'])}")
+PY
 
 echo
 echo "generic route: PASSED"
