@@ -23,7 +23,10 @@ import pytest
 from md_templates.openmm import bundlecheck, bundlev2
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PEPTIDE_PDB = REPO_ROOT / "src/md_templates/openmm/manifests/systems/ace_ala_nme.pdb"
+# Resolved through the package rather than hardcoded: Phase 4 moved the shipped assets
+# under engines/, and a literal path silently pointed at a file that no longer existed.
+PEPTIDE_PDB = (REPO_ROOT
+               / "src/md_templates/engines/openmm/manifests/systems/ace_ala_nme.pdb")
 
 
 # ---------------------------------------------------------------------------------------------

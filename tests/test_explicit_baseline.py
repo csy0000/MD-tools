@@ -736,9 +736,12 @@ def test_rgd_system_yaml_is_not_consumed_by_the_explicit_workflow():
     single module; splitting it into config/system/solvation/equilibration/md/rest2 would have
     silently retired this check if it kept naming one path.
     """
-    pkg = Path(__file__).resolve().parents[1] / "src/md_templates/openmm"
+    # Phase 4 moved the implementation under engines/ and the methods into their own subpackage.
+    # The paths follow, and the guard the docstring describes still applies: naming one file would
+    # let the next split retire this check silently.
+    pkg = Path(__file__).resolve().parents[1] / "src/md_templates/engines/openmm"
     simulation_modules = ["config.py", "system.py", "solvation.py",
-                          "equilibration.py", "md.py", "rest2.py"]
+                          "equilibration.py", "methods/md.py", "methods/rest2.py"]
     for name in simulation_modules:
         path = pkg / name
         assert path.is_file(), f"{name} is missing: the scan would silently pass"

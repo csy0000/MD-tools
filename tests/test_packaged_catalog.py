@@ -789,7 +789,7 @@ def test_f1_a_wheel_built_there_does_not_inherit_the_outer_commit(enclosed_insta
 
 @pytest.mark.parametrize("relative,edit", [
     ("src/md_templates/core/packaged.py", "\n# tampered loader\n"),
-    ("src/md_templates/openmm/bundlev2.py", "\n# tampered engine module\n"),
+    ("src/md_templates/engines/openmm/system.py", "\n# tampered engine module\n"),
     ("build_support/catalog.py", "\n# tampered build hook\n"),
 ])
 def test_f2_editing_any_relevant_source_in_an_archive_breaks_inheritance(sdist_tree, tmp_path,
