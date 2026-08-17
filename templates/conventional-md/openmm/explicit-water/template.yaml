@@ -89,7 +89,7 @@ restart:
 profiles:
   provider: current-openmm-implementation
   template_local: false
-  python_resource: md_templates.openmm.spec.profiles
+  python_resource: md_templates.core.config.profiles
   profile_ids:
     - explicit-md-ligand-v1
     - explicit-md-peptide-v1
@@ -135,6 +135,6 @@ validation:
 
 repository_references:
   - src/md_templates/openmm
-  - src/md_templates/openmm/spec/profiles
+  - src/md_templates/core/config/profiles
   - docs/support-matrix.md
   - docs/configuration.md

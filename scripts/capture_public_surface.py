@@ -90,7 +90,13 @@ def _module_surface(module_name: str) -> dict:
             # in a fresh interpreter. Submodules are inventoried separately and deterministically by
             # `_packaged_modules()`; skipping them keeps this section a statement about the API
             # rather than about import order.
-            if value.__name__.startswith(module_name + "."):
+            # Two ways a value is really a submodule slot: its own name says so, or the parent
+            # holds it under that name. The second case is the one aliasing creates -- after Phase 3
+            # `md_templates.openmm.bundlev2` IS `md_templates.core.bundle`, whose `__name__` no
+            # longer carries the legacy prefix, so a name check alone would let it back in and make
+            # this section depend on import order again.
+            if value.__name__.startswith(module_name + ".") or \
+                    f"{module_name}.{name}" in sys.modules:
                 continue
             kind, origin = "module", value.__name__
         elif inspect.isclass(value):
@@ -114,9 +120,15 @@ def _exception_surface() -> dict:
         module = __import__(module_name, fromlist=["*"])
         for name in dir(module):
             value = getattr(module, name)
-            if inspect.isclass(value) and issubclass(value, BaseException) \
-                    and value.__module__ == module_name:
-                out[f"{module_name}.{name}"] = [b.__name__ for b in value.__mro__]
+            if not (inspect.isclass(value) and issubclass(value, BaseException)):
+                continue
+            # Compare against the RESOLVED module name, not the string asked for. A legacy path that
+            # is an alias for a moved module reports the new location in `__module__`, and comparing
+            # against `module_name` would silently drop every exception behind such an alias -- which
+            # is exactly the coverage a compatibility baseline must not lose.
+            if value.__module__ != module.__name__:
+                continue
+            out[f"{module_name}.{name}"] = [b.__name__ for b in value.__mro__]
     for name in core.__all__:
         value = getattr(core, name)
         if inspect.isclass(value) and issubclass(value, BaseException):

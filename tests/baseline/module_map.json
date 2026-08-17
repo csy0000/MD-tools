@@ -9,51 +9,324 @@
   ],
   "schema_version": 1,
   "modules": {
-    "md_templates": {"destination": "md_templates", "phase": null, "status": "unchanged"},
-    "md_templates.core": {"destination": "md_templates.core", "phase": null, "status": "unchanged"},
-    "md_templates.core.identity": {"destination": "md_templates.core.identity", "phase": null, "status": "unchanged"},
-    "md_templates.core.packaged": {"destination": "md_templates.core.packaged", "phase": null, "status": "unchanged"},
-    "md_templates.core.paths": {"destination": "md_templates.core.paths", "phase": null, "status": "unchanged"},
-    "md_templates.core.registry": {"destination": "md_templates.core.registry", "phase": null, "status": "unchanged"},
-    "md_templates.core.resources": {"destination": "md_templates.core.resources", "phase": null, "status": "unchanged"},
-    "md_templates.core.template": {"destination": "md_templates.core.template", "phase": null, "status": "unchanged"},
-
-    "md_templates.openmm.spec": {"destination": "md_templates.core.config", "phase": 3, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.spec.units": {"destination": "md_templates.core.config.units", "phase": 3, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.spec.models": {"destination": "md_templates.core.config.models", "phase": 3, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.spec.canonical": {"destination": "md_templates.core.config.canonical", "phase": 3, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.spec.resolve": {"destination": "md_templates.core.config.resolve", "phase": 3, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.spec.diffs": {"destination": "md_templates.core.config.diffs", "phase": 3, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.spec.migrate": {"destination": "md_templates.core.config.migrate", "phase": 3, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.spec.adapter": {"destination": "md_templates.core.config.adapter", "phase": 3, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.runstate": {"destination": "md_templates.core.persistence", "phase": 3, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.bundlev2": {"destination": "md_templates.core.bundle", "phase": 3, "status": "planned", "compat_shim": true, "note": "topology_counts needs an engine and stays in the OpenMM provider"},
-    "md_templates.openmm.schemas": {"destination": "md_templates.core.manifests", "phase": 3, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.fingerprint": {"destination": "md_templates.core.fingerprint", "phase": 3, "status": "planned", "compat_shim": true},
-
-    "md_templates.openmm.system": {"destination": "md_templates.engines.openmm.system", "phase": 4, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.solvation": {"destination": "md_templates.engines.openmm.solvation", "phase": 4, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.equilibration": {"destination": "md_templates.engines.openmm.equilibration", "phase": 4, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.md": {"destination": "md_templates.engines.openmm.methods.md", "phase": 4, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.rest2": {"destination": "md_templates.engines.openmm.methods.rest2", "phase": 4, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.bundle": {"destination": "md_templates.engines.openmm.bundle", "phase": 4, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.bundlecheck": {"destination": "md_templates.engines.openmm.bundlecheck", "phase": 4, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.provenance": {"destination": "md_templates.engines.openmm.provenance", "phase": 4, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.envcheck": {"destination": "md_templates.engines.openmm.platform", "phase": 4, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.runner": {"destination": "md_templates.engines.openmm.runner", "phase": 4, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.config": {"destination": "md_templates.engines.openmm.config", "phase": 4, "status": "planned", "compat_shim": true},
-    "md_templates.openmm.cli": {"destination": "md_templates.engines.openmm.cli", "phase": 4, "status": "planned", "compat_shim": true, "note": "md-openmm entry point must keep working unchanged"},
-    "md_templates.openmm": {"destination": "md_templates.openmm", "phase": 4, "status": "planned", "note": "becomes a thin documented compatibility namespace"}
+    "md_templates": {
+      "destination": "md_templates",
+      "phase": null,
+      "status": "unchanged"
+    },
+    "md_templates.core": {
+      "destination": "md_templates.core",
+      "phase": null,
+      "status": "unchanged"
+    },
+    "md_templates.core.identity": {
+      "destination": "md_templates.core.identity",
+      "phase": null,
+      "status": "unchanged"
+    },
+    "md_templates.core.packaged": {
+      "destination": "md_templates.core.packaged",
+      "phase": null,
+      "status": "unchanged"
+    },
+    "md_templates.core.paths": {
+      "destination": "md_templates.core.paths",
+      "phase": null,
+      "status": "unchanged"
+    },
+    "md_templates.core.registry": {
+      "destination": "md_templates.core.registry",
+      "phase": null,
+      "status": "unchanged"
+    },
+    "md_templates.core.resources": {
+      "destination": "md_templates.core.resources",
+      "phase": null,
+      "status": "unchanged"
+    },
+    "md_templates.core.template": {
+      "destination": "md_templates.core.template",
+      "phase": null,
+      "status": "unchanged"
+    },
+    "md_templates.openmm.spec": {
+      "destination": "md_templates.core.config",
+      "phase": 3,
+      "status": "moved",
+      "compat_shim": true
+    },
+    "md_templates.openmm.spec.units": {
+      "destination": "md_templates.core.config.units",
+      "phase": 3,
+      "status": "moved",
+      "compat_shim": true
+    },
+    "md_templates.openmm.spec.models": {
+      "destination": "md_templates.core.config.models",
+      "phase": 3,
+      "status": "moved",
+      "compat_shim": true
+    },
+    "md_templates.openmm.spec.canonical": {
+      "destination": "md_templates.core.config.canonical",
+      "phase": 3,
+      "status": "moved",
+      "compat_shim": true
+    },
+    "md_templates.openmm.spec.resolve": {
+      "destination": "md_templates.core.config.resolve",
+      "phase": 3,
+      "status": "moved",
+      "compat_shim": true
+    },
+    "md_templates.openmm.spec.diffs": {
+      "destination": "md_templates.core.config.diffs",
+      "phase": 3,
+      "status": "moved",
+      "compat_shim": true
+    },
+    "md_templates.openmm.spec.migrate": {
+      "destination": "md_templates.core.config.migrate",
+      "phase": 3,
+      "status": "moved",
+      "compat_shim": true
+    },
+    "md_templates.openmm.spec.adapter": {
+      "destination": "md_templates.core.config.adapter",
+      "phase": 3,
+      "status": "moved",
+      "compat_shim": true
+    },
+    "md_templates.openmm.runstate": {
+      "destination": "md_templates.core.persistence",
+      "phase": 3,
+      "status": "moved",
+      "compat_shim": true
+    },
+    "md_templates.openmm.bundlev2": {
+      "destination": "md_templates.core.bundle",
+      "phase": 3,
+      "status": "moved",
+      "compat_shim": true,
+      "note": "topology_counts needs an engine and stays in the OpenMM provider"
+    },
+    "md_templates.openmm.schemas": {
+      "destination": "md_templates.openmm.schemas",
+      "phase": 3,
+      "status": "unchanged",
+      "note": "kept with the engine: the shipped system/experiment manifests are OpenMM assets and core must not reach into an engine's data directory. Its hashing helpers moved to md_templates.core.hashing and are re-exported from here, so there is one definition."
+    },
+    "md_templates.openmm.fingerprint": {
+      "destination": "md_templates.core.fingerprint",
+      "phase": 3,
+      "status": "moved",
+      "compat_shim": true
+    },
+    "md_templates.openmm.system": {
+      "destination": "md_templates.engines.openmm.system",
+      "phase": 4,
+      "status": "planned",
+      "compat_shim": true
+    },
+    "md_templates.openmm.solvation": {
+      "destination": "md_templates.engines.openmm.solvation",
+      "phase": 4,
+      "status": "planned",
+      "compat_shim": true
+    },
+    "md_templates.openmm.equilibration": {
+      "destination": "md_templates.engines.openmm.equilibration",
+      "phase": 4,
+      "status": "planned",
+      "compat_shim": true
+    },
+    "md_templates.openmm.md": {
+      "destination": "md_templates.engines.openmm.methods.md",
+      "phase": 4,
+      "status": "planned",
+      "compat_shim": true
+    },
+    "md_templates.openmm.rest2": {
+      "destination": "md_templates.engines.openmm.methods.rest2",
+      "phase": 4,
+      "status": "planned",
+      "compat_shim": true
+    },
+    "md_templates.openmm.bundle": {
+      "destination": "md_templates.engines.openmm.bundle",
+      "phase": 4,
+      "status": "planned",
+      "compat_shim": true
+    },
+    "md_templates.openmm.bundlecheck": {
+      "destination": "md_templates.engines.openmm.bundlecheck",
+      "phase": 4,
+      "status": "planned",
+      "compat_shim": true
+    },
+    "md_templates.openmm.provenance": {
+      "destination": "md_templates.engines.openmm.provenance",
+      "phase": 4,
+      "status": "planned",
+      "compat_shim": true
+    },
+    "md_templates.openmm.envcheck": {
+      "destination": "md_templates.engines.openmm.platform",
+      "phase": 4,
+      "status": "planned",
+      "compat_shim": true
+    },
+    "md_templates.openmm.runner": {
+      "destination": "md_templates.engines.openmm.runner",
+      "phase": 4,
+      "status": "planned",
+      "compat_shim": true
+    },
+    "md_templates.openmm.config": {
+      "destination": "md_templates.engines.openmm.config",
+      "phase": 4,
+      "status": "planned",
+      "compat_shim": true
+    },
+    "md_templates.openmm.cli": {
+      "destination": "md_templates.engines.openmm.cli",
+      "phase": 4,
+      "status": "planned",
+      "compat_shim": true,
+      "note": "md-openmm entry point must keep working unchanged"
+    },
+    "md_templates.openmm": {
+      "destination": "md_templates.openmm",
+      "phase": 4,
+      "status": "planned",
+      "note": "becomes a thin documented compatibility namespace"
+    },
+    "md_templates.core.hashing": {
+      "destination": "md_templates.core.hashing",
+      "phase": 3,
+      "status": "unchanged",
+      "note": "canonical_json/sha256_* extracted from schemas.py: one definition shared by the fingerprint projection and the manifest reader"
+    },
+    "md_templates.core.config": {
+      "destination": "md_templates.core.config",
+      "phase": 3,
+      "status": "unchanged",
+      "note": "the moved canonical configuration package"
+    },
+    "md_templates.openmm.restart": {
+      "destination": "md_templates.openmm.restart",
+      "phase": 3,
+      "status": "unchanged",
+      "note": "save_restart/load_restart: they take a running Simulation, so they stayed with the provider"
+    },
+    "md_templates.openmm.bundleinfo": {
+      "destination": "md_templates.openmm.bundleinfo",
+      "phase": 3,
+      "status": "unchanged",
+      "note": "topology_counts/forcefield_provenance: need a built OpenMM system"
+    },
+    "md_templates.openmm._compat": {
+      "destination": "md_templates.openmm._compat",
+      "phase": 3,
+      "status": "unchanged",
+      "note": "sys.modules aliasing for the legacy import paths"
+    },
+    "md_templates.core.config.units": {
+      "destination": "md_templates.core.config.units",
+      "phase": 3,
+      "status": "unchanged"
+    },
+    "md_templates.core.config.models": {
+      "destination": "md_templates.core.config.models",
+      "phase": 3,
+      "status": "unchanged"
+    },
+    "md_templates.core.config.canonical": {
+      "destination": "md_templates.core.config.canonical",
+      "phase": 3,
+      "status": "unchanged"
+    },
+    "md_templates.core.config.resolve": {
+      "destination": "md_templates.core.config.resolve",
+      "phase": 3,
+      "status": "unchanged"
+    },
+    "md_templates.core.config.diffs": {
+      "destination": "md_templates.core.config.diffs",
+      "phase": 3,
+      "status": "unchanged"
+    },
+    "md_templates.core.config.migrate": {
+      "destination": "md_templates.core.config.migrate",
+      "phase": 3,
+      "status": "unchanged"
+    },
+    "md_templates.core.config.adapter": {
+      "destination": "md_templates.core.config.adapter",
+      "phase": 3,
+      "status": "unchanged"
+    },
+    "md_templates.core.persistence": {
+      "destination": "md_templates.core.persistence",
+      "phase": 3,
+      "status": "unchanged"
+    },
+    "md_templates.core.bundle": {
+      "destination": "md_templates.core.bundle",
+      "phase": 3,
+      "status": "unchanged"
+    },
+    "md_templates.core.fingerprint": {
+      "destination": "md_templates.core.fingerprint",
+      "phase": 3,
+      "status": "unchanged"
+    }
   },
   "tests": {
-    "tests/test_spec_config.py": {"destination": "tests/core/test_config.py", "phase": 8, "status": "planned"},
-    "tests/test_compat_goldens.py": {"destination": "tests/compatibility/test_goldens.py", "phase": 8, "status": "planned"},
-    "tests/test_template_catalog.py": {"destination": "tests/core/test_catalog.py", "phase": 8, "status": "planned"},
-    "tests/test_template_identity.py": {"destination": "tests/core/test_identity.py", "phase": 8, "status": "planned"},
-    "tests/test_packaged_catalog.py": {"destination": "tests/packaging/test_packaged_catalog.py", "phase": 8, "status": "planned"},
-    "tests/test_explicit_baseline.py": {"destination": "tests/engine/test_explicit_baseline.py", "phase": 8, "status": "planned"},
-    "tests/test_explicit_portable.py": {"destination": "tests/engine/test_explicit_portable.py", "phase": 8, "status": "planned"},
-    "tests/test_bundle_portability.py": {"destination": "tests/integration/test_bundle_portability.py", "phase": 8, "status": "planned"},
-    "tests/test_crash_recovery.py": {"destination": "tests/integration/test_crash_recovery.py", "phase": 8, "status": "planned"}
+    "tests/test_spec_config.py": {
+      "destination": "tests/core/test_config.py",
+      "phase": 8,
+      "status": "planned"
+    },
+    "tests/test_compat_goldens.py": {
+      "destination": "tests/compatibility/test_goldens.py",
+      "phase": 8,
+      "status": "planned"
+    },
+    "tests/test_template_catalog.py": {
+      "destination": "tests/core/test_catalog.py",
+      "phase": 8,
+      "status": "planned"
+    },
+    "tests/test_template_identity.py": {
+      "destination": "tests/core/test_identity.py",
+      "phase": 8,
+      "status": "planned"
+    },
+    "tests/test_packaged_catalog.py": {
+      "destination": "tests/packaging/test_packaged_catalog.py",
+      "phase": 8,
+      "status": "planned"
+    },
+    "tests/test_explicit_baseline.py": {
+      "destination": "tests/engine/test_explicit_baseline.py",
+      "phase": 8,
+      "status": "planned"
+    },
+    "tests/test_explicit_portable.py": {
+      "destination": "tests/engine/test_explicit_portable.py",
+      "phase": 8,
+      "status": "planned"
+    },
+    "tests/test_bundle_portability.py": {
+      "destination": "tests/integration/test_bundle_portability.py",
+      "phase": 8,
+      "status": "planned"
+    },
+    "tests/test_crash_recovery.py": {
+      "destination": "tests/integration/test_crash_recovery.py",
+      "phase": 8,
+      "status": "planned"
+    }
   }
 }

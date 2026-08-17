@@ -45,7 +45,7 @@ from typing import Any, Optional
 from . import provenance, runstate
 from .bundle import BUNDLE_MANIFEST, validate_bundle
 from .config import exchange_rounds, resolve_config
-from .fingerprint import check_compatible, fingerprint
+from ..core.fingerprint import check_compatible, fingerprint
 from .schemas import (
     ExperimentManifest,
     PLATFORMS,
@@ -303,8 +303,8 @@ def resolve_canonical_run(bundle_dir: Path, method: str, *, config: Optional[Pat
     it says, the bundle-defining projection must still match the prepared artifacts, and that is
     checked before a run directory exists.
     """
-    from .spec import canonical as canon_mod
-    from .spec import resolve as resolve_mod
+    from ..core.config import canonical as canon_mod
+    from ..core.config import resolve as resolve_mod
 
     bundle_dir = Path(bundle_dir)
     pinned_path = bundle_dir / "canonical_configuration.json"
@@ -420,7 +420,7 @@ def launch_rest2(
         canonical_run = resolve_canonical_run(bundle_dir, "rest2", config=config,
                                               overrides=set_overrides)
     if canonical_run is not None:
-        from .spec.adapter import spec_to_runtime_cfg
+        from ..core.config.adapter import spec_to_runtime_cfg
 
         cfg = spec_to_runtime_cfg(canonical_run["spec"])
         cfg["production"]["platform"] = platform
@@ -600,7 +600,7 @@ def launch_md(
         canonical_run = resolve_canonical_run(bundle_dir, "md", config=config,
                                               overrides=set_overrides)
     if canonical_run is not None:
-        from .spec.adapter import spec_to_runtime_cfg
+        from ..core.config.adapter import spec_to_runtime_cfg
 
         cfg = spec_to_runtime_cfg(canonical_run["spec"])
         cfg["production"]["platform"] = platform

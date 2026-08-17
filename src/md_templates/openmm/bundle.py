@@ -36,7 +36,7 @@ from typing import Any, Optional
 
 from . import provenance
 from .config import resolve_config
-from .fingerprint import build_projection, fingerprint
+from ..core.fingerprint import build_projection, fingerprint
 from .solvation import salt_accounting
 from .schemas import (
     ExperimentManifest,
@@ -252,9 +252,9 @@ def _write_v2_artifacts(bundle_dir: Path, *, cfg: dict, system, experiment,
     provenance.write_json(bundle_dir / "environment.json", bundlev2.environment_provenance())
     if canonical is None:
         # A legacy-front-end bundle still gets a canonical record, by migrating its manifests.
-        from .spec import canonical as canon_mod
-        from .spec import migrate as migrate_mod
-        from .spec import resolve as resolve_mod
+        from ..core.config import canonical as canon_mod
+        from ..core.config import migrate as migrate_mod
+        from ..core.config import resolve as resolve_mod
 
         try:
             doc, notes = migrate_mod.migrate_manifests(system.doc, experiment.doc)

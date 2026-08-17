@@ -426,12 +426,38 @@ print(resolve_identity(load_catalog(root), "rest2/openmm/explicit-water").canoni
 # scope: PR 1 does not persist identity anywhere
 # ================================================================================================
 
-def test_identity_is_not_written_into_bundles_or_runs():
-    """The catalog is metadata in PR 1. Nothing in the runtime references it."""
+#: The catalog and identity modules. After Phase 3 the runtime legitimately imports `core` for the
+#: configuration, bundle and persistence contracts, so "imports core" stopped being the right
+#: question. The invariant that actually matters is narrower and unchanged: template identity and
+#: catalog metadata stay out of the runtime, and therefore out of anything hashed or persisted.
+CATALOG_MODULES = ("core.registry", "core.identity", "core.template", "core.packaged",
+                   "core.resources")
+
+
+def test_template_identity_is_not_reachable_from_the_runtime():
+    """Catalog metadata must not reach a bundle, a run manifest or a hash."""
+    import ast
+
     runtime = REPO_ROOT / "src" / "md_templates" / "openmm"
     offenders = []
     for path in sorted(runtime.rglob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        if "md_templates.core" in text or "from ..core" in text or "template_identity" in text:
-            offenders.append(path.relative_to(REPO_ROOT))
-    assert offenders == [], f"runtime modules reference the catalog: {offenders}"
+        source = path.read_text(encoding="utf-8")
+        if "template_identity" in source:
+            offenders.append(f"{path.name}: names template_identity")
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                target = node.module.lstrip(".")
+                if any(target.endswith(catalog) or f".{catalog}" in f".{target}"
+                       for catalog in CATALOG_MODULES):
+                    offenders.append(f"{path.name}: imports {node.module}")
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if any(catalog in alias.name for catalog in CATALOG_MODULES):
+                        offenders.append(f"{path.name}: imports {alias.name}")
+    assert offenders == [], f"runtime modules reach the catalog: {offenders}"
+
+
+def test_the_runtime_does_use_core_for_shared_contracts():
+    """The complement, so the test above cannot pass by the runtime importing nothing at all."""
+    text = (REPO_ROOT / "src" / "md_templates" / "openmm" / "runner.py").read_text(encoding="utf-8")
+    assert "core.config" in text or "core.persistence" in text or "core.bundle" in text

@@ -293,7 +293,9 @@ def test_descriptors_do_not_claim_template_local_profiles():
         profiles = catalog.descriptor(tid).profiles
         assert profiles.template_local is False
         assert profiles.provider == "current-openmm-implementation"
-        assert profiles.python_resource == "md_templates.openmm.spec.profiles"
+        # Phase 3 moved the engine-neutral configuration package, and the profiles travelled with
+        # the resolver that reads them. Still a provider reference, still not template-local.
+        assert profiles.python_resource == "md_templates.core.config.profiles"
 
 
 @pytest.mark.parametrize("path,key", [
@@ -633,10 +635,27 @@ def test_36_importing_catalog_modules_does_not_import_openmm():
     assert result.stdout.strip() == "", f"catalog import pulled in {result.stdout.strip()}"
 
 
-def test_36b_catalog_source_names_no_engine_dependency():
-    core_dir = REPO_ROOT / "src" / "md_templates" / "core"
-    for path in sorted(core_dir.glob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        for banned in ("import openmm", "import openff", "import rdkit", "import mdtraj",
-                       "import numpy", "from openmm", "from openff", "from rdkit"):
-            assert banned not in text, f"{path.name} references {banned}"
+def test_36b_catalog_source_has_no_top_level_engine_import():
+    """Parsed, not grepped, and scoped to the whole core tree.
+
+    The rule is about IMPORT TIME: core must be importable where no engine is installed. A deferred
+    import inside a function does not violate that, and after Phase 3 moved the engine-neutral
+    modules into `core/` a plain substring scan would flag the docstrings and the deferred calls
+    that were always allowed. Parsing the AST and looking only at column-zero imports states the
+    actual invariant instead of an approximation of it.
+    """
+    import ast
+
+    banned_roots = {"openmm", "openff", "rdkit", "mdtraj", "numpy", "scipy", "pandas"}
+    offenders = []
+    for path in sorted((REPO_ROOT / "src" / "md_templates" / "core").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Import, ast.ImportFrom)) or node.col_offset != 0:
+                continue
+            modules = ([alias.name for alias in node.names] if isinstance(node, ast.Import)
+                       else [node.module or ""])
+            for module in modules:
+                if module.split(".")[0] in banned_roots:
+                    offenders.append(f"{path.name}: {module}")
+    assert offenders == [], offenders

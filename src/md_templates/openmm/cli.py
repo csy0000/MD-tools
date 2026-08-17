@@ -268,7 +268,7 @@ def _resolve_resume(args) -> Optional[Path]:
 # ---------------------------------------------------------------------------------------------
 
 def _spec_modules():
-    from .spec import canonical, diffs, migrate, resolve
+    from ..core.config import canonical, diffs, migrate, resolve
     return canonical, diffs, migrate, resolve
 
 
@@ -418,7 +418,7 @@ def _prepare_from_canonical(args) -> int:
     migrated into this model first. There is one configuration engine, not two.
     """
     canonical, _, _, resolve = _spec_modules()
-    from .spec.adapter import spec_to_runtime_cfg
+    from ..core.config.adapter import spec_to_runtime_cfg
 
     result = resolve.resolve_spec(resolve.load_document(Path(args.config)),
                                   overrides=getattr(args, "set", None),
@@ -436,7 +436,7 @@ def _prepare_from_canonical(args) -> int:
                   file=sys.stderr)
             return runner.EXIT_MANIFEST
         if spec.system.pdb_sha256:
-            from .bundlev2 import sha256_file
+            from ..core.bundle import sha256_file
 
             actual = sha256_file(pdb_path)
             if actual != spec.system.pdb_sha256:
@@ -546,7 +546,7 @@ def _synthetic_system_manifest(spec, *, pdb_path=None):
 
 
 def _sha256_of_file(path) -> str:
-    from .bundlev2 import sha256_file
+    from ..core.bundle import sha256_file
 
     return sha256_file(Path(path))
 

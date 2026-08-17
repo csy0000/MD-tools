@@ -109,7 +109,7 @@ restart:
 profiles:
   provider: current-openmm-implementation
   template_local: false
-  python_resource: md_templates.openmm.spec.profiles
+  python_resource: md_templates.core.config.profiles
   profile_ids:
     - explicit-rest2-ligand-v1
     - explicit-rest2-peptide-v1
@@ -167,7 +167,7 @@ validation:
 
 repository_references:
   - src/md_templates/openmm
-  - src/md_templates/openmm/spec/profiles
+  - src/md_templates/core/config/profiles
   - src/md_templates/openmm/manifests/experiments/rgd_rest2_10rung.yaml
   - src/md_templates/openmm/manifests/experiments/macrocycle_pilot_8rung.yaml
   - docs/support-matrix.md

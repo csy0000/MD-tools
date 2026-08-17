@@ -45,7 +45,7 @@ include = ["md_templates*"]
 # paths. The directory is `manifests/`, NOT `data/` — this repository gitignores `data/` at any
 # depth, which would silently keep these files out of version control.
 [tool.setuptools.package-data]
-"md_templates.openmm.spec" = [
+"md_templates.core.config" = [
     # Versioned default profiles ARE the scientific defaults. A wheel without them has a
     # `config` command that cannot resolve anything, so they must travel with the package.
     "profiles/*.json",

@@ -120,8 +120,8 @@ def validate_bundle_v2(bundle_dir: Path, *, deep: bool = False) -> BundleReport:
         warnings.append("no profile snapshot recorded; the defaults behind this bundle are not "
                         "identifiable")
     else:
-        from .spec import canonical as canon_mod
-        from .spec import resolve as resolve_mod
+        from ..core.config import canonical as canon_mod
+        from ..core.config import resolve as resolve_mod
 
         try:
             live = resolve_mod.load_profile(profile["profile_id"])

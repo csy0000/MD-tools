@@ -157,3 +157,62 @@ def test_test_files_named_in_the_map_exist_at_source_or_destination():
         assert source.is_file() or destination.is_file(), (
             f"{name} is neither where it was nor where the map says it went"
         )
+
+
+# ------------------------------------------------------------------------------------------------
+# the name-level contract: what must survive wherever the code ends up living
+# ------------------------------------------------------------------------------------------------
+
+PHASE0_NAMES = REPO_ROOT / "tests" / "baseline" / "public_names_phase0.json"
+
+
+def phase0() -> dict:
+    return json.loads(PHASE0_NAMES.read_text(encoding="utf-8"))
+
+
+def test_no_public_name_captured_at_phase_0_has_disappeared():
+    """The campaign may move code; it may not remove a name from where callers import it.
+
+    Separate from the full surface baseline on purpose. That one records *where* each name comes
+    from and is regenerated when a phase deliberately relocates a module -- a reviewable
+    architectural diff. This one is never regenerated: a name that vanishes is a compatibility
+    break however good the reason sounded.
+    """
+    import importlib
+
+    for module_name, names in phase0()["names"].items():
+        module = importlib.import_module(module_name)
+        missing = [n for n in names if not hasattr(module, n)]
+        assert missing == [], f"{module_name} lost {missing}"
+
+
+def test_every_exception_captured_at_phase_0_is_still_importable_from_its_original_path():
+    import importlib
+
+    for dotted in phase0()["exceptions"]:
+        module_name, _, attribute = dotted.rpartition(".")
+        module = importlib.import_module(module_name)
+        value = getattr(module, attribute, None)
+        assert isinstance(value, type) and issubclass(value, BaseException), dotted
+
+
+def test_every_command_captured_at_phase_0_still_exists():
+    current = set(json.loads(BASELINE.read_text(encoding="utf-8"))["cli"])
+    missing = sorted(set(phase0()["commands"]) - current)
+    assert missing == [], f"md-openmm lost {missing}"
+
+
+def test_legacy_module_paths_still_import_and_alias_the_moved_code():
+    """A shim that answers the import but is a different object is worse than none.
+
+    Shared module state and `monkeypatch.setattr("md_templates.openmm.runstate.f", ...)` both depend
+    on the legacy path being the SAME object, not a copy that shadows it.
+    """
+    import importlib
+
+    for legacy, entry in load_map()["modules"].items():
+        if entry["status"] != "moved" or not entry.get("compat_shim"):
+            continue
+        assert importlib.import_module(legacy) is importlib.import_module(entry["destination"]), (
+            f"{legacy} is importable but is not the same module object as {entry['destination']}"
+        )
