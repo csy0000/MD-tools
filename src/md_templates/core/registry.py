@@ -35,6 +35,7 @@ from .template import TemplateDescriptor, TemplateError, parse_descriptor
 __all__ = [
     "REGISTRY_SCHEMA_VERSION", "REGISTRY_FILENAME", "CANONICAL_FORM",
     "RegistryError", "RegistryEntry", "Registry", "TemplateCatalog", "load_catalog",
+    "validate_registry_document", "check_entry_path_consistency", "check_descriptor_agreement",
     "load_registry_document",
 ]
 
@@ -205,11 +206,22 @@ def load_registry_document(path: Path) -> dict:
 
 @dataclass(frozen=True)
 class TemplateCatalog:
-    """A validated registry bound to the tree it describes."""
+    """A validated registry bound to the tree or distribution it describes.
+
+    `origin` and `reference_policy` record *how* it was validated, because the two loaders can
+    honestly check different things and a caller is entitled to know which it got. A source checkout
+    can confirm that every `repository_references` entry exists; an installed wheel cannot, because
+    those entries name documentation and source paths that do not travel in a wheel. Rather than
+    weaken the check or pretend a `docs/` path exists in site-packages, the build validates the
+    references against the source commit and the manifest records that it did — so the installed
+    catalog reports `validated-at-build` instead of silently skipping.
+    """
 
     root: Path
     registry: Registry
     descriptors: dict
+    origin: str = "source-tree"
+    reference_policy: str = "source-tree-existence"
 
     @property
     def canonical_url(self) -> str:
@@ -240,7 +252,12 @@ class TemplateCatalog:
         return self.descriptors[self.require(ref).template_id]
 
 
-def _check_entry_against_tree(root: Path, entry: RegistryEntry) -> TemplateDescriptor:
+def check_entry_path_consistency(entry: RegistryEntry) -> None:
+    """The registry entry must agree with its own declared path. No filesystem involved.
+
+    Shared by the source loader and the packaged loader: these are facts about the registry, and
+    both must enforce them identically or the two would accept different catalogs.
+    """
     parts = entry.template_path.split("/")
     _, method_dir, engine_dir, variant_dir, _ = parts
 
@@ -261,6 +278,59 @@ def _check_entry_against_tree(root: Path, entry: RegistryEntry) -> TemplateDescr
             f"relative to templates/, which is {directory!r}"
         )
 
+
+def check_descriptor_agreement(entry: RegistryEntry, descriptor: TemplateDescriptor,
+                               *, origin: str) -> None:
+    """The descriptor must say the same thing as the registry entry pointing at it.
+
+    A registry that validates while disagreeing with its descriptor is worse than one that fails,
+    because it looks correct. Shared by both loaders for the same reason as above.
+    """
+    if descriptor.template_id != entry.template_id:
+        raise RegistryError(
+            f"{origin}: descriptor template_id {descriptor.template_id!r} disagrees with the "
+            f"registry entry {entry.template_id!r}"
+        )
+    if descriptor.method.id != entry.method:
+        raise RegistryError(
+            f"{origin}: descriptor method {descriptor.method.id!r} disagrees with the registry "
+            f"entry {entry.method!r}"
+        )
+    if descriptor.engine.id != entry.engine:
+        raise RegistryError(
+            f"{origin}: descriptor engine {descriptor.engine.id!r} disagrees with the registry "
+            f"entry {entry.engine!r}"
+        )
+
+
+def validate_registry_document(document: dict, *, origin: str) -> Registry:
+    """Validate a registry document and its uniqueness constraints. No filesystem involved."""
+    try:
+        registry = Registry.model_validate(document)
+    except Exception as exc:
+        raise RegistryError(f"{origin}: {exc}") from exc
+
+    seen_ids: dict[str, int] = {}
+    seen_paths: dict[str, int] = {}
+    for i, entry in enumerate(registry.templates):
+        if entry.template_id in seen_ids:
+            raise RegistryError(
+                f"templates[{i}].template_id: {entry.template_id!r} duplicates templates"
+                f"[{seen_ids[entry.template_id]}]"
+            )
+        if entry.template_path in seen_paths:
+            raise RegistryError(
+                f"templates[{i}].template_path: {entry.template_path!r} duplicates templates"
+                f"[{seen_paths[entry.template_path]}]"
+            )
+        seen_ids[entry.template_id] = i
+        seen_paths[entry.template_path] = i
+    return registry
+
+
+def _check_entry_against_tree(root: Path, entry: RegistryEntry) -> TemplateDescriptor:
+    check_entry_path_consistency(entry)
+
     field = f"templates[{entry.template_id!r}].template_path"
     try:
         path = resolve_within_repository(root, entry.template_path, field=field)
@@ -280,21 +350,8 @@ def _check_entry_against_tree(root: Path, entry: RegistryEntry) -> TemplateDescr
     except TemplateError as exc:
         raise RegistryError(str(exc)) from exc
 
-    if descriptor.template_id != entry.template_id:
-        raise RegistryError(
-            f"{entry.template_path}: descriptor template_id {descriptor.template_id!r} disagrees "
-            f"with the registry entry {entry.template_id!r}"
-        )
-    if descriptor.method.id != entry.method:
-        raise RegistryError(
-            f"{entry.template_path}: descriptor method {descriptor.method.id!r} disagrees with the "
-            f"registry entry {entry.method!r}"
-        )
-    if descriptor.engine.id != entry.engine:
-        raise RegistryError(
-            f"{entry.template_path}: descriptor engine {descriptor.engine.id!r} disagrees with the "
-            f"registry entry {entry.engine!r}"
-        )
+    check_descriptor_agreement(entry, descriptor, origin=entry.template_path)
+
     for i, ref in enumerate(descriptor.repository_references):
         ref_field = f"{entry.template_path}: repository_references[{i}]"
         try:
@@ -321,26 +378,7 @@ def load_catalog(root: Path, *, registry_filename: str = REGISTRY_FILENAME) -> T
     except PathError as exc:
         raise RegistryError(str(exc)) from exc
     document = load_registry_document(registry_path)
-    try:
-        registry = Registry.model_validate(document)
-    except Exception as exc:
-        raise RegistryError(f"{registry_path}: {exc}") from exc
-
-    seen_ids: dict[str, int] = {}
-    seen_paths: dict[str, int] = {}
-    for i, entry in enumerate(registry.templates):
-        if entry.template_id in seen_ids:
-            raise RegistryError(
-                f"templates[{i}].template_id: {entry.template_id!r} duplicates templates"
-                f"[{seen_ids[entry.template_id]}]"
-            )
-        if entry.template_path in seen_paths:
-            raise RegistryError(
-                f"templates[{i}].template_path: {entry.template_path!r} duplicates templates"
-                f"[{seen_paths[entry.template_path]}]"
-            )
-        seen_ids[entry.template_id] = i
-        seen_paths[entry.template_path] = i
+    registry = validate_registry_document(document, origin=str(registry_path))
 
     descriptors = {e.template_id: _check_entry_against_tree(root, e) for e in registry.templates}
     return TemplateCatalog(root=root, registry=registry, descriptors=descriptors)
