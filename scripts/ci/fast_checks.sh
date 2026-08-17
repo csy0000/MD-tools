@@ -14,6 +14,33 @@ mkdir -p "$WORKDIR"
 
 step() { printf '\n=== %s ===\n' "$1"; }
 
+step "0. the expected commit"
+# The supported gate REQUIRES resolved packaged provenance naming exactly this checkout's HEAD, so
+# the SHA must be acquired BEFORE anything is built -- a checkout that cannot name itself should fail
+# in a second, not after a wheel build and an install.
+#
+# FAST_CHECKS_ALLOW_UNRESOLVED=1 is the local-development escape: it permits an unresolved build and
+# a missing SHA. It must be selected explicitly, it defaults to off, and it is announced here. CI
+# must never set it.
+ALLOW_UNRESOLVED="${FAST_CHECKS_ALLOW_UNRESOLVED:-0}"
+EXPECT_SHA=""
+if SHA_OUTPUT="$(bash "$REPO_ROOT/scripts/ci/expect_commit.sh" "$REPO_ROOT" 2>&1)"; then
+    EXPECT_SHA="$SHA_OUTPUT"
+    echo "  expected commit: $EXPECT_SHA"
+elif [ "$ALLOW_UNRESOLVED" = "1" ]; then
+    echo "  NOTE: no expected commit ($SHA_OUTPUT)"
+else
+    echo "fast checks FAILED: $SHA_OUTPUT" >&2
+    echo "The supported gate requires a checkout whose full commit SHA can be determined, so the" >&2
+    echo "packaged wheel can be checked against it. Run from a Git checkout with at least one" >&2
+    echo "commit, or set FAST_CHECKS_ALLOW_UNRESOLVED=1 for local development." >&2
+    exit 1
+fi
+
+if [ "$ALLOW_UNRESOLVED" = "1" ]; then
+    echo "  NOTE: FAST_CHECKS_ALLOW_UNRESOLVED=1 -- local development mode, not the supported gate"
+fi
+
 step "1. build the wheel"
 cd "$REPO_ROOT"
 rm -rf dist
@@ -67,17 +94,13 @@ step "4b. the packaged catalog, from outside the checkout"
 # Still in WORKDIR: this exercises the INSTALLED distribution. The script sets no sys.path of its
 # own, blocks sockets before importing, and refuses if md_templates resolves into the checkout.
 #
-# The supported gate REQUIRES resolved provenance naming exactly this checkout's HEAD. A gate that
-# accepted an unresolved build would pass on precisely the wheels that cannot name their own source.
-# Set FAST_CHECKS_ALLOW_UNRESOLVED=1 to test the refusal path from a dirty tree during development;
-# CI must never set it, and the mode is printed on every run.
-EXPECT_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
+# The expected commit was acquired in step 0, before anything was built, so a checkout that cannot
+# name itself fails in a second rather than after a wheel build.
 PACKAGED_ARGS=()
 if [ -n "$EXPECT_SHA" ]; then
     PACKAGED_ARGS+=(--expect-commit "$EXPECT_SHA")
 fi
-if [ "${FAST_CHECKS_ALLOW_UNRESOLVED:-0}" = "1" ]; then
-    echo "  NOTE: FAST_CHECKS_ALLOW_UNRESOLVED=1 -- local development mode, not the supported gate"
+if [ "$ALLOW_UNRESOLVED" = "1" ]; then
     PACKAGED_ARGS+=(--allow-unresolved)
 fi
 python "$REPO_ROOT/scripts/ci/check_packaged_catalog.py" "${PACKAGED_ARGS[@]}"

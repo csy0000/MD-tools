@@ -5,10 +5,12 @@ Run from a directory outside the repository, against a wheel that has been insta
     cd "$WORKDIR" && python "$REPO_ROOT/scripts/ci/check_packaged_catalog.py" \
         --expect-commit "$(git -C "$REPO_ROOT" rev-parse HEAD)"
 
-**Resolved provenance is required by default, and must match `--expect-commit` exactly.** A gate that
+**Strict mode is the default: `--expect-commit` is mandatory and must match exactly.** A gate that
 accepted an unresolved build would pass on precisely the wheels that cannot name their own source,
 which is the failure it exists to catch -- and it would do so silently, because an unresolved build
-is otherwise indistinguishable from a healthy one until someone asks for an identity.
+is otherwise indistinguishable from a healthy one until someone asks for an identity. Resolved
+provenance alone is not enough either: without an expected value, a stale wheel built from an older
+checkout passes while proving something about source nobody is looking at.
 
 `--allow-unresolved` exists for local development from a dirty tree. It must be selected explicitly;
 CI never sets it, and the script says which mode it is in on every run.
@@ -55,8 +57,8 @@ def fail(message: str) -> None:
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expect-commit", metavar="SHA",
-                        help="require the packaged build provenance to name exactly this full "
-                             "40-character commit SHA")
+                        help="the full 40-character commit SHA the packaged build provenance must "
+                             "name. REQUIRED in strict mode.")
     parser.add_argument("--allow-unresolved", action="store_true",
                         help="local development only: accept an unresolved build and check that it "
                              "refuses identity. CI must never pass this.")
@@ -102,16 +104,21 @@ def main(argv=None) -> int:
             return 0
         fail("unresolved build provenance produced an identity")
 
-    if args.expect_commit:
-        expected = args.expect_commit.strip().lower()
-        if len(expected) != 40 or any(c not in "0123456789abcdef" for c in expected):
-            fail(f"--expect-commit {args.expect_commit!r} is not a full 40-character hex SHA")
-        if provenance.commit_sha != expected:
-            fail(f"packaged provenance names {provenance.commit_sha}, but the checkout under test "
-                 f"is at {expected}. The wheel was built from different source.")
-        print(f"  expected commit:    {expected} (matches)")
-    else:
-        print("  expected commit:    not supplied (pass --expect-commit in CI)")
+    # Mandatory in strict mode. Resolved provenance on its own only proves the wheel names SOME
+    # commit; without an expected value a stale wheel built from an older checkout passes while
+    # proving something about source nobody is looking at.
+    if not args.expect_commit:
+        fail("--expect-commit is required in strict mode: resolved provenance alone does not show "
+             "that the wheel was built from the source under test. Pass the checkout's full SHA, or "
+             "select --allow-unresolved for local development.")
+
+    expected = args.expect_commit.strip().lower()
+    if len(expected) != 40 or any(c not in "0123456789abcdef" for c in expected):
+        fail(f"--expect-commit {args.expect_commit!r} is not a full 40-character hex SHA")
+    if provenance.commit_sha != expected:
+        fail(f"packaged provenance names {provenance.commit_sha}, but the checkout under test "
+             f"is at {expected}. The wheel was built from different source.")
+    print(f"  expected commit:    {expected} (matches)")
 
     for template_id in listed:
         identity = resolve_packaged_identity(template_id)
