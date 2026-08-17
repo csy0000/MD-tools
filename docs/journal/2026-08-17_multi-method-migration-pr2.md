@@ -262,21 +262,20 @@ The only changes outside `md_templates/core` and the build files are documentati
 
 ## CI status actually observed
 
-**Reported by the reviewer on PR #2: GitHub Actions is now running, and both the `fast` and
-`integration-cpu` workflows passed.** That resolves the question left open by PR 1, where the head
-carried zero commit-status contexts.
+**Reported by the reviewer: `fast` and `integration-cpu`, run #10, both passed after review round
+1.** That is the first remote run to exercise the strict gate introduced in round 1, and it resolves
+the question left open by PR 1, whose head carried zero commit-status contexts.
 
-**I could not independently confirm it from this machine, and am not claiming to have.** The API
-token available here lacks Actions and Checks read permission — `actions/runs`,
-`commits/<sha>/check-runs` and `commits/<sha>/status` all return **HTTP 403 "Resource not accessible
-by personal access token"**. So the workflow result above is recorded as *reviewer-observed*, and
-everything else in this journal is local evidence produced and checked here. Anyone wanting a
-first-hand check should look at the Actions tab for this branch, or re-run with a token carrying
-`actions: read`.
+**I could not independently confirm it, and am not claiming to have.** The API token on this machine
+lacks Actions and Checks read permission — `actions/runs`, `commits/<sha>/check-runs` and
+`commits/<sha>/status` all return **HTTP 403 "Resource not accessible by personal access token"**,
+re-checked at the start of review round 2. So the workflow result is recorded as *reviewer-observed*;
+every other result in this journal is local evidence produced and checked here. A first-hand check
+needs the Actions tab, or a token carrying `actions: read`.
 
-Note that the workflows the reviewer observed ran against the commit **before** this review round.
-The gate changed in review finding 3 — it is now strict — so the next Actions run is the first that
-exercises the strict path remotely.
+Run #10 predates review round 2, which changed both the digest and the gate's preconditions, so the
+next Actions run is the first to exercise closed-world coverage and the mandatory `--expect-commit`
+remotely.
 
 ## Review round 1: three findings, all real
 
@@ -337,6 +336,69 @@ fast checks: PASSED                                                        exit 
 ```
 
 `507 = 491 + 16`. No golden was regenerated and no existing test was weakened.
+
+## Review round 2: closed-world coverage and a mandatory expected commit
+
+**1. The source digest was an allowlist, and allowlists rot.** Round 1 bound `src/`,
+`build_support/`, `templates/` and four root files — which left `README.md`, build configuration, a
+descriptor's referenced documentation and *any newly added file* invisible. An unpacked archive could
+be edited in those places and still inherit the commit it named.
+
+The shape is now inverted: hash **every regular file** in the tree, keyed by normalised logical path,
+minus a short explicit list. Each exclusion earns its place by being **regenerated during a build** —
+`__pycache__`, `*.pyc`/`*.pyo`, any `*.egg-info` directory, top-level `build/` and `dist/`, `.git/` —
+because including them would make the digest depend on whether anything had been built before, and
+two builds of one commit must stay byte-identical. The provenance record excludes itself for the
+obvious reason: its own digest field is written from this value. Symlinks hash their link target
+rather than what it points at, so replacing a file with a link moves the digest.
+
+Coverage that has to be remembered is eventually forgotten. "Everything, minus a named list of
+generated things" is the only version that stays true as the repository grows.
+
+**2. `--expect-commit` was optional, so strict mode was weaker than it looked.** Resolved provenance
+on its own only shows the wheel names *some* commit; without an expected value a stale wheel built
+from an older checkout passed while proving something about source nobody was looking at. It is now
+mandatory whenever `--allow-unresolved` was not selected.
+
+The SHA is acquired in a new **step 0**, before anything is built, by `scripts/ci/expect_commit.sh`.
+Two reasons for the separate script: a checkout that cannot name itself now fails in a second rather
+than after a wheel build and an install, and the precondition is testable with a stubbed `git`
+without building anything. It refuses an empty or non-40-hex SHA rather than letting either degrade
+into "no expected commit" — which is exactly the check being skipped.
+`FAST_CHECKS_ALLOW_UNRESOLVED=1` still permits both an unresolved build and a missing SHA, still
+defaults to off, and is announced in step 0.
+
+Twenty regression tests. The closed-world group edits `README.md`, `setup.cfg`, a referenced doc and
+a brand-new file in an unpacked archive, each requiring unresolved provenance and a refused identity;
+another confirms the opposite direction, that regenerating `.egg-info`, `__pycache__`, `build/`,
+`dist/` and even rewriting the provenance record leaves the digest unchanged. The gate group runs the
+whole shell gate with a failing `git` stub and asserts it refuses **before** the wheel step, in under
+a minute.
+
+```console
+$ python -m pytest tests/test_packaged_catalog.py -q
+83 passed                                                                  31.13 s
+
+$ python -m pytest tests/test_template_catalog.py tests/test_template_identity.py -q
+131 passed                                                                  5.84 s
+
+$ python -m pytest tests/ -q -m "not slow"
+527 passed, 17 deselected                                                  39.08 s
+
+$ python scripts/capture_goldens.py --check
+7/7 ok, exit 0
+
+$ env -u PYTHONPATH bash scripts/ci/fast_checks.sh       # clean tree, STRICT mode
+  expected commit: d144e8c4d4275b9583493f4d1efa98e0d5580248
+  source state:       clean-git-checkout (resolved=True)
+  mode:               strict
+  expected commit:    d144e8c4d4275b9583493f4d1efa98e0d5580248 (matches)
+  ok: offline, no heavy dependencies, no checkout, no Git
+527 passed, 17 deselected
+fast checks: PASSED                                                        exit 0
+```
+
+`527 = 507 + 20`. No golden regenerated; no existing test weakened.
 
 ## Limitations and deferred work
 

@@ -140,9 +140,11 @@ Provenance is never inherited from an enclosing repository: the Git worktree roo
 source root, not merely contain it. A source tree unpacked inside another project — vendored, or in
 an ignored directory — would otherwise report that project's HEAD, and report it clean.
 
-An unmodified sdist inherits its commit only while **both** its catalog bytes and every
-build- and runtime-relevant source file still hash to what the archive recorded, so an archive whose
-implementation was edited after unpacking cannot carry the original commit forward.
+An unmodified sdist inherits its commit only while **both** its catalog bytes and a digest over
+**every regular file in the archive** still hash to what it recorded. That digest is closed-world:
+everything is covered except generated artifacts (`__pycache__`, `*.pyc`, `*.egg-info/`, top-level
+`build/` and `dist/`, `.git/`) and the provenance record itself. An archive edited anywhere — source,
+README, build configuration, a referenced document — cannot carry the original commit forward.
 
 A refusal raises `UnresolvedBuildProvenanceError` and names the state. Listing still works in every
 case: knowing *what* a distribution contains is useful even when its bytes cannot be named.
