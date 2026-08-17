@@ -111,9 +111,29 @@ calling the same scripts run above so local and CI behaviour cannot drift. They 
 YAML, every job pins `runs-on` and an explicit timeout, and `environment-ci.yml` is the documented
 environment with the CUDA pin removed.
 
-They have not been observed executing on GitHub at the time of writing. Whether they pass there is
-recorded separately below once observed; until then the correct description is **configured and
-locally reproduced, awaiting remote observation.**
+**Remote observation was attempted and is not possible from this environment.** After pushing
+`015c88f` to `openmm` (push verified: local and remote HEAD agree, and both workflow files are
+present on the remote branch), the runs were queried three ways:
+
+```console
+$ gh run list                       gh CLI is not installed
+$ curl .../actions/runs             HTTP 404
+$ curl .../repos/csy0000/MD-templates   HTTP 404 -- the repository is private
+$ echo $GH_TOKEN $GITHUB_TOKEN      both unset
+```
+
+Pushing works because the remote is SSH (`git@github.com:...`); the Actions REST API needs a token,
+and none is available here. So the workflows' status on GitHub is **unknown to me**, and nothing in
+this repository should be read as evidence that they passed.
+
+What someone with access should check, in order: that Actions is enabled for the repository at all;
+that `fast` and `integration-cpu` were triggered by the push to `openmm`; and that
+`integration-cpu` completes within its 90-minute timeout, since micromamba must solve the full
+environment on a cold cache and that step is the most likely first failure. If they fail for
+environment reasons rather than code reasons, `environment-ci.yml` is the file to adjust.
+
+Until then the correct description is **configured and locally reproduced, awaiting remote
+observation.**
 
 ## Portability claims, stated precisely
 
