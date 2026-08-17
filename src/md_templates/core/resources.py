@@ -168,6 +168,12 @@ class BuildProvenance(_Strict):
     commit_sha: Optional[str] = None
     canonical_url: str
     resource_manifest_sha256: str
+    #: A digest over every build- and runtime-relevant source file, not just the catalog. The catalog
+    #: manifest alone binds registry.yaml and the descriptors, which leaves the code that reads and
+    #: verifies them unbound: an sdist could be unpacked, `packaged.py` or `build_support/catalog.py`
+    #: rewritten, and the wheel would still inherit the archive's clean commit while behaving
+    #: differently. The commit must name the whole thing it claims to describe.
+    source_tree_sha256: Optional[str] = None
 
     @field_validator("schema_version", mode="before")
     @classmethod
@@ -187,6 +193,15 @@ class BuildProvenance(_Strict):
         if not isinstance(v, str) or not _SHA256.match(v):
             raise ValueError(
                 f"resource_manifest_sha256: {v!r} is not a lowercase 64-character SHA-256"
+            )
+        return v
+
+    @field_validator("source_tree_sha256")
+    @classmethod
+    def _check_source_tree_hash(cls, v):
+        if v is not None and (not isinstance(v, str) or not _SHA256.match(v)):
+            raise ValueError(
+                f"source_tree_sha256: {v!r} is not a lowercase 64-character SHA-256"
             )
         return v
 

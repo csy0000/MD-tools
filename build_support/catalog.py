@@ -46,7 +46,51 @@ class CatalogBuildError(RuntimeError):
     """The source catalog could not be validated or staged. The build must stop."""
 
 
-def decide_provenance(source_root: Path, manifest_sha256: str, canonical_url: str):
+#: Files whose contents decide what a build produces and how the result behaves. The catalog
+#: manifest binds only registry.yaml and the descriptors; these bind the rest, so an unpacked archive
+#: cannot have its implementation rewritten and still inherit the commit the archive named.
+RELEVANT_FILES = ("setup.py", "pyproject.toml", "MANIFEST.in", "registry.yaml")
+RELEVANT_TREES = ("src", "build_support", "templates")
+
+
+def _relevant_source_files(root: Path):
+    """Yield `(logical path, Path)` for every build- and runtime-relevant file under `root`.
+
+    Build artifacts are excluded because they appear *during* a build: including `.egg-info` or
+    `__pycache__` would make the digest depend on whether anything had been built before, and two
+    builds of one commit must produce identical metadata.
+    """
+    root = Path(root)
+    for name in RELEVANT_FILES:
+        candidate = root / name
+        if candidate.is_file():
+            yield name, candidate
+    for tree in RELEVANT_TREES:
+        base = root / tree
+        if not base.is_dir():
+            continue
+        for candidate in sorted(base.rglob("*")):
+            if not candidate.is_file():
+                continue
+            relative = candidate.relative_to(root)
+            if any(part == "__pycache__" or part.endswith(".egg-info") for part in relative.parts):
+                continue
+            if candidate.suffix in (".pyc", ".pyo"):
+                continue
+            yield relative.as_posix(), candidate
+
+
+def source_tree_digest(root: Path) -> str:
+    """One digest over the exact bytes of every relevant source file, keyed by logical path."""
+    _, _, resources_mod = _import_core()
+    files = {relative: resources_mod.sha256_bytes(path.read_bytes())
+             for relative, path in _relevant_source_files(root)}
+    return resources_mod.sha256_bytes(
+        resources_mod.canonical_json_bytes({"files": dict(sorted(files.items()))}))
+
+
+def decide_provenance(source_root: Path, manifest_sha256: str, canonical_url: str,
+                      source_sha256: str | None = None):
     """Decide what this source tree may claim about itself.
 
     Five outcomes, all closed values -- see `SOURCE_STATES`. The rules the instruction fixes:
@@ -65,6 +109,8 @@ def decide_provenance(source_root: Path, manifest_sha256: str, canonical_url: st
     _, identity_mod, resources_mod = _import_core()
     BuildProvenance = resources_mod.BuildProvenance
 
+    digest = source_sha256 if source_sha256 is not None else source_tree_digest(source_root)
+
     def record(resolved, state, sha=None):
         return BuildProvenance(
             schema_version=resources_mod.BUILD_PROVENANCE_SCHEMA_VERSION,
@@ -73,6 +119,7 @@ def decide_provenance(source_root: Path, manifest_sha256: str, canonical_url: st
             commit_sha=sha,
             canonical_url=canonical_url,
             resource_manifest_sha256=manifest_sha256,
+            source_tree_sha256=digest,
         )
 
     git = identity_mod.inspect_provenance(source_root)
@@ -91,9 +138,14 @@ def decide_provenance(source_root: Path, manifest_sha256: str, canonical_url: st
                 json.loads(archive.read_text(encoding="utf-8")))
         except Exception:
             return record(False, "no-verifiable-git-provenance")
-        if carried.resolved and carried.resource_manifest_sha256 == manifest_sha256:
-            # The archive named a commit, and the catalog bytes in it still hash to exactly what
-            # that record described. Anything else and the archive cannot be taken at its word.
+        # The archive may be taken at its word only if BOTH digests still agree: the catalog bytes
+        # and every build- and runtime-relevant source file. Binding the catalog alone would let an
+        # unpacked archive have `packaged.py`, an engine module or `build_support/catalog.py`
+        # rewritten and still inherit the commit -- a commit naming code it never contained.
+        if (carried.resolved
+                and carried.resource_manifest_sha256 == manifest_sha256
+                and carried.source_tree_sha256 is not None
+                and carried.source_tree_sha256 == digest):
             return record(True, "verified-source-archive", carried.commit_sha)
         return record(False, "no-verifiable-git-provenance")
 
@@ -210,32 +262,48 @@ def copy_referenced_sources(source_root: Path, release_tree: Path,
         shutil.copy2(source, target)
 
 
-def source_provenance_bytes(source_root: Path) -> bytes:
-    """Decide this source tree's provenance and serialise it, without writing anything.
+def decide_source_state(source_root: Path):
+    """The Git half of the decision, taken before the sdist machinery touches anything.
 
-    Called before the sdist machinery runs, because `sdist` creates its release tree inside the
-    project directory: judging the tree afterwards would see the build's own scratch space and call
-    a clean checkout dirty.
+    `sdist` creates its release tree inside the project directory, so judging the tree afterwards
+    would see the build's own scratch space and call a clean checkout dirty. The digests, by
+    contrast, must be computed from the finished release tree -- that is the tree the archive will
+    actually contain -- so the two halves are taken at different moments and combined at the end.
     """
-    registry_mod, _, resources_mod = _import_core()
+    _, identity_mod, _ = _import_core()
+    git = identity_mod.inspect_provenance(source_root)
+    if git.commit_sha is None:
+        return False, "no-verifiable-git-provenance", None
+    if not git.status_known:
+        return False, "unverifiable-git-status", None
+    if git.dirty:
+        return False, "dirty-source-tree", None
+    return True, "clean-git-checkout", git.commit_sha
 
-    manifest, _ = build_manifest(source_root)
-    manifest_sha256 = resources_mod.sha256_bytes(manifest.to_bytes())
-    canonical_url = registry_mod.load_catalog(source_root).canonical_url
-    provenance = decide_provenance(source_root, manifest_sha256, canonical_url)
-    print(f"sdist provenance: {provenance.source_state}"
-          + (f" @ {provenance.commit_sha}" if provenance.resolved else " (unresolved)"))
-    return provenance.to_bytes()
 
-
-def write_source_provenance(release_tree: Path, payload: bytes) -> None:
-    """Record the decided provenance inside an sdist so a later wheel can inherit it.
+def write_source_provenance(release_tree: Path, source_state) -> None:
+    """Record the archive's provenance, with digests taken over the finished release tree.
 
     Written into the sdist staging tree only. The working tree is never touched -- a build that
     modified tracked source would make the next `git status` dirty and quietly poison the provenance
     of every subsequent build.
     """
-    _, _, resources_mod = _import_core()
-    if payload is None:
+    registry_mod, _, resources_mod = _import_core()
+    if source_state is None:
         raise CatalogBuildError("sdist provenance was not decided before the release tree was made")
-    (Path(release_tree) / resources_mod.SOURCE_PROVENANCE_FILENAME).write_bytes(payload)
+
+    resolved, state, sha = source_state
+    release_tree = Path(release_tree)
+    manifest, _ = build_manifest(release_tree)
+    provenance = resources_mod.BuildProvenance(
+        schema_version=resources_mod.BUILD_PROVENANCE_SCHEMA_VERSION,
+        resolved=resolved,
+        source_state=state,
+        commit_sha=sha,
+        canonical_url=registry_mod.load_catalog(release_tree).canonical_url,
+        resource_manifest_sha256=resources_mod.sha256_bytes(manifest.to_bytes()),
+        source_tree_sha256=source_tree_digest(release_tree),
+    )
+    (release_tree / resources_mod.SOURCE_PROVENANCE_FILENAME).write_bytes(provenance.to_bytes())
+    print(f"sdist provenance: {provenance.source_state}"
+          + (f" @ {provenance.commit_sha}" if provenance.resolved else " (unresolved)"))

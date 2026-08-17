@@ -28,8 +28,8 @@ if str(HERE) not in sys.path:
 
 from build_support.catalog import (  # noqa: E402
     copy_referenced_sources,
+    decide_source_state,
     sdist_extra_files,
-    source_provenance_bytes,
     stage_catalog,
     write_source_provenance,
 )
@@ -42,14 +42,15 @@ class build_py(_build_py):
 
 
 class sdist(_sdist):
-    #: Provenance is decided BEFORE anything is built. `sdist` creates its release tree
+    #: The Git state is decided BEFORE anything is built. `sdist` creates its release tree
     #: (`md_templates-<version>/`) inside the project directory, and that directory is untracked, so
-    #: computing provenance later would see the build's own scratch space and call every clean tree
-    #: dirty. The source must be judged as it was, not as the build transiently made it.
-    _provenance_bytes = None
+    #: deciding later would see the build's own scratch space and call every clean tree dirty. The
+    #: digests are taken afterwards, from the finished release tree, because that is the tree the
+    #: archive will actually contain.
+    _source_state = None
 
     def run(self):
-        self._provenance_bytes = source_provenance_bytes(HERE)
+        self._source_state = decide_source_state(HERE)
         super().run()
 
     def make_release_tree(self, base_dir, files):
@@ -61,7 +62,7 @@ class sdist(_sdist):
         # path fails its own wheel build, which is the reference check firing on an incomplete
         # archive rather than a false alarm.
         copy_referenced_sources(HERE, Path(base_dir), sdist_extra_files(HERE))
-        write_source_provenance(release_tree=Path(base_dir), payload=self._provenance_bytes)
+        write_source_provenance(release_tree=Path(base_dir), source_state=self._source_state)
 
 
 setup(cmdclass={"build_py": build_py, "sdist": sdist})
