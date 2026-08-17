@@ -1,0 +1,1560 @@
+{
+  "cli": {
+    "md-openmm": {
+      "actions": [
+        {
+          "choices": null,
+          "default": "==SUPPRESS==",
+          "dest": "version",
+          "nargs": 0,
+          "option_strings": [
+            "--version"
+          ],
+          "required": false,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm"
+    },
+    "md-openmm bundle": {
+      "actions": [],
+      "prog": "md-openmm bundle"
+    },
+    "md-openmm bundle inspect": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "bundle",
+          "nargs": null,
+          "option_strings": [],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": [
+            "json",
+            "text",
+            "yaml"
+          ],
+          "default": "text",
+          "dest": "format",
+          "nargs": null,
+          "option_strings": [
+            "--format"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "output",
+          "nargs": null,
+          "option_strings": [
+            "--output"
+          ],
+          "required": false,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm bundle inspect"
+    },
+    "md-openmm bundle relocate-check": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "bundle",
+          "nargs": null,
+          "option_strings": [],
+          "required": true,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm bundle relocate-check"
+    },
+    "md-openmm bundle validate": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "bundle",
+          "nargs": null,
+          "option_strings": [],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": false,
+          "dest": "deep",
+          "nargs": 0,
+          "option_strings": [
+            "--deep"
+          ],
+          "required": false,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm bundle validate"
+    },
+    "md-openmm config": {
+      "actions": [],
+      "prog": "md-openmm config"
+    },
+    "md-openmm config diff": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "input_a",
+          "nargs": null,
+          "option_strings": [],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "input_b",
+          "nargs": null,
+          "option_strings": [],
+          "required": true,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm config diff"
+    },
+    "md-openmm config explain": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "field",
+          "nargs": null,
+          "option_strings": [],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": [
+            "json",
+            "yaml"
+          ],
+          "default": "json",
+          "dest": "format",
+          "nargs": null,
+          "option_strings": [
+            "--format"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "input",
+          "nargs": null,
+          "option_strings": [],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "output",
+          "nargs": null,
+          "option_strings": [
+            "--output"
+          ],
+          "required": false,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm config explain"
+    },
+    "md-openmm config init": {
+      "actions": [
+        {
+          "choices": [
+            "md",
+            "rest2"
+          ],
+          "default": null,
+          "dest": "method",
+          "nargs": null,
+          "option_strings": [
+            "--method"
+          ],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "output",
+          "nargs": null,
+          "option_strings": [
+            "--output"
+          ],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": false,
+          "dest": "overwrite",
+          "nargs": 0,
+          "option_strings": [
+            "--overwrite"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "profile",
+          "nargs": null,
+          "option_strings": [
+            "--profile"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": [
+            "pdb",
+            "smiles"
+          ],
+          "default": null,
+          "dest": "route",
+          "nargs": null,
+          "option_strings": [
+            "--route"
+          ],
+          "required": true,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm config init"
+    },
+    "md-openmm config list-profiles": {
+      "actions": [
+        {
+          "choices": [
+            "json",
+            "yaml"
+          ],
+          "default": "json",
+          "dest": "format",
+          "nargs": null,
+          "option_strings": [
+            "--format"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "output",
+          "nargs": null,
+          "option_strings": [
+            "--output"
+          ],
+          "required": false,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm config list-profiles"
+    },
+    "md-openmm config migrate": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "experiment",
+          "nargs": null,
+          "option_strings": [
+            "--experiment"
+          ],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "input",
+          "nargs": null,
+          "option_strings": [],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "output",
+          "nargs": null,
+          "option_strings": [
+            "--output"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": false,
+          "dest": "overwrite",
+          "nargs": 0,
+          "option_strings": [
+            "--overwrite"
+          ],
+          "required": false,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm config migrate"
+    },
+    "md-openmm config resolve": {
+      "actions": [
+        {
+          "choices": [
+            "json",
+            "yaml"
+          ],
+          "default": "json",
+          "dest": "format",
+          "nargs": null,
+          "option_strings": [
+            "--format"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "input",
+          "nargs": null,
+          "option_strings": [],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "output",
+          "nargs": null,
+          "option_strings": [
+            "--output"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "profile",
+          "nargs": null,
+          "option_strings": [
+            "--profile"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "set",
+          "nargs": null,
+          "option_strings": [
+            "--set"
+          ],
+          "required": false,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm config resolve"
+    },
+    "md-openmm config validate": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "input",
+          "nargs": null,
+          "option_strings": [],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "profile",
+          "nargs": null,
+          "option_strings": [
+            "--profile"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "set",
+          "nargs": null,
+          "option_strings": [
+            "--set"
+          ],
+          "required": false,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm config validate"
+    },
+    "md-openmm md": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "bundle",
+          "nargs": null,
+          "option_strings": [
+            "--bundle"
+          ],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "config",
+          "nargs": null,
+          "option_strings": [
+            "--config"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "device",
+          "nargs": null,
+          "option_strings": [
+            "--device"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "experiment",
+          "nargs": null,
+          "option_strings": [
+            "--experiment"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "out_root",
+          "nargs": null,
+          "option_strings": [
+            "--out-root"
+          ],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": [
+            "CPU",
+            "CUDA",
+            "OpenCL"
+          ],
+          "default": "CUDA",
+          "dest": "platform",
+          "nargs": null,
+          "option_strings": [
+            "--platform"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "resume_run",
+          "nargs": null,
+          "option_strings": [
+            "--resume-run"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "run_name",
+          "nargs": null,
+          "option_strings": [
+            "--run-name"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "set",
+          "nargs": null,
+          "option_strings": [
+            "--set"
+          ],
+          "required": false,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm md"
+    },
+    "md-openmm prepare": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "config",
+          "nargs": null,
+          "option_strings": [
+            "--config"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "device",
+          "nargs": null,
+          "option_strings": [
+            "--device"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "experiment",
+          "nargs": null,
+          "option_strings": [
+            "--experiment"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "name",
+          "nargs": null,
+          "option_strings": [
+            "--name"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": true,
+          "dest": "omega_exclusion",
+          "nargs": 0,
+          "option_strings": [
+            "--no-omega-exclusion"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "omega_exclusion",
+          "nargs": null,
+          "option_strings": [
+            "--omega-exclusion"
+          ],
+          "required": false,
+          "type": "_bool_flag"
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "out_root",
+          "nargs": null,
+          "option_strings": [
+            "--out-root"
+          ],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": [
+            "CPU",
+            "CUDA",
+            "OpenCL"
+          ],
+          "default": "CUDA",
+          "dest": "platform",
+          "nargs": null,
+          "option_strings": [
+            "--platform"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "profile",
+          "nargs": null,
+          "option_strings": [
+            "--profile"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "set",
+          "nargs": null,
+          "option_strings": [
+            "--set"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "system",
+          "nargs": null,
+          "option_strings": [
+            "--system"
+          ],
+          "required": false,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm prepare"
+    },
+    "md-openmm rest2": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "bundle",
+          "nargs": null,
+          "option_strings": [
+            "--bundle"
+          ],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "config",
+          "nargs": null,
+          "option_strings": [
+            "--config"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "device",
+          "nargs": null,
+          "option_strings": [
+            "--device"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "experiment",
+          "nargs": null,
+          "option_strings": [
+            "--experiment"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": true,
+          "dest": "omega_exclusion",
+          "nargs": 0,
+          "option_strings": [
+            "--no-omega-exclusion"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "omega_exclusion",
+          "nargs": null,
+          "option_strings": [
+            "--omega-exclusion"
+          ],
+          "required": false,
+          "type": "_bool_flag"
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "out_root",
+          "nargs": null,
+          "option_strings": [
+            "--out-root"
+          ],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": [
+            "CPU",
+            "CUDA",
+            "OpenCL"
+          ],
+          "default": "CUDA",
+          "dest": "platform",
+          "nargs": null,
+          "option_strings": [
+            "--platform"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "resume_run",
+          "nargs": null,
+          "option_strings": [
+            "--resume-run"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "run_name",
+          "nargs": null,
+          "option_strings": [
+            "--run-name"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "set",
+          "nargs": null,
+          "option_strings": [
+            "--set"
+          ],
+          "required": false,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm rest2"
+    },
+    "md-openmm smoke": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "device",
+          "nargs": null,
+          "option_strings": [
+            "--device"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": "smoke",
+          "dest": "experiment",
+          "nargs": null,
+          "option_strings": [
+            "--experiment"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": true,
+          "dest": "omega_exclusion",
+          "nargs": 0,
+          "option_strings": [
+            "--no-omega-exclusion"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "omega_exclusion",
+          "nargs": null,
+          "option_strings": [
+            "--omega-exclusion"
+          ],
+          "required": false,
+          "type": "_bool_flag"
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "out_root",
+          "nargs": null,
+          "option_strings": [
+            "--out-root"
+          ],
+          "required": true,
+          "type": null
+        },
+        {
+          "choices": [
+            "CPU",
+            "CUDA",
+            "OpenCL"
+          ],
+          "default": "CPU",
+          "dest": "platform",
+          "nargs": null,
+          "option_strings": [
+            "--platform"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "system",
+          "nargs": null,
+          "option_strings": [
+            "--system"
+          ],
+          "required": true,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm smoke"
+    },
+    "md-openmm validate-bundle": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "bundle",
+          "nargs": null,
+          "option_strings": [
+            "--bundle"
+          ],
+          "required": true,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm validate-bundle"
+    },
+    "md-openmm validate-env": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "device",
+          "nargs": null,
+          "option_strings": [
+            "--device"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": false,
+          "dest": "json",
+          "nargs": 0,
+          "option_strings": [
+            "--json"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": [
+            "CPU",
+            "CUDA",
+            "OpenCL"
+          ],
+          "default": null,
+          "dest": "platform",
+          "nargs": null,
+          "option_strings": [
+            "--platform"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": [
+            "double",
+            "mixed",
+            "single"
+          ],
+          "default": "mixed",
+          "dest": "precision",
+          "nargs": null,
+          "option_strings": [
+            "--precision"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": [
+            "pdb",
+            "smiles"
+          ],
+          "default": "smiles",
+          "dest": "route",
+          "nargs": null,
+          "option_strings": [
+            "--route"
+          ],
+          "required": false,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm validate-env"
+    },
+    "md-openmm validate-system": {
+      "actions": [
+        {
+          "choices": null,
+          "default": null,
+          "dest": "experiment",
+          "nargs": null,
+          "option_strings": [
+            "--experiment"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": false,
+          "dest": "no_chemistry",
+          "nargs": 0,
+          "option_strings": [
+            "--no-chemistry"
+          ],
+          "required": false,
+          "type": null
+        },
+        {
+          "choices": null,
+          "default": null,
+          "dest": "system",
+          "nargs": null,
+          "option_strings": [
+            "--system"
+          ],
+          "required": true,
+          "type": null
+        }
+      ],
+      "prog": "md-openmm validate-system"
+    }
+  },
+  "exceptions": {
+    "md_templates.core.BuildProvenanceError": [
+      "BuildProvenanceError",
+      "PackagedCatalogError",
+      "RegistryError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.core.DirtyWorkingTreeError": [
+      "DirtyWorkingTreeError",
+      "IdentityError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.core.IdentityError": [
+      "IdentityError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.core.NoProvenanceError": [
+      "NoProvenanceError",
+      "IdentityError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.core.PackagedCatalogError": [
+      "PackagedCatalogError",
+      "RegistryError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.core.PathError": [
+      "PathError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.core.RegistryError": [
+      "RegistryError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.core.ResourceIntegrityError": [
+      "ResourceIntegrityError",
+      "PackagedCatalogError",
+      "RegistryError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.core.TemplateError": [
+      "TemplateError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.core.UnknownTemplateError": [
+      "UnknownTemplateError",
+      "IdentityError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.core.UnresolvedBuildProvenanceError": [
+      "UnresolvedBuildProvenanceError",
+      "NoProvenanceError",
+      "IdentityError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.openmm.bundlev2.BundleContractError": [
+      "BundleContractError",
+      "RuntimeError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.openmm.runstate.IncompatibleContinuation": [
+      "IncompatibleContinuation",
+      "RuntimeError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.openmm.runstate.RunStateError": [
+      "RunStateError",
+      "RuntimeError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.openmm.schemas.ManifestError": [
+      "ManifestError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.openmm.spec.migrate.MigrationError": [
+      "MigrationError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.openmm.spec.resolve.ResolutionError": [
+      "ResolutionError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ],
+    "md_templates.openmm.spec.units.UnitError": [
+      "UnitError",
+      "ValueError",
+      "Exception",
+      "BaseException",
+      "object"
+    ]
+  },
+  "imports": {
+    "md_templates.core": {
+      "BUILD_PROVENANCE_SCHEMA_VERSION": {
+        "kind": "int",
+        "origin": null
+      },
+      "BuildProvenance": {
+        "kind": "class",
+        "origin": "md_templates.core.resources"
+      },
+      "BuildProvenanceError": {
+        "kind": "class",
+        "origin": "md_templates.core.packaged"
+      },
+      "CANONICAL_FORM": {
+        "kind": "str",
+        "origin": null
+      },
+      "DirtyWorkingTreeError": {
+        "kind": "class",
+        "origin": "md_templates.core.identity"
+      },
+      "GitProvenance": {
+        "kind": "class",
+        "origin": "md_templates.core.identity"
+      },
+      "IdentityError": {
+        "kind": "class",
+        "origin": "md_templates.core.identity"
+      },
+      "NoProvenanceError": {
+        "kind": "class",
+        "origin": "md_templates.core.identity"
+      },
+      "PackagedCatalog": {
+        "kind": "class",
+        "origin": "md_templates.core.packaged"
+      },
+      "PackagedCatalogError": {
+        "kind": "class",
+        "origin": "md_templates.core.packaged"
+      },
+      "PathError": {
+        "kind": "class",
+        "origin": "md_templates.core.paths"
+      },
+      "REGISTRY_FILENAME": {
+        "kind": "str",
+        "origin": null
+      },
+      "REGISTRY_SCHEMA_VERSION": {
+        "kind": "int",
+        "origin": null
+      },
+      "RESOURCE_MANIFEST_SCHEMA_VERSION": {
+        "kind": "int",
+        "origin": null
+      },
+      "Registry": {
+        "kind": "class",
+        "origin": "md_templates.core.registry"
+      },
+      "RegistryEntry": {
+        "kind": "class",
+        "origin": "md_templates.core.registry"
+      },
+      "RegistryError": {
+        "kind": "class",
+        "origin": "md_templates.core.registry"
+      },
+      "ResourceIntegrityError": {
+        "kind": "class",
+        "origin": "md_templates.core.packaged"
+      },
+      "ResourceManifest": {
+        "kind": "class",
+        "origin": "md_templates.core.resources"
+      },
+      "TEMPLATE_SCHEMA_VERSION": {
+        "kind": "int",
+        "origin": null
+      },
+      "TemplateCatalog": {
+        "kind": "class",
+        "origin": "md_templates.core.registry"
+      },
+      "TemplateDescriptor": {
+        "kind": "class",
+        "origin": "md_templates.core.template"
+      },
+      "TemplateError": {
+        "kind": "class",
+        "origin": "md_templates.core.template"
+      },
+      "TemplateIdentity": {
+        "kind": "class",
+        "origin": "md_templates.core.identity"
+      },
+      "TrustedProvenance": {
+        "kind": "class",
+        "origin": "md_templates.core.identity"
+      },
+      "UnknownTemplateError": {
+        "kind": "class",
+        "origin": "md_templates.core.identity"
+      },
+      "UnresolvedBuildProvenanceError": {
+        "kind": "class",
+        "origin": "md_templates.core.packaged"
+      },
+      "annotations": {
+        "kind": "_Feature",
+        "origin": "__future__"
+      },
+      "build_identity": {
+        "kind": "callable",
+        "origin": "md_templates.core.identity"
+      },
+      "describe_packaged_catalog": {
+        "kind": "callable",
+        "origin": "md_templates.core.packaged"
+      },
+      "identity": {
+        "kind": "module",
+        "origin": "md_templates.core.identity"
+      },
+      "inspect_provenance": {
+        "kind": "callable",
+        "origin": "md_templates.core.identity"
+      },
+      "load_catalog": {
+        "kind": "callable",
+        "origin": "md_templates.core.registry"
+      },
+      "load_packaged_catalog": {
+        "kind": "callable",
+        "origin": "md_templates.core.packaged"
+      },
+      "load_packaged_provenance": {
+        "kind": "callable",
+        "origin": "md_templates.core.packaged"
+      },
+      "normalise_commit_sha": {
+        "kind": "callable",
+        "origin": "md_templates.core.identity"
+      },
+      "normalise_repo_relative": {
+        "kind": "callable",
+        "origin": "md_templates.core.paths"
+      },
+      "packaged": {
+        "kind": "module",
+        "origin": "md_templates.core.packaged"
+      },
+      "packaged_catalog_available": {
+        "kind": "callable",
+        "origin": "md_templates.core.packaged"
+      },
+      "packaged_catalog_root": {
+        "kind": "callable",
+        "origin": "md_templates.core.packaged"
+      },
+      "parse_descriptor": {
+        "kind": "callable",
+        "origin": "md_templates.core.template"
+      },
+      "paths": {
+        "kind": "module",
+        "origin": "md_templates.core.paths"
+      },
+      "registry": {
+        "kind": "module",
+        "origin": "md_templates.core.registry"
+      },
+      "resolve_identity": {
+        "kind": "callable",
+        "origin": "md_templates.core.identity"
+      },
+      "resolve_packaged_identity": {
+        "kind": "callable",
+        "origin": "md_templates.core.packaged"
+      },
+      "resources": {
+        "kind": "module",
+        "origin": "md_templates.core.resources"
+      },
+      "template": {
+        "kind": "module",
+        "origin": "md_templates.core.template"
+      },
+      "verify_packaged_catalog": {
+        "kind": "callable",
+        "origin": "md_templates.core.packaged"
+      }
+    },
+    "md_templates.openmm": {
+      "DEFAULTS": {
+        "kind": "dict",
+        "origin": null
+      },
+      "ExperimentManifest": {
+        "kind": "class",
+        "origin": "md_templates.openmm.schemas"
+      },
+      "ManifestError": {
+        "kind": "class",
+        "origin": "md_templates.openmm.schemas"
+      },
+      "SCHEMA_VERSION": {
+        "kind": "int",
+        "origin": null
+      },
+      "SystemManifest": {
+        "kind": "class",
+        "origin": "md_templates.openmm.schemas"
+      },
+      "annotations": {
+        "kind": "_Feature",
+        "origin": "__future__"
+      },
+      "attempt_rest2_exchange": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.rest2"
+      },
+      "build_forcefield": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.system"
+      },
+      "build_rest2_scaled_system": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.system"
+      },
+      "build_simbox": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.equilibration"
+      },
+      "build_system": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.system"
+      },
+      "bundle": {
+        "kind": "module",
+        "origin": "md_templates.openmm.bundle"
+      },
+      "classify_omega_bonds": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.system"
+      },
+      "cli": {
+        "kind": "module",
+        "origin": "md_templates.openmm.cli"
+      },
+      "completed_prefix": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.md"
+      },
+      "config": {
+        "kind": "module",
+        "origin": "md_templates.openmm.config"
+      },
+      "config_hash": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.schemas"
+      },
+      "dump_defaults": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.config"
+      },
+      "envcheck": {
+        "kind": "module",
+        "origin": "md_templates.openmm.envcheck"
+      },
+      "equilibration": {
+        "kind": "module",
+        "origin": "md_templates.openmm.equilibration"
+      },
+      "exchange_pairs": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.rest2"
+      },
+      "exchange_rounds": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.config"
+      },
+      "fingerprint": {
+        "kind": "module",
+        "origin": "md_templates.openmm.fingerprint"
+      },
+      "initial_structure": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.system"
+      },
+      "load_config": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.config"
+      },
+      "load_experiment": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.schemas"
+      },
+      "load_system": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.schemas"
+      },
+      "make_integrator": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.equilibration"
+      },
+      "md": {
+        "kind": "module",
+        "origin": "md_templates.openmm.md"
+      },
+      "minimize_equilibrate": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.equilibration"
+      },
+      "omega_central_bonds": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.system"
+      },
+      "protonate": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.system"
+      },
+      "provenance": {
+        "kind": "module",
+        "origin": "md_templates.openmm.provenance"
+      },
+      "repartition_hydrogen_mass": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.system"
+      },
+      "resolve_config": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.config"
+      },
+      "resolve_remd_scale_ladder": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.rest2"
+      },
+      "resolve_route": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.system"
+      },
+      "rest2": {
+        "kind": "module",
+        "origin": "md_templates.openmm.rest2"
+      },
+      "rest2_ladder": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.config"
+      },
+      "run_md": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.md"
+      },
+      "run_rest2_remd": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.rest2"
+      },
+      "runner": {
+        "kind": "module",
+        "origin": "md_templates.openmm.runner"
+      },
+      "runstate": {
+        "kind": "module",
+        "origin": "md_templates.openmm.runstate"
+      },
+      "schemas": {
+        "kind": "module",
+        "origin": "md_templates.openmm.schemas"
+      },
+      "solvate": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.solvation"
+      },
+      "solvation": {
+        "kind": "module",
+        "origin": "md_templates.openmm.solvation"
+      },
+      "system": {
+        "kind": "module",
+        "origin": "md_templates.openmm.system"
+      },
+      "write_manifest": {
+        "kind": "callable",
+        "origin": "md_templates.openmm.config"
+      }
+    }
+  },
+  "modules": [
+    "md_templates",
+    "md_templates.core",
+    "md_templates.core.identity",
+    "md_templates.core.packaged",
+    "md_templates.core.paths",
+    "md_templates.core.registry",
+    "md_templates.core.resources",
+    "md_templates.core.template",
+    "md_templates.openmm",
+    "md_templates.openmm.bundle",
+    "md_templates.openmm.bundlecheck",
+    "md_templates.openmm.bundlev2",
+    "md_templates.openmm.cli",
+    "md_templates.openmm.config",
+    "md_templates.openmm.envcheck",
+    "md_templates.openmm.equilibration",
+    "md_templates.openmm.fingerprint",
+    "md_templates.openmm.md",
+    "md_templates.openmm.provenance",
+    "md_templates.openmm.rest2",
+    "md_templates.openmm.runner",
+    "md_templates.openmm.runstate",
+    "md_templates.openmm.schemas",
+    "md_templates.openmm.solvation",
+    "md_templates.openmm.spec",
+    "md_templates.openmm.spec.adapter",
+    "md_templates.openmm.spec.canonical",
+    "md_templates.openmm.spec.diffs",
+    "md_templates.openmm.spec.migrate",
+    "md_templates.openmm.spec.models",
+    "md_templates.openmm.spec.resolve",
+    "md_templates.openmm.spec.units",
+    "md_templates.openmm.system"
+  ]
+}
