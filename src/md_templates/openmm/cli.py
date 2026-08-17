@@ -136,6 +136,8 @@ def cmd_rest2(args) -> int:
         Path(args.bundle), exp, Path(args.out_root),
         platform=args.platform, device=args.device, omega_exclusion=args.omega_exclusion,
         run_name=args.run_name, resume_run=_resolve_resume(args),
+        config=(Path(args.config) if getattr(args, "config", None) else None),
+        set_overrides=getattr(args, "set", None),
     )
     if run_dir is not None:
         status = runner.read_status(run_dir)
@@ -155,6 +157,8 @@ def cmd_md(args) -> int:
         Path(args.bundle), exp, Path(args.out_root),
         platform=args.platform, device=args.device,
         run_name=args.run_name, resume_run=_resolve_resume(args),
+        config=(Path(args.config) if getattr(args, "config", None) else None),
+        set_overrides=getattr(args, "set", None),
     )
     if run_dir is not None:
         status = runner.read_status(run_dir)
@@ -421,12 +425,27 @@ def _prepare_from_canonical(args) -> int:
                                   profile_id=getattr(args, "profile", None))
     spec = result["spec"]
     cfg = spec_to_runtime_cfg(spec)
-    if spec.system.route != "smiles":
-        print("prepare from a canonical document currently supports the smiles route only; "
-              "the pdb route still uses --system/--experiment", file=sys.stderr)
-        return runner.EXIT_MANIFEST
+    document_dir = Path(args.config).resolve().parent
+    pdb_path = None
+    if spec.system.route == "pdb":
+        # Relative to the DOCUMENT, never the current working directory: a configuration that
+        # resolves differently depending on where it is invoked from is not portable.
+        pdb_path = (document_dir / spec.system.pdb).resolve()
+        if not pdb_path.is_file():
+            print(f"system.pdb {spec.system.pdb!r} does not exist relative to {document_dir}",
+                  file=sys.stderr)
+            return runner.EXIT_MANIFEST
+        if spec.system.pdb_sha256:
+            from .bundlev2 import sha256_file
 
-    system = _synthetic_system_manifest(spec)
+            actual = sha256_file(pdb_path)
+            if actual != spec.system.pdb_sha256:
+                print(f"system.pdb_sha256 does not match {pdb_path}:\n"
+                      f"  declared {spec.system.pdb_sha256}\n  actual   {actual}",
+                      file=sys.stderr)
+                return runner.EXIT_MANIFEST
+
+    system = _synthetic_system_manifest(spec, pdb_path=pdb_path)
     experiment = load_experiment(_resolve_manifest("smoke", "experiment"))
     envcheck.require_ok(platform=args.platform, device=args.device,
                         precision=spec.execution.precision, route=spec.system.route)
@@ -450,7 +469,7 @@ def _prepare_from_canonical(args) -> int:
     return runner.EXIT_OK
 
 
-def _synthetic_system_manifest(spec):
+def _synthetic_system_manifest(spec, *, pdb_path=None):
     """A SystemManifest view of the canonical system section, for the existing builder.
 
     The builder still addresses molecular identity through a manifest object; this adapts the
@@ -462,12 +481,22 @@ def _synthetic_system_manifest(spec):
 
     from .schemas import load_system
 
+    route_input: dict = {"route": spec.system.route,
+                         "expected_formal_charge": spec.system.expected_formal_charge}
+    if spec.system.route == "smiles":
+        route_input["smiles"] = spec.system.smiles
+    else:
+        # The manifest addresses the structure by a path relative to itself, so the temporary
+        # manifest is written BESIDE a copy of the structure rather than pointing back at the
+        # user's directory -- the bundle must not depend on where the input happened to live.
+        route_input["pdb"] = Path(pdb_path).name
+        route_input["pdb_sha256"] = spec.system.pdb_sha256 or _sha256_of_file(pdb_path)
+
     doc = {
         "schema_version": 1,
         "system_id": spec.system.system_id,
         "display_name": spec.system.display_name or spec.system.system_id,
-        "input": {"route": "smiles", "smiles": spec.system.smiles,
-                  "expected_formal_charge": spec.system.expected_formal_charge},
+        "input": route_input,
         "parameterization": {
             "small_molecule_forcefield": spec.build.forcefield.small_molecule,
             "charge_method": spec.build.forcefield.charge_method,
@@ -489,25 +518,37 @@ def _synthetic_system_manifest(spec):
     # RDKit means the document names one molecule and describes another.
     from .schemas import sha256_text
 
-    canonical_smiles = spec.system.canonical_isomeric_smiles
-    if canonical_smiles is None:
-        try:
-            from rdkit import Chem
-        except ImportError:                                    # pragma: no cover
-            raise SystemExit(
-                "system.canonical_isomeric_smiles is absent and RDKit is unavailable to derive it; "
-                "state it explicitly in the document."
-            ) from None
-        mol = Chem.MolFromSmiles(spec.system.smiles)
-        if mol is None:
-            raise SystemExit(f"system.smiles {spec.system.smiles!r} is not parseable by RDKit")
-        canonical_smiles = Chem.MolToSmiles(mol, isomericSmiles=True)
-    doc["input"]["canonical_isomeric_smiles"] = canonical_smiles
-    doc["input"]["canonical_smiles_sha256"] = (spec.system.canonical_smiles_sha256
-                                               or sha256_text(canonical_smiles))
-    tmp = Path(tempfile.mkdtemp()) / f"{spec.system.system_id}.yaml"
+    if spec.system.route == "smiles":
+        canonical_smiles = spec.system.canonical_isomeric_smiles
+        if canonical_smiles is None:
+            try:
+                from rdkit import Chem
+            except ImportError:                                # pragma: no cover
+                raise SystemExit(
+                    "system.canonical_isomeric_smiles is absent and RDKit is unavailable to derive "
+                    "it; state it explicitly in the document."
+                ) from None
+            mol = Chem.MolFromSmiles(spec.system.smiles)
+            if mol is None:
+                raise SystemExit(f"system.smiles {spec.system.smiles!r} is not parseable by RDKit")
+            canonical_smiles = Chem.MolToSmiles(mol, isomericSmiles=True)
+        doc["input"]["canonical_isomeric_smiles"] = canonical_smiles
+        doc["input"]["canonical_smiles_sha256"] = (spec.system.canonical_smiles_sha256
+                                                   or sha256_text(canonical_smiles))
+    staging = Path(tempfile.mkdtemp())
+    if pdb_path is not None:
+        import shutil as _shutil
+
+        _shutil.copy2(pdb_path, staging / Path(pdb_path).name)
+    tmp = staging / f"{spec.system.system_id}.yaml"
     tmp.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
     return load_system(tmp, check_chemistry=False)
+
+
+def _sha256_of_file(path) -> str:
+    from .bundlev2 import sha256_file
+
+    return sha256_file(Path(path))
 
 
 
@@ -637,6 +678,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_platform(r)
     add_omega_exclusion(r)
     add_run_naming(r)
+    r.add_argument("--config", default=None,
+                   help="canonical configuration document overriding the bundle's pinned run "
+                        "configuration. Build-defining fields must still match the bundle.")
+    r.add_argument("--set", action="append", default=None, metavar="dotted.path=value")
     r.set_defaults(func=cmd_rest2)
 
     c = sub.add_parser("config", help="inspect and resolve simulation configuration")
@@ -715,6 +760,10 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--out-root", required=True, metavar="RUN_ROOT")
     add_platform(m)
     add_run_naming(m)
+    m.add_argument("--config", default=None,
+                   help="canonical configuration document overriding the bundle's pinned run "
+                        "configuration. Build-defining fields must still match the bundle.")
+    m.add_argument("--set", action="append", default=None, metavar="dotted.path=value")
     m.set_defaults(func=cmd_md)
 
     s = sub.add_parser("smoke", help="prepare + run the tiny shipped experiment end to end")

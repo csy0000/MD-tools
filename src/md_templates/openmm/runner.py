@@ -265,6 +265,79 @@ def _stage_run_directory(bundle_dir: Path, exp_path: Path, cfg: dict, manifest: 
     return run_dir, False
 
 
+def resolve_canonical_run(bundle_dir: Path, method: str, *, config: Optional[Path] = None,
+                          overrides: Optional[list] = None) -> dict:
+    """Resolve the configuration a run should use, from the bundle and any override.
+
+    A version-2 bundle pins the canonical configuration it was prepared with, so a run needs no
+    document at all. `--config` is a RUN override, never a second source of build truth: whatever
+    it says, the bundle-defining projection must still match the prepared artifacts, and that is
+    checked before a run directory exists.
+    """
+    from .spec import canonical as canon_mod
+    from .spec import resolve as resolve_mod
+
+    bundle_dir = Path(bundle_dir)
+    pinned_path = bundle_dir / "canonical_configuration.json"
+    if not pinned_path.is_file():
+        raise IncompatibleExperiment(
+            f"{bundle_dir} carries no canonical configuration, so it cannot be run through the "
+            "canonical path. It is a version-1 bundle: use the documented compatibility path "
+            "(--experiment) instead."
+        )
+    pinned = json.loads(pinned_path.read_text(encoding="utf-8"))
+    if pinned.get("unavailable"):
+        raise IncompatibleExperiment(
+            f"{bundle_dir}: {pinned['unavailable']} -- no canonical projection is available"
+        )
+
+    document = (resolve_mod.load_document(Path(config)) if config
+                else json.loads(json.dumps(pinned["configuration"])))
+    if config is None:
+        # The pinned record stores quantities in canonical form; the model accepts them back.
+        document = _rehydrate_quantities(document)
+    result = resolve_mod.resolve_spec(document, overrides=overrides)
+    spec = result["spec"]
+
+    if spec.method != method:
+        raise IncompatibleExperiment(
+            f"this is `md-openmm {method}` but the configuration declares method "
+            f"{spec.method!r}. The command and the model must agree; neither is inferred."
+        )
+
+    recorded = (pinned.get("hashes") or {}).get("system_build_sha256")
+    live = canon_mod.sha256_of(canon_mod.system_build_projection(spec))
+    if recorded and live != recorded:
+        raise IncompatibleExperiment(
+            f"the requested configuration does not describe the prepared bundle.\n"
+            f"  bundle system/build {recorded}\n  requested           {live}\n"
+            "  A bundle-defining change needs a NEW BUNDLE; --config may vary the run, not the "
+            "System it runs on."
+        )
+    recorded_state = (pinned.get("hashes") or {}).get("prepared_state_sha256")
+    live_state = canon_mod.sha256_of(canon_mod.prepared_state_projection(spec))
+    if recorded_state and live_state != recorded_state:
+        raise IncompatibleExperiment(
+            f"the requested configuration would produce a different prepared STATE.\n"
+            f"  bundle prepared_state {recorded_state}\n  requested             {live_state}\n"
+            "  Equilibration, the integrator used to reach the stored state, or a preparation "
+            "seed differs; that needs a new bundle."
+        )
+    return {"spec": spec, "result": result, "pinned": pinned}
+
+
+def _rehydrate_quantities(node):
+    """Turn canonical `{value, unit}` pairs back into the strings the model parses."""
+    if isinstance(node, dict):
+        if set(node) == {"value", "unit"} and isinstance(node.get("value"), (int, float)):
+            unit = node["unit"]
+            return f"{node['value']} {unit}" if unit else node["value"]
+        return {k: _rehydrate_quantities(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_rehydrate_quantities(v) for v in node]
+    return node
+
+
 def launch_rest2(
     bundle_dir: Path,
     experiment_path: Optional[Path],
@@ -275,6 +348,8 @@ def launch_rest2(
     omega_exclusion: Optional[bool] = None,
     run_name: Optional[str] = None,
     resume_run: Optional[Path] = None,
+    config: Optional[Path] = None,
+    set_overrides: Optional[list] = None,
 ) -> tuple[int, Optional[Path]]:
     """Run REST2 from a prepared bundle, into a new run directory or an existing one.
 
@@ -295,8 +370,34 @@ def launch_rest2(
     experiment = load_experiment(exp_path)
 
     configure_device(platform, device)
-    cfg = resolve_config(system, experiment, platform=platform, device=device,
-                         omega_exclusion=omega_exclusion)
+    # A bundle either carries a canonical configuration or it does not. If it does, every
+    # disagreement -- method, build hash, prepared state -- is an ERROR: swallowing one and falling
+    # back to the legacy path is exactly the silent reinterpretation this design exists to stop.
+    # Only the ABSENCE of a canonical configuration selects the compatibility path.
+    canonical_run = None
+    has_canonical = (bundle_dir / "canonical_configuration.json").is_file()
+    if config is not None and not has_canonical:
+        raise IncompatibleExperiment(
+            f"--config was given but {bundle_dir} carries no canonical configuration; it is a "
+            "version-1 bundle and cannot be run through the canonical path."
+        )
+    if has_canonical:
+        canonical_run = resolve_canonical_run(bundle_dir, "rest2", config=config,
+                                              overrides=set_overrides)
+    if canonical_run is not None:
+        from .spec.adapter import spec_to_runtime_cfg
+
+        cfg = spec_to_runtime_cfg(canonical_run["spec"])
+        cfg["production"]["platform"] = platform
+        cfg["production"]["device_index"] = device
+        if omega_exclusion is not None:
+            # A CLI flag and a canonical field must not disagree silently: the flag is the later,
+            # more explicit statement, and it is recorded as an override.
+            cfg["rest2"]["omega_exclusion"] = bool(omega_exclusion)
+            cfg.setdefault("_overrides", {})["rest2.omega_exclusion"] = "command line"
+    else:
+        cfg = resolve_config(system, experiment, platform=platform, device=device,
+                             omega_exclusion=omega_exclusion)
 
     # BEFORE the run directory exists and before any OpenMM context: an overriding experiment may
     # change how long and where the run goes, never what System it runs. Checked whenever an
@@ -422,6 +523,8 @@ def launch_md(
     device: Optional[str] = None,
     run_name: Optional[str] = None,
     resume_run: Optional[Path] = None,
+    config: Optional[Path] = None,
+    set_overrides: Optional[list] = None,
 ) -> tuple[int, Optional[Path]]:
     """Run conventional explicit-water MD from a prepared bundle.
 
@@ -441,8 +544,30 @@ def launch_md(
     experiment = load_experiment(exp_path)
 
     configure_device(platform, device)
-    cfg = resolve_config(system, experiment, platform=platform, device=device)
-    if experiment_path is not None:
+    # A bundle either carries a canonical configuration or it does not. If it does, every
+    # disagreement -- method, build hash, prepared state -- is an ERROR; swallowing one and falling
+    # back to the legacy path is the silent reinterpretation this design exists to stop. Only the
+    # ABSENCE of a canonical configuration selects the compatibility path.
+    canonical_run = None
+    has_canonical = (bundle_dir / "canonical_configuration.json").is_file()
+    if config is not None and not has_canonical:
+        raise IncompatibleExperiment(
+            f"--config was given but {bundle_dir} carries no canonical configuration; it is a "
+            "version-1 bundle and cannot be run through the canonical path."
+        )
+    if has_canonical:
+        canonical_run = resolve_canonical_run(bundle_dir, "md", config=config,
+                                              overrides=set_overrides)
+    if canonical_run is not None:
+        from .spec.adapter import spec_to_runtime_cfg
+
+        cfg = spec_to_runtime_cfg(canonical_run["spec"])
+        cfg["production"]["platform"] = platform
+        cfg["production"]["device_index"] = device
+        cfg.setdefault("_declared", {})["production.md"] = "experiment"
+    else:
+        cfg = resolve_config(system, experiment, platform=platform, device=device)
+    if experiment_path is not None and canonical_run is None:
         reason = check_compatible(manifest, cfg)
         if reason:
             raise IncompatibleExperiment(reason)
