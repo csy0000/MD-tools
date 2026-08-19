@@ -1,6 +1,5 @@
 {
   "profile": "explicit-rest2-ligand-v1",
-
   "system": {
     "system_id": "cyclo_rgdfv",
     "display_name": "cyclo-RGDfV",
@@ -10,7 +9,6 @@
     "canonical_smiles_sha256": "59d4422635f77292ed94c609a76808df5c97110be09cd9779819270363143159",
     "expected_formal_charge": 0
   },
-
   "build": {
     "forcefield": {
       "small_molecule": "openff-2.2.0",
@@ -28,13 +26,13 @@
     },
     "constraints": "HBonds",
     "rigid_water": true,
-    "hydrogen_mass": "1.008 amu"
+    "hydrogen_mass": "3.024 amu",
+    "hmr_scope": "solute"
   },
-
   "protocol": {
     "integrator": {
       "kind": "langevin-middle",
-      "timestep": "2 fs",
+      "timestep": "4 fs",
       "temperature": "300 K",
       "friction": "1 /ps"
     },
@@ -48,18 +46,24 @@
     "production": {
       "method": "rest2",
       "duration_per_segment": "5 ns",
-      "enhanced_region": {"type": "solute"},
+      "enhanced_region": {
+        "type": "solute"
+      },
       "tau_ladder": {
         "minimum": 0.0,
         "maximum": 0.5,
         "count": 10,
         "interpolation": "linear"
       },
-      "exchange": {"number_of_exchanges_per_segment": 100},
-      "omega_exclusion": {"enabled": true, "definition": "peptide_omega"}
+      "exchange": {
+        "number_of_exchanges_per_segment": 100
+      },
+      "omega_exclusion": {
+        "enabled": true,
+        "definition": "peptide_omega"
+      }
     }
   },
-
   "execution": {
     "platform": "CUDA",
     "precision": "mixed",
@@ -70,7 +74,6 @@
       "checkpoint": "5000 ps"
     }
   },
-
   "randomness": {
     "master_seed": 20260819
   }

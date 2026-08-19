@@ -56,8 +56,9 @@ geometry would silently change the conditions the acceptance statistics were mea
 | box | dodecahedron, 1.2 nm solute-image padding |
 | salt | 0.15 M NaCl, counterions counted separately from added pairs |
 | nonbonded | PME, 1.0 nm real-space cutoff |
-| constraints | bonds to hydrogen; rigid water; **no** hydrogen-mass repartitioning |
-| integrator | `LangevinMiddleIntegrator`, 300 K, friction 1/ps, **2 fs** |
+| constraints | bonds to hydrogen; rigid water |
+| HMR | **hydrogen mass 3.024 amu**, solute scope; water never repartitioned |
+| integrator | `LangevinMiddleIntegrator`, 300 K, friction 1/ps, **4 fs** (enabled by HMR) |
 
 ## The tau ladder
 
@@ -79,10 +80,10 @@ physical, unscaled Hamiltonian.
 
 ```
 duration_per_segment            5 ns
-timestep                        2 fs
-steps per segment               2,500,000        (exact; a non-integer count is refused)
+timestep                        4 fs
+steps per segment               1,250,000        (exact; a non-integer count is refused)
 number_of_exchanges_per_segment 100
-steps per exchange round        25,000           (= 50 ps)
+steps per exchange round        12,500           (= 50 ps)
 ```
 
 10 ns per replica is `NUMBER_OF_SEGMENTS=2`.
@@ -100,6 +101,28 @@ Inspect the hardware first; do not assume every installed GPU should be mixed in
 run. On a mixed machine, pin `CUDA_DEVICE_ORDER=PCI_BUS_ID` and select devices of a single
 architecture — ranks on different GPU generations make the slowest device set the pace and can
 complicate reproducibility.
+
+## Hydrogen-mass repartitioning
+
+Mass is moved from heavy atoms onto their bonded hydrogens until each hydrogen reaches
+**3.024 amu** (3 x 1.008). The heavy partner loses exactly what the hydrogen gains, so total mass is
+conserved and centre-of-mass dynamics are untouched — the implementation asserts this.
+
+This is what buys the 4 fs timestep: it lowers the frequency of the bond-*angle* motions involving
+hydrogen, which are the fastest remaining degrees of freedom once `constraints: HBonds` has removed
+the bond *stretches*. HMR without those constraints would not help.
+
+**Water is never repartitioned.** Rigid water is fully constrained, so its hydrogen masses do not
+limit the timestep, and changing them would alter water's rotational dynamics — and therefore its
+diffusion constant and dielectric relaxation — for no benefit. `hmr_scope: solute` enforces this.
+
+**HMR is applied to the base System before any tau scaling**, so every replica has identical masses.
+That matters for exchange validity: REST2 swaps configurations between replicas, and the acceptance
+criterion used here is potential-energy-only, so masses must not differ across the ladder.
+
+HMR changes the equations of motion, not the potential energy surface. Thermodynamic averages are
+unaffected; kinetic quantities such as diffusion constants and rate constants are **not** directly
+comparable to an unrepartitioned run.
 
 ## Commands
 

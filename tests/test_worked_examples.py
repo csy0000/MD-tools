@@ -112,15 +112,35 @@ def test_both_examples_use_the_documented_preparation(path):
 
 
 @pytest.mark.parametrize("path", [ALANINE, RGDFV])
-def test_neither_example_uses_hydrogen_mass_repartitioning(path):
-    """The protocol specifies no HMR, and the packaged profile defaults to 3.024 amu."""
-    assert _resolved(path).build.hydrogen_mass.value == pytest.approx(1.008)
+def test_both_examples_use_hydrogen_mass_repartitioning(path):
+    """HMR to 3.024 amu (3 x 1.008) is what buys the 4 fs timestep."""
+    build = _resolved(path).build
+    assert build.hydrogen_mass.value == pytest.approx(3.024)
+    assert build.hmr_scope == "solute"
 
 
 @pytest.mark.parametrize("path", [ALANINE, RGDFV])
-def test_both_examples_integrate_at_two_femtoseconds(path):
+def test_hmr_requires_the_constraints_that_make_it_valid(path):
+    """4 fs with HMR is only sound with H-bonds constrained and water rigid.
+
+    HMR lowers the frequency of the bond-ANGLE motions involving hydrogen; the bond STRETCHES have
+    to be removed by constraints first, or the timestep is limited by them regardless of mass.
+    """
+    build = _resolved(path).build
+    assert build.constraints == "HBonds"
+    assert build.rigid_water is True
+
+
+@pytest.mark.parametrize("path", [ALANINE, RGDFV])
+def test_hmr_scope_never_touches_water(path):
+    """Repartitioning rigid water would change its rotational dynamics for no timestep benefit."""
+    assert _resolved(path).build.hmr_scope == "solute"
+
+
+@pytest.mark.parametrize("path", [ALANINE, RGDFV])
+def test_both_examples_integrate_at_four_femtoseconds(path):
     integrator = _resolved(path).protocol.integrator
-    assert integrator.timestep.value == pytest.approx(0.002)      # ps
+    assert integrator.timestep.value == pytest.approx(0.004)      # ps, enabled by HMR
     assert integrator.temperature.value == pytest.approx(300.0)
     assert integrator.friction.value == pytest.approx(1.0)
     assert integrator.kind == "langevin-middle"
@@ -140,13 +160,13 @@ def test_the_equilibration_stages_are_distinct(path):
 
 @pytest.mark.parametrize("path", [ALANINE, RGDFV])
 def test_the_equilibration_stages_are_whole_steps(path):
-    """10 ps at 2 fs is exactly 5,000 steps for each of NVT and NPT."""
+    """10 ps at 4 fs is exactly 2,500 steps for each of NVT and NPT."""
     spec = _resolved(path)
     dt = spec.protocol.integrator.timestep.value
     for stage in ("nvt", "npt"):
         duration = getattr(spec.protocol.equilibration, stage)
         steps = duration.value / dt
-        assert steps == pytest.approx(5_000, abs=1e-6)
+        assert steps == pytest.approx(2_500, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -155,7 +175,7 @@ def test_the_equilibration_stages_are_whole_steps(path):
 
 @pytest.mark.parametrize("path", [ALANINE, RGDFV])
 def test_the_worked_exchange_contract_resolves_exactly(path):
-    """5 ns / 2 fs / 100 exchanges -> 2,500,000 steps and 25,000 steps (50 ps) per round."""
+    """5 ns / 4 fs / 100 exchanges -> 1,250,000 steps and 12,500 steps (50 ps) per round."""
     spec = _resolved(path)
     production = spec.protocol.production
     plan = plan_segment(
@@ -165,8 +185,8 @@ def test_the_worked_exchange_contract_resolves_exactly(path):
         timestep_source=spec.protocol.integrator.timestep.source,
         number_of_exchanges_per_segment=production.exchange.number_of_exchanges_per_segment,
     )
-    assert plan.steps_per_segment == 2_500_000
-    assert plan.steps_per_exchange == 25_000
+    assert plan.steps_per_segment == 1_250_000
+    assert plan.steps_per_exchange == 12_500
     assert plan.number_of_exchanges_per_segment == 100
 
 
@@ -196,8 +216,8 @@ def test_two_trajectory_streams_at_the_documented_cadence(path):
     selected = reporting_interval_steps(
         reporting.solute.value, dt, interval_source=reporting.solute.source,
         timestep_source=spec.protocol.integrator.timestep.source, label="reporting.solute")
-    assert full_system == 50_000        # 100 ps
-    assert selected == 5_000            # 10 ps
+    assert full_system == 25_000        # 100 ps at 4 fs
+    assert selected == 2_500            # 10 ps at 4 fs
     assert full_system % selected == 0  # commensurate, or frames drift apart in physical time
 
 

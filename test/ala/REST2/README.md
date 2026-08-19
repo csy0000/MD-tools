@@ -18,8 +18,9 @@ quoted as if it did.
 | box | dodecahedron, 1.2 nm solute-image padding |
 | salt | 0.15 M NaCl, counterions counted separately from added pairs |
 | nonbonded | PME, 1.0 nm real-space cutoff |
-| constraints | bonds to hydrogen; rigid water; **no** hydrogen-mass repartitioning |
-| integrator | `LangevinMiddleIntegrator`, 300 K, friction 1/ps, **2 fs** |
+| constraints | bonds to hydrogen; rigid water |
+| HMR | **hydrogen mass 3.024 amu**, solute scope; water never repartitioned |
+| integrator | `LangevinMiddleIntegrator`, 300 K, friction 1/ps, **4 fs** (enabled by HMR) |
 
 **Why OPC and not TIP3P.** ff19SB's backbone parameters were fit with OPC, and that pairing is the
 published recommendation. The packaged profile defaults to `tip3pfb`, so this example overrides it
@@ -66,10 +67,10 @@ driver script's job, and how many actually committed is recorded in the run mani
 
 ```
 duration_per_segment            5 ns
-timestep                        2 fs
-steps per segment               2,500,000        (exact; a non-integer count is refused)
+timestep                        4 fs
+steps per segment               1,250,000        (exact; a non-integer count is refused)
 number_of_exchanges_per_segment 100
-steps per exchange round        25,000           (= 50 ps)
+steps per exchange round        12,500           (= 50 ps)
 ```
 
 10 ns per replica is therefore `NUMBER_OF_SEGMENTS=2`.
@@ -80,8 +81,30 @@ Two trajectory streams, as required by the protocol:
 
 | stream | interval | steps |
 |---|---|---|
-| full system | 100 ps | 50,000 |
-| solute / selected atoms | 10 ps | 5,000 |
+| full system | 100 ps | 25,000 |
+| solute / selected atoms | 10 ps | 2,500 |
+
+## Hydrogen-mass repartitioning
+
+Mass is moved from heavy atoms onto their bonded hydrogens until each hydrogen reaches
+**3.024 amu** (3 x 1.008). The heavy partner loses exactly what the hydrogen gains, so total mass is
+conserved and centre-of-mass dynamics are untouched — the implementation asserts this.
+
+This is what buys the 4 fs timestep: it lowers the frequency of the bond-*angle* motions involving
+hydrogen, which are the fastest remaining degrees of freedom once `constraints: HBonds` has removed
+the bond *stretches*. HMR without those constraints would not help.
+
+**Water is never repartitioned.** Rigid water is fully constrained, so its hydrogen masses do not
+limit the timestep, and changing them would alter water's rotational dynamics — and therefore its
+diffusion constant and dielectric relaxation — for no benefit. `hmr_scope: solute` enforces this.
+
+**HMR is applied to the base System before any tau scaling**, so every replica has identical masses.
+That matters for exchange validity: REST2 swaps configurations between replicas, and the acceptance
+criterion used here is potential-energy-only, so masses must not differ across the ladder.
+
+HMR changes the equations of motion, not the potential energy surface. Thermodynamic averages are
+unaffected; kinetic quantities such as diffusion constants and rate constants are **not** directly
+comparable to an unrepartitioned run.
 
 ## Commands
 
@@ -121,7 +144,7 @@ outputs/
 
 ## Runtime
 
-Not measured. The full protocol is 6 replicas x 10 ns at 2 fs in explicit water; estimate from your
+Not measured. The full protocol is 6 replicas x 10 ns at 4 fs in explicit water; estimate from your
 own hardware before committing to it. A short CPU smoke version exists for CI — see
 `tests/` — and a smoke run is not evidence of convergence or of anything scientific.
 

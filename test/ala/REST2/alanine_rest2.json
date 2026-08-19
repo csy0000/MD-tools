@@ -1,6 +1,5 @@
 {
   "profile": "explicit-rest2-peptide-v1",
-
   "system": {
     "system_id": "ace_ala_nme",
     "display_name": "ACE-ALA-NME (alanine dipeptide), ff19SB peptide route",
@@ -9,7 +8,6 @@
     "pdb_sha256": "dd50bd9cb68713d7705e204fbc84897e2c3a9b33c135fd3574bda0edebaa3bd4",
     "expected_formal_charge": 0
   },
-
   "build": {
     "forcefield": {
       "protein": "amber19/protein.ff19SB.xml",
@@ -26,13 +24,13 @@
     },
     "constraints": "HBonds",
     "rigid_water": true,
-    "hydrogen_mass": "1.008 amu"
+    "hydrogen_mass": "3.024 amu",
+    "hmr_scope": "solute"
   },
-
   "protocol": {
     "integrator": {
       "kind": "langevin-middle",
-      "timestep": "2 fs",
+      "timestep": "4 fs",
       "temperature": "300 K",
       "friction": "1 /ps"
     },
@@ -46,18 +44,24 @@
     "production": {
       "method": "rest2",
       "duration_per_segment": "5 ns",
-      "enhanced_region": {"type": "solute"},
+      "enhanced_region": {
+        "type": "solute"
+      },
       "tau_ladder": {
         "minimum": 0.0,
         "maximum": 0.5,
         "count": 6,
         "interpolation": "linear"
       },
-      "exchange": {"number_of_exchanges_per_segment": 100},
-      "omega_exclusion": {"enabled": true, "definition": "peptide_omega"}
+      "exchange": {
+        "number_of_exchanges_per_segment": 100
+      },
+      "omega_exclusion": {
+        "enabled": true,
+        "definition": "peptide_omega"
+      }
     }
   },
-
   "execution": {
     "platform": "CUDA",
     "precision": "mixed",
@@ -68,7 +72,6 @@
       "checkpoint": "5000 ps"
     }
   },
-
   "randomness": {
     "master_seed": 20260819
   }
