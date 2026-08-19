@@ -203,9 +203,35 @@ def test_cuda_device_order_is_pinned_to_pci_bus_id():
     assert 'os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"' in source
 
 
-def test_the_support_matrix_states_the_gpu_status_honestly():
-    """The claim in the docs must match what was actually run: no real-GPU testing here."""
+def test_the_support_matrix_records_what_was_actually_run_on_hardware():
+    """The docs must track the evidence, in both directions.
+
+    This test previously asserted the matrix said "real-GPU not run", which was true and had to be
+    said. A real run on an RTX 3080 then made that claim false, and the test failed -- which is the
+    point: the wording is pinned to reality, so it cannot drift in either direction. It now pins the
+    stronger claim, including the parts that are still NOT evidence.
+    """
     raw = (REPO_ROOT / "docs" / "support-matrix.md").read_text(encoding="utf-8")
     matrix = " ".join(raw.split())          # the claims wrap across lines; compare on words
-    assert "real-GPU not run" in matrix or "real-GPU runs were not performed" in matrix
-    assert "not CUDA validation" in matrix
+
+    # what was run, specifically enough that a copy-pasted claim would be noticed
+    assert "run on real hardware" in matrix
+    assert "RTX 3080" in matrix and "00000000:1B:00.0" in matrix
+    assert "CUDA_DEVICE_ORDER=PCI_BUS_ID" in matrix
+
+    # and what it still is not
+    assert "validates no science" in matrix
+    assert "OpenCL remains contract-tested only" in matrix
+
+
+def test_the_gpu_gate_exists_and_is_not_wired_into_cpu_ci():
+    """It needs hardware CI does not have, so it must be deliberate rather than scheduled."""
+    script = REPO_ROOT / "scripts" / "ci" / "gpu_contract_run.sh"
+    assert script.is_file()
+    # normalised, because the script's header is column-aligned and the phrase spans runs of spaces
+    source = " ".join(script.read_text(encoding="utf-8").split())
+    assert "CUDA_DEVICE_ORDER=PCI_BUS_ID" in source
+    assert "does NOT validate any science" in source
+
+    for workflow in (REPO_ROOT / ".github" / "workflows").glob("*.yml"):
+        assert "gpu_contract_run" not in workflow.read_text(encoding="utf-8"), workflow.name
