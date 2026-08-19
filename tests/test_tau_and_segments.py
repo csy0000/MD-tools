@@ -340,3 +340,47 @@ def test_substitutions_preserve_the_site_count(model, expected_sites):
 def test_an_undeclared_water_model_is_refused_not_guessed():
     with pytest.raises(ValueError, match="no same-topology stand-in is declared"):
         resolve_packing_model("tip4p2005")
+
+
+# ---------------------------------------------------------------------------------------------
+# the device mapping must reach the EXECUTION path, not just exist as a function
+#
+# map_replicas_to_devices was correct and unreachable for a while: the CLI accepted only a single
+# --device, so every replica landed on one GPU no matter what the mapping said. These tests pin the
+# wiring, not the arithmetic.
+# ---------------------------------------------------------------------------------------------
+
+from md_templates.openmm.rest2 import _resolve_replica_devices  # noqa: E402
+
+
+def _cfg(platform: str, device=None, device_indices=None) -> dict:
+    production = {"platform": platform, "device_index": device}
+    if device_indices is not None:
+        production["device_indices"] = device_indices
+    return {"production": production}
+
+
+def test_a_device_list_is_dealt_across_replicas():
+    assert _resolve_replica_devices(_cfg("CUDA", device_indices=[4, 5, 6]), 3) == [4, 5, 6]
+
+
+def test_replicas_share_devices_when_they_outnumber_them_in_the_runner():
+    assert _resolve_replica_devices(_cfg("CUDA", device_indices=[1, 2]), 5) == [1, 2, 1, 2, 1]
+
+
+def test_a_single_device_still_applies_to_every_replica():
+    """The previous behaviour must survive: --device alone puts everything on one GPU."""
+    assert _resolve_replica_devices(_cfg("CUDA", device="2"), 3) == [2, 2, 2]
+
+
+def test_the_device_list_wins_over_the_single_device():
+    resolved = _resolve_replica_devices(_cfg("CUDA", device="0", device_indices=[7, 8]), 4)
+    assert resolved == [7, 8, 7, 8]
+
+
+def test_cpu_has_no_device_mapping():
+    assert _resolve_replica_devices(_cfg("CPU"), 6) is None
+
+
+def test_no_device_named_means_no_override():
+    assert _resolve_replica_devices(_cfg("CUDA"), 3) is None
