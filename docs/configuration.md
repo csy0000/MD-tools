@@ -17,7 +17,8 @@ canonical projection and hash:
 
 ```
 system_build_sha256   change -> re-prepare the bundle
-protocol_sha256       change -> start a new run (n_chunks excluded: extension is not a change)
+protocol_sha256       change -> start a new run (nothing is excluded: segment COUNT is no
+                      longer a configuration field, so there is nothing to exclude)
 execution_sha256      recorded in provenance, never compared
 ```
 
@@ -33,8 +34,7 @@ system:
 protocol:
   production:
     method: md               # 'md' or 'rest2'; selects which settings are meaningful
-    n_chunks: 10
-    chunk: 100 ps
+      duration_per_segment: 100 ps   # ONE segment; how many to run is the driver's choice
 ```
 
 ```bash
@@ -59,11 +59,12 @@ protocol:
   integrator: {timestep: 4 fs, temperature: 300 K, friction: 1 /ps}
   production:
     method: rest2
-    n_chunks: 2
-    chunk: 1 ns
-    exchange_interval: 10 ps
+    duration_per_segment: 1 ns
     relaxation: 10 ps
-    scale_factors: [1.0, 0.79, 0.6, 0.44, 0.31, 0.25]
+    enhanced_region: {type: solute}
+    tau_ladder: {minimum: 0.0, maximum: 0.5, count: 6, interpolation: linear}
+    exchange: {number_of_exchanges_per_segment: 100}
+    omega_exclusion: {enabled: true, definition: peptide_omega}
 execution: {platform: CUDA, device: "0", precision: mixed}
 ```
 
@@ -150,3 +151,64 @@ data shaped like this model. It must **reject every key it cannot map** rather t
 must not add defaults, reinterpret values, or grow its own validation. It is an adapter into these
 semantics, never a second set of them. Not implemented; the boundary is defined so that it can be
 added without touching the model or the runners.
+
+
+## Segments, repetition, and completed work
+
+Three different things used to be conflated in one input. They are now kept apart:
+
+| | where it lives | example |
+|---|---|---|
+| length of ONE segment | scientific JSON | `duration_per_segment: 5 ns` |
+| how many segments to run | driver script | `NUMBER_OF_SEGMENTS=2` in Bash |
+| how many actually committed | run manifest | `committed.json` |
+
+Segment count is **not** a configuration field. When it was one, asking for a longer run changed the
+configuration hash, so an extended run looked like a different calculation. `duration_per_segment`
+*is* hashed, because it is the restart granularity: silently changing it would put segments of two
+different lengths inside one run.
+
+Every duration must convert to a whole number of integrator steps. A duration that does not is
+**refused**, not rounded, and the error names the nearest durations that would work.
+
+```
+duration_per_segment            5 ns
+timestep                        2 fs
+steps per segment               2,500,000
+number_of_exchanges_per_segment 100
+steps per exchange round        25,000       (= 50 ps)
+```
+
+If either division is inexact the configuration is rejected: an exchange round landing mid-step
+drops or duplicates an attempt across a segment boundary, and the committed watermark stops
+agreeing with the exchange history.
+
+## The REST2 ladder is parameterised by tau
+
+The public and persisted ladder parameter is `tau`, in the Amber style. The Hamiltonian is the same
+one the package has always applied:
+
+```
+one_minus_tau = 1 - tau
+s             = (1 - tau)^2      solute-solute terms
+sqrt(s)       = 1 - tau          solute-environment terms
+                1                environment terms
+```
+
+`tau = 0` is the cold, physical replica (`s = 1`), and a ladder must start there — a ladder that
+never samples the unscaled Hamiltonian has no replica whose trajectory is the physical ensemble.
+
+`tau` is the only input. `s`, `sqrt(s)` and effective temperatures are derived by one shared
+function and recorded as **labelled diagnostics**; they are never accepted back as input, because
+two ways to state the same ladder is how a ladder drifts.
+
+A linear `tau` ladder is an evenly spaced `sqrt(s)` ladder, which is the spacing that gives roughly
+even exchange acceptance along the chain — `tau` is exactly `1 - sqrt(s)`.
+
+```yaml
+tau_ladder: {minimum: 0.0, maximum: 0.5, count: 10, interpolation: linear}
+```
+
+Migrating an existing `scale_factors` ladder: `tau = 1 - sqrt(s)` for each rung. A ladder that is
+not linear in `tau` is **refused** rather than respaced, because respacing it changes exchange
+acceptance and therefore the run.
