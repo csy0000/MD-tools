@@ -33,6 +33,23 @@ Use this order:
 2. **CPU** when CUDA is unavailable or Amber cannot be built against the installed toolkit.
 3. **OpenCL** for OpenMM only when CUDA is unavailable and the user explicitly selects it. Never silently choose OpenCL over working CUDA.
 
+### Choosing a CUDA version
+
+Do not pick one CUDA version for the whole machine. Only software you **compile** needs a CUDA
+toolkit; in this stack that is Amber/`pmemd` alone. OpenMM, GROMACS, PyTorch, and PyTorch Geometric
+ship prebuilt binaries carrying their own CUDA runtime and need only a sufficiently new driver.
+Conda environments are isolated, so pin `cuda-version` per environment and never install a toolkit
+system-wide — one global toolkit forces the oldest consumer to hold back the newest.
+
+Take the compiled component's limit from its own source, not from a general recommendation. Amber26
+declares it in `cmake/CudaConfig.cmake`, which fails with `FATAL_ERROR "Untested CUDA version. AMBER
+currently requires CUDA version >= 7.5 and < 12.9."` and separately gates the CUDA/host-compiler
+pairing — including an explicit special case allowing **gcc 13.3 with CUDA 12.6**. Read that file
+from the release actually being installed; the ceiling moves between releases.
+
+Never place PyTorch and OpenMM in one environment. They constrain `cuda-version` differently and the
+solver resolves the conflict by silently downgrading one of them.
+
 An NVIDIA driver can be sufficient for a packaged OpenMM CUDA runtime, but building `pmemd.cuda`
 also requires a compatible CUDA toolkit and compiler. Building and running `pmemd.cuda.MPI` additionally
 requires the MPI compiler wrappers, runtime/launcher, and scheduler integration documented for Amber26.
