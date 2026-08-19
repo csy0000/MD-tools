@@ -445,8 +445,24 @@ export AMBERHOME=/absolute/path/to/md-stack/ambertools26
 source "$AMBERHOME/amber.sh"
 export PMEMDHOME=/absolute/path/to/md-stack/pmemd26
 source "$PMEMDHOME/amber.sh"
-export PATH=/absolute/path/to/md-stack/envs/openmm-8.5.2/bin:"$PATH"
+
+# Keep the two Python environments apart. AmberTools' amber.sh exports PYTHONPATH
+# to its own site-packages. Left set, that PYTHONPATH is inherited by ANY python
+# later on PATH -- including OpenMM's, which is commonly the same Python version.
+# AmberTools' own Python tools use absolute shebangs and keep working without it.
+unset PYTHONPATH
+
+# Expose OpenMM explicitly rather than putting its bin on PATH, so exactly one
+# `python` is in scope instead of two whose precedence depends on source order.
+export MD_OPENMM_PYTHON=/absolute/path/to/md-stack/envs/openmm-8.5.2/bin/python
+
+# Stable GPU numbering. Without this, CUDA device indices are ordered by compute
+# capability and can move between reboots -- which matters on mixed-GPU machines.
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
 ```
+
+If you would rather have `import parmed` work from a bare `python`, drop the `unset PYTHONPATH`
+and accept that OpenMM's interpreter inherits AmberTools' site-packages.
 
 Activate it only when needed:
 
