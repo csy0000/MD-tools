@@ -34,7 +34,6 @@ for segment in $(seq 1 "$ADDITIONAL_SEGMENTS"); do
         --bundle "$OUT_ROOT/bundle" \
         --config "$CONFIG" \
         --out-root "$OUT_ROOT/rest2" \
-        --run-name "$RUN_NAME" \
         --resume-run "$RUN_NAME" \
         --platform CUDA --devices "$MD_DEVICES"
 done

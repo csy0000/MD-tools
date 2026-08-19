@@ -295,3 +295,48 @@ def test_empty_device_list_is_refused():
 def test_duplicate_devices_are_refused():
     with pytest.raises(ValueError, match="more than once"):
         map_replicas_to_devices(6, [0, 1, 1])
+
+
+# ---------------------------------------------------------------------------------------------
+# water packing-model resolution
+#
+# OpenMM's Modeller.addSolvent can only BUILD a pre-equilibrated box for a handful of models. The
+# model that is SIMULATED is decided by the force field, so a model without its own box is packed
+# with a same-topology stand-in. Getting this wrong silently would solvate one water model and
+# parameterise another.
+# ---------------------------------------------------------------------------------------------
+
+from md_templates.openmm.solvation import resolve_packing_model  # noqa: E402
+
+
+@pytest.mark.parametrize("model", ["tip3p", "spce", "tip4pew", "tip5p", "swm4ndp"])
+def test_models_openmm_can_build_directly_are_not_substituted(model):
+    packing, substituted = resolve_packing_model(model)
+    assert packing == model
+    assert substituted is False
+
+
+def test_opc_is_packed_in_a_four_site_box():
+    """OPC is a 4-site model, so it borrows TIP4P-Ew geometry -- OpenMM documents this."""
+    packing, substituted = resolve_packing_model("opc")
+    assert packing == "tip4pew"
+    assert substituted is True
+
+
+def test_opc3_is_packed_in_a_three_site_box():
+    packing, substituted = resolve_packing_model("opc3")
+    assert packing == "tip3p"
+    assert substituted is True
+
+
+@pytest.mark.parametrize("model,expected_sites", [("opc", "tip4pew"), ("tip4pfb", "tip4pew"),
+                                                  ("opc3", "tip3p"), ("tip3pfb", "tip3p")])
+def test_substitutions_preserve_the_site_count(model, expected_sites):
+    """A 4-site model packed into a 3-site box would leave its virtual sites unplaced."""
+    packing, _ = resolve_packing_model(model)
+    assert packing == expected_sites
+
+
+def test_an_undeclared_water_model_is_refused_not_guessed():
+    with pytest.raises(ValueError, match="no same-topology stand-in is declared"):
+        resolve_packing_model("tip4p2005")

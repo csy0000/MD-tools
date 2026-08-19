@@ -222,6 +222,15 @@ def build_simbox(cfg: dict, out_dir: Path, suffix: str, *, smiles: Optional[str]
         "hmr": build["hmr"],
         "nonbonded": build["nonbonded"],
         "geometry": solv["geometry"],
+        # Which water model was SIMULATED (the force field decides) and which model's
+        # pre-equilibrated box supplied the starting coordinates. They differ for models
+        # OpenMM cannot build a box for, such as OPC; recording it keeps the substitution
+        # visible instead of leaving a reader to infer it from the force-field name.
+        "water": {
+            "model": solv.get("water_model"),
+            "packing_model": solv.get("water_packing_model"),
+            "packing_substituted": solv.get("water_packing_substituted"),
+        },
         "n_waters": solv["n_waters"],
         "ions": solv["ions"],
         "salt": solv.get("salt"),

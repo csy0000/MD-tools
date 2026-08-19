@@ -39,13 +39,20 @@ md-openmm md \
 echo "== 4. REST2: $NUMBER_OF_SEGMENTS segment(s) of 5 ns per replica =="
 for segment in $(seq 1 "$NUMBER_OF_SEGMENTS"); do
     echo "-- segment $segment of $NUMBER_OF_SEGMENTS"
-    # Every invocation runs ONE segment and continues in the SAME run directory. The committed
-    # generation record is the sole authority for where it resumes from.
+    # Every invocation runs ONE segment and continues in the SAME run directory. The first
+    # NAMES the run; every later one RESUMES it. The two flags are mutually exclusive, and a
+    # fresh run deliberately refuses to overwrite an existing directory -- so passing --run-name
+    # twice would stop the second segment rather than silently restarting the exchange sequence.
+    if [ "$segment" -eq 1 ]; then
+        NAME_ARGS=(--run-name "$RUN_NAME")
+    else
+        NAME_ARGS=(--resume-run "$RUN_NAME")
+    fi
     md-openmm rest2 \
         --bundle "$OUT_ROOT/bundle" \
         --config "$CONFIG" \
         --out-root "$OUT_ROOT/rest2" \
-        --run-name "$RUN_NAME" \
+        "${NAME_ARGS[@]}" \
         --platform CUDA --devices "$MD_DEVICES"
 done
 
