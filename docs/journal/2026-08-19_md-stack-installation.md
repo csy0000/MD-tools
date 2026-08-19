@@ -193,3 +193,106 @@ Under `/path/to/software/md-stack/`:
 - `logs/` — 22 configure, build, test and validation logs
 - `pmemd26/logs/test_amber_*/` — Amber's own harness logs and diff files
 - `activate-md-stack.sh` — standalone activation
+
+---
+
+# Addendum — conda environment reorganisation (same day)
+
+The environment set was consolidated after the installation was validated. This section exists so the
+`md_in_generator.py` design discussion has accurate constraints to work from.
+
+## Final layout
+
+Four conda environments plus one compiled prefix. All conda envs are reachable by **short name**:
+`~/.condarc` now has `envs_dirs` including `/path/to/software/md-stack/conda`.
+
+| name | python | key contents | role |
+|---|---|---|---|
+| `ambertools26` | 3.12.13 | `tleap`, `cpptraj`, `sander`, `antechamber`, parmed 4.3.1, rdkit 2026.03.1, **numpy 1.26.4**, pandas 3.0.5 | Amber-native preparation and analysis |
+| `openmm8` | 3.12.13 | openmm 8.5.2, **numpy 2.5.2**, scipy 1.18.0 | OpenMM runtime |
+| `openfftools` | 3.12.13 | openff-toolkit 0.19.0, openff-interchange 0.5.4, openmm 8.5.2, rdkit 2026.03.5, **numpy 2.5.2** | force-field typing and cross-engine export |
+| `amber-build` | — | gcc 13.3, nvcc 12.6, Open MPI 5.0.8, tcsh | build toolchain; also supplies the MPI **runtime and launcher** |
+| `pmemd26` | — | `pmemd`, `pmemd.MPI`, `pmemd.cuda`, `pmemd.cuda.MPI` | **not a conda env** — compiled install prefix |
+
+`source activate-md-stack.sh` wires all of these together and now also sources conda, so
+`conda activate openfftools` works in the same shell.
+
+## Constraints that bear on `md_in_generator.py`
+
+### `openff-interchange` can already export to both engines
+
+This is the most important finding for the generator. In `openfftools`:
+
+```
+Interchange exports: ['to_openmm', 'to_prmtop', 'to_inpcrd', 'to_amber', 'to_gromacs']
+```
+
+A single parameterised `Interchange` object can emit Amber `prmtop`/`inpcrd`, an OpenMM `System`,
+and GROMACS input. That is precisely the "define a run once, target either engine" capability, and
+it means the generator does **not** need to hand-write two independent input paths.
+
+This supersedes an earlier note in this journal saying no environment could import both engines'
+Python APIs. That was true before `openfftools` existed; it is no longer true.
+
+### numpy is split across an ABI boundary
+
+- `ambertools26`: **numpy 1.26.4**
+- `openmm8` / `openfftools`: **numpy 2.5.2**
+
+These straddle the numpy 2.0 ABI break. The environments cannot be merged by `conda install`;
+something would have to be rebuilt or downgraded. Any generator that needs both `parmed`/`tleap`
+**and** `openff`/`openmm` in one process has no home today.
+
+### What is missing
+
+- **`mdtraj` is in no environment.** If the generator or downstream analysis needs it, that is a new
+  dependency decision.
+- **`tleap` and `cpptraj` exist only in `ambertools26`**, which is also the only env on numpy 1.x.
+  A generator running in `openfftools` cannot call them in-process; it would have to shell out.
+
+### Practical implication
+
+Two plausible designs, both viable:
+
+1. **Generator lives in `openfftools`** and uses Interchange for everything, shelling out to
+   `ambertools26`'s `tleap`/`cpptraj` only when Amber-native preparation is genuinely required.
+2. **Generator writes input files only** and imports neither engine, in which case it can live
+   anywhere — the most robust option for pipeline invocation, since a script can always be run as
+   `<env>/bin/python md_in_generator.py` with no activation at all.
+
+The choice depends on whether the generator needs to *parameterise* systems or only *emit control
+files*. That is the question to settle before implementation.
+
+## Environments removed
+
+`escort-ais`, `escort-ais-explicit`, `escort-ais-explicit-target`, `md-clean-verify`,
+`md-wheel-check`, and the superseded `conda/openmm-8.5.2`.
+
+`openmm8` is an exact rebuild of the validated `openmm-8.5.2` from its explicit 44-package list, and
+was re-validated after the swap: `openmm.testInstallation` passes 4/4 platforms and
+`verify_install.py --require-cuda-mpi` returns `ok: true` against the new prefix.
+
+**Caveat recorded deliberately.** The `escort-ais-explicit*` environments may have backed earlier
+pREST2/RGD results. Their specs are preserved at `manifests/retired-env-specs/` (260 KB of
+`environment.yml` and explicit package lists), which permits a rebuild from conda-forge but is
+**not** a byte-for-byte guarantee — a removed build string would make the rebuild differ. If exact
+reproduction of those results is ever needed, that spec file is what remains.
+
+Deletion reclaimed only ~6 GB, not the ~43 GB the directory sizes implied, because conda hardlinks
+environment files to the shared package cache (`/path/to/conda_pkgs`, 6.2 GB). `conda clean
+--all` would reclaim the rest at the cost of re-downloading on future environment creation. Left
+alone: the volume is 7.3 TB with 7.0 TB free.
+
+## Two defects found while reorganising
+
+**MPI launcher mismatch in the activation script.** AmberTools' conda env ships its own Open MPI
+(5.0.10) and puts `mpirun` on `PATH`; `pmemd.cuda.MPI` is linked via rpath against `amber-build`'s
+Open MPI (**5.0.8**). Sourcing the activation script therefore selected a launcher that did not
+match the linked library — exactly the build-time/run-time MPI mixing the skill warns against. All
+validation runs in this journal were unaffected because they set `PATH` explicitly. Fixed by
+prepending `amber-build/bin`, which also restores `nvcc`/`gcc` from the toolchain the stack was
+compiled with.
+
+**`PYTHONPATH` leak between two Python 3.12 environments.** `ambertools26/amber.sh` exports
+`PYTHONPATH` to its own site-packages; any later `python` on `PATH` inherits it, including OpenMM's.
+The activation script now `unset`s it, and `installation/README.md` section 7 was corrected to match.
