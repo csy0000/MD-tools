@@ -106,14 +106,22 @@ def test_profile_hashes_and_default_selection_unchanged():
                 expected["default_selection"][f"{route}/{method}"]
 
 
-def test_rest2_defaults_unchanged():
+def test_rest2_defaults_unchanged():  # noqa: D401
     """Ladder, omega exclusion and proline classification are scientific settings."""
+    from md_templates.openmm.tau import build_tau_ladder, scale_factors_for_ladder
+
     expected = golden("rest2_defaults.json")
     assert capture_goldens._rest2_defaults_golden() == expected
     assert expected["runtime_defaults"]["omega_exclusion"] is True
     for ladder in expected["profile_ladders"].values():
-        assert ladder[0] == 1.0 and ladder[-1] == 0.25
-        assert ladder == sorted(ladder, reverse=True)
+        # The ladder is now DECLARED as tau and derived to s. The physics it resolves to is the
+        # same ladder as before: tau 0 -> 0.5 gives s 1.0 -> 0.25.
+        assert ladder["minimum"] == 0.0 and ladder["maximum"] == 0.5
+        assert ladder["interpolation"] == "linear"
+        scale_factors = scale_factors_for_ladder(
+            build_tau_ladder(ladder["minimum"], ladder["maximum"], ladder["count"]))
+        assert scale_factors[0] == 1.0 and scale_factors[-1] == 0.25
+        assert scale_factors == sorted(scale_factors, reverse=True)
 
 
 # ------------------------------------------------------------------------------------------------

@@ -425,7 +425,9 @@ def test_19b_the_descriptor_records_the_runtime_default_without_changing_it():
     assert DEFAULTS["rest2"]["omega_exclusion"] is declared.default_enabled
     for pid in ("explicit-rest2-ligand-v1", "explicit-rest2-peptide-v1"):
         profile = resolve.load_profile(pid)
-        assert profile["defaults"]["protocol"]["production"]["omega_exclusion"] is True
+        # omega exclusion is a structured block now (enabled + definition + proline policy);
+        # the DEFAULT it records is still the same boolean.
+        assert profile["defaults"]["protocol"]["production"]["omega_exclusion"]["enabled"] is True
 
 
 def test_20_smoke_evidence_cannot_be_marked_scientifically_validated(catalog_dir):

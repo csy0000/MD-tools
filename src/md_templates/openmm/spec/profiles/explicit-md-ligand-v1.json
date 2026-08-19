@@ -1,6 +1,6 @@
 {
   "profile_id": "explicit-md-ligand-v1",
-  "profile_schema_version": 1,
+  "profile_schema_version": 2,
   "description": "Standard explicit-water conventional MD, ligand/SMILES route",
   "route": "smiles",
   "method": "md",
@@ -40,7 +40,7 @@
       "remove_cm_motion": true
     },
     "protocol": {
-      "schema_version": 1,
+      "schema_version": 2,
       "integrator": {
         "kind": "langevin-middle",
         "timestep": "4 fs",
@@ -55,8 +55,7 @@
       },
       "production": {
         "method": "md",
-        "n_chunks": 10,
-        "chunk": "100 ps",
+        "duration_per_segment": "100 ps",
         "scale_factor": 1.0,
         "seed": null
       }

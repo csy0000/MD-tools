@@ -76,9 +76,13 @@ def _configuration_goldens() -> dict:
                 "hydrogen_mass_amu": spec.build.hydrogen_mass.value,
                 "constraints": spec.build.constraints,
                 "production.method": production.method,
-                "production.n_chunks": production.n_chunks,
-                "production.chunk_ps": production.chunk.value,
-                "production.scale_factors": getattr(production, "scale_factors", None),
+                "production.duration_per_segment_ps": production.duration_per_segment.value,
+                # tau is the SOURCE parameter; s is captured too so the golden pins the derived
+                # ladder as well as the declaration that produced it.
+                "production.tau_values": (production.tau_ladder.tau_values()
+                                          if hasattr(production, "tau_ladder") else None),
+                "production.derived_scale_factors": (production.scale_factors()
+                                                     if hasattr(production, "tau_ladder") else None),
             },
         }
     return out
@@ -199,12 +203,12 @@ def _rest2_defaults_golden() -> dict:
             "max_proline_ring_size": DEFAULTS["rest2"]["max_proline_ring_size"],
         },
         "profile_ladders": {
-            "explicit-rest2-ligand-v1": ligand["scale_factors"],
-            "explicit-rest2-peptide-v1": peptide["scale_factors"],
+            "explicit-rest2-ligand-v1": ligand["tau_ladder"],
+            "explicit-rest2-peptide-v1": peptide["tau_ladder"],
         },
         "profile_omega_exclusion": {
-            "explicit-rest2-ligand-v1": ligand["omega_exclusion"],
-            "explicit-rest2-peptide-v1": peptide["omega_exclusion"],
+            "explicit-rest2-ligand-v1": ligand["omega_exclusion"]["enabled"],
+            "explicit-rest2-peptide-v1": peptide["omega_exclusion"]["enabled"],
         },
     }
 

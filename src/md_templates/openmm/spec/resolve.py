@@ -187,6 +187,68 @@ def apply_overrides(data: dict, overrides: list[str], sources: dict) -> dict:
     return out
 
 
+#: Inputs retired when segment count left the scientific configuration. Each maps to the precise
+#: instruction a user needs, because "unknown field" alone would send them looking for a typo.
+_RETIRED_PRODUCTION_KEYS = {
+    "n_chunks": (
+        "protocol.production.n_chunks has been REMOVED from the scientific configuration. How many "
+        "segments to run is an execution choice, not a property of the calculation: putting it in "
+        "the JSON meant that asking for a longer run changed the configuration hash and made an "
+        "extended run look like a different calculation.\n"
+        "  Migration: delete `n_chunks`, keep the segment length as "
+        "`protocol.production.duration_per_segment`, and control repetition from the driver script "
+        "(for example NUMBER_OF_SEGMENTS in the generated Bash). Completed segments are recorded in "
+        "the run manifest."
+    ),
+    "chunk_ns": (
+        "protocol.production.chunk_ns has been RENAMED and re-typed. Segment length is now "
+        "`protocol.production.duration_per_segment` and carries explicit units.\n"
+        "  Migration: replace `\"chunk_ns\": 5.0` with `\"duration_per_segment\": \"5 ns\"`."
+    ),
+    "chunk": (
+        "protocol.production.chunk has been RENAMED to "
+        "`protocol.production.duration_per_segment`.\n"
+        "  Migration: rename the field; the value and units are unchanged."
+    ),
+    "scale_factors": (
+        "protocol.production.scale_factors has been REPLACED by the tau parameterisation. tau is "
+        "now the source parameter and s is derived as s = (1 - tau)^2, with the solute-environment "
+        "coupling sqrt(s) = 1 - tau. The Hamiltonian is unchanged; only the way the ladder is "
+        "written has changed.\n"
+        "  Migration: replace the explicit s list with "
+        "`\"tau_ladder\": {\"minimum\": 0.0, \"maximum\": 0.5, \"count\": N, "
+        "\"interpolation\": \"linear\"}`. For an existing ladder, tau = 1 - sqrt(s) for each rung."
+    ),
+    "exchange_interval": (
+        "protocol.production.exchange_interval has been REPLACED by an exchange COUNT per segment, "
+        "so that changing the segment length cannot silently change how many attempts a segment "
+        "contains.\n"
+        "  Migration: replace it with "
+        "`\"exchange\": {\"number_of_exchanges_per_segment\": N}`. The interval is derived as "
+        "duration_per_segment / N and is recorded in the run manifest."
+    ),
+}
+
+
+def _refuse_retired_chunk_inputs(document: dict) -> None:
+    """Reject retired production inputs with the exact migration, never a silent reinterpretation.
+
+    Silently mapping an old `n_chunks` onto the new contract would be the worst option available:
+    the run would proceed under a plan the author did not write and believes they did.
+    """
+    production = ((document.get("protocol") or {}).get("production") or {})
+    if not isinstance(production, dict):
+        return
+    found = [key for key in _RETIRED_PRODUCTION_KEYS if key in production]
+    if not found:
+        return
+    detail = "\n\n".join(_RETIRED_PRODUCTION_KEYS[key] for key in found)
+    raise ResolutionError(
+        f"This configuration uses {len(found)} retired production field(s): "
+        f"{', '.join(sorted(found))}.\n\n{detail}"
+    )
+
+
 def resolve_spec(document: dict, *, overrides: Optional[list[str]] = None,
                  profile_id: Optional[str] = None) -> dict:
     """Resolve one document into a validated `SimulationSpec` plus provenance.
@@ -195,6 +257,7 @@ def resolve_spec(document: dict, *, overrides: Optional[list[str]] = None,
     field to the layer that supplied its final value.
     """
     document = json.loads(json.dumps(document))          # never mutate the caller's data
+    _refuse_retired_chunk_inputs(document)
     system = document.get("system")
     if not isinstance(system, dict) or "route" not in system:
         raise ResolutionError(

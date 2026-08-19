@@ -25,7 +25,7 @@ CATEGORIES = ("bundle-defining", "continuity-defining", "extension-only",
 
 
 def classify(dotted: str) -> str:
-    if dotted in EXTENSION_ONLY or dotted.endswith(".n_chunks"):
+    if dotted in EXTENSION_ONLY:
         return "extension-only"
     if dotted.startswith("randomness."):
         # The master seed is a label; what changes physics is the RESOLVED stage seed. Structure
@@ -79,9 +79,14 @@ _EFFECTS: dict[str, str] = {
     "protocol.production.omega_exclusion":
         "leaves ordinary amide omega torsions unscaled by REST2. Enabled by default. Changing it "
         "changes the Hamiltonian and invalidates a bundle.",
-    "protocol.production.n_chunks":
-        "chunks THIS invocation adds. Extension-only: a resume may raise it.",
-    "protocol.production.chunk": "length of one chunk; also the restart granularity.",
+    "protocol.production.duration_per_segment":
+        "length of ONE production segment; also the restart granularity. How many segments run is "
+        "an execution choice made by the driver, not a field here.",
+    "protocol.production.tau_ladder":
+        "the REST2 ladder in tau. s = (1 - tau)^2 and the solute-environment coupling is "
+        "sqrt(s) = 1 - tau. Rung spacing sets exchange acceptance; changing it changes the run.",
+    "protocol.production.exchange":
+        "how many exchange rounds one segment contains. The interval is derived from it.",
     "build.solvation.padding": "minimum solvent between the solute and its periodic image.",
     "build.solvation.ionic_strength_molar":
         "requested SALT concentration. Neutralising counterions are counted separately.",

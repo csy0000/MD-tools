@@ -30,7 +30,12 @@ EXECUTION_ONLY = ("execution",)
 
 #: Extension-only: more work of the same kind. Excluded from the continuity hash so a run can be
 #: extended, which is the entire point of resuming.
-EXTENSION_ONLY = ("protocol.production.n_chunks",)
+#: Empty by construction, and that is the point. The only field that was ever extension-only
+#: was `protocol.production.n_chunks`, and segment count is no longer a scientific input at
+#: all -- the driver script decides how many segments to request and the run manifest records
+#: how many committed. Nothing remains in the canonical configuration that a user can change
+#: and still resume: every remaining field is bundle-, continuity-, or execution-defining.
+EXTENSION_ONLY: tuple[str, ...] = ()
 
 
 def to_plain(value: Any) -> Any:
@@ -116,14 +121,15 @@ def protocol_at_prepare_projection(spec: SimulationSpec) -> dict:
 
 
 def protocol_projection(spec: SimulationSpec) -> dict:
-    """Everything that decides the physical run, minus extension-only fields.
+    """Everything that decides the physical run.
 
-    `n_chunks` is removed deliberately: asking for more chunks extends a run rather than redefining
-    it, and including it here would make every continuation look incompatible.
+    Nothing is stripped any more. Segment count used to be removed here so that a continuation did
+    not look incompatible; it is no longer a configuration field at all, so the projection is now
+    simply the whole protocol. `duration_per_segment` IS hashed: it is the restart granularity, and
+    a resume that silently changed it would produce segments of two different lengths in one run.
     """
     data = _dump(spec)
     protocol = json.loads(json.dumps(data["protocol"]))
-    protocol.get("production", {}).pop("n_chunks", None)
     # The resolved PRODUCTION seed is continuity-defining: the same state advanced under a
     # different seed is a different trajectory. The master seed is not hashed as a label.
     seeds = spec.randomness.resolve()
