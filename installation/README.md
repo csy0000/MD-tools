@@ -5,6 +5,7 @@ installs:
 
 - AmberTools26;
 - licensed Amber26/`pmemd` components supplied by the user;
+- `pmemd.cuda.MPI` for replica exchange and other multi-GPU Amber methods;
 - OpenMM 8.5.2 in an isolated Python environment.
 
 CUDA is preferred on a compatible NVIDIA GPU. CPU is the fallback. OpenCL is not selected
@@ -41,8 +42,9 @@ The guide separates three questions that are often confused:
 
 1. Can OpenMM use an NVIDIA GPU? A working NVIDIA driver is normally the key requirement because
    packaged OpenMM builds can bring a compatible CUDA runtime.
-2. Can Amber build `pmemd.cuda`? This additionally needs a CUDA toolkit with `nvcc`, a compatible
-   host compiler, and a combination supported by Amber26.
+2. Can Amber build `pmemd.cuda` and `pmemd.cuda.MPI`? This additionally needs a CUDA toolkit with
+   `nvcc`, a compatible host compiler, a compatible MPI implementation/compiler wrappers, and a
+   combination supported by Amber26.
 3. Can both programs run on the CPU? This needs the normal C/C++/Fortran build toolchain for Amber;
    OpenMM has a CPU platform.
 
@@ -60,6 +62,8 @@ Before starting, have these paths ready:
 - the licensed Amber26/`pmemd` tar archive;
 - a package manager: `micromamba`, `mamba`, `conda`, or Python `venv`;
 - for an Amber CUDA build, the intended CUDA toolkit path if several versions are installed.
+- for multi-GPU Amber, the intended MPI implementation and launcher (`mpirun`, `mpiexec`, or a
+  scheduler launcher), single-node versus multi-node scope, and GPUs per node.
 
 Do not use `/`, `/usr`, `/usr/local`, your home directory itself, or this Git repository as the
 installation prefix. Do not reuse a nonempty directory belonging to unrelated software.
@@ -102,23 +106,29 @@ gfortran --version
 cmake --version
 nvidia-smi
 nvcc --version
+mpicc --version
+mpifort --version
+mpirun --version
+srun --version
 ```
 
 It is normal for `nvcc --version` to fail on a machine where OpenMM CUDA can run from a packaged
-runtime but Amber cannot yet build `pmemd.cuda`.
+runtime but Amber cannot yet build `pmemd.cuda`. It is also possible to have working single-GPU
+`pmemd.cuda` while `pmemd.cuda.MPI` is unavailable because a compatible MPI toolchain was not used.
 
 ### Hardware decision
 
 | Machine result | OpenMM | Amber26 |
 | --- | --- | --- |
-| NVIDIA GPU + working driver + supported toolkit/`nvcc` | CUDA | CUDA candidate; verify Amber26 compatibility |
+| NVIDIA GPU + working driver + supported toolkit/`nvcc` + compatible MPI | CUDA | Build and test `pmemd.cuda` and `pmemd.cuda.MPI` |
+| NVIDIA GPU + toolkit, but MPI missing/incompatible | CUDA | Single-GPU candidate only; CUDA+MPI not ready |
 | NVIDIA GPU + working driver, but no supported `nvcc` | CUDA may still work | CPU until a supported toolkit is installed |
 | No working NVIDIA GPU | CPU | CPU |
 | CUDA unavailable, OpenCL deliberately requested | Test OpenCL | CPU |
 
-Do not replace an NVIDIA driver or system CUDA installation as part of this guide unless the
-machine owner and administrator explicitly approve it. Driver changes can affect every GPU user on
-the host.
+Do not replace an NVIDIA driver, system CUDA installation, or system MPI stack as part of this guide
+unless the machine owner and administrator explicitly approve it. These changes can affect every
+GPU or cluster user on the host.
 
 ## 3. Inspect both archives safely
 
@@ -152,8 +162,10 @@ environment, log, and manifest directories:
 ```bash
 mkdir -p \
   "$MD_STACK_PREFIX/src" \
-  "$MD_STACK_PREFIX/build/amber26" \
-  "$MD_STACK_PREFIX/amber26" \
+  "$MD_STACK_PREFIX/build/ambertools26" \
+  "$MD_STACK_PREFIX/build/pmemd26" \
+  "$MD_STACK_PREFIX/ambertools26" \
+  "$MD_STACK_PREFIX/pmemd26" \
   "$MD_STACK_PREFIX/envs" \
   "$MD_STACK_PREFIX/logs" \
   "$MD_STACK_PREFIX/manifests"
@@ -164,8 +176,10 @@ The intended result is:
 ```text
 <prefix>/
   src/                    private extracted Amber sources
-  build/amber26/          out-of-source build files
-  amber26/                installed AMBERHOME
+  build/ambertools26/     out-of-source AmberTools build files
+  build/pmemd26/          out-of-source licensed PMEMD build files
+  ambertools26/           installed AMBERHOME
+  pmemd26/                installed PMEMDHOME
   envs/openmm-8.5.2/      isolated OpenMM environment
   logs/                   build and test logs
   manifests/              installation provenance
@@ -256,8 +270,8 @@ Read those documents and confirm:
 - the required extraction order;
 - whether the licensed Amber26/`pmemd` archive overlays the AmberTools26 source tree;
 - the supported operating systems, compilers, CMake version, Python, CUDA toolkits, and GPU compute
-  capabilities;
-- the release's install-prefix setting and CUDA enable/disable setting;
+  capabilities, plus supported MPI implementations and compiler wrappers;
+- the release's install-prefix, CUDA, and MPI enable/disable settings;
 - the official build and test commands.
 
 Archive layouts and option names can change. The bundled Amber26 instructions override every
@@ -269,15 +283,16 @@ Extract into a new subdirectory under `$MD_STACK_PREFIX/src`, following the orde
 instructions. A typical single-archive extraction looks like:
 
 ```bash
-mkdir -p "$MD_STACK_PREFIX/src/amber26-staging"
-tar -xf "$AMBERTOOLS26_ARCHIVE" -C "$MD_STACK_PREFIX/src/amber26-staging"
+mkdir -p "$MD_STACK_PREFIX/src/ambertools26-staging"
+tar -xf "$AMBERTOOLS26_ARCHIVE" -C "$MD_STACK_PREFIX/src/ambertools26-staging"
 ```
 
 Do not blindly unpack the licensed archive on top of that directory. First confirm the required
 overlay path in its documentation. After extraction, define the actual source root:
 
 ```bash
-export AMBER_SOURCE_ROOT=/absolute/path/to/the/extracted/amber26_source_root
+export AMBERTOOLS_SOURCE_ROOT=/absolute/path/to/the/extracted/ambertools26_source_root
+export PMEMD_SOURCE_ROOT=/absolute/path/to/the/extracted/pmemd26_source_root
 ```
 
 ### 6.3 Configure an out-of-source build
@@ -285,23 +300,29 @@ export AMBER_SOURCE_ROOT=/absolute/path/to/the/extracted/amber26_source_root
 Amber releases commonly provide a `build/run_cmake` helper. Read it before running it. Configure it
 so that:
 
-- the install prefix is exactly `$MD_STACK_PREFIX/amber26`;
+- the AmberTools install prefix is exactly `$MD_STACK_PREFIX/ambertools26` and the licensed PMEMD
+  prefix is exactly `$MD_STACK_PREFIX/pmemd26`, unless the release explicitly documents a combined
+  install;
 - the build directory is separate from the source directory;
-- CUDA is enabled only for a toolkit/compiler pair supported by Amber26;
+- CUDA and MPI are enabled only for a toolkit/compiler/MPI combination supported by Amber26;
+- the intended MPI compiler wrappers are selected so both `pmemd.cuda` and `pmemd.cuda.MPI` are
+  produced without mixing incompatible MPI libraries;
 - CUDA is disabled explicitly for the accepted CPU fallback;
 - optional components are chosen intentionally rather than inherited from another installation.
 
-If the release documentation uses a generated `run_cmake` script, copy or generate it in
-`$MD_STACK_PREFIX/build/amber26`, review the resulting CMake command, and save the full configure
-output:
+If the release documentation uses generated `run_cmake` scripts, configure and review AmberTools
+and licensed PMEMD separately, saving both complete configure outputs:
 
 ```bash
-cd "$MD_STACK_PREFIX/build/amber26"
-./run_cmake 2>&1 | tee "$MD_STACK_PREFIX/logs/amber26-configure.log"
+cd "$MD_STACK_PREFIX/build/ambertools26"
+./run_cmake 2>&1 | tee "$MD_STACK_PREFIX/logs/ambertools26-configure.log"
+
+cd "$MD_STACK_PREFIX/build/pmemd26"
+./run_cmake 2>&1 | tee "$MD_STACK_PREFIX/logs/pmemd26-configure.log"
 ```
 
-Do not run this example until `run_cmake` exists in the documented location and its prefix/CUDA
-settings have been reviewed.
+Do not run this example until `run_cmake` exists in the documented location and its
+prefix/CUDA/MPI settings have been reviewed.
 
 ### 6.4 Compile, install, and run Amber tests
 
@@ -309,24 +330,58 @@ Choose parallelism conservatively. More CPU cores are not helpful if each compil
 RAM. Substitute a suitable job count:
 
 ```bash
-cmake --build "$MD_STACK_PREFIX/build/amber26" --parallel 4 \
-  2>&1 | tee "$MD_STACK_PREFIX/logs/amber26-build.log"
+cmake --build "$MD_STACK_PREFIX/build/ambertools26" --parallel 4 \
+  2>&1 | tee "$MD_STACK_PREFIX/logs/ambertools26-build.log"
+cmake --install "$MD_STACK_PREFIX/build/ambertools26" \
+  2>&1 | tee "$MD_STACK_PREFIX/logs/ambertools26-install.log"
 
-cmake --install "$MD_STACK_PREFIX/build/amber26" \
-  2>&1 | tee "$MD_STACK_PREFIX/logs/amber26-install.log"
+cmake --build "$MD_STACK_PREFIX/build/pmemd26" --parallel 4 \
+  2>&1 | tee "$MD_STACK_PREFIX/logs/pmemd26-build.log"
+cmake --install "$MD_STACK_PREFIX/build/pmemd26" \
+  2>&1 | tee "$MD_STACK_PREFIX/logs/pmemd26-install.log"
 ```
 
 If Amber26's bundled instructions specify `make install` or another command instead, use that exact
 command. Then source the installed activation file in the current shell:
 
 ```bash
-export AMBERHOME="$MD_STACK_PREFIX/amber26"
+export AMBERHOME="$MD_STACK_PREFIX/ambertools26"
 source "$AMBERHOME/amber.sh"
+export PMEMDHOME="$MD_STACK_PREFIX/pmemd26"
+source "$PMEMDHOME/amber.sh"
 ```
 
-Run the release-provided AmberTools, `pmemd`, and CUDA test targets. Capture each result in
-`$MD_STACK_PREFIX/logs`. A compiler completing successfully is not enough: failed release tests must
-be investigated before any scientific simulation.
+The Amber26 manual uses `DO_PARALLEL` to select the launcher and rank count. Run `test.parallel` in
+each MPI-enabled installed tree. It recommends repeating with four or eight ranks because some
+replica-exchange tests need more than two:
+
+```bash
+cd "$AMBERHOME"
+export DO_PARALLEL="mpirun -np 2"
+make test.parallel 2>&1 | tee "$MD_STACK_PREFIX/logs/amber26-test-parallel-np2.log"
+
+export DO_PARALLEL="mpirun -np 4"
+make test.parallel 2>&1 | tee "$MD_STACK_PREFIX/logs/amber26-test-parallel-np4.log"
+```
+
+If the licensed PMEMD installation has a separate `$PMEMDHOME`, repeat the documented MPI target
+there. To test `pmemd.cuda.MPI` specifically, expose one GPU per MPI rank and run the dedicated CUDA
+parallel targets from the PMEMD installation/test tree:
+
+```bash
+cd "${PMEMDHOME:-$AMBERHOME}"
+export CUDA_VISIBLE_DEVICES=0,1
+export DO_PARALLEL="mpirun -np 2"
+make test.cuda.parallel \
+  2>&1 | tee "$MD_STACK_PREFIX/logs/amber26-test-cuda-parallel.log"
+make test.cuda.parallel.SPFP \
+  2>&1 | tee "$MD_STACK_PREFIX/logs/amber26-test-cuda-parallel-spfp.log"
+```
+
+Substitute the documented launcher or scheduler command and visible GPU IDs for the actual machine.
+Do not request more CUDA ranks than visible GPUs. Inspect the diff files identified by the Amber26
+manual: small floating-point differences can occur, whereas large or unexplained differences need
+investigation. A compiler completing successfully—or a one-rank MPI launch—is not enough.
 
 ## 7. Create an optional activation script
 
@@ -335,8 +390,10 @@ It is safer to create a standalone script than to edit `.bashrc` or `.zshrc`. Sa
 
 ```bash
 #!/usr/bin/env bash
-export AMBERHOME=/absolute/path/to/md-stack/amber26
+export AMBERHOME=/absolute/path/to/md-stack/ambertools26
 source "$AMBERHOME/amber.sh"
+export PMEMDHOME=/absolute/path/to/md-stack/pmemd26
+source "$PMEMDHOME/amber.sh"
 export PATH=/absolute/path/to/md-stack/envs/openmm-8.5.2/bin:"$PATH"
 ```
 
@@ -352,24 +409,31 @@ new shell.
 ## 8. Validate the complete stack
 
 The validator checks the required Amber executables, imports exactly OpenMM 8.5.2, lists OpenMM
-platforms, runs OpenMM's self-test, and—when requested—requires both `pmemd.cuda` and OpenMM CUDA:
+platforms, runs OpenMM's self-test, and—when requested—requires `pmemd.cuda`, `pmemd.cuda.MPI`, an
+MPI/scheduler launcher, and OpenMM CUDA:
 
 ```bash
 python3 .claude/skills/install-md-stack/scripts/verify_install.py \
-  --amberhome "$MD_STACK_PREFIX/amber26" \
+  --amberhome "$MD_STACK_PREFIX/ambertools26" \
+  --pmemdhome "$MD_STACK_PREFIX/pmemd26" \
   --python "$MD_STACK_PREFIX/envs/openmm-8.5.2/bin/python" \
-  --require-cuda \
+  --require-cuda-mpi \
+  --mpi-launcher mpirun \
   --output "$MD_STACK_PREFIX/manifests/validation.json"
 ```
 
-For an explicitly accepted CPU installation, omit `--require-cuda`. For OpenCL, omit that flag and
-separately verify that `openmm.testInstallation` reports the OpenCL platform; Amber remains a CPU
-build unless its own documentation says otherwise.
+`--require-cuda-mpi` implies `--require-cuda`. Substitute `mpiexec` or the documented scheduler
+launcher where appropriate. For an explicitly accepted CPU installation, omit both requirements.
+For OpenCL, separately verify that `openmm.testInstallation` reports the OpenCL platform; Amber
+remains a CPU build unless its own documentation says otherwise.
 
 Success requires all of the following:
 
 - `tleap`, `sander`, `pmemd`, and `cpptraj` are installed and executable;
 - `pmemd.cuda` exists when CUDA was selected for Amber;
+- `pmemd.cuda.MPI` and the intended launcher exist for replica exchange/multi-GPU Amber;
+- `make test.parallel` passes with the rank counts needed for replica-exchange coverage;
+- `make test.cuda.parallel` and `make test.cuda.parallel.SPFP` pass with one rank per visible GPU;
 - OpenMM reports version `8.5.2`;
 - OpenMM reports the CUDA platform when CUDA was selected;
 - `python -m openmm.testInstallation` passes;
@@ -382,10 +446,13 @@ Keep a small machine-readable manifest under `$MD_STACK_PREFIX/manifests`. Recor
 - component versions and absolute installation paths;
 - source archive filenames, sizes, and SHA-256 hashes;
 - CUDA/CPU/OpenCL choice for each engine;
-- GPU model, NVIDIA driver, toolkit/`nvcc`, compilers, CMake, and package-manager versions;
+- GPU model, NVIDIA driver, toolkit/`nvcc`, compilers, CMake, MPI implementation/compiler wrappers,
+  launcher/scheduler, and package-manager versions;
 - OpenMM environment export or lock file;
 - Amber configure command and selected build options;
 - validation commands, timestamps, return codes, and log paths;
+- `DO_PARALLEL`, rank counts, `CUDA_VISIBLE_DEVICES`, and results/diff-log paths for
+  `test.parallel`, `test.cuda.parallel`, and `test.cuda.parallel.SPFP`;
 - warnings and any accepted CPU fallback.
 
 Do not record usernames, tokens, license data, full archive listings, licensed contents, or a dump
@@ -423,6 +490,14 @@ Confirm that `nvcc` was available during Amber configuration, the toolkit and ho
 supported by Amber26, CUDA was enabled in the recorded CMake command, and the licensed `pmemd`
 source was overlaid exactly as documented. OpenMM CUDA working does not prove that Amber CUDA was
 buildable.
+
+### `pmemd.cuda.MPI` is missing or its tests fail
+
+Confirm that Amber26 was configured with both MPI and CUDA enabled, that the intended MPI compiler
+wrappers were selected, and that the run-time launcher uses the same compatible MPI implementation.
+Run `make test.parallel` first, then `make test.cuda.parallel` and
+`make test.cuda.parallel.SPFP`. Check `CUDA_VISIBLE_DEVICES`, use one rank per GPU, and inspect the
+manual's saved diff files before deciding whether a numerical difference is significant.
 
 ### Amber rejects the CUDA or compiler version
 

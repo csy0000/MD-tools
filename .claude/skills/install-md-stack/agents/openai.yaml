@@ -1,4 +1,4 @@
 interface:
   display_name: "Install MD Stack"
-  short_description: "Install Amber and OpenMM with CUDA checks"
-  default_prompt: "Use $install-md-stack to inspect this machine and install Amber26, AmberTools26, and OpenMM 8.5.2 safely."
+  short_description: "Install Amber/OpenMM with CUDA and MPI checks"
+  default_prompt: "Use $install-md-stack to inspect this machine and install Amber26, AmberTools26, OpenMM 8.5.2, and pmemd.cuda.MPI safely."

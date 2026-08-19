@@ -17,6 +17,7 @@ from typing import Any
 TOOLS = (
     "gcc", "g++", "gfortran", "clang", "cmake", "make", "ninja", "git", "tar", "bzip2",
     "python3", "conda", "mamba", "micromamba", "nvidia-smi", "nvcc", "clinfo",
+    "mpicc", "mpicxx", "mpifort", "mpirun", "mpiexec", "srun",
 )
 
 
@@ -131,6 +132,10 @@ def cuda_report() -> dict[str, Any]:
 def recommendations(report: dict[str, Any]) -> dict[str, str]:
     gpu = bool(report["nvidia"].get("available") and report["nvidia"].get("gpus"))
     nvcc = bool(report["cuda"].get("nvcc_available"))
+    tools = report["tools"]
+    mpi_compilers = all(tools[name].get("available") for name in ("mpicc", "mpifort"))
+    mpi_launcher = any(tools[name].get("available") for name in ("mpirun", "mpiexec", "srun"))
+    gpu_count = len(report["nvidia"].get("gpus", []))
     if gpu:
         openmm = "CUDA preferred; verify the packaged CUDA runtime against the detected driver"
     else:
@@ -141,7 +146,22 @@ def recommendations(report: dict[str, Any]) -> dict[str, str]:
         amber = "CPU build until a supported CUDA toolkit/nvcc is provided; do not replace drivers automatically"
     else:
         amber = "CPU build"
-    return {"openmm_backend": openmm, "amber_backend": amber}
+    if gpu and nvcc and mpi_compilers and mpi_launcher:
+        amber_mpi = (
+            "CUDA+MPI candidate for pmemd.cuda.MPI; verify Amber26/MPI compatibility and "
+            f"the intended rank-to-GPU layout against {gpu_count} visible GPU(s)"
+        )
+    elif gpu and nvcc:
+        amber_mpi = (
+            "pmemd.cuda.MPI is not ready: provide compatible MPI compiler wrappers and a launcher"
+        )
+    else:
+        amber_mpi = "pmemd.cuda.MPI is not ready until Amber CUDA prerequisites are satisfied"
+    return {
+        "openmm_backend": openmm,
+        "amber_backend": amber,
+        "amber_cuda_mpi_backend": amber_mpi,
+    }
 
 
 def main() -> int:
