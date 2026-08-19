@@ -279,9 +279,19 @@ pREST2/RGD results. Their specs are preserved at `manifests/retired-env-specs/` 
 reproduction of those results is ever needed, that spec file is what remains.
 
 Deletion reclaimed only ~6 GB, not the ~43 GB the directory sizes implied, because conda hardlinks
-environment files to the shared package cache (`/path/to/conda_pkgs`, 6.2 GB). `conda clean
---all` would reclaim the rest at the cost of re-downloading on future environment creation. Left
-alone: the volume is 7.3 TB with 7.0 TB free.
+extracted package files into environments; the data survives in the package cache until that is
+cleaned too.
+
+The cache in question is **`/path/to/miniforge3/pkgs` (42 GB)**, which is what `pkgs_dirs`
+actually points at. `conda clean --all` reports 10.21 GB of tarballs plus 8.79 GB of unused packages
+as reclaimable (~19 GB); the remainder stays because it is hardlinked into live environments.
+
+Separately, **`/path/to/conda_pkgs` (6.2 GB) is orphaned**. It is not in `pkgs_dirs`, nothing
+in `.condarc`/`.bashrc`/`.profile` references it, its newest entry is from 2026-08-11, and its
+contents are Python 3.11 / `ambertools-24.8` packages belonging to the retired `escort-ais*`
+environments. Sampled files have a link count of 1, so no live environment shares that data.
+
+No action is forced either way: the volume is 7.3 TB with 7.0 TB free.
 
 ## Two defects found while reorganising
 
