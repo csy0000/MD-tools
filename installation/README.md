@@ -24,6 +24,7 @@ start to finish.
 - [What this guide does—and does not do](#what-this-guide-doesand-does-not-do)
 - [1. Collect the inputs](#1-collect-the-inputs)
 - [2. Inspect the machine before changing it](#2-inspect-the-machine-before-changing-it)
+  - [Choosing a CUDA version](#choosing-a-cuda-version)
 - [3. Inspect both archives safely](#3-inspect-both-archives-safely)
 - [4. Create a clean directory layout](#4-create-a-clean-directory-layout)
 - [5. Install OpenMM 8.5.2](#5-install-openmm-852)
@@ -125,6 +126,56 @@ runtime but Amber cannot yet build `pmemd.cuda`. It is also possible to have wor
 | NVIDIA GPU + working driver, but no supported `nvcc` | CUDA may still work | CPU until a supported toolkit is installed |
 | No working NVIDIA GPU | CPU | CPU |
 | CUDA unavailable, OpenCL deliberately requested | Test OpenCL | CPU |
+
+### Choosing a CUDA version
+
+A machine that will eventually host Amber, OpenMM, GROMACS, PyTorch, and PyTorch Geometric does not
+need one CUDA version. It needs one *rule*.
+
+**Only software you compile needs a CUDA toolkit.** In this stack that is Amber/`pmemd` alone.
+OpenMM, GROMACS, PyTorch, and PyTorch Geometric are installed as prebuilt binaries that carry their
+own CUDA runtime inside their environment; they need a sufficiently new NVIDIA **driver** and nothing
+else. Conda environments are isolated, so one environment can hold CUDA 12.x while another holds
+13.x without interfering.
+
+The practical consequence: **pin `cuda-version` explicitly in every environment, and do not install a
+CUDA toolkit system-wide.** A single global toolkit forces the oldest consumer to hold back the
+newest — with Amber below CUDA 12.9 and current PyTorch builds on CUDA 13, one global choice must
+break something.
+
+**The compiled component sets its own limit, and Amber states it in code.** Amber26's
+`cmake/CudaConfig.cmake` fails outright outside a supported range:
+
+```
+FATAL_ERROR "Error: Untested CUDA version.
+             AMBER currently requires CUDA version >= 7.5 and < 12.9."
+```
+
+The same file gates the CUDA/host-compiler pairing, including an explicit special case:
+
+```cmake
+OR ( CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL 13.3
+     AND CUDA_VERSION VERSION_EQUAL 12.6 )
+     # 13.3 and 12.6 is a special case where stackoverflow and
+     # nvidia disagree; allow based on Gerald Monard's testing.
+```
+
+So on a host with **gcc 13.3**, **CUDA 12.6** is the combination Amber's authors tested, not a
+compromise. Read `CudaConfig.cmake` from the release you actually have rather than reusing this
+number: the ceiling moves between releases, and a newer Amber will accept newer toolkits.
+
+A worked example for a mixed machine:
+
+| environment | CUDA | reason |
+| --- | --- | --- |
+| Amber build | 12.6 **toolkit** (`nvcc`) | the version whitelisted for the host compiler |
+| OpenMM | 12.9 or 13.x **runtime** | both build families exist; choosing near Amber keeps caches shared |
+| GROMACS | whatever its CUDA build requires | prebuilt; driver is the only shared requirement |
+| PyTorch + PyTorch Geometric | 13.x **runtime** | current builds; PyG follows PyTorch exactly |
+
+Do not install PyTorch and OpenMM into the same environment. They constrain `cuda-version`
+differently, and the solver will resolve the conflict by silently downgrading one of them. Keep them
+in separate environments and join them through files on disk, not a shared runtime.
 
 Do not replace an NVIDIA driver, system CUDA installation, or system MPI stack as part of this guide
 unless the machine owner and administrator explicitly approve it. These changes can affect every
