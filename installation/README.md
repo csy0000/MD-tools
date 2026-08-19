@@ -18,6 +18,23 @@ The repository also contains an agent-readable version of this workflow at
 `.claude/skills/install-md-stack/SKILL.md`. People installing manually can follow this README from
 start to finish.
 
+## Contents
+
+- [What this guide does—and does not do](#what-this-guide-doesand-does-not-do)
+- [1. Collect the inputs](#1-collect-the-inputs)
+- [2. Inspect the machine before changing it](#2-inspect-the-machine-before-changing-it)
+- [3. Inspect both archives safely](#3-inspect-both-archives-safely)
+- [4. Create a clean directory layout](#4-create-a-clean-directory-layout)
+- [5. Install OpenMM 8.5.2](#5-install-openmm-852)
+- [6. Install AmberTools26 and licensed Amber26/pmemd](#6-install-ambertools26-and-licensed-amber26pmemd)
+- [7. Create an optional activation script](#7-create-an-optional-activation-script)
+- [8. Validate the complete stack](#8-validate-the-complete-stack)
+- [9. Record installation provenance](#9-record-installation-provenance)
+- [10. Troubleshooting](#10-troubleshooting)
+- [11. Updating or removing an installation](#11-updating-or-removing-an-installation)
+- [12. Next step](#12-next-step)
+- [Official OpenMM references](#official-openmm-references)
+
 ## What this guide does—and does not do
 
 The guide separates three questions that are often confused:

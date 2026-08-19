@@ -4,6 +4,17 @@ Use this reference for planning and command patterns. The installation documents
 user's Amber26 and AmberTools26 archives are authoritative for release-specific prerequisites,
 archive layout, CMake options, CUDA compatibility, and test targets.
 
+## Contents
+
+- [Information to collect](#information-to-collect)
+- [Suggested layout](#suggested-layout)
+- [Backend decision matrix](#backend-decision-matrix)
+- [OpenMM 8.5.2 patterns](#openmm-852-patterns)
+- [Amber archive and build pattern](#amber-archive-and-build-pattern)
+- [Activation pattern](#activation-pattern)
+- [Validation and manifest](#validation-and-manifest)
+- [Common failure interpretation](#common-failure-interpretation)
+
 ## Information to collect
 
 - Absolute, user-owned installation prefix.
