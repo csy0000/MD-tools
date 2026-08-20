@@ -53,7 +53,7 @@
         "tau_ladder": {
           "minimum": 0.0,
           "maximum": 0.5,
-          "count": 10,
+          "count": 4,
           "interpolation": "linear"
         },
         "omega_exclusion": {

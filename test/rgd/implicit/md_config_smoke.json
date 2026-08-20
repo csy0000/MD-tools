@@ -1,5 +1,5 @@
 {
-  "profile": "implicit-rest2-peptide-v1",
+  "profile": "implicit-rest2-ligand-v1",
   "protocol": {
     "integrator": {
       "kind": "langevin-middle",
@@ -9,44 +9,44 @@
     },
     "equilibration": {
       "protocol": "simple",
-      "nvt": "20 ps",
-      "minimize_max_iterations": 1000
+      "nvt": "2 ps",
+      "minimize_max_iterations": 200
     },
     "production": {
       "method": "rest2",
-      "duration_per_segment": "2 ns",
+      "duration_per_segment": "10 ps",
       "enhanced_region": {
         "type": "solute"
       },
       "tau_ladder": {
         "minimum": 0.0,
         "maximum": 0.5,
-        "count": 4,
+        "count": 6,
         "interpolation": "linear"
       },
       "exchange": {
-        "number_of_exchanges_per_segment": 200
+        "number_of_exchanges_per_segment": 10
       },
       "omega_exclusion": {
         "enabled": true,
         "definition": "peptide_omega"
       },
-      "relaxation": "20 ps"
+      "relaxation": "1 ps"
     }
   },
   "randomness": {
     "master_seed": 20260820
   },
   "execution": {
-    "platform": "CUDA",
+    "platform": "CPU",
     "precision": "mixed",
     "reporting": {
-      "all_atom": "10 ps",
-      "solute": "1 ps"
+      "all_atom": "1 ps",
+      "solute": "0.2 ps"
     }
   },
   "conventional_md": {
-    "duration": "1 ns"
+    "duration": "4 ps"
   },
   "minimization": {
     "restraint": {

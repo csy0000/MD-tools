@@ -1,5 +1,5 @@
 {
-  "profile": "implicit-rest2-peptide-v1",
+  "profile": "implicit-rest2-ligand-v1",
   "protocol": {
     "integrator": {
       "kind": "langevin-middle",
@@ -21,7 +21,7 @@
       "tau_ladder": {
         "minimum": 0.0,
         "maximum": 0.5,
-        "count": 4,
+        "count": 6,
         "interpolation": "linear"
       },
       "exchange": {
