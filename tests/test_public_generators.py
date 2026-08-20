@@ -766,6 +766,80 @@ def test_rest2_refuses_to_start_without_its_predecessors_endpoint(executed_proje
 
 
 # ---------------------------------------------------------------------------------------------
+# honest input support
+# ---------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("suffix,label", [(".mol", "MOL"), (".mol2", "MOL2"), (".sdf", "SDF")])
+def test_recognised_but_unimplemented_formats_are_refused(tmp_path, suffix, label):
+    """These used to fall through to the PDB reader, which cannot read them.
+
+    Advertising a format the execution path does not implement is how a user discovers the gap
+    after paying for a parameterisation, so the refusal must be immediate and say the word.
+    """
+    molecule = tmp_path / f"ligand{suffix}"
+    molecule.write_text("not really a molecule\n")
+    config = tmp_path / "c.json"
+    config.write_text(json.dumps(SYSTEM_CONFIG))
+    result = _run(SYSTEM_GEN, "-i", str(molecule), "-o", str(tmp_path / "out"),
+                  "--config", str(config), "--dry-run")
+    assert result.returncode != 0
+    assert "not implemented yet" in result.stderr
+    assert label in result.stderr
+    assert ".smi" in result.stderr, "must name a route that does work"
+
+
+def test_a_protein_ligand_complex_is_refused(tmp_path):
+    """Declared, recognised, and not built -- so it must not be accepted."""
+    config = tmp_path / "c.json"
+    config.write_text(json.dumps(dict(SYSTEM_CONFIG, system={"type": "protein-ligand"})))
+    result = _run(SYSTEM_GEN, "-i", str(ALANINE_PDB), "-o", str(tmp_path / "out"),
+                  "--config", str(config), "--dry-run")
+    assert result.returncode != 0
+    assert "not implemented yet" in result.stderr
+
+
+def test_ligand_build_values_are_checked_not_only_their_keys(tmp_path):
+    """A block naming a charge model the build will not use is false provenance.
+
+    It is copied into the manifest as a record of how the molecule was built, so an unsupported or
+    contradictory value is recorded as if it were true.
+    """
+    config = json.loads((REPO_ROOT / "test" / "rgd" / "REST2" / "system_config.json").read_text())
+    config["ligand_build"]["charge_model"] = "gasteiger"
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(config))
+    smi = REPO_ROOT / "test" / "rgd" / "REST2" / "cyclo_rgdfv.smi"
+
+    result = _run(SYSTEM_GEN, "-i", str(smi), "-o", str(tmp_path / "out"),
+                  "--config", str(path), "--dry-run")
+    assert result.returncode != 0
+    assert "gasteiger" in result.stderr and "am1bcc" in result.stderr, result.stderr
+
+
+def test_an_unsupported_ligand_build_policy_is_refused(tmp_path):
+    config = json.loads((REPO_ROOT / "test" / "rgd" / "REST2" / "system_config.json").read_text())
+    config["ligand_build"]["conformer_generation"] = "guess"
+    path = tmp_path / "c.json"
+    path.write_text(json.dumps(config))
+    smi = REPO_ROOT / "test" / "rgd" / "REST2" / "cyclo_rgdfv.smi"
+
+    result = _run(SYSTEM_GEN, "-i", str(smi), "-o", str(tmp_path / "out"),
+                  "--config", str(path), "--dry-run")
+    assert result.returncode != 0
+    assert "conformer_generation" in result.stderr
+
+
+def test_the_route_check_also_protects_callers_that_skip_the_cli(tmp_path):
+    """The library must not depend on the entry point for a scientific-safety check."""
+    from md_templates.openmm.system_prep import check_ligand_build_matches_the_route
+
+    declared = {"ligand_build": {"parameterization_route": "openff-1.0.0"}}
+    resolved = {"forcefield": {"ligand": "openff-2.2.0", "ligand_charge_method": "am1bcc"}}
+    with pytest.raises(ValueError, match="openff-1.0.0"):
+        check_ligand_build_matches_the_route(declared, resolved)
+
+
+# ---------------------------------------------------------------------------------------------
 # refusing to overwrite
 # ---------------------------------------------------------------------------------------------
 

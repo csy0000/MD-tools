@@ -106,6 +106,9 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
         if section in config:
             cfg[section].update(config[section])
 
+    if input_format == "smi":
+        check_ligand_build_matches_the_route(config, cfg)
+
     smiles = None
     pdb: Optional[Path] = None
     if input_format == "smi":
@@ -117,6 +120,36 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
         pdb = input_path
 
     return cfg, smiles, pdb
+
+
+def check_ligand_build_matches_the_route(config: dict, cfg: dict) -> None:
+    """The declared chemistry must be the chemistry that will actually be used.
+
+    `ligand_build` is copied into the bundle manifest as a record of how the molecule was built. If
+    it names a charge model or parameterisation route that the resolved force field does not use,
+    that record is false -- and it is exactly the kind of falsehood nobody notices, because both
+    values look plausible in isolation. Checked here rather than in the entry point so that callers
+    which never touch the command line are covered too.
+    """
+    declared = config.get("ligand_build") or {}
+    ff = cfg.get("forcefield") or {}
+    pairs = (
+        ("parameterization_route", ff.get("ligand"), "forcefield.ligand"),
+        ("charge_model", ff.get("ligand_charge_method"), "forcefield.ligand_charge_method"),
+    )
+    problems = [
+        f"    ligand_build.{field}={declared[field]!r} but the resolved {source}={resolved!r}"
+        for field, resolved, source in pairs
+        if field in declared and resolved is not None and declared[field] != resolved
+    ]
+    if problems:
+        raise ValueError(
+            "the declared ligand_build does not describe the parameterisation that would run:\n"
+            + "\n".join(problems)
+            + "\n  Change the declaration, or state the force field you meant under `forcefield`. "
+              "This block is\n  persisted as provenance, so a mismatch would record chemistry that "
+              "never happened."
+        )
 
 
 def prepare_system(*, input_path: Path, input_format: str, system_type: str, config: dict,

@@ -36,15 +36,34 @@ if (REPO_ROOT / "src" / "md_templates").is_dir():          # running from a chec
 #: and guessing that from a filename is how a peptide silently becomes a small-molecule run.
 _FORMAT_BY_SUFFIX = {
     ".pdb": "pdb",
-    ".mol": "mol",
-    ".mol2": "mol",
-    ".sdf": "mol",
     ".smi": "smi",
     ".smiles": "smi",
 }
 
+#: Extensions this tool recognises but cannot yet build. They are named separately, and refused
+#: with that word, because the alternative is worse than an error: every non-SMILES input used to
+#: fall through to the PDB reader, so a `.sdf` was silently handed to a parser that cannot read it.
+#: Advertising a format the execution path does not implement is how a user discovers the gap after
+#: paying for a parameterisation.
+_UNIMPLEMENTED_FORMATS = {
+    ".mol": "MOL",
+    ".mol2": "MOL2",
+    ".sdf": "SDF",
+}
+
 #: System types this pipeline can currently prepare.
-_SUPPORTED_TYPES = ("ligand", "protein", "protein-ligand")
+_SUPPORTED_TYPES = ("ligand", "protein")
+
+#: Recognised, refused for the same reason as the formats above.
+_UNIMPLEMENTED_TYPES = ("protein-ligand",)
+
+#: Accepted values, not merely accepted keys. A `ligand_build` block that names a charge model the
+#: run will not use is a false record of the chemistry.
+_LIGAND_BUILD_VOCABULARY = {
+    "stereochemistry_policy": ("from_smiles",),
+    "protonation_policy": ("as_given",),
+    "conformer_generation": ("etkdgv3",),
+}
 
 #: What a SMILES input must state explicitly. None of these can be inferred from a SMILES string
 #: without choosing chemistry on the user's behalf.
@@ -68,6 +87,17 @@ class InputError(SystemExit):
 def detect_format(path: Path) -> str:
     """Reader format from the extension. Never the system type."""
     suffix = path.suffix.lower()
+    if suffix in _UNIMPLEMENTED_FORMATS:
+        raise InputError(
+            f"{_UNIMPLEMENTED_FORMATS[suffix]} input is not implemented yet.\n"
+            "  This tool recognises the extension but has no build route for it, and refusing now "
+            "is deliberate:\n"
+            "  a non-SMILES input used to be handed to the PDB reader, which cannot read it.\n"
+            "  Implemented routes:\n"
+            "    .pdb           peptide or protein, with system.type declared\n"
+            "    .smi/.smiles   single small molecule, with an explicit ligand_build block\n"
+            f"  To use this molecule now, supply it as SMILES."
+        )
     if suffix not in _FORMAT_BY_SUFFIX:
         raise InputError(
             f"unsupported input extension {suffix!r}. Supported: "
@@ -84,6 +114,15 @@ def classify_system(fmt: str, config: dict, input_path: Path) -> str:
     hold a peptide, a ligand, or both -- so it must be declared.
     """
     declared = (config.get("system") or {}).get("type")
+    if declared in _UNIMPLEMENTED_TYPES:
+        raise InputError(
+            f"system.type {declared!r} is not implemented yet.\n"
+            "  Complex construction needs a component-wise route -- protein by tleap/ff19SB, ligand "
+            "by OpenFF, then\n"
+            "  a combined topology with consistent charges and a resolved interface -- and none of "
+            "that is executed here.\n"
+            f"  Implemented: {', '.join(_SUPPORTED_TYPES)}."
+        )
     if declared is not None:
         if declared not in _SUPPORTED_TYPES:
             raise InputError(
@@ -123,6 +162,26 @@ def require_smi_build_fields(config: dict) -> dict:
             '        "charge_model": "am1bcc",\n'
             '        "parameterization_route": "openff-2.2.0"\n'
             "    }"
+        )
+
+    # Values, not just keys. A block that states a policy this build cannot perform is a false
+    # record of the chemistry, and it is recorded in the bundle manifest as if it were true.
+    problems = []
+    charge = ligand.get("formal_charge")
+    if isinstance(charge, bool) or not isinstance(charge, int):
+        problems.append(f"    ligand_build.formal_charge must be an integer, got {charge!r}")
+    for field, allowed in _LIGAND_BUILD_VOCABULARY.items():
+        value = ligand.get(field)
+        if value not in allowed:
+            problems.append(
+                f"    ligand_build.{field}={value!r} is not supported; "
+                f"implemented: {', '.join(allowed)}")
+    if problems:
+        raise InputError(
+            "ligand_build states chemistry this build cannot perform:\n"
+            + "\n".join(problems)
+            + "\n  These are recorded in the bundle manifest, so an unsupported value would be "
+              "provenance that is simply untrue."
         )
     return ligand
 
@@ -192,6 +251,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ligand build : {ligand_build.get('parameterization_route')} / "
               f"{ligand_build.get('charge_model')}, formal charge "
               f"{ligand_build.get('formal_charge')}")
+
+    # The declared chemistry is checked against the chemistry that would actually run, here rather
+    # than only inside prepare_system, so that --dry-run catches it. A dry run that accepts a
+    # ligand_build naming a charge model the build will not use has validated nothing that matters.
+    if fmt == "smi":
+        from md_templates.openmm.config import DEFAULTS
+        from md_templates.openmm.system_prep import check_ligand_build_matches_the_route
+
+        resolved_ff = dict(DEFAULTS["forcefield"])
+        resolved_ff.update(config.get("forcefield") or {})
+        try:
+            check_ligand_build_matches_the_route(config, {"forcefield": resolved_ff})
+        except ValueError as error:
+            raise InputError(str(error))
 
     # A dry run validates the invocation as given, and an occupied destination is a property of the
     # invocation. Reporting it here is the whole point: parameterisation can cost half an hour, and
