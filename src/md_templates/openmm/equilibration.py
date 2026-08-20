@@ -298,7 +298,8 @@ def _load_bundle(system_xml: Path):
     return system, pdb, info
 
 
-def _apply_coords(sim, coords: Path, *, require_velocities: bool = False) -> dict:
+def _apply_coords(sim, coords: Path, *, require_velocities: bool = False,
+                  velocity_seed: Optional[int] = None) -> dict:
     """Seed a Context from ``-c``: either a PDB or a serialised OpenMM ``State``.
 
     Deliberately not ``loadCheckpoint``: a checkpoint is only valid for the exact System that wrote
@@ -318,21 +319,40 @@ def _apply_coords(sim, coords: Path, *, require_velocities: bool = False) -> dic
             sim.context.setPeriodicBoxVectors(*box)
         sim.context.setPositions(pdb.positions)
         if require_velocities:
-            sim.context.setVelocitiesToTemperature(
-                float(sim.integrator.getTemperature().value_in_unit(unit.kelvin)) * unit.kelvin
-            )
-        return {"coords": str(coords), "kind": "pdb", "velocities": "drawn from Maxwell-Boltzmann"}
+            temperature = float(
+                sim.integrator.getTemperature().value_in_unit(unit.kelvin)) * unit.kelvin
+            if velocity_seed is None:
+                sim.context.setVelocitiesToTemperature(temperature)
+            else:
+                sim.context.setVelocitiesToTemperature(temperature, int(velocity_seed))
+        return {"coords": str(coords), "kind": "pdb", "velocities": "drawn from Maxwell-Boltzmann",
+                "velocity_seed": velocity_seed}
 
     state = XmlSerializer.deserialize(coords.read_text(encoding="utf-8"))
     sim.context.setPeriodicBoxVectors(*state.getPeriodicBoxVectors())
     sim.context.setPositions(state.getPositions())
+    used_seed = None
     try:
         sim.context.setVelocities(state.getVelocities())
         vel = "carried over from the state"
     except Exception:
-        sim.context.setVelocitiesToTemperature(sim.integrator.getTemperature())
-        vel = "state carried none; drawn from Maxwell-Boltzmann"
-    return {"coords": str(coords), "kind": "state-xml", "velocities": vel}
+        # The state has no velocities. Drawing them here is only correct for a stage that is about
+        # to integrate: a minimisation needs none, and velocities created before minimisation are
+        # actively harmful. They are constraint-projected for the pre-minimisation geometry, and
+        # minimisation then moves every atom, so by the time the next stage integrates they violate
+        # the constraints badly enough to produce NaN on the first step. Measured on the alanine
+        # OPC box: inheriting such velocities is an immediate NaN, a fresh draw is stable.
+        if not require_velocities:
+            vel = "state carried none; none drawn (this stage does not integrate)"
+        elif velocity_seed is None:
+            sim.context.setVelocitiesToTemperature(sim.integrator.getTemperature())
+            vel = "state carried none; drawn from Maxwell-Boltzmann"
+        else:
+            used_seed = int(velocity_seed)
+            sim.context.setVelocitiesToTemperature(sim.integrator.getTemperature(), used_seed)
+            vel = "state carried none; drawn from Maxwell-Boltzmann"
+    return {"coords": str(coords), "kind": "state-xml", "velocities": vel,
+            "velocity_seed": used_seed}
 
 
 def minimize_equilibrate(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,

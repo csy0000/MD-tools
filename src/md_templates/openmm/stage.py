@@ -207,6 +207,16 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     else:
         restrained_atoms = []
 
+    # Every seed this stage uses, derived from the master seed by the shared algorithm and carried
+    # in the stage configuration. Nothing here invents a number: an integrator seed compiled into
+    # the source made two scientifically different runs share a random stream.
+    stage_seeds = payload.get("seeds") or {}
+    if not stage_seeds:
+        raise StageError(
+            f"{stage}.json carries no seeds. Regenerate the project with MD_input_gen.py: seeds are "
+            "resolved once, at generation, and recorded -- the stage runner does not invent them."
+        )
+
     barostat_index = None
     if "barostat" in payload:
         from openmm import MonteCarloBarostat
@@ -214,10 +224,17 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
         pressure = parse_quantity(payload["barostat"]["pressure"], dimension="pressure")
         barostat = MonteCarloBarostat(pressure.value * unit.bar,
                                       cfg["integrator"]["temperature_k"] * unit.kelvin, 25)
+        barostat.setRandomNumberSeed(int(stage_seeds["barostat"]))
         barostat_index = system.addForce(barostat)
 
-    sim = _make_simulation(pdb.topology, system, cfg, seed=20260820)
-    _apply_coords(sim, here / payload["input"]["state"])
+    sim = _make_simulation(pdb.topology, system, cfg, seed=int(stage_seeds["integrator"]))
+    # Velocities are initialised ONCE, on entering dynamics from a state that carries none -- in
+    # practice NVT, after minimisation. Every later stage inherits them. Re-drawing at each stage
+    # discards the equilibration that stage just paid for and hides it behind a plausible-looking
+    # temperature.
+    coords_origin = _apply_coords(sim, here / payload["input"]["state"],
+                                  require_velocities=(stage != "min"),
+                                  velocity_seed=int(stage_seeds["velocity"]))
 
     if restraint_index is not None:
         # kcal/mol/A^2 -> kJ/mol/nm^2
@@ -228,7 +245,13 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     # whether the volume actually moved is a sampling outcome: a MonteCarloBarostat can reject every
     # move in a short stage, so an unchanged box is not evidence that the barostat was missing.
     results: dict = {"stage": stage, "n_restrained_atoms": len(restrained_atoms),
-                     "barostat": (payload.get("barostat") or {}).get("type")}
+                     "barostat": (payload.get("barostat") or {}).get("type"),
+                     "seeds": dict(stage_seeds),
+                     "velocities": ("not required" if stage == "min"
+                                    else "initialized"
+                                    if coords_origin.get("velocity_seed") is not None
+                                    else "inherited"),
+                     "velocity_seed": coords_origin.get("velocity_seed")}
     energy_before = sim.context.getState(getEnergy=True).getPotentialEnergy()
     results["potential_before_kj_mol"] = energy_before.value_in_unit(unit.kilojoule_per_mole)
 
@@ -238,12 +261,13 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     else:
         steps = int(payload["steps"])
         if steps > 0:
-            sim.context.setVelocitiesToTemperature(
-                cfg["integrator"]["temperature_k"] * unit.kelvin, 20260820)
             sim.step(steps)
         results["steps"] = steps
 
-    state = sim.context.getState(getPositions=True, getVelocities=True, getEnergy=True,
+    # Minimisation writes NO velocities. That absence is the handshake: the first dynamics stage
+    # sees a state without them and initialises once, and every stage after that inherits. Writing
+    # zeros instead would look like inherited velocities at 0 K and never initialise.
+    state = sim.context.getState(getPositions=True, getVelocities=(stage != "min"), getEnergy=True,
                                  enforcePeriodicBox=True)
     results["potential_after_kj_mol"] = state.getPotentialEnergy().value_in_unit(
         unit.kilojoule_per_mole)
@@ -394,6 +418,23 @@ def _execute_rest2(here: Path, payload: dict, devices: str | None) -> int:
     return code
 
 
+def _require_master_seed(cfg: dict, runtime: dict) -> int:
+    """The master seed the project actually resolved, or a refusal.
+
+    Defaulting here would write a manifest that names a seed nothing in the run ever used, which is
+    worse than failing: the manifest is what a reader trusts to reproduce the run.
+    """
+    seed = (cfg.get("run") or {}).get("seed")
+    if seed is None:
+        seed = ((runtime.get("randomness") or {}).get("master_seed"))
+    if seed is None:
+        raise StageError(
+            "this project records no master seed, so the REST2 experiment manifest cannot state "
+            "one. Regenerate it with MD_input_gen.py."
+        )
+    return int(seed)
+
+
 def _write_experiment_yaml(path: Path, cfg: dict, runtime: dict) -> None:
     """The package's legacy experiment manifest, projected from the resolved MD configuration."""
     import yaml
@@ -413,7 +454,9 @@ def _write_experiment_yaml(path: Path, cfg: dict, runtime: dict) -> None:
     doc = {
         "schema_version": 2,
         "experiment_id": "staged_rest2",
-        "master_seed": cfg["run"].get("seed", 20260820),
+        # The master seed of the run, never a literal: a default compiled in here would make an
+        # experiment manifest claim a seed the project never resolved.
+        "master_seed": int(_require_master_seed(cfg, runtime)),
         "ladder_status": "unvalidated",
         "platform": {
             "name": cfg["production"]["platform"],

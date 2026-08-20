@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import subprocess
 import sys
 from pathlib import Path
@@ -763,6 +764,131 @@ def test_rest2_refuses_to_start_without_its_predecessors_endpoint(executed_proje
     payload = json.loads((here / "REST2_1.json").read_text())
     with pytest.raises(stage_mod.StageError, match="does not exist"):
         stage_mod._package_bundle_for_rest2(here, payload)
+
+
+# ---------------------------------------------------------------------------------------------
+# seeds and velocity continuity
+# ---------------------------------------------------------------------------------------------
+
+def test_no_seed_literal_survives_in_the_package():
+    """A seed compiled into the source makes two scientifically different runs share a stream."""
+    import md_templates.openmm as pkg
+
+    offenders = []
+    for path in pathlib.Path(pkg.__file__).parent.rglob("*.py"):
+        if path.name == "seeds.py":
+            continue                      # documents the literal it replaced
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if "20260820" in line and not line.lstrip().startswith("#"):
+                offenders.append(f"{path.name}:{number}")
+    assert not offenders, f"hard-coded seed literal still reachable: {offenders}"
+
+
+def test_seed_derivation_is_deterministic_nonzero_and_distinct():
+    from md_templates.openmm.seeds import derive_seed, seed_map, stage_purpose
+
+    purposes = [stage_purpose(s, r) for s in ("min", "eq_nvt", "cMD_1")
+                for r in ("integrator", "barostat", "velocity")]
+    first = seed_map(4242, purposes)
+    second = seed_map(4242, purposes)
+    assert first == second, "the same master seed must reproduce the same map"
+    assert len(set(first["seeds"].values())) == len(purposes), "seeds must be distinct"
+    assert all(0 < v < 2 ** 31 for v in first["seeds"].values()), "must be nonzero and 32-bit safe"
+    assert first["derivation_version"] >= 1 and first["derivation"]
+
+    # neighbouring master seeds must not produce overlapping sets; `master + offset` did
+    a = set(seed_map(1000, purposes)["seeds"].values())
+    b = set(seed_map(1001, purposes)["seeds"].values())
+    assert not (a & b)
+
+
+def test_seed_derivation_does_not_depend_on_python_hash_randomisation():
+    """PEP 456 randomises `hash()` per process, so a seed built on it differs run to run."""
+    import subprocess
+    import sys
+
+    code = ("import sys; sys.path.insert(0, %r);"
+            "from md_templates.openmm.seeds import derive_seed;"
+            "print(derive_seed(7, 'stage/eq_nvt/integrator'))" % str(REPO_ROOT / "src"))
+    seen = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                           env={**os.environ, "PYTHONHASHSEED": str(salt)}).stdout.strip()
+            for salt in (0, 1, 12345)}
+    assert len(seen) == 1, f"seed changed with PYTHONHASHSEED: {seen}"
+
+
+@pytest.mark.slow
+def test_the_generated_project_carries_a_seed_map_not_a_literal(generated_project):
+    from md_templates.openmm.seeds import derive_seed
+
+    manifest = json.loads((generated_project / "run_manifest.json").read_text())
+    randomness = manifest["randomness"]
+    master = randomness["master_seed"]
+    assert randomness["derivation"] and randomness["derivation_version"] >= 1
+    assert randomness["source"] in ("md_config.randomness.master_seed", "default")
+
+    # every recorded seed must be recomputable from the master seed -- a bare list of integers
+    # cannot be checked, and an unverifiable seed record is not provenance
+    for purpose, seed in randomness["seeds"].items():
+        assert seed == derive_seed(master, purpose), purpose
+
+    for stage in ("min", "eq_nvt", "cMD_1"):
+        payload = json.loads((generated_project / stage / f"{stage}.json").read_text())
+        assert set(payload["seeds"]) == {"integrator", "barostat", "velocity"}
+        assert payload["seeds"]["integrator"] == derive_seed(master, f"stage/{stage}/integrator")
+
+
+@pytest.mark.slow
+def test_a_stage_refuses_to_invent_a_seed(executed_project, tmp_path):
+    """If the configuration carries no seeds the stage must stop, not choose one."""
+    from md_templates.openmm import stage as stage_mod
+
+    payload = json.loads((executed_project / "cMD_1" / "cMD_1.json").read_text())
+    payload.pop("seeds")
+    path = tmp_path / "cMD_1.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(stage_mod.StageError, match="no seeds"):
+        stage_mod.execute_stage(executed_project / "cMD_1" / "cMD_1.json", payload)
+
+
+@pytest.mark.slow
+def test_velocities_are_initialised_once_and_inherited_afterwards(executed_project):
+    """The defect this replaces: every dynamic stage re-drew velocities from Maxwell-Boltzmann.
+
+    Re-drawing discards the equilibration the previous stage just paid for and hides it behind a
+    plausible-looking temperature, so nothing downstream looks wrong.
+    """
+    results = {s: json.loads((executed_project / s / f"{s}_results.json").read_text())
+               for s in ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1")}
+
+    assert results["min"]["velocities"] == "not required", "minimisation does not integrate"
+    assert results["eq_nvt"]["velocities"] == "initialized", "the first dynamics stage draws them"
+    assert results["eq_nvt"]["velocity_seed"] is not None, "and the draw must be seeded"
+    for stage in ("eq_npt_1", "eq_npt_2", "cMD_1"):
+        assert results[stage]["velocities"] == "inherited", stage
+        assert results[stage]["velocity_seed"] is None, stage
+
+    initialised = [s for s, r in results.items() if r["velocities"] == "initialized"]
+    assert initialised == ["eq_nvt"], f"velocities must be created exactly once, got {initialised}"
+
+
+@pytest.mark.slow
+def test_minimisation_hands_on_a_state_without_velocities(executed_project):
+    """The absence IS the handshake, and writing zeros instead would break it.
+
+    Velocities created before minimisation are constraint-projected for the pre-minimisation
+    geometry; minimisation then moves every atom, so the next stage integrates from velocities that
+    violate the constraints. Measured on the alanine OPC box, that is an immediate NaN.
+    """
+    from openmm import XmlSerializer
+
+    state = XmlSerializer.deserialize(
+        (executed_project / "min" / "min_final_state.xml").read_text())
+    with pytest.raises(Exception):
+        state.getVelocities()
+
+    nvt = XmlSerializer.deserialize(
+        (executed_project / "eq_nvt" / "eq_nvt_final_state.xml").read_text())
+    assert nvt.getVelocities() is not None, "a dynamics stage must pass velocities on"
 
 
 # ---------------------------------------------------------------------------------------------

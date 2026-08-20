@@ -88,12 +88,20 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
     cfg = copy.deepcopy(DEFAULTS)
 
     # Conformer generation needs an explicit seed. The package DEFAULTS leave it None because the
-    # canonical pipeline fills it from the randomness block; this front end has no such block, so
-    # it sets one deterministically. Without it the SMILES route dies on int(None) inside ETKDG --
-    # a failure the dry-run path cannot reach, since it never builds anything.
-    seed = int((config.get("randomness") or {}).get("structure_seed", 20260820))
+    # canonical pipeline fills it from the randomness block; this front end has no such block, so it
+    # derives one. Without a seed the SMILES route dies on int(None) inside ETKDG -- a failure the
+    # dry-run path cannot reach, since it never builds anything.
+    #
+    # Derived rather than hard-coded: the conformer seed decides which starting structure the whole
+    # bundle is built around, so it belongs to the run's seed map like every other stream.
+    from .seeds import DEFAULT_MASTER_SEED, derive_seed
+
+    randomness = config.get("randomness") or {}
+    master = int(randomness.get("master_seed", DEFAULT_MASTER_SEED))
+    explicit = randomness.get("structure_seed")
+    seed = int(explicit) if explicit is not None else derive_seed(master, "structure/conformer")
     cfg["structure"]["etkdg"]["seed"] = seed
-    cfg["run"]["seed"] = seed
+    cfg["run"]["seed"] = master
     for stage in ("equilibration",):
         if stage in cfg and isinstance(cfg[stage], dict):
             cfg[stage].setdefault("seed", seed)

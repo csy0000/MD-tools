@@ -50,6 +50,11 @@ RUN_MANIFEST_SCHEMA_VERSION = 1
 #: Collapsing them into one stage means either releasing the restraint while the density is still
 #: settling, or entering production with the solute still held. Both are the kind of error that
 #: produces a run that completes and is wrong.
+#: The independent random streams a single stage owns. Separate seeds because an integrator and a
+#: barostat sharing one would be correlated in a way nobody would think to look for, and the
+#: velocity draw must be reproducible on its own so "initialised once" is checkable.
+_STAGE_SEED_ROLES = ("integrator", "barostat", "velocity")
+
 STAGE_ORDER = ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1", "REST2_1")
 
 #: Stages that carry the positional restraint on the solute. `eq_npt_2` deliberately does not.
@@ -378,6 +383,7 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
     # directories that were never going to be written.
     from .destination import (OVERWRITE_GENERATED, check_destination, project_targets, publish,
                               resolve_mode)
+    from .seeds import DEFAULT_MASTER_SEED, seed_map, stage_purpose
     check_destination(outdir, project_targets(stages_to_generate),
                       overwrite=overwrite, what="project")
 
@@ -386,6 +392,17 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
     manifest["_bundle_dir"] = str(bundle_dir)
 
     resolution, forcefield = _resolved_spec(md_config, manifest)
+
+    # One master seed for the project, and every stream derived from it by the shared algorithm.
+    master_seed = int((md_config.get("randomness") or {}).get("master_seed", DEFAULT_MASTER_SEED))
+    seed_records = seed_map(
+        master_seed,
+        [stage_purpose(stage, role)
+         for stage in stages_to_generate for role in _STAGE_SEED_ROLES],
+    )
+    seed_records["source"] = ("md_config.randomness.master_seed"
+                              if (md_config.get("randomness") or {}).get("master_seed") is not None
+                              else "default")
     if resolve_mode(overwrite) == OVERWRITE_GENERATED:
         _refuse_keeping_results_from_another_protocol(outdir, resolution["hashes"])
     spec = resolution["spec"]
@@ -516,6 +533,10 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
             payload = {
                 "stage": stage,
                 "schema_version": RUN_MANIFEST_SCHEMA_VERSION,
+                # Resolved here, once, and carried with the stage. The runner reads these and
+                # derives nothing: a seed invented at execution time is a seed no record explains.
+                "seeds": {role: seed_records["seeds"][stage_purpose(stage, role)]
+                          for role in _STAGE_SEED_ROLES},
                 # every stage NAMES what it consumes and which stage produced it
                 "input": {
                     "system_xml": "../inputs/system.xml",
@@ -623,6 +644,7 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
             "value_sources": resolution["sources"],
             "generated_with": {"interpreter": interpreter,
                                "pythonpath": pythonpath or None},
+            "randomness": seed_records,
             "generated_not_executed": True,
             "completed_segments": 0,
             "lineage": inheritance,
