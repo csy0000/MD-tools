@@ -59,10 +59,9 @@ system: {system_id: ggg, route: smiles, smiles: "O=C1CNC(=O)CNC(=O)CN1"}
 protocol:
   production:
     method: rest2
-    duration_per_segment: 0.001 ns
     relaxation: 1 ps
     tau_ladder: {minimum: 0.0, maximum: 0.5, count: 3, interpolation: linear}
-    exchange: {number_of_exchanges_per_segment: 2}
+    exchange: {n_exchange_per_segment: 2, exchange_interval: 0.5 ps}
 execution: {platform: CPU}
 """
 
