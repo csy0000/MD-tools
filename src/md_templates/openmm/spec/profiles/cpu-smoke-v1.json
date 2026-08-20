@@ -1,6 +1,6 @@
 {
   "profile_id": "cpu-smoke-v1",
-  "profile_schema_version": 4,
+  "profile_schema_version": 5,
   "description": "Tiny CPU smoke: proves execution, no scientific meaning",
   "route": "smiles",
   "method": "rest2",
@@ -68,10 +68,6 @@
           "count": 3,
           "interpolation": "linear"
         },
-        "exchange": {
-          "n_exchange_per_segment": 2,
-          "exchange_interval": "0.5 ps"
-        },
         "omega_exclusion": {
           "enabled": true,
           "definition": "peptide_omega",
@@ -81,7 +77,11 @@
           "max_proline_ring_size": 7
         },
         "relaxation": "1 ps",
-        "seed": null
+        "seed": null,
+        "duration_per_segment": "1 ps",
+        "exchange": {
+          "number_of_exchanges_per_segment": 2
+        }
       }
     },
     "execution": {

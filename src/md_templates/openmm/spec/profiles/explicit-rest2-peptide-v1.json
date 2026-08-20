@@ -1,6 +1,6 @@
 {
   "profile_id": "explicit-rest2-peptide-v1",
-  "profile_schema_version": 4,
+  "profile_schema_version": 5,
   "description": "Standard explicit-water REST2, peptide/PDB route",
   "route": "pdb",
   "method": "rest2",
@@ -64,10 +64,6 @@
           "count": 10,
           "interpolation": "linear"
         },
-        "exchange": {
-          "n_exchange_per_segment": 200,
-          "exchange_interval": "10 ps"
-        },
         "omega_exclusion": {
           "enabled": true,
           "definition": "peptide_omega",
@@ -77,7 +73,11 @@
           "max_proline_ring_size": 7
         },
         "relaxation": "10 ps",
-        "seed": null
+        "seed": null,
+        "duration_per_segment": "2 ns",
+        "exchange": {
+          "number_of_exchanges_per_segment": 200
+        }
       }
     },
     "execution": {

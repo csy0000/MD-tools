@@ -61,7 +61,8 @@ protocol:
     method: rest2
     relaxation: 1 ps
     tau_ladder: {minimum: 0.0, maximum: 0.5, count: 3, interpolation: linear}
-    exchange: {n_exchange_per_segment: 2, exchange_interval: 0.5 ps}
+    duration_per_segment: 1 ps
+    exchange: {number_of_exchanges_per_segment: 2}
 execution: {platform: CPU}
 """
 

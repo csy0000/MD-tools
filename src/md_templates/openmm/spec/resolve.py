@@ -245,19 +245,30 @@ def _refuse_retired_chunk_inputs(document: dict) -> None:
         return
     found = [key for key in _RETIRED_PRODUCTION_KEYS if key in production]
 
-    # `duration_per_segment` is still the input for conventional MD, but for REST2 it is DERIVED
-    # from the exchange count and interval. Accepting it there would let one document state the
-    # same quantity twice and disagree with itself.
-    if production.get("method") == "rest2" and "duration_per_segment" in production:
-        raise ResolutionError(
-            "protocol.production.duration_per_segment is not an input for REST2: the segment "
-            "length is DERIVED as n_exchange_per_segment * exchange_interval, which is exact by "
-            "construction.\n"
-            "  Migration: delete it and state the schedule instead, for example\n"
-            "      \"exchange\": {\"n_exchange_per_segment\": 1000, \"exchange_interval\": \"5 ps\"}\n"
-            "  which is a 5 ns segment. Conventional MD (method: md) still takes "
-            "duration_per_segment directly."
-        )
+    # The exchange block is now a count only; the interval is derived from the segment duration.
+    # Both retired fields are named individually so the message can say what replaces each.
+    exchange = production.get("exchange")
+    if isinstance(exchange, dict):
+        retired_exchange = [k for k in ("n_exchange_per_segment", "exchange_interval")
+                            if k in exchange]
+        if retired_exchange:
+            raise ResolutionError(
+                "protocol.production.exchange states "
+                f"{', '.join(sorted(retired_exchange))}, which "
+                f"{'have' if len(retired_exchange) > 1 else 'has'} been REPLACED.\n"
+                "  A segment is now stated by its DURATION and the number of exchanges in it; the "
+                "interval is derived:\n"
+                "      steps_per_segment  = duration_per_segment / timestep\n"
+                "      steps_per_exchange = steps_per_segment / number_of_exchanges_per_segment\n"
+                "      exchange_interval  = steps_per_exchange * timestep\n"
+                "  Both divisions must be exact and are refused otherwise, never rounded.\n"
+                "  Migration: replace\n"
+                '      "exchange": {"n_exchange_per_segment": 1000, "exchange_interval": "5 ps"}\n'
+                "  with\n"
+                '      "duration_per_segment": "5 ns",\n'
+                '      "exchange": {"number_of_exchanges_per_segment": 1000}\n'
+                "  which is the same schedule: 1,250,000 steps at 4 fs, 1250 steps per round."
+            )
 
     if not found:
         return

@@ -113,19 +113,31 @@ def test_a_unitless_number_never_silently_acquires_a_unit():
 # 5-6: cross-field and method-specific validation
 # ---------------------------------------------------------------------------------------------
 
-def test_the_exchange_interval_must_be_whole_steps():
-    """The interval must be whole steps. The SEGMENT is a product, so it is exact by construction.
+def test_a_segment_that_does_not_divide_into_exchanges_is_refused():
+    """Both derivations are in integer step space and both refuse rather than round.
 
-    This is the whole point of stating a count and an interval instead of a duration and a count:
-    only one quantity can fail to divide, and it is the one a user chose directly.
+    A rounded exchange interval drifts the schedule out of alignment with the committed watermark
+    while the run still looks healthy, which is the failure mode worth refusing for.
     """
     doc = json.loads(json.dumps(MINIMAL))
     doc["protocol"]["production"] = {"method": "rest2",
                                      "tau_ladder": {"maximum": 0.5, "count": 2},
-                                     "exchange": {"n_exchange_per_segment": 4,
-                                                  "exchange_interval": "0.006 ps"},
+                                     "duration_per_segment": "0.024 ps",
+                                     "exchange": {"number_of_exchanges_per_segment": 4},
                                      "relaxation": "1 ps"}
-    # 6 fs is 1.5 steps at the profile's 4 fs timestep
+    # 0.024 ps is 6 steps at the profile's 4 fs timestep; 6 / 4 is not an integer
+    with pytest.raises(Exception, match="does not divide into"):
+        resolved(doc)
+
+
+def test_a_segment_that_is_not_whole_steps_is_refused():
+    """The first division has to be exact too."""
+    doc = json.loads(json.dumps(MINIMAL))
+    doc["protocol"]["production"] = {"method": "rest2",
+                                     "tau_ladder": {"maximum": 0.5, "count": 2},
+                                     "duration_per_segment": "0.006 ps",   # 1.5 steps at 4 fs
+                                     "exchange": {"number_of_exchanges_per_segment": 1},
+                                     "relaxation": "1 ps"}
     with pytest.raises(Exception, match="not a whole number of"):
         resolved(doc)
 
@@ -148,8 +160,8 @@ def test_rest2_rejects_md_only_settings():
     doc = json.loads(json.dumps(MINIMAL))
     doc["protocol"]["production"] = {"method": "rest2",
                                      "tau_ladder": {"maximum": 0.5, "count": 2},
-                                     "exchange": {"n_exchange_per_segment": 2,
-                                                  "exchange_interval": "0.5 ps"},
+                                     "duration_per_segment": "1 ps",
+                                     "exchange": {"number_of_exchanges_per_segment": 2},
                                      "relaxation": "1 ps", "scale_factor": 0.5}
     with pytest.raises(Exception, match="scale_factor"):
         resolved(doc)
@@ -159,7 +171,8 @@ def test_the_tau_ladder_must_start_at_the_cold_physical_rung():
     """tau must start at 0.0, which is s = 1: the unscaled, physical Hamiltonian."""
     doc = json.loads(json.dumps(MINIMAL))
     base = {"method": "rest2",
-            "exchange": {"n_exchange_per_segment": 2, "exchange_interval": "0.5 ps"},
+            "duration_per_segment": "1 ps",
+            "exchange": {"number_of_exchanges_per_segment": 2},
             "relaxation": "1 ps"}
     doc["protocol"]["production"] = dict(
         base, tau_ladder={"minimum": 0.1, "maximum": 0.5, "count": 3})
@@ -171,7 +184,8 @@ def test_the_tau_ladder_must_have_a_span():
     doc = json.loads(json.dumps(MINIMAL))
     doc["protocol"]["production"] = {
         "method": "rest2",
-        "exchange": {"n_exchange_per_segment": 2, "exchange_interval": "0.5 ps"},
+        "duration_per_segment": "1 ps",
+            "exchange": {"number_of_exchanges_per_segment": 2},
         "relaxation": "1 ps",
         "tau_ladder": {"minimum": 0.0, "maximum": 0.0, "count": 3}}
     with pytest.raises(Exception):
@@ -206,8 +220,8 @@ def test_an_explicitly_pinned_profile_is_used():
     doc = json.loads(json.dumps(MINIMAL))
     doc["protocol"]["production"] = {"method": "rest2",
                                      "tau_ladder": {"maximum": 0.5, "count": 3},
-                                     "exchange": {"n_exchange_per_segment": 2,
-                                                  "exchange_interval": "0.5 ps"},
+                                     "duration_per_segment": "1 ps",
+                                     "exchange": {"number_of_exchanges_per_segment": 2},
                                      "relaxation": "1 ps"}
     doc["profile"] = "cpu-smoke-v1"
     assert resolved(doc)["profile"]["profile_id"] == "cpu-smoke-v1"

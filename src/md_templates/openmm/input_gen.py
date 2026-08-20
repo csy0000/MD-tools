@@ -367,7 +367,7 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
                      inherit: Optional[str] = None, overwrite: bool = False,
                      dry_run: bool = False) -> dict:
     """Generate the staged project. Transactional; writes nothing on failure."""
-    from .segments import plan_segment_from_exchanges, reporting_interval_steps, steps_for_duration
+    from .segments import (plan_segment_from_duration_and_exchanges, reporting_interval_steps, steps_for_duration)
 
     inheritance = resolve_inheritance(inherit)
     skipped = set(inheritance.get("skipped_stages", [])) if inheritance else set()
@@ -432,16 +432,16 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
             timestep_source=dt.source, duration_label="equilibration.npt_free")
 
     if production.method == "rest2":
-        plan = plan_segment_from_exchanges(
-            production.exchange.n_exchange_per_segment,
-            production.exchange.exchange_interval.value, dt.value,
-            interval_source=production.exchange.exchange_interval.source,
+        plan = plan_segment_from_duration_and_exchanges(
+            production.duration_per_segment.value,
+            production.exchange.number_of_exchanges_per_segment, dt.value,
+            duration_source=production.duration_per_segment.source,
             timestep_source=dt.source)
         stage_steps["REST2_1"] = plan.steps_per_segment
         summary.append(
             f"REST2_1  {production.n_replicas} replicas, "
-            f"{production.exchange.n_exchange_per_segment} x "
-            f"{production.exchange.exchange_interval.source} = "
+            f"{production.duration_per_segment.source} / "
+            f"{production.exchange.number_of_exchanges_per_segment} exchanges = "
             f"{plan.steps_per_segment:,} steps per segment "
             f"({plan.steps_per_exchange:,} per exchange round)")
     else:
@@ -608,10 +608,11 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
                     },
                     "derived_scale_factors": production.scale_factors(),
                     "exchange": {
-                        "n_exchange_per_segment":
-                            production.exchange.n_exchange_per_segment,
-                        "exchange_interval":
-                            production.exchange.exchange_interval.source,
+                        "number_of_exchanges_per_segment":
+                            production.exchange.number_of_exchanges_per_segment,
+                        "duration_per_segment": production.duration_per_segment.source,
+                        "exchange_interval_derived_ps": plan.steps_per_exchange * dt.value,
+                        "steps_per_exchange": plan.steps_per_exchange,
                         "steps_per_exchange": plan.steps_per_exchange,
                     },
                     "enhanced_region": {"type": production.enhanced_region.type},
@@ -620,8 +621,9 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
                         "definition": production.omega_exclusion.definition,
                     },
                     "segment_note": (
-                        "duration_per_segment is DERIVED as n_exchange_per_segment x "
-                        "exchange_interval. How many segments to run is set by NUMBER_OF_SEGMENTS "
+                        "exchange_interval is DERIVED as duration_per_segment / "
+                        "number_of_exchanges_per_segment, exactly in steps. How many segments to "
+                        "run is set by NUMBER_OF_SEGMENTS "
                         "in run_all.sh, and completed segments are recorded in this run's manifest."
                     ),
                 }

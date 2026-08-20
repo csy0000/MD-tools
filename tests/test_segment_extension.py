@@ -47,8 +47,8 @@ def _smoke_config() -> dict:
                                              "nvt": "2 ps", "npt": "2 ps", "npt_free": "2 ps"}
     document["protocol"]["production"]["tau_ladder"]["count"] = 3
     # 2 exchanges x 2 ps = a 4 ps segment, derived. duration_per_segment is not an input for REST2.
-    document["protocol"]["production"]["exchange"] = {"n_exchange_per_segment": 2,
-                                                      "exchange_interval": "2 ps"}
+    document["protocol"]["production"]["duration_per_segment"] = "4 ps"
+    document["protocol"]["production"]["exchange"] = {"number_of_exchanges_per_segment": 2}
     document["build"]["solvation"]["padding"] = "0.9 nm"
     document["build"]["nonbonded"]["cutoff"] = "0.7 nm"
     return document

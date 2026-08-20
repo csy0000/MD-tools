@@ -25,13 +25,13 @@
         "count": 10,
         "interpolation": "linear"
       },
-      "exchange": {
-        "n_exchange_per_segment": 1000,
-        "exchange_interval": "5 ps"
-      },
       "omega_exclusion": {
         "enabled": true,
         "definition": "peptide_omega"
+      },
+      "duration_per_segment": "5 ns",
+      "exchange": {
+        "number_of_exchanges_per_segment": 1000
       }
     }
   },

@@ -112,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     from md_templates.openmm import input_gen
     from md_templates.openmm.destination import (OVERWRITE_ALL, OVERWRITE_GENERATED,
                                                  OVERWRITE_NONE, DestinationExists)
+    from md_templates.openmm.spec.resolve import ResolutionError
 
     overwrite = (OVERWRITE_ALL if args.overwrite
                  else OVERWRITE_GENERATED if args.overwrite_generated
@@ -127,6 +128,9 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
         )
     except DestinationExists as error:
+        raise InputError(str(error))
+    except ResolutionError as error:
+        # A configuration that names retired fields gets its migration message, not a traceback.
         raise InputError(str(error))
 
     print(f"  system      : {result['system_id']}  ({result['n_solute_atoms']} solute atoms)")

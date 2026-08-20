@@ -1,6 +1,6 @@
 {
   "profile_id": "explicit-md-ligand-v1",
-  "profile_schema_version": 4,
+  "profile_schema_version": 5,
   "description": "Standard explicit-water conventional MD, ligand/SMILES route",
   "route": "smiles",
   "method": "md",

@@ -89,10 +89,15 @@ def validate_stage(config_path: Path) -> dict:
         dt = parse_quantity(timestep, dimension="time")
         rest2 = payload.get("rest2")
         if rest2:
-            interval = parse_quantity(rest2["exchange"]["exchange_interval"], dimension="time")
-            steps_for_duration(interval.value, dt.value, duration_source=interval.source,
-                               timestep_source=dt.source,
-                               duration_label="rest2.exchange.exchange_interval")
+            # The interval is derived at generation, so what is checked here is that the recorded
+            # derivation is still a whole number of steps against this stage's timestep.
+            exchange = rest2["exchange"]
+            steps_for_duration(
+                float(exchange["exchange_interval_derived_ps"]), dt.value,
+                duration_source=(f"derived from {exchange['duration_per_segment']} / "
+                                 f"{exchange['number_of_exchanges_per_segment']} exchanges"),
+                timestep_source=dt.source,
+                duration_label="rest2.exchange.exchange_interval_derived_ps")
 
     restraint = payload.get("restraint")
     if restraint is not None:

@@ -34,7 +34,7 @@ from .units import Quantity, parse_quantity
 #: Independent schema versions. Bumping one must not force the others to move.
 SYSTEM_SCHEMA_VERSION = 1
 BUILD_SCHEMA_VERSION = 1
-PROTOCOL_SCHEMA_VERSION = 4
+PROTOCOL_SCHEMA_VERSION = 5
 EXECUTION_SCHEMA_VERSION = 1
 
 
@@ -254,27 +254,25 @@ class TauLadderSpec(Strict):
 
 
 class ExchangeSpec(Strict):
-    """The exchange schedule, stated as a count and an interval.
+    """How many exchange attempts a segment contains.
 
-    The segment length is DERIVED from these two by multiplication:
+    Only the count. The interval is DERIVED from it and the segment duration, in integer step
+    space::
 
-        duration_per_segment = n_exchange_per_segment * exchange_interval
+        steps_per_segment  = production.duration_per_segment / integrator.timestep
+        steps_per_exchange = steps_per_segment / number_of_exchanges_per_segment
+        exchange_interval  = steps_per_exchange * integrator.timestep
 
-    That ordering matters. Stating a segment duration and an exchange count instead would make the
-    interval a quotient, and a duration that did not divide exactly would have to be refused or --
-    worse -- rounded, drifting the exchange schedule out of alignment with the committed watermark.
-    A product is always exact, so a configuration that parses is a configuration that runs.
+    Both divisions must be exact and are refused otherwise, never rounded: an exchange interval off
+    by a step drifts the schedule out of alignment with the committed watermark while the run still
+    looks healthy.
 
-    1000 exchanges at a 5 ps interval is a 5 ns segment, and the file says so directly rather than
-    leaving a reader to divide.
+    A segment duration and an exchange count are the two numbers a reader actually chooses -- how
+    long to run and how often to attempt a swap. The interval is a consequence, so it is derived
+    rather than stated, and cannot disagree with them.
     """
 
-    n_exchange_per_segment: int = Field(ge=1)
-    exchange_interval: Time
-
-    def segment_duration_ps(self) -> float:
-        """The derived segment length. Exact by construction: a product, never a quotient."""
-        return self.n_exchange_per_segment * self.exchange_interval.value
+    number_of_exchanges_per_segment: int = Field(ge=1)
 
 
 class SelectionSpec(Strict):
@@ -329,12 +327,14 @@ class OmegaExclusionSpec(Strict):
 class REST2Production(Strict):
     """REST2 production.
 
-    Note what is absent: `duration_per_segment`. For REST2 the segment length is not an input, it
-    is `n_exchange_per_segment * exchange_interval`. Accepting it as well would let a document
-    state the same quantity twice and disagree with itself.
+    `duration_per_segment` is the length of ONE segment, exactly as for conventional MD. How many
+    segments to run is an execution choice made by the driver script and never appears here: a
+    segment count in the scientific input would make a longer run look like a different
+    calculation, because it would move the configuration hash.
     """
 
     method: Literal["rest2"] = "rest2"
+    duration_per_segment: Time
     enhanced_region: SelectionSpec = Field(default_factory=SelectionSpec)
     tau_ladder: TauLadderSpec
     exchange: ExchangeSpec
@@ -345,14 +345,6 @@ class REST2Production(Strict):
     @property
     def n_replicas(self) -> int:
         return self.tau_ladder.count
-
-    @property
-    def duration_per_segment(self) -> Quantity:
-        """Derived, never stated. Exact by construction."""
-        total_ps = self.exchange.segment_duration_ps()
-        return Quantity(value=total_ps, unit="ps", dimension="time",
-                        source=(f"derived: {self.exchange.n_exchange_per_segment} x "
-                                f"{self.exchange.exchange_interval.source}"))
 
     def scale_factors(self) -> list[float]:
         return self.tau_ladder.scale_factors()
@@ -374,17 +366,16 @@ class ProtocolSpec(Strict):
         Both are delegated to `md_templates.openmm.segments`, which refuses rather than rounds, so
         the CLI, the runner and the tests share one definition of "exact".
         """
-        from ..segments import plan_segment, plan_segment_from_exchanges
+        from ..segments import plan_segment, plan_segment_from_duration_and_exchanges
 
         production = self.production
         if isinstance(production, REST2Production):
-            # The segment is a PRODUCT of the exchange count and interval, so its length is exact
-            # by construction. What still has to divide exactly is the interval into steps.
-            plan_segment_from_exchanges(
-                production.exchange.n_exchange_per_segment,
-                production.exchange.exchange_interval.value,
+            # Two divisions, both in integer step space, both refused rather than rounded.
+            plan_segment_from_duration_and_exchanges(
+                production.duration_per_segment.value,
+                production.exchange.number_of_exchanges_per_segment,
                 self.integrator.timestep.value,
-                interval_source=production.exchange.exchange_interval.source,
+                duration_source=production.duration_per_segment.source,
                 timestep_source=self.integrator.timestep.source,
             )
         else:

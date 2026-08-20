@@ -136,7 +136,39 @@ is a claim about evidence rather than a simulation setting.
 Rejected at every nesting level, with the complete dotted path. A file that silently ignores a
 misspelled key runs a calculation its author did not choose and believes they did.
 
-Method models are discriminated: `md` rejects `exchange_interval`, `rest2` rejects `scale_factor`.
+Method models are discriminated: `md` rejects `exchange`, `rest2` rejects `scale_factor`.
+
+### A REST2 segment: what is stated and what is derived
+
+A segment is stated by its **duration** and the **number of exchanges** in it. The interval is a
+consequence of those two and is derived, in integer step space:
+
+```
+steps_per_segment  = production.duration_per_segment / integrator.timestep
+steps_per_exchange = steps_per_segment / exchange.number_of_exchanges_per_segment
+exchange_interval  = steps_per_exchange * integrator.timestep
+```
+
+```json
+"production": {
+  "method": "rest2",
+  "duration_per_segment": "5 ns",
+  "exchange": {"number_of_exchanges_per_segment": 1000}
+}
+```
+
+At a 4 fs timestep that is 1,250,000 steps per segment and 1,250 per exchange round -- a 5 ps
+interval. Both divisions must be exact and are **refused rather than rounded**: an exchange interval
+off by a step drifts the schedule out of alignment with the committed watermark while the run still
+looks healthy. A count that does not divide is rejected with nearby counts that do.
+
+`duration_per_segment` is the length of ONE segment. How many segments to run is an execution choice
+made by the driver script (`NUMBER_OF_SEGMENTS`), and how many were committed is runtime state in
+the run manifest. A segment count in the scientific input would move the configuration hash and make
+a longer run look like a different calculation.
+
+The earlier form -- `n_exchange_per_segment` plus `exchange_interval` -- is retired and refused with
+a migration message naming both replacements.
 
 ## The legacy front end
 

@@ -10,8 +10,8 @@
     },
     "profile": {
       "profile_id": "explicit-md-ligand-v1",
-      "profile_schema_version": 4,
-      "sha256": "f58d5a57da490c08baf64c4be8280ec7bbb294f675e41ff51c83f9c5738dbb25"
+      "profile_schema_version": 5,
+      "sha256": "ed59b5e88cc6b9227494922b38487f43af3c36ace2c7bfc1c06c17912eb57f6b"
     },
     "resolved": {
       "constraints": "HBonds",
@@ -38,8 +38,8 @@
     },
     "profile": {
       "profile_id": "explicit-md-peptide-v1",
-      "profile_schema_version": 4,
-      "sha256": "c617b3892d231d6866336e2ae58fc553f80210176993c50c12cdd9aa14db5cdc"
+      "profile_schema_version": 5,
+      "sha256": "7fa504a5c80b9d28f38efba54880987d2e7163f2340cfc3923a1e04f6c42fd96"
     },
     "resolved": {
       "constraints": "HBonds",
@@ -56,18 +56,18 @@
     }
   },
   "rest2_ligand_smiles": {
-    "canonical_json_sha256": "edc308ccce30b09c5635ce032a68325a875b3b671d5688a519beb8f290c61d14",
+    "canonical_json_sha256": "6e816aaec5e216eae441cc6d49aea1ba0459daca254feada9f5c8aac88dd45e3",
     "hashes": {
       "execution_sha256": "6f0a213589d37798f9abfdde3945429663b85a621002f6fe58dbe7628f4f6138",
       "prepared_state_sha256": "efef251935086250d17d97acdb8a91d6eaa31c2cad85ba0b8c3a4315ba28294f",
-      "protocol_at_prepare_sha256": "8ea69c633e87393b7842fc95611e94ef8b3ec46ee12be64f55053c45f6f163be",
-      "protocol_sha256": "5fa63a842b32ae021fc21d7aab898a4cc9011f94b4d2ce865e6bddbbbf5e340a",
+      "protocol_at_prepare_sha256": "9ca5ec5a8c8a2677a7e56990d0b619f491741cf40a4379995345e7ab3063a710",
+      "protocol_sha256": "b9fa7429506efba607e8fa7ad710b537265f93c0d5f14b64ed974bdf36699ce8",
       "system_build_sha256": "7f242b94a56a8047054ebbac412dd56bd0b3567d96288c14b0ca8820a49ab393"
     },
     "profile": {
       "profile_id": "explicit-rest2-ligand-v1",
-      "profile_schema_version": 4,
-      "sha256": "1ee94bfa954452d7a8608545ea22d822bc04572446bfc95ca96931aa18b5109b"
+      "profile_schema_version": 5,
+      "sha256": "3d569d5e6e94ed9c8e82ffb1e8919f907df94319faf8406d0c0bc9b731ebab86"
     },
     "resolved": {
       "constraints": "HBonds",
@@ -88,7 +88,7 @@
         0.25
       ],
       "production.duration_per_segment_ps": 2000.0,
-      "production.duration_per_segment_source": "derived: 200 x 10 ps",
+      "production.duration_per_segment_source": "2 ns",
       "production.method": "rest2",
       "production.tau_values": [
         0.0,
@@ -106,18 +106,18 @@
     }
   },
   "rest2_peptide_pdb": {
-    "canonical_json_sha256": "a6f88ae22239969bac5f8388a077b1d76f1c3a8e0cd99c7d020593af013c3308",
+    "canonical_json_sha256": "4ad78249f792511f92dad55b4829e2abf13ff24aab4d509508dd4c07f5ad5c84",
     "hashes": {
       "execution_sha256": "6f0a213589d37798f9abfdde3945429663b85a621002f6fe58dbe7628f4f6138",
       "prepared_state_sha256": "4a2a641a79228f39346aed063c8d3d85a1702f92c306dec3483c7d79812d7f2f",
-      "protocol_at_prepare_sha256": "8ea69c633e87393b7842fc95611e94ef8b3ec46ee12be64f55053c45f6f163be",
-      "protocol_sha256": "5fa63a842b32ae021fc21d7aab898a4cc9011f94b4d2ce865e6bddbbbf5e340a",
+      "protocol_at_prepare_sha256": "9ca5ec5a8c8a2677a7e56990d0b619f491741cf40a4379995345e7ab3063a710",
+      "protocol_sha256": "b9fa7429506efba607e8fa7ad710b537265f93c0d5f14b64ed974bdf36699ce8",
       "system_build_sha256": "39252363b5b5a289060b4fd273f25a102182e0396732435caecb3841b8281bbf"
     },
     "profile": {
       "profile_id": "explicit-rest2-peptide-v1",
-      "profile_schema_version": 4,
-      "sha256": "6630aa41fb9b23f352baf00518c5125e9a30af270f4330f70fd3e2244eea8c8d"
+      "profile_schema_version": 5,
+      "sha256": "e76faa83d29d323760186c71dca974fc7310254ccf9f0e20db68f88c1923ba81"
     },
     "resolved": {
       "constraints": "HBonds",
@@ -138,7 +138,7 @@
         0.25
       ],
       "production.duration_per_segment_ps": 2000.0,
-      "production.duration_per_segment_source": "derived: 200 x 10 ps",
+      "production.duration_per_segment_source": "2 ns",
       "production.method": "rest2",
       "production.tau_values": [
         0.0,

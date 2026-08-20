@@ -66,13 +66,18 @@ The JSON declares the length of **one** segment. It does not say how many to run
 driver script's job, and how many actually committed is recorded in the run manifest.
 
 ```
-n_exchange_per_segment          1000
-exchange_interval               5 ps
+duration_per_segment            5 ns             stated
+number_of_exchanges_per_segment 1000             stated
 timestep                        4 fs
-steps per exchange round        1,250            (5 ps / 4 fs, must divide exactly)
-steps per segment               1,250,000        (= 1000 x 1,250, a PRODUCT)
-duration_per_segment            5 ns             DERIVED, not stated
+steps per segment               1,250,000        (5 ns / 4 fs, must divide exactly)
+steps per exchange round        1,250            (1,250,000 / 1000, must divide exactly)
+exchange_interval               5 ps             DERIVED, not stated
 ```
+
+Both divisions happen in integer step space and both are refused rather than rounded: an exchange
+interval off by a step drifts the schedule out of alignment with the committed watermark while the
+run still looks healthy. An exchange count that does not divide is rejected with nearby counts that
+do.
 
 The segment length is **derived by multiplication**, never stated. That is the point: a product is
 exact, so the only quantity that can fail to divide is the interval itself -- which is the one you

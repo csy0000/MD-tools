@@ -50,8 +50,8 @@ MD_CONFIG = {
         "production": {"method": "rest2", "enhanced_region": {"type": "solute"},
                        "tau_ladder": {"minimum": 0.0, "maximum": 0.5, "count": 6,
                                       "interpolation": "linear"},
-                       "exchange": {"n_exchange_per_segment": 1000,
-                                    "exchange_interval": "5 ps"},
+                       "duration_per_segment": "5 ns",
+                       "exchange": {"number_of_exchanges_per_segment": 1000},
                        "omega_exclusion": {"enabled": True, "definition": "peptide_omega"}},
     },
     "execution": {"platform": "CUDA", "precision": "mixed",
@@ -574,8 +574,8 @@ def _cpu_md_config() -> dict:
     config["protocol"]["equilibration"].update(
         {"minimize_max_iterations": 500, "nvt": "0.4 ps", "npt": "0.4 ps", "npt_free": "0.4 ps"})
     config["conventional_md"]["duration"] = "0.4 ps"
-    config["protocol"]["production"]["exchange"] = {"n_exchange_per_segment": 2,
-                                                    "exchange_interval": "0.2 ps"}
+    config["protocol"]["production"]["duration_per_segment"] = "0.4 ps"
+    config["protocol"]["production"]["exchange"] = {"number_of_exchanges_per_segment": 2}
     return config
 
 
@@ -1261,7 +1261,7 @@ def test_overwrite_generated_refuses_when_the_protocol_changed(prepared_system, 
     assert same.returncode == 0, same.stdout + same.stderr
 
     changed = json.loads(json.dumps(MD_CONFIG))
-    changed["protocol"]["production"]["exchange"]["n_exchange_per_segment"] += 7
+    changed["protocol"]["production"]["exchange"]["number_of_exchanges_per_segment"] += 7
     other = tmp_path / "other.json"
     other.write_text(json.dumps(changed))
     result = _run(INPUT_GEN, "--system", str(prepared_system / "system_manifest.json"),

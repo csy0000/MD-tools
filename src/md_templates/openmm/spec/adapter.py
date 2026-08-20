@@ -131,11 +131,11 @@ def spec_to_runtime_cfg(spec: SimulationSpec, *, base: dict | None = None) -> di
         # tau is the source parameter; `s` reaches the System builder unchanged. The exchange
         # interval is DERIVED from the segment length and the exchange count rather than stated a
         # second time, so the two can never disagree.
-        plan = segments.plan_segment_from_exchanges(
-            prod.exchange.n_exchange_per_segment,
-            prod.exchange.exchange_interval.value,
+        plan = segments.plan_segment_from_duration_and_exchanges(
+            prod.duration_per_segment.value,
+            prod.exchange.number_of_exchanges_per_segment,
             integ.timestep.value,
-            interval_source=prod.exchange.exchange_interval.source,
+            duration_source=prod.duration_per_segment.source,
             timestep_source=integ.timestep.source,
         )
         exchange_interval_ps = plan.steps_per_exchange * integ.timestep.value

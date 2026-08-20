@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("pydantic")
 yaml = pytest.importorskip("yaml")
 
-from md_templates.openmm.segments import (plan_segment_from_exchanges,
+from md_templates.openmm.segments import (plan_segment_from_duration_and_exchanges,
                                           reporting_interval_steps)  # noqa: E402
 from md_templates.openmm.spec import resolve  # noqa: E402
 
@@ -176,14 +176,14 @@ def test_the_equilibration_stages_are_whole_steps(path):
 
 @pytest.mark.parametrize("path", [ALANINE, RGDFV])
 def test_the_worked_exchange_contract_resolves_exactly(path):
-    """1000 exchanges x 5 ps at 4 fs -> 1,250 steps per round, 1,250,000 per segment."""
+    """5 ns over 1000 exchanges at 4 fs -> 1,250,000 steps per segment, 1,250 per round."""
     spec = _resolved(path)
     production = spec.protocol.production
-    plan = plan_segment_from_exchanges(
-        production.exchange.n_exchange_per_segment,
-        production.exchange.exchange_interval.value,
+    plan = plan_segment_from_duration_and_exchanges(
+        production.duration_per_segment.value,
+        production.exchange.number_of_exchanges_per_segment,
         spec.protocol.integrator.timestep.value,
-        interval_source=production.exchange.exchange_interval.source,
+        duration_source=production.duration_per_segment.source,
         timestep_source=spec.protocol.integrator.timestep.source,
     )
     assert plan.steps_per_exchange == 1_250
@@ -192,19 +192,40 @@ def test_the_worked_exchange_contract_resolves_exactly(path):
 
 
 @pytest.mark.parametrize("path", [ALANINE, RGDFV])
-def test_the_segment_length_is_derived_not_stated(path):
-    """A product, not a quotient: 1000 x 5 ps = 5 ns, exact by construction."""
-    production = _resolved(path).protocol.production
-    assert production.duration_per_segment.value == pytest.approx(5000.0)   # ps
-    assert "derived" in production.duration_per_segment.source
+def test_the_exchange_interval_is_derived_not_stated(path):
+    """The interval is a consequence of the two numbers a reader actually chooses."""
+    spec = _resolved(path)
+    production = spec.protocol.production
+    assert production.duration_per_segment.value == pytest.approx(5000.0)   # ps, stated
+    plan = plan_segment_from_duration_and_exchanges(
+        production.duration_per_segment.value,
+        production.exchange.number_of_exchanges_per_segment,
+        spec.protocol.integrator.timestep.value,
+        duration_source=production.duration_per_segment.source,
+        timestep_source=spec.protocol.integrator.timestep.source,
+    )
+    interval_ps = plan.steps_per_exchange * spec.protocol.integrator.timestep.value
+    assert interval_ps == pytest.approx(5.0), "1,250 steps at 4 fs is 5 ps"
+    assert not hasattr(production.exchange, "exchange_interval"), "must not be an input"
 
 
 @pytest.mark.parametrize("path", [ALANINE, RGDFV])
-def test_rest2_refuses_a_stated_segment_duration(path):
-    """Stating it as well would let one document say the same thing twice and disagree."""
+def test_rest2_refuses_the_retired_exchange_fields(path):
+    """The old form must fail with a migration message, not be silently reinterpreted."""
     document = json.loads(path.read_text())
-    document["protocol"]["production"]["duration_per_segment"] = "5 ns"
-    with pytest.raises(Exception, match="not an input for REST2"):
+    production = document["protocol"]["production"]
+    production.pop("duration_per_segment")
+    production["exchange"] = {"n_exchange_per_segment": 1000, "exchange_interval": "5 ps"}
+    with pytest.raises(Exception, match="number_of_exchanges_per_segment"):
+        resolve.resolve_spec(document)
+
+
+@pytest.mark.parametrize("path", [ALANINE, RGDFV])
+def test_a_segment_that_does_not_divide_into_exchanges_is_refused(path):
+    """Refused rather than rounded: a rounded interval drifts the exchange schedule."""
+    document = json.loads(path.read_text())
+    document["protocol"]["production"]["exchange"]["number_of_exchanges_per_segment"] = 999
+    with pytest.raises(Exception, match="does not divide"):
         resolve.resolve_spec(document)
 
 
@@ -213,13 +234,11 @@ def test_segment_count_is_absent_from_the_scientific_input(path):
     """Ten ns per replica is two segments, and that '2' lives in Bash, not in the JSON."""
     document = json.loads(path.read_text())
     production = document["protocol"]["production"]
-    for retired in ("n_chunks", "chunk_ns", "chunk", "scale_factors",
-                    "number_of_exchanges_per_segment"):
+    for retired in ("n_chunks", "chunk_ns", "chunk", "scale_factors", "n_segments"):
         assert retired not in production, retired
-    # REST2 derives its segment length; it must not be stated
-    assert "duration_per_segment" not in production
-    assert production["exchange"]["n_exchange_per_segment"] == 1000
-    assert production["exchange"]["exchange_interval"] == "5 ps"
+    # the segment LENGTH is stated; how many segments to run is not
+    assert production["duration_per_segment"] == "5 ns"
+    assert production["exchange"] == {"number_of_exchanges_per_segment": 1000}
 
 
 # ---------------------------------------------------------------------------------------------

@@ -177,20 +177,20 @@ def migrate_manifests(system_doc: dict, experiment_doc: dict, *,
         protocol["production"] = {
             "method": "rest2",
             "tau_ladder": tau_ladder,
-            "exchange": {"n_exchange_per_segment": exchanges,
-                         "exchange_interval": _q(interval_ps, "ps")},
+            "duration_per_segment": _q(chunk_ns, "ns"),
+            "exchange": {"number_of_exchanges_per_segment": exchanges},
             "relaxation": _q(rest2.get("relaxation_ps"), "ps"),
         }
         notes.append(
-            f"rest2.chunk_ns ({chunk_ns} ns) is no longer stated: the REST2 segment length is "
-            f"DERIVED as n_exchange_per_segment * exchange_interval = {exchanges} x "
-            f"{interval_ps} ps, which is the same {chunk_ns} ns"
+            f"rest2.chunk_ns ({chunk_ns} ns) -> production.duration_per_segment, the length of ONE "
+            "segment; how many segments to run stays an execution choice"
         )
         notes.append(ladder_note)
         notes.append(
-            f"rest2.exchange_interval_ps ({interval_ps}) -> exchange.exchange_interval, kept as an "
-            f"input alongside n_exchange_per_segment ({exchanges}); the segment length is their "
-            "product, which is exact rather than a quotient that might not divide"
+            f"rest2.exchange_interval_ps ({interval_ps}) is no longer stated: the interval is "
+            f"DERIVED as duration_per_segment / number_of_exchanges_per_segment = {chunk_ns} ns / "
+            f"{exchanges}, which is the same {interval_ps} ps. Both divisions are exact in step "
+            "space and are refused rather than rounded"
         )
         if rest2.get("n_chunks") is not None:
             notes.append(

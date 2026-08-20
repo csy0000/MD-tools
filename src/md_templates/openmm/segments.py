@@ -124,6 +124,69 @@ def plan_segment(duration_per_segment_value: float, timestep_value: float, *,
     )
 
 
+def plan_segment_from_duration_and_exchanges(
+    duration_value: float, number_of_exchanges_per_segment: int, timestep_value: float, *,
+    duration_source: str, timestep_source: str) -> SegmentPlan:
+    """Resolve a REST2 segment stated as a DURATION and an EXCHANGE COUNT.
+
+    This is the public form. Both divisions happen in integer step space and both must be exact::
+
+        steps_per_segment  = duration_per_segment / timestep
+        steps_per_exchange = steps_per_segment / number_of_exchanges_per_segment
+        exchange_interval  = steps_per_exchange * timestep
+
+    Deriving in steps rather than in picoseconds is what makes this safe. The earlier form stated a
+    count and an interval and multiplied, which is exact by construction; stating a duration makes
+    the interval a quotient, and a quotient can fail to divide. It is refused here, never rounded:
+    a segment silently shortened by one step drifts the exchange schedule out of alignment with the
+    committed watermark while the run still looks healthy.
+
+    5 ns at 4 fs is 1,250,000 steps; over 1000 exchanges that is 1250 steps per round, a 5 ps
+    interval.
+    """
+    if number_of_exchanges_per_segment < 1:
+        raise ValueError(
+            "exchange.number_of_exchanges_per_segment must be at least 1; got "
+            f"{number_of_exchanges_per_segment}"
+        )
+    steps_per_segment = steps_for_duration(
+        duration_value, timestep_value,
+        duration_source=duration_source, timestep_source=timestep_source,
+        duration_label="production.duration_per_segment",
+    )
+    if steps_per_segment % number_of_exchanges_per_segment != 0:
+        exact = steps_per_segment / number_of_exchanges_per_segment
+        raise ValueError(
+            f"production.duration_per_segment ({duration_source}) is {steps_per_segment:,} steps at "
+            f"{timestep_source}, which does not divide into "
+            f"{number_of_exchanges_per_segment:,} exchanges: that would be {exact:.6f} steps per "
+            "round.\n"
+            "  Refusing rather than rounding: a rounded exchange interval drifts the schedule out "
+            "of alignment with the\n"
+            "  committed watermark while the run still looks healthy.\n"
+            f"  Nearby exchange counts that divide exactly: "
+            f"{_nearby_divisors(steps_per_segment, number_of_exchanges_per_segment)}"
+        )
+    return SegmentPlan(
+        steps_per_segment=steps_per_segment,
+        steps_per_exchange=steps_per_segment // number_of_exchanges_per_segment,
+        number_of_exchanges_per_segment=number_of_exchanges_per_segment,
+    )
+
+
+def _nearby_divisors(total_steps: int, wanted: int, span: int = 5000) -> str:
+    """Exchange counts near `wanted` that divide `total_steps` exactly.
+
+    An error that only says "this does not divide" leaves the reader to factorise by hand.
+    """
+    low = max(1, wanted - span)
+    candidates = [n for n in range(low, wanted + span + 1) if total_steps % n == 0]
+    if not candidates:
+        return "none within +/-%d" % span
+    candidates.sort(key=lambda n: (abs(n - wanted), n))
+    return ", ".join(str(n) for n in candidates[:5])
+
+
 def plan_segment_from_exchanges(n_exchange_per_segment: int, exchange_interval_value: float,
                                 timestep_value: float, *, interval_source: str,
                                 timestep_source: str) -> SegmentPlan:
