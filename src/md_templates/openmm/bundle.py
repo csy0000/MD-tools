@@ -331,7 +331,18 @@ def build_bundle_manifest(
                     "(duration, chunking, reporting, platform, device, ladder) are excluded",
         },
         "parameterization": dict(system.doc["parameterization"]),
-        "solvation": {
+        # Written per mode. An implicit bundle recording water-shaped keys full of nulls would read
+        # as one whose water settings were forgotten rather than one that has none.
+        "solvation": ({
+            "mode": "implicit",
+            "implicit_model": solv.get("implicit_model"),
+            "radii": solv.get("radii"),
+            "water_model": None,
+            "realized_ion_counts": None,
+            "salt": None,
+            "note": "no water, no ions, no box: the GB model is the solvent",
+        } if solv.get("mode") == "implicit" else {
+            "mode": "explicit",
             "water_model": solv["water_model"],
             "box_shape": solv["box_shape"],
             "padding_nm": solv["padding_nm"],
@@ -341,7 +352,7 @@ def build_bundle_manifest(
             "neutralize": solv["neutralize"],
             "realized_ion_counts": counts["ions"],
             "salt": counts["salt"],
-        },
+        }),
         "composition": {
             "n_atoms": counts["n_atoms"],
             "n_solute_atoms": counts["n_solute_atoms"],

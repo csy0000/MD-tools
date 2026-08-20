@@ -327,6 +327,11 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
                 cfg["forcefield"]["protein"] = built["build"].get(
                     "protein_forcefield", "leaprc.protein.ff19SB")
                 cfg["forcefield"]["water"] = None
+                # The package defaults name a small-molecule force field and charge method for
+                # every build. This route parameterises no small molecule, and recording those
+                # would advertise chemistry that never ran.
+                cfg["forcefield"]["ligand"] = None
+                cfg["forcefield"]["ligand_charge_method"] = None
                 cfg.setdefault("_value_sources", {})["forcefield.protein"] = (
                     "route-derived: tleap leaprc for the implicit route")
                 cfg["_value_sources"]["forcefield.water"] = "route-derived: implicit has no water"
@@ -541,14 +546,22 @@ def _write_system_yaml(path: Path, config: dict, cfg: dict, manifest: dict, info
             "protein_forcefield": ff.get("protein"),
             "water_forcefield": ff.get("water"),
         },
-        "solvation": {
+        # The solvation block is written per MODE. An implicit system emitting water-shaped keys
+        # full of nulls reads as a system whose water settings were forgotten, rather than one that
+        # has no water.
+        "solvation": ({
+            "mode": "implicit",
+            "implicit_model": solv.get("implicit_model"),
+            "radii": solv.get("radii"),
+        } if solv.get("mode") == "implicit" else {
+            "mode": "explicit",
             "water_model": solv.get("water_model"),
             "box_shape": solv.get("box_shape"),
             "padding_nm": solv.get("padding_nm"),
             "ionic_strength_molar": solv.get("ionic_strength_molar"),
             "positive_ion": solv.get("positive_ion", "Na+"),
             "negative_ion": solv.get("negative_ion", "Cl-"),
-        },
+        }),
     }
     if doc["input"]["route"] == "smiles":
         doc["input"]["smiles"] = system.get("smiles")

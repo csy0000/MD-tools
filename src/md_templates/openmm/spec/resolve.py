@@ -279,6 +279,32 @@ def _refuse_retired_chunk_inputs(document: dict) -> None:
     )
 
 
+#: Protocol defaults that only mean something with a periodic box.
+_BOX_ONLY_EQUILIBRATION_FIELDS = ("npt", "npt_free", "box_average_last")
+
+
+def _drop_the_other_solvent_treatment(defaults: dict, document: dict) -> None:
+    """Remove defaults that contradict the solvent treatment the document declares.
+
+    Both halves matter. Dropping the other `build` treatment stops a document from stating two;
+    dropping the box-only equilibration fields stops an explicit profile from adding an NPT stage
+    to an implicit protocol, which the model then refuses -- correctly, but for a value the user
+    never wrote.
+    """
+    stated = document.get("build") or {}
+    build = defaults.get("build")
+    if not isinstance(build, dict):
+        return
+    if stated.get("implicit") is not None:
+        build.pop("solvation", None)
+        equilibration = (defaults.get("protocol") or {}).get("equilibration")
+        if isinstance(equilibration, dict):
+            for field in _BOX_ONLY_EQUILIBRATION_FIELDS:
+                equilibration.pop(field, None)
+    elif stated.get("solvation") is not None:
+        build.pop("implicit", None)
+
+
 def resolve_spec(document: dict, *, overrides: Optional[list[str]] = None,
                  profile_id: Optional[str] = None) -> dict:
     """Resolve one document into a validated `SimulationSpec` plus provenance.
@@ -319,6 +345,12 @@ def resolve_spec(document: dict, *, overrides: Optional[list[str]] = None,
 
     sources: dict[str, str] = {}
     merged = json.loads(json.dumps(profile["defaults"]))
+    # A default must never contradict what the document already says. If the document declares one
+    # solvent treatment, the profile's other one is dropped before the merge rather than colliding
+    # with it. Without this, resolving an already-resolved implicit document under the default
+    # (explicit) profile produced a build stating BOTH treatments -- so resolution was not
+    # idempotent, and a resolved document could not be re-read.
+    _drop_the_other_solvent_treatment(merged, document)
     _flatten_sources(merged, f"profile:{profile['profile_id']}", sources)
     merged = _merge(merged, document, sources, "document")
     merged = apply_overrides(merged, overrides or [], sources)

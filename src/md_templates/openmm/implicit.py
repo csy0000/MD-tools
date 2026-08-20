@@ -45,6 +45,7 @@ provenance for OpenMM. There is no Amber execution engine here.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -266,10 +267,48 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
     with (staging / "topology.pdb").open("w", encoding="utf-8") as handle:
         app.PDBFile.writeFile(pdb_file.topology, pdb_file.positions, handle, keepIds=True)
 
+    # The same build record the explicit path writes, so everything downstream -- the bundle
+    # manifest, the REST2 bridge, omega exclusion -- reads one shape. `geometry` is null rather
+    # than absent: "this System has no periodic box" is a fact worth recording, and a missing key
+    # would be indistinguishable from a record that forgot to write it.
+    from .system import classify_omega_bonds, omega_central_bonds
+
+    topology = app.PDBFile(str(staging / "topology.pdb")).topology
+    solute = list(range(system.getNumParticles()))
+    omega_info = classify_omega_bonds(topology, solute,
+                                      route=("peptide" if route == "peptide" else "ligand"))
+    build_record = {
+        "suffix": "system",
+        "route": route,
+        "input_route": "pdb" if route == "peptide" else "smiles",
+        "n_particles": system.getNumParticles(),
+        "n_constraints": system.getNumConstraints(),
+        "n_solute_atoms": system.getNumParticles(),
+        "n_waters": 0,
+        "ions": None,
+        "salt": None,
+        "water": None,
+        "geometry": None,
+        "nonbonded": {"method": "NoCutoff", "cutoff_nm": None},
+        "hmr": {"scope": "none", "target_hydrogen_mass_amu": None},
+        "constraints": "HBonds",
+        "rigid_water": False,
+        "omega_central_bonds": omega_central_bonds(topology, solute),
+        **{k: omega_info[k] for k in
+           ("omega_unscaled_bonds", "omega_proline_like_scaled_bonds",
+            "omega_unclassified_candidates", "omega_detection_method", "omega_detail")
+           if k in omega_info},
+        "degrees_of_freedom": (3 * system.getNumParticles() - system.getNumConstraints() - 3),
+        "implicit": info,
+    }
+    (staging / "system_simbox.json").write_text(
+        json.dumps(build_record, indent=2) + "\n", encoding="utf-8")
+
     return {
         "system": system,
         "system_xml": staging / "system.xml",
         "topology_pdb": staging / "topology.pdb",
+        "build_record": build_record,
         "prmtop": amber["prmtop"],
         "coordinates": amber["coordinates"],
         "n_particles": system.getNumParticles(),

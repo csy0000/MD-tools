@@ -50,29 +50,42 @@ def spec_to_runtime_cfg(spec: SimulationSpec, *, base: dict | None = None) -> di
     cfg["forcefield"]["water"] = ff.water
 
     sol = build.solvation
-    cfg["solvation"].update({
-        "water_model": sol.water_model,
-        "box_shape": sol.box_shape,
-        "padding_nm": sol.padding.value,
-        "padding_semantics": sol.padding_semantics,
-        "ionic_strength_molar": sol.ionic_strength_molar,
-        "positive_ion": sol.positive_ion,
-        "negative_ion": sol.negative_ion,
-        "neutralize": sol.neutralize,
-        "cutoff_fit_policy": sol.cutoff_fit_policy,
-    })
+    if sol is not None:
+        cfg["solvation"].update({
+            "mode": "explicit",
+            "water_model": sol.water_model,
+            "box_shape": sol.box_shape,
+            "padding_nm": sol.padding.value,
+            "padding_semantics": sol.padding_semantics,
+            "ionic_strength_molar": sol.ionic_strength_molar,
+            "positive_ion": sol.positive_ion,
+            "negative_ion": sol.negative_ion,
+            "neutralize": sol.neutralize,
+            "cutoff_fit_policy": sol.cutoff_fit_policy,
+        })
+    else:
+        # Implicit: the runtime solvation block carries the GB model and nothing about water. It is
+        # REPLACED rather than updated, so no explicit default survives into a configuration that
+        # has no water to apply it to.
+        cfg["solvation"] = {
+            "mode": "implicit",
+            "implicit_model": build.implicit.model,
+            "radii": build.implicit.radii,
+            "salt_concentration_molar": 0.0,
+        }
 
     nb = build.nonbonded
     cfg["system_build"].update({
         "nonbonded_method": nb.method,
-        "nonbonded_cutoff_nm": nb.cutoff.value,
+        "nonbonded_cutoff_nm": (nb.cutoff.value if nb.cutoff else None),
         "switch_distance_nm": (nb.switch_distance.value if nb.switch_distance else None),
         "use_dispersion_correction": nb.use_dispersion_correction,
         "ewald_error_tolerance": nb.ewald_error_tolerance,
-        "minimum_image_margin_nm": nb.minimum_image_margin.value,
+        "minimum_image_margin_nm": (nb.minimum_image_margin.value
+                                    if nb.minimum_image_margin else None),
         "constraints": build.constraints,
         "rigid_water": build.rigid_water,
-        "hydrogen_mass_amu": build.hydrogen_mass.value,
+        "hydrogen_mass_amu": (build.hydrogen_mass.value if build.hydrogen_mass else None),
         "hmr_scope": build.hmr_scope,
         "remove_cm_motion": build.remove_cm_motion,
     })
@@ -86,8 +99,13 @@ def spec_to_runtime_cfg(spec: SimulationSpec, *, base: dict | None = None) -> di
     })
     cfg["equilibration"]["protocol"] = protocol.equilibration.protocol
     cfg["equilibration"]["minimize_max_iterations"] = protocol.equilibration.minimize_max_iterations
-    cfg["equilibration"]["npt_free_ps"] = protocol.equilibration.npt_free.value
     eq = protocol.equilibration
+    if eq.npt_free is not None:
+        cfg["equilibration"]["npt_free_ps"] = eq.npt_free.value
+    else:
+        # Implicit solvent has no NPT stage at all. Leaving a stale default here would describe an
+        # equilibration the generated project does not contain.
+        cfg["equilibration"].pop("npt_free_ps", None)
     for spec_field, runtime_key, scale in (("timestep", "timestep_fs", 1000.0),
                                            ("nvt", "nvt_ps", 1.0),
                                            ("npt", "npt_ps", 1.0),

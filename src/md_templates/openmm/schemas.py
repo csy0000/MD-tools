@@ -263,8 +263,18 @@ def validate_system(doc: dict, *, source: Path, check_chemistry: bool = True) ->
     prot = par["protein_forcefield"]
     if "auto" in (str(smff).lower(), str(prot).lower()):
         raise ManifestError(f"{where}: 'auto' is not a force field; name it explicitly")
-    if not par["water_forcefield"]:
-        raise ManifestError(f"{where}:parameterization: water_forcefield is required")
+    # A water force field is required only when there is water. An implicit-solvent system says so
+    # explicitly, so the absence is a declared fact rather than a missing field.
+    solvent = (doc.get("solvation") or {})
+    is_implicit = str(solvent.get("mode", "explicit")).lower() == "implicit"
+    if not par["water_forcefield"] and not is_implicit:
+        raise ManifestError(
+            f"{where}:parameterization: water_forcefield is required for an explicit-water system. "
+            "If this system has no water, declare solvation.mode: implicit.")
+    if par["water_forcefield"] and is_implicit:
+        raise ManifestError(
+            f"{where}:parameterization: water_forcefield is set but solvation.mode is 'implicit'. "
+            "An implicit system has no water to parameterise.")
 
     # ---- route / parameterisation agreement --------------------------------------------------
     if route == "smiles":
