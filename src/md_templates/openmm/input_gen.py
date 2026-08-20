@@ -34,7 +34,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-__all__ = ["generate_project", "RUN_MANIFEST_SCHEMA_VERSION", "STAGE_ORDER"]
+__all__ = ["generate_project", "RUN_MANIFEST_SCHEMA_VERSION", "STAGE_ORDER",
+           "IMPLICIT_STAGE_ORDER", "stage_order_for"]
 
 RUN_MANIFEST_SCHEMA_VERSION = 1
 
@@ -57,11 +58,23 @@ _STAGE_SEED_ROLES = ("integrator", "barostat", "velocity")
 
 STAGE_ORDER = ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1", "REST2_1")
 
+#: The implicit-solvent graph. There is no NPT stage and there cannot be one: implicit solvent has
+#: no box, so there is no volume to equilibrate and pressure is undefined. Dropping the two NPT
+#: stages is therefore not a shortcut -- an NPT stage here would be meaningless, not merely slow.
+IMPLICIT_STAGE_ORDER = ("min", "eq_nvt", "cMD_1", "REST2_1")
+
 #: Stages that carry the positional restraint on the solute. `eq_npt_2` deliberately does not.
 RESTRAINED_STAGES = ("min", "eq_nvt", "eq_npt_1")
 
-#: Stages that carry a barostat.
+#: Stages that carry a barostat. Empty under implicit solvent, enforced rather than assumed.
 BAROSTAT_STAGES = ("eq_npt_1", "eq_npt_2", "cMD_1")
+
+
+def stage_order_for(solvation_mode: str) -> tuple:
+    """The stage graph a solvation mode implies."""
+    from .solvation_mode import IMPLICIT
+
+    return IMPLICIT_STAGE_ORDER if solvation_mode == IMPLICIT else STAGE_ORDER
 
 #: Keys md_config.json may carry that the canonical model does not model. See _resolved_spec.
 GENERATOR_ONLY_KEYS = ("conventional_md", "minimization")
@@ -363,6 +376,17 @@ def _refuse_keeping_results_from_another_protocol(outdir: Path, hashes: dict) ->
     )
 
 
+def _read_manifest_solvation(system_manifest) -> dict:
+    """The solvation block the prepared bundle recorded.
+
+    Read from the manifest rather than from md_config.json: solvation is a property of the SYSTEM,
+    decided when it was built. A protocol cannot change it, and a protocol that appeared to would be
+    describing a different System than the one it points at.
+    """
+    document = json.loads(Path(system_manifest).read_text())
+    return (document.get("resolved_system_config") or {}).get("solvation") or {}
+
+
 def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
                      inherit: Optional[str] = None, overwrite: bool = False,
                      dry_run: bool = False) -> dict:
@@ -371,7 +395,10 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
 
     inheritance = resolve_inheritance(inherit)
     skipped = set(inheritance.get("skipped_stages", [])) if inheritance else set()
-    stages_to_generate = tuple(s for s in STAGE_ORDER if s not in skipped)
+    solvation_mode = str(
+        ((_read_manifest_solvation(system_manifest)) or {}).get("mode", "explicit"))
+    graph = stage_order_for(solvation_mode)
+    stages_to_generate = tuple(s for s in graph if s not in skipped)
     if not stages_to_generate:
         raise ValueError(
             f"--inherit {inherit!r} would skip every stage, leaving nothing to generate. "
@@ -470,12 +497,18 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
     summary.append(f"min      max {equilibration.minimize_max_iterations} iterations")
     summary.append(f"eq_nvt   {stage_steps.get('eq_nvt', 0):,} steps ({equilibration.nvt.source})"
                    if equilibration.nvt else "eq_nvt   (not configured)")
-    summary.append(f"eq_npt_1 {stage_steps.get('eq_npt_1', 0):,} steps "
-                   f"({equilibration.npt.source}, restrained)"
-                   if equilibration.npt else "eq_npt_1 (not configured)")
-    summary.append(f"eq_npt_2 {stage_steps.get('eq_npt_2', 0):,} steps "
-                   f"({equilibration.npt_free.source}, free)"
-                   if equilibration.npt_free else "eq_npt_2 (not configured)")
+    # The NPT stages are reported only when the graph has them. Saying "not configured" for a
+    # stage that cannot exist under implicit solvent reads as an omission the user could fix.
+    if "eq_npt_1" in graph:
+        summary.append(f"eq_npt_1 {stage_steps.get('eq_npt_1', 0):,} steps "
+                       f"({equilibration.npt.source}, restrained)"
+                       if equilibration.npt else "eq_npt_1 (not configured)")
+    if "eq_npt_2" in graph:
+        summary.append(f"eq_npt_2 {stage_steps.get('eq_npt_2', 0):,} steps "
+                       f"({equilibration.npt_free.source}, free)"
+                       if equilibration.npt_free else "eq_npt_2 (not configured)")
+    if "eq_npt_1" not in graph:
+        summary.append("no NPT stage: implicit solvent has no box, so pressure is undefined")
     summary.append(f"cMD_1    {stage_steps['cMD_1']:,} steps ({cmd_duration.source})")
     summary.append(f"reporting: full system every {full_steps:,} steps, "
                    f"selected atoms every {selected_steps:,} steps")
@@ -591,7 +624,7 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
             }
             if stage == "min":
                 payload["max_iterations"] = equilibration.minimize_max_iterations
-            if stage in BAROSTAT_STAGES:
+            if stage in BAROSTAT_STAGES and solvation_mode != "implicit":
                 payload["barostat"] = {
                     "type": "MonteCarloBarostat",
                     "pressure": (md_config.get("equilibration") or {})

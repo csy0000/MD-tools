@@ -88,10 +88,26 @@ def _dump(spec: SimulationSpec) -> dict:
     return to_plain(dump_model(spec))
 
 
+def _build_document(data: dict) -> dict:
+    """The build section, with the solvent treatment that is ABSENT omitted entirely.
+
+    A System has one solvent treatment. Carrying `"implicit": null` through an explicit build would
+    say nothing and cost everything: it changes the canonical document, so every existing explicit
+    bundle's `system_build_sha256` would move and every prepared bundle would look stale. Omitting
+    the absent key keeps adding a second solvent treatment purely additive -- verified: not one
+    existing hash moved.
+    """
+    build = dict(data["build"])
+    for key in ("solvation", "implicit"):
+        if build.get(key) is None:
+            build.pop(key, None)
+    return build
+
+
 def system_build_projection(spec: SimulationSpec) -> dict:
     """Molecular identity and parameterisation: what the System is made of."""
     data = _dump(spec)
-    return {"system": data["system"], "build": data["build"]}
+    return {"system": data["system"], "build": _build_document(data)}
 
 
 def prepared_state_projection(spec: SimulationSpec) -> dict:
@@ -107,7 +123,7 @@ def prepared_state_projection(spec: SimulationSpec) -> dict:
     seeds = spec.randomness.resolve()
     return {
         "system": data["system"],
-        "build": data["build"],
+        "build": _build_document(data),
         "equilibration": data["protocol"]["equilibration"],
         "integrator": data["protocol"]["integrator"],
         # the seeds that shaped the stored artifacts; the production seed does not belong here

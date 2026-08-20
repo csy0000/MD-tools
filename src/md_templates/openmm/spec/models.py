@@ -108,7 +108,9 @@ class ForceFieldSpec(Strict):
     small_molecule: Optional[str] = None
     charge_method: Optional[str] = None
     protein: Optional[str] = None
-    water: str
+    #: Null under implicit solvent. A water force field there would name parameters for molecules
+    #: the System does not contain.
+    water: Optional[str] = None
 
     @model_validator(mode="after")
     def _one_route_of_parameters(self):
@@ -137,13 +139,49 @@ class SolvationSpec(Strict):
     cutoff_fit_policy: Literal["grow", "refuse"] = "grow"
 
 
+class ImplicitSpec(Strict):
+    """Generalised-Born solvent. Present only when there is no water.
+
+    `GBn2` with `mbondi3` is the default and the pairing is not arbitrary: GBn2 was parameterised
+    against mbondi3, so another radius set is a different Hamiltonian that still runs.
+    """
+
+    model: Literal["HCT", "OBC1", "OBC2", "GBn", "GBn2"] = "GBn2"
+    radii: Literal["bondi", "mbondi", "mbondi2", "mbondi3", "amber6"] = "mbondi3"
+
+
 class NonbondedSpec(Strict):
-    method: Literal["PME", "LJPME"] = "PME"
-    cutoff: Length
+    """Nonbonded treatment. `NoCutoff` is the implicit-solvent case and takes none of the rest.
+
+    Under `NoCutoff` there is no box, so a cutoff, an Ewald tolerance and a minimum-image margin
+    describe quantities that do not exist -- they must be null rather than carrying a plausible
+    number nothing reads.
+    """
+
+    method: Literal["PME", "LJPME", "NoCutoff"] = "PME"
+    cutoff: Optional[Length] = None
     switch_distance: Optional[Length] = None
     use_dispersion_correction: bool = True
-    ewald_error_tolerance: float = Field(gt=0.0, lt=1.0)
-    minimum_image_margin: Length
+    ewald_error_tolerance: Optional[float] = Field(default=None, gt=0.0, lt=1.0)
+    minimum_image_margin: Optional[Length] = None
+
+    @model_validator(mode="after")
+    def _periodic_fields_match_the_method(self):
+        if self.method == "NoCutoff":
+            stated = [name for name in ("cutoff", "ewald_error_tolerance", "minimum_image_margin")
+                      if getattr(self, name) is not None]
+            if stated:
+                raise ValueError(
+                    f"nonbonded.method is 'NoCutoff' but {', '.join(stated)} "
+                    f"{'are' if len(stated) > 1 else 'is'} stated. Without a periodic box these "
+                    "describe quantities that do not exist; set them to null.")
+        else:
+            missing = [name for name in ("cutoff", "ewald_error_tolerance", "minimum_image_margin")
+                       if getattr(self, name) is None]
+            if missing:
+                raise ValueError(
+                    f"nonbonded.method is {self.method!r} and requires {', '.join(missing)}")
+        return self
 
     @model_validator(mode="after")
     def _switch_below_cutoff(self):
@@ -156,15 +194,44 @@ class NonbondedSpec(Strict):
 
 
 class BuildSpec(Strict):
+    """How the System is built. Exactly one solvent treatment, never both and never neither."""
+
     schema_version: int = BUILD_SCHEMA_VERSION
     forcefield: ForceFieldSpec
-    solvation: SolvationSpec
+    solvation: Optional[SolvationSpec] = None
+    implicit: Optional[ImplicitSpec] = None
     nonbonded: NonbondedSpec
     constraints: Literal["None", "HBonds", "AllBonds", "HAngles"] = "HBonds"
     rigid_water: bool = True
-    hydrogen_mass: Mass
-    hmr_scope: Literal["solute", "all"] = "solute"
+    #: Null means no hydrogen mass repartitioning. Implicit builds default to that deliberately:
+    #: the reference GBn2 System is not repartitioned, and comparing against a repartitioned one
+    #: would be comparing a different System that still passes every structural check.
+    hydrogen_mass: Optional[Mass] = None
+    hmr_scope: Literal["solute", "all", "none"] = "solute"
     remove_cm_motion: bool = True
+
+    @model_validator(mode="after")
+    def _exactly_one_solvent_treatment(self):
+        if self.solvation is not None and self.implicit is not None:
+            raise ValueError(
+                "build states both `solvation` (explicit water) and `implicit`. A System has one "
+                "solvent treatment; stating both leaves it undefined which one was used.")
+        if self.solvation is None and self.implicit is None:
+            raise ValueError(
+                "build states neither `solvation` nor `implicit`. Say which solvent treatment this "
+                "System uses -- it is never inferred.")
+        if self.implicit is not None:
+            if self.nonbonded.method != "NoCutoff":
+                raise ValueError(
+                    f"implicit solvent requires nonbonded.method 'NoCutoff', got "
+                    f"{self.nonbonded.method!r}: there is no periodic box to run PME in.")
+            if self.rigid_water:
+                raise ValueError("implicit solvent has no water, so rigid_water must be false")
+            if self.hydrogen_mass is not None and self.hmr_scope == "none":
+                raise ValueError(
+                    "build.hydrogen_mass is stated while hmr_scope is 'none'; set a scope or "
+                    "remove the mass")
+        return self
 
 
 # ---------------------------------------------------------------------------------------------
@@ -189,7 +256,9 @@ class EquilibrationSpec(Strict):
 
     protocol: Literal["staged", "simple"] = "staged"
     minimize_max_iterations: int = Field(ge=0, default=0)
-    npt_free: Time
+    #: Optional because an implicit-solvent protocol has no NPT stage at all. A stated value is
+    #: refused there rather than ignored -- see SimulationSpec.
+    npt_free: Optional[Time] = None
     timestep: Optional[Time] = None                # equilibration may integrate more cautiously
     nvt: Optional[Time] = None                     # `simple` only
     npt: Optional[Time] = None                     # `simple` only
@@ -490,6 +559,38 @@ class SimulationSpec(Strict):
         if self.system.route == "pdb" and ff.small_molecule:
             raise ValueError(
                 "system.route is 'pdb' (a peptide) but build.forcefield.small_molecule is set"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _implicit_solvent_has_no_pressure(self):
+        """Refuse NPT and pressure under implicit solvent, before anything is generated.
+
+        Implicit solvent has no box, so there is no volume to control and pressure is undefined. An
+        NPT equilibration stage or a stated pressure is not a harmless extra here -- it is a request
+        for an ensemble that cannot exist, and ignoring it would generate a protocol that silently
+        differs from the one the file describes.
+        """
+        if self.build.implicit is None:
+            return self
+
+        offenders = []
+        equilibration = self.protocol.equilibration
+        for field in ("npt", "npt_free", "box_average_last"):
+            if getattr(equilibration, field, None) is not None:
+                offenders.append(f"protocol.equilibration.{field}")
+        for field in ("pressure", "barostat", "barostat_interval"):
+            if getattr(self.protocol.production, field, None) is not None:
+                offenders.append(f"protocol.production.{field}")
+        if getattr(self.build, "solvation", None) is not None:
+            offenders.append("build.solvation")
+        if offenders:
+            raise ValueError(
+                "this is an implicit-solvent build, which has no box and therefore no pressure, "
+                f"but the configuration states {', '.join(offenders)}.\n"
+                "  The implicit stage graph is min -> eq_nvt -> cMD_1 -> REST2_1; there is no NPT "
+                "stage and there cannot be one.\n"
+                "  Remove these fields, or use an explicit-water build."
             )
         return self
 

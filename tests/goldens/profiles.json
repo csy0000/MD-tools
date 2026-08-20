@@ -40,6 +40,34 @@
       "profile_schema_version": 5,
       "route": "pdb",
       "sha256": "e76faa83d29d323760186c71dca974fc7310254ccf9f0e20db68f88c1923ba81"
+    },
+    "implicit-md-ligand-v1": {
+      "is_default": false,
+      "method": "md",
+      "profile_schema_version": 5,
+      "route": "smiles",
+      "sha256": "d37074cd297e7e81b4dd9e22c0d05f3b34ec67bde4bac3939518dabfbd78799a"
+    },
+    "implicit-md-peptide-v1": {
+      "is_default": false,
+      "method": "md",
+      "profile_schema_version": 5,
+      "route": "pdb",
+      "sha256": "053c7bfae76b2b95dc5090a0ad2cc5becfea7a50859453e4171aa0afe8cf9670"
+    },
+    "implicit-rest2-ligand-v1": {
+      "is_default": false,
+      "method": "rest2",
+      "profile_schema_version": 5,
+      "route": "smiles",
+      "sha256": "e9f45ec9d3b3361193bdc69457767ac91be635d3ad4016262637aec825cb3109"
+    },
+    "implicit-rest2-peptide-v1": {
+      "is_default": false,
+      "method": "rest2",
+      "profile_schema_version": 5,
+      "route": "pdb",
+      "sha256": "c4828f76ade0ab5d81a955e0277c8730387ebea98890b9e4bae255d5b27dfa91"
     }
   }
 }

@@ -1,0 +1,68 @@
+{
+  "profile_id": "implicit-md-ligand-v1",
+  "profile_schema_version": 5,
+  "description": "Implicit-solvent GBn2/mbondi3 conventional MD, ligand/SMILES route",
+  "route": "smiles",
+  "method": "md",
+  "is_default": false,
+  "defaults": {
+    "build": {
+      "schema_version": 1,
+      "forcefield": {
+        "small_molecule": "openff-2.2.0",
+        "charge_method": "am1bcc",
+        "protein": null,
+        "water": null
+      },
+      "nonbonded": {
+        "method": "NoCutoff",
+        "cutoff": null,
+        "switch_distance": null,
+        "use_dispersion_correction": false,
+        "ewald_error_tolerance": null,
+        "minimum_image_margin": null
+      },
+      "constraints": "HBonds",
+      "rigid_water": false,
+      "hydrogen_mass": null,
+      "hmr_scope": "none",
+      "remove_cm_motion": true,
+      "implicit": {
+        "model": "GBn2",
+        "radii": "mbondi3"
+      }
+    },
+    "protocol": {
+      "schema_version": 4,
+      "integrator": {
+        "kind": "langevin-middle",
+        "timestep": "2 fs",
+        "temperature": "300 K",
+        "friction": "1 /ps"
+      },
+      "equilibration": {
+        "protocol": "simple",
+        "minimize_max_iterations": 0,
+        "seed": null
+      },
+      "production": {
+        "method": "md",
+        "duration_per_segment": "100 ps",
+        "scale_factor": 1.0,
+        "seed": null
+      }
+    },
+    "execution": {
+      "schema_version": 1,
+      "platform": "CPU",
+      "device": null,
+      "precision": "mixed",
+      "reporting": {
+        "all_atom": "10 ps",
+        "solute": "2 ps",
+        "state": "10 ps",
+        "checkpoint": "100 ps"
+      }
+    }
+  }
+}

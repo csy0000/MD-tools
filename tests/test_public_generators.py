@@ -767,6 +767,105 @@ def test_rest2_refuses_to_start_without_its_predecessors_endpoint(executed_proje
 
 
 # ---------------------------------------------------------------------------------------------
+# implicit solvent: the configuration contract
+# ---------------------------------------------------------------------------------------------
+
+def test_implicit_defaults_to_gbn2_with_mbondi3_and_says_where_that_came_from():
+    from md_templates.openmm.solvation_mode import resolve_solvation
+
+    resolved = resolve_solvation({"mode": "implicit"})
+    assert resolved["implicit_model"] == "GBn2"
+    assert resolved["radii"] == "mbondi3"
+    assert resolved["sources"]["implicit_model"] == "package default"
+    assert resolved["sources"]["radii"] == "package default"
+
+
+def test_implicit_spelling_is_canonicalised_once():
+    """A bundle recording three spellings for one Hamiltonian cannot be compared by equality."""
+    from md_templates.openmm.solvation_mode import resolve_solvation
+
+    for model in ("GBn2", "gbn2", "GBN2"):
+        assert resolve_solvation({"mode": "implicit", "implicit_model": model})[
+            "implicit_model"] == "GBn2"
+    for radii in ("mbondi3", "MBONDI3", "Mbondi3"):
+        assert resolve_solvation({"mode": "implicit", "radii": radii})["radii"] == "mbondi3"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("padding_nm", 1.2), ("water_model", "opc"), ("ionic_strength_molar", 0.15),
+    ("positive_ion", "Na+"), ("nonbonded_cutoff_nm", 1.0), ("box_shape", "cube"),
+])
+def test_explicit_only_fields_are_refused_under_implicit_solvent(field, value):
+    """Not ignored: a configuration stating them describes an experiment that would not be run."""
+    from md_templates.openmm.solvation_mode import SolvationError, resolve_solvation
+
+    with pytest.raises(SolvationError, match=field):
+        resolve_solvation({"mode": "implicit", field: value})
+
+
+def test_implicit_only_fields_are_refused_under_explicit_water():
+    from md_templates.openmm.solvation_mode import SolvationError, resolve_solvation
+
+    with pytest.raises(SolvationError, match="implicit_model"):
+        resolve_solvation({"mode": "explicit", "implicit_model": "GBn2"})
+
+
+def test_a_build_may_not_state_both_solvent_treatments_or_neither():
+    """A System has one solvent treatment; stating both leaves it undefined which was used."""
+    from pydantic import ValidationError
+
+    from md_templates.openmm.spec.models import BuildSpec
+
+    common = {"forcefield": {"protein": "amber19/protein.ff19SB.xml", "water": None},
+              "nonbonded": {"method": "NoCutoff"}, "rigid_water": False, "hmr_scope": "none"}
+    with pytest.raises(ValidationError, match="one solvent treatment"):
+        BuildSpec(**dict(common, implicit={"model": "GBn2"},
+                         solvation={"water_model": "opc", "box_shape": "cube",
+                                    "padding": "1.2 nm", "ionic_strength_molar": 0.15}))
+    with pytest.raises(ValidationError, match="neither"):
+        BuildSpec(**common)
+
+
+def test_implicit_requires_nocutoff_and_no_rigid_water():
+    from pydantic import ValidationError
+
+    from md_templates.openmm.spec.models import BuildSpec
+
+    base = {"forcefield": {"protein": "amber19/protein.ff19SB.xml", "water": None},
+            "implicit": {"model": "GBn2"}, "hmr_scope": "none", "rigid_water": False}
+    with pytest.raises(ValidationError, match="NoCutoff"):
+        BuildSpec(**dict(base, nonbonded={"method": "PME", "cutoff": "1.0 nm",
+                                          "ewald_error_tolerance": 5e-4,
+                                          "minimum_image_margin": "0.1 nm"}))
+    with pytest.raises(ValidationError, match="rigid_water"):
+        BuildSpec(**dict(base, nonbonded={"method": "NoCutoff"}, rigid_water=True))
+
+
+def test_nocutoff_refuses_periodic_fields_that_describe_nothing():
+    from pydantic import ValidationError
+
+    from md_templates.openmm.spec.models import NonbondedSpec
+
+    with pytest.raises(ValidationError, match="do not exist"):
+        NonbondedSpec(method="NoCutoff", cutoff="1.0 nm")
+
+
+def test_adding_implicit_support_moved_no_existing_build_hash():
+    """The compatibility guarantee, pinned: `implicit: null` must not enter an explicit document.
+
+    Carrying it would change every existing explicit bundle's `system_build_sha256`, so every
+    prepared bundle would look stale for a field that says nothing.
+    """
+    from md_templates.openmm.spec.canonical import system_build_projection
+    from md_templates.openmm.spec.resolve import resolve_spec
+
+    document = json.loads((REPO_ROOT / "test" / "ala" / "REST2" / "alanine_rest2.json").read_text())
+    build = system_build_projection(resolve_spec(document)["spec"])["build"]
+    assert "implicit" not in build, "an absent solvent treatment must not enter the document"
+    assert "solvation" in build, "an explicit build still records its water"
+
+
+# ---------------------------------------------------------------------------------------------
 # resolved system provenance
 # ---------------------------------------------------------------------------------------------
 
