@@ -77,6 +77,7 @@ def _configuration_goldens() -> dict:
                 "constraints": spec.build.constraints,
                 "production.method": production.method,
                 "production.duration_per_segment_ps": production.duration_per_segment.value,
+                "production.duration_per_segment_source": production.duration_per_segment.source,
                 # tau is the SOURCE parameter; s is captured too so the golden pins the derived
                 # ladder as well as the declaration that produced it.
                 "production.tau_values": (production.tau_ladder.tau_values()

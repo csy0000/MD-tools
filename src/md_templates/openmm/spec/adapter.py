@@ -113,14 +113,14 @@ def spec_to_runtime_cfg(spec: SimulationSpec, *, base: dict | None = None) -> di
     # decides how many segments to request and the run manifest records how many committed, so the
     # runtime's `n_chunks` here means "this invocation runs one segment" and is no longer a
     # scientific input.
-    steps_per_segment = segments.steps_for_duration(
-        prod.duration_per_segment.value, integ.timestep.value,
-        duration_source=prod.duration_per_segment.source,
-        timestep_source=integ.timestep.source,
-        duration_label="production.duration_per_segment",
-    )
-
     if prod.method == "md":
+        steps_per_segment = segments.steps_for_duration(
+            prod.duration_per_segment.value, integ.timestep.value,
+            duration_source=prod.duration_per_segment.source,
+            timestep_source=integ.timestep.source,
+            duration_label="production.duration_per_segment",
+        )
+
         cfg["production"]["md"].update({
             "n_chunks": 1,
             "chunk_ns": prod.duration_per_segment.value / 1000.0,   # ps -> ns
@@ -131,11 +131,12 @@ def spec_to_runtime_cfg(spec: SimulationSpec, *, base: dict | None = None) -> di
         # tau is the source parameter; `s` reaches the System builder unchanged. The exchange
         # interval is DERIVED from the segment length and the exchange count rather than stated a
         # second time, so the two can never disagree.
-        plan = segments.plan_segment(
-            prod.duration_per_segment.value, integ.timestep.value,
-            duration_source=prod.duration_per_segment.source,
+        plan = segments.plan_segment_from_exchanges(
+            prod.exchange.n_exchange_per_segment,
+            prod.exchange.exchange_interval.value,
+            integ.timestep.value,
+            interval_source=prod.exchange.exchange_interval.source,
             timestep_source=integ.timestep.source,
-            number_of_exchanges_per_segment=prod.exchange.number_of_exchanges_per_segment,
         )
         exchange_interval_ps = plan.steps_per_exchange * integ.timestep.value
         tau_values = prod.tau_ladder.tau_values()
@@ -165,6 +166,7 @@ def spec_to_runtime_cfg(spec: SimulationSpec, *, base: dict | None = None) -> di
             "tau_values": tau_values,
             "derived": tau_module.ladder_diagnostics(tau_values, integ.temperature.value),
         }
+        steps_per_segment = plan.steps_per_segment
         cfg["rest2"]["enhanced_region"] = {
             "type": prod.enhanced_region.type,
             "atom_indices": (list(prod.enhanced_region.atom_indices)

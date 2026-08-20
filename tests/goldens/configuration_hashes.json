@@ -1,17 +1,17 @@
 {
   "md_ligand_smiles": {
-    "canonical_json_sha256": "cfbde9b67bc842af457b637c7b8b1c83bb86a8503780b9b9473034ddde01d66e",
+    "canonical_json_sha256": "3558e902e0e531ba8a3ab23c5addc73b1e3e3a4d95b3139bcfd5c105619daa7b",
     "hashes": {
       "execution_sha256": "6f0a213589d37798f9abfdde3945429663b85a621002f6fe58dbe7628f4f6138",
       "prepared_state_sha256": "efef251935086250d17d97acdb8a91d6eaa31c2cad85ba0b8c3a4315ba28294f",
-      "protocol_at_prepare_sha256": "46beb5ab499b05ae62a50140c33fb835c312b19aed3cb8558321b01ad4812349",
-      "protocol_sha256": "d525ff0e7a27ef2e8d9c4a529d3ae2eb0ecf9938ddd32cc21a6196393ae23e87",
+      "protocol_at_prepare_sha256": "ab5b1a2e401e5bc2fbd8150b90de12bbeaa65da4d07222bc96eeb249fa43c412",
+      "protocol_sha256": "80acc0dca962655b855ea6122416fdf91ffb306df5707aa368ce569d7d78240a",
       "system_build_sha256": "7f242b94a56a8047054ebbac412dd56bd0b3567d96288c14b0ca8820a49ab393"
     },
     "profile": {
       "profile_id": "explicit-md-ligand-v1",
-      "profile_schema_version": 2,
-      "sha256": "2b0558f7f46b422d90a5efcb6959ba7381fa04e4e6bb4a3c6f0b7d02e04fb47c"
+      "profile_schema_version": 3,
+      "sha256": "ab5c1b438b3d5c79439eea6207ec370d233e3909b59891f92e6e6717fee101e1"
     },
     "resolved": {
       "constraints": "HBonds",
@@ -21,24 +21,25 @@
       "nonbonded.cutoff_nm": 1.0,
       "production.derived_scale_factors": null,
       "production.duration_per_segment_ps": 100.0,
+      "production.duration_per_segment_source": "100 ps",
       "production.method": "md",
       "production.tau_values": null,
       "solvation.padding_nm": 1.2
     }
   },
   "md_peptide_pdb": {
-    "canonical_json_sha256": "dc2bd9870ba02de336af328daf7ee796e77353968ed10f77a312bf9a8ee3d426",
+    "canonical_json_sha256": "924965103719b5cfa3892454346257f99963165e61ad41f9f6c06c5000ab3121",
     "hashes": {
       "execution_sha256": "6f0a213589d37798f9abfdde3945429663b85a621002f6fe58dbe7628f4f6138",
       "prepared_state_sha256": "4a2a641a79228f39346aed063c8d3d85a1702f92c306dec3483c7d79812d7f2f",
-      "protocol_at_prepare_sha256": "46beb5ab499b05ae62a50140c33fb835c312b19aed3cb8558321b01ad4812349",
-      "protocol_sha256": "d525ff0e7a27ef2e8d9c4a529d3ae2eb0ecf9938ddd32cc21a6196393ae23e87",
+      "protocol_at_prepare_sha256": "ab5b1a2e401e5bc2fbd8150b90de12bbeaa65da4d07222bc96eeb249fa43c412",
+      "protocol_sha256": "80acc0dca962655b855ea6122416fdf91ffb306df5707aa368ce569d7d78240a",
       "system_build_sha256": "39252363b5b5a289060b4fd273f25a102182e0396732435caecb3841b8281bbf"
     },
     "profile": {
       "profile_id": "explicit-md-peptide-v1",
-      "profile_schema_version": 2,
-      "sha256": "45139c955e0cc15db8e4c4d1281e11019fb9e7aa056f067d41c7e98afacd5bd5"
+      "profile_schema_version": 3,
+      "sha256": "99e07e040e7ad1058a987d4cf8b9d904d740b29fe054c94b7bc27e4083523f67"
     },
     "resolved": {
       "constraints": "HBonds",
@@ -48,24 +49,25 @@
       "nonbonded.cutoff_nm": 1.0,
       "production.derived_scale_factors": null,
       "production.duration_per_segment_ps": 100.0,
+      "production.duration_per_segment_source": "100 ps",
       "production.method": "md",
       "production.tau_values": null,
       "solvation.padding_nm": 1.2
     }
   },
   "rest2_ligand_smiles": {
-    "canonical_json_sha256": "8b5424d12ef28d8c7faeb11866b45957b78dd142763cb8e2e8487d91f5fbd7c2",
+    "canonical_json_sha256": "d18e144bbd90e25bdea3585dffba19b6f958ebd0deb06b103efddf1c6a045285",
     "hashes": {
       "execution_sha256": "6f0a213589d37798f9abfdde3945429663b85a621002f6fe58dbe7628f4f6138",
       "prepared_state_sha256": "efef251935086250d17d97acdb8a91d6eaa31c2cad85ba0b8c3a4315ba28294f",
-      "protocol_at_prepare_sha256": "54157b5387bc0aa5fe2a00681efd3ba616a1501ca78b968f251861b682cf510e",
-      "protocol_sha256": "62fc6183fb53a5f349800a158085424c47c6c8fd361ef8f1c7a2e9a4646db59a",
+      "protocol_at_prepare_sha256": "0ec9c0a53cbfde0a1130760e8b342989bbd0373de109e23cedb86aa93032aa34",
+      "protocol_sha256": "184387185e39209e47cadc01c71538a3ec4fb414a8e8dce5bccee609c4002824",
       "system_build_sha256": "7f242b94a56a8047054ebbac412dd56bd0b3567d96288c14b0ca8820a49ab393"
     },
     "profile": {
       "profile_id": "explicit-rest2-ligand-v1",
-      "profile_schema_version": 2,
-      "sha256": "4b0ae05c025c864248f1bca15751b44ba4649506307e2f13c9926a57c479e704"
+      "profile_schema_version": 3,
+      "sha256": "5cab06fc12ec39233cb3dc3e2bdf038340e293da3e3a0a5e0fce0750eed48ae0"
     },
     "resolved": {
       "constraints": "HBonds",
@@ -86,6 +88,7 @@
         0.25
       ],
       "production.duration_per_segment_ps": 100.0,
+      "production.duration_per_segment_source": "derived: 10 x 10 ps",
       "production.method": "rest2",
       "production.tau_values": [
         0.0,
@@ -103,18 +106,18 @@
     }
   },
   "rest2_peptide_pdb": {
-    "canonical_json_sha256": "4746cb593099aebd3003106f7c9ea340dd8d1d9ac55972d9639861aad97a1dc8",
+    "canonical_json_sha256": "17ad919f03baace55b700eace13a92448893cb5d60a82c3efae2b5dec51aa053",
     "hashes": {
       "execution_sha256": "6f0a213589d37798f9abfdde3945429663b85a621002f6fe58dbe7628f4f6138",
       "prepared_state_sha256": "4a2a641a79228f39346aed063c8d3d85a1702f92c306dec3483c7d79812d7f2f",
-      "protocol_at_prepare_sha256": "54157b5387bc0aa5fe2a00681efd3ba616a1501ca78b968f251861b682cf510e",
-      "protocol_sha256": "62fc6183fb53a5f349800a158085424c47c6c8fd361ef8f1c7a2e9a4646db59a",
+      "protocol_at_prepare_sha256": "0ec9c0a53cbfde0a1130760e8b342989bbd0373de109e23cedb86aa93032aa34",
+      "protocol_sha256": "184387185e39209e47cadc01c71538a3ec4fb414a8e8dce5bccee609c4002824",
       "system_build_sha256": "39252363b5b5a289060b4fd273f25a102182e0396732435caecb3841b8281bbf"
     },
     "profile": {
       "profile_id": "explicit-rest2-peptide-v1",
-      "profile_schema_version": 2,
-      "sha256": "cfcf00682c20d636bc968a07d075698918fb7081a32056e71b7d9079baf3ae86"
+      "profile_schema_version": 3,
+      "sha256": "331c6edcb078ec0c5096f8bc9df79c6a3baa0a16ac8d1daa6f58db440ad862b3"
     },
     "resolved": {
       "constraints": "HBonds",
@@ -135,6 +138,7 @@
         0.25
       ],
       "production.duration_per_segment_ps": 100.0,
+      "production.duration_per_segment_source": "derived: 10 x 10 ps",
       "production.method": "rest2",
       "production.tau_values": [
         0.0,

@@ -113,18 +113,20 @@ def test_a_unitless_number_never_silently_acquires_a_unit():
 # 5-6: cross-field and method-specific validation
 # ---------------------------------------------------------------------------------------------
 
-def test_a_segment_must_divide_into_whole_exchange_rounds():
-    """The segment length must contain a whole number of exchange rounds.
+def test_the_exchange_interval_must_be_whole_steps():
+    """The interval must be whole steps. The SEGMENT is a product, so it is exact by construction.
 
-    A round landing mid-step would drop or duplicate an attempt across a segment boundary, and the
-    committed watermark would stop agreeing with the exchange history.
+    This is the whole point of stating a count and an interval instead of a duration and a count:
+    only one quantity can fail to divide, and it is the one a user chose directly.
     """
     doc = json.loads(json.dumps(MINIMAL))
-    doc["protocol"]["production"] = {"method": "rest2", "duration_per_segment": "1 ps",
+    doc["protocol"]["production"] = {"method": "rest2",
                                      "tau_ladder": {"maximum": 0.5, "count": 2},
-                                     "exchange": {"number_of_exchanges_per_segment": 3},
+                                     "exchange": {"n_exchange_per_segment": 4,
+                                                  "exchange_interval": "0.006 ps"},
                                      "relaxation": "1 ps"}
-    with pytest.raises(Exception, match="not divisible by"):
+    # 6 fs is 1.5 steps at the profile's 4 fs timestep
+    with pytest.raises(Exception, match="not a whole number of"):
         resolved(doc)
 
 
@@ -144,9 +146,10 @@ def test_md_rejects_rest2_only_settings():
 
 def test_rest2_rejects_md_only_settings():
     doc = json.loads(json.dumps(MINIMAL))
-    doc["protocol"]["production"] = {"method": "rest2", "duration_per_segment": "1 ps",
+    doc["protocol"]["production"] = {"method": "rest2",
                                      "tau_ladder": {"maximum": 0.5, "count": 2},
-                                     "exchange": {"number_of_exchanges_per_segment": 2},
+                                     "exchange": {"n_exchange_per_segment": 2,
+                                                  "exchange_interval": "0.5 ps"},
                                      "relaxation": "1 ps", "scale_factor": 0.5}
     with pytest.raises(Exception, match="scale_factor"):
         resolved(doc)
@@ -155,8 +158,9 @@ def test_rest2_rejects_md_only_settings():
 def test_the_tau_ladder_must_start_at_the_cold_physical_rung():
     """tau must start at 0.0, which is s = 1: the unscaled, physical Hamiltonian."""
     doc = json.loads(json.dumps(MINIMAL))
-    base = {"method": "rest2", "duration_per_segment": "1 ps",
-            "exchange": {"number_of_exchanges_per_segment": 2}, "relaxation": "1 ps"}
+    base = {"method": "rest2",
+            "exchange": {"n_exchange_per_segment": 2, "exchange_interval": "0.5 ps"},
+            "relaxation": "1 ps"}
     doc["protocol"]["production"] = dict(
         base, tau_ladder={"minimum": 0.1, "maximum": 0.5, "count": 3})
     with pytest.raises(Exception, match="cold rung|physical Hamiltonian"):
@@ -166,8 +170,9 @@ def test_the_tau_ladder_must_start_at_the_cold_physical_rung():
 def test_the_tau_ladder_must_have_a_span():
     doc = json.loads(json.dumps(MINIMAL))
     doc["protocol"]["production"] = {
-        "method": "rest2", "duration_per_segment": "1 ps",
-        "exchange": {"number_of_exchanges_per_segment": 2}, "relaxation": "1 ps",
+        "method": "rest2",
+        "exchange": {"n_exchange_per_segment": 2, "exchange_interval": "0.5 ps"},
+        "relaxation": "1 ps",
         "tau_ladder": {"minimum": 0.0, "maximum": 0.0, "count": 3}}
     with pytest.raises(Exception):
         resolved(doc)
@@ -199,9 +204,10 @@ def test_the_smoke_profile_is_never_selected_as_a_default():
 
 def test_an_explicitly_pinned_profile_is_used():
     doc = json.loads(json.dumps(MINIMAL))
-    doc["protocol"]["production"] = {"method": "rest2", "duration_per_segment": "0.001 ns",
+    doc["protocol"]["production"] = {"method": "rest2",
                                      "tau_ladder": {"maximum": 0.5, "count": 3},
-                                     "exchange": {"number_of_exchanges_per_segment": 2},
+                                     "exchange": {"n_exchange_per_segment": 2,
+                                                  "exchange_interval": "0.5 ps"},
                                      "relaxation": "1 ps"}
     doc["profile"] = "cpu-smoke-v1"
     assert resolved(doc)["profile"]["profile_id"] == "cpu-smoke-v1"
@@ -358,7 +364,7 @@ def test_the_retired_chunk_inputs_each_name_their_replacement():
         ("chunk_ns", 5.0, "duration_per_segment"),
         ("chunk", "5 ns", "duration_per_segment"),
         ("scale_factors", [1.0, 0.25], "tau_ladder"),
-        ("exchange_interval", "10 ps", "number_of_exchanges_per_segment"),
+        ("number_of_exchanges_per_segment", 100, "n_exchange_per_segment"),
     ]:
         doc = json.loads(json.dumps(MINIMAL))
         doc["protocol"]["production"][field] = value

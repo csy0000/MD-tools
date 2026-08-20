@@ -43,7 +43,6 @@
     },
     "production": {
       "method": "rest2",
-      "duration_per_segment": "5 ns",
       "enhanced_region": {
         "type": "solute"
       },
@@ -54,7 +53,8 @@
         "interpolation": "linear"
       },
       "exchange": {
-        "number_of_exchanges_per_segment": 100
+        "n_exchange_per_segment": 1000,
+        "exchange_interval": "5 ps"
       },
       "omega_exclusion": {
         "enabled": true,

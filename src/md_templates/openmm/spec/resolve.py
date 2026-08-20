@@ -219,13 +219,17 @@ _RETIRED_PRODUCTION_KEYS = {
         "`\"tau_ladder\": {\"minimum\": 0.0, \"maximum\": 0.5, \"count\": N, "
         "\"interpolation\": \"linear\"}`. For an existing ladder, tau = 1 - sqrt(s) for each rung."
     ),
-    "exchange_interval": (
-        "protocol.production.exchange_interval has been REPLACED by an exchange COUNT per segment, "
-        "so that changing the segment length cannot silently change how many attempts a segment "
-        "contains.\n"
+    "number_of_exchanges_per_segment": (
+        "protocol.production.number_of_exchanges_per_segment has been REPLACED. The exchange "
+        "schedule is now stated as a count AND an interval, and the segment length is derived "
+        "from their product:\n"
+        "      duration_per_segment = n_exchange_per_segment * exchange_interval\n"
+        "  A product is exact; the previous form made the interval a quotient of the segment "
+        "duration, which could fail to divide.\n"
         "  Migration: replace it with "
-        "`\"exchange\": {\"number_of_exchanges_per_segment\": N}`. The interval is derived as "
-        "duration_per_segment / N and is recorded in the run manifest."
+        "`\"exchange\": {\"n_exchange_per_segment\": 1000, \"exchange_interval\": \"5 ps\"}`, "
+        "and DELETE protocol.production.duration_per_segment -- for REST2 it is derived, not an "
+        "input."
     ),
 }
 
@@ -240,6 +244,21 @@ def _refuse_retired_chunk_inputs(document: dict) -> None:
     if not isinstance(production, dict):
         return
     found = [key for key in _RETIRED_PRODUCTION_KEYS if key in production]
+
+    # `duration_per_segment` is still the input for conventional MD, but for REST2 it is DERIVED
+    # from the exchange count and interval. Accepting it there would let one document state the
+    # same quantity twice and disagree with itself.
+    if production.get("method") == "rest2" and "duration_per_segment" in production:
+        raise ResolutionError(
+            "protocol.production.duration_per_segment is not an input for REST2: the segment "
+            "length is DERIVED as n_exchange_per_segment * exchange_interval, which is exact by "
+            "construction.\n"
+            "  Migration: delete it and state the schedule instead, for example\n"
+            "      \"exchange\": {\"n_exchange_per_segment\": 1000, \"exchange_interval\": \"5 ps\"}\n"
+            "  which is a 5 ns segment. Conventional MD (method: md) still takes "
+            "duration_per_segment directly."
+        )
+
     if not found:
         return
     detail = "\n\n".join(_RETIRED_PRODUCTION_KEYS[key] for key in found)

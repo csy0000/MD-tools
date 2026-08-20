@@ -13,7 +13,8 @@ import pytest
 pytest.importorskip("pydantic")
 yaml = pytest.importorskip("yaml")
 
-from md_templates.openmm.segments import plan_segment, reporting_interval_steps  # noqa: E402
+from md_templates.openmm.segments import (plan_segment_from_exchanges,
+                                          reporting_interval_steps)  # noqa: E402
 from md_templates.openmm.spec import resolve  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -175,19 +176,36 @@ def test_the_equilibration_stages_are_whole_steps(path):
 
 @pytest.mark.parametrize("path", [ALANINE, RGDFV])
 def test_the_worked_exchange_contract_resolves_exactly(path):
-    """5 ns / 4 fs / 100 exchanges -> 1,250,000 steps and 12,500 steps (50 ps) per round."""
+    """1000 exchanges x 5 ps at 4 fs -> 1,250 steps per round, 1,250,000 per segment."""
     spec = _resolved(path)
     production = spec.protocol.production
-    plan = plan_segment(
-        production.duration_per_segment.value,
+    plan = plan_segment_from_exchanges(
+        production.exchange.n_exchange_per_segment,
+        production.exchange.exchange_interval.value,
         spec.protocol.integrator.timestep.value,
-        duration_source=production.duration_per_segment.source,
+        interval_source=production.exchange.exchange_interval.source,
         timestep_source=spec.protocol.integrator.timestep.source,
-        number_of_exchanges_per_segment=production.exchange.number_of_exchanges_per_segment,
     )
+    assert plan.steps_per_exchange == 1_250
     assert plan.steps_per_segment == 1_250_000
-    assert plan.steps_per_exchange == 12_500
-    assert plan.number_of_exchanges_per_segment == 100
+    assert plan.number_of_exchanges_per_segment == 1_000
+
+
+@pytest.mark.parametrize("path", [ALANINE, RGDFV])
+def test_the_segment_length_is_derived_not_stated(path):
+    """A product, not a quotient: 1000 x 5 ps = 5 ns, exact by construction."""
+    production = _resolved(path).protocol.production
+    assert production.duration_per_segment.value == pytest.approx(5000.0)   # ps
+    assert "derived" in production.duration_per_segment.source
+
+
+@pytest.mark.parametrize("path", [ALANINE, RGDFV])
+def test_rest2_refuses_a_stated_segment_duration(path):
+    """Stating it as well would let one document say the same thing twice and disagree."""
+    document = json.loads(path.read_text())
+    document["protocol"]["production"]["duration_per_segment"] = "5 ns"
+    with pytest.raises(Exception, match="not an input for REST2"):
+        resolve.resolve_spec(document)
 
 
 @pytest.mark.parametrize("path", [ALANINE, RGDFV])
@@ -195,9 +213,13 @@ def test_segment_count_is_absent_from_the_scientific_input(path):
     """Ten ns per replica is two segments, and that '2' lives in Bash, not in the JSON."""
     document = json.loads(path.read_text())
     production = document["protocol"]["production"]
-    for retired in ("n_chunks", "chunk_ns", "chunk", "scale_factors", "exchange_interval"):
+    for retired in ("n_chunks", "chunk_ns", "chunk", "scale_factors",
+                    "number_of_exchanges_per_segment"):
         assert retired not in production, retired
-    assert "duration_per_segment" in production
+    # REST2 derives its segment length; it must not be stated
+    assert "duration_per_segment" not in production
+    assert production["exchange"]["n_exchange_per_segment"] == 1000
+    assert production["exchange"]["exchange_interval"] == "5 ps"
 
 
 # ---------------------------------------------------------------------------------------------

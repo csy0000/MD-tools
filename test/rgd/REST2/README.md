@@ -79,12 +79,18 @@ physical, unscaled Hamiltonian.
 ## Segments and exchange
 
 ```
-duration_per_segment            5 ns
+n_exchange_per_segment          1000
+exchange_interval               5 ps
 timestep                        4 fs
-steps per segment               1,250,000        (exact; a non-integer count is refused)
-number_of_exchanges_per_segment 100
-steps per exchange round        12,500           (= 50 ps)
+steps per exchange round        1,250            (5 ps / 4 fs, must divide exactly)
+steps per segment               1,250,000        (= 1000 x 1,250, a PRODUCT)
+duration_per_segment            5 ns             DERIVED, not stated
 ```
+
+The segment length is **derived by multiplication**, never stated. That is the point: a product is
+exact, so the only quantity that can fail to divide is the interval itself -- which is the one you
+chose directly. Stating a duration and an exchange count instead would make the interval a quotient
+that might not divide, and `duration_per_segment` is therefore **refused** for REST2.
 
 10 ns per replica is `NUMBER_OF_SEGMENTS=2`.
 

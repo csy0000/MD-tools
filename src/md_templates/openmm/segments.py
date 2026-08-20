@@ -124,6 +124,39 @@ def plan_segment(duration_per_segment_value: float, timestep_value: float, *,
     )
 
 
+def plan_segment_from_exchanges(n_exchange_per_segment: int, exchange_interval_value: float,
+                                timestep_value: float, *, interval_source: str,
+                                timestep_source: str) -> SegmentPlan:
+    """Resolve a REST2 segment stated as a COUNT and an INTERVAL.
+
+    This is the preferred form and the reason is arithmetic: the segment length is a product,
+
+        steps_per_segment = n_exchange_per_segment * steps_per_exchange
+
+    so it is exact whenever the interval itself is a whole number of steps. Stating a duration and
+    an exchange count instead makes the interval a quotient, which can fail to divide and then has
+    to be refused -- or, worse, rounded, drifting the exchange schedule out of alignment with the
+    committed watermark while the run still looks healthy.
+
+    1000 exchanges at 5 ps with a 4 fs timestep is 1250 steps per round and 1,250,000 per segment.
+    """
+    if n_exchange_per_segment < 1:
+        raise ValueError(
+            "exchange.n_exchange_per_segment must be at least 1; got "
+            f"{n_exchange_per_segment}"
+        )
+    steps_per_exchange = steps_for_duration(
+        exchange_interval_value, timestep_value,
+        duration_source=interval_source, timestep_source=timestep_source,
+        duration_label="exchange.exchange_interval",
+    )
+    return SegmentPlan(
+        steps_per_segment=steps_per_exchange * n_exchange_per_segment,
+        steps_per_exchange=steps_per_exchange,
+        number_of_exchanges_per_segment=n_exchange_per_segment,
+    )
+
+
 def reporting_interval_steps(interval_value: float, timestep_value: float, *,
                              interval_source: str, timestep_source: str,
                              label: str) -> int:
