@@ -770,6 +770,63 @@ def _scale_cmap_force(force: CMAPTorsionForce, solute_atom_indices: set[int], sc
         force.setMapParameters(map_index, size, [v * scale_factor for v in energy])
 
 
+#: Name of the global parameter injected into every CustomGBForce energy term. Chosen not to clash
+#: with any parameter already present in the GBn2 or HCT expressions.
+REST2_GB_SCALE_PARAMETER = "rest2_scale_gb"
+
+
+def _scale_customgb_force(force, system, solute_set: set, scale_factor: float) -> None:
+    """Scale the ENTIRE generalised-Born energy by `s`.
+
+    Charge scaling alone is not enough, and this is the part that is easy to get wrong. GBn2 has
+    three energy terms: two are proportional to charge products and would follow `charge * sqrt(s)`
+    correctly, but the third is a non-polar / dispersion correction with no charge dependence. It
+    still has to be scaled by `s` under REST2, and scaling charges leaves it untouched. Multiplying
+    every term by one global parameter scales all three uniformly.
+
+    The whole system must be the enhanced region. A GB energy is not decomposable into per-atom
+    contributions the way a bonded term is: every atom's Born radius depends on every other atom's
+    position, so a partial selection would need a validated treatment of the solute-environment
+    cross terms, and there is none here. Refused rather than approximated.
+
+    The expressions are rewritten in place and the parameter is added to the System, so this MUST
+    happen before a Context is created -- the compiled kernels have to already reference it.
+    """
+    n_particles = system.getNumParticles()
+    missing = [i for i in range(n_particles) if i not in solute_set]
+    if missing:
+        shown = ", ".join(str(i) for i in missing[:8])
+        more = f" and {len(missing) - 8} more" if len(missing) > 8 else ""
+        raise ValueError(
+            f"implicit REST2 requires the entire system to be the enhanced region, but "
+            f"{len(missing)} of {n_particles} particles are outside it ({shown}{more}).\n"
+            "  A generalised-Born energy is not separable per atom: every Born radius depends on "
+            "every other atom's\n"
+            "  position, so a partial selection needs a validated treatment of the "
+            "solute-environment cross terms.\n"
+            "  Refusing rather than approximating it. Set the enhanced region to the whole solute."
+        )
+
+    existing = {force.getGlobalParameterName(i)
+                for i in range(force.getNumGlobalParameters())}
+    if REST2_GB_SCALE_PARAMETER not in existing:
+        force.addGlobalParameter(REST2_GB_SCALE_PARAMETER, 1.0)
+        for term in range(force.getNumEnergyTerms()):
+            expression, computation = force.getEnergyTermParameters(term)
+            # Only the leading expression is scaled; everything after the first ';' defines
+            # intermediate variables, and multiplying those would change what they mean.
+            if ";" in expression:
+                head, tail = expression.split(";", 1)
+                scaled = f"{REST2_GB_SCALE_PARAMETER}*({head});{tail}"
+            else:
+                scaled = f"{REST2_GB_SCALE_PARAMETER}*({expression})"
+            force.setEnergyTermParameters(term, scaled, computation)
+
+    index = [force.getGlobalParameterName(i)
+             for i in range(force.getNumGlobalParameters())].index(REST2_GB_SCALE_PARAMETER)
+    force.setGlobalParameterDefaultValue(index, float(scale_factor))
+
+
 def build_rest2_scaled_system(base_system, solute_atom_indices: np.ndarray, scale_factor: float,
                               exclude_central_bonds=None):
     """Return a deep copy of *base_system* with REST2 Hamiltonian scaling applied.
@@ -806,11 +863,7 @@ def build_rest2_scaled_system(base_system, solute_atom_indices: np.ndarray, scal
         elif isinstance(force, CMAPTorsionForce):
             _scale_cmap_force(force, solute_set, scale_factor)
         elif isinstance(force, CustomGBForce):
-            raise ValueError(
-                "CustomGBForce found: this system uses implicit solvent, which this "
-                "explicit-water template does not support. Build the system with PME in "
-                "a solvated box instead."
-            )
+            _scale_customgb_force(force, system, solute_set, scale_factor)
     return system
 
 
