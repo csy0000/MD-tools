@@ -370,19 +370,22 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
             # The implicit peptide route is parameterised by tleap, so the force field it used is
             # the leaprc -- not the OpenMM XML the explicit defaults name. Recording both names for
             # one force field is exactly what the agreement check exists to catch.
-            # No water in either implicit route. This was previously cleared only on the peptide
-            # branch, so a ligand bundle recorded a water force field for water it does not have.
-            cfg["forcefield"]["water"] = None
-            cfg.setdefault("_value_sources", {})["forcefield.water"] = (
-                "route-derived: implicit solvent has no water")
-            if built["route"] == "peptide":
-                cfg["forcefield"]["protein"] = built["build"].get(
-                    "protein_forcefield", "leaprc.protein.ff19SB")
-                # The package defaults name a small-molecule force field and charge method for
-                # every build. This route parameterises no small molecule, and recording those
-                # would advertise chemistry that never ran.
-                cfg["forcefield"]["ligand"] = None
-                cfg["forcefield"]["ligand_charge_method"] = None
+            # The package defaults name a force field for EVERY component -- protein, water and
+            # small molecule -- because an explicit-water build may need all three. A given route
+            # parameterises one of them, and carrying the others records chemistry that never ran.
+            # This has now been the shape of three separate defects (water on the ligand route, a
+            # protein force field on the ligand route, small-molecule parameters on the peptide
+            # route), so the rule is written once: keep what this route used, null the rest.
+            used_by_route = {
+                "peptide": {"protein": built["build"].get("protein_forcefield",
+                                                          "leaprc.protein.ff19SB")},
+                "ligand": {"ligand": built["build"].get("small_molecule_forcefield"),
+                           "ligand_charge_method": built["build"].get("charge_method")},
+            }[built["route"]]
+            for field in ("protein", "water", "ligand", "ligand_charge_method"):
+                cfg["forcefield"][field] = used_by_route.get(field)
+                cfg.setdefault("_value_sources", {})[f"forcefield.{field}"] = (
+                    f"route-derived: {built['route']} route, implicit solvent")
             # The build settings must describe the System that was built. The package defaults are
             # explicit-water ones -- PME, a 1.0 nm cutoff, HMR to 3.024 amu, rigid water -- and
             # leaving them here made the manifest claim a Hamiltonian this bundle does not have.
@@ -634,8 +637,15 @@ def _write_system_yaml(path: Path, config: dict, cfg: dict, manifest: dict, info
         }),
     }
     if doc["input"]["route"] == "smiles":
-        doc["input"]["smiles"] = system.get("smiles")
-        doc["input"]["canonical_isomeric_smiles"] = system.get("smiles")
+        from .schemas import sha256_text
+
+        canonical = system.get("smiles")
+        doc["input"]["smiles"] = canonical
+        doc["input"]["canonical_isomeric_smiles"] = canonical
+        # The hash of the string this file itself declares. It catches an edited SMILES even in an
+        # environment that cannot parse chemistry, which is the point of storing it rather than
+        # re-deriving it on read.
+        doc["input"]["canonical_smiles_sha256"] = sha256_text(canonical or "")
     else:
         doc["input"]["pdb"] = system["input_file"]
         doc["input"]["pdb_sha256"] = system["input_sha256"]
