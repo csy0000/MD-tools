@@ -219,6 +219,18 @@ in any stage, velocities initialised once at `eq_nvt` and inherited after, every
 and log written at its exact cadence. REST2 ran and **continued**: 2 chunks, 50 lifetime exchange
 attempts with 25 per invocation, in the same run directory from the committed-generation record.
 
+Implicit cyclo-RGDfV, CPU, the whole chain through `run_all.sh`: prepare (AM1-BCC for the 79-atom
+macrocycle) → `min` → `eq_nvt` → `cMD_1` → REST2 over two segments, exit 0.
+
+```
+6 replicas, s = [1.0, 0.81, 0.64, 0.49, 0.36, 0.25]
+T_eff       = [300, 370, 469, 612, 833, 1200] K
+2 chunks, 50 lifetime exchange attempts, 25 per invocation, acceptance 0.26
+```
+
+The lifetime/invocation split is what shows the second segment continued rather than restarted.
+Again: 50 attempts is a smoke figure and says nothing about convergence or ladder quality.
+
 Ladders are shorter than their explicit counterparts, at the user's direction: **4 replicas for
 alanine, 6 for cyclo-RGDfV**, set in the profile defaults so the split follows the route. Measured for
 the 4-replica ladder: `s = [1.0, 0.694, 0.444, 0.25]`, `T_eff = [300, 432, 675, 1200] K`, acceptance
