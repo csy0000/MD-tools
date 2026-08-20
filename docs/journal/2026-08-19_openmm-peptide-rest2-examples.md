@@ -13,12 +13,13 @@ be a descendant of the expected `9e08dffd`).
 | tau parameterisation of the REST2 ladder | implemented, tested |
 | exact step / exchange arithmetic | implemented, tested |
 | deterministic replica→device mapping | implemented, tested |
-| alanine worked example (6 replicas) | generated, configuration validated, **not executed** |
-| RGDfV worked example (10 replicas) | generated, configuration validated, **not executed** |
-| extension examples | generated, **not executed** |
-| runner/runstate wiring of the new contract | **deferred** — see "Not done" |
+| alanine worked example (6 replicas) | executed — see addendum |
+| RGDfV worked example (10 replicas) | executed — see addendum |
+| extension examples | demonstrated on CPU; production extension in the addendum |
+| runner/runstate wiring of the new contract | **no rewiring needed** — see addendum |
 
-Nothing in this entry is a scientific result. No simulation was run.
+Nothing in this entry is a scientific result. **This section was written before the runs; the
+addendum at the end supersedes it where they disagree.**
 
 ## Phase 0: branch migration is blocked
 
@@ -118,10 +119,10 @@ that would work:
 
 ```
 duration_per_segment            5 ns
-timestep                        2 fs
-steps per segment               2,500,000
+timestep                        4 fs          (2 fs before HMR was enabled; see the addendum)
+steps per segment               1,250,000
 number_of_exchanges_per_segment 100
-steps per exchange round        25,000        (= 50 ps)
+steps per exchange round        12,500        (= 50 ps)
 ```
 
 An exchange count that does not divide the segment is refused: a round landing mid-step drops or
@@ -141,8 +142,10 @@ ff19SB's backbone parameters were fit with OPC. Sage's vdW parameters were train
 condensed-phase properties in TIP3P, and AM1-BCC charges were derived to be consistent with
 TIP3P-era additive force fields. The pairings are not interchangeable.
 
-OPC is a four-site model, so the alanine system's OpenMM particle count exceeds its topology atom
-count. Anything indexing particles must use the resolved indices from the bundle.
+OPC is a four-site model. **Correction:** an earlier draft of this entry claimed its virtual sites
+make the OpenMM particle count exceed the topology atom count. Measured on the prepared bundle they
+are EQUAL (1496 = 1496) -- OpenMM's OPC template carries the M-site as a topology atom. Code that
+indexes particles should still use the resolved indices from the bundle, but not for that reason.
 
 ### Conflict with the instruction, recorded rather than reconciled
 
