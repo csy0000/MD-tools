@@ -233,6 +233,75 @@ def test_the_initial_state_carries_no_velocities_and_no_box(implicit_bundle):
 
 
 # ---------------------------------------------------------------------------------------------
+# the OpenFF/Sage route, where changeRadii is load-bearing
+# ---------------------------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def rgdfv_implicit_bundle(tmp_path_factory):
+    """The cyclo-RGDfV implicit bundle. Expensive: AM1-BCC for the whole macrocycle."""
+    out = tmp_path_factory.mktemp("rgd_implicit") / "bundle"
+    smi = REPO_ROOT / "test" / "rgd" / "implicit" / "cyclo_rgdfv.smi"
+    config = REPO_ROOT / "test" / "rgd" / "implicit" / "system_config.json"
+    result = _run(SYSTEM_GEN, "-i", str(smi), "-o", str(out), "--config", str(config))
+    if result.returncode != 0:
+        pytest.skip(f"RGDfV implicit preparation unavailable: {result.stderr[-400:]}")
+    return out
+
+
+@pytest.mark.slow
+def test_the_rgdfv_bundle_is_the_pinned_parmed_construction(rgdfv_implicit_bundle):
+    """The same exactness required of alanine, on the route with different parameters."""
+    from openmm import XmlSerializer, app
+
+    positions = app.AmberInpcrdFile(str(rgdfv_implicit_bundle / "system.rst7")).positions
+    mine = _components(
+        XmlSerializer.deserialize((rgdfv_implicit_bundle / "system.xml").read_text()), positions)
+    reference = _components(
+        _reference_system(rgdfv_implicit_bundle / "system.prmtop",
+                          rgdfv_implicit_bundle / "system.rst7"),
+        positions)
+    for force, value in reference.items():
+        assert mine[force] == pytest.approx(value, abs=1e-9), force
+
+
+@pytest.mark.slow
+def test_changeradii_is_load_bearing_for_the_openff_route(rgdfv_implicit_bundle):
+    """The reason the call is unconditional, measured rather than asserted.
+
+    A Sage/OpenFF topology carries no GB radii at all, so without `changeRadii` the radii would be
+    zero and the GB energy meaningless. For the tleap alanine topology the same call changes
+    nothing. Applying it always is safe for the first case and required for this one.
+    """
+    manifest = json.loads((rgdfv_implicit_bundle / "system_manifest.json").read_text())
+    implicit = manifest["implicit"]
+    assert implicit["radii_change_was_a_no_op"] is False
+    assert implicit["radii_max_change_angstrom"] > 1.0, (
+        "the OpenFF topology's radii should have moved substantially; if this is now a no-op, the "
+        "toolchain started writing radii and the reason for the unconditional call has changed")
+
+
+@pytest.mark.slow
+def test_the_rgdfv_implicit_system_has_no_water_box_or_barostat(rgdfv_implicit_bundle):
+    from openmm import XmlSerializer
+
+    system = XmlSerializer.deserialize((rgdfv_implicit_bundle / "system.xml").read_text())
+    assert system.usesPeriodicBoundaryConditions() is False
+    assert not [f for f in system.getForces() if "Barostat" in type(f).__name__]
+    manifest = json.loads((rgdfv_implicit_bundle / "system_manifest.json").read_text())
+    assert manifest["composition"]["n_solute_atoms"] == system.getNumParticles(), (
+        "under implicit solvent the solute IS the system")
+
+
+@pytest.mark.slow
+def test_the_rgdfv_bundle_records_its_vetted_chemistry(rgdfv_implicit_bundle):
+    """The ligand route's provenance must name the parameters that actually ran."""
+    forcefield = json.loads((rgdfv_implicit_bundle / "forcefield.json").read_text())
+    assert forcefield["ligand"] == "openff-2.2.0"
+    assert forcefield["ligand_charge_method"] == "am1bcc"
+    assert forcefield["protein_forcefield"] is None, "a ligand route parameterises no protein"
+
+
+# ---------------------------------------------------------------------------------------------
 # REST2 scaling of the generalised-Born energy
 # ---------------------------------------------------------------------------------------------
 

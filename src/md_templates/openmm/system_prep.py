@@ -370,10 +370,14 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
             # The implicit peptide route is parameterised by tleap, so the force field it used is
             # the leaprc -- not the OpenMM XML the explicit defaults name. Recording both names for
             # one force field is exactly what the agreement check exists to catch.
+            # No water in either implicit route. This was previously cleared only on the peptide
+            # branch, so a ligand bundle recorded a water force field for water it does not have.
+            cfg["forcefield"]["water"] = None
+            cfg.setdefault("_value_sources", {})["forcefield.water"] = (
+                "route-derived: implicit solvent has no water")
             if built["route"] == "peptide":
                 cfg["forcefield"]["protein"] = built["build"].get(
                     "protein_forcefield", "leaprc.protein.ff19SB")
-                cfg["forcefield"]["water"] = None
                 # The package defaults name a small-molecule force field and charge method for
                 # every build. This route parameterises no small molecule, and recording those
                 # would advertise chemistry that never ran.
@@ -401,7 +405,6 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
                     "route-derived: implicit solvent")
                 cfg.setdefault("_value_sources", {})["forcefield.protein"] = (
                     "route-derived: tleap leaprc for the implicit route")
-                cfg["_value_sources"]["forcefield.water"] = "route-derived: implicit has no water"
             info = {
                 "route": built["route"],
                 "input_route": input_format,

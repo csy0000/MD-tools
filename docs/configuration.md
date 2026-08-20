@@ -295,6 +295,106 @@ stage and a `REST2` stage. Until the model grows a multi-stage production block 
 outside it -- they are extracted before canonical resolution and recorded in `run_manifest.json`
 with their values, so nothing is silent, but they do not participate in the configuration hashes.
 
+### Explicit water or implicit solvent
+
+`solvation.mode` discriminates, and each mode rejects the other's fields **by name** rather than
+ignoring them. A configuration stating `ionic_strength_molar` under implicit solvent describes an
+experiment that would not be run, and nothing in the output would say so.
+
+```json
+{"solvation": {"mode": "implicit", "implicit_model": "GBn2", "radii": "mbondi3"}}
+```
+
+`GBn2` and `mbondi3` are the defaults and the pairing is not arbitrary: GBn2 was parameterised
+against mbondi3, so another radius set is a different Hamiltonian that still runs. Spellings are
+canonicalised case-insensitively, so a bundle records one name for one thing.
+
+**When each is appropriate.** Explicit water is the reference treatment: it represents hydrogen
+bonding, dielectric screening and hydrophobic packing with real molecules, at the cost of a box that
+is usually 100x the solute. Implicit solvent replaces all of that with a continuum, which makes long
+sampling of a small solute affordable and removes solvent viscosity so conformational transitions
+happen faster in wall-clock terms. What it does not do is reproduce specific water bridges, ion
+pairing, or any property that depends on discrete solvent structure. Choose it to sample a solute's
+own degrees of freedom cheaply; do not choose it to study solvation itself.
+
+#### What implicit mode does not have, and why the absence is enforced
+
+No water, no box, no ions, no salt concentration, no PME, no real-space cutoff, no pressure and no
+barostat. Implicit solvent has no volume, so pressure is undefined; an NPT stage or a `pressure`
+field is refused **before generation**, with the stage graph spelled out, rather than ignored at run
+time.
+
+The implicit stage graph is therefore:
+
+```
+min -> eq_nvt -> cMD_1 -> REST2_1
+```
+
+There is no `eq_npt_1` or `eq_npt_2` and there cannot be.
+
+#### The construction path is part of the Hamiltonian
+
+The System is built through ParmEd:
+
+```python
+st = parmed.load_file(prmtop, xyz=rst7)
+parmed.tools.changeRadii(st, "mbondi3").execute()
+system = st.createSystem(nonbondedMethod=NoCutoff, constraints=HBonds,
+                         implicitSolvent=GBn2, removeCMMotion=True)
+```
+
+`AmberPrmtopFile.createSystem()` is **not** interchangeable with it. Measured on ACE-ALA-NME with
+identical per-particle GB parameters and identical radii, the two agree to 0.0000 kJ/mol on every
+force except `CustomGBForce`, where they differ by **16.05 kJ/mol**. Under REST2 that offset is
+several kT of spurious work, so every replica in a ladder must sit on the same branch.
+
+`changeRadii` runs unconditionally. Measured: a **no-op** for a tleap-built peptide topology
+(max |dR| = 0.0000 Å, since tleap already wrote mbondi3) and **load-bearing** for an OpenFF/Sage
+topology (max |dR| = 1.70 Å, since those carry no GB radii at all). The bundle manifest records
+which case a given bundle was, so a reader does not have to trust the claim.
+
+`system.prmtop` and `system.rst7` are construction intermediates and provenance for the OpenMM
+System. **This repository has no Amber execution engine.**
+
+#### Mass and timestep are not inherited
+
+The implicit profiles do **not** repartition hydrogen mass. The pinned reference builds its base
+System without repartitioning and the GBn2 energy validation is against an unrepartitioned System,
+so 3.024 amu hydrogens would be a different build that still passes every structural check. Without
+HMR, 4 fs is not stable for the fastest remaining motions, so the implicit profiles use **2 fs**.
+That choice is stated in the profile, not inherited by accident.
+
+#### Implicit REST2
+
+The whole system is the enhanced region, and a partial selection is **refused**. A generalised-Born
+energy is not separable per atom -- every Born radius depends on every other atom's position -- so a
+partial region needs a validated treatment of the solute-environment cross terms, and there is none
+here.
+
+The complete `CustomGBForce` energy is scaled by `s = (1 - tau)^2` through an injected global
+parameter, not by scaling charges. GBn2 has three energy terms and one is a non-polar correction
+with no charge dependence: `charge x sqrt(s)` would leave it at full strength. Measured: at `tau = 0`
+the scaled System is bitwise identical to the unscaled one, and at `tau = 0.1, 0.25, 0.4, 0.5` the GB
+energy equals `s x` the unscaled GB energy to ~1e-13 kJ/mol. Exactness at *every* tau is what shows
+all three terms scale.
+
+Omega exclusion remains torsion-only and is applied after the enhanced region is resolved, so it
+never alters GB or nonbonded scaling.
+
+**Ladder sizes.** Implicit ladders are shorter than their explicit counterparts: 4 replicas for the
+peptide route, 6 for the ligand route, against 10 for explicit water.
+
+#### Named profiles
+
+`implicit-md-peptide-v1`, `implicit-md-ligand-v1`, `implicit-rest2-peptide-v1`,
+`implicit-rest2-ligand-v1`. Named rather than branching hidden inside the explicit profiles, so
+choosing implicit solvent is a decision recorded in the configuration.
+
+Adding them moved **no existing hash**: the canonical build document omits whichever solvent
+treatment is absent, so `"implicit": null` never enters an explicit build. Carrying it would have
+changed `system_build_sha256` for every existing explicit configuration and made every prepared
+bundle look stale for a field that says nothing.
+
 ### Refusing to overwrite
 
 Both generators check the destination **before doing any work** and stop if a file they would write

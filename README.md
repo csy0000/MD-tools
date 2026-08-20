@@ -361,6 +361,36 @@ starting state and every stage up to and including it is recorded in `skipped_st
 silently omitted. It is not a checkpoint resume -- continuing a REST2 run happens inside that run's
 own directory, under the runner's own record.
 
+### Implicit solvent (GBn2 / mbondi3)
+
+`solvation.mode: implicit` builds a generalised-Born System instead of a water box. Defaults are
+`GBn2` with `mbondi3` radii -- the pairing GBn2 was parameterised against.
+
+Implicit mode has **no** water, box, ions, salt, PME, cutoff, pressure or barostat, and the stage
+graph is correspondingly shorter:
+
+```
+explicit:  min -> eq_nvt -> eq_npt_1 -> eq_npt_2 -> cMD_1 -> REST2_1
+implicit:  min -> eq_nvt ->                         cMD_1 -> REST2_1
+```
+
+There is no NPT stage and there cannot be one: with no box there is no volume to equilibrate and
+pressure is undefined. Stating one is refused before generation rather than ignored at run time.
+
+The System is built through ParmEd -- `load_file`, `changeRadii`, `Structure.createSystem` -- and
+**not** through `AmberPrmtopFile.createSystem`. The two differ by ~16 kJ/mol in `CustomGBForce` with
+identical radii and identical per-particle parameters, which under REST2 is several kT of spurious
+work, so the construction branch is part of the Hamiltonian. `system.prmtop` and `system.rst7` are
+kept as construction provenance; there is no Amber execution engine here.
+
+Implicit profiles do not repartition hydrogen mass and use a 2 fs timestep, stated explicitly rather
+than inherited from the explicit-water profiles. Implicit REST2 requires the whole system as the
+enhanced region and scales the entire GB energy by `s`, including the non-polar term that charge
+scaling alone would miss. Ladders are shorter: 4 replicas for the peptide route, 6 for the ligand
+route.
+
+Worked examples: `test/ala/implicit/` and `test/rgd/implicit/`.
+
 ### Current implementation status
 
 OpenMM is implemented. The system manifest carries an `adapter_status` block that says plainly that
