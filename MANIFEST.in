@@ -6,3 +6,9 @@ recursive-include build_support *.py
 include setup.py
 include CHANGELOG.md
 include environment-ci.yml
+
+# The public entry points and the worked examples. A consuming project that installs an sdist should
+# be able to read how the generators are meant to be driven, not just import the package.
+include MD_system_gen.py
+include MD_input_gen.py
+recursive-include test *.json *.md *.smi *.pdb

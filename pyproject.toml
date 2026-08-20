@@ -34,6 +34,8 @@ dev = ["pytest", "build"]
 # The entry point. Installing the wheel puts `md-openmm` on PATH, which is what lets a
 # consuming project run the pipeline without a source checkout.
 [project.scripts]
+md-system-gen = "md_templates.openmm.cli_system_gen:main"
+md-input-gen = "md_templates.openmm.cli_input_gen:main"
 md-openmm = "md_templates.openmm.cli:main"
 
 [tool.setuptools.packages.find]

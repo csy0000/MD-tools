@@ -518,3 +518,50 @@ def test_the_implicit_workflow_executes_and_writes_its_declared_outputs(implicit
         (implicit_project / s / f"{s}_results.json").read_text())["velocities"]
         for s in ("min", "eq_nvt", "cMD_1")}
     assert velocities == {"min": "not required", "eq_nvt": "initialized", "cMD_1": "inherited"}
+
+
+# ---------------------------------------------------------------------------------------------
+# packaging
+# ---------------------------------------------------------------------------------------------
+
+def test_the_public_entry_points_are_importable_from_the_package():
+    """They used to exist only as repository-root scripts.
+
+    A public entry point that lives only in a source tree is not installable, so a consuming
+    project could import the library and still have no way to run the generators. The root scripts
+    are now shims over packaged modules, and the console scripts point at those modules.
+    """
+    import tomllib
+
+    from md_templates.openmm import cli_input_gen, cli_system_gen
+
+    assert callable(cli_system_gen.main)
+    assert callable(cli_input_gen.main)
+
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    scripts = pyproject["project"]["scripts"]
+    assert scripts["md-system-gen"] == "md_templates.openmm.cli_system_gen:main"
+    assert scripts["md-input-gen"] == "md_templates.openmm.cli_input_gen:main"
+
+
+def test_the_root_scripts_are_shims_and_not_a_second_implementation():
+    """Two copies of an entry point drift, and the drift is invisible until they disagree."""
+    for name, module in (("MD_system_gen.py", "cli_system_gen"),
+                         ("MD_input_gen.py", "cli_input_gen")):
+        body = (REPO_ROOT / name).read_text()
+        assert f"from md_templates.openmm.{module} import" in body, name
+        assert "_FORMAT_BY_SUFFIX" not in body, f"{name} still holds its own implementation"
+        assert len(body.splitlines()) < 40, f"{name} should be a shim, not a program"
+
+
+def test_every_profile_ships_in_the_package():
+    """A profile that is not packaged cannot be selected from an installed wheel."""
+    import md_templates
+
+    packaged = {p.name for p in
+                (Path(md_templates.__file__).parent / "openmm" / "spec" / "profiles")
+                .glob("*.json")}
+    for expected in ("implicit-md-peptide-v1.json", "implicit-md-ligand-v1.json",
+                     "implicit-rest2-peptide-v1.json", "implicit-rest2-ligand-v1.json",
+                     "explicit-rest2-peptide-v1.json", "cpu-smoke-v1.json"):
+        assert expected in packaged, expected
