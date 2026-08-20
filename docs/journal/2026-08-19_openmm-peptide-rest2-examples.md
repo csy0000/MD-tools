@@ -285,3 +285,130 @@ change was made and no remote CI run was observed.
 - first-class minimisation restraint block (force constant, reference coordinates) in the schema
 - execute the worked protocols on the workstation and record concise summaries and hashes
 - CPU smoke variants of each example for the default CI suite
+
+---
+
+# Addendum — HMR, CUDA execution, and measured throughput
+
+Added after the entry above, at the user's direction. Everything here was measured on the
+workstation's RTX 3080s, not estimated.
+
+## Hydrogen-mass repartitioning at 4 fs
+
+Both systems now repartition hydrogen mass to **3.024 amu** (solute scope) and integrate at **4 fs**,
+across minimisation, NVT, NPT, cMD, REST2 and the extension. HMR did not need implementing —
+`repartition_hydrogen_mass` already conserved mass with an assertion, refused to leave a heavy atom
+under 1 amu, and never touched water. The examples had explicitly *disabled* it to follow the
+instruction's "no HMR"; this re-enables it.
+
+Every stage remains an exact whole number of steps, so nothing is rounded:
+
+```
+NVT / NPT   10 ps  ->     2,500 steps      cMD          1 ns  ->   250,000 steps
+REST2 segment 5 ns -> 1,250,000 steps      exchange round     ->    12,500 steps (50 ps)
+report full 100 ps ->    25,000 steps      report solute 10 ps->     2,500 steps
+```
+
+Confirmed on the real path: alanine repartitioned **12** hydrogens (it has exactly 12), RGDfV **38**,
+both solute-scope with total mass conserved.
+
+HMR is applied to the base System **before** tau scaling, so every replica has identical masses.
+That matters for exchange validity: the acceptance criterion here is potential-energy-only, so
+masses must not differ across the ladder. HMR changes the equations of motion, not the potential
+energy surface — thermodynamic averages are unaffected, kinetic quantities are not comparable to an
+unrepartitioned run.
+
+## Three defects that only appeared when the code RAN
+
+Configuration-level tests passed on all three. This is the entry's main lesson.
+
+**1. OPC was accepted by the schema and refused at runtime.** OpenMM's `Modeller.addSolvent` ships
+pre-equilibrated boxes only for tip3p/spce/tip4pew/tip5p/swm4ndp, so `model=opc` raised
+`Unknown water model`. The alanine example validated and would have failed the moment anyone ran it.
+
+Fixed properly rather than by retreating to TIP3P: the simulated water model is decided by the
+**force field**, and OpenMM documents the route — "a box of TIP4P-Ew water can be used for most four
+site water models". `solvation.resolve_packing_model` maps a model without its own box onto a
+same-site-count stand-in (`opc -> tip4pew`, `opc3 -> tip3p`) and the bundle records both the
+simulated and the packing model. Only same-site-count substitutions are declared; packing a
+four-site model into a three-site box would leave its virtual sites unplaced, so anything undeclared
+is refused rather than approximated.
+
+**2. The multi-GPU device mapping was correct and unreachable.** `map_replicas_to_devices` had seven
+passing tests and appeared nowhere in `src/` outside its own module. The CLI accepted only
+`--device` (singular) and `_platform_and_properties` applied one `DeviceIndex` to every replica, so
+every replica would have run on one GPU whatever the mapping said. The example scripts compounded it
+by passing `--devices`, a flag that did not exist. Now wired through
+`_platform_and_properties` -> `_make_simulation` -> `rest2` -> `runner` -> CLI, with `--device`
+alone still covering every replica so existing behaviour is unchanged.
+
+**3. Both example scripts would have failed.** `run_all.sh` passed `--run-name` on every segment,
+but a fresh run correctly refuses to overwrite an existing directory, so segment 2 would have
+stopped. `extend.sh` passed `--run-name` *and* `--resume-run`, which are mutually exclusive.
+
+## The segment contract needed no rewiring
+
+`runner`/`md`/`rest2` already treated `n_chunks` as "what THIS invocation adds", with the start taken
+from the committed record, so the adapter's `n_chunks: 1` already means one segment per invocation.
+Demonstrated on CPU rather than assumed — a fresh run plus two extensions produced:
+
+```
+attempt_index  0 1 2 3 4 5      no duplicates
+step           500 .. 3000      monotonic
+time_ps        2 .. 12          continuous across both boundaries
+phase          0 1 0 1 0 1      alternation preserved
+                                one CSV header, two committed generations
+```
+
+`tests/test_segment_extension.py` locks this in (instruction test items 13 and 15, plus the
+fresh-run refusal).
+
+## Measured REST2 throughput
+
+4 fs with HMR, mixed precision, one timed 1 ns segment per replica, wall clock including setup and
+exchange overhead.
+
+| system | replicas | GPUs | particles | ns/day per replica | aggregate |
+|---|---|---|---|---|---|
+| alanine (ACE-ALA-NME, OPC) | 6 | 6 | 2,442 | **398.2** | 2,389 |
+| cyclo-RGDfV (Sage/AM1-BCC, TIP3P) | 10 | 8 | 4,221 | **143.4** | 1,434 |
+| cyclo-RGDfV | 10 | **5** | 4,221 | **143.4** | 1,434 |
+
+**The 8-GPU and 5-GPU RGDfV results are identical to 0.04 %** (602.4 s vs 602.6 s wall). With 10
+replicas on 8 devices, two devices carry two replicas and take ~2x as long per exchange round; every
+replica waits at the round barrier, so the round costs whatever the slowest device costs — the same
+as if every device were doubled. **Three of the eight GPUs contribute nothing to an RGDfV run.**
+
+Use **5 GPUs for RGDfV**, not 8. Speeding it up genuinely would need one replica per device, i.e.
+ten identical GPUs; the machine has eight 3080s plus a differently-architected A5000. Changing the
+ladder to 8 rungs would be a scientific change to exchange spacing, not a scheduling decision.
+
+Alanine cannot use eight GPUs either: its ladder is six replicas, so six devices are occupied and
+two idle. REST2 parallelises across replicas, not within one.
+
+Derived wall clock for the worked protocols, all replicas in parallel:
+
+| | 10 ns protocol | + one 5 ns extension |
+|---|---|---|
+| alanine | 36 min | 54 min |
+| RGDfV | 1 h 40 min | 2 h 30 min |
+
+This corrects the earlier entry's expectation of a multi-day job. It is not one.
+
+## Preparation cost
+
+RGDfV's prepare took **27 m 41 s wall / 1300 CPU-minutes**, almost entirely AM1-BCC charge
+derivation through `sqm`. That is a one-time per-system cost paid before any GPU work, and it is
+why the SMILES route needed testing separately from alanine's PDB route.
+
+The prepared RGDfV bundle independently confirms the vetted chemistry: **79 solute atoms** (matching
+C26H38N8O7), net charge **4.6e-15** against a declared formal charge of 0, `protein_forcefield: None`.
+
+## Environment note
+
+The slow suite requires **`sqm` on PATH** (AmberTools), or the SMILES route cannot compute AM1-BCC
+charges and `validate-env` fails. `environment-ci.yml` lists `ambertools` for exactly this reason.
+In this session `sqm` came from the `ambertools26` conda environment while the tests ran under
+`openfftools`.
+
+Full suite after all of the above: **667 passed** (both markers, 10 min).
