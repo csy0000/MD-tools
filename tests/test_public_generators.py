@@ -767,6 +767,114 @@ def test_rest2_refuses_to_start_without_its_predecessors_endpoint(executed_proje
 
 
 # ---------------------------------------------------------------------------------------------
+# resolved system provenance
+# ---------------------------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_the_manifest_records_the_resolution_not_the_user_document(prepared_system):
+    """It used to label the raw user JSON `resolved_system_config`.
+
+    That is not a naming quibble: the input omits nearly every value the package chose, so the
+    manifest silently claimed a System defined by a handful of fields.
+    """
+    manifest = json.loads((prepared_system / "system_manifest.json").read_text())
+    resolved = manifest["resolved_system_config"]
+    stated = manifest["stated_system_config"]
+
+    # values the user never wrote, which nonetheless define the built System
+    build = resolved["system_build"]
+    assert build["constraints"] == "HBonds"
+    assert build["nonbonded_method"] == "PME"
+    assert build["hydrogen_mass_amu"] == pytest.approx(3.024)
+    assert build["hmr_scope"] == "solute"
+    assert build["nonbonded_cutoff_nm"] > 0
+
+    # the user stated three of these and the package resolved the rest; the manifest used to record
+    # only the three
+    assert set(build) > set(stated.get("system_build", {})), (
+        "the resolution must be strictly richer than the stated document")
+    assert "constraints" not in stated.get("system_build", {})
+
+
+@pytest.mark.slow
+def test_every_build_defining_value_says_where_it_came_from(prepared_system):
+    """When two bundles differ, the only useful question is which values I chose."""
+    manifest = json.loads((prepared_system / "system_manifest.json").read_text())
+    sources = manifest["value_sources"]
+    assert sources, "a manifest without attribution cannot be audited"
+
+    assert sources["forcefield.protein"] == "user input"
+    assert sources["system_build.constraints"] == "package default"
+    assert sources["solvation.water_model"] == "user input"
+    assert "route-derived" in sources["system.solute_kind"]
+
+    resolved = manifest["resolved_system_config"]
+    for path, origin in sources.items():
+        section, _, key = path.partition(".")
+        if section in resolved and isinstance(resolved[section], dict):
+            assert key in resolved[section] or "." in key, f"{path} attributed but not recorded"
+        assert origin, path
+
+
+@pytest.mark.slow
+def test_the_manifest_changes_when_a_build_defining_input_changes(tmp_path):
+    """A build-defining change must be visible in the manifest, or the bundle lies about itself."""
+    config = json.loads((REPO_ROOT / "test" / "ala" / "REST2" / "system_config.json").read_text())
+    base = tmp_path / "base.json"
+    base.write_text(json.dumps(config))
+
+    changed = json.loads(json.dumps(config))
+    changed["solvation"]["padding_nm"] = config["solvation"]["padding_nm"] + 0.3
+    other = tmp_path / "other.json"
+    other.write_text(json.dumps(changed))
+
+    manifests = []
+    for name, cfg_path in (("a", base), ("b", other)):
+        result = _run(SYSTEM_GEN, "-i", str(ALANINE_PDB), "-o", str(tmp_path / name),
+                      "--config", str(cfg_path))
+        assert result.returncode == 0, result.stdout + result.stderr
+        manifests.append(json.loads((tmp_path / name / "system_manifest.json").read_text()))
+
+    a, b = (m["resolved_system_config"]["solvation"]["padding_nm"] for m in manifests)
+    assert a != b, "a changed build-defining input must change the recorded resolution"
+
+
+@pytest.mark.slow
+def test_the_three_bundle_files_describe_one_hamiltonian(prepared_system):
+    """Nothing forces them to agree, and a disagreement is invisible in each file alone."""
+    yaml = pytest.importorskip("yaml")
+
+    manifest = json.loads((prepared_system / "system_manifest.json").read_text())
+    forcefield = json.loads((prepared_system / "forcefield.json").read_text())
+    system_yaml = yaml.safe_load((prepared_system / "system.yaml").read_text())
+
+    resolved = manifest["resolved_system_config"]["forcefield"]
+    parameterization = system_yaml["parameterization"]
+    assert (resolved["protein"] == parameterization["protein_forcefield"]
+            == forcefield["protein_forcefield"])
+    assert resolved["water"] == parameterization["water_forcefield"] == forcefield["water"]
+
+
+def test_a_bundle_whose_files_disagree_is_refused(tmp_path):
+    """The check runs at build time, because the bundle is the thing that travels."""
+    import yaml
+
+    from md_templates.openmm.system_prep import _check_the_three_files_describe_one_hamiltonian
+
+    bundle = tmp_path / "b"
+    bundle.mkdir()
+    (bundle / "system_manifest.json").write_text(json.dumps(
+        {"resolved_system_config": {"forcefield": {"protein": "amber19/protein.ff19SB.xml"}}}))
+    (bundle / "forcefield.json").write_text(
+        json.dumps({"protein_forcefield": "amber14/protein.ff14SB.xml"}))
+    (bundle / "system.yaml").write_text(yaml.safe_dump(
+        {"parameterization": {"protein_forcefield": "amber19/protein.ff19SB.xml"}}))
+
+    with pytest.raises(RuntimeError, match="disagree"):
+        _check_the_three_files_describe_one_hamiltonian(bundle)
+
+
+# ---------------------------------------------------------------------------------------------
 # declared outputs must be real
 # ---------------------------------------------------------------------------------------------
 

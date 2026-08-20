@@ -110,9 +110,23 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
     cfg["system"]["slug"] = system_block.get("id") or input_path.stem.lower().replace("-", "_")
     cfg["system"]["solute_kind"] = "ligand" if system_type == "ligand" else "peptide"
 
+    #: Where every build-defining value came from. A manifest that records values without their
+    #: origin cannot answer the only question that matters when two bundles differ: which of these
+    #: did I choose, and which did the package choose for me?
+    sources: dict = {}
     for section in ("forcefield", "solvation", "system_build"):
+        for key in cfg.get(section, {}):
+            sources[f"{section}.{key}"] = "package default"
         if section in config:
+            for key, value in config[section].items():
+                sources[f"{section}.{key}"] = "user input"
             cfg[section].update(config[section])
+    sources["system.slug"] = ("user input" if (config.get("system") or {}).get("id")
+                              else "route-derived: input filename")
+    sources["system.solute_kind"] = "route-derived: system.type"
+    sources["structure.etkdg.seed"] = ("user input" if explicit is not None
+                                       else f"derived from master seed {master}")
+    cfg["_value_sources"] = sources
 
     if input_format == "smi":
         check_ligand_build_matches_the_route(config, cfg)
@@ -128,6 +142,73 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
         pdb = input_path
 
     return cfg, smiles, pdb
+
+
+#: The sections of the resolved runtime configuration that DEFINE the built System. Changing any of
+#: them requires a new bundle, not a new protocol, which is exactly why they are the ones persisted.
+_BUILD_DEFINING_SECTIONS = ("forcefield", "solvation", "system_build", "structure", "system")
+
+
+def _check_the_three_files_describe_one_hamiltonian(bundle: Path) -> None:
+    """`forcefield.json`, `system.yaml` and `system_manifest.json` must agree.
+
+    Three files describe the same System for three different readers. Nothing forces them to agree,
+    and a disagreement is invisible: each file is internally plausible, so a bundle can claim ff19SB
+    in one place and something else in another, and only a run would reveal it -- if anyone looked.
+    Checked at build time rather than only in a test, because the bundle is the thing that travels.
+    """
+    import json as _json
+
+    import yaml as _yaml
+
+    manifest = _json.loads((bundle / "system_manifest.json").read_text())
+    forcefield = _json.loads((bundle / "forcefield.json").read_text())
+    system_yaml = _yaml.safe_load((bundle / "system.yaml").read_text())
+
+    resolved = manifest["resolved_system_config"]["forcefield"]
+    parameterization = system_yaml.get("parameterization") or {}
+    # `forcefield.json` names the protein field `protein_forcefield`; the resolved configuration and
+    # `system.yaml` use their own spellings. The mapping is written out rather than assumed, because
+    # comparing a key that does not exist compares None to None and can never fail.
+    checks = (
+        ("protein force field", resolved.get("protein"),
+         parameterization.get("protein_forcefield"), forcefield.get("protein_forcefield")),
+        ("water force field", resolved.get("water"),
+         parameterization.get("water_forcefield"), forcefield.get("water")),
+        ("small-molecule force field", resolved.get("ligand"),
+         parameterization.get("small_molecule_forcefield"), forcefield.get("ligand")),
+        ("charge method", resolved.get("ligand_charge_method"),
+         parameterization.get("charge_method"), forcefield.get("ligand_charge_method")),
+    )
+    problems = []
+    for label, in_manifest, in_yaml, in_ff in checks:
+        stated = {v for v in (in_manifest, in_yaml, in_ff) if v is not None}
+        if len(stated) > 1:
+            problems.append(
+                f"    {label}: system_manifest.json={in_manifest!r} system.yaml={in_yaml!r} "
+                f"forcefield.json={in_ff!r}")
+    if problems:
+        raise RuntimeError(
+            "the bundle's three descriptions of the Hamiltonian disagree, refusing to publish it:\n"
+            + "\n".join(problems))
+
+
+def _build_defining(cfg: dict) -> dict:
+    """The resolved, build-defining configuration, with nothing execution-only in it.
+
+    Platform, device and precision are deliberately excluded: they are machine choices recorded in
+    provenance elsewhere, and including them here would make an identical System built on a
+    different machine look like a different System.
+    """
+    import copy
+
+    out = {}
+    for section in _BUILD_DEFINING_SECTIONS:
+        value = cfg.get(section)
+        if isinstance(value, dict):
+            out[section] = copy.deepcopy(
+                {k: v for k, v in value.items() if not k.startswith("_")})
+    return out
 
 
 def check_ligand_build_matches_the_route(config: dict, cfg: dict) -> None:
@@ -248,7 +329,12 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
                 "detection_method": info.get("omega_detection_method"),
             },
             "files": {name: name for name in REQUIRED_BUNDLE_FILES},
-            "resolved_system_config": config,
+            # The configuration that was actually USED, after defaults and route decisions -- not
+            # the document the user wrote. Recording the input as if it were the resolution is how a
+            # manifest comes to omit every value the package chose, which is most of them.
+            "stated_system_config": config,
+            "resolved_system_config": _build_defining(cfg),
+            "value_sources": cfg.get("_value_sources", {}),
             "outputs_are_amber_or_gromacs": False,
             "adapter_status": {
                 "openmm": "implemented",
@@ -272,6 +358,8 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
             "note": "covers every bundle file except this one, which cannot contain its own hash",
             "files": checksums,
         })
+
+        _check_the_three_files_describe_one_hamiltonian(staging)
 
         missing = [f for f in REQUIRED_BUNDLE_FILES if not (staging / f).is_file()]
         if missing:
