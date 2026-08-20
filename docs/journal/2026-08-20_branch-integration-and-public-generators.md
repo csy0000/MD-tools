@@ -242,3 +242,69 @@ generator-level keys.
 
 **Remaining branch management.** None required. `feature/public-system-and-md-generators` is pushed
 and left for review; it is **not** merged into `dev`, per the instruction.
+
+---
+
+## Addendum — three checklist gaps, and a bug the dry-run path could not reach
+
+Written after an audit against the instruction's Phase 8/9 checklists, prompted by the user asking
+whether everything was finished. It was not. Three items were missing.
+
+| gap | resolution |
+|---|---|
+| bundle **relocation** not tested (Phase 8) | two tests: a bundle verifies from a new path, and generates a project from there |
+| CPU-only dry generation for **RGDfV** missing (Phase 8) | added, and the real RGDfV system was prepared through the public generator |
+| `forcefield.json` contents not documented (Phase 9) | full field table added to `docs/configuration.md` |
+
+### The SMILES route had never actually been executed
+
+Preparing RGDfV through `MD_system_gen.py` for the first time failed:
+
+```
+File "src/md_templates/openmm/system.py", line 51, in initial_structure
+    params.randomSeed = int(ecfg["seed"])
+TypeError: int() argument must be ... not 'NoneType'
+```
+
+The package `DEFAULTS` leave `structure.etkdg.seed` as `None` because the canonical pipeline fills
+it from the randomness block. `MD_system_gen.py` has no randomness block, so nothing set it. The
+PDB route was unaffected because it never calls `initial_structure`.
+
+Every existing SMILES test passed, because they all covered routing, `ligand_build` validation and
+refusals -- all of which stop **before** anything is built. **A dry-run path cannot exercise
+anything past the point where it stops.**
+
+This is the fourth defect this session found only by executing code that had passed
+validation-level tests, after the OPC water model, the unreachable device mapping, and the two
+broken example scripts. The pattern is consistent enough to state as a rule: generation and
+validation tests are necessary and are not evidence that a path runs.
+
+Fixed by setting the conformer seed explicitly in the front end, overridable through
+`randomness.structure_seed` so a specific conformer can be reproduced. Two regression tests added.
+
+### RGDfV prepared and generated through the public path
+
+```
+MD_system_gen.py  -i cyclo_rgdfv.smi   -> 79 solute atoms, 3124 particles
+                                          net charge 1.67e-15 vs declared 0
+                                          openff-2.2.0 / am1bcc, protein_forcefield None
+MD_input_gen.py   -> min, eq_nvt, eq_npt, cMD_1, REST2_1
+                     REST2_1: 10 replicas, 1000 x 5 ps = 1,250,000 steps per segment
+```
+
+The 79 atoms and the near-zero net charge independently reproduce the vetted manifest, from a
+different code path than the earlier `md-openmm prepare` bundle.
+
+### Behaviour discovered while writing the tests
+
+**Profiles are route-bound.** Pinning `explicit-rest2-ligand-v1` against a `pdb`-route bundle is
+refused: `profile 'explicit-rest2-ligand-v1' is for route 'smiles' but this document declares
+'pdb'`. That is correct -- a ligand profile carries small-molecule defaults that do not describe a
+peptide. The first draft of the RGDfV protocol test worked around it; it now asserts the refusal as
+intended behaviour instead.
+
+### Still true after the addendum
+
+No GPU work was repeated. The REST2 production results (alanine 0.478 over 7,500 attempts, RGDfV
+0.292 over 13,500) stand as reported and were not regenerated. The RGDfV work here is preparation
+and generation only -- CPU, no dynamics.

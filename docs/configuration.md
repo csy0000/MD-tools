@@ -214,6 +214,30 @@ not linear in `tau` is **refused** rather than respaced, because respacing it ch
 acceptance and therefore the run.
 
 
+### `forcefield.json`
+
+Every system bundle carries a human-readable record of how it was parameterised. It is written by
+`MD_system_gen.py` and is what a reader consults instead of deserialising `system.xml`:
+
+| field | meaning |
+|---|---|
+| `route` | the resolved parameterisation route: `ligand` or `peptide` |
+| `input_route` | how the molecule entered: `smiles` or `pdb` |
+| `system_type` | `ligand`, `protein`, or `protein-ligand` |
+| `xml` | the OpenMM force-field files actually loaded |
+| `water` | the water force field, e.g. `amber19/opc.xml` |
+| `protein_forcefield` | `null` on a ligand route -- so an accidental protein load is an error |
+| `ligand` | small-molecule force field, charge method, net and formal charge, atom count |
+| `nonbonded` | method, cutoff, switching, dispersion correction, Ewald tolerance |
+| `hmr` | target hydrogen mass, how many hydrogens were repartitioned, scope, total mass |
+| `constraints_note` | states that constraints and hydrogen mass belong to the **built System**, so changing either needs a new bundle rather than a new protocol |
+
+The water model is recorded twice on purpose: `forcefield.water` is the model that was **simulated**,
+while `system_manifest.json`'s `water.packing_model` records whose pre-equilibrated box supplied the
+starting coordinates. They differ for models OpenMM cannot build a box for -- OPC is packed with
+TIP4P-Ew geometry and parameterised by `amber19/opc.xml` -- and recording both keeps that
+substitution visible instead of leaving a reader to infer it.
+
 ## Configuration ownership: two files, one canonical model
 
 The two public generators consume two configuration files with strictly separate ownership.

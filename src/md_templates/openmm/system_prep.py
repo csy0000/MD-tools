@@ -85,6 +85,18 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
         )
 
     cfg = copy.deepcopy(DEFAULTS)
+
+    # Conformer generation needs an explicit seed. The package DEFAULTS leave it None because the
+    # canonical pipeline fills it from the randomness block; this front end has no such block, so
+    # it sets one deterministically. Without it the SMILES route dies on int(None) inside ETKDG --
+    # a failure the dry-run path cannot reach, since it never builds anything.
+    seed = int((config.get("randomness") or {}).get("structure_seed", 20260820))
+    cfg["structure"]["etkdg"]["seed"] = seed
+    cfg["run"]["seed"] = seed
+    for stage in ("equilibration",):
+        if stage in cfg and isinstance(cfg[stage], dict):
+            cfg[stage].setdefault("seed", seed)
+
     system_block = config.get("system") or {}
     cfg["system"]["slug"] = system_block.get("id") or input_path.stem.lower().replace("-", "_")
     cfg["system"]["solute_kind"] = "ligand" if system_type == "ligand" else "peptide"

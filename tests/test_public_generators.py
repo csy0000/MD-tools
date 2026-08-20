@@ -601,3 +601,151 @@ def test_rest2_execution_is_delegated_and_says_so(executed_project):
     payload = json.loads((executed_project / "REST2_1" / "REST2_1.json").read_text())
     with pytest.raises(SystemExit, match="competing restart authority"):
         stage_mod.execute_stage(executed_project / "REST2_1" / "REST2_1.json", payload)
+
+
+# ---------------------------------------------------------------------------------------------
+# relocation, and the RGDfV protocol
+# ---------------------------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_a_system_bundle_survives_relocation(prepared_system, tmp_path):
+    """A bundle is only portable if it verifies somewhere else, with no source checkout in sight."""
+    import shutil
+    from md_templates.openmm import input_gen
+
+    moved = tmp_path / "elsewhere" / "renamed_system"
+    moved.parent.mkdir(parents=True)
+    shutil.copytree(prepared_system, moved)
+    # verification must pass from the NEW location: nothing may depend on the original path
+    manifest = input_gen._verify_bundle(moved / "system_manifest.json")
+    assert manifest["composition"]["n_solute_atoms"] == 22
+
+
+@pytest.mark.slow
+def test_a_relocated_bundle_still_generates_a_project(prepared_system, tmp_path):
+    import shutil
+    moved = tmp_path / "moved_system"
+    shutil.copytree(prepared_system, moved)
+    config = tmp_path / "md.json"
+    config.write_text(json.dumps(MD_CONFIG))
+    out = tmp_path / "from_moved"
+    result = _run(INPUT_GEN, "--system", str(moved / "system_manifest.json"),
+                  "-o", str(out), "--config", str(config))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (out / "REST2_1" / "REST2_1.json").is_file()
+
+
+def test_no_absolute_source_paths_leak_into_a_generated_project(tmp_path):
+    """A project that embedded the checkout path would break the moment it moved."""
+    from md_templates.openmm import input_gen
+    # the stage launcher template must not bake in any absolute path
+    body = input_gen._stage_launcher("min", Path("/somewhere"))
+    assert "/data3" not in body
+    assert str(REPO_ROOT) not in body
+
+
+# --- RGDfV: dry generation on CPU, without paying 27 minutes of AM1-BCC ------------------------
+
+RGDFV_SMILES = ("CC(C)[C@@H]1NC(=O)[C@@H](Cc2ccccc2)NC(=O)[C@H](CC(=O)[O-])NC(=O)CNC(=O)"
+                "[C@H](CCCNC(N)=[NH2+])NC1=O")
+
+
+def test_rgdfv_system_generation_validates_on_cpu(tmp_path):
+    """The SMILES route's routing and required build fields, without building."""
+    smi = tmp_path / "cyclo_rgdfv.smi"
+    smi.write_text(RGDFV_SMILES + "\n")
+    config = tmp_path / "system_config.json"
+    config.write_text((REPO_ROOT / "test" / "rgd" / "REST2" / "system_config.json").read_text())
+    result = _run(SYSTEM_GEN, "-i", str(smi), "-o", str(tmp_path / "rgd_system"),
+                  "--config", str(config), "--dry-run")
+    assert result.returncode == 0, result.stderr
+    assert "system type  : ligand" in result.stdout
+    assert "openff-2.2.0" in result.stdout and "am1bcc" in result.stdout
+
+
+def test_the_rgdfv_smiles_shipped_with_the_example_is_the_vetted_one():
+    """The example must not carry a SMILES that drifted from the vetted manifest."""
+    yaml = pytest.importorskip("yaml")
+    manifest = yaml.safe_load(
+        (REPO_ROOT / "src" / "md_templates" / "openmm" / "manifests" / "systems"
+         / "cyclo_rgdfv.yaml").read_text())
+    shipped = (REPO_ROOT / "test" / "rgd" / "REST2" / "cyclo_rgdfv.smi").read_text().strip()
+    assert shipped == manifest["input"]["smiles"]
+
+
+@pytest.mark.slow
+def test_the_rgdfv_protocol_resolves_to_ten_replicas_on_cpu(prepared_system, tmp_path):
+    """Dry generation of the RGDfV PROTOCOL.
+
+    This uses the already-prepared alanine bundle rather than paying 27 minutes of AM1-BCC, because
+    what is under test is that md_config.json resolves to TEN replicas. The RGDfV system route is
+    covered separately by test_rgdfv_system_generation_validates_on_cpu.
+
+    The pinned profile is dropped: profiles are route-bound, so `explicit-rest2-ligand-v1` (smiles)
+    correctly refuses a pdb bundle. That refusal is desirable behaviour and is asserted below rather
+    than worked around silently.
+    """
+    config = tmp_path / "rgd_md.json"
+    rgd = json.loads((REPO_ROOT / "test" / "rgd" / "REST2" / "md_config.json").read_text())
+    rgd.pop("profile", None)             # see the docstring: profiles are route-bound
+    rgd["execution"]["platform"] = "CPU"
+    rgd["execution"].pop("precision", None)
+    config.write_text(json.dumps(rgd))
+    result = _run(INPUT_GEN, "--system", str(prepared_system / "system_manifest.json"),
+                  "-o", str(tmp_path / "rgd_run"), "--config", str(config), "--dry-run")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "10 replicas" in result.stdout
+    assert "1000 x 5 ps" in result.stdout
+
+
+def test_both_shipped_md_configs_declare_their_replica_counts():
+    for name, expected in (("ala", 6), ("rgd", 10)):
+        config = json.loads(
+            (REPO_ROOT / "test" / name / "REST2" / "md_config.json").read_text())
+        assert config["protocol"]["production"]["tau_ladder"]["count"] == expected, name
+
+
+@pytest.mark.slow
+def test_a_ligand_profile_refuses_a_peptide_bundle(prepared_system, tmp_path):
+    """Profiles are route-bound, and the mismatch must be refused rather than coerced.
+
+    Discovered while writing the RGDfV dry-generation test: pinning the ligand REST2 profile
+    against a pdb-route bundle fails, which is right -- a ligand profile carries small-molecule
+    defaults that do not describe a peptide.
+    """
+    config = tmp_path / "mismatched.json"
+    rgd = json.loads((REPO_ROOT / "test" / "rgd" / "REST2" / "md_config.json").read_text())
+    assert rgd["profile"] == "explicit-rest2-ligand-v1"
+    config.write_text(json.dumps(rgd))
+    result = _run(INPUT_GEN, "--system", str(prepared_system / "system_manifest.json"),
+                  "-o", str(tmp_path / "nope"), "--config", str(config), "--dry-run")
+    assert result.returncode != 0
+    assert "is for route" in (result.stdout + result.stderr)
+
+
+def test_the_system_front_end_sets_a_conformer_seed(tmp_path):
+    """Regression: the SMILES route died on int(None) the first time it was actually run.
+
+    The package DEFAULTS leave structure.etkdg.seed as None because the canonical pipeline fills it
+    from the randomness block. This front end has no randomness block, so it must set one itself --
+    a gap the dry-run tests could not reach, because they stop before anything is built.
+    """
+    from md_templates.openmm import system_prep
+    smi = tmp_path / "x.smi"
+    smi.write_text("CCO\n")
+    cfg, smiles, pdb = system_prep._runtime_cfg_from_system_config(
+        {"system": {"id": "x", "type": "ligand"}}, smi, "smi", "ligand")
+    assert smiles == "CCO"
+    assert isinstance(cfg["structure"]["etkdg"]["seed"], int)
+    assert isinstance(cfg["run"]["seed"], int)
+
+
+def test_the_conformer_seed_can_be_pinned(tmp_path):
+    """Reproducing a specific conformer needs the seed to be an input, not a constant."""
+    from md_templates.openmm import system_prep
+    smi = tmp_path / "x.smi"
+    smi.write_text("CCO\n")
+    cfg, _, _ = system_prep._runtime_cfg_from_system_config(
+        {"system": {"id": "x", "type": "ligand"}, "randomness": {"structure_seed": 4242}},
+        smi, "smi", "ligand")
+    assert cfg["structure"]["etkdg"]["seed"] == 4242
