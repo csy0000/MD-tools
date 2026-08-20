@@ -160,15 +160,35 @@ def test_system_config_rejects_protocol_settings(tmp_path):
             Path("x.pdb"), "pdb", "protein")
 
 
-def test_an_existing_nonempty_destination_is_refused(tmp_path):
+def test_a_destination_holding_an_existing_bundle_is_refused(tmp_path):
+    """What blocks a run is a file we would WRITE, not merely a non-empty directory.
+
+    This used to refuse any non-empty destination. That was both too strict -- a directory holding
+    someone's notes is not a reason to refuse -- and too vague, because the error could not say what
+    would have been clobbered. The rule is now stated in terms of the files being written.
+    """
+    dest = tmp_path / "out"
+    dest.mkdir()
+    (dest / "system_manifest.json").write_text("{}")
+    config = tmp_path / "c.json"
+    config.write_text(json.dumps(SYSTEM_CONFIG))
+    result = _run(SYSTEM_GEN, "-i", str(ALANINE_PDB), "-o", str(dest), "--config", str(config))
+    assert result.returncode != 0
+    assert "already holds" in result.stderr
+    assert "system_manifest.json" in result.stderr
+
+
+def test_a_destination_holding_only_unrelated_files_is_written_to(tmp_path):
+    """And the unrelated files survive, which is the promise the refusal above implies."""
     dest = tmp_path / "out"
     dest.mkdir()
     (dest / "already_here").write_text("x")
     config = tmp_path / "c.json"
     config.write_text(json.dumps(SYSTEM_CONFIG))
     result = _run(SYSTEM_GEN, "-i", str(ALANINE_PDB), "-o", str(dest), "--config", str(config))
-    assert result.returncode != 0
-    assert "not empty" in result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (dest / "already_here").read_text() == "x"
+    assert (dest / "system_manifest.json").is_file()
 
 
 # ---------------------------------------------------------------------------------------------
@@ -252,7 +272,7 @@ def generated_project(prepared_system, tmp_path_factory) -> Path:
 @pytest.mark.slow
 def test_the_stage_directories_are_named_as_documented(generated_project):
     from md_templates.openmm.input_gen import STAGE_ORDER
-    assert STAGE_ORDER == ("min", "eq_nvt", "eq_npt", "cMD_1", "REST2_1")
+    assert STAGE_ORDER == ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1", "REST2_1")
     for stage in STAGE_ORDER:
         assert (generated_project / stage / f"{stage}.json").is_file(), stage
         assert (generated_project / stage / f"{stage}.sh").is_file(), stage
@@ -271,8 +291,8 @@ def test_each_stage_owns_a_readable_launcher(generated_project):
 @pytest.mark.slow
 def test_every_stage_names_its_input_and_its_predecessor(generated_project):
     """An implicit hand-off is how a stage silently starts from the wrong coordinates."""
-    expected = {"min": "MD_system_gen.py", "eq_nvt": "min", "eq_npt": "eq_nvt",
-                "cMD_1": "eq_npt", "REST2_1": "cMD_1"}
+    expected = {"min": "MD_system_gen.py", "eq_nvt": "min", "eq_npt_1": "eq_nvt",
+                "eq_npt_2": "eq_npt_1", "cMD_1": "eq_npt_2", "REST2_1": "cMD_1"}
     for stage, producer in expected.items():
         payload = json.loads((generated_project / stage / f"{stage}.json").read_text())
         assert payload["input"]["produced_by"] == producer, stage
@@ -283,14 +303,14 @@ def test_every_stage_names_its_input_and_its_predecessor(generated_project):
 @pytest.mark.slow
 def test_a_state_carries_between_stages_not_a_pdb(generated_project):
     """Positions alone would discard velocities and box vectors at every boundary."""
-    for stage in ("eq_nvt", "eq_npt", "cMD_1", "REST2_1"):
+    for stage in ("eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1", "REST2_1"):
         payload = json.loads((generated_project / stage / f"{stage}.json").read_text())
         assert payload["input"]["state"].endswith("_final_state.xml"), stage
 
 
 @pytest.mark.slow
 def test_the_restrained_stages_carry_the_documented_restraint(generated_project):
-    for stage in ("min", "eq_nvt", "eq_npt"):
+    for stage in ("min", "eq_nvt", "eq_npt_1"):
         restraint = json.loads((generated_project / stage / f"{stage}.json").read_text())["restraint"]
         assert restraint["force_constant_kcal_per_mol_angstrom2"] == 1.0, stage
         assert restraint["selection"]["type"] == "solute"
@@ -309,7 +329,7 @@ def test_production_stages_carry_no_restraint(generated_project):
 @pytest.mark.slow
 def test_the_stage_projections_are_distinct(generated_project):
     """min, NVT, NPT, cMD and REST2 must not collapse into one generic block."""
-    npt = json.loads((generated_project / "eq_npt" / "eq_npt.json").read_text())
+    npt = json.loads((generated_project / "eq_npt_1" / "eq_npt_1.json").read_text())
     rest2 = json.loads((generated_project / "REST2_1" / "REST2_1.json").read_text())
     nvt = json.loads((generated_project / "eq_nvt" / "eq_nvt.json").read_text())
     assert "barostat" in npt and npt["barostat"]["type"] == "MonteCarloBarostat"
@@ -406,14 +426,21 @@ def test_a_tampered_bundle_is_refused(prepared_system, tmp_path):
 
 
 @pytest.mark.slow
-def test_generation_refuses_an_existing_nonempty_project(prepared_system, generated_project,
-                                                         tmp_path):
+def test_generation_refuses_a_project_it_would_overwrite(prepared_system, generated_project,
+                                                        tmp_path):
+    """Refused because stage files would be rewritten -- and the error names them."""
     config = tmp_path / "md.json"
     config.write_text(json.dumps(MD_CONFIG))
     result = _run(INPUT_GEN, "--system", str(prepared_system / "system_manifest.json"),
                   "-o", str(generated_project), "--config", str(config))
     assert result.returncode != 0
-    assert "not empty" in result.stderr
+    assert "already holds 15 file(s)" in result.stderr
+    assert "REST2_1/REST2_1.json" in result.stderr    # the listing names the colliding files
+    assert "--overwrite" in result.stderr
+
+    ok = _run(INPUT_GEN, "--system", str(prepared_system / "system_manifest.json"),
+              "-o", str(generated_project), "--config", str(config), "--overwrite")
+    assert ok.returncode == 0, ok.stdout + ok.stderr
 
 
 @pytest.mark.slow
@@ -457,9 +484,70 @@ def test_inherit_records_lineage_and_says_it_is_not_a_resume(prepared_system, ge
 
 
 @pytest.mark.slow
+def test_number_of_segments_drives_the_rest2_loop_and_nothing_else(generated_project):
+    """The segment count is an execution choice, so it must move the loop and NOT the hashes.
+
+    It was previously exported by `run_all.sh` and consumed by nothing, so asking for more segments
+    silently ran one. The REST2 stage is now invoked once per segment -- re-invoking the same
+    launcher is what continues the chain, because the runner reads its own committed-generation
+    record to find where the last one stopped.
+    """
+    body = (generated_project / "run_all.sh").read_text()
+    assert 'run_segments REST2_1 "$NUMBER_OF_SEGMENTS"' in body
+    assert "run_stage REST2_1" not in body, "REST2 must not be a single invocation"
+    for single_shot in ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1"):
+        assert f"run_stage {single_shot}" in body, single_shot
+
+    # and it must not appear anywhere in the scientific configuration
+    payload = json.loads((generated_project / "REST2_1" / "REST2_1.json").read_text())
+    assert "NUMBER_OF_SEGMENTS" not in json.dumps(payload["rest2"]["exchange"])
+    assert "n_segments" not in payload["rest2"]["exchange"]
+
+
+@pytest.mark.slow
+def test_inherit_can_select_the_stage_to_continue_from(prepared_system, executed_project,
+                                                       tmp_path):
+    """`--inherit <manifest>:<stage>` continues from an endpoint another project already reached.
+
+    Without the `:<stage>` selector every child project re-runs equilibration it has no reason to
+    repeat. With it, the named stage supplies the endpoint and the stages before it are recorded as
+    skipped rather than silently omitted -- the record is what makes the shortcut auditable.
+    """
+    config = tmp_path / "md.json"
+    config.write_text(json.dumps(MD_CONFIG))
+    dest = tmp_path / "from_npt2"
+    result = _run(INPUT_GEN, "--system", str(prepared_system / "system_manifest.json"),
+                  "-o", str(dest), "--config", str(config),
+                  "--inherit", f"{executed_project / 'run_manifest.json'}:eq_npt_2")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    lineage = json.loads((dest / "run_manifest.json").read_text())["lineage"]
+    assert lineage["inherited_stage"] == "eq_npt_2"
+    # the inherited stage is skipped TOO: we take its endpoint, so the child never re-runs it
+    assert lineage["skipped_stages"] == ["min", "eq_nvt", "eq_npt_1", "eq_npt_2"], \
+        "the stages the parent already ran must be named, not quietly dropped"
+    # and cMD_1 must consume the PARENT's endpoint, not a local file that was never produced
+    payload = json.loads((dest / "cMD_1" / "cMD_1.json").read_text())
+    assert "eq_npt_2_final_state.xml" in payload["input"]["state"]
+
+
+@pytest.mark.slow
+def test_inherit_rejects_a_stage_that_is_not_in_the_protocol(prepared_system, executed_project,
+                                                             tmp_path):
+    """A typo in the stage name must fail loudly, not inherit from nothing."""
+    config = tmp_path / "md.json"
+    config.write_text(json.dumps(MD_CONFIG))
+    result = _run(INPUT_GEN, "--system", str(prepared_system / "system_manifest.json"),
+                  "-o", str(tmp_path / "bad"), "--config", str(config),
+                  "--inherit", f"{executed_project / 'run_manifest.json'}:eq_npt")
+    assert result.returncode != 0
+    assert "eq_npt" in (result.stdout + result.stderr)
+
+
+@pytest.mark.slow
 def test_every_generated_stage_validates_without_a_gpu(generated_project):
     from md_templates.openmm.stage import validate_stage
-    for stage in ("min", "eq_nvt", "eq_npt", "cMD_1", "REST2_1"):
+    for stage in ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1", "REST2_1"):
         result = validate_stage(generated_project / stage / f"{stage}.json")
         assert result["stage"] == stage
         # only 'min' has all its inputs before anything runs; the rest declare a predecessor
@@ -503,7 +591,7 @@ def executed_project(prepared_system, tmp_path_factory) -> Path:
                   "-o", str(out), "--config", str(config))
     assert result.returncode == 0, result.stdout + result.stderr
 
-    for name in ("min", "eq_nvt", "eq_npt", "cMD_1"):
+    for name in ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1"):
         payload = json.loads((out / name / f"{name}.json").read_text())
         rc = stage_mod.execute_stage(out / name / f"{name}.json", payload)
         assert rc == 0, name
@@ -511,7 +599,7 @@ def executed_project(prepared_system, tmp_path_factory) -> Path:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("stage", ["min", "eq_nvt", "eq_npt", "cMD_1"])
+@pytest.mark.parametrize("stage", ["min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1"])
 def test_each_executed_stage_writes_its_endpoint_artifacts(executed_project, stage):
     """A stage that ran owns its outputs; that is what makes it independently rerunnable."""
     d = executed_project / stage
@@ -523,11 +611,13 @@ def test_each_executed_stage_writes_its_endpoint_artifacts(executed_project, sta
 @pytest.mark.slow
 def test_the_restraint_reaches_the_solute_and_only_the_equilibration_stages(executed_project):
     """22 restrained atoms is the alanine solute; production must be unrestrained."""
-    for stage in ("min", "eq_nvt", "eq_npt"):
+    for stage in ("min", "eq_nvt", "eq_npt_1"):
         results = json.loads((executed_project / stage / f"{stage}_results.json").read_text())
         assert results["n_restrained_atoms"] == 22, stage
-    cmd = json.loads((executed_project / "cMD_1" / "cMD_1_results.json").read_text())
-    assert cmd["n_restrained_atoms"] == 0
+    # eq_npt_2 is the FREE equilibration: same barostat, no restraint
+    for stage in ("eq_npt_2", "cMD_1"):
+        results = json.loads((executed_project / stage / f"{stage}_results.json").read_text())
+        assert results["n_restrained_atoms"] == 0, stage
 
 
 @pytest.mark.slow
@@ -562,11 +652,13 @@ def test_minimisation_lowers_the_energy_at_a_sane_iteration_count(executed_proje
 def test_only_the_npt_stages_change_the_box(executed_project):
     """The barostat must be on where the protocol says and nowhere else."""
     volumes = {s: json.loads((executed_project / s / f"{s}_results.json").read_text())["box_volume_nm3"]
-               for s in ("min", "eq_nvt", "eq_npt")}
+               for s in ("min", "eq_nvt", "eq_npt_1", "eq_npt_2")}
     assert volumes["min"] == pytest.approx(volumes["eq_nvt"], rel=1e-9), \
         "NVT must not change the box volume"
-    assert volumes["eq_npt"] != pytest.approx(volumes["eq_nvt"], rel=1e-9), \
-        "NPT must be able to change the box volume"
+    assert volumes["eq_npt_1"] != pytest.approx(volumes["eq_nvt"], rel=1e-9), \
+        "restrained NPT must be able to change the box volume"
+    assert volumes["eq_npt_2"] != pytest.approx(volumes["eq_npt_1"], rel=1e-9), \
+        "free NPT must be able to change the box volume"
 
 
 @pytest.mark.slow
@@ -595,12 +687,181 @@ def test_a_stage_refuses_to_run_before_its_predecessor(prepared_system, tmp_path
 
 
 @pytest.mark.slow
-def test_rest2_execution_is_delegated_and_says_so(executed_project):
-    """REST2 owns a restart boundary, so it is handed to the runner rather than re-plumbed."""
+def test_rest2_hands_the_runner_a_bundle_it_accepts(executed_project):
+    """REST2 is delegated, and the delegation is only real if the runner accepts what we build.
+
+    The stage layer never touches the committed-generation record -- it assembles the version-2
+    bundle the runner already understands and calls `launch_rest2`. Validating that bundle here is
+    what stops the hand-off from being decorative: `validate_bundle` is the same check the runner
+    performs, including the config_hash recomputation that catches a bundle assembled by copying a
+    hash instead of deriving one.
+    """
+    from md_templates.openmm.bundle import validate_bundle
+    from md_templates.openmm.stage import _package_bundle_for_rest2
+
+    here = executed_project / "REST2_1"
+    payload = json.loads((here / "REST2_1.json").read_text())
+    bundle = _package_bundle_for_rest2(here, payload)
+    manifest = validate_bundle(bundle)
+    # `bundle_schema_version` is the BUNDLE contract; `schema_version` is the manifest document's
+    # own version and is 1. They are different numbers and asserting the wrong one passes nothing.
+    assert manifest["bundle_schema_version"] == 2
+    assert (bundle / "experiment.prepare.yaml").is_file()
+    for role in ("system_xml", "topology_pdb", "topology_cif", "simbox", "equilibrated_state",
+                 "canonical_configuration", "resolved_runtime_config", "forcefield_provenance",
+                 "environment"):
+        assert role in manifest["roles"], role
+
+
+@pytest.mark.slow
+def test_rest2_starts_from_the_predecessors_endpoint_not_the_prepared_system(executed_project):
+    """The one substantive choice in the bundle, and the one that would silently discard cMD."""
+    from md_templates.openmm.stage import _package_bundle_for_rest2
+
+    here = executed_project / "REST2_1"
+    payload = json.loads((here / "REST2_1.json").read_text())
+    bundle = _package_bundle_for_rest2(here, payload)
+
+    equilibrated = (bundle / "equilibrated_state.xml").read_bytes()
+    assert equilibrated == (executed_project / "cMD_1" / "cMD_1_final_state.xml").read_bytes(), \
+        "REST2 must start where conventional MD finished"
+    assert equilibrated != (executed_project / "inputs" / "initial_state.xml").read_bytes(), \
+        "starting from the prepared system would discard every stage that ran"
+
+
+@pytest.mark.slow
+def test_rest2_refuses_to_start_without_its_predecessors_endpoint(executed_project, tmp_path):
+    """Missing coordinates must be an error, not a silent fall back to the prepared system."""
+    import shutil
+
     from md_templates.openmm import stage as stage_mod
-    payload = json.loads((executed_project / "REST2_1" / "REST2_1.json").read_text())
-    with pytest.raises(SystemExit, match="competing restart authority"):
-        stage_mod.execute_stage(executed_project / "REST2_1" / "REST2_1.json", payload)
+
+    copy = tmp_path / "no_cmd"
+    shutil.copytree(executed_project, copy)
+    (copy / "cMD_1" / "cMD_1_final_state.xml").unlink()
+
+    here = copy / "REST2_1"
+    payload = json.loads((here / "REST2_1.json").read_text())
+    with pytest.raises(stage_mod.StageError, match="does not exist"):
+        stage_mod._package_bundle_for_rest2(here, payload)
+
+
+# ---------------------------------------------------------------------------------------------
+# refusing to overwrite
+# ---------------------------------------------------------------------------------------------
+
+def test_the_bundle_target_list_cannot_drift_from_the_required_files():
+    """`destination` lists what a bundle contains without importing the scientific stack.
+
+    That duplication is deliberate -- the entry point must be able to check a destination in
+    milliseconds -- so the containment is asserted here instead of being hoped for.
+    """
+    from md_templates.openmm.destination import SYSTEM_BUNDLE_TARGETS
+    from md_templates.openmm.system_prep import REQUIRED_BUNDLE_FILES
+
+    missing = set(REQUIRED_BUNDLE_FILES) - set(SYSTEM_BUNDLE_TARGETS)
+    assert not missing, f"required bundle files absent from the overwrite check: {sorted(missing)}"
+
+
+def test_a_destination_is_only_blocked_by_files_the_generator_would_write(tmp_path):
+    """Unrelated files in the destination are not this generator's business."""
+    from md_templates.openmm.destination import check_destination
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "NOTES.md").write_text("mine")
+    result = check_destination(dest, ("system.xml", "topology.pdb"), overwrite=False,
+                               what="system bundle")
+    assert result["colliding"] == []
+    assert result["collateral"] == ["NOTES.md"]
+
+
+def test_a_colliding_target_stops_the_run_and_names_what_collides(tmp_path):
+    from md_templates.openmm.destination import DestinationExists, check_destination
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "system.xml").write_text("<System/>")
+    with pytest.raises(DestinationExists) as caught:
+        check_destination(dest, ("system.xml", "topology.pdb"), overwrite=False,
+                          what="system bundle")
+    message = str(caught.value)
+    assert "system.xml" in message
+    assert "topology.pdb" not in message, "must name what collides, not the whole target list"
+    assert "--overwrite" in message
+
+
+def test_overwrite_allows_the_collision(tmp_path):
+    from md_templates.openmm.destination import check_destination
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "system.xml").write_text("<System/>")
+    result = check_destination(dest, ("system.xml",), overwrite=True, what="system bundle")
+    assert result["colliding"] == ["system.xml"]
+
+
+def test_the_warning_counts_results_inside_stage_directories(tmp_path):
+    """The files most worth warning about live INSIDE directories the generator owns.
+
+    `min/` is written by the generator; `min/min_final_state.xml` is a result of running it, and
+    --overwrite deletes it with the rest of the directory. A top-level-only scan reports neither.
+    """
+    from md_templates.openmm.destination import DestinationExists, check_destination
+
+    dest = tmp_path / "project"
+    (dest / "min").mkdir(parents=True)
+    (dest / "min" / "min.json").write_text("{}")
+    (dest / "min" / "min_final_state.xml").write_text("<State/>")
+    (dest / "min" / "min.chk").write_bytes(b"")
+    (dest / "inputs").mkdir()
+    (dest / "inputs" / "system.xml").write_text("<System/>")
+
+    with pytest.raises(DestinationExists) as caught:
+        check_destination(dest, ("inputs", "min/min.json", "min/min.sh"), overwrite=False,
+                          what="project")
+    message = str(caught.value)
+    assert "2 file(s) it did not write" in message, message
+    assert "min/" in message
+    # a directory target is ours in its entirety, so its contents are not collateral
+    assert "inputs/" not in message.split("would also delete")[-1]
+
+
+def test_publish_keeps_unrelated_files_and_overwrite_does_not(tmp_path):
+    """The publish step must match what the check promised, or the check is a lie."""
+    from md_templates.openmm.destination import publish
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "NOTES.md").write_text("mine")
+
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "system.xml").write_text("<System/>")
+    publish(staging, dest, overwrite=False, what="system bundle")
+    assert (dest / "NOTES.md").is_file(), "a non-colliding publish must not destroy other files"
+    assert (dest / "system.xml").is_file()
+
+    staging2 = tmp_path / "staging2"
+    staging2.mkdir()
+    (staging2 / "system.xml").write_text("<System2/>")
+    publish(staging2, dest, overwrite=True, what="system bundle")
+    assert not (dest / "NOTES.md").exists(), "--overwrite replaces the whole directory, as warned"
+    assert (dest / "system.xml").read_text() == "<System2/>"
+
+
+def test_publish_reports_a_target_that_appeared_while_we_worked(tmp_path):
+    """Distinguishable from a user error, because it is a race and not a mistake."""
+    from md_templates.openmm.destination import publish
+
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "system.xml").write_text("someone else")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "system.xml").write_text("<System/>")
+    with pytest.raises(RuntimeError, match="appeared while"):
+        publish(staging, dest, overwrite=False, what="system bundle")
 
 
 # ---------------------------------------------------------------------------------------------
@@ -635,13 +896,35 @@ def test_a_relocated_bundle_still_generates_a_project(prepared_system, tmp_path)
     assert (out / "REST2_1" / "REST2_1.json").is_file()
 
 
-def test_no_absolute_source_paths_leak_into_a_generated_project(tmp_path):
-    """A project that embedded the checkout path would break the moment it moved."""
+def test_the_launcher_records_the_interpreter_that_generated_the_project(tmp_path):
+    """The one absolute path a launcher may carry, and why it must carry it.
+
+    `python -m md_templates.openmm.stage` with a bare `python` is how this broke twice in practice:
+    the stack's activation script puts AmberTools' interpreter first on PATH, and that one has
+    neither openmm nor md_templates, so every stage died with ModuleNotFoundError. So the launcher
+    records the interpreter it was GENERATED with -- the one known to import both.
+
+    It is recorded as an overridable default (`: "${PYTHON:=...}"`), not hard-coded, and it is
+    preflighted, so a project that moves to a machine without that interpreter fails with an
+    instruction rather than a traceback.
+    """
     from md_templates.openmm import input_gen
-    # the stage launcher template must not bake in any absolute path
-    body = input_gen._stage_launcher("min", Path("/somewhere"))
-    assert "/data3" not in body
+
+    interpreter, pythonpath = input_gen._interpreter_defaults()
+    body = input_gen._stage_launcher("min", interpreter, pythonpath)
+
+    assert f': "${{PYTHON:={interpreter}}}"' in body, "must be an overridable default"
+    assert "import md_templates, openmm" in body, "must preflight before running the stage"
+    assert "PYTHON=" in body and "cannot import" in body, "must say how to fix it"
+
+
+def test_no_source_checkout_path_leaks_except_the_recorded_pythonpath(tmp_path):
+    """A project that embedded the checkout anywhere ELSE would break the moment it moved."""
+    from md_templates.openmm import input_gen
+
+    body = input_gen._stage_launcher("min", Path("/usr/bin/python3"), None)
     assert str(REPO_ROOT) not in body
+    assert "/data3" not in body
 
 
 # --- RGDfV: dry generation on CPU, without paying 27 minutes of AM1-BCC ------------------------

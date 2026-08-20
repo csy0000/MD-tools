@@ -9,37 +9,37 @@
     "cpu-smoke-v1": {
       "is_default": false,
       "method": "rest2",
-      "profile_schema_version": 3,
+      "profile_schema_version": 4,
       "route": "smiles",
-      "sha256": "7af69fa6e2576fa7d3a34c2eeb301961d1faec5bff24d171eaddd49ea09b6a7b"
+      "sha256": "4758b02eeb16889f5acdd6123b38f92b2c1aa21d2b06acb4a42555d986607ac5"
     },
     "explicit-md-ligand-v1": {
       "is_default": true,
       "method": "md",
-      "profile_schema_version": 3,
+      "profile_schema_version": 4,
       "route": "smiles",
-      "sha256": "ab5c1b438b3d5c79439eea6207ec370d233e3909b59891f92e6e6717fee101e1"
+      "sha256": "f58d5a57da490c08baf64c4be8280ec7bbb294f675e41ff51c83f9c5738dbb25"
     },
     "explicit-md-peptide-v1": {
       "is_default": true,
       "method": "md",
-      "profile_schema_version": 3,
+      "profile_schema_version": 4,
       "route": "pdb",
-      "sha256": "99e07e040e7ad1058a987d4cf8b9d904d740b29fe054c94b7bc27e4083523f67"
+      "sha256": "c617b3892d231d6866336e2ae58fc553f80210176993c50c12cdd9aa14db5cdc"
     },
     "explicit-rest2-ligand-v1": {
       "is_default": true,
       "method": "rest2",
-      "profile_schema_version": 3,
+      "profile_schema_version": 4,
       "route": "smiles",
-      "sha256": "5cab06fc12ec39233cb3dc3e2bdf038340e293da3e3a0a5e0fce0750eed48ae0"
+      "sha256": "1ee94bfa954452d7a8608545ea22d822bc04572446bfc95ca96931aa18b5109b"
     },
     "explicit-rest2-peptide-v1": {
       "is_default": true,
       "method": "rest2",
-      "profile_schema_version": 3,
+      "profile_schema_version": 4,
       "route": "pdb",
-      "sha256": "331c6edcb078ec0c5096f8bc9df79c6a3baa0a16ac8d1daa6f58db440ad862b3"
+      "sha256": "6630aa41fb9b23f352baf00518c5125e9a30af270f4330f70fd3e2244eea8c8d"
     }
   }
 }

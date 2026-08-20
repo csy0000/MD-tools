@@ -37,6 +37,7 @@ REQUIRED_BUNDLE_FILES = (
     "initial_state.xml",
     "forcefield.json",
     "system_manifest.json",
+    "system.yaml",
     "checksums.json",
 )
 
@@ -126,9 +127,13 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
     moved into place only once the required-file check passes, so an interrupted run leaves either
     the previous bundle or nothing -- never a half-written one whose checksums describe a mixture.
     """
+    from .destination import SYSTEM_BUNDLE_TARGETS, check_destination, publish
     from .equilibration import build_simbox
 
     outdir = Path(outdir)
+    # Checked BEFORE any work: parameterising a ligand can cost half an hour, and discovering the
+    # destination was occupied only at the publish step would throw all of it away.
+    check_destination(outdir, SYSTEM_BUNDLE_TARGETS, overwrite=overwrite, what="system bundle")
     staging = outdir.parent / f".{outdir.name}.staging"
     if staging.exists():
         shutil.rmtree(staging)
@@ -213,6 +218,12 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
         }
         _write_json(staging / "system_manifest.json", manifest)
 
+        # The package's legacy system manifest, written from the SAME chemistry. The runner reads
+        # it, so emitting it here is what lets a generated project be handed to the existing REST2
+        # runner instead of teaching that runner a second bundle format. It carries chemistry only
+        # -- no protocol -- so it stays inside this generator's remit.
+        _write_system_yaml(staging / "system.yaml", config, manifest, info)
+
         checksums = {p.name: _sha256(p) for p in sorted(staging.iterdir())
                      if p.is_file() and p.name != "checksums.json"}
         _write_json(staging / "checksums.json", {
@@ -227,11 +238,7 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
                 f"system bundle is incomplete, refusing to publish it: missing {missing}"
             )
 
-        if outdir.exists():
-            if not overwrite:
-                raise RuntimeError(f"{outdir} appeared during preparation; refusing to overwrite")
-            shutil.rmtree(outdir)
-        staging.replace(outdir)
+        publish(staging, outdir, overwrite=overwrite, what="system bundle")
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -269,3 +276,45 @@ def _write_topology_cif(topology_pdb: Path, out_cif: Path) -> None:
     pdb = PDBFile(str(topology_pdb))
     with out_cif.open("w") as handle:
         PDBxFile.writeFile(pdb.topology, pdb.positions, handle, keepIds=True)
+
+
+def _write_system_yaml(path: Path, config: dict, manifest: dict, info: dict) -> None:
+    """Emit the package's legacy system manifest from the prepared chemistry.
+
+    Chemistry only. Protocol belongs to md_config.json and is never written here.
+    """
+    import yaml
+
+    system = manifest["system"]
+    ff = config.get("forcefield") or {}
+    solv = config.get("solvation") or {}
+    doc = {
+        "schema_version": 1,
+        "system_id": system["id"],
+        "display_name": (config.get("system") or {}).get("display_name", system["id"]),
+        "input": {
+            "route": "smiles" if system["input_format"] == "smi" else "pdb",
+            "expected_formal_charge": (config.get("ligand_build") or {}).get("formal_charge", 0),
+        },
+        "parameterization": {
+            "small_molecule_forcefield": ff.get("ligand"),
+            "charge_method": ff.get("ligand_charge_method"),
+            "protein_forcefield": ff.get("protein"),
+            "water_forcefield": ff.get("water"),
+        },
+        "solvation": {
+            "water_model": solv.get("water_model"),
+            "box_shape": solv.get("box_shape"),
+            "padding_nm": solv.get("padding_nm"),
+            "ionic_strength_molar": solv.get("ionic_strength_molar"),
+            "positive_ion": solv.get("positive_ion", "Na+"),
+            "negative_ion": solv.get("negative_ion", "Cl-"),
+        },
+    }
+    if doc["input"]["route"] == "smiles":
+        doc["input"]["smiles"] = system.get("smiles")
+        doc["input"]["canonical_isomeric_smiles"] = system.get("smiles")
+    else:
+        doc["input"]["pdb"] = system["input_file"]
+        doc["input"]["pdb_sha256"] = system["input_sha256"]
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")

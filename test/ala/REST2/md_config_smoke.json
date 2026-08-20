@@ -1,0 +1,59 @@
+{
+  "profile": "explicit-rest2-peptide-v1",
+  "protocol": {
+    "integrator": {
+      "kind": "langevin-middle",
+      "timestep": "4 fs",
+      "temperature": "300 K",
+      "friction": "1 /ps"
+    },
+    "equilibration": {
+      "protocol": "simple",
+      "minimize_max_iterations": 1000,
+      "nvt": "10 ps",
+      "npt": "10 ps",
+      "npt_free": "10 ps"
+    },
+    "production": {
+      "method": "rest2",
+      "enhanced_region": {
+        "type": "solute"
+      },
+      "tau_ladder": {
+        "minimum": 0.0,
+        "maximum": 0.5,
+        "count": 6,
+        "interpolation": "linear"
+      },
+      "exchange": {
+        "n_exchange_per_segment": 100,
+        "exchange_interval": "1 ps"
+      },
+      "omega_exclusion": {
+        "enabled": true,
+        "definition": "peptide_omega"
+      }
+    }
+  },
+  "execution": {
+    "platform": "CUDA",
+    "precision": "mixed",
+    "reporting": {
+      "all_atom": "10 ps",
+      "solute": "1 ps",
+      "state": "1 ps",
+      "checkpoint": "100 ps"
+    }
+  },
+  "conventional_md": {
+    "duration": "100 ps"
+  },
+  "minimization": {
+    "restraint": {
+      "force_constant_kcal_per_mol_angstrom2": 1.0
+    }
+  },
+  "randomness": {
+    "master_seed": 20260820
+  }
+}

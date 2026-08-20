@@ -83,27 +83,42 @@ def main(argv: list[str] | None = None) -> int:
         raise InputError(f"config not found: {config_path}")
 
     outdir = Path(args.outdir).resolve()
-    if outdir.exists() and any(outdir.iterdir()) and not args.overwrite:
-        raise InputError(
-            f"destination {outdir} exists and is not empty. Refusing to write into it: a project "
-            "half-overwritten with stages from two different configurations would run without "
-            "complaint and mean nothing. Use --overwrite, or choose another -o."
-        )
+    # The destination check itself lives in the library, so it also protects callers that never go
+    # through this entry point -- the same reason the --inherit stage suffix is parsed there.
 
-    inherit_path = Path(args.inherit).resolve() if args.inherit else None
-    if inherit_path is not None and not inherit_path.is_file():
-        raise InputError(f"--inherit manifest not found: {inherit_path}")
+    # --inherit is `<run_manifest.json>[:<stage>]`. Resolve the path half only: checking the whole
+    # string as a path is how the `:<stage>` form silently stopped working at the CLI while the
+    # library accepted it. The stage half is validated by resolve_inheritance, which is the only
+    # place that knows the protocol's stage order.
+    inherit_arg = args.inherit
+    if inherit_arg:
+        whole = Path(inherit_arg).expanduser()
+        if whole.is_file():                      # a path that happens to contain a colon
+            base, stage = whole.resolve(), None
+        else:
+            manifest_part, sep, stage_part = inherit_arg.rpartition(":")
+            if not sep or not manifest_part:
+                raise InputError(f"--inherit manifest not found: {whole}")
+            base, stage = Path(manifest_part).expanduser().resolve(), stage_part
+        if not base.is_file():
+            raise InputError(f"--inherit manifest not found: {base}")
+        inherit_arg = f"{base}:{stage}" if stage else str(base)
+    inherit_path = inherit_arg or None
 
     from md_templates.openmm import input_gen
+    from md_templates.openmm.destination import DestinationExists
 
-    result = input_gen.generate_project(
-        system_manifest=manifest_path,
-        md_config=json.loads(config_path.read_text()),
-        outdir=outdir,
-        inherit=inherit_path,
-        overwrite=args.overwrite,
-        dry_run=args.dry_run,
-    )
+    try:
+        result = input_gen.generate_project(
+            system_manifest=manifest_path,
+            md_config=json.loads(config_path.read_text()),
+            outdir=outdir,
+            inherit=inherit_path,
+            overwrite=args.overwrite,
+            dry_run=args.dry_run,
+        )
+    except DestinationExists as error:
+        raise InputError(str(error))
 
     print(f"  system      : {result['system_id']}  ({result['n_solute_atoms']} solute atoms)")
     print(f"  stages      : {', '.join(result['stages'])}")

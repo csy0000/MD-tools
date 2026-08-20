@@ -263,15 +263,62 @@ stage and a `REST2` stage. Until the model grows a multi-stage production block 
 outside it -- they are extracted before canonical resolution and recorded in `run_manifest.json`
 with their values, so nothing is silent, but they do not participate in the configuration hashes.
 
+### Refusing to overwrite
+
+Both generators check the destination **before doing any work** and stop if a file they would write
+is already there. Parameterising a ligand costs half an hour; finding out at the publish step that
+the destination was occupied throws all of it away.
+
+The rule is stated in terms of the files being written, not the directory:
+
+```
+MD_system_gen: destination /path/to/bundle already holds 13 file(s) this system bundle would write:
+    checksums.json
+    config.json
+    ...
+  Refusing to write: a destination half-rewritten from a different configuration would run without
+  complaint and mean nothing.
+  Use --overwrite to replace it, or choose another destination.
+```
+
+A destination holding only *unrelated* files is not a reason to stop, and those files are preserved:
+the staged output is moved in entry by entry rather than replacing the directory.
+
+`--overwrite` is different, and the error says so when it applies. It replaces the **whole**
+destination directory, so it deletes files the generator never wrote -- on a project that has run,
+that is every result:
+
+```
+  --overwrite replaces the WHOLE destination directory, which would also delete 228 file(s) it did
+  not write:
+    REST2_1/  (207 files)
+    cMD_1/  (4 files)
+    min/  (4 files)
+    run.log
+```
+
+Both the check and the publish step live in `md_templates.openmm.destination`, so `--overwrite`
+means the same thing in both generators, and the check protects callers that never go through the
+command line.
+
 ### Inheritance is not restart
 
 `--inherit` takes the `run_manifest.json` of a previous generated run and records lineage: what this
 project descends from, and the hash of that manifest. It never parses a log, and it is not a way to
 continue a simulation.
 
-Continuing a REST2 run happens **inside that run's own directory**, through the
-committed-generation record, using `md-openmm rest2 --resume-run`. That record is the sole authority
-for the restart boundary.
+With the optional `:<stage>` selector -- `--inherit ../parent/run_manifest.json:eq_npt_2` -- the
+named stage's endpoint becomes this project's starting state, so a project that only varies the
+production protocol does not re-run equilibration another project already did. Every stage up to and
+including the named one is listed in `lineage.skipped_stages`; the inherited stage is skipped too,
+because what is inherited is its *endpoint*. Naming them is what keeps the shortcut auditable, and an
+unknown stage name is an error rather than a silent inheritance of nothing.
+
+Continuing a REST2 run is a different thing entirely and happens **inside that run's own directory**,
+through the committed-generation record. `REST2_1.sh` assembles the bundle and hands it to the
+runner, passing the previous run directory if one exists; the runner reads its own record to find the
+restart point. The stage layer never reads or writes that record. It remains the sole authority for
+the restart boundary, reachable also as `md-openmm rest2 --resume-run`.
 
 ### CUDA preference and the CPU validation path
 

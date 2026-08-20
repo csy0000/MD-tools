@@ -34,7 +34,7 @@ from .units import Quantity, parse_quantity
 #: Independent schema versions. Bumping one must not force the others to move.
 SYSTEM_SCHEMA_VERSION = 1
 BUILD_SCHEMA_VERSION = 1
-PROTOCOL_SCHEMA_VERSION = 3
+PROTOCOL_SCHEMA_VERSION = 4
 EXECUTION_SCHEMA_VERSION = 1
 
 

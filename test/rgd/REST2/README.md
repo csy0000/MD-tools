@@ -155,7 +155,8 @@ rgd_run/
     inputs/       immutable copy of the prepared system + its checksums
     min/          min.json      min.sh
     eq_nvt/       eq_nvt.json   eq_nvt.sh
-    eq_npt/       eq_npt.json   eq_npt.sh
+    eq_npt_1/     eq_npt_1.json eq_npt_1.sh    restrained NPT
+    eq_npt_2/     eq_npt_2.json eq_npt_2.sh    free NPT
     cMD_1/        cMD_1.json    cMD_1.sh
     REST2_1/      REST2_1.json  REST2_1.sh
     run_all.sh    run_manifest.json    run.log
@@ -173,8 +174,15 @@ cd rgd_run && ./run_all.sh          # all stages in order
 cd rgd_run/min && ./min.sh          # or just one
 ```
 
-`min`, `eq_nvt`, `eq_npt` and `cMD_1` execute directly. **`REST2_1` is delegated** to the expert
-CLI, which owns the committed-generation restart contract -- `REST2_1.sh` prints the exact command.
+Every stage runs through its own `.sh`. The single-shot stages execute in-process; **`REST2_1` is
+delegated** to the runner, which owns the committed-generation restart contract. `REST2_1.sh`
+assembles the bundle and calls it, passing the previous run directory if there is one -- so running
+`REST2_1.sh` again continues the chain rather than restarting it. The stage layer decides nothing
+about restarts.
+
+Each launcher records the interpreter that generated the project and preflights it before running:
+the stack's activation script puts AmberTools' interpreter first on PATH and that one cannot import
+`openmm` or `md_templates`. Override with `PYTHON=... ./run_all.sh`.
 
 `NUMBER_OF_SEGMENTS` in `run_all.sh` controls how many REST2 segments run. It is an execution
 choice and never appears in the scientific JSON.

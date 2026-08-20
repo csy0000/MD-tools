@@ -317,26 +317,47 @@ The extension chooses the *reader*, never the chemistry.
 ```
 alanine_run/
     inputs/            immutable copy of the prepared system + checksums
-    min/               min.json      min.sh
-    eq_nvt/            eq_nvt.json   eq_nvt.sh
-    eq_npt/            eq_npt.json   eq_npt.sh
-    cMD_1/             cMD_1.json    cMD_1.sh
-    REST2_1/           REST2_1.json  REST2_1.sh
+    min/               min.json       min.sh
+    eq_nvt/            eq_nvt.json    eq_nvt.sh
+    eq_npt_1/          eq_npt_1.json  eq_npt_1.sh     position-restrained NPT
+    eq_npt_2/          eq_npt_2.json  eq_npt_2.sh     free NPT
+    cMD_1/             cMD_1.json     cMD_1.sh
+    REST2_1/           REST2_1.json   REST2_1.sh
     run_all.sh         run_manifest.json      run.log
 ```
 
-Conventional MD stages are `cMD_N` and replica exchange stages are `REST2_N`. Each stage JSON names
-the topology and input **State** it consumes and which stage produced it; a State rather than a PDB,
-because positions alone would discard velocities and box vectors at every boundary.
+Conventional MD stages are `cMD_N` and replica exchange stages are `REST2_N`. The two NPT stages are
+separate because they are different protocols, not one repeated: `eq_npt_1` holds the solute under
+the 1 kcal/mol/A^2 positional restraint while the box relaxes, and `eq_npt_2` releases it.
 
-`min`, `eq_nvt`, `eq_npt` and `cMD_1` execute directly through
-`python -m md_templates.openmm.stage`. **REST2 is delegated** to the `md-openmm` CLI, which owns the
-committed-generation restart contract; a second implementation of a restart boundary is exactly what
-this repository forbids.
+Each stage JSON names the topology and input **State** it consumes and which stage produced it; a
+State rather than a PDB, because positions alone would discard velocities and box vectors at every
+boundary.
 
-`--dry-run` validates a whole project without a GPU. `--inherit` records **lineage** from a previous
-generated run; it is not a checkpoint resume, and continuing a REST2 run happens inside that run's
-own directory.
+Every stage executes through `python -m md_templates.openmm.stage`. The single-shot stages run
+in-process; **REST2 is delegated** to the runner, which owns the committed-generation restart
+contract. The stage layer assembles the bundle the runner expects and calls it -- it decides nothing
+about restarts, because a second implementation of a restart boundary is exactly what this
+repository forbids.
+
+Each launcher records the interpreter that generated the project and preflights it. A bare `python`
+is not safe here: the stack's activation script puts AmberTools' interpreter first on PATH, and it
+has neither openmm nor `md_templates`. Override with `PYTHON=... ./run_all.sh`.
+
+Both generators refuse to write when a file they would produce already exists, naming the files
+rather than just calling the directory non-empty, and they check *before* doing any work -- a bundle
+build can cost half an hour. A destination holding unrelated files is not blocked, and those files
+survive the write. `--overwrite` replaces the **whole** destination directory, so on a project that
+has already run it deletes the results too; the error says how many files that is and where they
+are, before you commit to it.
+
+`--dry-run` validates a whole project without a GPU.
+
+`--inherit <run_manifest.json>[:<stage>]` continues from an endpoint another project already reached.
+Without the `:<stage>` selector it records lineage only; with it, the named stage supplies the
+starting state and every stage up to and including it is recorded in `skipped_stages` rather than
+silently omitted. It is not a checkpoint resume -- continuing a REST2 run happens inside that run's
+own directory, under the runner's own record.
 
 ### Current implementation status
 

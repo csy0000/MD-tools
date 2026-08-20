@@ -37,7 +37,9 @@ __all__ = ["main", "validate_stage", "EXECUTION_STATUS"]
 EXECUTION_STATUS = {
     "min": "implemented: restrained minimisation",
     "eq_nvt": "implemented: restrained NVT",
-    "eq_npt": "implemented: restrained NPT with a MonteCarloBarostat",
+    "eq_npt_1": "implemented: RESTRAINED NPT -- the box relaxes while the solute is held",
+    "eq_npt_2": "implemented: FREE NPT -- restraint released, the solute relaxes in the "
+                "equilibrated box",
     "cMD_1": "implemented: unrestrained NPT conventional MD",
     "REST2_1": "delegated to md_templates.openmm.runner, which owns the committed-generation "
                "restart contract -- this module never decides a restart boundary",
@@ -257,20 +259,169 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     return 0
 
 
-def _execute_rest2(here: Path, payload: dict, devices: str | None) -> int:
-    """Hand REST2 to the runner. This function decides nothing about restarts."""
-    raise StageError(
-        "REST2_1 execution from a stage configuration is not wired.\n"
-        "\n"
-        "The runner owns run-directory naming, the committed-generation restart contract and the\n"
-        "durable exchange history. Reaching those from a stage projection needs a real adapter,\n"
-        "and a partial one would become a competing restart authority.\n"
-        "\n"
-        "Run REST2 with the expert CLI, which is fully wired and produced this project's\n"
-        "reference results:\n"
-        "    md-openmm rest2 --bundle <project>/inputs --config <md_config> \\\n"
-        "                    --out-root ./rest2 --run-name <name> --devices 1,2,3\n"
+def _package_bundle_for_rest2(here: Path, payload: dict) -> Path:
+    """Assemble a package-format bundle so the runner can consume this project.
+
+    The runner takes a version-2 bundle, not a stage projection. Rather than teach it a second
+    input format -- or worse, reimplement its run-directory and restart handling here -- this
+    builds the bundle it already understands, using the package's own provenance writers.
+
+    The one substantive choice: ``equilibrated_state.xml`` is the PREDECESSOR STAGE's endpoint
+    (cMD_1's final state), not the system bundle's initial state. That is what REST2 must start
+    from, and naming it correctly here is what makes the hand-off real rather than decorative.
+    """
+    import shutil
+
+    from . import bundlev2, provenance
+
+    project = here.parent
+    inputs = project / "inputs"
+    staged = here / "_bundle"
+    if staged.exists():
+        shutil.rmtree(staged)
+    staged.mkdir(parents=True)
+
+    for name in ("system.xml", "topology.pdb", "topology.cif"):
+        shutil.copy2(inputs / name, staged / name)
+    # the simbox record build_simbox produced, under the name the contract expects
+    simbox_src = next((p for p in inputs.iterdir() if p.name.endswith("simbox.json")), None)
+    if simbox_src is None:
+        raise StageError(f"no simbox record in {inputs}; regenerate the system bundle")
+    shutil.copy2(simbox_src, staged / "simbox.json")
+
+    # REST2 starts from the previous stage's endpoint, not from the prepared system
+    predecessor = (here / payload["input"]["state"]).resolve()
+    if not predecessor.is_file():
+        raise StageError(
+            f"REST2 needs {payload['input']['produced_by']}'s endpoint state, but "
+            f"{predecessor} does not exist. Run the preceding stages first."
+        )
+    shutil.copy2(predecessor, staged / "equilibrated_state.xml")
+
+    runtime = json.loads((project / "run_manifest.json").read_text())
+    provenance.write_json(staged / "canonical_configuration.json", {
+        "configuration": runtime["resolved_md_config"],
+        "hashes": runtime["configuration_hashes"],
+        "profile": runtime.get("profile"),
+        "sources": runtime["value_sources"],
+    })
+    from .spec import resolve as spec_resolve
+    from .spec.adapter import spec_to_runtime_cfg
+    resolved = spec_resolve.resolve_spec(json.loads(json.dumps(runtime["resolved_md_config"])))
+    cfg = spec_to_runtime_cfg(resolved["spec"])
+    provenance.write_json(staged / "resolved_runtime_config.json", cfg)
+    provenance.write_json(staged / "forcefield_provenance.json",
+                          bundlev2.forcefield_provenance(cfg))
+    provenance.write_json(staged / "environment.json", bundlev2.environment_provenance())
+    shutil.copy2(inputs / "system.yaml", staged / "system.yaml")
+    # system.yaml names its original input by bare filename; stage it beside the yaml so the
+    # manifest loader resolves it here rather than reaching back into the system bundle
+    for original in (inputs / "original_inputs").glob("*"):
+        if original.is_file():
+            shutil.copy2(original, staged / original.name)
+    provenance.write_json(staged / "resolved_config.json", cfg)
+
+    # The legacy experiment manifest, written HERE rather than by MD_system_gen.py: it is protocol,
+    # and the system generator must not own protocol. It is a projection of the same resolved
+    # md_config the stage JSONs came from, so it cannot describe a different run.
+    _write_experiment_yaml(staged / "experiment.prepare.yaml", cfg, runtime)
+
+    # Build the manifest with the PACKAGE's own builder rather than by hand. Every field it
+    # computes -- composition, checksums, the v2 block, the cross-checks against system.yaml and
+    # experiment.prepare.yaml -- is logic that already exists and that validate_bundle will test.
+    # Reimplementing it here would be a second, weaker copy of the bundle contract.
+    from .bundle import build_bundle_manifest
+    from .schemas import config_hash, load_experiment, load_system
+
+    simbox_info = json.loads((staged / "simbox.json").read_text())
+    system_manifest = load_system(staged / "system.yaml")
+    experiment_manifest = load_experiment(staged / "experiment.prepare.yaml")
+    # the hash the bundle will RECOMPUTE from its own manifests -- passing anything else makes
+    # validate_bundle report the bundle as edited after preparation
+    manifest = build_bundle_manifest(
+        staged,
+        system_manifest,
+        experiment_manifest,
+        cfg,
+        simbox_info=simbox_info,
+        equilibration_info={
+            "source": "staged project",
+            "predecessor_stage": payload["input"]["produced_by"],
+            "note": ("equilibrated_state.xml is the predecessor stage's endpoint, not the prepared "
+                     "system's initial state -- REST2 starts from where conventional MD finished."),
+        },
+        config_hash_value=config_hash(system_manifest.doc, experiment_manifest.doc),
     )
+    provenance.write_json(staged / "bundle_manifest.json", manifest)
+    return staged
+
+
+def _execute_rest2(here: Path, payload: dict, devices: str | None) -> int:
+    """Hand REST2 to the runner.
+
+    This function decides *nothing* about restarts. It assembles the bundle the runner expects,
+    then calls the runner, which owns run-directory naming, the committed-generation record and
+    the durable exchange history. The stage layer never reads or writes those.
+    """
+    from . import runner
+
+    bundle = _package_bundle_for_rest2(here, payload)
+    out_root = here / "rest2"
+    # Continuing a segment chain is the runner's decision, made from its own committed-generation
+    # record. All we do is point it at the run directory it created last time, if there is one.
+    # Named explicitly rather than "whichever sorts last": a stage owns exactly one REST2 run, and
+    # picking by sort order would silently resume someone else's run if a second one appeared.
+    candidate = out_root / "REST2_1"
+    resume_run = candidate if (candidate / "status.json").is_file() else None
+    if resume_run is not None:
+        print(f"[REST2_1] continuing {resume_run.name} (the runner decides the restart point)")
+
+    code, run_dir = runner.launch_rest2(
+        bundle,
+        bundle / "experiment.prepare.yaml",
+        out_root,
+        platform=payload.get("execution", {}).get("platform", "CUDA"),
+        devices=devices,
+        run_name=None if resume_run else "REST2_1",
+        resume_run=resume_run,
+    )
+    if run_dir is not None:
+        print(f"[REST2_1] run directory: {run_dir}")
+    return code
+
+
+def _write_experiment_yaml(path: Path, cfg: dict, runtime: dict) -> None:
+    """The package's legacy experiment manifest, projected from the resolved MD configuration."""
+    import yaml
+
+    remd = dict(cfg["production"]["remd"])
+    # The legacy experiment schema names the pre-exchange relaxation `relaxation_ps`; the runtime
+    # tree calls the same quantity `equilibration_ps`. Map it rather than leaving the field absent.
+    if "relaxation_ps" not in remd:
+        relaxation = remd.get("equilibration_ps")
+        if not relaxation:
+            raise StageError(
+                "the resolved configuration has no REST2 relaxation time "
+                "(production.remd.equilibration_ps), so the experiment manifest cannot be written. "
+                "Regenerate the project from a configuration that states it."
+            )
+        remd["relaxation_ps"] = relaxation
+    doc = {
+        "schema_version": 2,
+        "experiment_id": "staged_rest2",
+        "master_seed": cfg["run"].get("seed", 20260820),
+        "ladder_status": "unvalidated",
+        "platform": {
+            "name": cfg["production"]["platform"],
+            "precision": cfg["production"]["precision"],
+        },
+        "integrator": dict(cfg["integrator"]),
+        "equilibration": dict(cfg["equilibration"]),
+        "md": dict(cfg["production"]["md"]),
+        "rest2": remd,
+        "overrides": {},
+    }
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
 
 
 if __name__ == "__main__":                                   # pragma: no cover

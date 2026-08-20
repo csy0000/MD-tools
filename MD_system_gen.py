@@ -178,12 +178,8 @@ def main(argv: list[str] | None = None) -> int:
     ligand_build = require_smi_build_fields(config) if fmt == "smi" else None
 
     outdir = Path(args.outdir).resolve()
-    if outdir.exists() and any(outdir.iterdir()) and not args.overwrite:
-        raise InputError(
-            f"destination {outdir} exists and is not empty. Refusing to write into it: a partially "
-            "overwritten system bundle is worse than none, because its checksums would describe a "
-            "mixture of two preparations. Use --overwrite to replace it, or choose another -o."
-        )
+    # The destination check itself lives in the library, so it also protects callers that never go
+    # through this entry point, and so --overwrite means the same thing in both generators.
 
     print(f"  input        : {input_path.name}  (format {fmt})")
     print(f"  system type  : {system_type}")
@@ -193,19 +189,34 @@ def main(argv: list[str] | None = None) -> int:
               f"{ligand_build.get('charge_model')}, formal charge "
               f"{ligand_build.get('formal_charge')}")
 
+    # A dry run validates the invocation as given, and an occupied destination is a property of the
+    # invocation. Reporting it here is the whole point: parameterisation can cost half an hour, and
+    # nobody wants to spend it and then be told the destination was never writable.
+    from md_templates.openmm.destination import (DestinationExists, SYSTEM_BUNDLE_TARGETS,
+                                                 check_destination)
+
+    try:
+        check_destination(outdir, SYSTEM_BUNDLE_TARGETS,
+                          overwrite=args.overwrite, what="system bundle")
+    except DestinationExists as error:
+        raise InputError(str(error))
+
     if args.dry_run:
         print("  dry run: input, configuration and routing validated; nothing was built.")
         return 0
 
     from md_templates.openmm import system_prep      # imported late: heavy scientific deps
-    result = system_prep.prepare_system(
-        input_path=input_path,
-        input_format=fmt,
-        system_type=system_type,
-        config=config,
-        outdir=outdir,
-        overwrite=args.overwrite,
-    )
+    try:
+        result = system_prep.prepare_system(
+            input_path=input_path,
+            input_format=fmt,
+            system_type=system_type,
+            config=config,
+            outdir=outdir,
+            overwrite=args.overwrite,
+        )
+    except DestinationExists as error:
+        raise InputError(str(error))
 
     print(f"  system bundle: {result['bundle_dir']}")
     print(f"  manifest     : {result['system_manifest']}")
