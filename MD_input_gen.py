@@ -76,6 +76,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _readable_validation_error(error) -> str:
+    """Pydantic's report, reduced to the messages a user can act on.
+
+    Each entry keeps the dotted location and the message our own validators raised; the input dump
+    and the documentation link are dropped, because neither helps someone fix a configuration.
+    """
+    lines = []
+    for item in error.errors():
+        location = ".".join(str(part) for part in item.get("loc", ()) if part != "__root__")
+        message = str(item.get("msg", "")).removeprefix("Value error, ")
+        lines.append(f"{location}: {message}" if location else message)
+    return "the configuration is not valid:\n" + "\n\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -113,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     from md_templates.openmm.destination import (OVERWRITE_ALL, OVERWRITE_GENERATED,
                                                  OVERWRITE_NONE, DestinationExists)
     from md_templates.openmm.spec.resolve import ResolutionError
+    from pydantic import ValidationError
 
     overwrite = (OVERWRITE_ALL if args.overwrite
                  else OVERWRITE_GENERATED if args.overwrite_generated
@@ -132,6 +147,11 @@ def main(argv: list[str] | None = None) -> int:
     except ResolutionError as error:
         # A configuration that names retired fields gets its migration message, not a traceback.
         raise InputError(str(error))
+    except ValidationError as error:
+        # Pydantic wraps our own messages -- the exact arithmetic of a segment that does not divide,
+        # for instance -- in a traceback and a link to its docs. Unwrap them: an actionable message
+        # buried in a stack trace is not actionable.
+        raise InputError(_readable_validation_error(error))
 
     print(f"  system      : {result['system_id']}  ({result['n_solute_atoms']} solute atoms)")
     print(f"  stages      : {', '.join(result['stages'])}")

@@ -1051,6 +1051,28 @@ def test_seed_derivation_does_not_depend_on_python_hash_randomisation():
 
 
 @pytest.mark.slow
+def test_an_invalid_configuration_is_reported_without_a_traceback(prepared_system, tmp_path):
+    """An actionable message buried in a stack trace is not actionable.
+
+    Pydantic wraps our own validator messages -- the exact arithmetic of a segment that does not
+    divide -- in a traceback, an input dump and a link to its documentation. None of that helps
+    someone fix a configuration.
+    """
+    config = json.loads((REPO_ROOT / "test" / "ala" / "REST2" / "md_config.json").read_text())
+    config["protocol"]["production"]["exchange"]["number_of_exchanges_per_segment"] = 1007
+    path = tmp_path / "nodiv.json"
+    path.write_text(json.dumps(config))
+
+    result = _run(INPUT_GEN, "--system", str(prepared_system / "system_manifest.json"),
+                  "-o", str(tmp_path / "out"), "--config", str(path))
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+    assert "errors.pydantic.dev" not in result.stderr
+    assert "does not divide into 1,007 exchanges" in result.stderr
+    assert "Nearby exchange counts that divide exactly" in result.stderr
+
+
+@pytest.mark.slow
 def test_the_generated_project_carries_a_seed_map_not_a_literal(generated_project):
     from md_templates.openmm.seeds import derive_seed
 
@@ -1369,7 +1391,9 @@ def test_overwrite_generated_refuses_when_the_protocol_changed(prepared_system, 
     assert same.returncode == 0, same.stdout + same.stderr
 
     changed = json.loads(json.dumps(MD_CONFIG))
-    changed["protocol"]["production"]["exchange"]["number_of_exchanges_per_segment"] += 7
+    # 1,250,000 steps divides exactly by 1250, so this is a DIFFERENT protocol rather than an
+    # invalid one -- the guard under test is the protocol change, not the divisibility check
+    changed["protocol"]["production"]["exchange"]["number_of_exchanges_per_segment"] = 1250
     other = tmp_path / "other.json"
     other.write_text(json.dumps(changed))
     result = _run(INPUT_GEN, "--system", str(prepared_system / "system_manifest.json"),
@@ -1507,7 +1531,7 @@ def test_the_rgdfv_protocol_resolves_to_ten_replicas_on_cpu(prepared_system, tmp
                   "-o", str(tmp_path / "rgd_run"), "--config", str(config), "--dry-run")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "10 replicas" in result.stdout
-    assert "1000 x 5 ps" in result.stdout
+    assert "5 ns / 1000 exchanges" in result.stdout
 
 
 def test_both_shipped_md_configs_declare_their_replica_counts():
