@@ -276,6 +276,74 @@ Extracted from the research repository, where this pipeline was developed alongs
 implicit-solvent work. Published as a single initial commit: the tree is what matters for a
 template, and the development history remains in the originating repository.
 
+## The two public entry points
+
+Preparation and protocol generation are **separate commands**, because they answer different
+questions and change at different times.
+
+```bash
+python MD_system_gen.py -i ALA.pdb -o alanine_system --config system_config.json
+python MD_input_gen.py  --system alanine_system/system_manifest.json \
+                        -o alanine_run --config md_config.json
+```
+
+| | `MD_system_gen.py` | `MD_input_gen.py` |
+|---|---|---|
+| answers | **what** the molecule is | **what is done** to it |
+| owns | chemistry, force fields, solvent, ions, box, topology | minimisation, equilibration, cMD, REST2, reporting, execution |
+| config | `system_config.json` | `md_config.json` |
+| produces | an immutable system bundle | a staged project |
+| **never** | runs minimisation or any dynamics | reparameterises, resolvates or rebuilds the system |
+
+Each rejects the other's settings rather than ignoring them: a protocol block written into
+`system_config.json` would never be applied, and silence about that is worse than an error.
+
+Why separate: preparing cyclo-RGDfV costs ~27 minutes of AM1-BCC charge derivation. Regenerating a
+protocol against that bundle is instant and needs no GPU, and one prepared system can back several
+protocols with no chance of one of them quietly re-solvating it.
+
+### Supported inputs
+
+| extension | reader | system type |
+|---|---|---|
+| `.pdb` | PDB | **must be declared** -- a PDB may hold a peptide, a ligand or a complex |
+| `.mol`, `.mol2`, `.sdf` | molecule | ligand (unambiguous) |
+| `.smi`, `.smiles` | SMILES | ligand, and `ligand_build` must state charge, stereochemistry, protonation, conformer generation, charge model and parameterisation route |
+
+The extension chooses the *reader*, never the chemistry.
+
+### The generated project
+
+```
+alanine_run/
+    inputs/            immutable copy of the prepared system + checksums
+    min/               min.json      min.sh
+    eq_nvt/            eq_nvt.json   eq_nvt.sh
+    eq_npt/            eq_npt.json   eq_npt.sh
+    cMD_1/             cMD_1.json    cMD_1.sh
+    REST2_1/           REST2_1.json  REST2_1.sh
+    run_all.sh         run_manifest.json      run.log
+```
+
+Conventional MD stages are `cMD_N` and replica exchange stages are `REST2_N`. Each stage JSON names
+the topology and input **State** it consumes and which stage produced it; a State rather than a PDB,
+because positions alone would discard velocities and box vectors at every boundary.
+
+`min`, `eq_nvt`, `eq_npt` and `cMD_1` execute directly through
+`python -m md_templates.openmm.stage`. **REST2 is delegated** to the `md-openmm` CLI, which owns the
+committed-generation restart contract; a second implementation of a restart boundary is exactly what
+this repository forbids.
+
+`--dry-run` validates a whole project without a GPU. `--inherit` records **lineage** from a previous
+generated run; it is not a checkpoint resume, and continuing a REST2 run happens inside that run's
+own directory.
+
+### Current implementation status
+
+OpenMM is implemented. The system manifest carries an `adapter_status` block that says plainly that
+**Amber and GROMACS are not implemented** -- Amber would emit `prmtop`/`rst7`, GROMACS `top`/`gro`,
+and a GROMACS `tpr` is stage-specific and would belong to input generation, not preparation.
+
 ## Branch policy
 
 | branch | role |

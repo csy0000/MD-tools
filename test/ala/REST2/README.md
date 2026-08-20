@@ -112,6 +112,55 @@ HMR changes the equations of motion, not the potential energy surface. Thermodyn
 unaffected; kinetic quantities such as diffusion constants and rate constants are **not** directly
 comparable to an unrepartitioned run.
 
+## Setup with the public generators
+
+Preparation and protocol generation are separate commands, because they answer different questions
+and change at different times. Preparing the system derives charges and solvates -- expensive, and
+unchanged when you alter a protocol. Generating a protocol is cheap and needs no GPU.
+
+```bash
+# 1. prepare the molecular system. Runs NO dynamics.
+python MD_system_gen.py -i ace_ala_nme.pdb \
+       -o ala_system --config system_config.json
+
+# 2. generate the staged protocol from it.
+python MD_input_gen.py --system ala_system/system_manifest.json \
+       -o ala_run --config md_config.json
+```
+
+The PDB is a peptide, so `system.type` is declared: a PDB does not say what it holds.
+
+This produces:
+
+```
+ala_run/
+    inputs/       immutable copy of the prepared system + its checksums
+    min/          min.json      min.sh
+    eq_nvt/       eq_nvt.json   eq_nvt.sh
+    eq_npt/       eq_npt.json   eq_npt.sh
+    cMD_1/        cMD_1.json    cMD_1.sh
+    REST2_1/      REST2_1.json  REST2_1.sh
+    run_all.sh    run_manifest.json    run.log
+```
+
+Each stage owns its configuration, its launcher and (once run) its outputs. Each stage JSON names
+the topology and the input **State** it consumes and which stage produced it, so a stage cannot
+silently start from the wrong coordinates -- running one before its predecessor fails with exactly
+that message.
+
+Run everything, or one stage at a time:
+
+```bash
+cd ala_run && ./run_all.sh          # all stages in order
+cd ala_run/min && ./min.sh          # or just one
+```
+
+`min`, `eq_nvt`, `eq_npt` and `cMD_1` execute directly. **`REST2_1` is delegated** to the expert
+CLI, which owns the committed-generation restart contract -- `REST2_1.sh` prints the exact command.
+
+`NUMBER_OF_SEGMENTS` in `run_all.sh` controls how many REST2 segments run. It is an execution
+choice and never appears in the scientific JSON.
+
 ## Commands
 
 ```bash

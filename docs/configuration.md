@@ -212,3 +212,45 @@ tau_ladder: {minimum: 0.0, maximum: 0.5, count: 10, interpolation: linear}
 Migrating an existing `scale_factors` ladder: `tau = 1 - sqrt(s)` for each rung. A ladder that is
 not linear in `tau` is **refused** rather than respaced, because respacing it changes exchange
 acceptance and therefore the run.
+
+
+## Configuration ownership: two files, one canonical model
+
+The two public generators consume two configuration files with strictly separate ownership.
+
+| | `system_config.json` | `md_config.json` |
+|---|---|---|
+| owns | `system.type`, `ligand_build`, `forcefield`, `solvation`, `system_build` | `protocol.integrator`, `protocol.equilibration`, `protocol.production`, `execution`, `reporting` |
+| consumed by | `MD_system_gen.py` | `MD_input_gen.py` |
+
+Each **rejects** the other's keys. Writing `production` into `system_config.json` raises an error
+naming the file it belongs in, rather than being ignored -- an ignored setting is one the author
+believes took effect.
+
+Both resolve through the **same** canonical typed model. Stage JSON files are *projections* of the
+resolved model, never independent sources of defaults: a value that could be set in two places is a
+value that can disagree with itself.
+
+### One known seam
+
+`conventional_md.duration` and `minimization.restraint` in `md_config.json` are **generator-level**
+keys. The canonical model describes one production method, while a staged protocol has both a `cMD`
+stage and a `REST2` stage. Until the model grows a multi-stage production block these two live
+outside it -- they are extracted before canonical resolution and recorded in `run_manifest.json`
+with their values, so nothing is silent, but they do not participate in the configuration hashes.
+
+### Inheritance is not restart
+
+`--inherit` takes the `run_manifest.json` of a previous generated run and records lineage: what this
+project descends from, and the hash of that manifest. It never parses a log, and it is not a way to
+continue a simulation.
+
+Continuing a REST2 run happens **inside that run's own directory**, through the
+committed-generation record, using `md-openmm rest2 --resume-run`. That record is the sole authority
+for the restart boundary.
+
+### CUDA preference and the CPU validation path
+
+Execution prefers CUDA with mixed precision. Every generator has a `--dry-run` that resolves and
+validates the full configuration without touching a GPU, and `python -m md_templates.openmm.stage
+--validate` checks a single stage's inputs the same way. That is what CI uses.
