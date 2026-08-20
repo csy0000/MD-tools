@@ -187,7 +187,8 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     from openmm.app import PDBFile
 
     from .equilibration import (_add_positional_restraints, _apply_coords, _make_simulation,
-                                _set_barostat)
+                                _set_barostat, solute_atom_indices)
+    from .reporting import attach_reporters
 
     cfg = _runtime_cfg(payload)
     system = XmlSerializer.deserialize((here / payload["input"]["system_xml"]).read_text())
@@ -241,6 +242,36 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
         k = restraint["force_constant_kcal_per_mol_angstrom2"] * 4.184 * 100.0
         sim.context.setParameter("k_restraint", k)
 
+    # Every declared output is attached here, so what the configuration promises is what the stage
+    # writes. Minimisation gets none: it takes no steps, so a step-interval reporter would produce
+    # an empty file that looks like a broken one.
+    reporting = payload.get("reporting") or {}
+    attached: dict = {}
+    selected_atoms: list = []
+    if stage != "min" and int(payload.get("steps", 0)) > 0:
+        selection = (reporting.get("selected_atoms") or {}).get("type", "solute")
+        selected_atoms = solute_atom_indices(pdb.topology, selection)
+        expected = reporting.get("selected_atoms_expected_count")
+        if expected is not None and int(expected) != len(selected_atoms):
+            raise StageError(
+                f"{stage}: the selection {selection!r} resolves to {len(selected_atoms)} atoms in "
+                f"this topology, but the project was generated expecting {int(expected)}. The "
+                "bundle and the project disagree; regenerate the project against this bundle."
+            )
+        outputs = payload["output"]
+        attached = attach_reporters(
+            sim,
+            all_atom_path=here / outputs["trajectory_all_atoms"],
+            all_atom_interval_steps=reporting.get("full_system_interval_steps"),
+            selected_path=here / outputs["trajectory_selected_atoms"],
+            selected_interval_steps=reporting.get("selected_atoms_interval_steps"),
+            selected_atoms=selected_atoms,
+            state_path=here / outputs["log"],
+            state_interval_steps=reporting.get("state_interval_steps")
+                                 or reporting.get("full_system_interval_steps"),
+            total_steps=int(payload["steps"]),
+        )
+
     # The barostat is recorded because whether one was applied is a fact about the stage, while
     # whether the volume actually moved is a sampling outcome: a MonteCarloBarostat can reject every
     # move in a short stage, so an unchanged box is not evidence that the barostat was missing.
@@ -251,7 +282,12 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
                                     else "initialized"
                                     if coords_origin.get("velocity_seed") is not None
                                     else "inherited"),
-                     "velocity_seed": coords_origin.get("velocity_seed")}
+                     "velocity_seed": coords_origin.get("velocity_seed"),
+                     "reporters": attached,
+                     "selected_atoms": {"type": (reporting.get("selected_atoms") or {}).get(
+                                            "type", "solute"),
+                                        "n_atoms": len(selected_atoms),
+                                        "indices_sha256": _selection_fingerprint(selected_atoms)}}
     energy_before = sim.context.getState(getEnergy=True).getPotentialEnergy()
     results["potential_before_kj_mol"] = energy_before.value_in_unit(unit.kilojoule_per_mole)
 
@@ -285,6 +321,20 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
           f"V {results['box_volume_nm3']:.2f} nm^3, "
           f"{results.get('steps', 0)} steps, {len(restrained_atoms)} restrained atoms")
     return 0
+
+
+def _selection_fingerprint(indices) -> str:
+    """A hash of the resolved selection, so two runs can be compared without storing every index.
+
+    Atom ORDER is part of it: a trajectory written for one order and analysed against another is
+    wrong in a way that no file size or frame count reveals.
+    """
+    import hashlib
+
+    if not indices:
+        return ""
+    payload = ",".join(str(int(i)) for i in indices).encode()
+    return hashlib.sha256(payload).hexdigest()[:16]
 
 
 def _package_bundle_for_rest2(here: Path, payload: dict) -> Path:

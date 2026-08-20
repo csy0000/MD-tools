@@ -767,6 +767,132 @@ def test_rest2_refuses_to_start_without_its_predecessors_endpoint(executed_proje
 
 
 # ---------------------------------------------------------------------------------------------
+# declared outputs must be real
+# ---------------------------------------------------------------------------------------------
+
+def _dcd_frame_count(path) -> int:
+    """Frame count from the DCD header, without a trajectory library."""
+    import struct
+
+    with open(path, "rb") as handle:
+        handle.seek(8)
+        return struct.unpack("<i", handle.read(4))[0]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("stage", ["eq_nvt", "cMD_1"])
+def test_a_dynamic_stage_writes_every_output_it_declares(executed_project, stage):
+    """The defect this replaces: intervals were recorded and no reporter was ever attached.
+
+    A manifest describing a trajectory that does not exist is worse than a missing feature, because
+    nothing downstream notices until someone goes looking for the frames.
+    """
+    outputs = json.loads((executed_project / stage / f"{stage}.json").read_text())["output"]
+    for key in ("trajectory_all_atoms", "trajectory_selected_atoms", "log",
+                "final_state", "final_structure", "checkpoint", "results"):
+        path = executed_project / stage / outputs[key]
+        assert path.is_file(), f"{stage} declares {key}={outputs[key]} and did not write it"
+        assert path.stat().st_size > 0, f"{stage}/{outputs[key]} is empty"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("stage", ["eq_nvt", "cMD_1"])
+def test_trajectories_hold_frames_at_the_declared_cadence(executed_project, stage):
+    """Frame COUNT, not merely file existence: a reporter at the wrong interval still writes a file."""
+    results = json.loads((executed_project / stage / f"{stage}_results.json").read_text())
+    outputs = json.loads((executed_project / stage / f"{stage}.json").read_text())["output"]
+    steps = results["steps"]
+
+    for key, filename in (("all_atom", outputs["trajectory_all_atoms"]),
+                          ("selected_atoms", outputs["trajectory_selected_atoms"])):
+        attached = results["reporters"][key]
+        frames = _dcd_frame_count(executed_project / stage / filename)
+        assert frames == steps // attached["interval_steps"], (
+            f"{stage}/{filename}: {frames} frames for {steps} steps at interval "
+            f"{attached['interval_steps']}")
+
+
+@pytest.mark.slow
+def test_the_selected_trajectory_holds_exactly_the_resolved_selection(executed_project):
+    """22 atoms is the alanine solute -- the same selection the restraint uses."""
+    results = json.loads((executed_project / "cMD_1" / "cMD_1_results.json").read_text())
+    assert results["selected_atoms"]["type"] == "solute"
+    assert results["selected_atoms"]["n_atoms"] == 22
+    assert results["reporters"]["selected_atoms"]["n_atoms"] == 22
+    assert results["selected_atoms"]["indices_sha256"], "the atom ORDER must be fingerprinted"
+
+    # the restrained stages restrain the same 22 atoms: one definition of "solute", not two
+    restrained = json.loads(
+        (executed_project / "eq_nvt" / "eq_nvt_results.json").read_text())["n_restrained_atoms"]
+    assert restrained == results["selected_atoms"]["n_atoms"]
+
+
+@pytest.mark.slow
+def test_the_all_atom_trajectory_is_wrapped_and_the_selection_is_not(executed_project):
+    """A scientific choice, so it is asserted rather than left to whoever edits the call.
+
+    Wrapping teleports the solute across the box whenever its centre crosses a face, which breaks
+    every analysis that reads the trajectory as continuous.
+    """
+    results = json.loads((executed_project / "cMD_1" / "cMD_1_results.json").read_text())
+    assert results["reporters"]["all_atom"]["wrapped"] is True
+    assert results["reporters"]["selected_atoms"]["wrapped"] is False
+
+
+@pytest.mark.slow
+def test_the_state_log_has_one_header_and_the_expected_rows(executed_project):
+    results = json.loads((executed_project / "cMD_1" / "cMD_1_results.json").read_text())
+    lines = (executed_project / "cMD_1" / "cMD_1.log").read_text().splitlines()
+    headers = [line for line in lines if line.lstrip('#"').startswith(('Step', "Step"))
+               or line.startswith('#"Step')]
+    assert len(headers) == 1, f"expected exactly one header, got {len(headers)}"
+    rows = len(lines) - 1
+    assert rows == results["steps"] // results["reporters"]["state_log"]["interval_steps"]
+
+
+@pytest.mark.slow
+def test_minimisation_declares_no_trajectory_because_it_takes_no_steps(executed_project):
+    """A step-interval reporter on a stage that never steps writes an empty, broken-looking file."""
+    results = json.loads((executed_project / "min" / "min_results.json").read_text())
+    assert results["reporters"] == {}
+    outputs = json.loads((executed_project / "min" / "min.json").read_text())["output"]
+    assert not (executed_project / "min" / outputs["trajectory_all_atoms"]).exists()
+
+
+def test_a_reporting_interval_must_be_a_whole_number_of_steps():
+    """Rounding would silently change the sampling frequency."""
+    from md_templates.openmm.reporting import exact_steps
+
+    assert exact_steps(250, what="x") == 250
+    with pytest.raises(ValueError, match="whole number of steps"):
+        exact_steps(250.5, what="x")
+    with pytest.raises(ValueError, match="at least one step"):
+        exact_steps(0, what="x")
+
+
+def test_a_reporting_interval_longer_than_the_stage_is_refused():
+    """It would produce an empty trajectory, indistinguishable from a broken one."""
+    from md_templates.openmm.reporting import attach_reporters
+
+    class _Sim:
+        reporters: list = []
+
+    with pytest.raises(ValueError, match="no frame would ever be written"):
+        attach_reporters(_Sim(), all_atom_path=pathlib.Path("x.dcd"),
+                         all_atom_interval_steps=5000, total_steps=100)
+
+
+def test_the_stage_refuses_a_selection_that_does_not_match_the_bundle(executed_project, tmp_path):
+    """A project pointed at a different bundle must fail, not write a mislabelled trajectory."""
+    from md_templates.openmm import stage as stage_mod
+
+    payload = json.loads((executed_project / "cMD_1" / "cMD_1.json").read_text())
+    payload["reporting"]["selected_atoms_expected_count"] = 999
+    with pytest.raises(stage_mod.StageError, match="disagree"):
+        stage_mod.execute_stage(executed_project / "cMD_1" / "cMD_1.json", payload)
+
+
+# ---------------------------------------------------------------------------------------------
 # seeds and velocity continuity
 # ---------------------------------------------------------------------------------------------
 

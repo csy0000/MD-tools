@@ -553,6 +553,10 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
                     "checkpoint": f"{stage}.chk",
                     "log": f"{stage}.log",
                     "results": f"{stage}_results.json",
+                    # Named here so the manifest and the execution path cannot disagree about which
+                    # files exist. A stage that takes no steps writes neither.
+                    "trajectory_all_atoms": f"{stage}_all_atoms.dcd",
+                    "trajectory_selected_atoms": f"{stage}_selected_atoms.dcd",
                 },
                 "integrator": {
                     "type": integrator.kind, "timestep": dt.source,
@@ -571,7 +575,14 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
                 "reporting": {
                     "full_system_interval_steps": full_steps,
                     "selected_atoms_interval_steps": selected_steps,
+                    "state_interval_steps": full_steps,
                     "selected_atoms": {"type": "solute"},
+                    # What the prepared bundle says the selection should resolve to. The stage
+                    # re-resolves it against the topology and refuses on a mismatch, so a project
+                    # pointed at a different bundle fails instead of writing a trajectory whose
+                    # atom order silently means something else.
+                    "selected_atoms_expected_count": int(
+                        manifest["composition"]["n_solute_atoms"]),
                 },
                 "execution": {
                     "platform": spec.execution.platform,

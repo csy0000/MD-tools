@@ -113,6 +113,31 @@ def _scaled_system(system, cfg: dict, n_solute_atoms: int, scale_factor: float,
 # ---------------------------------------------------------------------------------------------
 # Step 5 -- minimise, NVT, NPT
 # ---------------------------------------------------------------------------------------------
+def solute_atom_indices(topology, selection: str = "solute") -> list:
+    """Resolve a named selection to topology atom indices.
+
+    One definition of "solute", used by the positional restraint and by the selected-atom
+    trajectory. Two definitions would eventually disagree, and the disagreement would surface as a
+    trajectory whose atom order does not match the restraint's -- silently, because both are
+    plausible lists of integers.
+
+    `solute` is everything that is not water or an ion; `solute-heavy` drops hydrogens as well.
+    """
+    from openmm.app import element as elem
+
+    if selection not in ("solute", "solute-heavy"):
+        raise ValueError(
+            f"unknown atom selection {selection!r}; implemented: solute, solute-heavy")
+    out = []
+    for atom in topology.atoms():
+        if atom.residue.name.upper() in WATER_RESIDUE_NAMES | ION_RESIDUE_NAMES:
+            continue
+        if selection == "solute-heavy" and atom.element == elem.hydrogen:
+            continue
+        out.append(int(atom.index))
+    return out
+
+
 def _add_positional_restraints(system, topology, selection: str, positions_nm: np.ndarray):
     """Add a flat harmonic positional restraint driven by the global parameter ``k_restraint``.
 
@@ -130,15 +155,9 @@ def _add_positional_restraints(system, topology, selection: str, positions_nm: n
     for name in ("x0", "y0", "z0"):
         force.addPerParticleParameter(name)
 
-    atoms = list(topology.atoms())
-    restrained = []
-    for atom in atoms:
-        if atom.residue.name.upper() in WATER_RESIDUE_NAMES | ION_RESIDUE_NAMES:
-            continue
-        if selection == "solute-heavy" and atom.element == elem.hydrogen:
-            continue
-        force.addParticle(int(atom.index), [float(x) for x in positions_nm[atom.index]])
-        restrained.append(int(atom.index))
+    restrained = solute_atom_indices(topology, selection)
+    for atom_index in restrained:
+        force.addParticle(int(atom_index), [float(x) for x in positions_nm[atom_index]])
     index = system.addForce(force)
     return index, restrained
 
