@@ -20,7 +20,7 @@ from md_templates.openmm.spec.units import UnitError, parse_quantity  # noqa: E4
 
 MINIMAL = {
     "system": {"system_id": "demo", "route": "smiles", "smiles": "CCO"},
-    "protocol": {"production": {"method": "md", "n_chunks": 3, "chunk": "10 ps"}},
+    "protocol": {"production": {"method": "md", "duration_per_segment": "10 ps"}},
 }
 
 
@@ -113,47 +113,68 @@ def test_a_unitless_number_never_silently_acquires_a_unit():
 # 5-6: cross-field and method-specific validation
 # ---------------------------------------------------------------------------------------------
 
-def test_chunk_must_be_a_whole_number_of_exchange_intervals():
+def test_the_exchange_interval_must_be_whole_steps():
+    """The interval must be whole steps. The SEGMENT is a product, so it is exact by construction.
+
+    This is the whole point of stating a count and an interval instead of a duration and a count:
+    only one quantity can fail to divide, and it is the one a user chose directly.
+    """
     doc = json.loads(json.dumps(MINIMAL))
-    doc["protocol"]["production"] = {"method": "rest2", "n_chunks": 1, "chunk": "1 ps",
-                                     "scale_factors": [1.0, 0.5], "exchange_interval": "0.3 ps",
+    doc["protocol"]["production"] = {"method": "rest2",
+                                     "tau_ladder": {"maximum": 0.5, "count": 2},
+                                     "exchange": {"n_exchange_per_segment": 4,
+                                                  "exchange_interval": "0.006 ps"},
                                      "relaxation": "1 ps"}
-    with pytest.raises(Exception, match="whole number of exchange intervals"):
+    # 6 fs is 1.5 steps at the profile's 4 fs timestep
+    with pytest.raises(Exception, match="not a whole number of"):
         resolved(doc)
 
 
-def test_chunk_must_be_a_whole_number_of_timesteps():
+def test_a_segment_must_be_a_whole_number_of_timesteps():
     doc = json.loads(json.dumps(MINIMAL))
-    doc["protocol"]["production"]["chunk"] = "0.005 ps"      # not a multiple of 4 fs
-    with pytest.raises(Exception, match="whole number of"):
+    doc["protocol"]["production"]["duration_per_segment"] = "0.005 ps"   # not a multiple of 4 fs
+    with pytest.raises(Exception, match="not a whole number of"):
         resolved(doc)
 
 
 def test_md_rejects_rest2_only_settings():
     doc = json.loads(json.dumps(MINIMAL))
-    doc["protocol"]["production"]["exchange_interval"] = "1 ps"
-    with pytest.raises(Exception, match="exchange_interval"):
+    doc["protocol"]["production"]["exchange"] = {"number_of_exchanges_per_segment": 4}
+    with pytest.raises(Exception, match="exchange"):
         resolved(doc)
 
 
 def test_rest2_rejects_md_only_settings():
     doc = json.loads(json.dumps(MINIMAL))
-    doc["protocol"]["production"] = {"method": "rest2", "n_chunks": 1, "chunk": "1 ps",
-                                     "scale_factors": [1.0, 0.5], "exchange_interval": "0.5 ps",
+    doc["protocol"]["production"] = {"method": "rest2",
+                                     "tau_ladder": {"maximum": 0.5, "count": 2},
+                                     "exchange": {"n_exchange_per_segment": 2,
+                                                  "exchange_interval": "0.5 ps"},
                                      "relaxation": "1 ps", "scale_factor": 0.5}
     with pytest.raises(Exception, match="scale_factor"):
         resolved(doc)
 
 
-def test_a_descending_ladder_starting_at_one_is_required():
+def test_the_tau_ladder_must_start_at_the_cold_physical_rung():
+    """tau must start at 0.0, which is s = 1: the unscaled, physical Hamiltonian."""
     doc = json.loads(json.dumps(MINIMAL))
-    base = {"method": "rest2", "n_chunks": 1, "chunk": "1 ps",
-            "exchange_interval": "0.5 ps", "relaxation": "1 ps"}
-    doc["protocol"]["production"] = dict(base, scale_factors=[0.9, 0.5])
-    with pytest.raises(Exception, match="cold rung"):
+    base = {"method": "rest2",
+            "exchange": {"n_exchange_per_segment": 2, "exchange_interval": "0.5 ps"},
+            "relaxation": "1 ps"}
+    doc["protocol"]["production"] = dict(
+        base, tau_ladder={"minimum": 0.1, "maximum": 0.5, "count": 3})
+    with pytest.raises(Exception, match="cold rung|physical Hamiltonian"):
         resolved(doc)
-    doc["protocol"]["production"] = dict(base, scale_factors=[1.0, 0.5, 0.7])
-    with pytest.raises(Exception, match="descending"):
+
+
+def test_the_tau_ladder_must_have_a_span():
+    doc = json.loads(json.dumps(MINIMAL))
+    doc["protocol"]["production"] = {
+        "method": "rest2",
+        "exchange": {"n_exchange_per_segment": 2, "exchange_interval": "0.5 ps"},
+        "relaxation": "1 ps",
+        "tau_ladder": {"minimum": 0.0, "maximum": 0.0, "count": 3}}
+    with pytest.raises(Exception):
         resolved(doc)
 
 
@@ -183,9 +204,11 @@ def test_the_smoke_profile_is_never_selected_as_a_default():
 
 def test_an_explicitly_pinned_profile_is_used():
     doc = json.loads(json.dumps(MINIMAL))
-    doc["protocol"]["production"] = {"method": "rest2", "n_chunks": 2, "chunk": "0.001 ns",
-                                     "scale_factors": [1.0, 0.5625, 0.25],
-                                     "exchange_interval": "0.5 ps", "relaxation": "1 ps"}
+    doc["protocol"]["production"] = {"method": "rest2",
+                                     "tau_ladder": {"maximum": 0.5, "count": 3},
+                                     "exchange": {"n_exchange_per_segment": 2,
+                                                  "exchange_interval": "0.5 ps"},
+                                     "relaxation": "1 ps"}
     doc["profile"] = "cpu-smoke-v1"
     assert resolved(doc)["profile"]["profile_id"] == "cpu-smoke-v1"
 
@@ -207,10 +230,10 @@ def test_the_user_document_wins_over_the_profile():
 
 def test_a_cli_override_wins_over_the_document():
     doc = json.loads(json.dumps(MINIMAL))
-    doc["protocol"]["production"]["n_chunks"] = 5
-    r = resolved(doc, overrides=["protocol.production.n_chunks=11"])
-    assert r["spec"].protocol.production.n_chunks == 11
-    assert r["sources"]["protocol.production.n_chunks"] == "cli"
+    doc["protocol"]["production"]["duration_per_segment"] = "10 ps"
+    r = resolved(doc, overrides=["protocol.production.duration_per_segment=20 ps"])
+    assert r["spec"].protocol.production.duration_per_segment.source == "20 ps"
+    assert r["sources"]["protocol.production.duration_per_segment"] == "cli"
 
 
 def test_every_resolved_field_reports_its_source():
@@ -223,14 +246,14 @@ def test_every_resolved_field_reports_its_source():
 
 def test_the_route_is_never_inferred():
     doc = {"system": {"system_id": "demo", "smiles": "CCO"},
-           "protocol": {"production": {"method": "md", "n_chunks": 1, "chunk": "10 ps"}}}
+           "protocol": {"production": {"method": "md", "duration_per_segment": "10 ps"}}}
     with pytest.raises(resolve.ResolutionError, match="system.route is required"):
         resolved(doc)
 
 
 def test_the_method_is_never_inferred():
     doc = {"system": {"system_id": "demo", "route": "smiles", "smiles": "CCO"},
-           "protocol": {"production": {"n_chunks": 1, "chunk": "10 ps"}}}
+           "protocol": {"production": {"duration_per_segment": "10 ps"}}}
     with pytest.raises(resolve.ResolutionError, match="method is required"):
         resolved(doc)
 
@@ -257,7 +280,6 @@ def test_changing_a_profile_value_changes_its_hash():
 @pytest.mark.parametrize("field,value,expected", [
     ("build.solvation.padding", "1.5 nm", "bundle-defining"),
     ("protocol.integrator.timestep", "2 fs", "continuity-defining"),
-    ("protocol.production.n_chunks", 99, "extension-only"),
     ("execution.platform", "CUDA", "execution-only"),
 ])
 def test_diff_classifies_each_change_by_its_consequence(field, value, expected):
@@ -322,12 +344,44 @@ def test_execution_choices_do_not_change_the_scientific_hashes():
     assert a["hashes"]["execution_sha256"] != b["hashes"]["execution_sha256"]
 
 
-def test_more_chunks_does_not_change_the_continuity_hash():
-    """Extension must not look like a different run, or resuming becomes impossible."""
-    a = resolved()
+def test_segment_count_is_not_a_configuration_field_at_all():
+    """The old extension-only field is gone, and asking for it is refused with a migration.
+
+    This is a stronger guarantee than the one it replaces. Previously `n_chunks` was in the
+    configuration and had to be excluded from the continuity hash so a longer run did not look
+    like a different run. Now it cannot be written at all, so there is nothing to exclude.
+    """
     doc = json.loads(json.dumps(MINIMAL))
     doc["protocol"]["production"]["n_chunks"] = 99
-    assert resolved(doc)["hashes"]["protocol_sha256"] == a["hashes"]["protocol_sha256"]
+    with pytest.raises(Exception, match="REMOVED from the scientific configuration"):
+        resolved(doc)
+
+
+def test_the_retired_chunk_inputs_each_name_their_replacement():
+    """A refusal that does not say what to write instead just sends the reader hunting a typo."""
+    for field, value, expected in [
+        ("n_chunks", 3, "duration_per_segment"),
+        ("chunk_ns", 5.0, "duration_per_segment"),
+        ("chunk", "5 ns", "duration_per_segment"),
+        ("scale_factors", [1.0, 0.25], "tau_ladder"),
+        ("number_of_exchanges_per_segment", 100, "n_exchange_per_segment"),
+    ]:
+        doc = json.loads(json.dumps(MINIMAL))
+        doc["protocol"]["production"][field] = value
+        with pytest.raises(Exception) as excinfo:
+            resolved(doc)
+        assert expected in str(excinfo.value), field
+
+
+def test_the_scale_factor_migration_states_the_exact_tau_relationship():
+    """A user converting an existing ladder needs the formula, not just the new field name."""
+    doc = json.loads(json.dumps(MINIMAL))
+    doc["protocol"]["production"]["scale_factors"] = [1.0, 0.5625, 0.25]
+    with pytest.raises(Exception) as excinfo:
+        resolved(doc)
+    message = str(excinfo.value)
+    assert "tau = 1 - sqrt(s)" in message
+    assert "s = (1 - tau)^2" in message
 
 
 def test_a_build_change_changes_only_the_build_hash():

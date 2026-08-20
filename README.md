@@ -180,7 +180,9 @@ md-openmm rest2 --bundle B --out-root ./runs --resume-run production_a # continu
 * `--run-name` is used verbatim: no timestamp, system or hash is appended.
 * A fresh run refuses an existing directory rather than reusing it.
 * `--resume-run` continues the same directory -- never a sibling or a child -- and
-  **`n_chunks` is the work this invocation adds**, so resuming extends the run.
+  **Each invocation runs one segment**, so resuming extends the run. Segment count is not a
+  configuration field: the driver script decides how many segments to request, and the run
+  manifest records how many committed.
 * Before a resume loads anything, the continuity contract in `run_state.json` is compared with the
   requested configuration. Force field, integrator, constraints, chunk length, ladder and the
   omega-exclusion setting must match; the number of chunks deliberately need not. A mismatch is
@@ -273,3 +275,19 @@ Re-running them against the current CLI is the way to restore an evidence direct
 Extracted from the research repository, where this pipeline was developed alongside
 implicit-solvent work. Published as a single initial commit: the tree is what matters for a
 template, and the development history remains in the originating repository.
+
+## Branch policy
+
+| branch | role |
+|---|---|
+| `main` | stable and default. Only ever receives `dev` at a validated milestone. |
+| `dev` | integration. Everything lands here first. |
+| `feature/*`, `fix/*`, `docs/*` | normal work. Branch **from `dev`**, target **`dev`**. |
+
+Normal work never targets `main` directly. `dev` is merged into `main` only when a milestone has
+been validated — the point of the split is that `main` is always a state someone can build on
+without checking what happened to it that week.
+
+The repository's previous primary branch was `openmm`; it was renamed to `main` using GitHub's
+branch-rename operation, which retargets open pull requests and leaves redirects in place. It was
+not simulated by force-pushing, so history is continuous across the rename.

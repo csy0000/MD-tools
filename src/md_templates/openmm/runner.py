@@ -374,6 +374,7 @@ def launch_rest2(
     *,
     platform: str,
     device: Optional[str] = None,
+    devices: Optional[str] = None,
     omega_exclusion: Optional[bool] = None,
     run_name: Optional[str] = None,
     resume_run: Optional[Path] = None,
@@ -425,6 +426,14 @@ def launch_rest2(
         cfg = spec_to_runtime_cfg(canonical_run["spec"])
         cfg["production"]["platform"] = platform
         cfg["production"]["device_index"] = device
+        # An ordered device list places replicas across several GPUs. It is recorded on the
+        # config so the resolved mapping reaches the run manifest: a changed device list must be
+        # visible rather than silently re-dealt across a resume.
+        if devices:
+            parsed = [int(token) for token in str(devices).replace(",", " ").split()]
+            if len(set(parsed)) != len(parsed):
+                raise ValueError(f"--devices lists a device more than once: {devices!r}")
+            cfg["production"]["device_indices"] = parsed
         if omega_exclusion is not None:
             # A CLI flag and a canonical field must not disagree silently: the flag is the later,
             # more explicit statement, and it is recorded as an override.

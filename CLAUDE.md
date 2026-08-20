@@ -52,8 +52,18 @@ Do not report a feature as implemented merely because a helper, schema field, or
 - Preserve periodic box vectors in structures and restart states.
 - Use explicit physical units and validate dimensionality.
 - Do not reconstruct integer simulation plans by rounding floating-point totals.
-- `n_chunks` and `chunk_ns` are inputs; total duration is derived.
-- For continuation, `n_chunks` means additional chunks requested by the current invocation.
+- Scientific configuration declares the length of ONE segment (`duration_per_segment`), never a
+  segment count. How many segments to run is an execution choice made by the driver script;
+  how many committed is runtime state in the run manifest.
+- Never reintroduce a segment/chunk count into the scientific input. It made a longer run look
+  like a different calculation, because it moved the configuration hash.
+- The REST2 ladder is parameterised by `tau`. `s = (1 - tau)^2` and the solute-environment
+  coupling is `sqrt(s) = 1 - tau`, derived by one shared function. `tau` is persisted as the
+  source parameter; `s`, `sqrt(s)` and effective temperatures are labelled derived diagnostics
+  and are never accepted back as input.
+- Durations and reporting intervals must convert to exact integer steps. Reject rather than
+  round: a segment silently shortened by one step drifts the exchange schedule out of
+  alignment with the committed watermark while still looking healthy.
 - Do not change scientific defaults without an explicit task requirement, a versioned profile/schema change, documentation, and tests.
 - Do not describe a smoke test as scientific validation, convergence, or proof of production suitability.
 - Keep operational verification, statistical validation, and scientific validation clearly separated.

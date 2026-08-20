@@ -134,7 +134,8 @@ def cmd_rest2(args) -> int:
     exp = _resolve_manifest(args.experiment, "experiment") if args.experiment else None
     code, run_dir = runner.launch_rest2(
         Path(args.bundle), exp, Path(args.out_root),
-        platform=args.platform, device=args.device, omega_exclusion=args.omega_exclusion,
+        platform=args.platform, device=args.device,
+        devices=getattr(args, "devices", None), omega_exclusion=args.omega_exclusion,
         run_name=args.run_name, resume_run=_resolve_resume(args),
         config=(Path(args.config) if getattr(args, "config", None) else None),
         set_overrides=getattr(args, "set", None),
@@ -676,6 +677,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="override the experiment the bundle was prepared with")
     r.add_argument("--out-root", required=True, metavar="RUN_ROOT")
     add_platform(r)
+    r.add_argument("--devices", default=None, metavar="LIST",
+                   help="ordered CUDA/OpenCL device list, e.g. '1,2,3,4'. Replicas are dealt "
+                        "round-robin across it, so several replicas may share a device when they "
+                        "outnumber the devices. Overrides --device for REST2.")
     add_omega_exclusion(r)
     add_run_naming(r)
     r.add_argument("--config", default=None,

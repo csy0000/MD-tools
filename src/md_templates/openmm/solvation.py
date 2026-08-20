@@ -154,6 +154,45 @@ def _resolve_box(modeller, cfg: dict) -> dict:
     return info
 
 
+
+#: OpenMM's `Modeller.addSolvent` can only BUILD a pre-equilibrated box for the handful of models it
+#: ships boxes for. The scientific water model is decided by the FORCE FIELD, not by the packing
+#: geometry, so a model without its own box is packed using a same-topology stand-in and then
+#: parameterised by its own force field. OpenMM's own documentation sanctions this: "a box of
+#: TIP4P-Ew water can be used for most four site water models".
+#:
+#: Only same-site-count substitutions appear here. Packing a four-site model into a three-site box
+#: would leave the virtual sites unplaced, so those are refused rather than approximated.
+_PACKING_MODEL = {
+    "opc": "tip4pew",       # 4-site, like TIP4P-Ew
+    "opc3": "tip3p",        # 3-site
+    "tip4pfb": "tip4pew",   # 4-site
+    "tip3pfb": "tip3p",     # 3-site
+}
+
+#: Models `addSolvent` can build a box for directly.
+_NATIVE_PACKING_MODELS = frozenset({"tip3p", "spce", "tip4pew", "tip5p", "swm4ndp"})
+
+
+def resolve_packing_model(water_model: str) -> tuple[str, bool]:
+    """Return `(model addSolvent can build, whether a stand-in box was substituted)`.
+
+    The returned model chooses only the starting COORDINATES. The force field named in the
+    configuration is what assigns parameters, so the simulated model is the one that was asked for.
+    """
+    model = str(water_model)
+    if model in _NATIVE_PACKING_MODELS:
+        return model, False
+    if model in _PACKING_MODEL:
+        return _PACKING_MODEL[model], True
+    raise ValueError(
+        f"water model {model!r} has no pre-equilibrated box in OpenMM and no same-topology "
+        f"stand-in is declared for it. Known directly: {sorted(_NATIVE_PACKING_MODELS)}; "
+        f"known by substitution: {sorted(_PACKING_MODEL)}. Add an explicit entry rather than "
+        "letting a different water model be packed silently."
+    )
+
+
 def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] = None,
             route: Optional[str] = None) -> dict:
     """Solvate in a rhombic-dodecahedron box with ``padding_nm`` of water and NaCl at 0.15 M.
@@ -176,9 +215,10 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
     solute_residues = [r.name for r in modeller.topology.residues()]
 
     geometry = _resolve_box(modeller, cfg)
+    packing_model, substituted = resolve_packing_model(scfg["water_model"])
     modeller.addSolvent(
         forcefield,
-        model=scfg["water_model"],
+        model=packing_model,
         boxVectors=unit.Quantity(
             tuple(Vec3(*v) for v in geometry["box_vectors_nm"]), unit.nanometer
         ),
@@ -220,6 +260,12 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
         "n_waters": n_water,
         "ions": ions,
         "geometry": geometry,
+        # The model that was SIMULATED (assigned by the force field) and the model whose
+        # pre-equilibrated box supplied the starting coordinates. When these differ the
+        # substitution is recorded rather than left for a reader to infer.
+        "water_model": scfg["water_model"],
+        "water_packing_model": packing_model,
+        "water_packing_substituted": substituted,
         "box_shape": scfg["box_shape"],
         "padding_nm": float(scfg["padding_nm"]),
         "box_vectors_nm": [[float(x) for x in v] for v in box],

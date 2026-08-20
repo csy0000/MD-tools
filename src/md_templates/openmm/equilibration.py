@@ -53,7 +53,13 @@ def make_integrator(cfg: dict, seed: int, timestep_fs: Optional[float] = None):
     return integrator
 
 
-def _platform_and_properties(cfg: dict):
+def _platform_and_properties(cfg: dict, device_index: Optional[int] = None):
+    """Resolve the OpenMM platform and its properties.
+
+    `device_index` overrides the configured one. REST2 uses it to place each replica on its own
+    device: without a per-simulation override every replica would land on the same GPU, which is
+    correct only when there is one.
+    """
     import openmm
 
     pcfg = cfg["production"]
@@ -63,16 +69,18 @@ def _platform_and_properties(cfg: dict):
     if name in ("CUDA", "OpenCL"):
         # The platform default is single precision: ~25 % faster and it silently changes energies.
         props["Precision"] = str(pcfg["precision"])
-        if pcfg["device_index"] is not None:
-            props["DeviceIndex"] = str(pcfg["device_index"])
+        chosen = device_index if device_index is not None else pcfg["device_index"]
+        if chosen is not None:
+            props["DeviceIndex"] = str(chosen)
     return plat, props
 
 
-def _make_simulation(topology, system, cfg: dict, seed: int, timestep_fs: Optional[float] = None):
+def _make_simulation(topology, system, cfg: dict, seed: int, timestep_fs: Optional[float] = None,
+                     device_index: Optional[int] = None):
     from openmm import app
 
     integrator = make_integrator(cfg, seed, timestep_fs)
-    plat, props = _platform_and_properties(cfg)
+    plat, props = _platform_and_properties(cfg, device_index)
     return app.Simulation(topology, system, integrator, plat, props or None)
 
 
@@ -222,6 +230,15 @@ def build_simbox(cfg: dict, out_dir: Path, suffix: str, *, smiles: Optional[str]
         "hmr": build["hmr"],
         "nonbonded": build["nonbonded"],
         "geometry": solv["geometry"],
+        # Which water model was SIMULATED (the force field decides) and which model's
+        # pre-equilibrated box supplied the starting coordinates. They differ for models
+        # OpenMM cannot build a box for, such as OPC; recording it keeps the substitution
+        # visible instead of leaving a reader to infer it from the force-field name.
+        "water": {
+            "model": solv.get("water_model"),
+            "packing_model": solv.get("water_packing_model"),
+            "packing_substituted": solv.get("water_packing_substituted"),
+        },
         "n_waters": solv["n_waters"],
         "ions": solv["ions"],
         "salt": solv.get("salt"),

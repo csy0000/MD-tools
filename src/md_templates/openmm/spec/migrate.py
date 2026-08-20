@@ -16,6 +16,55 @@ from typing import Any, Optional
 __all__ = ["migrate_manifests", "MigrationError"]
 
 
+
+def _tau_ladder_from_scale_factors(scale_factors) -> tuple[dict, str]:
+    """Express an explicit `s` ladder as a tau ladder, or refuse.
+
+    tau = 1 - sqrt(s). A ladder that is not linear in tau cannot be written in the new form
+    without changing it, so it is refused rather than approximated -- a silently respaced ladder
+    changes exchange acceptance and therefore the run.
+    """
+    import math
+
+    from ..tau import build_tau_ladder
+
+    if not scale_factors:
+        raise MigrationError(
+            "rest2.scale_factors is missing; the ladder cannot be migrated without it."
+        )
+    taus = [1.0 - math.sqrt(float(s)) for s in scale_factors]
+    minimum, maximum, count = round(taus[0], 12), round(taus[-1], 12), len(taus)
+    rebuilt = build_tau_ladder(minimum, maximum, count)
+    worst = max(abs(a - b) for a, b in zip(taus, rebuilt))
+    if worst > 1e-9:
+        raise MigrationError(
+            "rest2.scale_factors is not linear in tau (worst deviation "
+            f"{worst:.2e}), so it cannot be expressed as a tau ladder without respacing it. "
+            "Respacing changes exchange acceptance and therefore the run. Convert the ladder "
+            "deliberately, or keep the old ladder by naming each rung."
+        )
+    return ({"minimum": minimum, "maximum": maximum, "count": count, "interpolation": "linear"},
+            f"rest2.scale_factors -> tau_ladder[{minimum}, {maximum}] x {count} "
+            f"(s = (1 - tau)^2 reproduces the old ladder to {worst:.1e})")
+
+
+def _exchanges_per_segment(chunk_ns, interval_ps) -> int:
+    """How many exchange rounds the old chunk contained, as an exact integer."""
+    if chunk_ns is None or interval_ps is None:
+        raise MigrationError(
+            "rest2.chunk_ns and rest2.exchange_interval_ps are both required to derive the "
+            "exchange count per segment."
+        )
+    count = (float(chunk_ns) * 1000.0) / float(interval_ps)
+    if abs(count - round(count)) > 1e-9:
+        raise MigrationError(
+            f"rest2.chunk_ns ({chunk_ns} ns) is not a whole number of exchange intervals "
+            f"({interval_ps} ps): {count:.6f}. The old configuration was already inconsistent; "
+            "fix it before migrating."
+        )
+    return int(round(count))
+
+
 class MigrationError(ValueError):
     """An old document cannot be expressed in the canonical model without a decision."""
 
@@ -105,26 +154,49 @@ def migrate_manifests(system_doc: dict, experiment_doc: dict, *,
     if method == "md" or (md and not rest2):
         protocol["production"] = {
             "method": "md",
-            "n_chunks": md.get("n_chunks"),
-            "chunk": _q(md.get("chunk_ns"), "ns"),
+            "duration_per_segment": _q(md.get("chunk_ns"), "ns"),
             "scale_factor": md.get("scale_factor", 1.0),
         }
-        notes.append("md.chunk_ns -> protocol.production.chunk ('ns')")
+        notes.append("md.chunk_ns -> protocol.production.duration_per_segment ('ns')")
+        if md.get("n_chunks") is not None:
+            notes.append(
+                f"md.n_chunks ({md['n_chunks']}) was DROPPED: segment count is an execution "
+                "choice, not a scientific input. Request that many segments from the driver "
+                "script instead; the run manifest records how many committed."
+            )
     elif rest2 or method == "rest2":
         if "total_ns_per_replica" in rest2:
             raise MigrationError(
                 "rest2.total_ns_per_replica belongs to a retired schema: the chunk count is an "
                 "input, not a rounded quotient. Convert it to n_chunks and chunk_ns first."
             )
+        chunk_ns = rest2.get("chunk_ns")
+        interval_ps = rest2.get("exchange_interval_ps")
+        tau_ladder, ladder_note = _tau_ladder_from_scale_factors(rest2.get("scale_factors"))
+        exchanges = _exchanges_per_segment(chunk_ns, interval_ps)
         protocol["production"] = {
             "method": "rest2",
-            "n_chunks": rest2.get("n_chunks"),
-            "chunk": _q(rest2.get("chunk_ns"), "ns"),
-            "scale_factors": rest2.get("scale_factors"),
-            "exchange_interval": _q(rest2.get("exchange_interval_ps"), "ps"),
+            "tau_ladder": tau_ladder,
+            "exchange": {"n_exchange_per_segment": exchanges,
+                         "exchange_interval": _q(interval_ps, "ps")},
             "relaxation": _q(rest2.get("relaxation_ps"), "ps"),
         }
-        notes.append("rest2.chunk_ns / exchange_interval_ps / relaxation_ps -> explicit quantities")
+        notes.append(
+            f"rest2.chunk_ns ({chunk_ns} ns) is no longer stated: the REST2 segment length is "
+            f"DERIVED as n_exchange_per_segment * exchange_interval = {exchanges} x "
+            f"{interval_ps} ps, which is the same {chunk_ns} ns"
+        )
+        notes.append(ladder_note)
+        notes.append(
+            f"rest2.exchange_interval_ps ({interval_ps}) -> exchange.exchange_interval, kept as an "
+            f"input alongside n_exchange_per_segment ({exchanges}); the segment length is their "
+            "product, which is exact rather than a quotient that might not divide"
+        )
+        if rest2.get("n_chunks") is not None:
+            notes.append(
+                f"rest2.n_chunks ({rest2['n_chunks']}) was DROPPED: segment count is an execution "
+                "choice, not a scientific input."
+            )
     else:
         raise MigrationError(
             "the experiment declares neither an `md:` nor a `rest2:` block, so the method is "

@@ -18,6 +18,7 @@ import numpy as np
 
 from . import runstate
 from .config import resolve_chunk_plan, rest2_ladder, write_manifest
+from .tau import map_replicas_to_devices
 from .equilibration import (_apply_coords, _load_bundle, _make_simulation,
                             _scaled_system, _steps)
 from .md import (_assert_omega_classified, _attach_chunk_reporters, _close_chunk,
@@ -225,6 +226,25 @@ def summarise_exchange_log(run_dir) -> dict:
     }
 
 
+
+def _resolve_replica_devices(cfg: dict, n_replicas: int) -> Optional[list[int]]:
+    """Which device each replica runs on, or None when the platform has no devices.
+
+    `production.device_indices` is the ordered list. When it is absent the single
+    `production.device_index` is used for every replica, which reproduces the previous behaviour.
+    The resolved mapping is returned so the caller can record it: a changed device list must be
+    visible in the run manifest rather than silently re-dealt.
+    """
+    pcfg = cfg["production"]
+    if str(pcfg["platform"]) not in ("CUDA", "OpenCL"):
+        return None
+    devices = pcfg.get("device_indices")
+    if not devices:
+        single = pcfg.get("device_index")
+        return None if single is None else [int(single)] * n_replicas
+    return map_replicas_to_devices(n_replicas, [int(d) for d in devices])
+
+
 def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
                    suffix: str) -> dict:
     """Stage (d): REST2-REMD -- N replicas, neighbour exchange, chunked per replica.
@@ -277,10 +297,16 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
     n_replicas = len(scale_factors)
     dt_fs = float(cfg["integrator"]["timestep_fs"])
 
+    # Replicas are dealt across the ordered device list. One replica per GPU is NOT hard-coded:
+    # several replicas may share a device when they outnumber the devices, which is what makes a
+    # ten-replica ladder possible on a four-GPU machine.
+    device_map = _resolve_replica_devices(cfg, n_replicas)
+
     simulations = []
     for r, sc in enumerate(scale_factors):
         system = _scaled_system(base, cfg, n_solute, sc, omega)
-        simulations.append(_make_simulation(pdb.topology, system, cfg, int(rcfg["seed"]) + r))
+        simulations.append(_make_simulation(pdb.topology, system, cfg, int(rcfg["seed"]) + r,
+                                            device_index=(device_map[r] if device_map else None)))
 
     exchange_steps = _steps(float(rcfg["exchange_interval_ps"]), dt_fs)
     plan = resolve_chunk_plan(rcfg["n_chunks"], rcfg["chunk_ns"], timestep_fs=dt_fs,

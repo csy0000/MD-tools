@@ -34,7 +34,7 @@ from .units import Quantity, parse_quantity
 #: Independent schema versions. Bumping one must not force the others to move.
 SYSTEM_SCHEMA_VERSION = 1
 BUILD_SCHEMA_VERSION = 1
-PROTOCOL_SCHEMA_VERSION = 1
+PROTOCOL_SCHEMA_VERSION = 3
 EXECUTION_SCHEMA_VERSION = 1
 
 
@@ -197,53 +197,165 @@ class EquilibrationSpec(Strict):
     seed: Optional[int] = None
 
 
-class ChunkPlan(Strict):
-    """The plan is stated, never inferred from a total.
+class SegmentedProduction(Strict):
+    """Production states the length of ONE segment. It does not state how many.
 
-    `n_chunks` is the work THIS invocation adds; total duration is derived from it and reported.
+    Segment count is execution state, not science. A user who wants to run longer is not
+    performing a different calculation, so requesting more segments must not move the
+    configuration hash. The driver script decides how many segments to request; the run manifest
+    records how many actually committed.
     """
 
-    n_chunks: int = Field(gt=0)
-    chunk: Time
-
-    @property
-    def total(self) -> float:
-        return self.n_chunks * self.chunk.value
+    duration_per_segment: Time
 
 
-class MDProduction(ChunkPlan):
+class MDProduction(SegmentedProduction):
     method: Literal["md"] = "md"
     scale_factor: float = Field(gt=0.0, le=1.0, default=1.0)
     seed: Optional[int] = None
 
 
-class REST2Production(ChunkPlan):
-    method: Literal["rest2"] = "rest2"
-    scale_factors: list[float] = Field(min_length=2)
-    exchange_interval: Time
-    relaxation: Time
-    omega_exclusion: bool = True
-    proline_like_residues: list[str] = Field(default_factory=lambda: ["PRO"])
-    max_proline_ring_size: int = Field(gt=2, default=7)
-    seed: Optional[int] = None
+class TauLadderSpec(Strict):
+    """The REST2 ladder in the Amber-style ``tau`` parameterisation.
+
+    ``tau`` is the source parameter and the thing persisted. ``s`` and ``sqrt(s)`` are derived by
+    one shared function (:mod:`md_templates.openmm.tau`) and recorded as labelled diagnostics,
+    never accepted back as input -- two ways to say the same thing is how a ladder drifts.
+    """
+
+    minimum: float = Field(ge=0.0, lt=1.0, default=0.0)
+    maximum: float = Field(gt=0.0, lt=1.0)
+    count: int = Field(ge=2)
+    interpolation: Literal["linear"] = "linear"
 
     @model_validator(mode="after")
-    def _ladder_and_divisibility(self):
-        s = self.scale_factors
-        if abs(s[0] - 1.0) > 1e-12:
-            raise ValueError(f"production.scale_factors must start at the cold rung 1.0, got {s[0]}")
-        if any(b >= a for a, b in zip(s, s[1:])):
-            raise ValueError(f"production.scale_factors must be strictly descending: {s}")
-        if not all(0.0 < v <= 1.0 for v in s):
-            raise ValueError(f"production.scale_factors must lie in (0, 1]: {s}")
-        per_chunk = self.chunk.value / self.exchange_interval.value
-        if abs(per_chunk - round(per_chunk)) > 1e-9:
+    def _span_and_cold_rung(self):
+        if self.maximum <= self.minimum:
             raise ValueError(
-                f"production.chunk ({self.chunk.source}) is not a whole number of exchange "
-                f"intervals ({self.exchange_interval.source}): {per_chunk:.6f}. A chunk boundary "
-                "falling mid-interval would drop or duplicate an attempt across a resume."
+                f"production.tau_ladder.maximum ({self.maximum}) must exceed minimum "
+                f"({self.minimum}); a ladder with no span is not a ladder"
+            )
+        if self.minimum != 0.0:
+            raise ValueError(
+                f"production.tau_ladder.minimum must be 0.0 so the cold rung is the unscaled, "
+                f"physical Hamiltonian (s = 1); got {self.minimum}. A ladder that never samples "
+                "the physical ensemble has no replica whose trajectory is the answer."
             )
         return self
+
+    def tau_values(self) -> list[float]:
+        from ..tau import build_tau_ladder
+        return build_tau_ladder(self.minimum, self.maximum, self.count, self.interpolation)
+
+    def scale_factors(self) -> list[float]:
+        """The ``s`` values this ladder resolves to -- the bridge to the System builder."""
+        from ..tau import scale_factors_for_ladder
+        return scale_factors_for_ladder(self.tau_values())
+
+
+class ExchangeSpec(Strict):
+    """The exchange schedule, stated as a count and an interval.
+
+    The segment length is DERIVED from these two by multiplication:
+
+        duration_per_segment = n_exchange_per_segment * exchange_interval
+
+    That ordering matters. Stating a segment duration and an exchange count instead would make the
+    interval a quotient, and a duration that did not divide exactly would have to be refused or --
+    worse -- rounded, drifting the exchange schedule out of alignment with the committed watermark.
+    A product is always exact, so a configuration that parses is a configuration that runs.
+
+    1000 exchanges at a 5 ps interval is a 5 ns segment, and the file says so directly rather than
+    leaving a reader to divide.
+    """
+
+    n_exchange_per_segment: int = Field(ge=1)
+    exchange_interval: Time
+
+    def segment_duration_ps(self) -> float:
+        """The derived segment length. Exact by construction: a product, never a quotient."""
+        return self.n_exchange_per_segment * self.exchange_interval.value
+
+
+class SelectionSpec(Strict):
+    """Which atoms an operation applies to.
+
+    OpenMM consumes resolved zero-based indices. A mask expression is a front end that is resolved
+    to indices before the System is built; both the original expression and the resolved indices
+    are persisted, so a reader can see what was asked and what it turned out to mean.
+    """
+
+    type: Literal["solute", "atom_indices", "amber_mask"] = "solute"
+    atom_indices: Optional[list[int]] = None
+    amber_mask: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _one_selection_language(self):
+        if self.type == "atom_indices":
+            if not self.atom_indices:
+                raise ValueError("selection.atom_indices is required when type is 'atom_indices'")
+            negative = [index for index in self.atom_indices if index < 0]
+            if negative:
+                raise ValueError(
+                    f"selection.atom_indices must be zero-based and non-negative; got {negative}"
+                )
+            if len(set(self.atom_indices)) != len(self.atom_indices):
+                raise ValueError("selection.atom_indices contains duplicate indices")
+        elif self.type == "amber_mask":
+            if not self.amber_mask:
+                raise ValueError("selection.amber_mask is required when type is 'amber_mask'")
+        else:
+            if self.atom_indices or self.amber_mask:
+                raise ValueError(
+                    "selection.type is 'solute' but an explicit selection was also given; declare "
+                    "exactly one selection language"
+                )
+        return self
+
+
+class OmegaExclusionSpec(Strict):
+    """Peptide omega torsions are left unscaled by default.
+
+    Softening omega lets the backbone sample cis-amide states that are an artefact of the scaling
+    rather than physics, so exclusion is on unless a user turns it off deliberately.
+    """
+
+    enabled: bool = True
+    definition: Literal["peptide_omega"] = "peptide_omega"
+    proline_like_residues: list[str] = Field(default_factory=lambda: ["PRO"])
+    max_proline_ring_size: int = Field(gt=2, default=7)
+
+
+class REST2Production(Strict):
+    """REST2 production.
+
+    Note what is absent: `duration_per_segment`. For REST2 the segment length is not an input, it
+    is `n_exchange_per_segment * exchange_interval`. Accepting it as well would let a document
+    state the same quantity twice and disagree with itself.
+    """
+
+    method: Literal["rest2"] = "rest2"
+    enhanced_region: SelectionSpec = Field(default_factory=SelectionSpec)
+    tau_ladder: TauLadderSpec
+    exchange: ExchangeSpec
+    omega_exclusion: OmegaExclusionSpec = Field(default_factory=OmegaExclusionSpec)
+    relaxation: Optional[Time] = None
+    seed: Optional[int] = None
+
+    @property
+    def n_replicas(self) -> int:
+        return self.tau_ladder.count
+
+    @property
+    def duration_per_segment(self) -> Quantity:
+        """Derived, never stated. Exact by construction."""
+        total_ps = self.exchange.segment_duration_ps()
+        return Quantity(value=total_ps, unit="ps", dimension="time",
+                        source=(f"derived: {self.exchange.n_exchange_per_segment} x "
+                                f"{self.exchange.exchange_interval.source}"))
+
+    def scale_factors(self) -> list[float]:
+        return self.tau_ladder.scale_factors()
 
 
 Production = Annotated[Union[MDProduction, REST2Production], Field(discriminator="method")]
@@ -256,15 +368,33 @@ class ProtocolSpec(Strict):
     production: Production
 
     @model_validator(mode="after")
-    def _chunk_is_whole_steps(self):
-        dt = self.integrator.timestep.value
-        steps = self.production.chunk.value / dt
-        if abs(steps - round(steps)) > 1e-6:
-            raise ValueError(
-                f"production.chunk ({self.production.chunk.source}) is not a whole number of "
-                f"{self.integrator.timestep.source} steps ({steps:.6f}). A rounded chunk runs a "
-                "different length than it declares."
+    def _segment_resolves_to_exact_whole_steps(self):
+        """Durations must be whole steps, and a REST2 segment whole exchange rounds.
+
+        Both are delegated to `md_templates.openmm.segments`, which refuses rather than rounds, so
+        the CLI, the runner and the tests share one definition of "exact".
+        """
+        from ..segments import plan_segment, plan_segment_from_exchanges
+
+        production = self.production
+        if isinstance(production, REST2Production):
+            # The segment is a PRODUCT of the exchange count and interval, so its length is exact
+            # by construction. What still has to divide exactly is the interval into steps.
+            plan_segment_from_exchanges(
+                production.exchange.n_exchange_per_segment,
+                production.exchange.exchange_interval.value,
+                self.integrator.timestep.value,
+                interval_source=production.exchange.exchange_interval.source,
+                timestep_source=self.integrator.timestep.source,
             )
+        else:
+            plan_segment(
+                production.duration_per_segment.value,
+                self.integrator.timestep.value,
+                duration_source=production.duration_per_segment.source,
+                timestep_source=self.integrator.timestep.source,
+            )
+        return self
         return self
 
 

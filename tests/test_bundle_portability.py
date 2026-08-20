@@ -59,11 +59,10 @@ system: {system_id: ggg, route: smiles, smiles: "O=C1CNC(=O)CNC(=O)CN1"}
 protocol:
   production:
     method: rest2
-    n_chunks: 2
-    chunk: 0.001 ns
-    scale_factors: [1.0, 0.5625, 0.25]
-    exchange_interval: 0.5 ps
+    duration_per_segment: 0.001 ns
     relaxation: 1 ps
+    tau_ladder: {minimum: 0.0, maximum: 0.5, count: 3, interpolation: linear}
+    exchange: {number_of_exchanges_per_segment: 2}
 execution: {platform: CPU}
 """
 
@@ -80,7 +79,7 @@ build:
 protocol:
   equilibration: {protocol: simple, minimize_max_iterations: 200, timestep: 1 fs,
                   nvt: 2 ps, npt: 2 ps, npt_free: 2 ps, box_average_last: 1 ps}
-  production: {method: md, n_chunks: 2, chunk: 0.001 ns}
+  production: {method: md, duration_per_segment: 0.001 ns}
 execution:
   platform: CPU
   reporting: {all_atom: 0.5 ps, solute: 0.5 ps, state: 0.5 ps, checkpoint: 0.5 ps}
