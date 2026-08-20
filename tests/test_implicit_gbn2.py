@@ -521,6 +521,57 @@ def test_the_implicit_workflow_executes_and_writes_its_declared_outputs(implicit
 
 
 # ---------------------------------------------------------------------------------------------
+# a route records only the chemistry it used
+# ---------------------------------------------------------------------------------------------
+
+def test_the_peptide_route_records_no_small_molecule_chemistry(implicit_bundle):
+    """The package defaults name a force field for every component; a route uses one.
+
+    Carrying the others is provenance for chemistry that never ran. This was three separate
+    defects -- water on the ligand route, a protein force field on the ligand route, and
+    small-molecule parameters on the peptide route -- so it is asserted from both directions.
+    """
+    forcefield = json.loads((implicit_bundle / "forcefield.json").read_text())
+    assert forcefield["protein_forcefield"] == "leaprc.protein.ff19SB"
+    assert forcefield["water"] is None, "implicit solvent has no water to parameterise"
+    assert forcefield["ligand"] is None, "a peptide route parameterises no small molecule"
+    assert forcefield["ligand_charge_method"] is None
+
+    manifest = json.loads((implicit_bundle / "system_manifest.json").read_text())
+    sources = manifest["value_sources"]
+    for field in ("protein", "water", "ligand", "ligand_charge_method"):
+        assert "route-derived" in sources[f"forcefield.{field}"], field
+
+
+@pytest.mark.slow
+def test_the_ligand_route_records_no_protein_or_water(rgdfv_implicit_bundle):
+    """And the manifest must survive its own validator, which refuses the mixture."""
+    from md_templates.openmm.schemas import load_system
+
+    forcefield = json.loads((rgdfv_implicit_bundle / "forcefield.json").read_text())
+    assert forcefield["ligand"] == "openff-2.2.0"
+    assert forcefield["ligand_charge_method"] == "am1bcc"
+    assert forcefield["protein_forcefield"] is None, (
+        "a smiles route may not load a protein force field")
+    assert forcefield["water"] is None
+
+    # the same check the REST2 bridge performs; it is what caught the leak
+    load_system(rgdfv_implicit_bundle / "system.yaml")
+
+
+@pytest.mark.slow
+def test_the_ligand_bundle_records_a_verifiable_smiles_hash(rgdfv_implicit_bundle):
+    """It catches an edited SMILES even where RDKit cannot parse chemistry."""
+    import yaml
+
+    from md_templates.openmm.schemas import sha256_text
+
+    doc = yaml.safe_load((rgdfv_implicit_bundle / "system.yaml").read_text())
+    declared = doc["input"]["canonical_isomeric_smiles"]
+    assert doc["input"]["canonical_smiles_sha256"] == sha256_text(declared)
+
+
+# ---------------------------------------------------------------------------------------------
 # packaging
 # ---------------------------------------------------------------------------------------------
 
