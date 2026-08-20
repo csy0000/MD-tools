@@ -284,9 +284,10 @@ MD_system_gen: destination /path/to/bundle already holds 13 file(s) this system 
 A destination holding only *unrelated* files is not a reason to stop, and those files are preserved:
 the staged output is moved in entry by entry rather than replacing the directory.
 
-`--overwrite` is different, and the error says so when it applies. It replaces the **whole**
-destination directory, so it deletes files the generator never wrote -- on a project that has run,
-that is every result:
+There are two ways to say yes, and they mean different things.
+
+`--overwrite` replaces the **whole** destination directory, so it deletes files the generator never
+wrote -- on a project that has run, that is every result:
 
 ```
   --overwrite replaces the WHOLE destination directory, which would also delete 228 file(s) it did
@@ -297,9 +298,31 @@ that is every result:
     run.log
 ```
 
-Both the check and the publish step live in `md_templates.openmm.destination`, so `--overwrite`
-means the same thing in both generators, and the check protects callers that never go through the
-command line.
+`--overwrite-generated` rewrites only the files the generator produces and leaves everything else
+in place, so a project keeps its results, checkpoints, trajectories and logs. This is the right tool
+when the **generator** changed and the protocol did not -- a fixed launcher script, a new stage
+projection -- which is a real situation: a generated project is a snapshot, so fixing a generator
+bug does not fix projects already written.
+
+It is the wrong tool when the protocol changed, and that is refused:
+
+```
+MD_input_gen: refusing to keep the results in /path/to/project: they were produced under a
+different protocol.
+    recorded : 26c53711db497c51
+    this run : 1ed16940d99eb985
+
+  Use --overwrite to discard them, or generate a new project with
+  --inherit <this project>/run_manifest.json:<stage> to reuse an endpoint without
+  pretending the old results belong to the new protocol.
+```
+
+The comparison is on the recorded `protocol_sha256`, so it is the resolved protocol that decides,
+not the config file's text.
+
+Both the check and the publish step live in `md_templates.openmm.destination`, so every mode means
+the same thing in both generators, and the check protects callers that never go through the command
+line.
 
 ### Inheritance is not restart
 

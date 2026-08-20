@@ -649,16 +649,35 @@ def test_minimisation_lowers_the_energy_at_a_sane_iteration_count(executed_proje
 
 
 @pytest.mark.slow
-def test_only_the_npt_stages_change_the_box(executed_project):
-    """The barostat must be on where the protocol says and nowhere else."""
+def test_only_the_npt_stages_carry_a_barostat(executed_project):
+    """Whether a barostat was applied is a fact; whether the volume moved is a sampling outcome.
+
+    An earlier version of this test asserted that each NPT stage changed the box relative to the one
+    before it. That is not an invariant: a MonteCarloBarostat proposes a move every 25 steps and can
+    reject all of them, and in a short CPU stage it sometimes does -- `eq_npt_2` came back bitwise
+    identical to `eq_npt_1`. The same mistake as asserting that minimisation lowers the reported
+    energy. What the protocol actually guarantees is which stages carry a barostat.
+    """
+    results = {s: json.loads((executed_project / s / f"{s}_results.json").read_text())
+               for s in ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1")}
+
+    for stage in ("min", "eq_nvt"):
+        assert results[stage]["barostat"] is None, f"{stage} must not carry a barostat"
+    for stage in ("eq_npt_1", "eq_npt_2", "cMD_1"):
+        assert results[stage]["barostat"] == "MonteCarloBarostat", stage
+
+    # NVT constancy IS exact: with no barostat nothing can change the box.
+    assert results["min"]["box_volume_nm3"] == pytest.approx(
+        results["eq_nvt"]["box_volume_nm3"], rel=1e-12), "NVT must not change the box volume"
+
+
+@pytest.mark.slow
+def test_the_barostat_moves_the_box_over_the_whole_npt_sequence(executed_project):
+    """Aggregated over every NPT stage, so one unlucky stage cannot fail it."""
     volumes = {s: json.loads((executed_project / s / f"{s}_results.json").read_text())["box_volume_nm3"]
-               for s in ("min", "eq_nvt", "eq_npt_1", "eq_npt_2")}
-    assert volumes["min"] == pytest.approx(volumes["eq_nvt"], rel=1e-9), \
-        "NVT must not change the box volume"
-    assert volumes["eq_npt_1"] != pytest.approx(volumes["eq_nvt"], rel=1e-9), \
-        "restrained NPT must be able to change the box volume"
-    assert volumes["eq_npt_2"] != pytest.approx(volumes["eq_npt_1"], rel=1e-9), \
-        "free NPT must be able to change the box volume"
+               for s in ("eq_nvt", "cMD_1")}
+    assert volumes["cMD_1"] != pytest.approx(volumes["eq_nvt"], rel=1e-9), \
+        "three NPT stages must between them change the box volume"
 
 
 @pytest.mark.slow
@@ -848,6 +867,82 @@ def test_publish_keeps_unrelated_files_and_overwrite_does_not(tmp_path):
     publish(staging2, dest, overwrite=True, what="system bundle")
     assert not (dest / "NOTES.md").exists(), "--overwrite replaces the whole directory, as warned"
     assert (dest / "system.xml").read_text() == "<System2/>"
+
+
+def test_overwrite_generated_replaces_our_files_and_keeps_the_rest(tmp_path):
+    """The whole point: a project can be regenerated without discarding what running it produced."""
+    from md_templates.openmm.destination import OVERWRITE_GENERATED, publish
+
+    dest = tmp_path / "project"
+    (dest / "min").mkdir(parents=True)
+    (dest / "min" / "min.json").write_text("OLD")
+    (dest / "min" / "min_final_state.xml").write_text("<State/>")   # a result
+    (dest / "run.log").write_text("history")
+
+    staging = tmp_path / "staging"
+    (staging / "min").mkdir(parents=True)
+    (staging / "min" / "min.json").write_text("NEW")
+    (staging / "run_all.sh").write_text("#!/bin/sh\n")
+
+    publish(staging, dest, overwrite=OVERWRITE_GENERATED, what="project")
+
+    assert (dest / "min" / "min.json").read_text() == "NEW", "generated files are rewritten"
+    assert (dest / "min" / "min_final_state.xml").is_file(), "results survive"
+    assert (dest / "run.log").read_text() == "history", "logs survive"
+    assert (dest / "run_all.sh").is_file()
+    assert not staging.exists()
+
+
+def test_the_three_overwrite_modes_are_distinct(tmp_path):
+    """`--overwrite` and `--overwrite-generated` must not quietly do the same thing."""
+    from md_templates.openmm.destination import (OVERWRITE_ALL, OVERWRITE_GENERATED,
+                                                 OVERWRITE_NONE, publish, resolve_mode)
+
+    assert resolve_mode(True) is OVERWRITE_ALL     # the older boolean keeps its meaning
+    assert resolve_mode(False) is OVERWRITE_NONE
+
+    for mode, result_survives in ((OVERWRITE_ALL, False), (OVERWRITE_GENERATED, True)):
+        dest = tmp_path / f"dest_{mode}"
+        dest.mkdir()
+        (dest / "result.xml").write_text("mine")
+        staging = tmp_path / f"staging_{mode}"
+        staging.mkdir()
+        (staging / "system.xml").write_text("<System/>")
+        publish(staging, dest, overwrite=mode, what="project")
+        assert (dest / "result.xml").exists() is result_survives, mode
+        assert (dest / "system.xml").is_file(), mode
+
+
+def test_an_unknown_overwrite_mode_is_rejected():
+    from md_templates.openmm.destination import resolve_mode
+
+    with pytest.raises(ValueError, match="unknown overwrite mode"):
+        resolve_mode("sometimes")
+
+
+@pytest.mark.slow
+def test_overwrite_generated_refuses_when_the_protocol_changed(prepared_system, generated_project,
+                                                               tmp_path):
+    """Keeping results is right when the GENERATOR changed, wrong when the protocol did.
+
+    Without this the surviving results would sit beside stage files that no longer describe them,
+    and nothing in the directory would say so.
+    """
+    config = tmp_path / "md.json"
+    config.write_text(json.dumps(MD_CONFIG))
+    same = _run(INPUT_GEN, "--system", str(prepared_system / "system_manifest.json"),
+                "-o", str(generated_project), "--config", str(config), "--overwrite-generated")
+    assert same.returncode == 0, same.stdout + same.stderr
+
+    changed = json.loads(json.dumps(MD_CONFIG))
+    changed["protocol"]["production"]["exchange"]["n_exchange_per_segment"] += 7
+    other = tmp_path / "other.json"
+    other.write_text(json.dumps(changed))
+    result = _run(INPUT_GEN, "--system", str(prepared_system / "system_manifest.json"),
+                  "-o", str(generated_project), "--config", str(other), "--overwrite-generated")
+    assert result.returncode != 0
+    assert "different protocol" in result.stderr
+    assert "--inherit" in result.stderr, "must name the correct alternative"
 
 
 def test_publish_reports_a_target_that_appeared_while_we_worked(tmp_path):

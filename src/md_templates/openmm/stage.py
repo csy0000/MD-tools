@@ -224,7 +224,11 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
         k = restraint["force_constant_kcal_per_mol_angstrom2"] * 4.184 * 100.0
         sim.context.setParameter("k_restraint", k)
 
-    results: dict = {"stage": stage, "n_restrained_atoms": len(restrained_atoms)}
+    # The barostat is recorded because whether one was applied is a fact about the stage, while
+    # whether the volume actually moved is a sampling outcome: a MonteCarloBarostat can reject every
+    # move in a short stage, so an unchanged box is not evidence that the barostat was missing.
+    results: dict = {"stage": stage, "n_restrained_atoms": len(restrained_atoms),
+                     "barostat": (payload.get("barostat") or {}).get("type")}
     energy_before = sim.context.getState(getEnergy=True).getPotentialEnergy()
     results["potential_before_kj_mol"] = energy_before.value_in_unit(unit.kilojoule_per_mole)
 

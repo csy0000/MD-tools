@@ -471,3 +471,77 @@ deferred precisely because it is slow. The duplication is deliberate and a test 
 files now succeeds where it previously failed. The old test asserting `not empty` was replaced,
 not deleted: one test now asserts the precise refusal, another asserts that unrelated files survive
 the write.
+
+## Addendum 4 — the two open items, closed
+
+Both were flagged as decisions rather than bugs, and both were taken.
+
+### `rest2_summary.json` reported two different timescales as if they were one
+
+`n_chunks` is the lifetime count (`start_chunk + chunks_this_invocation`), while
+`total_ns_per_replica` was `plan["total_ns"]` -- this invocation's budget. On a resumed run the two
+sat side by side and disagreed, so a reader could not tell how much sampling the run directory
+actually held. Measured before the fix: `n_chunks: 3, chunk_ns: 0.1, total_ns_per_replica: 0.1`.
+
+`total_ns_per_replica` is now derived from `n_chunks`, and the per-invocation figure is reported
+separately and labelled, matching what the exchange counters already did:
+
+```
+n_chunks                      3
+chunk_ns                      0.1
+total_ns_per_replica          0.3      <- lifetime, consistent with n_chunks
+invocation_ns_per_replica     0.1
+lifetime_exchange_attempts    750
+invocation_exchange_attempts  250
+```
+
+This predates the branch (`f885be5`) and is a reporting change only; no sampling behaviour moved.
+
+### `--overwrite-generated`
+
+`--overwrite` replaces the whole destination, which on an executed project destroys every result.
+The new mode rewrites only the files the generator produces and merges them in, so results,
+checkpoints, trajectories and logs survive. The merge is recursive because the files worth keeping
+are nested: `min/` must survive so `min/min_final_state.xml` does, while `min/min.json` is replaced.
+
+The motivating case is one this branch hit twice: **a generated project is a snapshot**, so fixing a
+generator bug does not fix projects already written. Regenerating them previously meant destroying
+their results or hand-patching files.
+
+What makes it safe rather than merely convenient is the refusal. Keeping results is correct when the
+*generator* changed and the protocol did not; it is wrong when the protocol changed, because the
+surviving results would sit beside stage files that no longer describe them and nothing in the
+directory would say so. So the recorded `protocol_sha256` is compared with the resolved one and a
+mismatch is refused, naming the two correct alternatives -- discard with `--overwrite`, or start a
+new project with `--inherit …:<stage>`, which is what that flag is for.
+
+Verified on the executed alanine project: same protocol rewrote the stage files and preserved the
+750-attempt REST2 history, `cMD_1`'s endpoint and both logs; a changed protocol was refused with
+both hashes shown.
+
+Three modes now, one meaning each, resolved in `destination.py`: `none`, `all`, `generated`. The
+older boolean still maps to `all`, so nothing that passed `overwrite=True` changed meaning.
+
+### And the same wrong-invariant mistake, a second time
+
+The full suite then failed on `test_only_the_npt_stages_change_the_box`, which asserted that each
+NPT stage changed the box relative to the one before it. `eq_npt_2` came back **bitwise identical**
+to `eq_npt_1`.
+
+Not a defect: a `MonteCarloBarostat` proposes a move every 25 steps and can reject all of them, and
+in a short CPU stage it sometimes does. In the real alanine run the volumes are 18.336 -> 18.675
+nm^3, so the mechanism works. I had asserted a *sampling outcome* as an invariant -- exactly the
+minimisation mistake from earlier on this branch, made again in a different physical quantity.
+
+Two changes rather than a loosened tolerance, because a tolerance would only make the flake rarer:
+
+* stages now record the barostat they applied, so whether one was present -- the thing the protocol
+  actually guarantees -- is a fact in `*_results.json` rather than something inferred from whether
+  the volume happened to move. Useful provenance in its own right;
+* the test splits into an exact invariant (no barostat means the box cannot change, asserted at
+  `rel=1e-12`) and an aggregated trend over all three NPT stages, which one unlucky stage cannot
+  fail.
+
+Worth naming the pattern, since it has now happened twice on this branch: **a stochastic method's
+outcome is not its contract.** What can be asserted exactly is what was configured and what
+conservation requires; everything else needs either aggregation or an honest tolerance.

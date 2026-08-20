@@ -569,8 +569,12 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
         "pre_exchange_relaxation": relaxation,
         "n_chunks": n_chunks,
         "chunk_ns": plan["chunk_ns"],
-        # derived from the plan, reported only
-        "total_ns_per_replica": plan["total_ns"],
+        # Derived, reported only -- and derived from `n_chunks`, which is the LIFETIME count
+        # (start_chunk + this invocation). It previously reported `plan["total_ns"]`, which is this
+        # invocation's budget, so a resumed run recorded a lifetime chunk count beside a
+        # single-invocation duration and the two silently disagreed.
+        "total_ns_per_replica": n_chunks * plan["chunk_ns"],
+        "invocation_ns_per_replica": chunks_this_invocation * plan["chunk_ns"],
         # Both are reported and unambiguously labelled: lifetime describes the run directory,
         # invocation describes this process only.
         "lifetime_exchange_attempts": lifetime_attempts,

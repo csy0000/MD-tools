@@ -320,6 +320,44 @@ def resolve_inheritance(inherit: Optional[str]) -> Optional[dict]:
     return resolved
 
 
+def _refuse_keeping_results_from_another_protocol(outdir: Path, hashes: dict) -> None:
+    """The guard that makes `--overwrite-generated` safe rather than merely convenient.
+
+    Keeping results while rewriting the stage files is exactly right when the generator changed --
+    a fixed launcher, a new stage projection -- and the protocol did not. It is exactly wrong when
+    the protocol changed, because the surviving results were produced under the old one and nothing
+    in the directory would say so.
+
+    So the protocol hash recorded by the previous generation is compared with this one, and a
+    mismatch is refused with the two correct alternatives: discard the results, or start a new
+    project that inherits an endpoint from this one.
+    """
+    from .destination import DestinationExists
+
+    previous = Path(outdir) / "run_manifest.json"
+    if not previous.is_file():
+        return
+    try:
+        recorded = json.loads(previous.read_text()).get("configuration_hashes", {})
+    except json.JSONDecodeError:
+        return
+    was, now = recorded.get("protocol_sha256"), hashes.get("protocol_sha256")
+    if not was or not now or was == now:
+        return
+    raise DestinationExists(
+        f"refusing to keep the results in {outdir}: they were produced under a different "
+        f"protocol.\n"
+        f"    recorded : {was[:16]}\n"
+        f"    this run : {now[:16]}\n\n"
+        "  --overwrite-generated keeps whatever the stages produced, which is correct when the\n"
+        "  GENERATOR changed and the protocol did not. Here the protocol itself changed, so those\n"
+        "  results would sit beside stage files that no longer describe them.\n\n"
+        "  Use --overwrite to discard them, or generate a new project with\n"
+        "  --inherit <this project>/run_manifest.json:<stage> to reuse an endpoint without\n"
+        "  pretending the old results belong to the new protocol."
+    )
+
+
 def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
                      inherit: Optional[str] = None, overwrite: bool = False,
                      dry_run: bool = False) -> dict:
@@ -338,7 +376,8 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
     # Checked BEFORE any work, and against the stages this run will actually generate: inheriting
     # from a stage means fewer stage directories, so a fixed list would report collisions for
     # directories that were never going to be written.
-    from .destination import check_destination, project_targets, publish
+    from .destination import (OVERWRITE_GENERATED, check_destination, project_targets, publish,
+                              resolve_mode)
     check_destination(outdir, project_targets(stages_to_generate),
                       overwrite=overwrite, what="project")
 
@@ -347,6 +386,8 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
     manifest["_bundle_dir"] = str(bundle_dir)
 
     resolution, forcefield = _resolved_spec(md_config, manifest)
+    if resolve_mode(overwrite) == OVERWRITE_GENERATED:
+        _refuse_keeping_results_from_another_protocol(outdir, resolution["hashes"])
     spec = resolution["spec"]
     integrator = spec.protocol.integrator
     dt = integrator.timestep

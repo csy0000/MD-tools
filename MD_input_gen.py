@@ -65,8 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="md_config.json: protocol, reporting and execution choices only")
     parser.add_argument("--inherit", default=None, metavar="RUN_MANIFEST",
                         help="run_manifest.json of a previous generated run, for lineage only")
-    parser.add_argument("--overwrite", action="store_true",
-                        help="replace a non-empty destination (refused by default)")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--overwrite", action="store_true",
+                       help="replace the WHOLE destination directory, results included")
+    modes.add_argument("--overwrite-generated", action="store_true",
+                       help="rewrite only the files this generator produces, keeping results "
+                            "and logs; refused if the protocol itself changed")
     parser.add_argument("--dry-run", action="store_true",
                         help="resolve and validate everything, write nothing; needs no GPU")
     return parser
@@ -106,7 +110,12 @@ def main(argv: list[str] | None = None) -> int:
     inherit_path = inherit_arg or None
 
     from md_templates.openmm import input_gen
-    from md_templates.openmm.destination import DestinationExists
+    from md_templates.openmm.destination import (OVERWRITE_ALL, OVERWRITE_GENERATED,
+                                                 OVERWRITE_NONE, DestinationExists)
+
+    overwrite = (OVERWRITE_ALL if args.overwrite
+                 else OVERWRITE_GENERATED if args.overwrite_generated
+                 else OVERWRITE_NONE)
 
     try:
         result = input_gen.generate_project(
@@ -114,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
             md_config=json.loads(config_path.read_text()),
             outdir=outdir,
             inherit=inherit_path,
-            overwrite=args.overwrite,
+            overwrite=overwrite,
             dry_run=args.dry_run,
         )
     except DestinationExists as error:

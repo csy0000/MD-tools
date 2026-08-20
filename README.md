@@ -349,7 +349,9 @@ rather than just calling the directory non-empty, and they check *before* doing 
 build can cost half an hour. A destination holding unrelated files is not blocked, and those files
 survive the write. `--overwrite` replaces the **whole** destination directory, so on a project that
 has already run it deletes the results too; the error says how many files that is and where they
-are, before you commit to it.
+are, before you commit to it. `--overwrite-generated` instead rewrites only the generator's own
+files and keeps results, checkpoints and logs -- correct when the generator changed and the protocol
+did not, and refused when the protocol itself changed.
 
 `--dry-run` validates a whole project without a GPU.
 

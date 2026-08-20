@@ -21,8 +21,32 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-__all__ = ["DestinationExists", "check_destination", "publish", "SYSTEM_BUNDLE_TARGETS",
-           "project_targets"]
+__all__ = ["DestinationExists", "check_destination", "publish", "resolve_mode",
+           "OVERWRITE_NONE", "OVERWRITE_ALL", "OVERWRITE_GENERATED",
+           "SYSTEM_BUNDLE_TARGETS", "project_targets"]
+
+#: Refuse to touch anything that already exists.
+OVERWRITE_NONE = "none"
+#: Replace the destination directory entirely -- results, logs and all.
+OVERWRITE_ALL = "all"
+#: Rewrite only the files this generator produces, leaving everything else in place.
+OVERWRITE_GENERATED = "generated"
+
+_MODES = (OVERWRITE_NONE, OVERWRITE_ALL, OVERWRITE_GENERATED)
+
+
+def resolve_mode(overwrite) -> str:
+    """Accept a mode name, or the older boolean, and return a mode name.
+
+    `overwrite=True` has always meant "replace the destination", so it keeps meaning that.
+    """
+    if overwrite is True:
+        return OVERWRITE_ALL
+    if overwrite is False or overwrite is None:
+        return OVERWRITE_NONE
+    if overwrite in _MODES:
+        return overwrite
+    raise ValueError(f"unknown overwrite mode {overwrite!r}; expected one of {_MODES}")
 
 #: Everything `prepare_system` publishes into a system bundle.
 #:
@@ -118,9 +142,9 @@ def _collateral(outdir: Path, targets: list) -> list[str]:
     return sorted(found)
 
 
-def check_destination(outdir: Path, targets: Iterable[str], *, overwrite: bool,
+def check_destination(outdir: Path, targets: Iterable[str], *, overwrite,
                       what: str) -> dict:
-    """Refuse to write over existing files unless ``overwrite`` is set.
+    """Refuse to write over existing files unless an overwrite mode allows it.
 
     ``targets`` are paths relative to ``outdir`` -- the specific things this generator creates, not
     the whole directory. A destination that merely contains unrelated files is not a reason to stop:
@@ -131,8 +155,9 @@ def check_destination(outdir: Path, targets: Iterable[str], *, overwrite: bool,
     would additionally delete, and is empty unless the destination holds files this generator does
     not produce.
 
-    Raises `DestinationExists` when there are collisions and ``overwrite`` is false.
+    Raises `DestinationExists` when there are collisions and the mode is `OVERWRITE_NONE`.
     """
+    mode = resolve_mode(overwrite)
     outdir = Path(outdir)
     targets = list(dict.fromkeys(targets))
     if not outdir.exists():
@@ -146,49 +171,81 @@ def check_destination(outdir: Path, targets: Iterable[str], *, overwrite: bool,
     colliding = sorted(t for t in targets if (outdir / t).exists())
     collateral = _collateral(outdir, targets)
 
-    if colliding and not overwrite:
+    if colliding and mode == OVERWRITE_NONE:
         extra = ""
         if collateral:
             extra = (
                 f"\n\n  --overwrite replaces the WHOLE destination directory, which would also "
                 f"delete {len(collateral)} file(s) it did not write:\n{_grouped(collateral)}"
+                f"\n  --overwrite-generated rewrites only the {len(colliding)} file(s) above and "
+                f"keeps those."
             )
         raise DestinationExists(
             f"destination {outdir} already holds {len(colliding)} file(s) this {what} would "
             f"write:\n{_listed(colliding)}\n\n"
             f"  Refusing to write: a destination half-rewritten from a different configuration "
             f"would run without complaint and mean nothing.\n"
-            f"  Use --overwrite to replace it, or choose another destination."
+            f"  Use --overwrite to replace it, --overwrite-generated to rewrite only the files "
+            f"above, or choose another destination."
             f"{extra}"
         )
-    return {"colliding": colliding, "collateral": collateral}
+    return {"colliding": colliding, "collateral": collateral, "mode": mode}
 
 
-def publish(staging: Path, outdir: Path, *, overwrite: bool, what: str) -> None:
-    """Move a completed staging directory into place.
+def _merge_into(src: Path, dst: Path) -> None:
+    """Move everything in `src` into `dst`, replacing files that collide and keeping the rest.
 
-    Three cases, and the middle one is why this is not a one-liner:
-
-    * the destination does not exist -- a single rename, fully atomic.
-    * the destination exists and holds nothing we would write -- the staged entries are moved in
-      individually. Replacing the directory wholesale would delete files that are not ours and that
-      `check_destination` explicitly declined to complain about; refusing outright would make that
-      check a lie.
-    * ``overwrite`` -- the destination is replaced entirely, which is what the warning in
-      `check_destination` says it does.
-
-    A target that exists here but did not exist at the pre-flight check appeared while we worked, so
-    it is a race and not a user error, and it is reported as such.
+    Recursive because the files worth keeping are nested: `min/` must survive so that
+    `min/min_final_state.xml` survives, while `min/min.json` is replaced.
     """
     import shutil
 
+    dst.mkdir(parents=True, exist_ok=True)
+    for entry in list(src.iterdir()):
+        target = dst / entry.name
+        if entry.is_dir() and target.is_dir():
+            _merge_into(entry, target)
+            continue
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+        entry.replace(target)
+
+
+def publish(staging: Path, outdir: Path, *, overwrite, what: str) -> None:
+    """Move a completed staging directory into place.
+
+    Four cases, and the interesting ones are the last two:
+
+    * the destination does not exist -- a single rename, fully atomic.
+    * `OVERWRITE_ALL` -- the destination is replaced entirely, which is what the warning in
+      `check_destination` says it does.
+    * `OVERWRITE_NONE` with a destination that exists -- the pre-flight found no collisions, so the
+      staged entries are moved in individually. Replacing the directory wholesale would delete files
+      that are not ours and that `check_destination` explicitly declined to complain about; refusing
+      outright would make that check a lie.
+    * `OVERWRITE_GENERATED` -- the staged tree is merged in, replacing what collides and leaving
+      everything else. This is how a project is rewritten without discarding the results of having
+      run it.
+
+    Under `OVERWRITE_NONE`, a target that exists here but did not exist at the pre-flight check
+    appeared while we worked, so it is a race and not a user error, and it is reported as such.
+    """
+    import shutil
+
+    mode = resolve_mode(overwrite)
     staging, outdir = Path(staging), Path(outdir)
     if not outdir.exists():
         staging.replace(outdir)
         return
-    if overwrite:
+    if mode == OVERWRITE_ALL:
         shutil.rmtree(outdir)
         staging.replace(outdir)
+        return
+    if mode == OVERWRITE_GENERATED:
+        _merge_into(staging, outdir)
+        shutil.rmtree(staging, ignore_errors=True)
         return
 
     for entry in list(staging.iterdir()):

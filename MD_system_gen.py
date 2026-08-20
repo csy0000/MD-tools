@@ -155,8 +155,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="destination directory for the prepared system bundle")
     parser.add_argument("--config", required=True, metavar="JSON",
                         help="system_config.json: chemistry and system-building choices only")
-    parser.add_argument("--overwrite", action="store_true",
-                        help="replace a non-empty destination (refused by default)")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--overwrite", action="store_true",
+                       help="replace the WHOLE destination directory")
+    modes.add_argument("--overwrite-generated", action="store_true",
+                       help="rewrite only the files this generator produces, keeping anything "
+                            "else in the destination")
     parser.add_argument("--dry-run", action="store_true",
                         help="validate input, config and routing, then stop without building")
     return parser
@@ -192,12 +196,16 @@ def main(argv: list[str] | None = None) -> int:
     # A dry run validates the invocation as given, and an occupied destination is a property of the
     # invocation. Reporting it here is the whole point: parameterisation can cost half an hour, and
     # nobody wants to spend it and then be told the destination was never writable.
-    from md_templates.openmm.destination import (DestinationExists, SYSTEM_BUNDLE_TARGETS,
-                                                 check_destination)
+    from md_templates.openmm.destination import (OVERWRITE_ALL, OVERWRITE_GENERATED,
+                                                 OVERWRITE_NONE, SYSTEM_BUNDLE_TARGETS,
+                                                 DestinationExists, check_destination)
 
+    overwrite = (OVERWRITE_ALL if args.overwrite
+                 else OVERWRITE_GENERATED if args.overwrite_generated
+                 else OVERWRITE_NONE)
     try:
         check_destination(outdir, SYSTEM_BUNDLE_TARGETS,
-                          overwrite=args.overwrite, what="system bundle")
+                          overwrite=overwrite, what="system bundle")
     except DestinationExists as error:
         raise InputError(str(error))
 
@@ -213,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
             system_type=system_type,
             config=config,
             outdir=outdir,
-            overwrite=args.overwrite,
+            overwrite=overwrite,
         )
     except DestinationExists as error:
         raise InputError(str(error))
