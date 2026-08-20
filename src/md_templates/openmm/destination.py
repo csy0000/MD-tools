@@ -68,6 +68,16 @@ SYSTEM_BUNDLE_TARGETS = (
     "system_prep",
     "system_simbox.json",
     "manifest_system_simbox.json",
+    # implicit bundles only; harmless to list for explicit ones, since a target that does not exist
+    # simply never collides
+    "system.prmtop",
+    "system.rst7",
+    "tleap.in",
+    "tleap.log",
+    "tleap_out.pdb",
+    "leap.log",
+    "structure",
+    "ligand_topology.pdb",
 )
 
 #: What a generated project holds regardless of which stages it contains.

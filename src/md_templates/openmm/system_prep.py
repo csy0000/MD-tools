@@ -15,6 +15,7 @@ alongside it.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import shutil
@@ -72,6 +73,7 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
     ignored, because a user who wrote it there believes it took effect.
     """
     from .config import DEFAULTS
+    from .solvation_mode import resolve_solvation
     import copy
 
     protocol_keys = {"minimization", "equilibration", "production", "protocol", "reporting",
@@ -114,13 +116,23 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
     #: origin cannot answer the only question that matters when two bundles differ: which of these
     #: did I choose, and which did the package choose for me?
     sources: dict = {}
-    for section in ("forcefield", "solvation", "system_build"):
+    for section in ("forcefield", "system_build"):
         for key in cfg.get(section, {}):
             sources[f"{section}.{key}"] = "package default"
         if section in config:
             for key, value in config[section].items():
                 sources[f"{section}.{key}"] = "user input"
             cfg[section].update(config[section])
+    # One discriminated solvation contract, resolved once. Explicit mode keeps the existing
+    # defaults; implicit mode rejects every field that describes water it does not have.
+    solvation = resolve_solvation(config.get("solvation"),
+                                  defaults=copy.deepcopy(DEFAULTS["solvation"]))
+    cfg["solvation"] = {k: v for k, v in solvation.items() if k != "sources"}
+    for key, origin in solvation["sources"].items():
+        sources[f"solvation.{key}"] = origin
+    sources["solvation.mode"] = ("user input" if (config.get("solvation") or {}).get("mode")
+                                 else "package default: explicit")
+
     sources["system.slug"] = ("user input" if (config.get("system") or {}).get("id")
                               else "route-derived: input filename")
     sources["system.solute_kind"] = "route-derived: system.type"
@@ -193,6 +205,37 @@ def _check_the_three_files_describe_one_hamiltonian(bundle: Path) -> None:
             + "\n".join(problems))
 
 
+def _implicit_forcefield_record(cfg: dict, built: dict) -> dict:
+    """The force-field block for an implicit bundle, in the same shape the explicit path uses."""
+    ff = cfg.get("forcefield") or {}
+    build = built["build"]
+    return {
+        "protein_forcefield": (build.get("protein_forcefield") if built["route"] == "peptide"
+                               else None),
+        "water": None,
+        "ligand": build.get("small_molecule_forcefield") if built["route"] == "ligand" else None,
+        "ligand_charge_method": (build.get("charge_method") if built["route"] == "ligand"
+                                 else ff.get("ligand_charge_method")),
+        "xml": [],
+        "implicit_model": build["implicit_model"],
+        "radii": build["radii"],
+    }
+
+
+def _write_initial_state_from_amber(system_xml: Path, rst7: Path, out: Path) -> None:
+    """An initial State from full-precision Amber coordinates. No velocities, nothing integrated."""
+    import openmm
+    from openmm import XmlSerializer, app, unit
+
+    system = XmlSerializer.deserialize(Path(system_xml).read_text(encoding="utf-8"))
+    positions = app.AmberInpcrdFile(str(rst7)).positions
+    context = openmm.Context(system, openmm.VerletIntegrator(0.001 * unit.picoseconds),
+                             openmm.Platform.getPlatformByName("Reference"))
+    context.setPositions(positions)
+    state = context.getState(getPositions=True)
+    Path(out).write_text(XmlSerializer.serialize(state), encoding="utf-8")
+
+
 def _build_defining(cfg: dict) -> dict:
     """The resolved, build-defining configuration, with nothing execution-only in it.
 
@@ -250,6 +293,7 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
     the previous bundle or nothing -- never a half-written one whose checksums describe a mixture.
     """
     from .destination import SYSTEM_BUNDLE_TARGETS, check_destination, publish
+    from .solvation_mode import IMPLICIT
     from .equilibration import build_simbox
 
     outdir = Path(outdir)
@@ -265,18 +309,66 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
         cfg, smiles, pdb = _runtime_cfg_from_system_config(
             config, input_path, input_format, system_type)
 
-        # The construction path, reused unchanged. It solvates, ionises and parameterises; it
-        # integrates nothing.
-        info = build_simbox(cfg, staging, "system", smiles=smiles, pdb=pdb)
+        solvation = cfg["solvation"]
+        if solvation["mode"] == IMPLICIT:
+            # A different construction entirely: no water, no box, no ions. The Amber files it
+            # writes are how the GBn2 System is built and are kept as provenance, not because
+            # anything here runs Amber.
+            from .implicit import build_implicit_bundle_inputs, implicit_provenance
 
-        system_xml = staging / "system.xml"
-        topology_pdb = staging / "topology.pdb"
-        Path(info["system_xml"]).replace(system_xml)
-        Path(info["topology_pdb"]).replace(topology_pdb)
+            built = build_implicit_bundle_inputs(
+                route=("ligand" if system_type == "ligand" else "peptide"),
+                cfg=cfg, staging=staging, pdb=pdb, smiles=smiles,
+                implicit_model=solvation["implicit_model"], radii=solvation["radii"])
+            # The implicit peptide route is parameterised by tleap, so the force field it used is
+            # the leaprc -- not the OpenMM XML the explicit defaults name. Recording both names for
+            # one force field is exactly what the agreement check exists to catch.
+            if built["route"] == "peptide":
+                cfg["forcefield"]["protein"] = built["build"].get(
+                    "protein_forcefield", "leaprc.protein.ff19SB")
+                cfg["forcefield"]["water"] = None
+                cfg.setdefault("_value_sources", {})["forcefield.protein"] = (
+                    "route-derived: tleap leaprc for the implicit route")
+                cfg["_value_sources"]["forcefield.water"] = "route-derived: implicit has no water"
+            info = {
+                "route": built["route"],
+                "input_route": input_format,
+                "n_solute_atoms": built["n_solute_atoms"],
+                "n_particles": built["n_particles"],
+                "forcefield": _implicit_forcefield_record(cfg, built),
+                "nonbonded": {"method": "NoCutoff", "cutoff_nm": None,
+                              "note": "implicit solvent has no periodic box and no cutoff"},
+                "hmr": {"scope": "none", "target_hydrogen_mass_amu": None,
+                        "note": ("the pinned reference does not repartition hydrogen mass; the "
+                                 "implicit profile does not either, so the GBn2 energy comparison "
+                                 "is against an unrepartitioned System")},
+                "implicit": implicit_provenance(built["build"]),
+                "box": None,
+                "salt": None,
+            }
+            system_xml = staging / "system.xml"
+            topology_pdb = staging / "topology.pdb"
 
-        # An initial State: positions and box vectors as built, no velocities, nothing integrated.
-        initial_state = staging / "initial_state.xml"
-        _write_initial_state(system_xml, topology_pdb, initial_state)
+            # Positions come from the rst7, not the PDB: PDB coordinates are rounded to three
+            # decimals in angstrom, which shifts every force by ~0.02 kJ/mol against the
+            # reference construction. Measured; small, and pointless to accept.
+            initial_state = staging / "initial_state.xml"
+            _write_initial_state_from_amber(
+                system_xml, staging / "system.rst7", initial_state)
+        else:
+            # The construction path, reused unchanged. It solvates, ionises and parameterises; it
+            # integrates nothing.
+            info = build_simbox(cfg, staging, "system", smiles=smiles, pdb=pdb)
+
+            system_xml = staging / "system.xml"
+            topology_pdb = staging / "topology.pdb"
+            Path(info["system_xml"]).replace(system_xml)
+            Path(info["topology_pdb"]).replace(topology_pdb)
+
+            # An initial State: positions and box vectors as built, no velocities, nothing
+            # integrated.
+            initial_state = staging / "initial_state.xml"
+            _write_initial_state(system_xml, topology_pdb, initial_state)
         _write_topology_cif(topology_pdb, staging / "topology.cif")
 
         forcefield = {
@@ -286,6 +378,7 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
             **(info.get("forcefield") or {}),
             "nonbonded": info.get("nonbonded"),
             "hmr": info.get("hmr"),
+            "implicit": info.get("implicit"),
             "constraints_note": (
                 "constraints and hydrogen mass are properties of the built System and are recorded "
                 "here; changing either requires a new system bundle, not a new protocol."
@@ -324,6 +417,14 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
             "salt": info.get("salt"),
             "geometry": info.get("geometry"),
             "water": info.get("water"),
+            # Present only for implicit bundles. Everything needed to rebuild the exact GBn2
+            # System: the construction branch, both library versions, the tleap commands where
+            # they were used, and what the radius change actually did.
+            "implicit": info.get("implicit"),
+            "amber_files": ({"topology": "system.prmtop", "coordinates": "system.rst7",
+                             "role": ("construction intermediates and provenance for the OpenMM "
+                                      "System; this repository has no Amber execution engine")}
+                            if info.get("implicit") else None),
             "omega": {
                 "central_bonds": info.get("omega_central_bonds"),
                 "detection_method": info.get("omega_detection_method"),
@@ -349,7 +450,7 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
         # it, so emitting it here is what lets a generated project be handed to the existing REST2
         # runner instead of teaching that runner a second bundle format. It carries chemistry only
         # -- no protocol -- so it stays inside this generator's remit.
-        _write_system_yaml(staging / "system.yaml", config, manifest, info)
+        _write_system_yaml(staging / "system.yaml", config, cfg, manifest, info)
 
         checksums = {p.name: _sha256(p) for p in sorted(staging.iterdir())
                      if p.is_file() and p.name != "checksums.json"}
@@ -361,7 +462,13 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
 
         _check_the_three_files_describe_one_hamiltonian(staging)
 
-        missing = [f for f in REQUIRED_BUNDLE_FILES if not (staging / f).is_file()]
+        required = list(REQUIRED_BUNDLE_FILES)
+        solvation = cfg["solvation"]
+        if solvation["mode"] == IMPLICIT:
+            # The Amber files ARE the construction path for GBn2, so a bundle without them cannot
+            # be rebuilt or checked. Required members, not incidental leftovers.
+            required += ["system.prmtop", "system.rst7"]
+        missing = [f for f in required if not (staging / f).is_file()]
         if missing:
             raise RuntimeError(
                 f"system bundle is incomplete, refusing to publish it: missing {missing}"
@@ -407,16 +514,19 @@ def _write_topology_cif(topology_pdb: Path, out_cif: Path) -> None:
         PDBxFile.writeFile(pdb.topology, pdb.positions, handle, keepIds=True)
 
 
-def _write_system_yaml(path: Path, config: dict, manifest: dict, info: dict) -> None:
+def _write_system_yaml(path: Path, config: dict, cfg: dict, manifest: dict, info: dict) -> None:
     """Emit the package's legacy system manifest from the prepared chemistry.
 
     Chemistry only. Protocol belongs to md_config.json and is never written here.
+
+    Reads the RESOLVED configuration, not the user's document: this file used to describe whatever
+    the user happened to write, so a bundle whose force field came from a default recorded `null`.
     """
     import yaml
 
     system = manifest["system"]
-    ff = config.get("forcefield") or {}
-    solv = config.get("solvation") or {}
+    ff = cfg.get("forcefield") or {}
+    solv = cfg.get("solvation") or {}
     doc = {
         "schema_version": 1,
         "system_id": system["id"],

@@ -50,6 +50,8 @@ from typing import Optional
 
 __all__ = [
     "AMBER_TOPOLOGY_NAME",
+    "build_amber_topology_via_tleap",
+    "build_implicit_bundle_inputs",
     "AMBER_COORDINATE_NAME",
     "build_implicit_system",
     "implicit_provenance",
@@ -171,4 +173,140 @@ def implicit_provenance(info: dict) -> dict:
         "no_ions": True,
         "no_periodic_box": True,
         "no_barostat": "implicit solvent has no volume, so pressure is undefined",
+    }
+
+
+def build_amber_topology_via_tleap(pdb_path: Path, out_dir: Path, *, radii: str = "mbondi3",
+                                   protein_forcefield: str = "leaprc.protein.ff19SB") -> dict:
+    """Build prmtop/rst7 for a peptide or protein with tleap.
+
+    `set default PBRadii mbondi3` is issued BEFORE `saveAmberParm`, which is what writes the radii
+    into the topology. `changeRadii` still runs later and is a no-op here -- belt and braces for the
+    case where a topology arrives without them.
+
+    tleap's stdout is captured and kept: a run that "succeeded" while dropping an atom is a real
+    failure mode, and the log is the only place it shows.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("tleap") is None:
+        raise RuntimeError(
+            "tleap was not found on PATH. Implicit preparation of a peptide route builds its Amber "
+            "topology with tleap (AmberTools); activate an environment that provides it.")
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prmtop = out_dir / AMBER_TOPOLOGY_NAME
+    coordinates = out_dir / AMBER_COORDINATE_NAME
+    leap_pdb = out_dir / "tleap_out.pdb"
+    script = out_dir / "tleap.in"
+    log = out_dir / "tleap.log"
+
+    script.write_text("\n".join([
+        f"source {protein_forcefield}",
+        f"set default PBRadii {radii}",
+        f"mol = loadPdb {pdb_path.resolve()}",
+        f"saveAmberParm mol {prmtop.resolve()} {coordinates.resolve()}",
+        f"savePdb mol {leap_pdb.resolve()}",
+        "quit",
+    ]) + "\n", encoding="utf-8")
+
+    result = subprocess.run(["tleap", "-f", str(script)], capture_output=True, text=True,
+                            check=False, cwd=str(out_dir))
+    log.write_text((result.stdout or "") + (result.stderr or ""), encoding="utf-8")
+    if result.returncode != 0 or not prmtop.is_file():
+        raise RuntimeError(
+            f"tleap failed building the implicit topology from {pdb_path.name}.\n"
+            f"  Its log is at {log}.\n{(result.stderr or result.stdout)[-1500:]}")
+    return {
+        "prmtop": prmtop,
+        "coordinates": coordinates,
+        "topology_pdb": leap_pdb,
+        "tleap_input": script,
+        "tleap_log": log,
+        "tleap_commands": script.read_text(encoding="utf-8").splitlines(),
+        "protein_forcefield": protein_forcefield,
+        "radii_requested": radii,
+    }
+
+
+def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
+                                 pdb: Optional[Path] = None, smiles: Optional[str] = None,
+                                 implicit_model: str = "GBn2", radii: str = "mbondi3") -> dict:
+    """Produce every Amber and OpenMM artefact an implicit bundle needs.
+
+    Two routes reach the same ParmEd construction from different directions:
+
+    * `peptide` -- tleap writes the topology with mbondi3 radii already in it;
+    * `ligand` -- the vetted OpenFF/Sage parameterisation is serialised to Amber files through
+      ParmEd. That System is built with `constraints=None` on purpose: constraints are applied by
+      `createSystem` on the way back out, and baking them in here would apply them twice.
+    """
+    from openmm import XmlSerializer, app
+
+    staging = Path(staging)
+    if route == "peptide":
+        if pdb is None:
+            raise ValueError("the peptide route needs a PDB input")
+        amber = build_amber_topology_via_tleap(pdb, staging, radii=radii)
+        topology_source = amber["topology_pdb"]
+    elif route == "ligand":
+        amber = _amber_files_for_ligand(cfg, staging, smiles=smiles)
+        topology_source = amber["topology_pdb"]
+    else:
+        raise ValueError(f"implicit preparation has no route {route!r}; expected peptide or ligand")
+
+    system, info = build_implicit_system(
+        amber["prmtop"], amber["coordinates"],
+        implicit_model=implicit_model, radii=radii)
+
+    (staging / "system.xml").write_text(XmlSerializer.serialize(system), encoding="utf-8")
+    pdb_file = app.PDBFile(str(topology_source))
+    with (staging / "topology.pdb").open("w", encoding="utf-8") as handle:
+        app.PDBFile.writeFile(pdb_file.topology, pdb_file.positions, handle, keepIds=True)
+
+    return {
+        "system": system,
+        "system_xml": staging / "system.xml",
+        "topology_pdb": staging / "topology.pdb",
+        "prmtop": amber["prmtop"],
+        "coordinates": amber["coordinates"],
+        "n_particles": system.getNumParticles(),
+        "n_solute_atoms": system.getNumParticles(),   # implicit: the solute IS the system
+        "route": route,
+        "build": {**info, **{k: v for k, v in amber.items()
+                             if k in ("tleap_commands", "protein_forcefield", "radii_requested",
+                                      "small_molecule_forcefield", "charge_method")}},
+    }
+
+
+def _amber_files_for_ligand(cfg: dict, staging: Path, *, smiles: Optional[str]) -> dict:
+    """OpenFF/Sage parameters, serialised to Amber files through ParmEd."""
+    from openmm import app
+
+    from .system import build_forcefield, initial_structure
+
+    if not smiles:
+        raise ValueError("the implicit ligand route needs a SMILES input")
+
+    structure = initial_structure(smiles, staging / "structure", cfg)
+    ligand_sdf = Path(structure["sdf"])
+    forcefield, ff_info = build_forcefield(cfg, ligand_sdf=ligand_sdf, route="ligand")
+
+    solute = app.PDBFile(str(structure["pdb"]))
+    # No constraints here: they are applied by createSystem on the way back out.
+    bare = forcefield.createSystem(solute.topology, nonbondedMethod=app.NoCutoff, constraints=None)
+    written = write_amber_files_from_openmm(solute.topology, bare, solute.positions, staging)
+
+    topology_pdb = staging / "ligand_topology.pdb"
+    with topology_pdb.open("w", encoding="utf-8") as handle:
+        app.PDBFile.writeFile(solute.topology, solute.positions, handle, keepIds=True)
+    return {
+        "prmtop": written["prmtop"],
+        "coordinates": written["coordinates"],
+        "topology_pdb": topology_pdb,
+        "small_molecule_forcefield": (cfg.get("forcefield") or {}).get("ligand"),
+        "charge_method": (cfg.get("forcefield") or {}).get("ligand_charge_method"),
+        "forcefield_info": ff_info,
     }
