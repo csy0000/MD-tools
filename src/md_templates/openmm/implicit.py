@@ -275,8 +275,12 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
 
     topology = app.PDBFile(str(staging / "topology.pdb")).topology
     solute = list(range(system.getNumParticles()))
-    omega_info = classify_omega_bonds(topology, solute,
-                                      route=("peptide" if route == "peptide" else "ligand"))
+    # The ligand route needs the SDF: bond orders are not recoverable from a topology, and amide
+    # detection depends on them. It is written by the same step that built the conformer.
+    ligand_sdf = amber.get("ligand_sdf")
+    omega_info = classify_omega_bonds(
+        topology, solute, route=("peptide" if route == "peptide" else "ligand"),
+        ligand_sdf=(Path(ligand_sdf) if ligand_sdf else None))
     build_record = {
         "suffix": "system",
         "route": route,
@@ -330,10 +334,10 @@ def _amber_files_for_ligand(cfg: dict, staging: Path, *, smiles: Optional[str]) 
         raise ValueError("the implicit ligand route needs a SMILES input")
 
     structure = initial_structure(smiles, staging / "structure", cfg)
-    ligand_sdf = Path(structure["sdf"])
+    ligand_sdf = Path(structure["solute_sdf"])
     forcefield, ff_info = build_forcefield(cfg, ligand_sdf=ligand_sdf, route="ligand")
 
-    solute = app.PDBFile(str(structure["pdb"]))
+    solute = app.PDBFile(str(structure["solute_pdb"]))
     # No constraints here: they are applied by createSystem on the way back out.
     bare = forcefield.createSystem(solute.topology, nonbondedMethod=app.NoCutoff, constraints=None)
     written = write_amber_files_from_openmm(solute.topology, bare, solute.positions, staging)
@@ -345,6 +349,7 @@ def _amber_files_for_ligand(cfg: dict, staging: Path, *, smiles: Optional[str]) 
         "prmtop": written["prmtop"],
         "coordinates": written["coordinates"],
         "topology_pdb": topology_pdb,
+        "ligand_sdf": str(ligand_sdf),
         "small_molecule_forcefield": (cfg.get("forcefield") or {}).get("ligand"),
         "charge_method": (cfg.get("forcefield") or {}).get("ligand_charge_method"),
         "forcefield_info": ff_info,

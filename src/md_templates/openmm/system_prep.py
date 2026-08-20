@@ -161,6 +161,37 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
 _BUILD_DEFINING_SECTIONS = ("forcefield", "solvation", "system_build", "structure", "system")
 
 
+#: OpenMM serialises a nonbonded method as an enum integer, so `forcefield.json` records `4` where
+#: everything else records `"PME"`. Comparing those directly reports a disagreement that is only a
+#: difference of representation. The mapping is written out rather than guessed.
+_NONBONDED_METHOD_NAMES = {0: "NoCutoff", 1: "CutoffNonPeriodic", 2: "CutoffPeriodic",
+                           3: "Ewald", 4: "PME", 5: "LJPME"}
+
+
+def _nonbonded_method_name(value):
+    """A nonbonded method as a name, whichever representation it arrives in."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return _NONBONDED_METHOD_NAMES.get(value)
+    return str(value)
+
+
+def _named_nonbonded(nonbonded):
+    """The nonbonded record with the method's NAME added beside its enum.
+
+    Added rather than replaced: existing bundles record the integer, and a reader of either
+    generation should find what they expect. `4` alone is not a description of a Hamiltonian.
+    """
+    if not isinstance(nonbonded, dict):
+        return nonbonded
+    out = dict(nonbonded)
+    name = _nonbonded_method_name(out.get("method"))
+    if name is not None:
+        out["method_name"] = name
+    return out
+
+
 def _check_the_three_files_describe_one_hamiltonian(bundle: Path) -> None:
     """`forcefield.json`, `system.yaml` and `system_manifest.json` must agree.
 
@@ -193,6 +224,22 @@ def _check_the_three_files_describe_one_hamiltonian(bundle: Path) -> None:
          parameterization.get("charge_method"), forcefield.get("ligand_charge_method")),
     )
     problems = []
+
+    # Build settings, not just force fields. The first version of this check compared only the
+    # latter and so did not notice a manifest claiming PME and HMR for a System that had neither.
+    build = manifest["resolved_system_config"].get("system_build") or {}
+    ff_nonbonded = (forcefield.get("nonbonded") or {})
+    ff_method = _nonbonded_method_name(ff_nonbonded.get("method"))
+    if ff_method and build.get("nonbonded_method") and ff_method != build["nonbonded_method"]:
+        problems.append(
+            f"    nonbonded method: system_manifest.json={build['nonbonded_method']!r} "
+            f"forcefield.json={ff_method!r}")
+    ff_hmr = (forcefield.get("hmr") or {})
+    if ff_hmr.get("scope") and build.get("hmr_scope") and ff_hmr["scope"] != build["hmr_scope"]:
+        problems.append(
+            f"    hydrogen mass repartitioning: system_manifest.json={build['hmr_scope']!r} "
+            f"forcefield.json={ff_hmr['scope']!r}")
+
     for label, in_manifest, in_yaml, in_ff in checks:
         stated = {v for v in (in_manifest, in_yaml, in_ff) if v is not None}
         if len(stated) > 1:
@@ -332,6 +379,26 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
                 # would advertise chemistry that never ran.
                 cfg["forcefield"]["ligand"] = None
                 cfg["forcefield"]["ligand_charge_method"] = None
+            # The build settings must describe the System that was built. The package defaults are
+            # explicit-water ones -- PME, a 1.0 nm cutoff, HMR to 3.024 amu, rigid water -- and
+            # leaving them here made the manifest claim a Hamiltonian this bundle does not have.
+            cfg["system_build"].update({
+                "nonbonded_method": "NoCutoff",
+                "nonbonded_cutoff_nm": None,
+                "switch_distance_nm": None,
+                "use_dispersion_correction": False,
+                "ewald_error_tolerance": None,
+                "minimum_image_margin_nm": None,
+                "constraints": "HBonds",
+                "rigid_water": False,
+                "hydrogen_mass_amu": None,
+                "hmr_scope": "none",
+                "remove_cm_motion": True,
+            })
+            for key in ("nonbonded_method", "nonbonded_cutoff_nm", "hydrogen_mass_amu",
+                        "hmr_scope", "rigid_water"):
+                cfg.setdefault("_value_sources", {})[f"system_build.{key}"] = (
+                    "route-derived: implicit solvent")
                 cfg.setdefault("_value_sources", {})["forcefield.protein"] = (
                     "route-derived: tleap leaprc for the implicit route")
                 cfg["_value_sources"]["forcefield.water"] = "route-derived: implicit has no water"
@@ -381,7 +448,7 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
             "input_route": info.get("input_route"),
             "system_type": system_type,
             **(info.get("forcefield") or {}),
-            "nonbonded": info.get("nonbonded"),
+            "nonbonded": _named_nonbonded(info.get("nonbonded")),
             "hmr": info.get("hmr"),
             "implicit": info.get("implicit"),
             "constraints_note": (

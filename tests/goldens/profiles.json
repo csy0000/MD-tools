@@ -60,14 +60,14 @@
       "method": "rest2",
       "profile_schema_version": 5,
       "route": "smiles",
-      "sha256": "e9f45ec9d3b3361193bdc69457767ac91be635d3ad4016262637aec825cb3109"
+      "sha256": "0e24f0bfc45dddfb56f64698dab2fcf8df5b82d7d93b640c85d7ea41164e955e"
     },
     "implicit-rest2-peptide-v1": {
       "is_default": false,
       "method": "rest2",
       "profile_schema_version": 5,
       "route": "pdb",
-      "sha256": "c4828f76ade0ab5d81a955e0277c8730387ebea98890b9e4bae255d5b27dfa91"
+      "sha256": "634337d04851969ba79009cd7d3dfad29814703e4aee3e4fb7ea27674ed9e62f"
     }
   }
 }

@@ -198,7 +198,13 @@ def _interpreter_defaults() -> tuple[str, str]:
 
 def _stage_launcher(stage: str, interpreter: str, pythonpath: str) -> str:
     """A readable launcher. It calls a package module; it does not reimplement any physics."""
-    path_line = (f': "${{PYTHONPATH:={pythonpath}}}"\nexport PYTHONPATH\n' if pythonpath else "")
+    # APPENDED, not defaulted. `${PYTHONPATH:=...}` keeps whatever the caller already exported, and
+    # a caller with a RELATIVE PYTHONPATH (a bare `src`, say) then breaks the moment this script
+    # changes directory -- the recorded absolute path is right there and gets ignored. Appending
+    # keeps the caller's entries ahead of ours, so they can still shadow the package deliberately,
+    # while guaranteeing the interpreter can find it at all.
+    path_line = (f'PYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}{pythonpath}"\nexport PYTHONPATH\n'
+                 if pythonpath else "")
     return f"""#!/usr/bin/env bash
 # Stage: {stage}
 #

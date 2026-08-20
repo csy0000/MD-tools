@@ -1570,6 +1570,22 @@ def test_the_launcher_records_the_interpreter_that_generated_the_project(tmp_pat
     assert "PYTHON=" in body and "cannot import" in body, "must say how to fix it"
 
 
+def test_the_launcher_survives_a_relative_pythonpath_in_the_environment():
+    """`${PYTHONPATH:=...}` was not enough, and the failure mode is quiet.
+
+    A caller exporting a RELATIVE PYTHONPATH -- a bare `src`, which is exactly what running the
+    tests from the checkout does -- kept that value, and it stopped resolving the moment the
+    launcher changed into the stage directory. The recorded absolute path was sitting right there
+    and was ignored. Appending keeps the caller's entries first, so they can still shadow the
+    package deliberately, while guaranteeing the interpreter can find it at all.
+    """
+    from md_templates.openmm import input_gen
+
+    body = input_gen._stage_launcher("min", Path("/usr/bin/python3"), "/abs/path/src")
+    assert 'PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/abs/path/src"' in body
+    assert ': "${PYTHONPATH:=' not in body, "defaulting silently loses to a relative value"
+
+
 def test_no_source_checkout_path_leaks_except_the_recorded_pythonpath(tmp_path):
     """A project that embedded the checkout anywhere ELSE would break the moment it moved."""
     from md_templates.openmm import input_gen
