@@ -242,6 +242,23 @@ The agreement check and the new tests caught five problems in code written durin
 5. The ligand implicit route recorded a **water force field** because water was cleared only on the
    peptide branch.
 
+Two further instances of the same *shape* appeared afterwards, in different components. The
+package defaults name a force field for protein, water **and** small molecule, because an
+explicit-water build may need all three; each route parameterises one of them and was carrying the
+others as provenance for chemistry that never ran:
+
+* the ligand route recorded a water force field (water was cleared only on the peptide branch);
+* the ligand route recorded `amber19/protein.ff19SB.xml`, which `validate_system` correctly refused
+  — a smiles route may not load a protein force field.
+
+After the third occurrence the rule was written once instead of patched again: keep what the route
+used, null the rest. The lesson is that a per-branch fix to a defect with a shared cause will be
+needed once per branch, and the count of branches is not known in advance.
+
+`system.yaml` also omitted `canonical_smiles_sha256` on the SMILES route. It exists to catch an
+edited SMILES in an environment that cannot parse chemistry, which is why it is stored rather than
+re-derived on read.
+
 Two more, found by running rather than by reasoning:
 
 - **Resolution was not idempotent.** Re-resolving an already-resolved implicit document under the
@@ -302,8 +319,26 @@ Four profiles: `implicit-{md,rest2}-{peptide,ligand}-v1.json`
 - The GB models other than GBn2 are accepted by the schema because OpenMM supports them, but only
   GBn2/mbondi3 is exercised end to end.
 
+## Packaging: a gap in the acceptance criteria, found and closed
+
+`MD_system_gen.py` and `MD_input_gen.py` were in **neither the wheel nor the sdist**, and the
+examples were in neither. A public entry point that exists only in a source tree is not installable:
+a consuming project could import the library and still have no way to run the generators, which is
+most of what this repository offers.
+
+Their implementations moved to `md_templates.openmm.cli_system_gen` and `cli_input_gen`, with the
+root scripts reduced to shims — a shim rather than a copy, because two implementations of an entry
+point drift and the drift is invisible until they disagree. Console scripts `md-system-gen` and
+`md-input-gen` are registered, and `MANIFEST.in` carries the entry points and `test/` into the sdist.
+
+Verified with a real wheel installed into a clean target outside the checkout: `md-system-gen`
+prepared an implicit alanine bundle, `md-input-gen` generated the project, and `min`, `eq_nvt` and
+`cMD_1` executed — with the launcher recording the **installed** package path.
+
+An earlier relocation check had run the *checkout* scripts, which insert `src` at `sys.path[0]`, so
+it exercised the source rather than the wheel. It was re-done through the console scripts. Recording
+that here because the first result looked like a pass and was not one.
+
 ## Deferred
 
-- Wheel/sdist verification and relocated-bundle execution for the implicit path
-- The complete supported suite including slow markers, re-run after the last fixes
-- A real-CUDA smoke for implicit conventional MD and REST2
+- A real-CUDA smoke for the implicit path
