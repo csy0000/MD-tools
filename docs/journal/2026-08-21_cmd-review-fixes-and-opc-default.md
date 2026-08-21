@@ -5,7 +5,7 @@ That journal is **superseded**: its implicit hashes were produced under a restra
 vectors an implicit System should not have, so they do not describe the code that is now on `dev`.
 Its explicit results stand, but its explicit default does not.
 
-Baseline `07d2458`, head **`d1ff1c3`**. Eight commits, no branch, no PR, `main` untouched.
+Baseline `07d2458`, final SHA **`935e9d5`**. Nine commits, no branch, no PR, `main` untouched.
 
 ## Findings
 
@@ -16,7 +16,7 @@ Baseline `07d2458`, head **`d1ff1c3`**. Eight commits, no branch, no PR, `main` 
 | 3 | DCD truncation computed a frame as three coordinate blocks, missing the 56-byte unit-cell record, and corrupted every periodic trajectory it touched | new `dcdtail` module walking real Fortran records, validating every marker, updating offsets 8 and 20 together, atomic replace | `test_dcd_tail_recovery.py` (17) | measured 96 assumed vs 152 actual bytes for a 6-atom periodic frame; verified with a second, independently written DCD reader |
 | 4 | committed outputs were not checked before append; a trajectory shorter than its own watermark was treated as resumable | `inspect_committed_outputs` / `assert_committed_outputs_intact`: longer is truncated to the watermark, **shorter is refused** as missing history | `test_cmd_continuity_and_crash.py`, `integration_cpu.sh` step 13 | torn tails removed with committed frames byte-identical, both periodic and nonperiodic |
 | 5 | invocation accounting could disagree with the data, and two invocations could share a run directory | invocation record, watermarks and continuity hash written inside the *same* atomic commit; `close_reporters` refuses to commit on an unclosable stream; exclusive `flock` per run directory | `test_cmd_continuity_and_crash.py` incl. `test_two_invocations_cannot_share_one_run_directory` | history `[1000, 2000, 2000]` before, contiguous `(1, 0, 1000) (2, 1000, 2000)` after |
-| 6 | validation gates deferred, and remote CI unverified | staged cMD gated on CPU from the installed wheel: normal resume, forced State fallback, crash/tail recovery | `integration_cpu.sh` steps 10–13 | all gates below; remote CI **green for `d1ff1c3`** (`fast` #28, `integration-cpu` #28) |
+| 6 | validation gates deferred, and remote CI unverified | staged cMD gated on CPU from the installed wheel: normal resume, forced State fallback, crash/tail recovery | `integration_cpu.sh` steps 10–13 | all gates below; remote CI **green** (`fast` #28/#29, `integration-cpu` #28/#29) |
 | 7 | TIP3P-FB was the active explicit default although ff19SB was parameterised against OPC | four `-v2` OPC profiles become the defaults; `-v1` kept name-resolvable, `is_default: false`, `superseded_by`, COMPATIBILITY ONLY | `test_opc_default.py` (23) | `default` resolves to `-v2` for all four explicit route/method pairs; goldens changed for exactly those four, implicit untouched |
 
 ## A defect the OPC change exposed
@@ -118,12 +118,15 @@ e1f94ba  fix(ci): step 6 was still building a spec from retired production field
 
 ## Remote CI
 
-Both workflows trigger on pushes to `dev` and both are **green for the final SHA `d1ff1c3`**.
+Both workflows trigger on pushes to `dev` and both are green for `d1ff1c3` (the code) and
+for **`935e9d5`, the final SHA** (this journal's CI section).
 
 | workflow | run | conclusion | duration | URL |
 |---|---|---|---|---|
 | `fast` | #28 | **success** | 2 m 04 s | https://github.com/csy0000/MD-templates/actions/runs/32476211126 |
 | `integration-cpu` | #28 | **success** | 3 m 57 s | https://github.com/csy0000/MD-templates/actions/runs/32476210988 |
+| `fast` | #29 | **success** | — | https://github.com/csy0000/MD-templates/actions/runs/32491770318 |
+| `integration-cpu` | #29 | **success** | — | https://github.com/csy0000/MD-templates/actions/runs/32491770319 |
 
 Every step succeeded in both jobs; the only skipped steps are the `if: failure()` diagnostic
 uploads. `integration-cpu` ran the full 13-step gate, the real subprocess crash-recovery slow tests
