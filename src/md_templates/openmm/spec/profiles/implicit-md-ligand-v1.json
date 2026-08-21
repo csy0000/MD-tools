@@ -33,7 +33,7 @@
       }
     },
     "protocol": {
-      "schema_version": 4,
+      "schema_version": 5,
       "integrator": {
         "kind": "langevin-middle",
         "timestep": "2 fs",
@@ -42,12 +42,13 @@
       },
       "equilibration": {
         "protocol": "simple",
-        "minimize_max_iterations": 0,
-        "seed": null
+        "minimize_max_iterations": 1000,
+        "seed": null,
+        "nvt": "10 ps"
       },
       "production": {
         "method": "md",
-        "duration_per_segment": "100 ps",
+        "duration_per_segment": "5 ns",
         "scale_factor": 1.0,
         "seed": null
       }
@@ -58,8 +59,8 @@
       "device": null,
       "precision": "mixed",
       "reporting": {
-        "all_atom": "10 ps",
-        "solute": "2 ps",
+        "all_atom": "100 ps",
+        "solute": "10 ps",
         "state": "10 ps",
         "checkpoint": "100 ps"
       }

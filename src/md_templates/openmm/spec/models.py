@@ -27,7 +27,8 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Optional, Union
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import (BaseModel, BeforeValidator, ConfigDict, Field, field_validator,
+                      model_validator)
 
 from .units import Quantity, parse_quantity
 
@@ -35,6 +36,10 @@ from .units import Quantity, parse_quantity
 SYSTEM_SCHEMA_VERSION = 1
 BUILD_SCHEMA_VERSION = 1
 PROTOCOL_SCHEMA_VERSION = 5
+
+#: Versions this build recognises but will not accept. Named so a refusal can say "retired" and
+#: point at the migration, rather than "unknown", which would send a reader hunting for a typo.
+RETIRED_PROTOCOL_SCHEMA_VERSIONS = (1, 2, 3, 4)
 EXECUTION_SCHEMA_VERSION = 1
 
 
@@ -146,8 +151,12 @@ class ImplicitSpec(Strict):
     against mbondi3, so another radius set is a different Hamiltonian that still runs.
     """
 
-    model: Literal["HCT", "OBC1", "OBC2", "GBn", "GBn2"] = "GBn2"
-    radii: Literal["bondi", "mbondi", "mbondi2", "mbondi3", "amber6"] = "mbondi3"
+    #: Only the validated pair is publicly accepted. OpenMM exposes other GB models and ParmEd
+    #: accepts other radius sets, but the energy identity in this repository is pinned for
+    #: GBn2/mbondi3 and nothing else, and public acceptance follows the evidence rather than the
+    #: library's capability. `implicit.py` stays extensible so widening this means adding evidence.
+    model: Literal["GBn2"] = "GBn2"
+    radii: Literal["mbondi3"] = "mbondi3"
 
 
 class NonbondedSpec(Strict):
@@ -423,7 +432,29 @@ Production = Annotated[Union[MDProduction, REST2Production], Field(discriminator
 
 
 class ProtocolSpec(Strict):
+    #: Validated, not merely carried. An unconstrained integer let a document label itself
+    #: version 4 while using version-5 exchange fields, so the label said one thing and the
+    #: semantics said another -- and nothing checked. A version this code cannot interpret must be
+    #: refused, and a retired version must arrive with its migration message.
     schema_version: int = PROTOCOL_SCHEMA_VERSION
+
+    @field_validator("schema_version")
+    @classmethod
+    def _supported_protocol_schema(cls, value: int) -> int:
+        if value == PROTOCOL_SCHEMA_VERSION:
+            return value
+        if value in RETIRED_PROTOCOL_SCHEMA_VERSIONS:
+            raise ValueError(
+                f"protocol.schema_version {value} is retired. Version "
+                f"{PROTOCOL_SCHEMA_VERSION} states a segment as `duration_per_segment` plus "
+                "`exchange.number_of_exchanges_per_segment` and derives the interval.\n"
+                "  A version-4 document using the version-5 exchange fields is not a version-4 "
+                "document; relabel it 5 once\n  it uses them, or migrate it with "
+                "`md-openmm config migrate`."
+            )
+        raise ValueError(
+            f"protocol.schema_version {value} is not a version this build understands; "
+            f"supported: {PROTOCOL_SCHEMA_VERSION}")
     integrator: IntegratorSpec
     equilibration: EquilibrationSpec
     production: Production

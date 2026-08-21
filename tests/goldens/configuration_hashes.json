@@ -1,17 +1,17 @@
 {
   "md_ligand_smiles": {
-    "canonical_json_sha256": "c5d93f59fc31f444646883923a1fc287d3176e6aefadf000f9cd0e3ea7ea48df",
+    "canonical_json_sha256": "74773c04d7ac27a4f7738c6b388df2dac7417ff2889d8cdbf82e30b8accbba39",
     "hashes": {
-      "execution_sha256": "6f0a213589d37798f9abfdde3945429663b85a621002f6fe58dbe7628f4f6138",
-      "prepared_state_sha256": "efef251935086250d17d97acdb8a91d6eaa31c2cad85ba0b8c3a4315ba28294f",
-      "protocol_at_prepare_sha256": "7ec68d8a620092973af1a7aa1a2c2c3bf710c125f784c6ee4d50e8f9ae010d04",
-      "protocol_sha256": "eaec55fc56169e38216f3a0c6a18a5d358c936dec21a2ebe861879d4c631bbaa",
+      "execution_sha256": "4ce46337fbab3ef3eca86b7e0cea3fce195feadb3e472593ad74fd1581c5f966",
+      "prepared_state_sha256": "3f07a3713b85cbc9c73431fe2b7b3e02a4582488199be98a428caec3f6fe1398",
+      "protocol_at_prepare_sha256": "4b731a4349ff039fc8b3a8ab0d335fa70b5f1f6100761c0cbb2a64a804665efb",
+      "protocol_sha256": "70f577ff86fb4ff8343f1223bcd901dc12c730b0395676bda458d1abc0a88af9",
       "system_build_sha256": "7f242b94a56a8047054ebbac412dd56bd0b3567d96288c14b0ca8820a49ab393"
     },
     "profile": {
       "profile_id": "explicit-md-ligand-v1",
       "profile_schema_version": 5,
-      "sha256": "ed59b5e88cc6b9227494922b38487f43af3c36ace2c7bfc1c06c17912eb57f6b"
+      "sha256": "c10e73b5a9c19c9d7e37a50d75912247d6918d4dbb3d27939a7e09f23b44de18"
     },
     "resolved": {
       "constraints": "HBonds",
@@ -20,26 +20,26 @@
       "integrator.timestep_ps": 0.004,
       "nonbonded.cutoff_nm": 1.0,
       "production.derived_scale_factors": null,
-      "production.duration_per_segment_ps": 100.0,
-      "production.duration_per_segment_source": "100 ps",
+      "production.duration_per_segment_ps": 5000.0,
+      "production.duration_per_segment_source": "5 ns",
       "production.method": "md",
       "production.tau_values": null,
       "solvation.padding_nm": 1.2
     }
   },
   "md_peptide_pdb": {
-    "canonical_json_sha256": "307d4d0c1f6562132de56679db746f7cb7dfb0d8933bdeb8a0542146b9bd4603",
+    "canonical_json_sha256": "c39e642260a947a0159be5e2ac8c8b957498483a8532b6cf33a46bb659e7e7b0",
     "hashes": {
-      "execution_sha256": "6f0a213589d37798f9abfdde3945429663b85a621002f6fe58dbe7628f4f6138",
-      "prepared_state_sha256": "4a2a641a79228f39346aed063c8d3d85a1702f92c306dec3483c7d79812d7f2f",
-      "protocol_at_prepare_sha256": "7ec68d8a620092973af1a7aa1a2c2c3bf710c125f784c6ee4d50e8f9ae010d04",
-      "protocol_sha256": "eaec55fc56169e38216f3a0c6a18a5d358c936dec21a2ebe861879d4c631bbaa",
+      "execution_sha256": "4ce46337fbab3ef3eca86b7e0cea3fce195feadb3e472593ad74fd1581c5f966",
+      "prepared_state_sha256": "46fd45709a998a6c3f9646ceced785a0483ba5f417dc01924f9825d2ff6ef114",
+      "protocol_at_prepare_sha256": "4b731a4349ff039fc8b3a8ab0d335fa70b5f1f6100761c0cbb2a64a804665efb",
+      "protocol_sha256": "70f577ff86fb4ff8343f1223bcd901dc12c730b0395676bda458d1abc0a88af9",
       "system_build_sha256": "39252363b5b5a289060b4fd273f25a102182e0396732435caecb3841b8281bbf"
     },
     "profile": {
       "profile_id": "explicit-md-peptide-v1",
       "profile_schema_version": 5,
-      "sha256": "7fa504a5c80b9d28f38efba54880987d2e7163f2340cfc3923a1e04f6c42fd96"
+      "sha256": "e606d064de812503f60c914452beb1d172e782afbf966b853fc6d5da9a2a7795"
     },
     "resolved": {
       "constraints": "HBonds",
@@ -48,26 +48,26 @@
       "integrator.timestep_ps": 0.004,
       "nonbonded.cutoff_nm": 1.0,
       "production.derived_scale_factors": null,
-      "production.duration_per_segment_ps": 100.0,
-      "production.duration_per_segment_source": "100 ps",
+      "production.duration_per_segment_ps": 5000.0,
+      "production.duration_per_segment_source": "5 ns",
       "production.method": "md",
       "production.tau_values": null,
       "solvation.padding_nm": 1.2
     }
   },
   "rest2_ligand_smiles": {
-    "canonical_json_sha256": "80dc69699e2d53406863ba5859ce3be0f2668ff5f86bb21ebf60df0c4dfd92d4",
+    "canonical_json_sha256": "adc3fbb7dbcc205b053ad581ebe0c0a0fc0694c1555eb6ca49a97a12d07a0d02",
     "hashes": {
-      "execution_sha256": "6f0a213589d37798f9abfdde3945429663b85a621002f6fe58dbe7628f4f6138",
-      "prepared_state_sha256": "efef251935086250d17d97acdb8a91d6eaa31c2cad85ba0b8c3a4315ba28294f",
-      "protocol_at_prepare_sha256": "9ca5ec5a8c8a2677a7e56990d0b619f491741cf40a4379995345e7ab3063a710",
-      "protocol_sha256": "b9fa7429506efba607e8fa7ad710b537265f93c0d5f14b64ed974bdf36699ce8",
+      "execution_sha256": "4ce46337fbab3ef3eca86b7e0cea3fce195feadb3e472593ad74fd1581c5f966",
+      "prepared_state_sha256": "3f07a3713b85cbc9c73431fe2b7b3e02a4582488199be98a428caec3f6fe1398",
+      "protocol_at_prepare_sha256": "2998be627f0499eefd03ba23200c618f134cf0a4401a70ba3663c58f595f11f2",
+      "protocol_sha256": "45bf0dfcfb9247a1f6f57ad963deb7877b2135d23acb56be16a2b446a5d7d218",
       "system_build_sha256": "7f242b94a56a8047054ebbac412dd56bd0b3567d96288c14b0ca8820a49ab393"
     },
     "profile": {
       "profile_id": "explicit-rest2-ligand-v1",
       "profile_schema_version": 5,
-      "sha256": "3d569d5e6e94ed9c8e82ffb1e8919f907df94319faf8406d0c0bc9b731ebab86"
+      "sha256": "9e56bc55832389f40ad55dff59f14ae1a14a872ea9b21428fd3eba537db64f4a"
     },
     "resolved": {
       "constraints": "HBonds",
@@ -87,8 +87,8 @@
         0.308641975308642,
         0.25
       ],
-      "production.duration_per_segment_ps": 2000.0,
-      "production.duration_per_segment_source": "2 ns",
+      "production.duration_per_segment_ps": 5000.0,
+      "production.duration_per_segment_source": "5 ns",
       "production.method": "rest2",
       "production.tau_values": [
         0.0,
@@ -106,18 +106,18 @@
     }
   },
   "rest2_peptide_pdb": {
-    "canonical_json_sha256": "bb0172c5f07387363b1b698c5ddb0530f85d1f60d7d8fea911d4a6431241ad83",
+    "canonical_json_sha256": "d3008933760e9d1f512d5b9e6b9236439f1dbce20a7fe833bae1a03d7e250243",
     "hashes": {
-      "execution_sha256": "6f0a213589d37798f9abfdde3945429663b85a621002f6fe58dbe7628f4f6138",
-      "prepared_state_sha256": "4a2a641a79228f39346aed063c8d3d85a1702f92c306dec3483c7d79812d7f2f",
-      "protocol_at_prepare_sha256": "9ca5ec5a8c8a2677a7e56990d0b619f491741cf40a4379995345e7ab3063a710",
-      "protocol_sha256": "b9fa7429506efba607e8fa7ad710b537265f93c0d5f14b64ed974bdf36699ce8",
+      "execution_sha256": "4ce46337fbab3ef3eca86b7e0cea3fce195feadb3e472593ad74fd1581c5f966",
+      "prepared_state_sha256": "46fd45709a998a6c3f9646ceced785a0483ba5f417dc01924f9825d2ff6ef114",
+      "protocol_at_prepare_sha256": "e3220599535a35bb5e2591a419f17a7445996ec4787b1ef5816fbf5940805777",
+      "protocol_sha256": "ed10f04d5a5dcb22471a197e4d3ae75d88db653303771574b73733b66397e64a",
       "system_build_sha256": "39252363b5b5a289060b4fd273f25a102182e0396732435caecb3841b8281bbf"
     },
     "profile": {
       "profile_id": "explicit-rest2-peptide-v1",
       "profile_schema_version": 5,
-      "sha256": "e76faa83d29d323760186c71dca974fc7310254ccf9f0e20db68f88c1923ba81"
+      "sha256": "5c8d031ebfe915cbd25f618fccc7d92fa5f5fae49b5bfde9629ad4abc4d5bb76"
     },
     "resolved": {
       "constraints": "HBonds",
@@ -127,29 +127,21 @@
       "nonbonded.cutoff_nm": 1.0,
       "production.derived_scale_factors": [
         1.0,
-        0.8919753086419753,
-        0.7901234567901234,
-        0.6944444444444445,
-        0.6049382716049383,
-        0.5216049382716049,
-        0.44444444444444453,
-        0.37345679012345684,
-        0.308641975308642,
+        0.81,
+        0.6400000000000001,
+        0.48999999999999994,
+        0.36,
         0.25
       ],
-      "production.duration_per_segment_ps": 2000.0,
-      "production.duration_per_segment_source": "2 ns",
+      "production.duration_per_segment_ps": 5000.0,
+      "production.duration_per_segment_source": "5 ns",
       "production.method": "rest2",
       "production.tau_values": [
         0.0,
-        0.05555555555555555,
-        0.1111111111111111,
-        0.16666666666666666,
-        0.2222222222222222,
-        0.2777777777777778,
-        0.3333333333333333,
-        0.3888888888888889,
-        0.4444444444444444,
+        0.1,
+        0.2,
+        0.3,
+        0.4,
         0.5
       ],
       "solvation.padding_nm": 1.2

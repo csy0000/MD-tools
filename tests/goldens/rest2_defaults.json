@@ -7,7 +7,7 @@
       "minimum": 0.0
     },
     "explicit-rest2-peptide-v1": {
-      "count": 10,
+      "count": 6,
       "interpolation": "linear",
       "maximum": 0.5,
       "minimum": 0.0

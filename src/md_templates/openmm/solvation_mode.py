@@ -30,6 +30,8 @@ __all__ = [
     "DEFAULT_IMPLICIT_RADII",
     "SUPPORTED_IMPLICIT_MODELS",
     "SUPPORTED_RADII",
+    "RECOGNISED_BUT_UNVALIDATED_MODELS",
+    "RECOGNISED_BUT_UNVALIDATED_RADII",
     "EXPLICIT_ONLY_FIELDS",
     "IMPLICIT_ONLY_FIELDS",
     "SolvationError",
@@ -42,13 +44,21 @@ IMPLICIT = "implicit"
 DEFAULT_IMPLICIT_MODEL = "GBn2"
 DEFAULT_IMPLICIT_RADII = "mbondi3"
 
-#: The GB models OpenMM exposes. Only GBn2 is exercised end to end here; the others are accepted
-#: because refusing a model OpenMM supports would be arbitrary, but they are recorded explicitly so
-#: a bundle never implies GBn2 when it used something else.
-SUPPORTED_IMPLICIT_MODELS = ("HCT", "OBC1", "OBC2", "GBn", "GBn2")
+#: What the PUBLIC schema accepts. OpenMM exposing HCT/OBC/GBn and ParmEd accepting several radius
+#: sets does not make every pair a validated template: the energy identity in this repository is
+#: pinned for GBn2 with mbondi3 and for nothing else. Public acceptance is an evidence boundary, so
+#: it is drawn where the evidence is, not where the library's capability is.
+#:
+#: The internal builder in `implicit.py` remains extensible on purpose -- validating another pair
+#: should mean adding evidence and widening this tuple, not rewriting the construction.
+SUPPORTED_IMPLICIT_MODELS = ("GBn2",)
+SUPPORTED_RADII = ("mbondi3",)
 
-#: Radius sets ParmEd's `changeRadii` accepts.
-SUPPORTED_RADII = ("bondi", "mbondi", "mbondi2", "mbondi3", "amber6")
+#: Recognised by OpenMM/ParmEd but not validated here. Named separately so the refusal can say
+#: "not validated" rather than "unknown", which would be untrue and would send a reader looking for
+#: a typo.
+RECOGNISED_BUT_UNVALIDATED_MODELS = ("HCT", "OBC1", "OBC2", "GBn")
+RECOGNISED_BUT_UNVALIDATED_RADII = ("bondi", "mbondi", "mbondi2", "amber6")
 
 #: Fields that only mean something with explicit water. Under implicit solvent each one describes a
 #: quantity that does not exist.
@@ -75,7 +85,7 @@ class SolvationError(ValueError):
     """A solvation configuration that cannot describe one experiment."""
 
 
-def _canonical(value, allowed, field: str) -> str:
+def _canonical(value, allowed, field: str, recognised=()) -> str:
     """Match case-insensitively, store the canonical spelling.
 
     `gbn2`, `GBN2` and `GBn2` are the same model, and a bundle that records three spellings for one
@@ -83,10 +93,21 @@ def _canonical(value, allowed, field: str) -> str:
     """
     lowered = {item.lower(): item for item in allowed}
     key = str(value).strip().lower()
-    if key not in lowered:
+    if key in lowered:
+        return lowered[key]
+    if key in {item.lower() for item in recognised}:
         raise SolvationError(
-            f"solvation.{field} = {value!r} is not supported; implemented: {', '.join(allowed)}")
-    return lowered[key]
+            f"solvation.{field} = {value!r} is recognised but NOT VALIDATED in this repository.\n"
+            f"  The implicit-solvent energy identity is pinned for "
+            f"{DEFAULT_IMPLICIT_MODEL}/{DEFAULT_IMPLICIT_RADII} and for no other combination, so "
+            "accepting this one\n"
+            "  would ship a template with no evidence behind it. Public support follows the "
+            "evidence, not the library's\n"
+            f"  capability. Implemented: {', '.join(allowed)}."
+        )
+    raise SolvationError(
+        f"solvation.{field} = {value!r} is not a recognised {field}; "
+        f"implemented: {', '.join(allowed)}")
 
 
 def resolve_solvation(block: dict | None, *, defaults: dict | None = None) -> dict:
@@ -136,8 +157,9 @@ def resolve_solvation(block: dict | None, *, defaults: dict | None = None) -> di
     model = block.get("implicit_model", DEFAULT_IMPLICIT_MODEL)
     radii = block.get("radii", DEFAULT_IMPLICIT_RADII)
     resolved = {
-        "implicit_model": _canonical(model, SUPPORTED_IMPLICIT_MODELS, "implicit_model"),
-        "radii": _canonical(radii, SUPPORTED_RADII, "radii"),
+        "implicit_model": _canonical(model, SUPPORTED_IMPLICIT_MODELS, "implicit_model",
+                                     RECOGNISED_BUT_UNVALIDATED_MODELS),
+        "radii": _canonical(radii, SUPPORTED_RADII, "radii", RECOGNISED_BUT_UNVALIDATED_RADII),
         "salt_concentration_molar": float(block.get("salt_concentration_molar", 0.0)),
     }
     if resolved["salt_concentration_molar"] != 0.0:

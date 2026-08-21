@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from .models import PROTOCOL_SCHEMA_VERSION
+
 __all__ = ["migrate_manifests", "MigrationError"]
 
 
@@ -128,7 +130,10 @@ def migrate_manifests(system_doc: dict, experiment_doc: dict, *,
 
     integ = experiment_doc.get("integrator") or {}
     protocol: dict[str, Any] = {
-        "schema_version": 1,
+        # A migration produces a CURRENT document. Emitting the old version number would relabel a
+        # migrated protocol as one this build refuses, and the whole point of migrating is to stop
+        # carrying a version whose semantics no longer match the fields.
+        "schema_version": PROTOCOL_SCHEMA_VERSION,
         "integrator": {
             "kind": integ.get("kind", "langevin-middle"),
             "timestep": _q(integ.get("timestep_fs"), "fs"),
