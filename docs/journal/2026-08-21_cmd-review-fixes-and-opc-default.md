@@ -122,6 +122,12 @@ runs used separate devices.
 | NaN or Inf | none | none |
 | continuity hash | `6997c9e1f73fcb0249bf629d70f1a50a78d574cc30486a6d6a20ee8b9f135db1` | `de031be03a20cbe7929dc55c086eb3b236419f3b18cc1ef1469ed2319cd3563b` |
 
+> **The hashes below are superseded by
+> [`2026-08-21_deterministic-bundle-generation.md`](2026-08-21_deterministic-bundle-generation.md).**
+> They were produced from bundles built before hydrogen placement and ion placement were seeded, so
+> they document these runs without being reproducible by rebuilding them. The validations were
+> re-run from seeded bundles and pass every check unchanged; the physics is identical.
+
 Output hashes (sha256), recomputed under the final code:
 
 ```
