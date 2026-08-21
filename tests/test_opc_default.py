@@ -305,4 +305,6 @@ def test_generation_gives_each_route_its_own_water_without_any_override(tmp_path
     manifest = json.loads((ligand / "system_manifest.json").read_text())
     sources = manifest.get("sources") or manifest.get("value_sources") or {}
     if "forcefield.water" in sources:
-        assert "ligand" in sources["forcefield.water"], sources["forcefield.water"]
+        # the provenance names the force-field family that decided it, which is more specific than
+        # the solute label it used to name
+        assert "Sage" in sources["forcefield.water"], sources["forcefield.water"]

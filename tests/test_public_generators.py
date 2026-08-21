@@ -687,12 +687,34 @@ def test_the_barostat_moves_the_box_over_the_whole_npt_sequence(executed_project
 
 @pytest.mark.slow
 def test_a_stage_consumes_its_predecessors_endpoint(executed_project):
-    """Energies must be continuous across the hand-off, or velocities were dropped."""
+    """Energies must be continuous across the hand-off, or the coordinates were dropped.
+
+    The two numbers are close but not equal, and the gap is physical rather than numerical.
+    `min` reports a potential that INCLUDES its restraint term, and by the end of minimisation the
+    solute has moved away from the reference positions, so that term is nonzero. `eq_nvt` restrains
+    to the coordinates it just loaded, so its restraint term starts at exactly zero. The difference
+    is therefore min's final restraint energy: k = 1 kcal/mol/A^2 over 22 solute atoms, which is
+    single-digit to low-tens of kJ/mol depending on how far minimisation travelled.
+
+    That distance is not reproducible -- L-BFGS on the threaded CPU platform sums in a
+    nondeterministic order -- so a relative tolerance of 1e-4 (~3.7 kJ/mol here) sat right on top of
+    the expected restraint energy and this test failed intermittently. The tolerance below is an
+    absolute one, sized to bound the restraint term while leaving the real failure it exists to
+    catch two orders of magnitude outside it: a dropped hand-off restarts from the pre-minimisation
+    coordinates, which differ by roughly 4,000 kJ/mol.
+    """
     min_out = json.loads((executed_project / "min" / "min_results.json").read_text())
     nvt_in = json.loads((executed_project / "eq_nvt" / "eq_nvt_results.json").read_text())
-    assert nvt_in["potential_before_kj_mol"] == pytest.approx(
-        min_out["potential_after_kj_mol"], rel=1e-4), \
-        "eq_nvt did not start from min's endpoint"
+    gap = nvt_in["potential_before_kj_mol"] - min_out["potential_after_kj_mol"]
+    assert abs(gap) < 100.0, (
+        f"eq_nvt did not start from min's endpoint: {gap:,.1f} kJ/mol apart, which is far beyond "
+        "the restraint term that separates them")
+    # Releasing a restraint term can only lower the reported potential, so a materially positive
+    # gap would mean the difference is something other than the restraint. The 1 kJ/mol allowance
+    # is for evaluation noise on a threaded platform, not for a restraint-sized effect.
+    assert gap < 1.0, (
+        f"eq_nvt started {gap:,.3f} kJ/mol ABOVE min's endpoint; the restraint term cannot raise "
+        "it, so this gap is not the expected difference")
 
 
 @pytest.mark.slow
