@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import platform as _platform
+import random
 import subprocess
 import sys
 import time
@@ -229,10 +230,39 @@ def protonate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path]
             modeller.delete(
                 [a for a in modeller.topology.atoms() if a.element == elem.hydrogen]
             )
-        added = modeller.addHydrogens(
-            forcefield, pH=float(pcfg["ph"]), variants=pcfg["variants"]
-        )
-        note = f"addHydrogens at pH {pcfg['ph']}"
+        # `addHydrogens` is nondeterministic twice over, and both halves have to be pinned or a
+        # bundle cannot be rebuilt. It places each new hydrogen from a RANDOM direction drawn from
+        # Python's global `random` -- unseeded, repeat calls move hydrogens by up to 0.18 nm -- and
+        # it then relaxes them with a minimisation whose threaded floating-point reductions are
+        # themselves order-dependent, leaving ~1e-4 nm of drift even once the RNG is fixed.
+        #
+        # A tenth of a nanometre on a hydrogen is not a rounding error: the box is sized from the
+        # solute's extent, so it changes the box, and a box change of 0.04 Angstrom was enough to
+        # add or drop one whole water molecule between builds. Bundle hashes, relocation checks and
+        # every "which value did I choose?" provenance comparison depend on this being stable.
+        #
+        # Seeding alone leaves the floating-point half, so the relaxation runs on the Reference
+        # platform, which is single-threaded and reproducible. Together these are bit-identical
+        # across builds. Reference is slower, but this minimises only the added hydrogens of a
+        # solute -- a macrocycle or a small peptide here -- so the cost is seconds.
+        from .seeds import DEFAULT_MASTER_SEED, derive_seed
+
+        master = (cfg.get("run") or {}).get("seed")
+        hydrogen_seed = derive_seed(
+            int(master if master is not None else DEFAULT_MASTER_SEED), "structure/protonation")
+        from openmm import Platform
+
+        reference = Platform.getPlatformByName("Reference")
+        state = random.getstate()
+        random.seed(hydrogen_seed)
+        try:
+            added = modeller.addHydrogens(
+                forcefield, pH=float(pcfg["ph"]), variants=pcfg["variants"], platform=reference
+            )
+        finally:
+            random.setstate(state)
+        note = (f"addHydrogens at pH {pcfg['ph']}, seed {hydrogen_seed}, "
+                "relaxed on the Reference platform for reproducibility")
 
     out_pdb = out_dir / "solute_h.pdb"
     with out_pdb.open("w") as fh:

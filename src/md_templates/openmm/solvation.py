@@ -10,6 +10,8 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+import contextlib
+import random
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
@@ -252,6 +254,26 @@ def resolve_packing_model(water_model: str) -> tuple[str, bool]:
     )
 
 
+#: `Modeller.addSolvent` chooses WHICH water molecules to replace with ions using Python's global
+#: `random`, and OpenMM 8.5.2 exposes no `randomSeed` parameter to control it. Unseeded, two builds
+#: from byte-identical configuration produce different bundles: the same water count and the same
+#: Hamiltonian in form, but different coordinates and different ion sites, so `system.xml` and
+#: `topology.pdb` never match. That silently undercuts every bundle hash, relocation check and
+#: provenance comparison in this package -- "which value did I choose?" cannot be answered by
+#: comparing two bundles if rebuilding the same one gives a different answer each time.
+#:
+#: Seeding the global module is the only lever available, so it is taken deliberately and put back:
+#: the previous state is restored on the way out, so this changes solvation and nothing else.
+@contextlib.contextmanager
+def _seeded_global_random(seed: int):
+    state = random.getstate()
+    random.seed(int(seed))
+    try:
+        yield
+    finally:
+        random.setstate(state)
+
+
 def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] = None,
             route: Optional[str] = None) -> dict:
     """Solvate in a rhombic-dodecahedron box with ``padding_nm`` of water and NaCl at 0.15 M.
@@ -279,17 +301,25 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
     if water_note is not None:
         print(f"  solvation: {water_note['reason']}", flush=True)
     packing_model, substituted = resolve_packing_model(water_model)
-    modeller.addSolvent(
-        forcefield,
-        model=packing_model,
-        boxVectors=unit.Quantity(
-            tuple(Vec3(*v) for v in geometry["box_vectors_nm"]), unit.nanometer
-        ),
-        positiveIon=scfg["positive_ion"],
-        negativeIon=scfg["negative_ion"],
-        ionicStrength=float(scfg["ionic_strength_molar"]) * unit.molar,
-        neutralize=bool(scfg["neutralize"]),
-    )
+    # Derived from the run's master seed like every other stream, so solvation is part of the
+    # seed map rather than an unrecorded source of variation.
+    from .seeds import DEFAULT_MASTER_SEED, derive_seed
+
+    master = (cfg.get("run") or {}).get("seed")
+    solvation_seed = derive_seed(int(master if master is not None else DEFAULT_MASTER_SEED),
+                                 "structure/solvation")
+    with _seeded_global_random(solvation_seed):
+        modeller.addSolvent(
+            forcefield,
+            model=packing_model,
+            boxVectors=unit.Quantity(
+                tuple(Vec3(*v) for v in geometry["box_vectors_nm"]), unit.nanometer
+            ),
+            positiveIon=scfg["positive_ion"],
+            negativeIon=scfg["negative_ion"],
+            ionicStrength=float(scfg["ionic_strength_molar"]) * unit.molar,
+            neutralize=bool(scfg["neutralize"]),
+        )
 
     topology = modeller.topology
     # the solute must still be the first n_solute atoms
@@ -326,6 +356,7 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
         # The model that was SIMULATED (assigned by the force field) and the model whose
         # pre-equilibrated box supplied the starting coordinates. When these differ the
         # substitution is recorded rather than left for a reader to infer.
+        "solvation_seed": solvation_seed,
         "water_model": water_model,
         "water_model_requested": scfg["water_model"],
         "water_model_reconciled": water_note,
