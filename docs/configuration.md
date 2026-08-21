@@ -331,6 +331,41 @@ was a restart. It now has the contract REST2 already had, built on the same `run
 Re-invoking the stage launcher continues the same run in the same directory. It never starts a
 sibling run and calls that continuation.
 
+**What continuity is checked against.** `cmd_schema_version` is 2. A fingerprint of the resolved
+configuration was not enough: it did not bind the System or the topology that would actually be
+integrated, so a resume could continue a *different* Hamiltonian under the same run name. The
+continuity record now hashes the serialized System, the topology, the bundle identity, the
+forcefield provenance, the restraint convention above, and the ordered atom identity -- index,
+chain, residue id, residue name, atom name and element -- so a reordered or re-parameterised
+system is refused rather than appended to.
+
+**What happens to damaged outputs.** Before anything is opened for append, every committed stream
+is compared against the watermark in `committed.json`:
+
+* **longer than the watermark** -- a tail written after the last commit, i.e. the crash. It is
+  truncated back to the watermark. Trajectories are cut on real record boundaries (see below), logs
+  are rewritten atomically.
+* **shorter than the watermark** -- history that was committed and is now missing. This is
+  **refused**, not padded and not silently re-run: the run's own record says frames existed that no
+  longer do, and quietly continuing would produce a trajectory with an unannounced hole.
+
+DCD truncation reads the format rather than computing it. An OpenMM frame is three coordinate
+blocks, and a *periodic* frame carries a 48-byte unit cell inside Fortran record markers -- 56 bytes
+-- before them. Periodicity cannot be inferred from the solvent mode either: `DCDReporter` with an
+`atomSubset` takes its box vectors from the topology, so a selected-atom trajectory written with
+`enforcePeriodicBox=False` still carries a unit cell when the topology has one. The flag is read
+from the file, every record marker is checked against its partner, and both header fields -- the
+frame count at offset 8 and the last step at offset 20 -- are updated together so the frame count
+and the time axis cannot disagree. A file that does not match this structure, including a
+big-endian one, is refused rather than edited.
+
+**One invocation per run directory.** A segmented stage holds an exclusive `flock` on its run
+directory for its lifetime and raises `RunDirectoryBusy` rather than interleaving writes with
+another invocation. Without it two concurrent invocations produced an invocation history of
+`[1000, 2000, 2000]` -- the accounting recorded a segment twice because both processes committed.
+The invocation record, the watermarks and the continuity hash are written inside the *same* atomic
+commit as the data, so the accounting cannot drift from what is on disk.
+
 ```bash
 CMD_NUMBER_OF_SEGMENTS=2 ./run_all.sh      # equilibrate once, then two cMD segments
 cd cMD_1 && ./cMD_1.sh                     # add one more segment, later
@@ -387,6 +422,34 @@ min -> eq -> cMD_1 -> REST2_1
 ```
 
 There is no `eq_npt_1` or `eq_npt_2` and there cannot be.
+
+**`eq` is equilibration, not a placeholder.** It is 20 ps of real restrained dynamics at constant
+temperature -- the same wall-clock equilibration the explicit graph spends across `eq_nvt`,
+`eq_npt_1` and `eq_npt_2`, collapsed into one stage. What it cannot carry is an *ensemble label*:
+with no volume there is no NVT/NPT distinction to make and no barostat to attach, so the stage is
+named for what it does rather than for an ensemble it cannot have. The solute is positionally
+restrained throughout and released at `cMD_1`, which is why the potential energy steps at that
+boundary -- the restraint term leaves the Hamiltonian.
+
+**Restraint distance is measured differently in each mode, and the difference is not cosmetic.**
+
+| mode | expression | why |
+|---|---|---|
+| explicit | `periodicdistance(x, y, z, x0, y0, z0)^2` | minimum image: an atom that wanders across a box face is measured to its own reference point, not dragged the width of the box back to it |
+| implicit | `(x-x0)^2 + (y-y0)^2 + (z-z0)^2` | plain Cartesian: there is no box, so there is no image to minimise over |
+
+Using `periodicdistance` in implicit solvent is wrong twice over. The restraint reads OpenMM's
+*default* box vectors, which a nonperiodic System still carries and which mean nothing, so the
+restraint energy depends on a number the protocol never chose. And the restraint Force itself then
+reports periodic boundary use, which propagates: a System that declared no box acquires one through
+its own restraint, and `System.usesPeriodicBoundaryConditions()` flips from `False` to `True` the
+moment the restraint is added. The expression is therefore selected from the System *before* it is
+modified, and the resulting System is re-checked afterwards -- if adding a restraint changed the
+periodicity, generation stops rather than continuing under a Hamiltonian nobody asked for.
+
+The convention actually used is recorded per stage as `restraint_convention`, either
+`cartesian (nonperiodic)` or `minimum-image (periodicdistance)`, and it is bound into the cMD
+continuity hash: a run cannot be resumed across a change to it.
 
 #### The construction path is part of the Hamiltonian
 

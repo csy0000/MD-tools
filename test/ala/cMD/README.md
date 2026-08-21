@@ -12,6 +12,8 @@ segment boundary, checkpoint restart, append behaviour, or monotonic runtime ind
 | solvent | ff19SB / OPC box, 0.15 M NaCl, PME | ff19SB / GBn2 with mbondi3 |
 | stages | min, eq_nvt, eq_npt_1, eq_npt_2, cMD_1 | **min, eq, cMD_1** |
 | production ensemble | NPT, 300 K, 1 bar | NVT, 300 K |
+| equilibration | 10 ps NVT + 10 ps restrained NPT + 10 ps free NPT | **20 ps restrained `eq`**, no ensemble label, no barostat |
+| restraint distance | minimum image (`periodicdistance`) | **plain Cartesian** — no box, so no image to minimise over |
 | timestep | 4 fs, HMR to 3.024 amu | 2 fs, no HMR |
 | steps for 1 ns | 250,000 | 500,000 |
 | volume / density | recorded | **not applicable** and recorded as null |
@@ -28,6 +30,12 @@ cd run && CMD_NUMBER_OF_SEGMENTS=2 ./run_all.sh
 
 Equilibration runs once; the driver then invokes the cMD stage the requested number of times. To add
 segments later, invoke `cMD_1/cMD_1.sh` directly — see `*/extension/`.
+
+Both modes equilibrate for the same 20 ps. The implicit graph is shorter because it has no box to
+relax, not because it skips equilibration: `eq` is real restrained dynamics at constant temperature.
+It simply cannot be labelled NVT or NPT, since without a volume there is no distinction to make.
+The solute is restrained through `eq` and released at `cMD_1`, so the potential energy steps at that
+boundary by the restraint term — expected, not drift.
 
 Select a GPU explicitly and pin the device ordering, or the index you record will not be the device
 you used:

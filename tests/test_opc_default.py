@@ -150,3 +150,63 @@ def test_the_active_alanine_examples_use_opc():
         profile = document.get("profile")
         if isinstance(profile, str) and profile.startswith("explicit-"):
             assert profile.endswith("-v2"), f"{path} names {profile}"
+
+
+# ---------------------------------------------------------------------------------------------
+# the two water fields must agree about how many sites water has
+# ---------------------------------------------------------------------------------------------
+
+def test_a_three_site_forcefield_is_not_packed_with_four_site_geometry():
+    """The regression that moving the default to OPC actually caused.
+
+    `forcefield.water` and `solvation.water_model` are independent settings. A manifest that names
+    a water force field but no packing model leaves the packing model at its default -- and once
+    that default became OPC, a config naming `tip3pfb.xml` was packed with 4-site geometry. OpenMM
+    then fails deep inside `addSolvent` with "No template found for residue 3 (HOH). The residue
+    contains extra sites", which names neither setting involved.
+    """
+    from md_templates.openmm.solvation import reconcile_water_model
+
+    model, note = reconcile_water_model("amber19/tip3pfb.xml", "opc")
+    assert model == "tip3pfb", "the packing model did not follow the force field"
+    assert note is not None and "3-site" in note["reason"] and "4-site" in note["reason"]
+    assert note["requested_water_model"] == "opc"
+    assert note["resolved_water_model"] == "tip3pfb"
+
+
+@pytest.mark.parametrize("water_xml,water_model", [
+    ("amber19/opc.xml", "opc"),            # the new default pair
+    ("amber19/tip3pfb.xml", "tip3p"),      # the v1 pair: same site count, deliberately different
+    ("amber19/tip4pfb.xml", "tip4pew"),    # 4-site parameters packed from the 4-site stand-in box
+])
+def test_a_coherent_pair_is_left_exactly_as_declared(water_xml, water_model):
+    """Same site count is not a conflict. tip3pfb parameters from a tip3p box is the documented
+    arrangement, and reconciliation must not rewrite it -- doing so would change the resolved
+    configuration, and with it the hash, of every existing v1 run."""
+    from md_templates.openmm.solvation import reconcile_water_model
+
+    model, note = reconcile_water_model(water_xml, water_model)
+    assert model == water_model
+    assert note is None
+
+
+def test_an_unrecognised_water_resource_is_left_alone_rather_than_guessed():
+    from md_templates.openmm.solvation import reconcile_water_model
+
+    model, note = reconcile_water_model("custom/my_water.xml", "tip3p")
+    assert (model, note) == ("tip3p", None)
+
+
+def test_the_shipped_v1_and_v2_profiles_are_each_internally_coherent():
+    """Whatever a profile declares, its two water fields must describe the same model."""
+    from md_templates.openmm.solvation import reconcile_water_model
+    from md_templates.openmm.spec.resolve import list_profiles
+
+    for profile in list_profiles():
+        build = profile["defaults"]["build"]
+        water = build["forcefield"].get("water")
+        model = (build.get("solvation") or {}).get("water_model")
+        if not water or not model:
+            continue
+        _, note = reconcile_water_model(water, model)
+        assert note is None, f"{profile['profile_id']} is incoherent: {note['reason']}"

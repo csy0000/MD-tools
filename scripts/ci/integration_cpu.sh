@@ -149,5 +149,152 @@ if not info["validation"]["ok"]:
 print("  validated and inspected both bundles with the network disabled")
 PY
 
+# ------------------------------------------------------------------------------------------------
+# Staged cMD from the installed wheel. Steps 5-8 above drive the CHUNKED `md-openmm md` path; the
+# staged path (md-system-gen -> md-input-gen -> per-stage scripts, committed generations under one
+# run directory) is a separate persistence implementation and needs its own gate. Implicit solvent
+# keeps it cheap enough for CPU CI: 22 atoms, no water, no box.
+# ------------------------------------------------------------------------------------------------
+
+step "10. staged cMD: generate a tiny implicit project from the installed wheel"
+mkdir -p "$WORKDIR/staged"
+python -c "
+import shutil, pathlib
+from md_templates.openmm.schemas import shipped_system
+src = shipped_system('ace_ala_nme').parent / 'ace_ala_nme.pdb'
+shutil.copy2(src, pathlib.Path('$WORKDIR/staged/ace_ala_nme.pdb'))"
+
+cat > "$WORKDIR/staged/system.json" <<'JSON'
+{"system": {"id": "ace_ala_nme", "type": "protein"},
+ "solvation": {"mode": "implicit", "implicit_model": "GBn2", "radii": "mbondi3"},
+ "randomness": {"master_seed": 20260821}}
+JSON
+
+cat > "$WORKDIR/staged/md.json" <<'JSON'
+{"profile": "implicit-md-peptide-v1",
+ "protocol": {
+   "integrator": {"kind": "langevin-middle", "timestep": "2 fs", "temperature": "300 K",
+                  "friction": "1 /ps"},
+   "equilibration": {"protocol": "simple", "minimize_max_iterations": 50, "restrained": "0.2 ps"},
+   "production": {"method": "md", "duration_per_segment": "2 ps"}},
+ "minimization": {"restraint": {"force_constant_kcal_per_mol_angstrom2": 1.0}},
+ "randomness": {"master_seed": 20260821},
+ "execution": {"platform": "CPU",
+               "reporting": {"all_atom": "1 ps", "solute": "0.4 ps"}}}
+JSON
+
+cd "$WORKDIR/staged"
+md-system-gen -i ace_ala_nme.pdb -o bundle --config system.json
+md-input-gen --system bundle/system_manifest.json -o project --config md.json
+
+# the corrected implicit graph: min -> eq -> cMD_1, with no NVT/NPT stage and no barostat
+for want in min eq cMD_1; do
+  [ -d "project/$want" ] || fail "staged implicit project is missing stage $want"
+done
+for unwanted in eq_nvt eq_npt_1 eq_npt_2; do
+  if [ -d "project/$unwanted" ]; then fail "implicit project has $unwanted; it has no box to equilibrate"; fi
+done
+echo "  stages: $(ls project | tr '\n' ' ')"
+
+step "11. staged cMD: two committed generations, then a satisfied re-run is a no-op"
+(cd project && CMD_NUMBER_OF_SEGMENTS=2 ./run_all.sh >/dev/null)
+
+python - <<'PYEOF'
+import json, pathlib, sys
+run = pathlib.Path("project/cMD_1")
+committed = json.loads((run / "committed.json").read_text())
+if committed["invocations_completed"] < 2:
+    sys.exit(f"expected 2 committed generations, got {committed['invocations_completed']}")
+history = committed["invocation_history"]
+if history != sorted(set(history)) or len(history) != committed["invocations_completed"]:
+    sys.exit(f"invocation history is not a strictly increasing set: {history}")
+if committed.get("periodic") is not False:
+    sys.exit(f"implicit run reports periodic={committed.get('periodic')}; it has no box")
+if committed.get("box_volume_nm3") is not None:
+    sys.exit("implicit run recorded a box volume")
+print(f"  committed generations {committed['invocations_completed']}, history {history}, "
+      f"step {committed['step']}, periodic {committed['periodic']}")
+PYEOF
+
+(cd project/cMD_1 && CMD_NUMBER_OF_SEGMENTS=2 ./cMD_1.sh >/dev/null 2>&1) || true
+python - <<'PYEOF'
+import json, pathlib, sys
+c = json.loads(pathlib.Path("project/cMD_1/committed.json").read_text())
+if c["invocations_completed"] != 2:
+    sys.exit(f"a satisfied run committed again: {c['invocation_history']}")
+print(f"  re-running a satisfied cMD stage is a no-op: {c['invocation_history']}")
+PYEOF
+
+step "12. staged cMD: forced State fallback when the checkpoint is unusable"
+python - <<'PYEOF'
+import pathlib, sys
+run = pathlib.Path("project/cMD_1")
+checkpoints = sorted(run.rglob("*.chk"))
+states = [p for p in run.rglob("*.xml") if "state" in p.name.lower()]
+if not checkpoints:
+    sys.exit("no cMD checkpoint to corrupt; the fallback cannot be forced")
+if not states:
+    sys.exit("no serialized State beside the checkpoint; the fallback has nothing to fall back to")
+for chk in checkpoints:
+    chk.write_bytes(b"not a checkpoint")
+print(f"  corrupted {len(checkpoints)} checkpoint(s); State preserved: {states[0].name}")
+PYEOF
+
+(cd project/cMD_1 && CMD_NUMBER_OF_SEGMENTS=3 ./cMD_1.sh 2>&1) | tee "$WORKDIR/cmd_fallback.log" | tail -3
+grep -qiE "portable state|serialized state|state fallback" "$WORKDIR/cmd_fallback.log" \
+  || fail "the staged cMD State fallback was not announced when the checkpoint was unusable"
+python - <<'PYEOF'
+import json, pathlib, sys
+c = json.loads(pathlib.Path("project/cMD_1/committed.json").read_text())
+if c["invocations_completed"] != 3:
+    sys.exit(f"the fallback resume did not commit a third generation: {c['invocation_history']}")
+print(f"  recovered via the serialized State and committed generation 3: step {c['step']}")
+PYEOF
+
+step "13. staged cMD: crash tail recovery on the committed trajectory"
+python - <<'PYEOF'
+import pathlib, pickle, struct, sys
+from md_templates.openmm import dcdtail
+run = pathlib.Path("project/cMD_1")
+targets = sorted(run.glob("*.dcd"))
+if not targets:
+    sys.exit("no cMD trajectory to damage")
+before = {}
+for dcd in targets:
+    scan = dcdtail.frame_offsets(dcd)
+    end = scan["boundaries"][-1] if scan["boundaries"] else scan["data_start"]
+    before[dcd.name] = (scan["complete_frames"], dcd.read_bytes()[:end])
+    with dcd.open("ab") as handle:                  # a writer that died mid-frame
+        handle.write(struct.pack("<i", 4 * scan["n_atoms"]))
+        handle.write(b"\x00" * (2 * scan["n_atoms"]))
+    print(f"  appended a torn frame to {dcd.name} (periodic={scan['periodic']}, "
+          f"{scan['complete_frames']} committed frames)")
+pathlib.Path("tail_before.pkl").write_bytes(pickle.dumps(before))
+PYEOF
+
+(cd project/cMD_1 && CMD_NUMBER_OF_SEGMENTS=4 ./cMD_1.sh >/dev/null 2>&1) || true
+
+python - <<'PYEOF'
+import pathlib, pickle, sys
+from md_templates.openmm import dcdtail
+before = pickle.loads(pathlib.Path("tail_before.pkl").read_bytes())
+run = pathlib.Path("project/cMD_1")
+for name, (frames, prefix) in before.items():
+    dcd = run / name
+    scan = dcdtail.frame_offsets(dcd)
+    if scan["trailing_bytes"] != 0:
+        sys.exit(f"{name} still carries {scan['trailing_bytes']} torn bytes after recovery")
+    if scan["complete_frames"] < frames:
+        sys.exit(f"{name} lost committed history: {scan['complete_frames']} < {frames}")
+    # the committed frames must survive byte for byte; only header fields 8 and 20 may move
+    if dcd.read_bytes()[92:len(prefix)] != prefix[92:]:
+        sys.exit(f"{name}: recovery altered already-committed frames")
+    print(f"  {name}: torn tail removed, {frames} committed frames byte-identical, "
+          f"now {scan['complete_frames']}")
+print("  staged cMD crash/tail recovery verified")
+PYEOF
+rm -f tail_before.pkl
+cd "$WORKDIR/elsewhere"
+
 echo
 echo "CPU integration: PASSED"

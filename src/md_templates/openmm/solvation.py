@@ -173,6 +173,65 @@ _PACKING_MODEL = {
 #: Models `addSolvent` can build a box for directly.
 _NATIVE_PACKING_MODELS = frozenset({"tip3p", "spce", "tip4pew", "tip5p", "swm4ndp"})
 
+#: Site count per water model. The packing geometry and the parameters must agree on this number.
+#: A 4-site model packed into a 3-site box leaves its virtual sites unplaced; a 3-site force field
+#: handed a 4-site box has no template for the extra site and OpenMM fails with an opaque
+#: "No template found for residue (HOH) ... contains extra sites".
+_WATER_SITES = {
+    "tip3p": 3, "tip3pfb": 3, "opc3": 3, "spce": 3,
+    "tip4pew": 4, "tip4pfb": 4, "opc": 4,
+    "tip5p": 5, "swm4ndp": 5,
+}
+
+
+def water_model_for_forcefield(water_xml) -> Optional[str]:
+    """The water model an OpenMM water force-field resource parameterises, or None if unknown.
+
+    `amber19/opc.xml` -> `opc`. Returning None rather than guessing keeps an unrecognised resource
+    from being reconciled against a model it may not actually parameterise.
+    """
+    if not water_xml:
+        return None
+    stem = str(water_xml).replace("\\", "/").rsplit("/", 1)[-1]
+    if stem.lower().endswith(".xml"):
+        stem = stem[:-4]
+    stem = stem.lower()
+    return stem if stem in _WATER_SITES else None
+
+
+def reconcile_water_model(water_xml, water_model) -> tuple[str, Optional[dict]]:
+    """Make the packing model agree with the force field about how many sites water has.
+
+    `forcefield.water` and `solvation.water_model` are separate settings and either can be set
+    without the other -- a manifest that names a water force field but no packing model leaves the
+    packing model at its default, and since the default moved to OPC (4-site) that silently paired
+    a 3-site force field with a 4-site box.
+
+    The force field is the authority: it assigns the parameters, so it decides which model is being
+    simulated. When the two disagree on site count the packing model follows the force field, and
+    the substitution is returned so it lands in the recorded provenance rather than happening
+    quietly. Models of the same site count are left alone -- `tip3pfb` parameters packed from a
+    `tip3p` box is the documented, correct arrangement.
+    """
+    implied = water_model_for_forcefield(water_xml)
+    asked = str(water_model).lower() if water_model else None
+    if implied is None or asked is None or asked not in _WATER_SITES:
+        return water_model, None
+    if _WATER_SITES[implied] == _WATER_SITES[asked]:
+        return water_model, None
+    note = {
+        "requested_water_model": water_model,
+        "resolved_water_model": implied,
+        "water_forcefield": str(water_xml),
+        "reason": (
+            f"solvation.water_model={water_model!r} is {_WATER_SITES[asked]}-site but "
+            f"forcefield.water={water_xml!r} parameterises {implied!r}, which is "
+            f"{_WATER_SITES[implied]}-site. The force field assigns the parameters, so it decides "
+            f"the model; packing follows it."
+        ),
+    }
+    return implied, note
+
 
 def resolve_packing_model(water_model: str) -> tuple[str, bool]:
     """Return `(model addSolvent can build, whether a stand-in box was substituted)`.
@@ -215,7 +274,11 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
     solute_residues = [r.name for r in modeller.topology.residues()]
 
     geometry = _resolve_box(modeller, cfg)
-    packing_model, substituted = resolve_packing_model(scfg["water_model"])
+    water_model, water_note = reconcile_water_model(
+        (cfg.get("forcefield") or {}).get("water"), scfg["water_model"])
+    if water_note is not None:
+        print(f"  solvation: {water_note['reason']}", flush=True)
+    packing_model, substituted = resolve_packing_model(water_model)
     modeller.addSolvent(
         forcefield,
         model=packing_model,
@@ -263,7 +326,9 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
         # The model that was SIMULATED (assigned by the force field) and the model whose
         # pre-equilibrated box supplied the starting coordinates. When these differ the
         # substitution is recorded rather than left for a reader to infer.
-        "water_model": scfg["water_model"],
+        "water_model": water_model,
+        "water_model_requested": scfg["water_model"],
+        "water_model_reconciled": water_note,
         "water_packing_model": packing_model,
         "water_packing_substituted": substituted,
         "box_shape": scfg["box_shape"],
@@ -282,7 +347,7 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
             negative_ion=scfg.get("negative_ion"),
             requested_molar=scfg.get("ionic_strength_molar"),
         ),
-        "water_model_template": scfg["water_model"],
+        "water_model_template": water_model,
         "forcefield": ff_info,
     }
     (out_dir / "solvation.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
