@@ -27,11 +27,12 @@ system: {system_id: ggg, route: smiles, smiles: "O=C1CNC(=O)CNC(=O)CN1"}
 protocol:
   production:
     method: rest2
-    n_chunks: 2
-    chunk: 0.001 ns
-    scale_factors: [1.0, 0.5625, 0.25]
-    exchange_interval: 0.5 ps
-    relaxation: 1 ps
+    duration_per_segment: 0.001 ns
+    # tau is the source parameter; s = (1 - tau)^2. tau 0.0/0.25/0.5 is the old
+    # s ladder [1.0, 0.5625, 0.25] written in the current parameterisation.
+    tau_ladder: {minimum: 0.0, maximum: 0.5, count: 3, interpolation: linear}
+    enhanced_region: {type: solute}
+    exchange: {number_of_exchanges_per_segment: 2}
 execution: {platform: CPU}
 YAML
 
@@ -51,7 +52,7 @@ build:
 protocol:
   equilibration: {protocol: simple, minimize_max_iterations: 200, timestep: 1 fs,
                   nvt: 2 ps, npt: 2 ps, npt_free: 2 ps, box_average_last: 1 ps}
-  production: {method: md, n_chunks: 2, chunk: 0.001 ns}
+  production: {method: md, duration_per_segment: 0.001 ns}
 execution:
   platform: CPU
   reporting: {all_atom: 0.5 ps, solute: 0.5 ps, state: 0.5 ps, checkpoint: 0.5 ps}
@@ -196,39 +197,48 @@ for unwanted in eq_nvt eq_npt_1 eq_npt_2; do
 done
 echo "  stages: $(ls project | tr '\n' ' ')"
 
-step "11. staged cMD: two committed generations, then a satisfied re-run is a no-op"
+step "11. staged cMD: two committed generations in one run directory"
 (cd project && CMD_NUMBER_OF_SEGMENTS=2 ./run_all.sh >/dev/null)
 
-python - <<'PYEOF'
-import json, pathlib, sys
-run = pathlib.Path("project/cMD_1")
-committed = json.loads((run / "committed.json").read_text())
-if committed["invocations_completed"] < 2:
-    sys.exit(f"expected 2 committed generations, got {committed['invocations_completed']}")
-history = committed["invocation_history"]
-if history != sorted(set(history)) or len(history) != committed["invocations_completed"]:
-    sys.exit(f"invocation history is not a strictly increasing set: {history}")
-if committed.get("periodic") is not False:
-    sys.exit(f"implicit run reports periodic={committed.get('periodic')}; it has no box")
-if committed.get("box_volume_nm3") is not None:
-    sys.exit("implicit run recorded a box volume")
-print(f"  committed generations {committed['invocations_completed']}, history {history}, "
-      f"step {committed['step']}, periodic {committed['periodic']}")
-PYEOF
+COMMITTED=project/cMD_1/run/restart/committed.json
+[ -f "$COMMITTED" ] || fail "no committed generation record at $COMMITTED"
 
-(cd project/cMD_1 && CMD_NUMBER_OF_SEGMENTS=2 ./cMD_1.sh >/dev/null 2>&1) || true
 python - <<'PYEOF'
 import json, pathlib, sys
-c = json.loads(pathlib.Path("project/cMD_1/committed.json").read_text())
+c = json.loads(pathlib.Path("project/cMD_1/run/restart/committed.json").read_text())
+if c["cmd_schema_version"] != 2:
+    sys.exit(f"cmd_schema_version is {c['cmd_schema_version']}, expected 2")
 if c["invocations_completed"] != 2:
-    sys.exit(f"a satisfied run committed again: {c['invocation_history']}")
-print(f"  re-running a satisfied cMD stage is a no-op: {c['invocation_history']}")
+    sys.exit(f"expected 2 committed generations, got {c['invocations_completed']}")
+h = c["invocation_history"]
+if len(h) != 2:
+    sys.exit(f"invocation history has {len(h)} records for 2 generations: {h}")
+if h[0]["started_absolute_step"] != 0:
+    sys.exit(f"the first invocation did not start at step 0: {h[0]}")
+for a, b in zip(h, h[1:]):
+    if a["ended_absolute_step"] != b["started_absolute_step"]:
+        sys.exit(f"a gap or overlap between invocations: {a} -> {b}")
+for r in h:
+    if r["started_absolute_step"] >= r["ended_absolute_step"]:
+        sys.exit(f"an invocation did not advance: {r}")
+if c["periodic"] is not False:
+    sys.exit(f"implicit run reports periodic={c['periodic']}; it has no box")
+if c.get("box_volume_nm3") is not None:
+    sys.exit("implicit run recorded a box volume")
+if not c.get("continuity_hash"):
+    sys.exit("no continuity hash was committed")
+conv = c["continuity"].get("restraint_convention")
+if conv not in (None, "cartesian (nonperiodic)"):
+    sys.exit(f"implicit restraint convention is {conv!r}, not the nonperiodic Cartesian one")
+print(f"  2 generations, step {c['absolute_step']}, t {c['absolute_time_ps']:.1f} ps, "
+      f"periodic {c['periodic']}, schema v{c['cmd_schema_version']}")
+print(f"  invocations: {[(r['invocation'], r['started_absolute_step'], r['ended_absolute_step']) for r in h]}")
 PYEOF
 
 step "12. staged cMD: forced State fallback when the checkpoint is unusable"
 python - <<'PYEOF'
 import pathlib, sys
-run = pathlib.Path("project/cMD_1")
+run = pathlib.Path("project/cMD_1/run")
 checkpoints = sorted(run.rglob("*.chk"))
 states = [p for p in run.rglob("*.xml") if "state" in p.name.lower()]
 if not checkpoints:
@@ -240,15 +250,18 @@ for chk in checkpoints:
 print(f"  corrupted {len(checkpoints)} checkpoint(s); State preserved: {states[0].name}")
 PYEOF
 
-(cd project/cMD_1 && CMD_NUMBER_OF_SEGMENTS=3 ./cMD_1.sh 2>&1) | tee "$WORKDIR/cmd_fallback.log" | tail -3
-grep -qiE "portable state|serialized state|state fallback" "$WORKDIR/cmd_fallback.log" \
+(cd project/cMD_1 && ./cMD_1.sh 2>&1) | tee "$WORKDIR/cmd_fallback.log" | tail -4
+grep -qiE "state" "$WORKDIR/cmd_fallback.log" \
   || fail "the staged cMD State fallback was not announced when the checkpoint was unusable"
 python - <<'PYEOF'
 import json, pathlib, sys
-c = json.loads(pathlib.Path("project/cMD_1/committed.json").read_text())
+c = json.loads(pathlib.Path("project/cMD_1/run/restart/committed.json").read_text())
 if c["invocations_completed"] != 3:
-    sys.exit(f"the fallback resume did not commit a third generation: {c['invocation_history']}")
-print(f"  recovered via the serialized State and committed generation 3: step {c['step']}")
+    sys.exit(f"the fallback resume did not commit a third generation: {c['invocations_completed']}")
+if c["restart_source_for_this_segment"] != "state":
+    sys.exit(f"segment 3 restarted from {c['restart_source_for_this_segment']!r}, not the State; "
+             "either the corrupted checkpoint was used or the fallback did not engage")
+print(f"  recovered via the serialized State: generation 3, step {c['absolute_step']}")
 PYEOF
 
 step "13. staged cMD: crash tail recovery on the committed trajectory"
@@ -267,12 +280,12 @@ for dcd in targets:
     with dcd.open("ab") as handle:                  # a writer that died mid-frame
         handle.write(struct.pack("<i", 4 * scan["n_atoms"]))
         handle.write(b"\x00" * (2 * scan["n_atoms"]))
-    print(f"  appended a torn frame to {dcd.name} (periodic={scan['periodic']}, "
-          f"{scan['complete_frames']} committed frames)")
+    print(f"  tore {dcd.name}: periodic={scan['periodic']}, "
+          f"{scan['complete_frames']} committed frames")
 pathlib.Path("tail_before.pkl").write_bytes(pickle.dumps(before))
 PYEOF
 
-(cd project/cMD_1 && CMD_NUMBER_OF_SEGMENTS=4 ./cMD_1.sh >/dev/null 2>&1) || true
+(cd project/cMD_1 && ./cMD_1.sh >/dev/null 2>&1) || fail "the run did not survive a torn trajectory tail"
 
 python - <<'PYEOF'
 import pathlib, pickle, sys
@@ -286,12 +299,12 @@ for name, (frames, prefix) in before.items():
         sys.exit(f"{name} still carries {scan['trailing_bytes']} torn bytes after recovery")
     if scan["complete_frames"] < frames:
         sys.exit(f"{name} lost committed history: {scan['complete_frames']} < {frames}")
-    # the committed frames must survive byte for byte; only header fields 8 and 20 may move
+    # frames committed before the tear must survive byte for byte; only the header fields at
+    # offsets 8 and 20 are rewritten, so compare from the end of the header onward
     if dcd.read_bytes()[92:len(prefix)] != prefix[92:]:
         sys.exit(f"{name}: recovery altered already-committed frames")
     print(f"  {name}: torn tail removed, {frames} committed frames byte-identical, "
           f"now {scan['complete_frames']}")
-print("  staged cMD crash/tail recovery verified")
 PYEOF
 rm -f tail_before.pkl
 cd "$WORKDIR/elsewhere"
