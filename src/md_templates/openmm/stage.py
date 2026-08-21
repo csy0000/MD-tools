@@ -188,7 +188,7 @@ def _runtime_cfg(payload: dict) -> dict:
 #: Bumped when the continuity contract gains or changes a field. A run committed under an older
 #: contract cannot be compared field-by-field against this one, so it is refused with guidance
 #: rather than silently reinterpreted.
-CMD_CONTINUITY_VERSION = 2
+CMD_CONTINUITY_VERSION = 3
 
 
 def _atom_identity(topology, indices) -> str:
@@ -247,23 +247,52 @@ def _cmd_continuity(payload: dict, system, *, here: Path, topology=None,
     topology_file = here / payload["input"]["topology"]
     bundle = here / ".." / "inputs"
 
+    # The force-field FILE, not only a projection of it. The projection is kept because it is what a
+    # human reads in a refusal message, but a projection cannot notice a change to a field it does
+    # not name -- and every field it does not name is still part of the Hamiltonian.
     forcefield = {}
+    forcefield_sha = None
     forcefield_path = bundle / "forcefield.json"
     if forcefield_path.is_file():
         record = json.loads(forcefield_path.read_text())
         forcefield = {k: record.get(k) for k in
                       ("protein_forcefield", "water", "ligand", "ligand_charge_method",
                        "implicit_model", "radii", "route", "input_route")}
+        forcefield_sha = _file_sha256(forcefield_path)
 
+    # Likewise the manifest: its exact bytes, plus the identity fields worth naming in a message.
     manifest_identity = None
     manifest_path = bundle / "system_manifest.json"
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text())
+        system_block = manifest.get("system") or {}
         manifest_identity = {
-            "system_id": (manifest.get("system") or {}).get("id"),
-            "input_sha256": (manifest.get("system") or {}).get("input_sha256"),
+            "system_id": system_block.get("id"),
+            "input_sha256": system_block.get("input_sha256"),
             "prepared_through": manifest.get("prepared_through"),
+            "manifest_sha256": _file_sha256(manifest_path),
+            # whichever identity/configuration hash the bundle records for itself
+            "configuration_hash": (
+                manifest.get("configuration_hash")
+                or manifest.get("config_hash")
+                or (manifest.get("hashes") or {}).get("system_build_sha256")
+                or (manifest.get("identity") or {}).get("hash")),
+            "water_policy": {
+                k: (manifest.get("water_policy") or {}).get(k)
+                for k in ("water", "water_model", "basis", "mixed")
+            } if manifest.get("water_policy") else None,
         }
+
+    # The predecessor State is how this cMD chain began: immutable provenance, bound by its exact
+    # bytes rather than by a pathname that can be repointed at a different equilibration. `absent`
+    # rather than None so that DELETING it is a visible change and gets refused, instead of quietly
+    # comparing equal to a run that never had one.
+    predecessor_path = here / payload["input"]["state"]
+    predecessor = {
+        "path": payload["input"]["state"],
+        "produced_by": payload["input"]["produced_by"],
+        "sha256": (_file_sha256(predecessor_path) if predecessor_path.is_file() else "absent"),
+    }
 
     return {
         "contract_version": CMD_CONTINUITY_VERSION,
@@ -273,6 +302,7 @@ def _cmd_continuity(payload: dict, system, *, here: Path, topology=None,
         "topology_sha256": _file_sha256(topology_file),
         "bundle": manifest_identity,
         "forcefield": forcefield,
+        "forcefield_sha256": forcefield_sha,
         "n_particles": system.getNumParticles(),
         "n_constraints": system.getNumConstraints(),
         "periodic": bool(system.usesPeriodicBoundaryConditions()),
@@ -280,6 +310,8 @@ def _cmd_continuity(payload: dict, system, *, here: Path, topology=None,
         "barostat_pressure": barostat.get("pressure"),
         "integrator": {k: integrator.get(k) for k in
                        ("type", "timestep", "temperature", "friction")},
+        "restraint_active": bool(restraint) and restraint.get("selection") not in (None, "none"),
+        "restraint_selection": restraint.get("selection"),
         "restraint_force_constant": restraint.get("force_constant_kcal_per_mol_angstrom2"),
         "restraint_convention": payload.get("_restraint_convention"),
         "steps_per_segment": int(payload["steps"]),
@@ -292,6 +324,17 @@ def _cmd_continuity(payload: dict, system, *, here: Path, topology=None,
         "selected_atoms_fingerprint": (
             _atom_identity(topology, selected_atoms) if topology is not None and selected_atoms
             else None),
+        # WHICH atoms land in WHICH file, in what order. A permutation that preserves the count
+        # produces a trajectory whose frames are silently scrambled relative to the first segment's.
+        "output_atom_ordering": {
+            "all_atom": (_atom_identity(topology, range(topology.getNumAtoms()))
+                         if topology is not None else None),
+            "selected_atoms": (
+                _atom_identity(topology, selected_atoms)
+                if topology is not None and selected_atoms else None),
+        },
+        "predecessor": predecessor,
+        # kept as flat fields too: they are what the refusal message quotes
         "input_state": payload["input"]["state"],
         "produced_by": payload["input"]["produced_by"],
     }
@@ -436,18 +479,32 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
         restart_source = runstate.load_restart(sim, continuation["restore_from"])
         from . import cmd_segments as _cmd
 
-        sim.currentStep = int(continuation["absolute_step"])
-        _cmd.verify_restart_matches_commit(sim, {
-            "absolute_step": continuation["absolute_step"],
-            "absolute_time_ps": continuation.get("absolute_time_ps")})
+        # Read what the restart ACTUALLY restored before touching anything. Assigning the step
+        # first -- which is what this used to do -- writes the expected value into the Context and
+        # then "verifies" it against itself, so a checkpoint from the wrong generation passed.
+        position = _cmd.read_restart_position(sim)
+        verification = _cmd.verify_restart_matches_commit(
+            sim,
+            {"absolute_step": continuation["absolute_step"],
+             "absolute_time_ps": continuation.get("absolute_time_ps")},
+            position=position)
+        # Only now, and only when the restart did not carry a step of its own.
+        restart_provenance = _cmd.restore_restart_step(sim, verification,
+                                                       restart_source=restart_source)
         coords_origin = {"coords": str(continuation["restore_from"]),
                          "kind": f"committed generation ({restart_source})",
                          "velocities": "restored from the committed generation",
-                         "velocity_seed": None}
+                         "velocity_seed": None,
+                         "restart_provenance": restart_provenance}
         print(f"  {stage}: continuing from generation "
-              f"{continuation['segments_completed']} via {restart_source}")
+              f"{continuation['segments_completed']} via {restart_source} "
+              f"(step {restart_provenance['started_absolute_step']:,} from "
+              f"{restart_provenance['step_origin']})")
+        if not restart_provenance["bitwise_continuation"]:
+            print(f"  {stage}: {restart_provenance['note']}", flush=True)
     else:
         restart_source = "predecessor state"
+        restart_provenance = None
         coords_origin = _apply_coords(sim, here / payload["input"]["state"],
                                       require_velocities=(stage != "min"),
                                       velocity_seed=int(stage_seeds["velocity"]))
@@ -540,7 +597,13 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
         # that the next invocation removes.
         from . import cmd_segments, runstate
 
+        from .faults import crash_point
+
+        # Boundary 1: reporters still open, so the trajectory runs past the last commit.
+        crash_point("before_reporters_close")
         cmd_segments.close_reporters(sim)
+        # Boundary 2: streams end exactly at the boundary, but nothing is saved for it.
+        crash_point("after_reporters_close")
 
         generation = int(continuation["segments_completed"]) + 1
         absolute_step = int(continuation["absolute_step"]) + steps
@@ -560,7 +623,10 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
             started_step=int(continuation["absolute_step"]),
             started_time_ps=float(continuation.get("absolute_time_ps") or 0.0),
             invocation={"steps": steps, "stage": stage},
-            extra={"periodic": periodic})
+            extra={"periodic": periodic, "restart_provenance": restart_provenance})
+        # Boundary 5: committed, but run_state.json still describes the previous generation.
+        crash_point("after_atomic_commit")
+
         # reconciled from the commit, never the other way round
         runstate.record_invocation(run_dir, {
             "segment": generation,
@@ -575,6 +641,7 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
             "absolute_step": absolute_step,
             "absolute_time_ps": absolute_time_ps,
             "restart_source": restart_source,
+            "restart_provenance": restart_provenance,
             "continued": not continuation["first_segment"],
             "watermarks": committed["watermarks"],
             "tail_recovery": continuation.get("tail_recovery"),

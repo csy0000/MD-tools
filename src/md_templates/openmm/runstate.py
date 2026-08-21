@@ -524,6 +524,11 @@ def save_restart(sim, gdir: Path, *, replica: Optional[int] = None) -> tuple[Pat
     os.replace(tmp_chk, gdir / chk_name)
     _fsync_dir(gdir)
 
+    # Boundary 3: the checkpoint exists, the portable State does not. Inert unless armed.
+    from .faults import crash_point
+
+    crash_point("after_checkpoint_member")
+
     state = sim.context.getState(getPositions=True, getVelocities=True, getParameters=True,
                                  enforcePeriodicBox=False)
     atomic_write_bytes(gdir / state_name, XmlSerializer.serialize(state).encode("utf-8"))

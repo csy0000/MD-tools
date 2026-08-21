@@ -39,6 +39,8 @@ from typing import Optional
 
 __all__ = [
     "CMD_RUN_STATE_VERSION",
+    "UnsupportedCmdSchema",
+    "assert_supported_cmd_schema",
     "CommittedOutputCorrupt",
     "RunDirectoryBusy",
     "hold_run_lock",
@@ -47,6 +49,8 @@ __all__ = [
     "continuity_hash",
     "inspect_committed_outputs",
     "verify_restart_matches_commit",
+    "read_restart_position",
+    "restore_restart_step",
     "plan_segment",
     "prepare_continuation",
     "commit_segment",
@@ -54,7 +58,12 @@ __all__ = [
 ]
 
 #: Bumped when the persisted cMD run-state layout changes in a way an older reader would misread.
-CMD_RUN_STATE_VERSION = 2
+#: On-disk meaning of the cMD committed record. Version 3 completed the continuity contract: the
+#: predecessor State, the manifest and the force-field file are now bound by their exact bytes
+#: rather than by a pathname and a partial projection. A version-2 record cannot be reinterpreted
+#: as a version-3 one -- it never carried those identities, so "unchanged" could not be checked --
+#: and it is refused with regeneration guidance instead.
+CMD_RUN_STATE_VERSION = 3
 
 #: The reporting streams a cMD segment appends to. Each carries its own watermark.
 _STREAMS = ("all_atom", "selected_atoms", "state_log")
@@ -160,6 +169,7 @@ def prepare_continuation(run_dir: Path, *, continuity: dict, plan: dict) -> dict
         }
 
     record = runstate.committed_record(run_dir)
+    assert_supported_cmd_schema(run_dir, record)
     return {
         "first_segment": False,
         "segments_completed": int(record.get("generation", generation)),
@@ -170,6 +180,36 @@ def prepare_continuation(run_dir: Path, *, continuity: dict, plan: dict) -> dict
                        for stream in _STREAMS},
         "stored_invocations": len(stored.get("invocations", [])),
     }
+
+
+class UnsupportedCmdSchema(RuntimeError):
+    """A committed record written under an on-disk layout this build cannot verify."""
+
+
+def assert_supported_cmd_schema(run_dir: Path, record: dict) -> None:
+    """Refuse a committed record whose schema this build cannot check, before anything is opened.
+
+    Reinterpreting an older record as a current one is the failure this guards: version 2 bound the
+    predecessor State by pathname and the bundle by a partial projection, so a version-2 record has
+    nothing to compare the new identities against. Treating its absence as "unchanged" would mean a
+    resume silently skipped exactly the checks the version bump added.
+    """
+    if not record:
+        return
+    found = record.get("cmd_schema_version")
+    if found == CMD_RUN_STATE_VERSION:
+        return
+    raise UnsupportedCmdSchema(
+        f"{run_dir}: the committed record has cmd_schema_version {found!r}, and this build writes "
+        f"{CMD_RUN_STATE_VERSION}.\n"
+        "  Version 3 binds the predecessor State, system_manifest.json and forcefield.json by their "
+        "exact bytes. A version-2 record never recorded those identities, so this build cannot "
+        "verify that the calculation is unchanged, and treating them as unchanged would skip the "
+        "checks the bump exists to add.\n"
+        "  The committed physics is not lost. To continue this run, keep using the build that wrote "
+        "it. To continue under this build, regenerate the project and start a fresh run; the "
+        "existing trajectories remain valid as the record of the segments already committed."
+    )
 
 
 class CommittedOutputCorrupt(RuntimeError):
@@ -338,33 +378,91 @@ def close_reporters(sim) -> None:
             + "\n  ".join(failures))
 
 
-def verify_restart_matches_commit(sim, record: dict) -> dict:
-    """After restoring, check the physics matches what the commit says was committed.
+def read_restart_position(sim) -> dict:
+    """What the restart ACTUALLY restored: the step and time now in the Context.
 
-    A checkpoint or State that loads without error can still be the wrong one -- an older
-    generation left behind, or a file copied from another run. Comparing step and time against the
-    committed record turns "it loaded" into "it loaded the right thing", before any output opens.
+    `Simulation.currentStep` is a property over `Context.getStepCount()` in OpenMM 8.5.2 -- reading
+    it is reading the Context, and *assigning* it calls `Context.setStepCount`. That is why nothing
+    may be assigned before this is read: an assignment overwrites the very value to be checked, and
+    the comparison that follows then compares the commit against itself.
     """
     from openmm import unit
 
     state = sim.context.getState()
-    loaded_step = int(sim.currentStep)
-    loaded_time = float(state.getTime().value_in_unit(unit.picosecond))
+    return {
+        "loaded_step": int(sim.context.getStepCount()),
+        "loaded_time_ps": float(state.getTime().value_in_unit(unit.picosecond)),
+    }
+
+
+def verify_restart_matches_commit(sim, record: dict, *, position: Optional[dict] = None) -> dict:
+    """Check what was restored against what the commit says was committed. Mutates nothing.
+
+    A checkpoint or State that loads without error can still be the wrong one -- an older generation
+    left behind, or a file copied from another run. Comparing step and time against the committed
+    record turns "it loaded" into "it loaded the right thing", before any output opens.
+
+    Pass `position` when it was captured before anything touched the Context; otherwise it is read
+    here. Time is always authoritative. A restart reporting step 0 against a non-zero commit is
+    treated as *carrying no step* rather than as a mismatch -- see `restore_restart_step`.
+    """
+    position = position if position is not None else read_restart_position(sim)
+    loaded_step = int(position["loaded_step"])
+    loaded_time = float(position["loaded_time_ps"])
     expected_step = int(record.get("absolute_step", 0))
     expected_time = record.get("absolute_time_ps")
 
     problems = []
-    if loaded_step != expected_step:
-        problems.append(f"    step: restart holds {loaded_step:,}, commit says {expected_step:,}")
     if expected_time is not None and abs(loaded_time - float(expected_time)) > 1e-6:
         problems.append(f"    time: restart holds {loaded_time} ps, commit says {expected_time} ps")
+    step_carried = loaded_step != 0 or expected_step == 0
+    if step_carried and loaded_step != expected_step:
+        problems.append(f"    step: restart holds {loaded_step:,}, commit says {expected_step:,}")
     if problems:
         raise RuntimeError(
             "the restored restart does not match the committed generation:\n"
             + "\n".join(problems)
             + "\n  Refusing to append output to a run whose restart and commit record disagree."
         )
-    return {"loaded_step": loaded_step, "loaded_time_ps": loaded_time}
+    return {**position, "step_carried_by_restart": step_carried,
+            "expected_step": expected_step, "expected_time_ps": expected_time}
+
+
+def restore_restart_step(sim, verification: dict, *, restart_source: str) -> dict:
+    """Set the step count AFTER verification, and record where the value came from.
+
+    Only two outcomes are possible, and both are recorded rather than inferred:
+
+    * the restart carried the step and it already matched, so this is a no-op and the provenance
+      says the step came from the restart itself;
+    * the restart carried no step -- a State written by a build that did not preserve one -- so the
+      step is taken from the atomic commit, which is the only other authority for it. The Context
+      time was already verified against that same commit, so the two agree by construction.
+
+    A State fallback is additionally recorded as a non-bitwise continuation: the State restores
+    positions, velocities, box and time, but not the stochastic integrator's internal stream, so the
+    trajectory from here diverges from the one an uninterrupted run would have produced.
+    """
+    expected_step = int(verification["expected_step"])
+    if verification["step_carried_by_restart"]:
+        origin = f"restart ({restart_source})"
+    else:
+        sim.context.setStepCount(expected_step)
+        origin = "committed.json (the restart carried no step count)"
+    provenance = {
+        "restart_source": restart_source,
+        "step_origin": origin,
+        "started_absolute_step": expected_step,
+        "started_absolute_time_ps": verification["loaded_time_ps"],
+        "bitwise_continuation": restart_source == "checkpoint",
+    }
+    if restart_source != "checkpoint":
+        provenance["note"] = (
+            "serialized State fallback: positions, velocities, box and time are restored, but the "
+            "stochastic integrator's internal stream is not, so this continuation is physically "
+            "valid and NOT bitwise identical to an uninterrupted run."
+        )
+    return provenance
 
 
 def commit_segment(run_dir: Path, sim, *, generation: int, plan: dict, absolute_step: int,
@@ -389,6 +487,11 @@ def commit_segment(run_dir: Path, sim, *, generation: int, plan: dict, absolute_
     gdir.mkdir(parents=True, exist_ok=True)
 
     checkpoint, state = runstate.save_restart(sim, gdir)
+
+    # Boundary 4: a complete restart pair that no commit record points at yet.
+    from .faults import crash_point
+
+    crash_point("after_restart_members")
 
     watermarks = {
         "all_atom": _frames_at(plan.get("all_atom_interval"), absolute_step),
