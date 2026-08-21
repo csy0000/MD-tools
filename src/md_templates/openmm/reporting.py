@@ -60,6 +60,7 @@ def attach_reporters(
     checkpoint_interval_steps: Optional[int] = None,
     total_steps: Optional[int] = None,
     append: bool = False,
+    periodic: bool = True,
 ) -> dict:
     """Attach the declared reporters and return what was attached.
 
@@ -72,6 +73,9 @@ def attach_reporters(
     from openmm.app import CheckpointReporter, DCDReporter, StateDataReporter
 
     attached: dict = {}
+    # `periodic` comes from the SYSTEM, not from whether a State happens to return box vectors. A
+    # nonperiodic Context still exposes default vectors, so asking a State is not a test of
+    # periodicity -- it is a test of whether OpenMM filled in a default, and it always has.
     sim.reporters.clear()
 
     def _check(steps: int, label: str) -> None:
@@ -84,10 +88,12 @@ def attach_reporters(
     if all_atom_path is not None and all_atom_interval_steps:
         steps = exact_steps(all_atom_interval_steps, what="all-atom reporting interval")
         _check(steps, "all-atom trajectory")
+        # Wrapping a nonperiodic system is meaningless: there is no box to wrap into, and writing
+        # the trajectory as though there were labels it periodic for every downstream reader.
         sim.reporters.append(
-            DCDReporter(str(all_atom_path), steps, append=append, enforcePeriodicBox=True))
+            DCDReporter(str(all_atom_path), steps, append=append, enforcePeriodicBox=periodic))
         attached["all_atom"] = {"file": all_atom_path.name, "interval_steps": steps,
-                                "wrapped": True}
+                                "wrapped": bool(periodic)}
 
     if selected_path is not None and selected_interval_steps and selected_atoms:
         steps = exact_steps(selected_interval_steps, what="selected-atom reporting interval")
@@ -103,11 +109,15 @@ def attach_reporters(
         steps = exact_steps(state_interval_steps, what="state-data reporting interval")
         _check(steps, "state log")
         # `append` also decides whether a header is written, so a resumed stage does not repeat it.
+        # Volume and density are requested only when there is a box. Without one, OpenMM would
+        # still emit numbers -- computed from the default vectors -- and a log column full of
+        # fictional volumes is worse than a missing column, because it reads as a measurement.
         sim.reporters.append(
             StateDataReporter(str(state_path), steps, step=True, time=True, potentialEnergy=True,
-                              kineticEnergy=True, temperature=True, volume=True, density=True,
-                              speed=True, append=append))
-        attached["state_log"] = {"file": state_path.name, "interval_steps": steps}
+                              kineticEnergy=True, temperature=True, volume=bool(periodic),
+                              density=bool(periodic), speed=True, append=append))
+        attached["state_log"] = {"file": state_path.name, "interval_steps": steps,
+                                 "volume_and_density": bool(periodic)}
 
     if checkpoint_path is not None and checkpoint_interval_steps:
         steps = exact_steps(checkpoint_interval_steps, what="checkpoint interval")

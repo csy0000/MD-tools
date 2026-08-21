@@ -179,6 +179,42 @@ def _runtime_cfg(payload: dict) -> dict:
     return cfg
 
 
+def _cmd_continuity(payload: dict, system, *, selected_atoms_fingerprint) -> dict:
+    """The fields that must not change between segments of one conventional-MD run.
+
+    Everything here changes the calculation rather than merely how long it runs. Two segments that
+    disagree about any of them are two different simulations sharing a trajectory file, which is a
+    worse outcome than a refusal because the file looks continuous.
+
+    Segment COUNT is deliberately absent: asking for more segments is the one change that is always
+    safe, which is why it lives in Bash and never in the hash.
+    """
+    integrator = payload.get("integrator") or {}
+    reporting = payload.get("reporting") or {}
+    barostat = payload.get("barostat") or {}
+    restraint = payload.get("restraint") or {}
+    return {
+        "stage": payload["stage"],
+        "n_particles": system.getNumParticles(),
+        "n_constraints": system.getNumConstraints(),
+        "periodic": bool(system.usesPeriodicBoundaryConditions()),
+        "ensemble": "NPT" if barostat else "NVT",
+        "barostat_pressure": barostat.get("pressure"),
+        "integrator": {k: integrator.get(k) for k in
+                       ("type", "timestep", "temperature", "friction")},
+        "restraint_force_constant": restraint.get("force_constant_kcal_per_mol_angstrom2"),
+        "steps_per_segment": int(payload["steps"]),
+        "reporting_intervals": {
+            "all_atom": reporting.get("full_system_interval_steps"),
+            "selected_atoms": reporting.get("selected_atoms_interval_steps"),
+            "state_log": reporting.get("state_interval_steps"),
+        },
+        "selected_atoms_fingerprint": selected_atoms_fingerprint,
+        "input_state": payload["input"]["state"],
+        "produced_by": payload["input"]["produced_by"],
+    }
+
+
 def execute_stage(config_path: Path, payload: dict, devices: str | None = None) -> int:
     """Run one stage and write its endpoint state, structure, results and log."""
     stage = payload["stage"]
@@ -198,6 +234,26 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     cfg = _runtime_cfg(payload)
     system = XmlSerializer.deserialize((here / payload["input"]["system_xml"]).read_text())
     pdb = PDBFile(str(here / payload["input"]["topology"]))
+    # Asked of the SYSTEM. A nonperiodic Context still returns default box vectors, so testing a
+    # State tells you only that OpenMM filled in a default -- never that the run has a box.
+    periodic = bool(system.usesPeriodicBoundaryConditions())
+
+    # A conventional-MD stage owns a run directory and a committed-generation record, so it decides
+    # its continuation HERE -- before the Context exists and before any output file is opened. An
+    # incompatible continuation must be refused while the previous segment's outputs are still
+    # exactly as it left them.
+    segmented = stage.startswith("cMD")
+    continuation = None
+    cmd_plan = None
+    cmd_continuity = None
+    run_dir = here / "run"
+    if segmented:
+        from . import cmd_segments
+
+        cmd_plan = cmd_segments.plan_segment(payload)
+        cmd_continuity = _cmd_continuity(payload, system, selected_atoms_fingerprint=None)
+        continuation = cmd_segments.prepare_continuation(
+            run_dir, continuity=cmd_continuity, plan=cmd_plan)
 
     restraint = payload.get("restraint")
     restraint_index = None
@@ -238,9 +294,24 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     # practice NVT, after minimisation. Every later stage inherits them. Re-drawing at each stage
     # discards the equilibration that stage just paid for and hides it behind a plausible-looking
     # temperature.
-    coords_origin = _apply_coords(sim, here / payload["input"]["state"],
-                                  require_velocities=(stage != "min"),
-                                  velocity_seed=int(stage_seeds["velocity"]))
+    if segmented and not continuation["first_segment"]:
+        # Continue from the last COMMITTED generation, not from the equilibration endpoint. The
+        # checkpoint is preferred; the State fallback is physically valid but does not restore the
+        # integrator's random stream, so it is announced and recorded rather than silently taken.
+        from . import runstate
+
+        restart_source = runstate.load_restart(sim, continuation["restore_from"])
+        coords_origin = {"coords": str(continuation["restore_from"]),
+                         "kind": f"committed generation ({restart_source})",
+                         "velocities": "restored from the committed generation",
+                         "velocity_seed": None}
+        print(f"  {stage}: continuing from generation "
+              f"{continuation['segments_completed']} via {restart_source}")
+    else:
+        restart_source = "predecessor state"
+        coords_origin = _apply_coords(sim, here / payload["input"]["state"],
+                                      require_velocities=(stage != "min"),
+                                      velocity_seed=int(stage_seeds["velocity"]))
 
     if restraint_index is not None:
         # kcal/mol/A^2 -> kJ/mol/nm^2
@@ -264,8 +335,28 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
                 "bundle and the project disagree; regenerate the project against this bundle."
             )
         outputs = payload["output"]
+        append = bool(continuation and not continuation["first_segment"])
+        if segmented:
+            # Any frames beyond the committed watermark belong to an invocation that died before
+            # its boundary. They are removed BEFORE the reporters open, so appending cannot leave
+            # the trajectory containing frames no generation accounts for.
+            from . import cmd_segments
+
+            trimmed = [
+                cmd_segments.truncate_to_watermark(
+                    here / outputs["trajectory_all_atoms"], "all_atom",
+                    continuation["watermarks"]["all_atom"], n_atoms=system.getNumParticles()),
+                cmd_segments.truncate_to_watermark(
+                    here / outputs["trajectory_selected_atoms"], "selected_atoms",
+                    continuation["watermarks"]["selected_atoms"], n_atoms=len(selected_atoms)),
+                cmd_segments.truncate_to_watermark(
+                    here / outputs["log"], "state_log",
+                    continuation["watermarks"]["state_log"], n_atoms=0),
+            ]
+            continuation["tail_recovery"] = trimmed
         attached = attach_reporters(
             sim,
+            append=append,
             all_atom_path=here / outputs["trajectory_all_atoms"],
             all_atom_interval_steps=reporting.get("full_system_interval_steps"),
             selected_path=here / outputs["trajectory_selected_atoms"],
@@ -275,6 +366,7 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
             state_interval_steps=reporting.get("state_interval_steps")
                                  or reporting.get("full_system_interval_steps"),
             total_steps=int(payload["steps"]),
+            periodic=periodic,
         )
 
     # The barostat is recorded because whether one was applied is a fact about the stage, while
@@ -305,15 +397,76 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
             sim.step(steps)
         results["steps"] = steps
 
+    if segmented:
+        # Close the boundary in order: reporters first, so the files on disk end exactly here;
+        # then the restart pair; then the atomic commit. A crash before the commit leaves a tail
+        # that the next invocation removes.
+        from . import cmd_segments, runstate
+
+        for reporter in list(sim.reporters):
+            for attribute in ("_out", "_traj_file", "_dcd"):
+                handle = getattr(reporter, attribute, None)
+                close = getattr(handle, "close", None)
+                if close is not None:
+                    try:
+                        close()
+                    except Exception:                                   # noqa: BLE001,S110
+                        pass
+        sim.reporters.clear()
+
+        generation = int(continuation["segments_completed"]) + 1
+        absolute_step = int(continuation["absolute_step"]) + steps
+        absolute_time_ps = float(
+            sim.context.getState().getTime().value_in_unit(unit.picosecond))
+
+        if continuation["first_segment"]:
+            runstate.write_run_state(run_dir, method="md", continuity=cmd_continuity,
+                                     stage=stage)
+        runstate.record_invocation(run_dir, {
+            "segment": generation,
+            "steps": steps,
+            "restart_source": restart_source,
+            "absolute_step_after": absolute_step,
+            "absolute_time_ps_after": absolute_time_ps,
+        })
+        committed = cmd_segments.commit_segment(
+            run_dir, sim, generation=generation, plan=cmd_plan,
+            absolute_step=absolute_step, absolute_time_ps=absolute_time_ps,
+            continuity=cmd_continuity, restart_source=restart_source,
+            extra={"periodic": periodic})
+        results["segment"] = {
+            "generation": generation,
+            "absolute_step": absolute_step,
+            "absolute_time_ps": absolute_time_ps,
+            "restart_source": restart_source,
+            "continued": not continuation["first_segment"],
+            "watermarks": committed["watermarks"],
+            "tail_recovery": continuation.get("tail_recovery"),
+        }
+        print(f"  {stage}: committed generation {generation}, "
+              f"absolute step {absolute_step:,}, t = {absolute_time_ps:.1f} ps")
+
     # Minimisation writes NO velocities. That absence is the handshake: the first dynamics stage
     # sees a state without them and initialises once, and every stage after that inherits. Writing
     # zeros instead would look like inherited velocities at 0 K and never initialise.
     state = sim.context.getState(getPositions=True, getVelocities=(stage != "min"), getEnergy=True,
-                                 enforcePeriodicBox=True)
+                                 enforcePeriodicBox=periodic)
     results["potential_after_kj_mol"] = state.getPotentialEnergy().value_in_unit(
         unit.kilojoule_per_mole)
-    box = state.getPeriodicBoxVectors().value_in_unit(unit.nanometer)
-    results["box_volume_nm3"] = float(abs(np.linalg.det(np.array(box))))
+    # A nonperiodic System has no volume. Recording the determinant of OpenMM's default box vectors
+    # would put a number here that looks like a thermodynamic measurement and is not one, so the
+    # absence is recorded explicitly with its reason instead.
+    if periodic:
+        box = state.getPeriodicBoxVectors().value_in_unit(unit.nanometer)
+        results["box_volume_nm3"] = float(abs(np.linalg.det(np.array(box))))
+        results["periodic"] = True
+    else:
+        results["box_volume_nm3"] = None
+        results["periodic"] = False
+        results["volume_note"] = (
+            "not applicable: this System is nonperiodic (implicit solvent), so it has no volume "
+            "and no density. OpenMM still exposes default box vectors; their determinant is not a "
+            "thermodynamic quantity.")
 
     (here / payload["output"]["final_state"]).write_text(XmlSerializer.serialize(state))
     with (here / payload["output"]["final_structure"]).open("w") as handle:
@@ -321,9 +474,10 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     sim.saveCheckpoint(str(here / payload["output"]["checkpoint"]))
     (here / payload["output"]["results"]).write_text(json.dumps(results, indent=2) + "\n")
 
+    volume = (f"V {results['box_volume_nm3']:.2f} nm^3" if results["box_volume_nm3"] is not None
+              else "no box (implicit)")
     print(f"  {stage}: U {results['potential_before_kj_mol']:.1f} -> "
-          f"{results['potential_after_kj_mol']:.1f} kJ/mol, "
-          f"V {results['box_volume_nm3']:.2f} nm^3, "
+          f"{results['potential_after_kj_mol']:.1f} kJ/mol, {volume}, "
           f"{results.get('steps', 0)} steps, {len(restrained_atoms)} restrained atoms")
     return 0
 

@@ -35,7 +35,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 __all__ = ["generate_project", "RUN_MANIFEST_SCHEMA_VERSION", "STAGE_ORDER",
-           "IMPLICIT_STAGE_ORDER", "stage_order_for"]
+           "IMPLICIT_STAGE_ORDER", "MD_STAGE_ORDER", "IMPLICIT_MD_STAGE_ORDER",
+           "stage_order_for"]
 
 RUN_MANIFEST_SCHEMA_VERSION = 1
 
@@ -63,6 +64,13 @@ STAGE_ORDER = ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1", "REST2_1")
 #: stages is therefore not a shortcut -- an NPT stage here would be meaningless, not merely slow.
 IMPLICIT_STAGE_ORDER = ("min", "eq_nvt", "cMD_1", "REST2_1")
 
+#: Conventional MD ends at cMD_1. A REST2 stage is not appended to an MD-only project, and no REST2
+#: object -- tau ladder, exchange schedule, omega policy -- is constructed for it. Generating one
+#: anyway would put a replica-exchange calculation in a project that never asked for it, and its
+#: presence in the manifest would misdescribe the run.
+MD_STAGE_ORDER = ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1")
+IMPLICIT_MD_STAGE_ORDER = ("min", "eq_nvt", "cMD_1")
+
 #: Stages that carry the positional restraint on the solute. `eq_npt_2` deliberately does not.
 RESTRAINED_STAGES = ("min", "eq_nvt", "eq_npt_1")
 
@@ -70,11 +78,19 @@ RESTRAINED_STAGES = ("min", "eq_nvt", "eq_npt_1")
 BAROSTAT_STAGES = ("eq_npt_1", "eq_npt_2", "cMD_1")
 
 
-def stage_order_for(solvation_mode: str) -> tuple:
-    """The stage graph a solvation mode implies."""
+def stage_order_for(solvation_mode: str, method: str = "rest2") -> tuple:
+    """The stage graph a solvation mode and production method imply.
+
+    Four graphs, from two independent facts: implicit solvent has no NPT stage, and conventional MD
+    has no REST2 stage. Neither is a subset of the other, so both are decided here rather than by
+    trimming a single canonical list somewhere downstream.
+    """
     from .solvation_mode import IMPLICIT
 
-    return IMPLICIT_STAGE_ORDER if solvation_mode == IMPLICIT else STAGE_ORDER
+    implicit = solvation_mode == IMPLICIT
+    if method == "md":
+        return IMPLICIT_MD_STAGE_ORDER if implicit else MD_STAGE_ORDER
+    return IMPLICIT_STAGE_ORDER if implicit else STAGE_ORDER
 
 #: Keys md_config.json may carry that the canonical model does not model. See _resolved_spec.
 GENERATOR_ONLY_KEYS = ("conventional_md", "minimization")
@@ -382,6 +398,17 @@ def _refuse_keeping_results_from_another_protocol(outdir: Path, hashes: dict) ->
     )
 
 
+def md_config_method(md_config: dict) -> str:
+    """The production method a document asks for, before the spec is resolved.
+
+    The stage graph has to be known before resolution, because which stages exist decides which
+    seeds are derived. Read directly and defensively: an unrecognised value falls through to the
+    resolver, which reports it properly.
+    """
+    method = ((md_config.get("protocol") or {}).get("production") or {}).get("method")
+    return str(method) if method in ("md", "rest2") else "rest2"
+
+
 def _read_manifest_solvation(system_manifest) -> dict:
     """The solvation block the prepared bundle recorded.
 
@@ -403,7 +430,7 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
     skipped = set(inheritance.get("skipped_stages", [])) if inheritance else set()
     solvation_mode = str(
         ((_read_manifest_solvation(system_manifest)) or {}).get("mode", "explicit"))
-    graph = stage_order_for(solvation_mode)
+    graph = stage_order_for(solvation_mode, md_config_method(md_config))
     stages_to_generate = tuple(s for s in graph if s not in skipped)
     if not stages_to_generate:
         raise ValueError(
@@ -477,19 +504,39 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
             f"{production.exchange.number_of_exchanges_per_segment} exchanges = "
             f"{plan.steps_per_segment:,} steps per segment "
             f"({plan.steps_per_exchange:,} per exchange round)")
-    else:
+    elif production.method != "md":
         raise ValueError(
             "md_config.json declares protocol.production.method "
-            f"{production.method!r}; the staged layout generates a REST2 production stage. "
-            "Conventional-MD-only projects are not yet generated."
+            f"{production.method!r}; implemented methods are 'md' and 'rest2'."
         )
 
-    cmd_ns = (md_config.get("conventional_md") or {}).get("duration", "1 ns")
-    from .spec.units import parse_quantity
-    cmd_duration = parse_quantity(cmd_ns, dimension="time")
+    # The cMD segment length. For an MD-only project this IS the canonical
+    # `production.duration_per_segment`; for the REST2 chain, cMD is a pre-production stage whose
+    # length comes from the generator-only `conventional_md.duration`. Two fields must never
+    # compete for one stage, so which one applies is decided by the method and recorded with its
+    # source rather than resolved by precedence.
+    stated_cmd = (md_config.get("conventional_md") or {}).get("duration")
+    if production.method == "md":
+        if stated_cmd is not None:
+            raise ValueError(
+                "this is an MD-only project, so the cMD segment length is "
+                "protocol.production.duration_per_segment, but the document also states "
+                f"conventional_md.duration = {stated_cmd!r}.\n"
+                "  Two fields would be competing for one stage. Remove conventional_md.duration; it "
+                "applies only to the\n  pre-production cMD stage of a REST2 chain."
+            )
+        cmd_duration = production.duration_per_segment
+        cmd_source = "protocol.production.duration_per_segment"
+    else:
+        from .spec.units import parse_quantity
+        cmd_duration = parse_quantity(stated_cmd if stated_cmd is not None else "1 ns",
+                                      dimension="time")
+        cmd_source = ("conventional_md.duration" if stated_cmd is not None
+                      else "default: conventional_md.duration")
+
     stage_steps["cMD_1"] = steps_for_duration(
         cmd_duration.value, dt.value, duration_source=cmd_duration.source,
-        timestep_source=dt.source, duration_label="conventional_md.duration")
+        timestep_source=dt.source, duration_label=cmd_source)
     stage_steps["min"] = 0
 
     reporting = spec.execution.reporting
