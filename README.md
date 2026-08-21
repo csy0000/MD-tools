@@ -361,6 +361,25 @@ starting state and every stage up to and including it is recorded in `skipped_st
 silently omitted. It is not a checkpoint resume -- continuing a REST2 run happens inside that run's
 own directory, under the runner's own record.
 
+### Conventional MD
+
+`production.method = "md"` generates a standalone conventional-MD project, ending at `cMD_1` with no
+REST2 stage and no REST2 machinery. Explicit runs get the two NPT equilibration stages; implicit runs
+get neither, because there is no box.
+
+cMD runs in **committed segments** in one run directory: each segment ends with an atomic commit
+holding a checkpoint (preferred for continuation) and a portable State (announced fallback), and
+re-invoking the launcher continues the same run rather than restarting it. Trajectories and logs
+append, with per-stream watermarks so a crash leaves an uncommitted tail that the next invocation
+removes rather than appending after.
+
+```bash
+CMD_NUMBER_OF_SEGMENTS=2 ./run_all.sh   # equilibrate once, then two production segments
+cd cMD_1 && ./cMD_1.sh                  # add another segment later
+```
+
+Worked examples: `test/ala/cMD/explicit/` and `test/ala/cMD/implicit/`.
+
 ### Implicit solvent (GBn2 / mbondi3)
 
 `solvation.mode: implicit` builds a generalised-Born System instead of a water box. Defaults are
@@ -383,7 +402,8 @@ identical radii and identical per-particle parameters, which under REST2 is seve
 work, so the construction branch is part of the Hamiltonian. `system.prmtop` and `system.rst7` are
 kept as construction provenance; there is no Amber execution engine here.
 
-Implicit profiles do not repartition hydrogen mass and use a 2 fs timestep, stated explicitly rather
+Only GBn2 with mbondi3 is publicly accepted; other models and radius sets are refused as not
+validated. Implicit profiles do not repartition hydrogen mass and use a 2 fs timestep, stated explicitly rather
 than inherited from the explicit-water profiles. Implicit REST2 requires the whole system as the
 enhanced region and scales the entire GB energy by `s`, including the non-polar term that charge
 scaling alone would miss. Ladders are shorter: 4 replicas for the peptide route, 6 for the ligand

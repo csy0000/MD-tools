@@ -12,7 +12,7 @@ name: integration-cpu
 
 on:
   push:
-    branches: [openmm, main]
+    branches: [main, dev, openmm]
   pull_request:
   workflow_dispatch:
   schedule:

@@ -295,6 +295,58 @@ stage and a `REST2` stage. Until the model grows a multi-stage production block 
 outside it -- they are extracted before canonical resolution and recorded in `run_manifest.json`
 with their values, so nothing is silent, but they do not participate in the configuration hashes.
 
+### Conventional MD as a standalone method
+
+`protocol.production.method = "md"` is a supported public method with its own stage graphs:
+
+```
+explicit md    : min -> eq_nvt -> eq_npt_1 -> eq_npt_2 -> cMD_1
+implicit md    : min -> eq_nvt -> cMD_1
+explicit rest2 : min -> eq_nvt -> eq_npt_1 -> eq_npt_2 -> cMD_1 -> REST2_1
+implicit rest2 : min -> eq_nvt -> cMD_1 -> REST2_1
+```
+
+Four graphs from two independent facts: implicit solvent has no NPT stage, and conventional MD has
+no REST2 stage. An MD-only project constructs **no** REST2 object -- no tau ladder, no exchange
+schedule, no omega policy, and no seed for a stage that does not exist.
+
+For an MD-only project the cMD segment length is the canonical
+`protocol.production.duration_per_segment`. The generator-only `conventional_md.duration` applies
+only to the pre-production cMD stage of a REST2 chain, and stating both is **refused** rather than
+resolved by precedence -- two fields must never compete for one stage.
+
+#### cMD runs in committed segments
+
+`cMD_1` was single-shot: re-running it overwrote its outputs, which looked like a continuation and
+was a restart. It now has the contract REST2 already had, built on the same `runstate` primitives:
+
+* an atomic committed-generation record per segment;
+* a binary checkpoint, preferred for continuation, with a serialized State as an **announced**
+  fallback -- the State is physically valid but does not restore the integrator's random stream;
+* continuity comparison **before** any output is opened for append;
+* per-stream reporting watermarks, because an all-atom trajectory at 100 ps and a solute trajectory
+  at 10 ps reach the same boundary with different frame counts;
+* quarantine of any tail beyond the committed watermark.
+
+Re-invoking the stage launcher continues the same run in the same directory. It never starts a
+sibling run and calls that continuation.
+
+```bash
+CMD_NUMBER_OF_SEGMENTS=2 ./run_all.sh      # equilibrate once, then two cMD segments
+cd cMD_1 && ./cMD_1.sh                     # add one more segment, later
+```
+
+`CMD_NUMBER_OF_SEGMENTS` and `REST2_NUMBER_OF_SEGMENTS` are separate because adding cMD segments and
+adding REST2 segments are different requests. Both live in Bash and neither enters the scientific
+JSON or the continuity hash: asking for a longer run must not change the configuration hash.
+
+#### Reporting is declared per stage
+
+The reporting cadence is a **production** cadence. An equilibration stage of 10 ps cannot produce a
+frame at a 100 ps interval, so the generator omits that stream for that stage and records why,
+rather than declaring an output nothing will write. The state log falls back to a cadence that fits,
+so equilibration stays observable.
+
 ### Explicit water or implicit solvent
 
 `solvation.mode` discriminates, and each mode rejects the other's fields **by name** rather than
@@ -305,9 +357,13 @@ experiment that would not be run, and nothing in the output would say so.
 {"solvation": {"mode": "implicit", "implicit_model": "GBn2", "radii": "mbondi3"}}
 ```
 
-`GBn2` and `mbondi3` are the defaults and the pairing is not arbitrary: GBn2 was parameterised
-against mbondi3, so another radius set is a different Hamiltonian that still runs. Spellings are
-canonicalised case-insensitively, so a bundle records one name for one thing.
+`GBn2` with `mbondi3` is the **only** publicly accepted combination. The pairing is not arbitrary:
+GBn2 was parameterised against mbondi3, so another radius set is a different Hamiltonian that still
+runs. OpenMM exposes HCT, OBC1, OBC2 and GBn, and ParmEd accepts several radius sets, but the energy
+identity in this repository is pinned for one pair and public acceptance follows the evidence rather
+than the library's capability. A recognised-but-unvalidated value is refused with that wording --
+not "unknown", which would send a reader hunting for a typo. Spellings are canonicalised
+case-insensitively, so a bundle records one name for one thing.
 
 **When each is appropriate.** Explicit water is the reference treatment: it represents hydrogen
 bonding, dielectric screening and hydrophobic packing with real molecules, at the cost of a box that
