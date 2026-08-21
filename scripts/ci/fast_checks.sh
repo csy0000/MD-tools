@@ -127,7 +127,7 @@ python - <<'PY'
 import json, tempfile, pathlib, yaml
 from md_templates.openmm.spec import resolve
 doc = {"system": {"system_id": "eq", "route": "smiles", "smiles": "CCO"},
-       "protocol": {"production": {"method": "md", "n_chunks": 2, "chunk": "10 ps"}}}
+       "protocol": {"production": {"method": "md", "duration_per_segment": "10 ps"}}}
 d = pathlib.Path(tempfile.mkdtemp())
 (d / "a.yaml").write_text(yaml.safe_dump(doc))
 (d / "a.json").write_text(json.dumps(doc))
