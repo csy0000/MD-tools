@@ -112,17 +112,6 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
     cfg["system"]["slug"] = system_block.get("id") or input_path.stem.lower().replace("-", "_")
     cfg["system"]["solute_kind"] = "ligand" if system_type == "ligand" else "peptide"
 
-    # The default water follows the solute, because ff19SB and Sage were validated against
-    # different water models (see DEFAULT_WATER_BY_SOLUTE_KIND). Applied BEFORE the user's
-    # forcefield/solvation blocks below, so an explicit choice still wins and is still recorded as
-    # user input rather than being silently agreed with.
-    from .config import default_water_for
-
-    default_water_xml, default_water_model = default_water_for(cfg["system"]["solute_kind"])
-    cfg["forcefield"]["water"] = default_water_xml
-    solvation_defaults = copy.deepcopy(DEFAULTS["solvation"])
-    solvation_defaults["water_model"] = default_water_model
-
     #: Where every build-defining value came from. A manifest that records values without their
     #: origin cannot answer the only question that matters when two bundles differ: which of these
     #: did I choose, and which did the package choose for me?
@@ -130,13 +119,52 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
     for section in ("forcefield", "system_build"):
         for key in cfg.get(section, {}):
             sources[f"{section}.{key}"] = "package default"
-        if section == "forcefield":
-            sources["forcefield.water"] = (
-                f"package default: {cfg['system']['solute_kind']} solute")
         if section in config:
             for key, value in config[section].items():
                 sources[f"{section}.{key}"] = "user input"
             cfg[section].update(config[section])
+    # The default water is derived from the force fields that were ACTUALLY RESOLVED just above,
+    # not from the input label. `peptide` and `ligand` say which reader parsed the input; the
+    # force-field fields say which parameters will be assigned, and it is the parameters that were
+    # fitted against a particular water model. Deriving from the label would also give the wrong
+    # answer for a complex, where both are present.
+    from .water_policy import AmbiguousWaterPolicy, resolve_default_water
+
+    user_forcefield = config.get("forcefield") or {}
+    user_solvation = config.get("solvation") or {}
+    mode = (user_solvation.get("mode") or "explicit")
+    water_policy = None
+    if mode != "implicit":
+        try:
+            water_policy = resolve_default_water(cfg["forcefield"],
+                                                 solute_kind=cfg["system"]["solute_kind"])
+        except AmbiguousWaterPolicy:
+            # Only fatal if the package would have to choose. A configuration that states BOTH
+            # water fields has already answered the question, and refusing it would reject the very
+            # escape hatch the error message recommends.
+            if "water" not in user_forcefield or "water_model" not in user_solvation:
+                raise
+
+    solvation_defaults = copy.deepcopy(DEFAULTS["solvation"])
+    if "water" in user_forcefield:
+        sources["forcefield.water"] = "user input"
+    elif water_policy is not None:
+        cfg["forcefield"]["water"] = water_policy["water"]
+        sources["forcefield.water"] = f"package default: {water_policy['basis']}"
+    if water_policy is not None:
+        solvation_defaults["water_model"] = water_policy["water_model"]
+        # Ion parameters are water-model specific and OpenMM ships them INSIDE the water
+        # force-field file, so they cannot drift from the water they were fitted with. Recorded
+        # because "which ion parameters did this run use?" otherwise has no answer in the bundle.
+        cfg["_water_policy"] = {
+            **water_policy,
+            "ion_parameters": {
+                "source": cfg["forcefield"]["water"],
+                "note": ("Joung-Cheatham ion parameters are fitted per water model and ship inside "
+                         "the water force-field file, so they follow the water model above."),
+            },
+        }
+
     # One discriminated solvation contract, resolved once. Explicit mode keeps the existing
     # defaults; implicit mode rejects every field that describes water it does not have.
     solvation = resolve_solvation(config.get("solvation"), defaults=solvation_defaults)
@@ -522,6 +550,10 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
             "salt": info.get("salt"),
             "geometry": info.get("geometry"),
             "water": info.get("water"),
+            # WHY this water model, not merely which one. For a mixed-force-field complex the
+            # rationale states that the choice is a compatibility decision rather than a validated
+            # pairing, so a report built on the bundle can say so instead of implying otherwise.
+            "water_policy": cfg.get("_water_policy"),
             # Present only for implicit bundles. Everything needed to rebuild the exact GBn2
             # System: the construction branch, both library versions, the tleap commands where
             # they were used, and what the radius change actually did.

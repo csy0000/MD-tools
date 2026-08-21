@@ -387,11 +387,43 @@ so equilibration stays observable.
 ff19SB and Sage were validated against different water, so there is no single explicit default that
 is right for both routes:
 
-| solute | force field | default water | why |
-|---|---|---|---|
-| peptide | ff19SB | `amber19/opc.xml` + `opc` | ff19SB's amino-acid-specific CMAPs were trained against QM energy surfaces computed in solution and validated with OPC. With TIP3P it over-stabilises helices — the very property the CMAPs exist to get right |
-| ligand | Sage / openff-2.2.0 | `amber19/tip3p.xml` + `tip3p` | Sage's Lennard-Jones parameters were refit against condensed-phase data conditioned on plain TIP3P, and the OpenFF force fields ship TIP3P water parameters themselves |
-| complex | ff19SB + Sage | `amber19/opc.xml` + `opc` | one box, one water: the protein backbone is the dominant error term, so ff19SB's partner wins and the ligand runs slightly off its validation water. Recorded as the trade it is |
+The choice is derived from the **resolved force-field family**, not from the input label. `peptide`
+and `ligand` say which reader parsed the input; the force-field fields say which parameters will be
+assigned, and it is the parameters that were fitted against a particular water. A complex carries
+both, so a label-driven rule has no answer for it at all.
+
+| force-field family | fitting water | source |
+|---|---|---|
+| **ff19SB** | OPC | amino-acid-specific CMAPs trained against QM energy surfaces computed *in solution*; with TIP3P the helical propensities the CMAPs exist to reproduce come out wrong. Tian *et al.*, *JCTC* **2020**, 16, 528–552, [doi:10.1021/acs.jctc.9b00591](https://doi.org/10.1021/acs.jctc.9b00591) |
+| **ff14SB** | TIP3P | developed and validated in TIP3P. Maier *et al.*, *JCTC* **2015**, 11, 3696–3713, [doi:10.1021/acs.jctc.5b00255](https://doi.org/10.1021/acs.jctc.5b00255) |
+| **OpenFF Sage** (openff-2.x) | plain TIP3P | the Lennard-Jones refit was trained against condensed-phase properties in TIP3P, and openff-forcefields ships `tip3p.offxml` with each release. Boothroyd *et al.*, *JCTC* **2023**, 19, 3251–3275, [doi:10.1021/acs.jctc.3c00039](https://doi.org/10.1021/acs.jctc.3c00039) |
+
+which gives:
+
+| solute | default water |
+|---|---|
+| ff19SB peptide or protein | `amber19/opc.xml` + `opc` |
+| Sage ligand, including a Sage-parameterised macrocycle such as RGDfV | `amber19/tip3p.xml` + `tip3p` |
+| ff19SB + Sage protein–ligand complex | `amber19/opc.xml` + `opc`, **as a documented mixed-force-field compatibility choice** |
+
+**The complex case is a compromise and is recorded as one.** One box carries one water model, so one
+of the two force fields must run away from its fitting partner. It resolves to the protein's
+partner, because the protein backbone is normally the dominant error term and Sage's LJ refit is the
+less water-sensitive of the two. No single water model is the native partner of both, and the
+resolved manifest carries that sentence in `water_policy.rationale` so a report built on such a
+system can state it rather than imply both force fields were used as published.
+
+**An unrecognised force field is refused, not guessed.** Choosing water for a force field this
+package does not know would pair parameters with a solvent nobody validated them against, and the
+run would look entirely normal. The refusal names `forcefield.water` and `solvation.water_model` as
+the way to state the pairing you intend; an explicit choice always wins and is recorded as
+`user input`.
+
+**Ion parameters follow the water model automatically.** Joung–Cheatham ion sets are fitted per
+water model, and OpenMM ships them *inside* each water force-field file — so `amber19/opc.xml`
+brings OPC-matched ions and `amber19/tip3p.xml` brings TIP3P-matched ones, with no separate choice
+and no way for them to drift apart. They genuinely differ: Na⁺ ε is 0.124 kJ/mol with OPC against
+0.366 with TIP3P. The source file is recorded in `water_policy.ion_parameters`.
 
 Plain **TIP3P**, not TIP3P-FB. TIP3P-FB is a separate ForceBalance refit with different charges and
 LJ terms — a better water model on its own merits, but not what Sage was conditioned against, and it

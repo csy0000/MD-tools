@@ -13,10 +13,12 @@ Two force-field routes, both exercised end to end on this machine:
 
 The route is **declared, never inferred**: a ligand manifest may not name a protein force field and
 a peptide manifest may not name a small-molecule one, because that is precisely how a peptide
-silently becomes a Sage run with the same system name. **Water follows the solute**, because ff19SB and Sage were validated against different water: a
-ligand-only system gets **TIP3P**, anything containing a peptide gets **OPC**. Both are the active
-`explicit-*-v2` profiles; the superseded `-v1` profiles remain name-resolvable for reproducing the
-earlier TIP3P-FB runs.
+silently becomes a Sage run with the same system name. **Water follows the force field**, because ff19SB and Sage were fitted against different water:
+ff19SB gets **OPC**, Sage gets plain **TIP3P**, and an ff19SB + Sage complex defaults to OPC as a
+documented compatibility choice. The rule reads the resolved force-field family rather than the
+input label, and refuses rather than guesses for a force field it does not recognise. Both defaults
+are the active `explicit-*-v2` profiles; the superseded `-v1` profiles remain name-resolvable for
+reproducing the earlier TIP3P-FB runs. See `docs/configuration.md` for the primary sources.
 
 Nothing here depends on the project it came from: no annealed-importance-sampling machinery, no implicit-solvent
 work.
