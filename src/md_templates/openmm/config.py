@@ -415,6 +415,31 @@ from .schemas import ExperimentManifest, ManifestError, SystemManifest
 #: manifest never says `auto`, so the baseline's route-resolution never has to guess.
 ROUTE_TO_SOLUTE_KIND = {"smiles": "ligand", "pdb": "peptide"}
 
+#: The water model each solute kind is DEFAULTED to, because the two force fields involved were
+#: validated against different water and there is no single right answer for a mixed system.
+#:
+#: * ff19SB's amino-acid-specific CMAPs were trained against QM energy surfaces computed in
+#:   solution and validated with OPC; with TIP3P it over-stabilises helices, which is precisely the
+#:   property the CMAPs exist to get right.
+#: * Sage's Lennard-Jones parameters were refit against condensed-phase data conditioned on plain
+#:   TIP3P, and the OpenFF force fields ship TIP3P water parameters themselves.
+#:
+#: So a ligand-only solute gets Sage + TIP3P, and anything containing a peptide gets OPC -- for a
+#: complex the protein backbone is the dominant error term, so ff19SB's partner wins and the ligand
+#: is accepted slightly off its validation water. There is one box and one water model; this is
+#: the trade being made, recorded rather than inherited from whichever default happened to apply.
+DEFAULT_WATER_BY_SOLUTE_KIND = {
+    "peptide": ("amber19/opc.xml", "opc"),
+    "complex": ("amber19/opc.xml", "opc"),
+    "ligand": ("amber19/tip3p.xml", "tip3p"),
+}
+
+
+def default_water_for(solute_kind: str) -> tuple[str, str]:
+    """`(water force field, packing model)` for a solute kind. Unknown kinds keep the base default."""
+    return DEFAULT_WATER_BY_SOLUTE_KIND.get(
+        str(solute_kind), (DEFAULTS["forcefield"]["water"], DEFAULTS["solvation"]["water_model"]))
+
 
 def resolve_config(
     system: SystemManifest,

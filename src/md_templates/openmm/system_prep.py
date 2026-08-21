@@ -112,6 +112,17 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
     cfg["system"]["slug"] = system_block.get("id") or input_path.stem.lower().replace("-", "_")
     cfg["system"]["solute_kind"] = "ligand" if system_type == "ligand" else "peptide"
 
+    # The default water follows the solute, because ff19SB and Sage were validated against
+    # different water models (see DEFAULT_WATER_BY_SOLUTE_KIND). Applied BEFORE the user's
+    # forcefield/solvation blocks below, so an explicit choice still wins and is still recorded as
+    # user input rather than being silently agreed with.
+    from .config import default_water_for
+
+    default_water_xml, default_water_model = default_water_for(cfg["system"]["solute_kind"])
+    cfg["forcefield"]["water"] = default_water_xml
+    solvation_defaults = copy.deepcopy(DEFAULTS["solvation"])
+    solvation_defaults["water_model"] = default_water_model
+
     #: Where every build-defining value came from. A manifest that records values without their
     #: origin cannot answer the only question that matters when two bundles differ: which of these
     #: did I choose, and which did the package choose for me?
@@ -119,14 +130,16 @@ def _runtime_cfg_from_system_config(config: dict, input_path: Path, input_format
     for section in ("forcefield", "system_build"):
         for key in cfg.get(section, {}):
             sources[f"{section}.{key}"] = "package default"
+        if section == "forcefield":
+            sources["forcefield.water"] = (
+                f"package default: {cfg['system']['solute_kind']} solute")
         if section in config:
             for key, value in config[section].items():
                 sources[f"{section}.{key}"] = "user input"
             cfg[section].update(config[section])
     # One discriminated solvation contract, resolved once. Explicit mode keeps the existing
     # defaults; implicit mode rejects every field that describes water it does not have.
-    solvation = resolve_solvation(config.get("solvation"),
-                                  defaults=copy.deepcopy(DEFAULTS["solvation"]))
+    solvation = resolve_solvation(config.get("solvation"), defaults=solvation_defaults)
     cfg["solvation"] = {k: v for k, v in solvation.items() if k != "sources"}
     for key, origin in solvation["sources"].items():
         sources[f"solvation.{key}"] = origin
@@ -213,15 +226,26 @@ def _check_the_three_files_describe_one_hamiltonian(bundle: Path) -> None:
     # `forcefield.json` names the protein field `protein_forcefield`; the resolved configuration and
     # `system.yaml` use their own spellings. The mapping is written out rather than assumed, because
     # comparing a key that does not exist compares None to None and can never fail.
+    # On the ligand route `forcefield.json` records the small molecule as a BLOCK -- the force
+    # field name plus the charge method, net and formal charge and atom count -- while the manifest
+    # and `system.yaml` record the force field as a bare name. Comparing the block against the name
+    # put a dict into a set and raised `TypeError: unhashable type: 'dict'`, so this check crashed
+    # on every explicit ligand bundle instead of running. Take the name out of the block first.
+    ff_ligand = forcefield.get("ligand")
+    ff_charge_method = forcefield.get("ligand_charge_method")
+    if isinstance(ff_ligand, dict):
+        ff_charge_method = ff_charge_method or ff_ligand.get("charge_method")
+        ff_ligand = ff_ligand.get("forcefield")
+
     checks = (
         ("protein force field", resolved.get("protein"),
          parameterization.get("protein_forcefield"), forcefield.get("protein_forcefield")),
         ("water force field", resolved.get("water"),
          parameterization.get("water_forcefield"), forcefield.get("water")),
         ("small-molecule force field", resolved.get("ligand"),
-         parameterization.get("small_molecule_forcefield"), forcefield.get("ligand")),
+         parameterization.get("small_molecule_forcefield"), ff_ligand),
         ("charge method", resolved.get("ligand_charge_method"),
-         parameterization.get("charge_method"), forcefield.get("ligand_charge_method")),
+         parameterization.get("charge_method"), ff_charge_method),
     )
     problems = []
 
@@ -241,7 +265,10 @@ def _check_the_three_files_describe_one_hamiltonian(bundle: Path) -> None:
             f"forcefield.json={ff_hmr['scope']!r}")
 
     for label, in_manifest, in_yaml, in_ff in checks:
-        stated = {v for v in (in_manifest, in_yaml, in_ff) if v is not None}
+        # compared by their canonical text, so a value this check did not anticipate is REPORTED as
+        # a disagreement rather than crashing the build that was about to be written
+        stated = {json.dumps(v, sort_keys=True, default=str)
+                  for v in (in_manifest, in_yaml, in_ff) if v is not None}
         if len(stated) > 1:
             problems.append(
                 f"    {label}: system_manifest.json={in_manifest!r} system.yaml={in_yaml!r} "

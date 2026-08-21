@@ -25,7 +25,7 @@
       "method": "md",
       "profile_schema_version": 5,
       "route": "smiles",
-      "sha256": "715ceea1c9b100743e3a8c4c457ebfb3d143553105311510590b0d8601cc5994"
+      "sha256": "b94f815e24c5e234b93a5971b7b0ad2abc5c8a65799786490cc3dd22fea029a7"
     },
     "explicit-md-peptide-v1": {
       "is_default": false,
@@ -53,7 +53,7 @@
       "method": "rest2",
       "profile_schema_version": 5,
       "route": "smiles",
-      "sha256": "53261b3e146c9e4a9dd852fe2bcd4b68bf2994cbf330021e7b70a5ca228aa1da"
+      "sha256": "9b8b72ec19ebdffe02133cdeb81da34ef63e53475f3130210999b0089c783419"
     },
     "explicit-rest2-peptide-v1": {
       "is_default": false,

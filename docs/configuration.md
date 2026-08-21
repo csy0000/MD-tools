@@ -382,6 +382,25 @@ frame at a 100 ps interval, so the generator omits that stream for that stage an
 rather than declaring an output nothing will write. The state log falls back to a cadence that fits,
 so equilibration stays observable.
 
+#### The default water model follows the solute
+
+ff19SB and Sage were validated against different water, so there is no single explicit default that
+is right for both routes:
+
+| solute | force field | default water | why |
+|---|---|---|---|
+| peptide | ff19SB | `amber19/opc.xml` + `opc` | ff19SB's amino-acid-specific CMAPs were trained against QM energy surfaces computed in solution and validated with OPC. With TIP3P it over-stabilises helices — the very property the CMAPs exist to get right |
+| ligand | Sage / openff-2.2.0 | `amber19/tip3p.xml` + `tip3p` | Sage's Lennard-Jones parameters were refit against condensed-phase data conditioned on plain TIP3P, and the OpenFF force fields ship TIP3P water parameters themselves |
+| complex | ff19SB + Sage | `amber19/opc.xml` + `opc` | one box, one water: the protein backbone is the dominant error term, so ff19SB's partner wins and the ligand runs slightly off its validation water. Recorded as the trade it is |
+
+Plain **TIP3P**, not TIP3P-FB. TIP3P-FB is a separate ForceBalance refit with different charges and
+LJ terms — a better water model on its own merits, but not what Sage was conditioned against, and it
+is what the superseded `-v1` profiles used.
+
+The choice is applied before any user configuration, so naming `forcefield.water` explicitly still
+wins and is still recorded as user input rather than silently agreed with. The provenance records
+which default applied, as `package default: <solute kind> solute`.
+
 ### Explicit water or implicit solvent
 
 `solvation.mode` discriminates, and each mode rejects the other's fields **by name** rather than

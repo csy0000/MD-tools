@@ -172,7 +172,8 @@ such system exists in this project yet and that path is **untested**.
 | peptide | **ff19SB** | `amber19/protein.ff19SB.xml` (ships with OpenMM 8.5) |
 | ligand / macrocycle | **Sage 2.2** (`openff-2.2.0`) | `SMIRNOFFTemplateGenerator`, openmmforcefields 0.16 |
 | ligand charges | **AM1BCC** | AmberTools `sqm` via the OpenFF toolkit |
-| water | **OPC** (active default since 2026-08-21) | `amber19/opc.xml` |
+| water (peptide or complex) | **OPC** (active default since 2026-08-21) | `amber19/opc.xml` |
+| water (ligand only) | **TIP3P** (active default since 2026-08-21) | `amber19/tip3p.xml` |
 | ions | Na⁺ / Cl⁻ at **0.15 M** + neutralising counterions | `addSolvent(ionicStrength=...)` |
 
 **`solvation.water_model` selects geometry, `forcefield.water` selects parameters.** They are
