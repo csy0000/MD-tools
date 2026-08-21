@@ -5,7 +5,7 @@ That journal is **superseded**: its implicit hashes were produced under a restra
 vectors an implicit System should not have, so they do not describe the code that is now on `dev`.
 Its explicit results stand, but its explicit default does not.
 
-Baseline `07d2458`, head `9d0d4db` + this journal. Seven commits, no branch, no PR.
+Baseline `07d2458`, head **`d1ff1c3`**. Eight commits, no branch, no PR, `main` untouched.
 
 ## Findings
 
@@ -16,7 +16,7 @@ Baseline `07d2458`, head `9d0d4db` + this journal. Seven commits, no branch, no 
 | 3 | DCD truncation computed a frame as three coordinate blocks, missing the 56-byte unit-cell record, and corrupted every periodic trajectory it touched | new `dcdtail` module walking real Fortran records, validating every marker, updating offsets 8 and 20 together, atomic replace | `test_dcd_tail_recovery.py` (17) | measured 96 assumed vs 152 actual bytes for a 6-atom periodic frame; verified with a second, independently written DCD reader |
 | 4 | committed outputs were not checked before append; a trajectory shorter than its own watermark was treated as resumable | `inspect_committed_outputs` / `assert_committed_outputs_intact`: longer is truncated to the watermark, **shorter is refused** as missing history | `test_cmd_continuity_and_crash.py`, `integration_cpu.sh` step 13 | torn tails removed with committed frames byte-identical, both periodic and nonperiodic |
 | 5 | invocation accounting could disagree with the data, and two invocations could share a run directory | invocation record, watermarks and continuity hash written inside the *same* atomic commit; `close_reporters` refuses to commit on an unclosable stream; exclusive `flock` per run directory | `test_cmd_continuity_and_crash.py` incl. `test_two_invocations_cannot_share_one_run_directory` | history `[1000, 2000, 2000]` before, contiguous `(1, 0, 1000) (2, 1000, 2000)` after |
-| 6 | validation gates deferred, and remote CI unverified | staged cMD gated on CPU from the installed wheel: normal resume, forced State fallback, crash/tail recovery | `integration_cpu.sh` steps 10–13 | all gates below; **remote CI remains unverified — see Blocked** |
+| 6 | validation gates deferred, and remote CI unverified | staged cMD gated on CPU from the installed wheel: normal resume, forced State fallback, crash/tail recovery | `integration_cpu.sh` steps 10–13 | all gates below; remote CI **green for `d1ff1c3`** (`fast` #28, `integration-cpu` #28) |
 | 7 | TIP3P-FB was the active explicit default although ff19SB was parameterised against OPC | four `-v2` OPC profiles become the defaults; `-v1` kept name-resolvable, `is_default: false`, `superseded_by`, COMPATIBILITY ONLY | `test_opc_default.py` (23) | `default` resolves to `-v2` for all four explicit route/method pairs; goldens changed for exactly those four, implicit untouched |
 
 ## A defect the OPC change exposed
@@ -116,26 +116,27 @@ e1f94ba  fix(ci): step 6 was still building a spec from retired production field
 9d0d4db  test(ci): gate the staged cMD path, and migrate the integration documents
 ```
 
-## Blocked: remote CI is unverified
+## Remote CI
 
-Both workflows trigger on pushes to `dev` (`fast.yml`, `integration-cpu.yml`, `branches:
-[main, dev, openmm]`), and the code is pushed. **The Actions result for the final SHA could not be
-read**, so this work is not claimed as a pass.
+Both workflows trigger on pushes to `dev` and both are **green for the final SHA `d1ff1c3`**.
 
-* `gh` is not installed, and no `GH_*` or `GITHUB_*` token exists in the environment.
-* The repository is private, so unauthenticated API access returns 404.
-* SSH works for git transport but is not usable for the REST API.
-* The token stored in `~/.config/gh/hosts.yml` authenticates as `csy0000` and returns **HTTP 200**
-  on `/repos/csy0000/MD-templates`, but **HTTP 403 "Resource not accessible by personal access
-  token"** on both `/actions/runs` and `/actions/workflows`.
+| workflow | run | conclusion | duration | URL |
+|---|---|---|---|---|
+| `fast` | #28 | **success** | 2 m 04 s | https://github.com/csy0000/MD-templates/actions/runs/32476211126 |
+| `integration-cpu` | #28 | **success** | 3 m 57 s | https://github.com/csy0000/MD-templates/actions/runs/32476210988 |
 
-GitHub names the missing permission itself in the response header:
+Every step succeeded in both jobs; the only skipped steps are the `if: failure()` diagnostic
+uploads. `integration-cpu` ran the full 13-step gate, the real subprocess crash-recovery slow tests
+and the bundle-portability slow tests.
 
-```
-x-accepted-github-permissions: actions=read
-```
+**The baseline was red.** `fast` and `integration-cpu` both **failed** at `07d2458` (#27) and at
+`7684854` (#26), and the last green pair before this work was #25 at `5471471` on `main`. The cause
+was the one recorded above: both CI scripts still constructed their documents from the retired
+`n_chunks` / `chunk` / `scale_factors` production fields, so each aborted before running anything.
+That is why the previous round reported these gates as unverified rather than failing — the failure
+was in the harness, not in the code under test.
 
-This is a token-permission boundary, not a transient failure, and it cannot be resolved from this
-machine. **To unblock:** add **Actions: Read** to that fine-grained PAT (or install `gh` and
-authenticate with a token that has it), after which the runs for the final SHA can be located and
-their conclusions recorded here.
+Reading these results required **Actions: Read** on the fine-grained PAT, which was absent while
+this work was done and added afterwards. Until then every Actions route returned HTTP 403
+"Resource not accessible by personal access token", with GitHub naming the missing permission in
+the `x-accepted-github-permissions: actions=read` response header.
