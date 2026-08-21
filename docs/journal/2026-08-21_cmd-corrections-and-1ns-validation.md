@@ -1,5 +1,12 @@
 # 2026-08-21 — Standalone cMD, committed segments, and two 1 ns alanine validations
 
+> **Superseded by [`2026-08-21_cmd-review-fixes-and-opc-default.md`](2026-08-21_cmd-review-fixes-and-opc-default.md).**
+> Seven findings were raised against this round. The **implicit** results and hashes below no longer
+> describe the code on `dev`: the positional restraint used `periodicdistance` in implicit solvent,
+> so it read box vectors that System should not have had, and correcting it changed that
+> Hamiltonian. The explicit results stand, but TIP3P-FB is no longer the active default — OPC is,
+> via the `explicit-*-v2` profiles.
+
 Instruction: `claudecode-instructions/20260821_cmd-corrections-and-1ns-validation.md`
 Starting commit: `8fa39cb` (instruction) on `dev`, itself a descendant of `8c0c85c`
 
