@@ -175,6 +175,9 @@ def _runtime_cfg(payload: dict) -> dict:
     execution = payload.get("execution") or {}
     cfg["production"]["platform"] = execution.get("platform", "CPU")
     cfg["production"]["precision"] = execution.get("precision", "mixed")
+    # Filled in by execute_stage from --devices. Left None here so `_runtime_cfg` stays a pure
+    # projection of the payload; a stage that silently chose its own GPU would place work on a
+    # device the operator did not select.
     cfg["production"]["device_index"] = None
     return cfg
 
@@ -232,6 +235,15 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     from .reporting import attach_reporters
 
     cfg = _runtime_cfg(payload)
+    # A single-shot or cMD stage runs one Context, so it takes the FIRST device of the requested
+    # set. Refusing to interpret --devices here would have meant the flag silently did nothing on
+    # every stage except REST2, and the run would land on whichever GPU CUDA picked.
+    device_index = None
+    if devices:
+        first = str(devices).split(",")[0].strip()
+        if first:
+            device_index = int(first)
+            cfg["production"]["device_index"] = device_index
     system = XmlSerializer.deserialize((here / payload["input"]["system_xml"]).read_text())
     pdb = PDBFile(str(here / payload["input"]["topology"]))
     # Asked of the SYSTEM. A nonperiodic Context still returns default box vectors, so testing a
@@ -289,7 +301,8 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
         barostat.setRandomNumberSeed(int(stage_seeds["barostat"]))
         barostat_index = system.addForce(barostat)
 
-    sim = _make_simulation(pdb.topology, system, cfg, seed=int(stage_seeds["integrator"]))
+    sim = _make_simulation(pdb.topology, system, cfg, seed=int(stage_seeds["integrator"]),
+                           device_index=device_index)
     # Velocities are initialised ONCE, on entering dynamics from a state that carries none -- in
     # practice NVT, after minimisation. Every later stage inherits them. Re-drawing at each stage
     # discards the equilibration that stage just paid for and hides it behind a plausible-looking

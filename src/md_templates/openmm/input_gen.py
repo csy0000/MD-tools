@@ -256,10 +256,14 @@ def _run_all(stages: tuple[str, ...]) -> str:
     # the runner reads its own committed-generation record to find where the last one stopped.
     # That is why the segment count is a loop here and not a field in the stage JSON -- asking for
     # more sampling must not change the configuration hash.
-    lines = "\n".join(
-        (f'run_segments {s} "$NUMBER_OF_SEGMENTS"' if s.startswith("REST2") else f'run_stage {s}')
-        for s in stages
-    )
+    def _line(stage: str) -> str:
+        if stage.startswith("REST2"):
+            return f'run_segments {stage} "$REST2_NUMBER_OF_SEGMENTS"'
+        if stage.startswith("cMD"):
+            return f'run_segments {stage} "$CMD_NUMBER_OF_SEGMENTS"'
+        return f"run_stage {stage}"
+
+    lines = "\n".join(_line(s) for s in stages)
     return f"""#!/usr/bin/env bash
 # Run every stage in order. Each stage's own launcher owns how that stage runs; this file owns
 # only the ORDER and the record of what was executed.
@@ -267,10 +271,13 @@ set -euo pipefail
 PROJECT="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 cd "$PROJECT"
 
-# How many REST2 segments to run. This is an EXECUTION choice and lives here, never in the
-# scientific JSON: asking for a longer run must not change the configuration hash.
-: "${{NUMBER_OF_SEGMENTS:=2}}"
-export NUMBER_OF_SEGMENTS
+# How many segments of each production stage to run. These are EXECUTION choices and live here,
+# never in the scientific JSON: asking for a longer run must not change the configuration hash.
+# They are separate because the two stages are separately extensible -- adding cMD segments and
+# adding REST2 segments are different requests, and one number could not express both.
+: "${{CMD_NUMBER_OF_SEGMENTS:=1}}"
+: "${{REST2_NUMBER_OF_SEGMENTS:=2}}"
+export CMD_NUMBER_OF_SEGMENTS REST2_NUMBER_OF_SEGMENTS
 
 run_stage () {{
     local s="$1"
@@ -281,9 +288,12 @@ run_stage () {{
     "./$s/$s.sh"
 }}
 
-# Run a replica-exchange stage for N segments. Re-invoking the SAME launcher is what continues the
-# chain; the runner decides the restart point from its own record, so this loop never has to know
-# where the last segment stopped.
+# Run a production stage for N segments. Re-invoking the SAME launcher is what continues the chain:
+# both cMD and REST2 read their own committed-generation record to find the restart point, so this
+# loop never has to know where the last segment stopped.
+#
+# Equilibration above runs once. To ADD segments later, invoke the stage launcher directly rather
+# than re-running this script -- that continues the same run without re-running minimisation.
 run_segments () {{
     local s="$1" n="$2" i
     for (( i=1; i<=n; i++ )); do
@@ -396,6 +406,41 @@ def _refuse_keeping_results_from_another_protocol(outdir: Path, hashes: dict) ->
         "  --inherit <this project>/run_manifest.json:<stage> to reuse an endpoint without\n"
         "  pretending the old results belong to the new protocol."
     )
+
+
+def _reporting_for_stage(stage: str, steps: int, full_steps: int, selected_steps: int) -> dict:
+    """Which reporting streams this stage can honestly declare.
+
+    An interval longer than the stage produces no frames. Declaring it anyway is the defect this
+    repository already fixed once in the other direction -- a manifest describing files that do not
+    exist -- so the generator omits what cannot be written and says why.
+
+    Equilibration keeps its state log wherever the cadence fits, because temperature and density
+    settling is exactly what a reader wants from those stages; it is the trajectories that are a
+    production concern.
+    """
+    reporting: dict = {"selected_atoms": {"type": "solute"}}
+    omitted: dict = {}
+
+    for key, interval, label in (("full_system_interval_steps", full_steps, "all-atom trajectory"),
+                                 ("selected_atoms_interval_steps", selected_steps,
+                                  "selected-atom trajectory")):
+        if steps and interval and interval <= steps:
+            reporting[key] = interval
+        elif steps:
+            omitted[label] = (f"interval {interval:,} steps exceeds this stage's {steps:,} steps")
+
+    # the state log falls back to a cadence that fits, so equilibration is still observable
+    if steps:
+        state_interval = full_steps if full_steps <= steps else max(1, steps // 10)
+        reporting["state_interval_steps"] = state_interval
+        if state_interval != full_steps:
+            omitted["state log cadence"] = (
+                f"{full_steps:,} steps exceeds this stage, so it logs every "
+                f"{state_interval:,} steps instead")
+    if omitted:
+        reporting["omitted"] = omitted
+    return reporting
 
 
 def md_config_method(md_config: dict) -> str:
@@ -659,9 +704,14 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
                             "the same thing in every restrained stage",
                 } if restrained else None),
                 "reporting": {
-                    "full_system_interval_steps": full_steps,
-                    "selected_atoms_interval_steps": selected_steps,
-                    "state_interval_steps": full_steps,
+                    # A stream is DECLARED only where it can actually produce a frame. The
+                    # reporting cadence is a production cadence -- 100 ps between all-atom frames --
+                    # and an equilibration stage is 10 ps long, so declaring it there would promise
+                    # a trajectory that cannot exist. Rather than attach a reporter that writes
+                    # nothing, the interval is omitted and the reason is recorded, which keeps
+                    # "everything declared is written" true for every stage.
+                    **_reporting_for_stage(stage, stage_steps.get(stage, 0),
+                                           full_steps, selected_steps),
                     "selected_atoms": {"type": "solute"},
                     # What the prepared bundle says the selection should resolve to. The stage
                     # re-resolves it against the topology and refuses on a mismatch, so a project
