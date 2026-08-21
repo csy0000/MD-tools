@@ -188,6 +188,21 @@ implicit  cMD_1.log                 be8ff48f7145ea9002cc356d6fad4eed23dbb281b488
 Driver 580.173.02, OpenMM 8.5.2, ParmEd 4.3.1, Python 3.12.13, CUDA mixed precision. Runs live under
 `MD-test/cmd-validation-20260821-gaps/`, outside the repository; nothing generated is committed.
 
+## Remote CI
+
+Both workflows trigger on pushes to `dev` and both are green.
+
+| SHA | workflow | run | id | conclusion | URL |
+|---|---|---|---|---|---|
+| `25f7832` (code + journal) | `fast` | #36 | 32524723711 | **success** | https://github.com/csy0000/MD-templates/actions/runs/32524723711 |
+| `25f7832` | `integration-cpu` | #36 | 32524723755 | **success** | https://github.com/csy0000/MD-templates/actions/runs/32524723755 |
+
+`25f7832` carries every code change in this round. This commit adds only the table above, so its own
+runs cannot be listed inside itself; the final SHA and its two green runs are recorded in the task
+report alongside this journal, and were verified before the work was reported complete.
+
+The previous journal's #31 URLs describe `b1ab424` and do not apply to this code.
+
 ## Limitations
 
 * Bundle reproducibility is *same machine, same library versions*. A different OpenMM release may
