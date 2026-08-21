@@ -1,11 +1,11 @@
-# cMD review fixes and the OPC default
+# cMD review fixes and the explicit-water defaults
 
 **2026-08-21.** Seven findings from the review of `20260821_cmd-corrections-and-1ns-validation`.
 That journal is **superseded**: its implicit hashes were produced under a restraint that read box
 vectors an implicit System should not have, so they do not describe the code that is now on `dev`.
 Its explicit results stand, but its explicit default does not.
 
-Baseline `07d2458`, final SHA **`935e9d5`**. Nine commits, no branch, no PR, `main` untouched.
+Baseline `07d2458`, final SHA **`b1ab424`**. Eleven commits, no branch, no PR, `main` untouched.
 
 ## Findings
 
@@ -16,8 +16,8 @@ Baseline `07d2458`, final SHA **`935e9d5`**. Nine commits, no branch, no PR, `ma
 | 3 | DCD truncation computed a frame as three coordinate blocks, missing the 56-byte unit-cell record, and corrupted every periodic trajectory it touched | new `dcdtail` module walking real Fortran records, validating every marker, updating offsets 8 and 20 together, atomic replace | `test_dcd_tail_recovery.py` (17) | measured 96 assumed vs 152 actual bytes for a 6-atom periodic frame; verified with a second, independently written DCD reader |
 | 4 | committed outputs were not checked before append; a trajectory shorter than its own watermark was treated as resumable | `inspect_committed_outputs` / `assert_committed_outputs_intact`: longer is truncated to the watermark, **shorter is refused** as missing history | `test_cmd_continuity_and_crash.py`, `integration_cpu.sh` step 13 | torn tails removed with committed frames byte-identical, both periodic and nonperiodic |
 | 5 | invocation accounting could disagree with the data, and two invocations could share a run directory | invocation record, watermarks and continuity hash written inside the *same* atomic commit; `close_reporters` refuses to commit on an unclosable stream; exclusive `flock` per run directory | `test_cmd_continuity_and_crash.py` incl. `test_two_invocations_cannot_share_one_run_directory` | history `[1000, 2000, 2000]` before, contiguous `(1, 0, 1000) (2, 1000, 2000)` after |
-| 6 | validation gates deferred, and remote CI unverified | staged cMD gated on CPU from the installed wheel: normal resume, forced State fallback, crash/tail recovery | `integration_cpu.sh` steps 10–13 | all gates below; remote CI **green** (`fast` #28/#29, `integration-cpu` #28/#29) |
-| 7 | TIP3P-FB was the active explicit default although ff19SB was parameterised against OPC | four `-v2` OPC profiles become the defaults; `-v1` kept name-resolvable, `is_default: false`, `superseded_by`, COMPATIBILITY ONLY | `test_opc_default.py` (23) | `default` resolves to `-v2` for all four explicit route/method pairs; goldens changed for exactly those four, implicit untouched |
+| 6 | validation gates deferred, and remote CI unverified | staged cMD gated on CPU from the installed wheel: normal resume, forced State fallback, crash/tail recovery | `integration_cpu.sh` steps 10–13 | all gates below; remote CI **green** (`fast` and `integration-cpu` #28, #29, #31) |
+| 7 | TIP3P-FB was the active explicit default although ff19SB was parameterised against OPC | four `-v2` profiles become the defaults, water chosen **per solute** (see below); `-v1` kept name-resolvable, `is_default: false`, `superseded_by`, COMPATIBILITY ONLY | `test_opc_default.py` (27) | `default` resolves to `-v2` for all four explicit route/method pairs; goldens changed for exactly those four, implicit untouched |
 
 ## A defect the OPC change exposed
 
@@ -34,7 +34,44 @@ left exactly as declared — `tip3pfb` parameters packed from a `tip3p` box is t
 arrangement, and rewriting it would change the resolved configuration, and the hash, of every
 existing v1 run. The substitution is printed and recorded in the bundle provenance.
 
-## What was deliberately not repointed at OPC
+## Revised after review: the default water follows the solute
+
+The instruction specified OPC for both routes. On review that was corrected for the **ligand**
+route, because the two force fields were validated against different water:
+
+* **ff19SB** — amino-acid-specific CMAPs trained against QM energy surfaces computed *in solution*
+  and validated with OPC. With TIP3P it over-stabilises helices, which is the property the CMAPs
+  exist to get right. OPC is not a preference here; the paper tested both.
+* **Sage 2.2** — Lennard-Jones parameters refit against condensed-phase data conditioned on plain
+  TIP3P, and the OpenFF force fields ship TIP3P water parameters themselves.
+
+| solute | default water | reasoning |
+|---|---|---|
+| peptide | `amber19/opc.xml` + `opc` | ff19SB's validated partner |
+| ligand | `amber19/tip3p.xml` + `tip3p` | Sage's validated partner |
+| complex | `amber19/opc.xml` + `opc` | one box, one water: the protein backbone is the dominant error term, so ff19SB wins and the ligand runs slightly off its validation water |
+
+Plain **TIP3P**, not TIP3P-FB — the latter is a separate ForceBalance refit with different charges
+and LJ terms, is not what Sage was conditioned against, and is what the `-v1` profiles used. The
+choice is applied before any user configuration, so an explicit `forcefield.water` still wins and
+is still recorded as user input; provenance names the default that applied as
+`package default: <solute kind> solute`.
+
+This does not affect the CUDA validations below: alanine is a peptide, so it was and remains OPC.
+
+## A second pre-existing crash, found by exercising the ligand route
+
+`MD_system_gen.py` could not build **any** explicit ligand bundle. On the ligand route
+`forcefield.json` records the small molecule as a block — force field name plus charge method, net
+and formal charge and atom count — while the manifest records a bare name, and the three-file
+agreement check put that block into a set: `TypeError: unhashable type: 'dict'`. It crashed instead
+of comparing. Verified to fail identically at `57ee54b`, so it predates this work; it survived
+because the suite exercised SMILES only through `md-openmm prepare`, never through this front end.
+The check now takes the name out of the block and compares canonical text, so an unanticipated
+value is reported as a disagreement rather than killing the build that was about to be written. A
+new end-to-end test covers both routes through `MD_system_gen.py`.
+
+## What was deliberately not repointed
 
 Reproduction records, labelled rather than changed: `cyclo_rgdfv.yaml` and `test/rgd/` reproduce
 completed RGD production trajectories, `small_macrocycle_smoke.yaml` has recorded hashes, and
@@ -45,9 +82,9 @@ completed RGD production trajectories, `small_macrocycle_smoke.yaml` has recorde
 
 | gate | command | result |
 |---|---|---|
-| per-finding focused tests | `pytest tests/test_restraint_periodicity.py tests/test_dcd_tail_recovery.py tests/test_opc_default.py tests/test_cmd_continuity_and_crash.py tests/test_cmd_segments.py` | **83 passed**, 96.14 s |
-| non-slow suite | `pytest -m "not slow"` | **801 passed, 119 deselected**, 79.45 s |
-| complete suite | `pytest` | **920 passed, 0 failed, 0 error, 0 skipped**, 3 warnings, 1434.20 s (23:54) |
+| per-finding focused tests | `pytest tests/test_restraint_periodicity.py tests/test_dcd_tail_recovery.py tests/test_opc_default.py tests/test_cmd_continuity_and_crash.py tests/test_cmd_segments.py` | **93 passed**, 122.57 s |
+| non-slow suite | `pytest -m "not slow"` | **804 passed, 120 deselected**, 77.92 s |
+| complete suite | `pytest` | **924 passed, 0 failed, 0 error, 0 skipped**, 3 warnings, 1412.78 s (23:32) |
 | fast CI | `scripts/ci/fast_checks.sh` | **PASSED**, 1 m 36 s — wheel + sdist, packaged-resource inspection, public commands from outside the checkout, all 13 profiles listed with the four v2 defaults |
 | CPU integration | `scripts/ci/integration_cpu.sh` | **PASSED**, 13 steps — relocation with the source deleted, offline validation, chunked resume, State fallback, and the three new staged-cMD gates |
 | committed artifacts | `git ls-files` scan | clean: **2.1 MiB across 205 files**, no trajectory, checkpoint or State, nothing over 1 MiB |
@@ -114,12 +151,16 @@ b1d0647  feat(profiles)!: OPC is the active explicit-solvent default, versioned 
 270d8b8  fix(solvation): make the packing model follow the water force field
 e1f94ba  fix(ci): step 6 was still building a spec from retired production fields
 9d0d4db  test(ci): gate the staged cMD path, and migrate the integration documents
+d1ff1c3  docs(journal): cMD review fixes and the OPC default
+935e9d5  docs(journal): record the green Actions runs for d1ff1c3
+57ee54b  docs(journal): record run #29, green for the final SHA
+b1ab424  feat(profiles)!: the default water model follows the solute
 ```
 
 ## Remote CI
 
 Both workflows trigger on pushes to `dev` and both are green for `d1ff1c3` (the code) and
-for **`935e9d5`, the final SHA** (this journal's CI section).
+for **`b1ab424`, the final SHA** (#31).
 
 | workflow | run | conclusion | duration | URL |
 |---|---|---|---|---|
@@ -127,6 +168,8 @@ for **`935e9d5`, the final SHA** (this journal's CI section).
 | `integration-cpu` | #28 | **success** | 3 m 57 s | https://github.com/csy0000/MD-templates/actions/runs/32476210988 |
 | `fast` | #29 | **success** | — | https://github.com/csy0000/MD-templates/actions/runs/32491770318 |
 | `integration-cpu` | #29 | **success** | — | https://github.com/csy0000/MD-templates/actions/runs/32491770319 |
+| `fast` | #31 | **success** | — | https://github.com/csy0000/MD-templates/actions/runs/32497458186 |
+| `integration-cpu` | #31 | **success** | — | https://github.com/csy0000/MD-templates/actions/runs/32497458036 |
 
 Every step succeeded in both jobs; the only skipped steps are the `if: failure()` diagnostic
 uploads. `integration-cpu` ran the full 13-step gate, the real subprocess crash-recovery slow tests
