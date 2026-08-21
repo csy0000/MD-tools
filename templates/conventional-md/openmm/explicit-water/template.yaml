@@ -9,7 +9,7 @@ schema_version: 1
 template_id: conventional-md/openmm/explicit-water
 display_name: Conventional MD in explicit water (OpenMM)
 summary: >-
-  One free walker in TIP3P-FB water at a fixed Hamiltonian, run in chunks from a hash-checked,
+  One free walker in OPC water at a fixed Hamiltonian, run in chunks from a hash-checked,
   transportable prepared bundle. Parameterisation is by declared route: Sage/openff-2.2.0 with
   AM1-BCC for ligands, ff19SB for peptides.
 

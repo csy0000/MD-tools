@@ -238,7 +238,7 @@ def main() -> None:
                      choices=("dodecahedron", "cube", "octahedron"))
     box.add_argument("--salt-molar", type=float, default=0.15, dest="salt_molar")
     box.add_argument("--ph", type=float, default=7.0)
-    box.add_argument("--water", default=None, help="water XML (default amber19/tip3pfb.xml)")
+    box.add_argument("--water", default=None, help="water XML (default amber19/opc.xml)")
     box.add_argument("--hydrogen-mass-amu", type=float, default=3.024, dest="hydrogen_mass_amu")
     box.add_argument("--no-omega-selective", action="store_true",
                      help="scale the amide omega torsions too (default: leave them unscaled)")

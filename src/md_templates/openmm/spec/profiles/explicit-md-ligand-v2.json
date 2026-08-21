@@ -1,21 +1,21 @@
 {
-  "profile_id": "explicit-rest2-peptide-v1",
+  "profile_id": "explicit-md-ligand-v2",
   "profile_schema_version": 5,
-  "description": "Standard explicit-water REST2, peptide/PDB route \u2014 COMPATIBILITY ONLY: TIP3P-FB water. Superseded by explicit-rest2-peptide-v2, which uses OPC. Kept name-resolvable so existing configurations keep resolving to the water model they were run with.",
-  "route": "pdb",
-  "method": "rest2",
-  "is_default": false,
+  "description": "Explicit-water conventional MD, ligand/SMILES route, ff19SB/OPC \u2014 the active default. ff19SB was parameterised against OPC, which is why OPC rather than TIP3P-FB is the default here.",
+  "route": "smiles",
+  "method": "md",
+  "is_default": true,
   "defaults": {
     "build": {
       "schema_version": 1,
       "forcefield": {
-        "small_molecule": null,
-        "charge_method": null,
-        "protein": "amber19/protein.ff19SB.xml",
-        "water": "amber19/tip3pfb.xml"
+        "small_molecule": "openff-2.2.0",
+        "charge_method": "am1bcc",
+        "protein": null,
+        "water": "amber19/opc.xml"
       },
       "solvation": {
-        "water_model": "tip3p",
+        "water_model": "opc",
         "box_shape": "dodecahedron",
         "padding": "1.2 nm",
         "padding_semantics": "solute-image-gap",
@@ -56,30 +56,10 @@
         "npt": "10 ps"
       },
       "production": {
-        "method": "rest2",
-        "enhanced_region": {
-          "type": "solute"
-        },
-        "tau_ladder": {
-          "minimum": 0.0,
-          "maximum": 0.5,
-          "count": 6,
-          "interpolation": "linear"
-        },
-        "omega_exclusion": {
-          "enabled": true,
-          "definition": "peptide_omega",
-          "proline_like_residues": [
-            "PRO"
-          ],
-          "max_proline_ring_size": 7
-        },
-        "relaxation": "10 ps",
-        "seed": null,
+        "method": "md",
         "duration_per_segment": "5 ns",
-        "exchange": {
-          "number_of_exchanges_per_segment": 1000
-        }
+        "scale_factor": 1.0,
+        "seed": null
       }
     },
     "execution": {
@@ -94,6 +74,5 @@
         "checkpoint": "100 ps"
       }
     }
-  },
-  "superseded_by": "explicit-rest2-peptide-v2"
+  }
 }

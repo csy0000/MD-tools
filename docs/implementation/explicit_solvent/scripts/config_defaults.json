@@ -33,13 +33,13 @@
   },
   "forcefield": {
     "protein": "amber19/protein.ff19SB.xml",
-    "water": "amber19/tip3pfb.xml",
+    "water": "amber19/opc.xml",
     "ligand": "openff-2.2.0",
     "ligand_charge_method": "am1bcc",
     "extra_xml": []
   },
   "solvation": {
-    "water_model": "tip3p",
+    "water_model": "opc",
     "box_shape": "dodecahedron",
     "padding_nm": 1.2,
     "padding_semantics": "solute-image-gap",

@@ -205,7 +205,7 @@ def test_route_and_force_field_must_agree():
 # ---------------------------------------------------------------------------------------------
 
 def test_default_profile_is_selected_from_the_declared_route_and_method():
-    assert resolved()["profile"]["profile_id"] == "explicit-md-ligand-v1"
+    assert resolved()["profile"]["profile_id"] == "explicit-md-ligand-v2"
 
 
 def test_the_smoke_profile_is_never_selected_as_a_default():
@@ -229,7 +229,7 @@ def test_an_explicitly_pinned_profile_is_used():
 
 def test_a_profile_for_the_wrong_method_is_refused():
     doc = json.loads(json.dumps(MINIMAL))
-    doc["profile"] = "explicit-rest2-ligand-v1"          # document declares md
+    doc["profile"] = "explicit-rest2-ligand-v2"          # document declares md
     with pytest.raises(resolve.ResolutionError, match="method"):
         resolved(doc)
 
@@ -285,7 +285,7 @@ def test_every_profile_is_valid_and_carries_an_id_version_and_hash():
 
 def test_changing_a_profile_value_changes_its_hash():
     """A scientific change to a profile cannot reuse its identity silently."""
-    doc = resolve.load_profile("explicit-md-ligand-v1")
+    doc = resolve.load_profile("explicit-md-ligand-v2")
     before = canonical.sha256_of(doc)
     doc["defaults"]["build"]["nonbonded"]["cutoff"] = "1.2 nm"
     assert canonical.sha256_of(doc) != before

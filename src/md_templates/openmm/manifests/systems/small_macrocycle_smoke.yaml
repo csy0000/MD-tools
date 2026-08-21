@@ -20,6 +20,8 @@ parameterization:
   small_molecule_forcefield: openff-2.2.0
   charge_method: am1bcc
   protein_forcefield: null
+  # PINNED to TIP3P-FB: this smoke fixture has recorded hashes and exists to be fast and
+  # unchanging. The active explicit default is OPC (explicit-*-v2).
   water_forcefield: amber19/tip3pfb.xml
 
 # Deliberately tight: a small box keeps the CPU smoke to minutes. Not a production solvation

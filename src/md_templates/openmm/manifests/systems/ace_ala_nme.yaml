@@ -30,13 +30,13 @@ parameterization:
   small_molecule_forcefield: null
   charge_method: null
   protein_forcefield: amber19/protein.ff19SB.xml
-  water_forcefield: amber19/tip3pfb.xml
+  water_forcefield: amber19/opc.xml
 
 # 1.2 nm padding in a cube, matching the smoke system's rationale: large enough that the natural
 # box already exceeds twice the cutoff, so the box-growth policy never has to grow it and the
 # first NPT step cannot shrink it below the minimum-image limit.
 solvation:
-  water_model: tip3p
+  water_model: opc
   padding_nm: 1.2
   box_shape: cube
   ionic_strength_molar: 0.0

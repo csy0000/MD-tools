@@ -1,10 +1,10 @@
 {
   "profile_id": "explicit-rest2-ligand-v1",
   "profile_schema_version": 5,
-  "description": "Standard explicit-water REST2, ligand/SMILES route",
+  "description": "Standard explicit-water REST2, ligand/SMILES route \u2014 COMPATIBILITY ONLY: TIP3P-FB water. Superseded by explicit-rest2-ligand-v2, which uses OPC. Kept name-resolvable so existing configurations keep resolving to the water model they were run with.",
   "route": "smiles",
   "method": "rest2",
-  "is_default": true,
+  "is_default": false,
   "defaults": {
     "build": {
       "schema_version": 1,
@@ -94,5 +94,6 @@
         "checkpoint": "100 ps"
       }
     }
-  }
+  },
+  "superseded_by": "explicit-rest2-ligand-v2"
 }

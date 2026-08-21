@@ -153,7 +153,7 @@ parameterization:
   small_molecule_forcefield: openff-2.2.0
   charge_method: am1bcc
   protein_forcefield: null
-  water_forcefield: amber19/tip3pfb.xml
+  water_forcefield: amber19/opc.xml
 ```
 
 For a PDB-based peptide macrocycle the contract is different, and the difference is enforced:

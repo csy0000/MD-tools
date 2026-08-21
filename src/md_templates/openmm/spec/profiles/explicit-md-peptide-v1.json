@@ -1,10 +1,10 @@
 {
   "profile_id": "explicit-md-peptide-v1",
   "profile_schema_version": 5,
-  "description": "Standard explicit-water conventional MD, peptide/PDB route",
+  "description": "Standard explicit-water conventional MD, peptide/PDB route \u2014 COMPATIBILITY ONLY: TIP3P-FB water. Superseded by explicit-md-peptide-v2, which uses OPC. Kept name-resolvable so existing configurations keep resolving to the water model they were run with.",
   "route": "pdb",
   "method": "md",
-  "is_default": true,
+  "is_default": false,
   "defaults": {
     "build": {
       "schema_version": 1,
@@ -74,5 +74,6 @@
         "checkpoint": "100 ps"
       }
     }
-  }
+  },
+  "superseded_by": "explicit-md-peptide-v2"
 }

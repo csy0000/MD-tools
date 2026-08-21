@@ -10,7 +10,7 @@ schema_version: 1
 template_id: rest2/openmm/explicit-water
 display_name: Omega-selective REST2 in explicit water (OpenMM)
 summary: >-
-  Replica exchange with solute tempering over a declared scale-factor ladder in TIP3P-FB water,
+  Replica exchange with solute tempering over a declared scale-factor ladder in OPC water,
   with neighbour exchange and per-replica chunking, from a hash-checked, transportable prepared
   bundle. Solute torsion scaling excludes omega torsions by default.
 

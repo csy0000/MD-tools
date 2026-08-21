@@ -165,7 +165,9 @@ counts are exactly 10 ps / 2 ps.
   does not exchange makes a 1 µs reference worthless. **Run a ~2 ns acceptance pilot first.**
 * **the staged equilibration on an actual macrocycle** — alanine's solute barely moves (RMSD
   0.051 nm), which is not a test of the protocol's purpose.
-* **ff19SB + TIP3P-FB** — ff19SB was parameterised against OPC.
+* ~~**ff19SB + TIP3P-FB** — ff19SB was parameterised against OPC.~~ **Resolved 2026-08-21:** OPC
+  is now the active explicit default for both routes (`explicit-*-v2`). The TIP3P-FB `-v1` profiles
+  stay name-resolvable so existing runs remain reproducible.
 * **GPU timings**, so the wall-clock cost of 1 µs is unknown; `done.json` records ns/day per chunk,
   so the first real chunk answers it.
 * **the `"complex"` route** (ff19SB residues + SMIRNOFF ligand in one system).

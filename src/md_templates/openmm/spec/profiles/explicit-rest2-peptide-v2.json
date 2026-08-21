@@ -1,10 +1,10 @@
 {
-  "profile_id": "explicit-rest2-peptide-v1",
+  "profile_id": "explicit-rest2-peptide-v2",
   "profile_schema_version": 5,
-  "description": "Standard explicit-water REST2, peptide/PDB route \u2014 COMPATIBILITY ONLY: TIP3P-FB water. Superseded by explicit-rest2-peptide-v2, which uses OPC. Kept name-resolvable so existing configurations keep resolving to the water model they were run with.",
+  "description": "Standard explicit-water, peptide/PDB route, ff19SB/OPC \u2014 the active default. ff19SB was parameterised against OPC, which is why OPC rather than TIP3P-FB is the default here.",
   "route": "pdb",
   "method": "rest2",
-  "is_default": false,
+  "is_default": true,
   "defaults": {
     "build": {
       "schema_version": 1,
@@ -12,10 +12,10 @@
         "small_molecule": null,
         "charge_method": null,
         "protein": "amber19/protein.ff19SB.xml",
-        "water": "amber19/tip3pfb.xml"
+        "water": "amber19/opc.xml"
       },
       "solvation": {
-        "water_model": "tip3p",
+        "water_model": "opc",
         "box_shape": "dodecahedron",
         "padding": "1.2 nm",
         "padding_semantics": "solute-image-gap",
@@ -94,6 +94,5 @@
         "checkpoint": "100 ps"
       }
     }
-  },
-  "superseded_by": "explicit-rest2-peptide-v2"
+  }
 }

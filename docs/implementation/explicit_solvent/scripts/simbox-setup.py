@@ -4,7 +4,7 @@
     simbox-setup.py --smiles "$SMILES" --out-suffix "$SUFFIX" --config simbox-config.json
     simbox-setup.py --pdb    "$PDB"    --out-suffix "$SUFFIX" --config simbox-config.json
 
-Initial structure -> hydrogens at pH 7 -> rhombic-dodecahedron solvation (TIP3P-FB, 0.15 M NaCl)
+Initial structure -> hydrogens at pH 7 -> rhombic-dodecahedron solvation (OPC, 0.15 M NaCl)
 -> OpenMM System with PME at 1.0 nm, HBonds constraints and hydrogen mass repartitioning.
 
 --smiles is the LIGAND route: RDKit ETKDGv3 + MMFF94s, parameterised with Sage 2.2 + AM1BCC.

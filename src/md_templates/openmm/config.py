@@ -69,15 +69,17 @@ DEFAULTS: dict[str, Any] = {
     # ---- force field -------------------------------------------------------------------------
     "forcefield": {
         "protein": "amber19/protein.ff19SB.xml",
-        "water": "amber19/tip3pfb.xml",
+        "water": "amber19/opc.xml",
         "ligand": "openff-2.2.0",            # Sage 2.2
         "ligand_charge_method": "am1bcc",    # requires AmberTools (sqm) on PATH
         "extra_xml": [],
     },
     # ---- step 3: solvation -------------------------------------------------------------------
     "solvation": {
-        "water_model": "tip3p",              # 3-site geometry template; parameters come from
-                                             # forcefield.water (tip3pfb) -- see the doc
+        # OPC is the default explicit water model: ff19SB was parameterised against it. OpenMM
+        # ships no pre-equilibrated OPC box, so the packing model is substituted (see solvation.py)
+        # while the PARAMETERS come from forcefield.water = amber19/opc.xml.
+        "water_model": "opc",
         "box_shape": "dodecahedron",
         "padding_nm": 1.2,
         # "solute-image-gap": padding means what it says -- at least padding_nm of solvent between

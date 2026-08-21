@@ -1,5 +1,5 @@
 {
-  "profile": "explicit-md-peptide-v1",
+  "profile": "explicit-md-peptide-v2",
   "protocol": {
     "integrator": {
       "kind": "langevin-middle",

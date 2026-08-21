@@ -13,7 +13,7 @@ Two force-field routes, both exercised end to end on this machine:
 
 The route is **declared, never inferred**: a ligand manifest may not name a protein force field and
 a peptide manifest may not name a small-molecule one, because that is precisely how a peptide
-silently becomes a Sage run with the same system name. Water is TIP3P-FB throughout.
+silently becomes a Sage run with the same system name. Water is **OPC** throughout (the active `explicit-*-v2` profiles); the superseded `-v1` profiles remain name-resolvable for reproducing TIP3P-FB runs.
 
 Nothing here depends on the project it came from: no annealed-importance-sampling machinery, no implicit-solvent
 work.

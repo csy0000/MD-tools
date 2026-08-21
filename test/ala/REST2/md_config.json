@@ -1,5 +1,5 @@
 {
-  "profile": "explicit-rest2-peptide-v1",
+  "profile": "explicit-rest2-peptide-v2",
   "protocol": {
     "integrator": {
       "kind": "langevin-middle",

@@ -172,19 +172,26 @@ such system exists in this project yet and that path is **untested**.
 | peptide | **ff19SB** | `amber19/protein.ff19SB.xml` (ships with OpenMM 8.5) |
 | ligand / macrocycle | **Sage 2.2** (`openff-2.2.0`) | `SMIRNOFFTemplateGenerator`, openmmforcefields 0.16 |
 | ligand charges | **AM1BCC** | AmberTools `sqm` via the OpenFF toolkit |
-| water | **TIP3P-FB** | `amber19/tip3pfb.xml` |
+| water | **OPC** (active default since 2026-08-21) | `amber19/opc.xml` |
 | ions | Na⁺ / Cl⁻ at **0.15 M** + neutralising counterions | `addSolvent(ionicStrength=...)` |
 
-**`solvation.water_model = "tip3p"` is not a typo.** That argument selects the 3-site water
-*geometry template* Modeller packs into the box; the *parameters* come from whichever water XML the
-force field loaded, here `tip3pfb.xml`. TIP3P-FB is a reparameterisation of TIP3P with identical
-topology, so this is the documented way to build a TIP3P-FB box.
+**`solvation.water_model` selects geometry, `forcefield.water` selects parameters.** They are
+separate fields: the first picks the geometry template Modeller packs into the box, the second
+supplies the parameters. The active default sets **both** to OPC (`opc` / `amber19/opc.xml`); OPC is
+4-site, so the box carries one virtual site per water. The superseded `-v1` profiles pair
+`water_model: tip3p` with `amber19/tip3pfb.xml`, which was not a typo either: TIP3P-FB is a
+reparameterisation of TIP3P with identical topology, so the 3-site template is the correct packing
+geometry for it.
 
 **AmberTools must be on `PATH`.** The OpenFF toolkit registry discovers `AmberToolsToolkitWrapper`
 by looking for `sqm`/`antechamber` on `PATH`. In a bare shell they are not found even though they
 are installed in the `md-templates` environment, and AM1BCC then silently becomes unavailable.
 `build_forcefield` checks the registry and **fails loudly** rather than letting the charges fall back
 to a different method under an AM1BCC label. Always `conda activate md-templates`.
+
+**Superseded 2026-08-21: the default is now OPC, so this trade no longer applies to new runs.** The
+discussion below describes the `-v1` profiles, which are kept only for reproducing existing
+trajectories.
 
 **ff19SB was parameterised with OPC water, not TIP3P-FB.** The combination requested here is what
 this baseline implements, and it is a common and defensible pairing (TIP3P-FB is markedly better

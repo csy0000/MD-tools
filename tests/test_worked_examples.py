@@ -84,7 +84,13 @@ def test_rgdfv_uses_the_vetted_ligand_route_not_ff19sb():
 
 
 def test_rgdfv_water_is_matched_to_its_force_field():
-    """Sage/AM1-BCC was trained with TIP3P; OPC is ff19SB's partner, not Sage's."""
+    """test/rgd pins TIP3P-FB: it reproduces completed RGD production runs.
+
+    The active explicit default is now OPC for both routes (explicit-*-v2). This example is not
+    the default -- it is the record of what the RGD derivatives were actually run under, and it is
+    checked against the vetted manifest, which pins TIP3P-FB for the same reason. Repointing it at
+    OPC would change the physics of a reproduction record under an unchanged name.
+    """
     assert _resolved(RGDFV).build.solvation.water_model == "tip3p"
 
 

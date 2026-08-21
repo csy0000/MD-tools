@@ -1,7 +1,7 @@
 {
   "profile_id": "cpu-smoke-v1",
   "profile_schema_version": 5,
-  "description": "Tiny CPU smoke: proves execution, no scientific meaning",
+  "description": "Tiny CPU smoke: proves execution, no scientific meaning. Deliberate nondefault water: pins 3-site TIP3P-FB because this profile exists to run fast on CPU. The active explicit default is OPC (explicit-*-v2), which is 4-site.",
   "route": "smiles",
   "method": "rest2",
   "is_default": false,

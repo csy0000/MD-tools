@@ -1,5 +1,5 @@
 {
-  "profile": "explicit-rest2-peptide-v1",
+  "profile": "explicit-rest2-peptide-v2",
   "system": {
     "system_id": "ace_ala_nme",
     "display_name": "ACE-ALA-NME (alanine dipeptide), ff19SB peptide route",

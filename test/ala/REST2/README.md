@@ -23,8 +23,9 @@ quoted as if it did.
 | integrator | `LangevinMiddleIntegrator`, 300 K, friction 1/ps, **4 fs** (enabled by HMR) |
 
 **Why OPC and not TIP3P.** ff19SB's backbone parameters were fit with OPC, and that pairing is the
-published recommendation. The packaged profile defaults to `tip3pfb`, so this example overrides it
-deliberately rather than inheriting a mismatched pair.
+published recommendation. Since 2026-08-21 the packaged default *is* OPC (`explicit-*-v2`), so this
+example now inherits the correct pair rather than overriding a mismatched one. The superseded
+`-v1` profiles still name `tip3pfb` and stay resolvable for reproducing earlier runs.
 
 **OPC is a four-site model.** It carries a virtual site per water, so the OpenMM particle count
 exceeds the topology atom count. Anything that indexes particles must use the resolved indices

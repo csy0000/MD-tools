@@ -45,7 +45,7 @@ cat > "$WORKDIR/src_pdb/sim.yaml" <<'YAML'
 system: {system_id: ace_ala_nme, route: pdb, pdb: ace_ala_nme.pdb}
 build:
   forcefield: {small_molecule: null, charge_method: null,
-               protein: amber19/protein.ff19SB.xml, water: amber19/tip3pfb.xml}
+               protein: amber19/protein.ff19SB.xml, water: amber19/opc.xml}
   solvation: {box_shape: cube, padding: 1.2 nm, ionic_strength_molar: 0.0}
   nonbonded: {cutoff: 0.7 nm}
 protocol:
