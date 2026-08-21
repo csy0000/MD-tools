@@ -138,19 +138,43 @@ def solute_atom_indices(topology, selection: str = "solute") -> list:
     return out
 
 
+#: The two restraint distance conventions, named so a bundle records which one it used.
+RESTRAINT_MINIMUM_IMAGE = "minimum-image (periodicdistance)"
+RESTRAINT_CARTESIAN = "cartesian (nonperiodic)"
+
+
 def _add_positional_restraints(system, topology, selection: str, positions_nm: np.ndarray):
     """Add a flat harmonic positional restraint driven by the global parameter ``k_restraint``.
 
-    ``periodicdistance`` is used so an atom that wanders across a box face is still measured to its
-    own reference point rather than to an image of it.  The stiffness is a global parameter, so it
-    can be lowered between stages with one ``setParameter`` call instead of rebuilding the Context.
+    Returns ``(force_index, restrained_indices, convention)``.
+
+    The distance convention follows the SYSTEM, and getting this wrong is not cosmetic:
+
+    * **Explicit, periodic** -- ``periodicdistance``, so an atom that wanders across a box face is
+      still measured to its own reference point rather than to an image of it.
+    * **Implicit, nonperiodic** -- plain Cartesian displacement. ``periodicdistance`` in a system
+      with no box makes the restraint depend on OpenMM's default box vectors, and it makes the
+      restraint Force itself report periodic boundary use -- so a protocol that claims to have no
+      box acquires one through its own restraint.
+
+    Periodicity is read BEFORE the Force is added. Reading it afterwards would let the Force being
+    constructed change the answer used to construct it.
+
+    The stiffness is a global parameter, so it can be lowered between stages with one
+    ``setParameter`` call instead of rebuilding the Context.
     """
     from openmm import CustomExternalForce
-    from openmm.app import element as elem
 
-    force = CustomExternalForce(
-        "k_restraint*periodicdistance(x, y, z, x0, y0, z0)^2"
-    )
+    # decided from the unmodified System, before anything is added to it
+    periodic = bool(system.usesPeriodicBoundaryConditions())
+    if periodic:
+        expression = "k_restraint*periodicdistance(x, y, z, x0, y0, z0)^2"
+        convention = RESTRAINT_MINIMUM_IMAGE
+    else:
+        expression = "k_restraint*((x-x0)^2 + (y-y0)^2 + (z-z0)^2)"
+        convention = RESTRAINT_CARTESIAN
+
+    force = CustomExternalForce(expression)
     force.addGlobalParameter("k_restraint", 0.0)
     for name in ("x0", "y0", "z0"):
         force.addPerParticleParameter(name)
@@ -159,7 +183,14 @@ def _add_positional_restraints(system, topology, selection: str, positions_nm: n
     for atom_index in restrained:
         force.addParticle(int(atom_index), [float(x) for x in positions_nm[atom_index]])
     index = system.addForce(force)
-    return index, restrained
+
+    if not periodic and system.usesPeriodicBoundaryConditions():
+        raise RuntimeError(
+            "adding the positional restraint made a nonperiodic System report periodic boundary "
+            "conditions. The restraint expression must not reference a periodic function here; "
+            "refusing rather than running an implicit protocol that has silently acquired a box."
+        )
+    return index, restrained, convention
 
 
 def _kabsch_rmsd(a: np.ndarray, b: np.ndarray) -> float:
@@ -419,7 +450,7 @@ def minimize_equilibrate(cfg: dict, system_xml: Path, coords: Path, out_dir: Pat
     t_target = float(ecfg["heat_to_k"] or temperature)
 
     ref_positions = np.array(pdb.positions.value_in_unit(unit.nanometer))
-    restraint_index, restrained_atoms = _add_positional_restraints(
+    restraint_index, restrained_atoms, _restraint_convention = _add_positional_restraints(
         system, pdb.topology, str(ecfg["restraint_selection"]), ref_positions
     )
     barostat = MonteCarloBarostat(
