@@ -34,6 +34,12 @@ left exactly as declared — `tip3pfb` parameters packed from a `tip3p` box is t
 arrangement, and rewriting it would change the resolved configuration, and the hash, of every
 existing v1 run. The substitution is printed and recorded in the bundle provenance.
 
+> **Superseded on one decision by
+> [`2026-08-21_remaining-cmd-acceptance-gaps.md`](2026-08-21_remaining-cmd-acceptance-gaps.md).**
+> The water default is now derived from the resolved force-field family rather than from the solute
+> label, with primary sources cited and the mixed protein–ligand case documented. Nothing else in
+> this journal is reopened.
+
 ## Revised after review: the default water follows the solute
 
 The instruction specified OPC for both routes. On review that was corrected for the **ligand**

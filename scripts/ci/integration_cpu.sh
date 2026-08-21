@@ -205,9 +205,13 @@ COMMITTED=project/cMD_1/run/restart/committed.json
 
 python - <<'PYEOF'
 import json, pathlib, sys
+from md_templates.openmm.cmd_segments import CMD_RUN_STATE_VERSION
+
 c = json.loads(pathlib.Path("project/cMD_1/run/restart/committed.json").read_text())
-if c["cmd_schema_version"] != 2:
-    sys.exit(f"cmd_schema_version is {c['cmd_schema_version']}, expected 2")
+# compared against the constant, not a literal: pinning the number here meant a deliberate schema
+# bump broke the gate that was supposed to be checking the schema
+if c["cmd_schema_version"] != CMD_RUN_STATE_VERSION:
+    sys.exit(f"cmd_schema_version is {c['cmd_schema_version']}, expected {CMD_RUN_STATE_VERSION}")
 if c["invocations_completed"] != 2:
     sys.exit(f"expected 2 committed generations, got {c['invocations_completed']}")
 h = c["invocation_history"]
