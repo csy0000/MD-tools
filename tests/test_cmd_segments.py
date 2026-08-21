@@ -212,23 +212,33 @@ def test_an_incompatible_continuation_is_refused_before_anything_is_appended(md_
     assert trajectory.read_bytes() == before, "outputs were touched before the refusal"
 
 
-def test_the_continuity_contract_excludes_the_segment_count():
-    """Asking for more segments is the one change that is always safe."""
+@pytest.mark.slow
+def test_the_continuity_contract_excludes_the_segment_count(md_project):
+    """Asking for more segments is the one change that is always safe.
+
+    Built from the real project so the contract carries the artifact hashes it is supposed to bind;
+    a hand-made stub would only prove that the dictionary has the keys the test names.
+    """
     from md_templates.openmm.stage import _cmd_continuity
+    from openmm import XmlSerializer
+    from openmm.app import PDBFile
 
-    class _System:
-        def getNumParticles(self): return 22
-        def getNumConstraints(self): return 12
-        def usesPeriodicBoundaryConditions(self): return False
+    here = md_project / "cMD_1"
+    payload = json.loads((here / "cMD_1.json").read_text())
+    system = XmlSerializer.deserialize((here / payload["input"]["system_xml"]).read_text())
+    pdb = PDBFile(str(here / payload["input"]["topology"]))
 
-    payload = {"stage": "cMD_1", "steps": 1000,
-               "integrator": {"type": "langevin-middle", "timestep": "2 fs",
-                              "temperature": "300 K", "friction": "1 /ps"},
-               "reporting": {}, "input": {"state": "x.xml", "produced_by": "eq_nvt"}}
-    contract = _cmd_continuity(payload, _System(), selected_atoms_fingerprint=None)
-    assert "segments" not in json.dumps(contract).lower().replace("steps_per_segment", "")
+    contract = _cmd_continuity(payload, system, here=here, topology=pdb.topology,
+                               selected_atoms=list(range(system.getNumParticles())))
+    body = json.dumps(contract).lower().replace("steps_per_segment", "")
+    assert "number_of_segments" not in body and "segments_completed" not in body
     assert contract["ensemble"] == "NVT"
-    assert contract["steps_per_segment"] == 1000
+    assert contract["steps_per_segment"] == payload["steps"]
+    # and it binds identity, not merely counts
+    assert len(contract["system_xml_sha256"]) == 64
+    assert len(contract["topology_sha256"]) == 64
+    assert contract["selected_atoms_fingerprint"] is not None
+    assert contract["contract_version"] >= 2
 
 
 def test_an_uncommitted_tail_is_truncated_to_the_watermark(tmp_path):

@@ -112,7 +112,7 @@ def initial_structure(smiles: str, out_dir: Path, cfg: dict) -> dict:
 # ---------------------------------------------------------------------------------------------
 def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
                     route: Optional[str] = None):
-    """Return ``(ForceField, info)`` for the baseline: ff19SB + TIP3P-FB (+ Sage for a ligand).
+    """Return ``(ForceField, info)`` for the baseline: ff19SB + OPC (+ Sage for a ligand).
 
     A ligand is parameterised through :class:`openmmforcefields.generators.SMIRNOFFTemplateGenerator`,
     which registers a residue template on the fly.  ``ligand_charge_method='am1bcc'`` runs

@@ -185,7 +185,50 @@ def _runtime_cfg(payload: dict) -> dict:
     return cfg
 
 
-def _cmd_continuity(payload: dict, system, *, selected_atoms_fingerprint) -> dict:
+#: Bumped when the continuity contract gains or changes a field. A run committed under an older
+#: contract cannot be compared field-by-field against this one, so it is refused with guidance
+#: rather than silently reinterpreted.
+CMD_CONTINUITY_VERSION = 2
+
+
+def _atom_identity(topology, indices) -> str:
+    """A hash over the ORDERED identity of the selected atoms, not merely their count.
+
+    Finding 2. The contract carried particle and constraint counts, which do not identify a
+    System, and the selection fingerprint was passed as None. Two different topologies with equal
+    counts, or two different orderings of the same number of atoms, compared equal -- so a
+    trajectory could be continued with a different molecule or a permuted atom order, and every
+    frame after the boundary would silently mean something else.
+
+    Index, chain, residue number, residue name, atom name and element are all included, so
+    equal-length selections cannot alias.
+    """
+    import hashlib
+
+    atoms = list(topology.atoms())
+    parts = []
+    for position, index in enumerate(indices):
+        atom = atoms[int(index)]
+        residue = atom.residue
+        parts.append("|".join((
+            str(position), str(int(index)), str(residue.chain.id), str(residue.id),
+            str(residue.name), str(atom.name),
+            atom.element.symbol if atom.element is not None else "none")))
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _cmd_continuity(payload: dict, system, *, here: Path, topology=None,
+                    selected_atoms=None) -> dict:
     """The fields that must not change between segments of one conventional-MD run.
 
     Everything here changes the calculation rather than merely how long it runs. Two segments that
@@ -199,8 +242,37 @@ def _cmd_continuity(payload: dict, system, *, selected_atoms_fingerprint) -> dic
     reporting = payload.get("reporting") or {}
     barostat = payload.get("barostat") or {}
     restraint = payload.get("restraint") or {}
+
+    system_xml = here / payload["input"]["system_xml"]
+    topology_file = here / payload["input"]["topology"]
+    bundle = here / ".." / "inputs"
+
+    forcefield = {}
+    forcefield_path = bundle / "forcefield.json"
+    if forcefield_path.is_file():
+        record = json.loads(forcefield_path.read_text())
+        forcefield = {k: record.get(k) for k in
+                      ("protein_forcefield", "water", "ligand", "ligand_charge_method",
+                       "implicit_model", "radii", "route", "input_route")}
+
+    manifest_identity = None
+    manifest_path = bundle / "system_manifest.json"
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text())
+        manifest_identity = {
+            "system_id": (manifest.get("system") or {}).get("id"),
+            "input_sha256": (manifest.get("system") or {}).get("input_sha256"),
+            "prepared_through": manifest.get("prepared_through"),
+        }
+
     return {
+        "contract_version": CMD_CONTINUITY_VERSION,
         "stage": payload["stage"],
+        # identity of the exact artifacts, not counts that many systems share
+        "system_xml_sha256": _file_sha256(system_xml),
+        "topology_sha256": _file_sha256(topology_file),
+        "bundle": manifest_identity,
+        "forcefield": forcefield,
         "n_particles": system.getNumParticles(),
         "n_constraints": system.getNumConstraints(),
         "periodic": bool(system.usesPeriodicBoundaryConditions()),
@@ -209,13 +281,17 @@ def _cmd_continuity(payload: dict, system, *, selected_atoms_fingerprint) -> dic
         "integrator": {k: integrator.get(k) for k in
                        ("type", "timestep", "temperature", "friction")},
         "restraint_force_constant": restraint.get("force_constant_kcal_per_mol_angstrom2"),
+        "restraint_convention": payload.get("_restraint_convention"),
         "steps_per_segment": int(payload["steps"]),
         "reporting_intervals": {
             "all_atom": reporting.get("full_system_interval_steps"),
             "selected_atoms": reporting.get("selected_atoms_interval_steps"),
             "state_log": reporting.get("state_interval_steps"),
         },
-        "selected_atoms_fingerprint": selected_atoms_fingerprint,
+        "selected_atoms_count": len(selected_atoms or []),
+        "selected_atoms_fingerprint": (
+            _atom_identity(topology, selected_atoms) if topology is not None and selected_atoms
+            else None),
         "input_state": payload["input"]["state"],
         "produced_by": payload["input"]["produced_by"],
     }
@@ -262,13 +338,22 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     cmd_plan = None
     cmd_continuity = None
     run_dir = here / "run"
-    if segmented:
-        from . import cmd_segments
 
-        cmd_plan = cmd_segments.plan_segment(payload)
-        cmd_continuity = _cmd_continuity(payload, system, selected_atoms_fingerprint=None)
-        continuation = cmd_segments.prepare_continuation(
-            run_dir, continuity=cmd_continuity, plan=cmd_plan)
+    # The reporting selection is resolved BEFORE the continuity contract is built, because the
+    # contract binds its ordered atom identity. Resolving it later is how it came to be passed as
+    # None, which let a permuted or different selection of the same length compare equal.
+    reporting = payload.get("reporting") or {}
+    selected_atoms: list = []
+    if stage != "min" and int(payload.get("steps", 0)) > 0:
+        selection = (reporting.get("selected_atoms") or {}).get("type", "solute")
+        selected_atoms = solute_atom_indices(pdb.topology, selection)
+        expected = reporting.get("selected_atoms_expected_count")
+        if expected is not None and int(expected) != len(selected_atoms):
+            raise StageError(
+                f"{stage}: the selection {selection!r} resolves to {len(selected_atoms)} atoms in "
+                f"this topology, but the project was generated expecting {int(expected)}. The "
+                "bundle and the project disagree; regenerate the project against this bundle."
+            )
 
     restraint = payload.get("restraint")
     restraint_index = None
@@ -279,10 +364,11 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
             (here / ".." / restraint["reference"]).read_text())
         reference = np.array(
             reference_state.getPositions().value_in_unit(unit.nanometer))
-        restraint_index, restrained_atoms = _add_positional_restraints(
+        restraint_index, restrained_atoms, restraint_convention = _add_positional_restraints(
             system, pdb.topology, "solute", reference)
     else:
         restrained_atoms = []
+        restraint_convention = None
 
     # Every seed this stage uses, derived from the master seed by the shared algorithm and carried
     # in the stage configuration. Nothing here invents a number: an integrator seed compiled into
@@ -304,6 +390,37 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
         barostat.setRandomNumberSeed(int(stage_seeds["barostat"]))
         barostat_index = system.addForce(barostat)
 
+    run_lock = None
+    if segmented:
+        from . import cmd_segments
+
+        # Held for the whole segment. Released when the process exits, including when it is killed.
+        run_lock = cmd_segments.hold_run_lock(run_dir)
+        payload["_restraint_convention"] = restraint_convention
+        cmd_plan = cmd_segments.plan_segment(payload)
+        cmd_continuity = _cmd_continuity(payload, system, here=here, topology=pdb.topology,
+                                         selected_atoms=selected_atoms)
+        continuation = cmd_segments.prepare_continuation(
+            run_dir, continuity=cmd_continuity, plan=cmd_plan)
+
+        # Phase one of the output check: every committed stream is INSPECTED and nothing is
+        # touched. A stream shorter than its watermark is missing history and must stop the run
+        # while the other streams are still exactly as the last segment left them.
+        outputs = payload["output"]
+        streams = [
+            {"name": "all-atom trajectory", "path": here / outputs["trajectory_all_atoms"],
+             "watermark": continuation["watermarks"]["all_atom"], "kind": "dcd",
+             "n_atoms": system.getNumParticles()},
+            {"name": "selected-atom trajectory",
+             "path": here / outputs["trajectory_selected_atoms"],
+             "watermark": continuation["watermarks"]["selected_atoms"], "kind": "dcd",
+             "n_atoms": len(selected_atoms) or None},
+            {"name": "state log", "path": here / outputs["log"],
+             "watermark": continuation["watermarks"]["state_log"], "kind": "log",
+             "n_atoms": None},
+        ]
+        cmd_segments.assert_committed_outputs_intact(streams)
+
     sim = _make_simulation(pdb.topology, system, cfg, seed=int(stage_seeds["integrator"]),
                            device_index=device_index)
     # Velocities are initialised ONCE, on entering dynamics from a state that carries none -- in
@@ -317,6 +434,12 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
         from . import runstate
 
         restart_source = runstate.load_restart(sim, continuation["restore_from"])
+        from . import cmd_segments as _cmd
+
+        sim.currentStep = int(continuation["absolute_step"])
+        _cmd.verify_restart_matches_commit(sim, {
+            "absolute_step": continuation["absolute_step"],
+            "absolute_time_ps": continuation.get("absolute_time_ps")})
         coords_origin = {"coords": str(continuation["restore_from"]),
                          "kind": f"committed generation ({restart_source})",
                          "velocities": "restored from the committed generation",
@@ -337,19 +460,8 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     # Every declared output is attached here, so what the configuration promises is what the stage
     # writes. Minimisation gets none: it takes no steps, so a step-interval reporter would produce
     # an empty file that looks like a broken one.
-    reporting = payload.get("reporting") or {}
     attached: dict = {}
-    selected_atoms: list = []
     if stage != "min" and int(payload.get("steps", 0)) > 0:
-        selection = (reporting.get("selected_atoms") or {}).get("type", "solute")
-        selected_atoms = solute_atom_indices(pdb.topology, selection)
-        expected = reporting.get("selected_atoms_expected_count")
-        if expected is not None and int(expected) != len(selected_atoms):
-            raise StageError(
-                f"{stage}: the selection {selection!r} resolves to {len(selected_atoms)} atoms in "
-                f"this topology, but the project was generated expecting {int(expected)}. The "
-                "bundle and the project disagree; regenerate the project against this bundle."
-            )
         outputs = payload["output"]
         append = bool(continuation and not continuation["first_segment"])
         if segmented:
@@ -390,6 +502,9 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     # move in a short stage, so an unchanged box is not evidence that the barostat was missing.
     results: dict = {"stage": stage, "n_restrained_atoms": len(restrained_atoms),
                      "barostat": (payload.get("barostat") or {}).get("type"),
+                     # which distance the restraint measured. An implicit run using minimum-image
+                     # distance would depend on box vectors it is not supposed to have.
+                     "restraint_convention": restraint_convention,
                      "seeds": dict(stage_seeds),
                      # Four distinct provenances, named distinctly. "inherited" for a segment
                      # that was RESTORED from a committed generation would be true but useless: a
@@ -425,37 +540,36 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
         # that the next invocation removes.
         from . import cmd_segments, runstate
 
-        for reporter in list(sim.reporters):
-            for attribute in ("_out", "_traj_file", "_dcd"):
-                handle = getattr(reporter, attribute, None)
-                close = getattr(handle, "close", None)
-                if close is not None:
-                    try:
-                        close()
-                    except Exception:                                   # noqa: BLE001,S110
-                        pass
-        sim.reporters.clear()
+        cmd_segments.close_reporters(sim)
 
         generation = int(continuation["segments_completed"]) + 1
         absolute_step = int(continuation["absolute_step"]) + steps
         absolute_time_ps = float(
             sim.context.getState().getTime().value_in_unit(unit.picosecond))
 
+        # `run_state.json` is written for compatibility and for readers, but it is a CACHE. The
+        # invocation itself is published only by the atomic commit below, so a crash between the
+        # two cannot leave a phantom invocation for a retry to duplicate.
         if continuation["first_segment"]:
             runstate.write_run_state(run_dir, method="md", continuity=cmd_continuity,
                                      stage=stage)
+        committed = cmd_segments.commit_segment(
+            run_dir, sim, generation=generation, plan=cmd_plan,
+            absolute_step=absolute_step, absolute_time_ps=absolute_time_ps,
+            continuity=cmd_continuity, restart_source=restart_source,
+            started_step=int(continuation["absolute_step"]),
+            started_time_ps=float(continuation.get("absolute_time_ps") or 0.0),
+            invocation={"steps": steps, "stage": stage},
+            extra={"periodic": periodic})
+        # reconciled from the commit, never the other way round
         runstate.record_invocation(run_dir, {
             "segment": generation,
             "steps": steps,
             "restart_source": restart_source,
             "absolute_step_after": absolute_step,
             "absolute_time_ps_after": absolute_time_ps,
+            "reconciled_from": "committed.json",
         })
-        committed = cmd_segments.commit_segment(
-            run_dir, sim, generation=generation, plan=cmd_plan,
-            absolute_step=absolute_step, absolute_time_ps=absolute_time_ps,
-            continuity=cmd_continuity, restart_source=restart_source,
-            extra={"periodic": periodic})
         results["segment"] = {
             "generation": generation,
             "absolute_step": absolute_step,

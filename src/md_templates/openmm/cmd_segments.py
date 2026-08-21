@@ -33,11 +33,20 @@ its own watermark and each is truncated to its own committed length.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
 __all__ = [
     "CMD_RUN_STATE_VERSION",
+    "CommittedOutputCorrupt",
+    "RunDirectoryBusy",
+    "hold_run_lock",
+    "assert_committed_outputs_intact",
+    "close_reporters",
+    "continuity_hash",
+    "inspect_committed_outputs",
+    "verify_restart_matches_commit",
     "plan_segment",
     "prepare_continuation",
     "commit_segment",
@@ -45,10 +54,46 @@ __all__ = [
 ]
 
 #: Bumped when the persisted cMD run-state layout changes in a way an older reader would misread.
-CMD_RUN_STATE_VERSION = 1
+CMD_RUN_STATE_VERSION = 2
 
 #: The reporting streams a cMD segment appends to. Each carries its own watermark.
 _STREAMS = ("all_atom", "selected_atoms", "state_log")
+
+
+class RunDirectoryBusy(RuntimeError):
+    """Another process is already writing this run directory."""
+
+
+def hold_run_lock(run_dir: Path):
+    """Take an exclusive lock on a cMD run directory for the life of the returned handle.
+
+    Nothing previously stopped two invocations from writing one run directory at once. They would
+    both restore the same committed generation, both append to the same trajectories and both
+    commit -- producing duplicated invocation indices and interleaved frames, while every file
+    still looked individually well-formed.
+
+    Discovered by a test that killed a launcher: killing the shell left the Python child running,
+    so a "crashed" segment and its retry ran concurrently and the committed history came back as
+    [1000, 2000, 2000]. A stale lock from a killed process is released by the operating system
+    when the file descriptor closes, so this cannot wedge a run directory.
+    """
+    import fcntl
+
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    handle = (run_dir / ".lock").open("w")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as error:
+        handle.close()
+        raise RunDirectoryBusy(
+            f"another process is writing {run_dir}. Two invocations sharing one run directory "
+            "would both restore the same committed generation and both append to the same "
+            "trajectories, so this one is refusing rather than interleaving with it."
+        ) from error
+    handle.write(str(os.getpid()))
+    handle.flush()
+    return handle
 
 
 def plan_segment(payload: dict) -> dict:
@@ -127,70 +172,215 @@ def prepare_continuation(run_dir: Path, *, continuity: dict, plan: dict) -> dict
     }
 
 
+class CommittedOutputCorrupt(RuntimeError):
+    """A committed stream is absent, short, or malformed. Continuation must stop."""
+
+
+def inspect_committed_outputs(streams: list) -> list:
+    """Phase one: look at every committed stream and change nothing.
+
+    Finding 4. Recovery previously treated an absent or short file as "absent"/"kept", even when
+    the atomic commit said more frames were durably written. Continuing from that produces a
+    trajectory with a hole in its history while the run still reports completeness -- the worst
+    combination, because every downstream index is silently wrong.
+
+    The asymmetry matters: past the watermark is a TAIL, which is recoverable. Short of it is
+    MISSING HISTORY, which is not, because the bytes are simply gone.
+
+    A watermark of zero is the one case where absence is valid: nothing was committed yet.
+    """
+    problems = []
+    for stream in streams:
+        name, path, watermark, kind, n_atoms = (
+            stream["name"], Path(stream["path"]), int(stream["watermark"]),
+            stream["kind"], stream.get("n_atoms"))
+        if watermark == 0:
+            continue
+        if not path.is_file():
+            problems.append(f"    {name}: {path.name} is absent, but {watermark} "
+                            f"{'frames' if kind == 'dcd' else 'rows'} were committed")
+            continue
+        try:
+            present = (_dcd_state(path, n_atoms) if kind == "dcd" else _log_state(path))
+        except Exception as error:                                    # noqa: BLE001
+            problems.append(f"    {name}: {path.name} is malformed -- {error}")
+            continue
+        if present["count"] < watermark:
+            problems.append(
+                f"    {name}: {path.name} holds {present['count']} "
+                f"{'frames' if kind == 'dcd' else 'rows'} but {watermark} were committed. "
+                "That is missing history, not an uncommitted tail.")
+        if kind == "dcd" and n_atoms is not None and present["n_atoms"] != n_atoms:
+            problems.append(
+                f"    {name}: {path.name} holds {present['n_atoms']} atoms per frame, but this "
+                f"stream writes {n_atoms}. The trajectory does not describe this selection.")
+    return problems
+
+
+def _dcd_state(path: Path, n_atoms) -> dict:
+    from .dcdtail import frame_offsets
+
+    scan = frame_offsets(path)
+    return {"count": scan["complete_frames"], "n_atoms": scan["n_atoms"],
+            "trailing_bytes": scan["trailing_bytes"]}
+
+
+def _log_state(path: Path) -> dict:
+    """A state-data log: exactly one header, then monotonic rows."""
+    lines = Path(path).read_text().splitlines()
+    headers = [line for line in lines if line.startswith("#")]
+    if len(headers) != 1:
+        raise ValueError(f"expected exactly one header, found {len(headers)}")
+    rows = [line for line in lines if not line.startswith("#")]
+    steps = []
+    for row in rows:
+        try:
+            steps.append(int(row.split(",")[0]))
+        except (ValueError, IndexError) as error:
+            raise ValueError(f"unparsable row {row[:40]!r}") from error
+    if steps != sorted(steps) or len(set(steps)) != len(steps):
+        raise ValueError("step column is not strictly increasing")
+    return {"count": len(rows), "n_atoms": None}
+
+
+def assert_committed_outputs_intact(streams: list) -> None:
+    """Refuse the continuation if any committed stream is not intact. Mutates nothing."""
+    problems = inspect_committed_outputs(streams)
+    if problems:
+        raise CommittedOutputCorrupt(
+            "refusing to continue: the committed outputs of this run are not intact.\n"
+            + "\n".join(problems)
+            + "\n\n  The commit record is the authority on what was durably written. A stream "
+              "shorter than its\n  watermark cannot be repaired by appending -- the missing frames "
+              "are gone, and appending after\n  them would leave every later index wrong while the "
+              "run still reported success."
+        )
+
+
 def truncate_to_watermark(path: Path, stream: str, frames: int, *, n_atoms: int) -> dict:
     """Cut a trajectory or log back to its committed length before appending to it.
 
     A file longer than its watermark is an uncommitted tail: the previous process wrote frames and
     then died before the commit. Appending after them would leave the trajectory containing frames
-    that no committed generation accounts for, and every later index would be wrong by that amount.
+    no committed generation accounts for, and every later index wrong by that amount.
 
-    DCD carries its frame count in the header, so both the count and the file length are corrected.
+    DCD truncation is delegated to `dcdtail`, which walks real Fortran records. The arithmetic that
+    used to live here treated a frame as three coordinate blocks and missed the 56-byte unit-cell
+    record that every periodic frame carries -- including a periodic ATOM-SUBSET frame, which a
+    solvent-mode guess would have got wrong.
     """
     path = Path(path)
     if not path.is_file():
         return {"stream": stream, "action": "absent"}
 
     if path.suffix == ".dcd":
-        import struct
+        from .dcdtail import truncate_to_frames
 
-        with path.open("rb+") as handle:
-            handle.seek(8)
-            present = struct.unpack("<i", handle.read(4))[0]
-            if present <= frames:
-                return {"stream": stream, "action": "kept", "frames": present}
-            header = 84 + 4 + 84 + 4 + 4 + 4 + 4 + 4          # DCD header + title + natom blocks
-            frame_bytes = 3 * (4 + 4 * n_atoms + 4)
-            handle.seek(8)
-            handle.write(struct.pack("<i", frames))
-            handle.truncate(_dcd_header_bytes(path) + frames * frame_bytes)
-        return {"stream": stream, "action": "truncated", "from": present, "to": frames}
+        result = truncate_to_frames(path, frames)
+        return {"stream": stream, **result}
 
-    # a text log: one header line plus one row per report
     lines = path.read_text().splitlines()
     if not lines:
         return {"stream": stream, "action": "empty"}
-    keep = lines[: 1 + frames]
+    keep = lines[: 1 + frames]                              # one header, then committed rows
     if len(keep) == len(lines):
         return {"stream": stream, "action": "kept", "rows": len(lines) - 1}
-    path.write_text("\n".join(keep) + "\n")
+    _atomic_write_text(path, "\n".join(keep) + "\n")
     return {"stream": stream, "action": "truncated", "from": len(lines) - 1, "to": frames}
 
 
-def _dcd_header_bytes(path: Path) -> int:
-    """Byte offset of the first frame, read from the file rather than assumed.
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Replace a text file through a same-directory temporary, flushed and fsynced."""
+    import os
+    import tempfile
 
-    OpenMM writes a fixed header, but the title block length is stored in the file and a hard-coded
-    offset would silently corrupt a trajectory written by any other producer.
+    path = Path(path)
+    fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def close_reporters(sim) -> None:
+    """Flush and close every reporter, refusing to continue if one cannot be closed.
+
+    Finding 5. A close failure used to be swallowed, and the commit went ahead anyway -- so the
+    commit record could point at a boundary whose trajectory bytes were still in a buffer that
+    never reached the disk. If a stream cannot be closed, the boundary is not real and must not be
+    committed.
     """
-    import struct
+    failures = []
+    for reporter in list(sim.reporters):
+        for attribute in ("_out", "_traj_file", "_dcd"):
+            handle = getattr(reporter, attribute, None)
+            close = getattr(handle, "close", None)
+            if close is None:
+                continue
+            try:
+                flush = getattr(handle, "flush", None)
+                if flush is not None:
+                    flush()
+                close()
+            except Exception as error:                                # noqa: BLE001
+                failures.append(f"{type(reporter).__name__}.{attribute}: "
+                                f"{type(error).__name__}: {error}")
+    sim.reporters.clear()
+    if failures:
+        raise RuntimeError(
+            "refusing to commit this segment: its output streams did not close cleanly, so the "
+            "bytes on disk may not reach the boundary the commit would claim.\n  "
+            + "\n  ".join(failures))
 
-    with path.open("rb") as handle:
-        first = struct.unpack("<i", handle.read(4))[0]           # 84
-        handle.seek(4 + first + 4)
-        title_size = struct.unpack("<i", handle.read(4))[0]
-        handle.seek(4 + first + 4 + 4 + title_size + 4)
-        natom_size = struct.unpack("<i", handle.read(4))[0]
-        return 4 + first + 4 + 4 + title_size + 4 + 4 + natom_size + 4
+
+def verify_restart_matches_commit(sim, record: dict) -> dict:
+    """After restoring, check the physics matches what the commit says was committed.
+
+    A checkpoint or State that loads without error can still be the wrong one -- an older
+    generation left behind, or a file copied from another run. Comparing step and time against the
+    committed record turns "it loaded" into "it loaded the right thing", before any output opens.
+    """
+    from openmm import unit
+
+    state = sim.context.getState()
+    loaded_step = int(sim.currentStep)
+    loaded_time = float(state.getTime().value_in_unit(unit.picosecond))
+    expected_step = int(record.get("absolute_step", 0))
+    expected_time = record.get("absolute_time_ps")
+
+    problems = []
+    if loaded_step != expected_step:
+        problems.append(f"    step: restart holds {loaded_step:,}, commit says {expected_step:,}")
+    if expected_time is not None and abs(loaded_time - float(expected_time)) > 1e-6:
+        problems.append(f"    time: restart holds {loaded_time} ps, commit says {expected_time} ps")
+    if problems:
+        raise RuntimeError(
+            "the restored restart does not match the committed generation:\n"
+            + "\n".join(problems)
+            + "\n  Refusing to append output to a run whose restart and commit record disagree."
+        )
+    return {"loaded_step": loaded_step, "loaded_time_ps": loaded_time}
 
 
 def commit_segment(run_dir: Path, sim, *, generation: int, plan: dict, absolute_step: int,
                    absolute_time_ps: float, continuity: dict, restart_source: str,
+                   invocation: dict, started_step: int, started_time_ps: float,
                    extra: Optional[dict] = None) -> dict:
     """Close the boundary: flush, save both restart forms, then commit atomically.
 
     The ordering is the contract. Reporters are closed first so the files on disk end exactly at the
     boundary; the restart pair is written next; the commit record is written last and atomically.
     A crash before the final step leaves an uncommitted tail, which the next invocation removes.
+
+    Finding 5: the completed invocation is part of THIS record. It used to be appended to
+    `run_state.json` before the commit, so a crash in between left a phantom invocation that a
+    retry would duplicate while `committed.json` still described the older physics. One atomic
+    write, one authority.
     """
     from . import runstate
 
@@ -205,6 +395,20 @@ def commit_segment(run_dir: Path, sim, *, generation: int, plan: dict, absolute_
         "selected_atoms": _frames_at(plan.get("selected_atoms_interval"), absolute_step),
         "state_log": _frames_at(plan.get("state_log_interval"), absolute_step),
     }
+    completed = {
+        "invocation": int(generation),
+        "segment": int(generation),
+        "started_absolute_step": int(started_step),
+        "started_absolute_time_ps": float(started_time_ps),
+        "ended_absolute_step": int(absolute_step),
+        "ended_absolute_time_ps": float(absolute_time_ps),
+        "restart_source": restart_source,
+        **invocation,
+    }
+    previous = runstate.committed_record(run_dir)
+    history = list(previous.get("invocation_history") or [])
+    history.append(completed)
+
     record = {
         "cmd_schema_version": CMD_RUN_STATE_VERSION,
         "absolute_step": int(absolute_step),
@@ -213,6 +417,10 @@ def commit_segment(run_dir: Path, sim, *, generation: int, plan: dict, absolute_
         "watermarks": watermarks,
         "restart_source_for_this_segment": restart_source,
         "continuity": continuity,
+        "continuity_hash": continuity_hash(continuity),
+        # lifetime history lives in the atomic record so monotonic accounting survives a crash
+        "invocation_history": history,
+        "invocations_completed": len(history),
         **(extra or {}),
     }
     # `commit_generation` takes the record as keyword extras, so the whole thing is one atomic
@@ -220,3 +428,12 @@ def commit_segment(run_dir: Path, sim, *, generation: int, plan: dict, absolute_
     runstate.commit_generation(
         run_dir, generation, members=[checkpoint.name, state.name], **record)
     return record
+
+
+def continuity_hash(contract: dict) -> str:
+    """A deterministic hash over the canonical continuity contract."""
+    import hashlib
+    import json as _json
+
+    canonical = _json.dumps(contract, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()
