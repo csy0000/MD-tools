@@ -390,7 +390,7 @@ graph is correspondingly shorter:
 
 ```
 explicit:  min -> eq_nvt -> eq_npt_1 -> eq_npt_2 -> cMD_1 -> REST2_1
-implicit:  min -> eq_nvt ->                         cMD_1 -> REST2_1
+implicit:  min -> eq ->                             cMD_1 -> REST2_1
 ```
 
 There is no NPT stage and there cannot be one: with no box there is no volume to equilibrate and

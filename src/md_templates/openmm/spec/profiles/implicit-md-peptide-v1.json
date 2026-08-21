@@ -44,7 +44,7 @@
         "protocol": "simple",
         "minimize_max_iterations": 1000,
         "seed": null,
-        "nvt": "10 ps"
+        "restrained": "20 ps"
       },
       "production": {
         "method": "md",

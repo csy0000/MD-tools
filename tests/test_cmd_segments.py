@@ -46,8 +46,9 @@ def _tiny_md_config(*, implicit: bool, segment: str = "2 ps") -> dict:
         "protocol": {
             "integrator": {"kind": "langevin-middle", "timestep": "2 fs",
                            "temperature": "300 K", "friction": "1 /ps"},
+            # implicit equilibrates too, under `restrained`; an `nvt` duration there is refused
             "equilibration": ({"protocol": "simple", "minimize_max_iterations": 100,
-                               "nvt": "1 ps"} if implicit else
+                               "restrained": "1 ps"} if implicit else
                               {"protocol": "simple", "minimize_max_iterations": 100,
                                "nvt": "1 ps", "npt": "1 ps", "npt_free": "1 ps"}),
             "production": {"method": "md", "duration_per_segment": segment},
@@ -96,13 +97,13 @@ def _run_stage(project: Path, stage: str) -> subprocess.CompletedProcess:
 def test_md_only_generation_is_no_longer_refused(md_project):
     """It used to fail with 'Conventional-MD-only projects are not yet generated'."""
     manifest = json.loads((md_project / "run_manifest.json").read_text())
-    assert [e["stage"] for e in manifest["stages"]] == ["min", "eq_nvt", "cMD_1"]
+    assert [e["stage"] for e in manifest["stages"]] == ["min", "eq", "cMD_1"]
 
 
 def test_an_md_only_project_contains_no_rest2_machinery(md_project):
     """No tau ladder, no exchange schedule, no omega policy, and no seeds for a missing stage."""
     assert not (md_project / "REST2_1").exists()
-    for stage in ("min", "eq_nvt", "cMD_1"):
+    for stage in ("min", "eq", "cMD_1"):
         payload = json.loads((md_project / stage / f"{stage}.json").read_text())
         assert "rest2" not in payload, stage
     manifest = json.loads((md_project / "run_manifest.json").read_text())
@@ -113,10 +114,12 @@ def test_the_two_md_stage_graphs_differ_only_by_the_npt_stages():
     from md_templates.openmm.input_gen import stage_order_for
 
     assert stage_order_for("explicit", "md") == ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1")
-    assert stage_order_for("implicit", "md") == ("min", "eq_nvt", "cMD_1")
+    # implicit still equilibrates; the stage is named `eq` rather than `eq_nvt` because "NVT"
+    # fixes a volume and an implicit system has none
+    assert stage_order_for("implicit", "md") == ("min", "eq", "cMD_1")
     # and REST2 keeps its chain
     assert stage_order_for("explicit", "rest2")[-1] == "REST2_1"
-    assert stage_order_for("implicit", "rest2") == ("min", "eq_nvt", "cMD_1", "REST2_1")
+    assert stage_order_for("implicit", "rest2") == ("min", "eq", "cMD_1", "REST2_1")
 
 
 def test_an_md_only_project_takes_its_segment_from_the_canonical_field(md_project):
@@ -146,7 +149,7 @@ def test_two_segments_continue_in_one_run_directory(md_project):
     """Re-invoking the launcher continues; it never starts a sibling run and calls it continuation."""
     import glob
 
-    for stage in ("min", "eq_nvt"):
+    for stage in ("min", "eq"):
         assert _run_stage(md_project, stage).returncode == 0, stage
 
     first = _run_stage(md_project, "cMD_1")
@@ -261,7 +264,13 @@ def test_the_shipped_defaults_are_the_corrected_ones(profile):
 
     assert protocol["schema_version"] == 5, "a version-4 label must not carry version-5 semantics"
     assert protocol["equilibration"]["minimize_max_iterations"] == 1000
-    assert protocol["equilibration"]["nvt"] == "10 ps"
+    if profile.startswith("explicit"):
+        assert protocol["equilibration"]["nvt"] == "10 ps"
+    else:
+        # implicit equilibrates for the same kind of time, under a name that does not claim an
+        # ensemble it cannot have
+        assert "nvt" not in protocol["equilibration"]
+        assert protocol["equilibration"]["restrained"] == "20 ps"
     assert protocol["production"]["duration_per_segment"] == "5 ns"
     assert defaults["execution"]["reporting"]["all_atom"] == "100 ps"
     assert defaults["execution"]["reporting"]["solute"] == "10 ps"
@@ -345,3 +354,58 @@ def test_reporting_is_declared_only_where_it_can_be_written():
     production = _reporting_for_stage("cMD_1", 125_000, full_steps=25_000, selected_steps=2_500)
     assert production["full_system_interval_steps"] == 25_000
     assert "omitted" not in production
+
+
+def test_implicit_refuses_a_stated_equilibration_stage(implicit_bundle, tmp_path):
+    """Refused, not ignored: a configuration asking for NVT is told it will not happen.
+
+    Implicit solvent has no water shell to relax, so an NVT stage has nothing to do that restrained
+    minimisation has not already done. Silently dropping the field would generate a protocol that
+    differs from the one the file describes.
+
+    Driven through the public entry point because that is where a user meets it, and because the
+    resolver needs the bundle to know the route.
+    """
+    document = _tiny_md_config(implicit=True)
+    document["protocol"]["equilibration"]["nvt"] = "10 ps"
+    config = tmp_path / "md.json"
+    config.write_text(json.dumps(document))
+
+    result = _run(INPUT_GEN, "--system", str(implicit_bundle / "system_manifest.json"),
+                  "-o", str(tmp_path / "out"), "--config", str(config))
+    assert result.returncode != 0
+    assert "no water shell" in result.stderr, result.stderr[-400:]
+
+
+@pytest.mark.slow
+def test_velocities_are_initialised_once_then_restored(implicit_bundle, tmp_path):
+    """Dropping eq_nvt makes cMD_1 the first dynamics stage; the handshake must still hold.
+
+    On its OWN project, because the two provenances appear in order and a shared project would only
+    ever show the last one -- which is how a test can assert "initialised once" while proving
+    nothing about the first segment.
+    """
+    config = tmp_path / "md.json"
+    config.write_text(json.dumps(_tiny_md_config(implicit=True)))
+    project = tmp_path / "run"
+    assert _run(INPUT_GEN, "--system", str(implicit_bundle / "system_manifest.json"),
+                "-o", str(project), "--config", str(config)).returncode == 0
+
+    assert _run_stage(project, "min").returncode == 0
+    assert json.loads(
+        (project / "min" / "min_results.json").read_text())["velocities"] == "not required"
+
+    # `eq` is the first stage that integrates, so it is where velocities are created
+    assert _run_stage(project, "eq").returncode == 0
+    equilibration = json.loads((project / "eq" / "eq_results.json").read_text())
+    assert equilibration["velocities"] == "initialized"
+    assert equilibration["velocity_seed"] is not None, "the draw must be seeded"
+
+    assert _run_stage(project, "cMD_1").returncode == 0
+    first = json.loads((project / "cMD_1" / "cMD_1_results.json").read_text())
+    assert first["velocities"] == "inherited", "production inherits them from equilibration"
+
+    assert _run_stage(project, "cMD_1").returncode == 0
+    second = json.loads((project / "cMD_1" / "cMD_1_results.json").read_text())
+    assert second["velocities"] == "restored from the committed generation"
+    assert second["velocity_seed"] is None, "a restored segment draws nothing"

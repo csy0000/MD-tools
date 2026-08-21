@@ -17,7 +17,7 @@ conformational preferences.
 |---|---|---|
 | solvent | OPC box, ions, PME | GBn2 with mbondi3 radii |
 | box | dodecahedron, 1.2 nm padding | **none** |
-| stages | min, eq_nvt, eq_npt_1, eq_npt_2, cMD_1, REST2_1 | **min, eq_nvt, cMD_1, REST2_1** |
+| stages | min, eq_nvt, eq_npt_1, eq_npt_2, cMD_1, REST2_1 | **min, eq, cMD_1, REST2_1** |
 | barostat | on the NPT and production stages | **never** |
 | timestep | 4 fs with HMR to 3.024 amu | **2 fs, no HMR** |
 | replicas | 10 | **6** |
@@ -75,14 +75,14 @@ cd rgd_implicit_run && ./run_all.sh
 rgd_implicit_run/
     inputs/        the prepared system, copied
     min/           restrained minimisation
-    eq_nvt/        restrained NVT -- velocities initialised HERE, once
+    eq/            restrained equilibration, 20 ps -- velocities initialised HERE, once
     cMD_1/         unrestrained NVT conventional MD
     REST2_1/       replica exchange, one run containing its segments
     run_all.sh     run_manifest.json     run.log
 ```
 
-No NPT stage: implicit solvent has no box, so there is no volume to equilibrate and pressure is
-undefined.
+No NPT stage, and the equilibration stage is called `eq` rather than `eq_nvt`: it runs the same
+restrained constant-temperature dynamics, but "NVT" fixes a volume this System does not have.
 
 ## Exchange derivation
 
@@ -120,7 +120,7 @@ calculation is about.
 
 ## Extension
 
-`NUMBER_OF_SEGMENTS` in `run_all.sh` sets how many segments run; it is an execution choice and never
+`REST2_NUMBER_OF_SEGMENTS` in `run_all.sh` sets how many segments run; it is an execution choice and never
 appears in the scientific JSON. Re-invoking `REST2_1/REST2_1.sh` continues the same run from its
 committed-generation record, accumulating lifetime exchange statistics.
 

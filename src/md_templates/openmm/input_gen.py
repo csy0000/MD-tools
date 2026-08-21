@@ -59,20 +59,26 @@ _STAGE_SEED_ROLES = ("integrator", "barostat", "velocity")
 
 STAGE_ORDER = ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1", "REST2_1")
 
-#: The implicit-solvent graph. There is no NPT stage and there cannot be one: implicit solvent has
-#: no box, so there is no volume to equilibrate and pressure is undefined. Dropping the two NPT
-#: stages is therefore not a shortcut -- an NPT stage here would be meaningless, not merely slow.
-IMPLICIT_STAGE_ORDER = ("min", "eq_nvt", "cMD_1", "REST2_1")
+#: The implicit-solvent graph. Restrained minimisation, then production.
+#:
+#: There is no NPT stage and there cannot be one: implicit solvent has no box, so there is no volume
+#: to equilibrate and pressure is undefined.
+#:
+#: Equilibration still happens -- the solute has to settle under restraints before production -- but
+#: it is a single stage named `eq` rather than `eq_nvt`. "NVT" names an ensemble at constant volume,
+#: and there is no volume here, so the label would describe something the run does not have. The
+#: dynamics are the same: constant temperature, solute restrained, no barostat.
+IMPLICIT_STAGE_ORDER = ("min", "eq", "cMD_1", "REST2_1")
 
 #: Conventional MD ends at cMD_1. A REST2 stage is not appended to an MD-only project, and no REST2
 #: object -- tau ladder, exchange schedule, omega policy -- is constructed for it. Generating one
 #: anyway would put a replica-exchange calculation in a project that never asked for it, and its
 #: presence in the manifest would misdescribe the run.
 MD_STAGE_ORDER = ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1")
-IMPLICIT_MD_STAGE_ORDER = ("min", "eq_nvt", "cMD_1")
+IMPLICIT_MD_STAGE_ORDER = ("min", "eq", "cMD_1")
 
 #: Stages that carry the positional restraint on the solute. `eq_npt_2` deliberately does not.
-RESTRAINED_STAGES = ("min", "eq_nvt", "eq_npt_1")
+RESTRAINED_STAGES = ("min", "eq", "eq_nvt", "eq_npt_1")
 
 #: Stages that carry a barostat. Empty under implicit solvent, enforced rather than assumed.
 BAROSTAT_STAGES = ("eq_npt_1", "eq_npt_2", "cMD_1")
@@ -524,6 +530,13 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
         stage_steps["eq_nvt"] = steps_for_duration(
             equilibration.nvt.value, dt.value, duration_source=equilibration.nvt.source,
             timestep_source=dt.source, duration_label="equilibration.nvt")
+    if equilibration.restrained is not None:
+        # Implicit solvent's single equilibration stage: restrained constant-temperature dynamics,
+        # no barostat, no ensemble label that implies a volume.
+        stage_steps["eq"] = steps_for_duration(
+            equilibration.restrained.value, dt.value,
+            duration_source=equilibration.restrained.source,
+            timestep_source=dt.source, duration_label="equilibration.restrained")
     if equilibration.npt is not None:
         # restrained NPT: the box relaxes while the solute is held
         stage_steps["eq_npt_1"] = steps_for_duration(
@@ -593,8 +606,10 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
         timestep_source=dt.source, label="reporting.solute")
 
     summary.append(f"min      max {equilibration.minimize_max_iterations} iterations")
-    summary.append(f"eq_nvt   {stage_steps.get('eq_nvt', 0):,} steps ({equilibration.nvt.source})"
-                   if equilibration.nvt else "eq_nvt   (not configured)")
+    if "eq_nvt" in graph:
+        summary.append(
+            f"eq_nvt   {stage_steps.get('eq_nvt', 0):,} steps ({equilibration.nvt.source})"
+            if equilibration.nvt else "eq_nvt   (not configured)")
     # The NPT stages are reported only when the graph has them. Saying "not configured" for a
     # stage that cannot exist under implicit solvent reads as an omission the user could fix.
     if "eq_npt_1" in graph:
@@ -605,8 +620,11 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
         summary.append(f"eq_npt_2 {stage_steps.get('eq_npt_2', 0):,} steps "
                        f"({equilibration.npt_free.source}, free)"
                        if equilibration.npt_free else "eq_npt_2 (not configured)")
-    if "eq_npt_1" not in graph:
-        summary.append("no NPT stage: implicit solvent has no box, so pressure is undefined")
+    if "eq" in graph:
+        summary.append(
+            f"eq       {stage_steps.get('eq', 0):,} steps "
+            f"({equilibration.restrained.source}, restrained; no ensemble label because implicit "
+            "solvent has no volume)")
     summary.append(f"cMD_1    {stage_steps['cMD_1']:,} steps ({cmd_duration.source})")
     summary.append(f"reporting: full system every {full_steps:,} steps, "
                    f"selected atoms every {selected_steps:,} steps")

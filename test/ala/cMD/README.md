@@ -10,7 +10,7 @@ segment boundary, checkpoint restart, append behaviour, or monotonic runtime ind
 |  | `explicit/` | `implicit/` |
 |---|---|---|
 | solvent | ff19SB / OPC box, 0.15 M NaCl, PME | ff19SB / GBn2 with mbondi3 |
-| stages | min, eq_nvt, eq_npt_1, eq_npt_2, cMD_1 | min, eq_nvt, cMD_1 |
+| stages | min, eq_nvt, eq_npt_1, eq_npt_2, cMD_1 | **min, eq, cMD_1** |
 | production ensemble | NPT, 300 K, 1 bar | NVT, 300 K |
 | timestep | 4 fs, HMR to 3.024 amu | 2 fs, no HMR |
 | steps for 1 ns | 250,000 | 500,000 |

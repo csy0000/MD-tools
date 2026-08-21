@@ -272,6 +272,10 @@ class EquilibrationSpec(Strict):
     nvt: Optional[Time] = None                     # `simple` only
     npt: Optional[Time] = None                     # `simple` only
     box_average_last: Optional[Time] = None
+    #: Implicit solvent's single equilibration stage. Named for what it IS -- restrained
+    #: constant-temperature dynamics -- rather than for an ensemble it cannot have: "NVT" fixes a
+    #: volume, and an implicit system has none.
+    restrained: Optional[Time] = None
     seed: Optional[int] = None
 
 
@@ -607,7 +611,11 @@ class SimulationSpec(Strict):
 
         offenders = []
         equilibration = self.protocol.equilibration
-        for field in ("npt", "npt_free", "box_average_last"):
+        # `nvt` joins the box-only fields here for a different reason: implicit solvent has no water
+        # shell to relax, so an NVT equilibration stage has nothing to do that restrained
+        # minimisation has not already done. Refused rather than ignored, so a configuration that
+        # asks for one is told it will not happen instead of silently not getting it.
+        for field in ("nvt", "npt", "npt_free", "box_average_last"):
             if getattr(equilibration, field, None) is not None:
                 offenders.append(f"protocol.equilibration.{field}")
         for field in ("pressure", "barostat", "barostat_interval"):
@@ -615,13 +623,22 @@ class SimulationSpec(Strict):
                 offenders.append(f"protocol.production.{field}")
         if getattr(self.build, "solvation", None) is not None:
             offenders.append("build.solvation")
+        if self.protocol.equilibration.restrained is None:
+            raise ValueError(
+                "an implicit-solvent protocol needs protocol.equilibration.restrained: the solute "
+                "still has to settle under\n  restraints before production. It is named "
+                "`restrained` rather than `nvt` because 'NVT' fixes a volume\n  and an implicit "
+                "system has none; the dynamics are the same."
+            )
         if offenders:
             raise ValueError(
-                "this is an implicit-solvent build, which has no box and therefore no pressure, "
-                f"but the configuration states {', '.join(offenders)}.\n"
-                "  The implicit stage graph is min -> eq_nvt -> cMD_1 -> REST2_1; there is no NPT "
-                "stage and there cannot be one.\n"
-                "  Remove these fields, or use an explicit-water build."
+                "this is an implicit-solvent build, but the configuration states "
+                f"{', '.join(offenders)}.\n"
+                "  The implicit stage graph is min -> cMD_1 (-> REST2_1): restrained minimisation, "
+                "then production.\n"
+                "  There is no NPT stage because there is no box, and no NVT stage because there is "
+                "no water shell to\n  relax -- the solute is the whole system. Remove these fields, "
+                "or use an explicit-water build."
             )
         return self
 

@@ -494,9 +494,13 @@ def test_number_of_segments_drives_the_rest2_loop_and_nothing_else(generated_pro
     record to find where the last one stopped.
     """
     body = (generated_project / "run_all.sh").read_text()
-    assert 'run_segments REST2_1 "$NUMBER_OF_SEGMENTS"' in body
+    # The two production stages have SEPARATE controls: adding cMD segments and adding REST2
+    # segments are different requests, and one number could not express both.
+    assert 'run_segments REST2_1 "$REST2_NUMBER_OF_SEGMENTS"' in body
+    assert 'run_segments cMD_1 "$CMD_NUMBER_OF_SEGMENTS"' in body
     assert "run_stage REST2_1" not in body, "REST2 must not be a single invocation"
-    for single_shot in ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1"):
+    assert "run_stage cMD_1" not in body, "cMD must not be a single invocation either"
+    for single_shot in ("min", "eq_nvt", "eq_npt_1", "eq_npt_2"):
         assert f"run_stage {single_shot}" in body, single_shot
 
     # and it must not appear anywhere in the scientific configuration

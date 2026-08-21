@@ -465,14 +465,16 @@ def implicit_project(implicit_bundle, tmp_path_factory):
 
 def test_the_implicit_stage_graph_has_no_npt(implicit_project):
     manifest = json.loads((implicit_project / "run_manifest.json").read_text())
+    # `eq` rather than `eq_nvt`: implicit solvent still equilibrates under restraints, but "NVT"
+    # names an ensemble at constant volume and this System has none
     assert [entry["stage"] for entry in manifest["stages"]] == [
-        "min", "eq_nvt", "cMD_1", "REST2_1"]
+        "min", "eq", "cMD_1", "REST2_1"]
     for absent in ("eq_npt_1", "eq_npt_2"):
         assert not (implicit_project / absent).exists(), absent
 
 
 def test_no_stage_carries_a_barostat(implicit_project):
-    for stage in ("min", "eq_nvt", "cMD_1", "REST2_1"):
+    for stage in ("min", "eq", "cMD_1", "REST2_1"):
         payload = json.loads((implicit_project / stage / f"{stage}.json").read_text())
         assert "barostat" not in payload, stage
 
@@ -495,13 +497,13 @@ def test_the_implicit_workflow_executes_and_writes_its_declared_outputs(implicit
     """min -> eq_nvt -> cMD_1, through the generated launchers, with real reporters."""
     import struct
 
-    for stage in ("min", "eq_nvt", "cMD_1"):
+    for stage in ("min", "eq", "cMD_1"):
         script = implicit_project / stage / f"{stage}.sh"
         result = subprocess.run([str(script)], capture_output=True, text=True,
                                 cwd=str(implicit_project / stage))
         assert result.returncode == 0, f"{stage}: {result.stderr[-800:]}"
 
-    for stage in ("eq_nvt", "cMD_1"):
+    for stage in ("eq", "cMD_1"):
         results = json.loads(
             (implicit_project / stage / f"{stage}_results.json").read_text())
         assert results["barostat"] is None, f"{stage} must have no barostat"
@@ -516,8 +518,8 @@ def test_the_implicit_workflow_executes_and_writes_its_declared_outputs(implicit
 
     velocities = {s: json.loads(
         (implicit_project / s / f"{s}_results.json").read_text())["velocities"]
-        for s in ("min", "eq_nvt", "cMD_1")}
-    assert velocities == {"min": "not required", "eq_nvt": "initialized", "cMD_1": "inherited"}
+        for s in ("min", "eq", "cMD_1")}
+    assert velocities == {"min": "not required", "eq": "initialized", "cMD_1": "inherited"}
 
 
 # ---------------------------------------------------------------------------------------------

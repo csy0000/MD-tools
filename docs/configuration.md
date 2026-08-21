@@ -301,9 +301,9 @@ with their values, so nothing is silent, but they do not participate in the conf
 
 ```
 explicit md    : min -> eq_nvt -> eq_npt_1 -> eq_npt_2 -> cMD_1
-implicit md    : min -> eq_nvt -> cMD_1
+implicit md    : min -> eq -> cMD_1
 explicit rest2 : min -> eq_nvt -> eq_npt_1 -> eq_npt_2 -> cMD_1 -> REST2_1
-implicit rest2 : min -> eq_nvt -> cMD_1 -> REST2_1
+implicit rest2 : min -> eq -> cMD_1 -> REST2_1
 ```
 
 Four graphs from two independent facts: implicit solvent has no NPT stage, and conventional MD has
@@ -383,7 +383,7 @@ time.
 The implicit stage graph is therefore:
 
 ```
-min -> eq_nvt -> cMD_1 -> REST2_1
+min -> eq -> cMD_1 -> REST2_1
 ```
 
 There is no `eq_npt_1` or `eq_npt_2` and there cannot be.

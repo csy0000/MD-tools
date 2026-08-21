@@ -9,8 +9,8 @@
     },
     "equilibration": {
       "protocol": "simple",
-      "nvt": "2 ps",
-      "minimize_max_iterations": 200
+      "minimize_max_iterations": 200,
+      "restrained": "2 ps"
     },
     "production": {
       "method": "rest2",

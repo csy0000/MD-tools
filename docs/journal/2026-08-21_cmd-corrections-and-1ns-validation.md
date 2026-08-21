@@ -26,6 +26,41 @@ ff19SB/GBn2/mbondi3 NVT, each as two committed 500 ps segments in one run direct
 | 14 | `--devices` honoured only by REST2 | honoured by every stage |
 | 15 | CI did not run on `dev` | `dev` added to both workflow push triggers |
 
+### A second user decision, mid-task: implicit equilibration is not "NVT"
+
+The user confirmed the replica counts and added: *"implicit doesn't need nvt or npt, just positional
+restraints is fine"*, then clarified: *"implicit solvent also needs to undergo the same equilibration
+time (20ps in total) but no nvt or npt because it doesn't have simulation box"*.
+
+The first reading dropped the equilibration stage entirely, which was wrong. The clarification is
+narrower and better: implicit solvent still equilibrates under restraints for the same kind of time;
+what it cannot have is an *ensemble label*. "NVT" fixes a volume, and there is no volume here.
+
+So the implicit graphs are:
+
+```
+implicit md    : min -> eq -> cMD_1
+implicit rest2 : min -> eq -> cMD_1 -> REST2_1
+```
+
+`eq` runs 20 ps of restrained constant-temperature dynamics with no barostat, configured by
+`protocol.equilibration.restrained` -- a field named for what it is rather than for an ensemble it
+cannot have. A stated `nvt`, `npt` or `npt_free` under implicit solvent is refused, and a *missing*
+`restrained` is refused too: the solute still has to settle before production, so its absence is an
+omission rather than a choice.
+
+Two things this exposed:
+
+* `EXECUTION_STATUS` did not know the new stage name, so `eq.sh` failed with "unknown stage 'eq'".
+  That is the second time a new stage name has needed registering there; it is a list the stage
+  runner treats as authoritative, which is the right design and a step easy to forget.
+* Velocity creation moved with the graph. `eq` is now the first stage that integrates, so it is
+  where velocities are initialised, and `cMD_1` inherits them. Measured on the final run:
+  `min` "not required", `eq` "initialized", `cMD_1` "inherited" then "restored from the committed
+  generation" on its second segment.
+
+The implicit 1 ns validation was re-run on this final graph and reproduces every total.
+
 ### The replica-count conflict, resolved toward the user
 
 The instruction says the implicit 4/6 counts are "incorrect for this repository instruction history"
@@ -103,9 +138,9 @@ cd explicit_run && MD_DEVICES=0 CMD_NUMBER_OF_SEGMENTS=2 ./run_all.sh
 
 | | explicit | implicit |
 |---|---|---|
-| stages | min, eq_nvt, eq_npt_1, eq_npt_2, cMD_1 | min, eq_nvt, cMD_1 |
+| stages | min, eq_nvt, eq_npt_1, eq_npt_2, cMD_1 | min, eq, cMD_1 |
 | minimisation | 1000 iterations, solute restrained 1 kcal/mol/Å² | same |
-| equilibration | 10 ps NVT, 10 ps restrained NPT, 10 ps free NPT | 10 ps NVT |
+| equilibration | 10 ps NVT, 10 ps restrained NPT, 10 ps free NPT | 20 ps restrained `eq`, no ensemble label |
 | timestep | 4 fs with HMR to 3.024 amu | 2 fs, no HMR |
 | ensemble | NPT, 300 K, 1 bar | NVT, 300 K |
 | segment | 500 ps = 125,000 steps | 500 ps = 250,000 steps |
@@ -135,12 +170,17 @@ observables:
 
 ```
 explicit   T 292.6 .. 309.9 K    U -33205.4 .. -32364.7 kJ/mol   V 18.0 .. 18.8 nm^3
-implicit   T 221.5 .. 407.7 K    U   -138.7 ..    -87.3 kJ/mol   V n/a (nonperiodic)
+implicit   T 225.0 .. 289.8 K    U   -138.2 ..   -103.9 kJ/mol   V n/a (nonperiodic)
 ```
 
-The implicit temperature range is much wider because the system is 22 atoms rather than 2438; the
-instantaneous temperature of a small system fluctuates strongly, and that is expected rather than a
-defect.
+The implicit temperature range is wider than the explicit one because the system is 22 atoms rather
+than 2438; the instantaneous temperature of a small system fluctuates strongly, and that is expected
+rather than a defect. The implicit log has no Volume or Density column at all -- confirmed from the
+header -- which is the point of the mode-aware reporting.
+
+Implicit figures and hashes are from the re-run on the final graph (min -> eq -> cMD_1). Two earlier
+runs, on the original and the intermediate graphs, reproduced the same step, time and frame totals --
+the graph change moved the trajectory, as it must, but not the accounting.
 
 Wall time for production only: explicit 38 s, implicit 34 s, giving roughly 2,274 and 2,541 ns/day.
 
@@ -149,8 +189,8 @@ Output hashes (sha256, first 16 hex):
 ```
 explicit  cMD_1_all_atoms.dcd       e446485749bb2229
 explicit  cMD_1_selected_atoms.dcd  11a8a34e6ea357bb
-implicit  cMD_1_all_atoms.dcd       8350d534f25c8c42
-implicit  cMD_1_selected_atoms.dcd  1956e783c5bda6ae
+implicit  cMD_1_all_atoms.dcd       618316bc98d7babe
+implicit  cMD_1_selected_atoms.dcd  3f149df55867bd8c
 ```
 
 Both restart forms reload in a fresh Context at t = 1000.0 ps with identical energy

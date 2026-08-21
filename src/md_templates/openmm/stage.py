@@ -36,6 +36,9 @@ __all__ = ["main", "validate_stage", "EXECUTION_STATUS"]
 #: implementation of a restart boundary is exactly what CLAUDE.md forbids.
 EXECUTION_STATUS = {
     "min": "implemented: restrained minimisation",
+    "eq": ("implemented: restrained equilibration for implicit solvent -- constant temperature, "
+           "no barostat, and no ensemble label, because 'NVT' fixes a volume this System does not "
+           "have"),
     "eq_nvt": "implemented: restrained NVT",
     "eq_npt_1": "implemented: RESTRAINED NPT -- the box relaxes while the solute is held",
     "eq_npt_2": "implemented: FREE NPT -- restraint released, the solute relaxes in the "
@@ -388,7 +391,13 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     results: dict = {"stage": stage, "n_restrained_atoms": len(restrained_atoms),
                      "barostat": (payload.get("barostat") or {}).get("type"),
                      "seeds": dict(stage_seeds),
+                     # Four distinct provenances, named distinctly. "inherited" for a segment
+                     # that was RESTORED from a committed generation would be true but useless: a
+                     # reader checking that velocities were created once needs to tell a restart
+                     # from a hand-off between stages.
                      "velocities": ("not required" if stage == "min"
+                                    else "restored from the committed generation"
+                                    if str(coords_origin.get("kind", "")).startswith("committed")
                                     else "initialized"
                                     if coords_origin.get("velocity_seed") is not None
                                     else "inherited"),

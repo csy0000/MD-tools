@@ -11,7 +11,7 @@ it did. It is **not** convergence, and it is not scientific validation of the pr
 |---|---|---|
 | solvent | OPC box, ions, PME | GBn2 with mbondi3 radii |
 | box | dodecahedron, 1.2 nm padding | **none** |
-| stages | min, eq_nvt, eq_npt_1, eq_npt_2, cMD_1, REST2_1 | **min, eq_nvt, cMD_1, REST2_1** |
+| stages | min, eq_nvt, eq_npt_1, eq_npt_2, cMD_1, REST2_1 | **min, eq, cMD_1, REST2_1** |
 | barostat | on the NPT and production stages | **never** |
 | timestep | 4 fs with HMR to 3.024 amu | **2 fs, no HMR** |
 | replicas | 6 | **4** |
@@ -71,15 +71,18 @@ cd ala_implicit_run && ./run_all.sh
 ala_implicit_run/
     inputs/        the prepared system, copied
     min/           restrained minimisation
-    eq_nvt/        restrained NVT -- velocities are initialised HERE, once
+    eq/            restrained equilibration, 20 ps -- velocities initialised HERE, once
     cMD_1/         unrestrained NVT conventional MD
     REST2_1/       replica exchange, one run containing its segments
     run_all.sh     run_manifest.json     run.log
 ```
 
-No `eq_npt_1`, no `eq_npt_2`. Velocities are created once on entering `eq_nvt` and inherited
-afterwards; minimisation writes a state with no velocities, which is what triggers that single
-initialisation.
+There is no NPT stage and no stage called NVT. Equilibration still happens -- `eq` runs restrained
+constant-temperature dynamics for 20 ps -- but it carries no ensemble label, because "NVT" fixes a
+volume and this System has none.
+
+Velocities are created once on entering `eq`, the first stage that integrates; minimisation writes a
+state with no velocities, which is what triggers that single initialisation.
 
 ## Exchange derivation
 
@@ -118,7 +121,7 @@ would leave untouched.
 
 ## Extension
 
-`NUMBER_OF_SEGMENTS` in `run_all.sh` controls how many segments run. It is an execution choice and
+`REST2_NUMBER_OF_SEGMENTS` in `run_all.sh` controls how many segments run. It is an execution choice and
 never appears in the scientific JSON — putting it there would move the configuration hash and make a
 longer run look like a different calculation.
 

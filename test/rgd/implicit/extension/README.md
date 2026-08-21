@@ -15,7 +15,7 @@ That is the whole command. Each invocation:
 * preserves monotonic step, time, frame and exchange-attempt indices;
 * accumulates **lifetime** statistics while reporting this invocation's separately.
 
-Run it `NUMBER_OF_SEGMENTS` times, or set that variable and use `run_all.sh`. The segment count
+Run it `REST2_NUMBER_OF_SEGMENTS` times, or set that variable and use `run_all.sh`. The segment count
 lives in Bash and in runtime state, never in the scientific JSON: putting it there would move the
 configuration hash and make a longer run look like a different calculation.
 

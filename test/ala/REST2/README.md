@@ -171,7 +171,7 @@ Each launcher records the interpreter that generated the project and preflights 
 the stack's activation script puts AmberTools' interpreter first on PATH and that one cannot import
 `openmm` or `md_templates`. Override with `PYTHON=... ./run_all.sh`.
 
-`NUMBER_OF_SEGMENTS` in `run_all.sh` controls how many REST2 segments run. It is an execution
+`REST2_NUMBER_OF_SEGMENTS` in `run_all.sh` controls how many REST2 segments run. It is an execution
 choice and never appears in the scientific JSON.
 
 ## Commands
