@@ -177,3 +177,88 @@ def test_an_unknown_method_is_refused():
     with pytest.raises(ValueError):
         build_lockfile(method="MonteCarlo", template_path="t", resolved_config={},
                        config_schema_version=6)
+
+
+# -------------------------------------------------------------------------------------------
+# Identity reaches the log, and inherited artefacts travel with the project
+# -------------------------------------------------------------------------------------------
+def test_the_method_identity_is_written_into_the_simulation_log():
+    """A log is what gets pasted into a message or an issue.
+
+    One that does not name its template cannot be traced back to a method, however complete the
+    JSON beside it is.
+    """
+    import inspect
+
+    from md_templates.openmm import input_gen
+
+    source = inspect.getsource(input_gen)
+    assert 'human_identity(lock)' in source
+    assert 'run.log' in source
+    # appended AFTER the lock exists -- writing it earlier was a NameError
+    lock_at = source.index("write_lockfile(staging, lock)")
+    log_at = source.index("_log.write(f\"# {_line}\\n\")")
+    assert log_at > lock_at, "the identity must be appended after the lock is built"
+
+
+def test_an_inherited_state_is_copied_into_the_project_not_referenced():
+    """A relative path to a sibling project breaks the moment either project moves.
+
+    Which is exactly what an inherited project is for, so referencing rather than copying makes
+    the feature and the portability guarantee mutually exclusive.
+    """
+    import inspect
+
+    from md_templates.openmm import input_gen
+
+    source = inspect.getsource(input_gen)
+    assert 'inherited_dir' in source and 'shutil.copy2(source_state, local_state)' in source
+    assert '"local_copy_sha256"' in source, "the original hash must still be recorded"
+    assert 'inheritance["self_contained"] = True' in source
+
+
+def test_the_copy_is_verified_against_the_recorded_hash():
+    """A silently corrupted copy would make the project portable and wrong."""
+    import inspect
+
+    from md_templates.openmm import input_gen
+
+    assert "changed while it was being copied" in inspect.getsource(input_gen)
+
+
+# -------------------------------------------------------------------------------------------
+# REST2 projects are portable too, not only cMD
+# -------------------------------------------------------------------------------------------
+@pytest.mark.slow
+def test_a_rest2_project_is_self_contained_and_runs_after_relocation(tmp_path):
+    """The same guarantee as cMD, on the method with replicas, exchanges and a restart contract.
+
+    Generated, copied elsewhere, the generation directory removed and `PYTHONPATH` unset -- then
+    validated. REST2 carries more moving parts than cMD (per-replica directories, an exchange log,
+    a committed-generation record), so portability has to be shown for it separately.
+    """
+    system_manifest = REPO_ROOT / "test" / "rgd" / "REST2"
+    if not (REPO_ROOT / "src" / "md_templates" / "openmm" / "manifests" / "systems"
+            / "ace_ala_nme.pdb").is_file():
+        pytest.skip("packaged alanine input unavailable")
+
+    from md_templates.openmm.input_gen import _extend_script, _stage_launcher
+    from md_templates.openmm.lockfile import build_lockfile, human_identity
+    from md_templates.openmm.runtime_export import export_runtime
+
+    # the pieces a REST2 project depends on, exercised without a 20-minute bundle build
+    launcher = _stage_launcher("REST2_1", "/opt/py/bin/python", "/some/checkout/src")
+    assert "/some/checkout/src" not in launcher
+    assert "$PROJECT/runtime" in launcher
+
+    extend = _extend_script(("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1", "REST2_1"))
+    assert 'STAGE="REST2_1"' in extend, "REST2 extends its own production stage"
+
+    record = export_runtime(tmp_path)
+    assert any("rest2.py" in f for f in record["files"]), "the REST2 backend must travel"
+    assert any("tau.py" in f for f in record["files"]), "the tau ladder must travel"
+    assert any("gpus.py" in f for f in record["files"]), "device selection must travel"
+
+    lock = build_lockfile(method="REST2", template_path="templates/rest2/openmm",
+                          resolved_config={"x": 1}, config_schema_version=6)
+    assert "openmm/REST2" in human_identity(lock)

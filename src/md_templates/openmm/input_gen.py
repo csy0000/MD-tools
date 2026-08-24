@@ -755,10 +755,35 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
         previous_state = "inputs/initial_state.xml"
         external_producer = None
         if inheritance and inheritance.get("inherited_state"):
-            # the first generated stage consumes the OTHER project's endpoint
-            previous_state = os.path.relpath(inheritance["inherited_state"], staging)
+            # The first generated stage consumes the OTHER project's endpoint. That endpoint is
+            # COPIED IN rather than referenced: a relative path to a sibling project breaks the
+            # moment either project moves, which is exactly what an inherited project is for. The
+            # original location and its hash are kept as provenance, so a changed or re-run source
+            # is still detectable -- the copy makes the project portable without making it silent
+            # about where the state came from.
+            inherited_dir = staging / "inputs" / "inherited"
+            inherited_dir.mkdir(parents=True, exist_ok=True)
+            source_state = Path(inheritance["inherited_state"])
+            local_state = inherited_dir / source_state.name
+            shutil.copy2(source_state, local_state)
+            previous_state = os.path.relpath(local_state, staging)
             external_producer = (f"{Path(inheritance['inherited_from']).parent.name}:"
-                                 f"{inheritance['inherited_stage']} (external)")
+                                 f"{inheritance['inherited_stage']} (external, copied in)")
+            copied_sha = _sha256(local_state)
+            if copied_sha != inheritance["inherited_state_sha256"]:
+                raise ValueError(
+                    f"the inherited state changed while it was being copied: "
+                    f"{inheritance['inherited_state_sha256']} -> {copied_sha}")
+            inheritance = dict(inheritance)
+            inheritance["local_copy"] = str(Path(previous_state))
+            inheritance["local_copy_sha256"] = copied_sha
+            inheritance["self_contained"] = True
+            inheritance["hand_off_note"] = (
+                f"stages up to and including {inheritance['inherited_stage']} were NOT generated; "
+                f"this project starts from the source project's endpoint State, which has been "
+                f"COPIED to {previous_state}. The original path and sha256 are recorded, so a "
+                f"changed or re-run source is detectable, and the project carries the state it "
+                f"actually uses.")
         stage_records = []
         for stage in stages_to_generate:
             d = staging / stage
@@ -930,6 +955,15 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
             exported_files=runtime_manifest(staging),
         )
         write_lockfile(staging, lock)
+
+        # The method identity belongs in the LOG as well as the README: a log is what gets
+        # pasted into a message or an issue, and one that does not name its template cannot be
+        # traced back to a method. Appended after the lock exists, not before.
+        with (staging / "run.log").open("a", encoding="utf-8") as _log:
+            _log.write("#\n")
+            for _line in human_identity(lock).splitlines():
+                _log.write(f"# {_line}\n")
+            _log.write("#\n")
 
         # A short local README. A project that travels needs to say what it is and what it still
         # needs, because the person who opens it may not be the person who made it.
