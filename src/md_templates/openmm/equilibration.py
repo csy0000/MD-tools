@@ -18,6 +18,7 @@ import numpy as np
 from .config import write_manifest
 from .system import build_system, initial_structure, protonate
 from .solvation import solvate
+from .hashing import sha256_text
 
 WATER_RESIDUE_NAMES = frozenset({"HOH", "WAT", "SOL", "TIP3", "TIP", "H2O"})
 ION_RESIDUE_NAMES = frozenset({"NA", "CL", "K", "MG", "CA", "ZN", "BR", "I", "LI", "RB", "CS"})
@@ -304,7 +305,7 @@ def build_simbox(cfg: dict, out_dir: Path, suffix: str, *, smiles: Optional[str]
             "water_forcefield": cfg["forcefield"]["water"],
             "input_smiles": smiles,
             "input_smiles_sha256": (
-                hashlib.sha256(smiles.encode("utf-8")).hexdigest() if smiles else None
+                sha256_text(smiles) if smiles else None
             ),
             "formal_charge": (build["forcefield"]["ligand"] or {}).get("formal_charge"),
         },

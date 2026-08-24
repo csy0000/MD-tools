@@ -21,6 +21,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from .hashing import sha256_bytes, sha256_text
 
 __all__ = ["main", "validate_stage", "EXECUTION_STATUS"]
 
@@ -214,17 +215,13 @@ def _atom_identity(topology, indices) -> str:
             str(position), str(int(index)), str(residue.chain.id), str(residue.id),
             str(residue.name), str(atom.name),
             atom.element.symbol if atom.element is not None else "none")))
-    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+    return sha256_text("\n".join(parts))
 
 
 def _file_sha256(path: Path) -> str:
-    import hashlib
+    from .hashing import sha256_file
 
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return sha256_file(path)
 
 
 def _cmd_continuity(payload: dict, system, *, here: Path, topology=None,
@@ -696,7 +693,7 @@ def _selection_fingerprint(indices) -> str:
     if not indices:
         return ""
     payload = ",".join(str(int(i)) for i in indices).encode()
-    return hashlib.sha256(payload).hexdigest()[:16]
+    return sha256_bytes(payload)[:16]
 
 
 def _package_bundle_for_rest2(here: Path, payload: dict) -> Path:

@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from .hashing import sha256_text
 from typing import Optional
 
 __all__ = [
@@ -539,4 +540,4 @@ def continuity_hash(contract: dict) -> str:
     import json as _json
 
     canonical = _json.dumps(contract, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    return sha256_text(canonical)

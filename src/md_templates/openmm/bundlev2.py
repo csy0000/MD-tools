@@ -95,11 +95,9 @@ def normalise_relative(path: str | Path, *, field: str = "path") -> str:
 
 def sha256_file(path: Path) -> str:
     """Hash BYTES. Parsing and re-serialising would make a changed file hash the same."""
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as fh:
-        for block in iter(lambda: fh.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    from .hashing import sha256_file as _sha256_file
+
+    return _sha256_file(path)
 
 
 def write_checksums(bundle_dir: Path, relative_paths: list[str]) -> Path:

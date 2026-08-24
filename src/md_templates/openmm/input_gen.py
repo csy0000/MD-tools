@@ -103,11 +103,9 @@ GENERATOR_ONLY_KEYS = ("conventional_md", "minimization")
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    from .hashing import sha256_file
+
+    return sha256_file(path)
 
 
 def _write_json(path: Path, payload: Any) -> None:

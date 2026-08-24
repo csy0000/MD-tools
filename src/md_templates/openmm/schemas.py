@@ -113,15 +113,15 @@ def canonical_json(doc: Any) -> str:
 
 
 def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    from .hashing import sha256_text as _sha256_text
+
+    return _sha256_text(text)
 
 
 def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for block in iter(lambda: fh.read(1 << 20), b""):
-            h.update(block)
-    return h.hexdigest()
+    from .hashing import sha256_file as _sha256_file
+
+    return _sha256_file(path)
 
 
 def config_hash(system: dict, experiment: dict, *, length: int = 12) -> str:
