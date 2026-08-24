@@ -5,6 +5,8 @@ import csv
 import hashlib
 import json
 import math
+
+from .ensembles import EXPLICIT_PRODUCTION_ENSEMBLE as ENSEMBLE_NPT, validate_ensemble
 import os
 import platform as _platform
 import subprocess
@@ -275,13 +277,15 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
     run_dir = out_dir / suffix if suffix else out_dir
     run_dir.mkdir(parents=True, exist_ok=True)
     rcfg = cfg["production"]["remd"]
-    if str(cfg["production"]["ensemble"]).upper() != "NVT":
-        raise ValueError(
-            "REST2-REMD in this baseline is NVT.  An NPT ladder needs a PV term in the "
-            "acceptance criterion, which attempt_rest2_exchange does not include."
-        )
 
     base, pdb, bundle = _load_bundle(system_xml)
+    # This refused NPT outright, because the acceptance criterion carried no pV term. It does now
+    # -- `attempt_rest2_exchange` evaluates all four reduced potentials u = beta*(U + p*V) -- so
+    # the refusal has been replaced by the canonical check. Derived from the loaded System, so an
+    # implicit ladder cannot be labelled NPT and an explicit one cannot claim a fixed box.
+    solvation_mode = "explicit" if base.usesPeriodicBoundaryConditions() else "implicit"
+    cfg["production"]["ensemble"] = validate_ensemble(
+        cfg["production"].get("ensemble"), solvation_mode)
     n_solute = int(bundle["n_solute_atoms"])
     omega = _assert_omega_classified(
         bundle, omega_exclusion=bool(cfg["rest2"]["omega_exclusion"]))
@@ -302,11 +306,46 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
     # ten-replica ladder possible on a four-GPU machine.
     device_map = _resolve_replica_devices(cfg, n_replicas)
 
+    # Explicit REST2 is NPT replica exchange: one physical pressure, one physical temperature, and
+    # a Hamiltonian that differs between replicas. Each replica therefore carries its OWN barostat.
+    # Sharing one seed across replicas would correlate their volume moves, which is precisely the
+    # independence the exchange criterion assumes; the seeds are derived per replica and recorded.
+    npt = (cfg["production"]["ensemble"] == ENSEMBLE_NPT)
+    pressure_bar = float(cfg.get("equilibration", {}).get("pressure_bar", 1.0)) if npt else None
+    barostat_seeds: list[int | None] = []
+
     simulations = []
     for r, sc in enumerate(scale_factors):
         system = _scaled_system(base, cfg, n_solute, sc, omega)
+        if npt:
+            from openmm import MonteCarloBarostat, unit as _u
+
+            seed = int(rcfg["seed"]) + 100_000 + r
+            barostat = MonteCarloBarostat(pressure_bar * _u.bar,
+                                          float(cfg["production"]["temperature_k"])
+                                          if "temperature_k" in cfg["production"] else temperature,
+                                          int(cfg.get("equilibration", {})
+                                              .get("barostat_interval", 25)))
+            barostat.setRandomNumberSeed(seed)
+            system.addForce(barostat)
+            barostat_seeds.append(seed)
+        else:
+            barostat_seeds.append(None)
         simulations.append(_make_simulation(pdb.topology, system, cfg, int(rcfg["seed"]) + r,
                                             device_index=(device_map[r] if device_map else None)))
+
+    # Exactly one barostat per Context, or none at all -- never a second one inherited from the
+    # bundle's System, which would apply two independent volume moves per step.
+    for r, sim in enumerate(simulations):
+        n_baro = sum(1 for f in sim.system.getForces()
+                     if "Barostat" in f.__class__.__name__)
+        expected = 1 if npt else 0
+        if n_baro != expected:
+            raise ValueError(
+                f"replica {r} has {n_baro} barostat(s), expected {expected} for ensemble "
+                f"{cfg['production']['ensemble']!r}. Two barostats apply two independent volume "
+                f"moves per step and sample no defined ensemble."
+            )
 
     exchange_steps = _steps(float(rcfg["exchange_interval_ps"]), dt_fs)
     plan = resolve_chunk_plan(rcfg["n_chunks"], rcfg["chunk_ns"], timestep_fs=dt_fs,
@@ -369,6 +408,16 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
         "scale_factor_i", "scale_factor_j",
         "energy_i_on_i_kj_mol", "energy_j_on_j_kj_mol",
         "energy_i_on_j_kj_mol", "energy_j_on_i_kj_mol",
+        # The NPT half of the criterion. Recorded even when the pV terms cancel -- which they do
+        # whenever every replica shares beta and p, as REST2 does -- because a log that omits them
+        # cannot be used to check that they cancelled, only to assume it. `None` under implicit
+        # solvent, where there is no volume rather than a volume of zero.
+        "volume_i_nm3", "volume_j_nm3", "pv_i_kj_mol", "pv_j_kj_mol",
+        "beta_i", "beta_j", "pressure_i_bar", "pressure_j_bar",
+        # All four reduced potentials, so the acceptance arithmetic can be reproduced from the log
+        # alone without re-running the simulation.
+        "reduced_u_ii", "reduced_u_jj", "reduced_u_ij", "reduced_u_ji",
+        "periodic",
         "delta_kj_mol", "log_acceptance", "accepted",
     ] + [f"walker_at_replica_{r:02d}" for r in range(n_replicas)]
 
@@ -487,7 +536,8 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
                 for sim in simulations:
                     sim.step(exchange_steps)
                 for i, j in exchange_pairs(n_replicas, phase):
-                    result = attempt_rest2_exchange(simulations[i], simulations[j], beta0, rng)
+                    result = attempt_rest2_exchange(simulations[i], simulations[j], beta0, rng,
+                                             pressure_bar=pressure_bar)
                     lifetime_attempts += 1
                     invocation_attempts += 1
                     if result["accepted"]:
@@ -605,13 +655,87 @@ def exchange_pairs(n_replicas: int, phase: int) -> list[tuple[int, int]]:
     return [(i, i + 1) for i in range(start, n_replicas - 1, 2)]
 
 
-def attempt_rest2_exchange(sim_i, sim_j, beta0: float, rng) -> dict:
-    """Attempt a REST2 replica exchange between two simulations.
+#: kJ/mol per (bar * nm^3). ``1 bar * 1 nm^3 = 1e5 Pa * 1e-27 m^3 = 1e-22 J``; times Avogadro and
+#: divided by 1000 gives kJ/mol. Written as a named constant because a wrong pV conversion produces
+#: an acceptance ratio that is merely *slightly* wrong, which is the hardest kind to notice.
+BAR_NM3_TO_KJ_PER_MOL = 6.02214076e23 * 1e-22 / 1000.0     # = 0.0602214076
 
-    Returns a dict with energy values, log_acceptance, and accepted flag.
-    Exchange logic lifted from scripts/09_run_openmm_explicit_rest2.py.
+
+def reduced_potential(energy_kj_mol: float, beta: float,
+                      pressure_bar: float | None = None,
+                      volume_nm3: float | None = None) -> float:
+    """The configurational reduced potential ``u = beta * (U + p*V)``.
+
+    ``p*V`` is omitted when either the pressure or the volume is ``None``. That is not a shortcut
+    for "assume zero": a nonperiodic system has no volume, so there is no ``pV`` term to compute,
+    while a periodic system sampled at fixed volume has one that is constant and cancels. Passing
+    ``None`` states the former; passing ``0.0`` would assert a real volume of zero.
+    """
+    u = energy_kj_mol
+    if pressure_bar is not None and volume_nm3 is not None:
+        u += pressure_bar * volume_nm3 * BAR_NM3_TO_KJ_PER_MOL
+    return beta * u
+
+
+def exchange_log_acceptance(u_ii: float, u_jj: float, u_ij: float, u_ji: float) -> float:
+    """``-[u_i(x_j,V_j) + u_j(x_i,V_i) - u_i(x_i,V_i) - u_j(x_j,V_j)]``.
+
+    All four reduced potentials enter. Writing the criterion in terms of energy differences alone
+    is only valid when the two states share ``beta`` and ``p``; the four-term form stays correct
+    when they do not, and reduces to the same number when they do.
+    """
+    return -((u_ij + u_ji) - (u_ii + u_jj))
+
+
+def _volume_nm3(state) -> float | None:
+    """Box volume, or ``None`` for a nonperiodic system -- which has no volume at all."""
+    import numpy as np
+    from openmm import unit
+
+    box = state.getPeriodicBoxVectors(asNumpy=True)
+    if box is None:
+        return None
+    vectors = np.asarray(box.value_in_unit(unit.nanometer), dtype=float)
+    volume = float(abs(np.linalg.det(vectors)))
+    # A nonperiodic Context still reports vectors; OpenMM's default is a unit box, and a genuine
+    # simulation cell is never exactly 1 nm^3, so this is the cheapest reliable discriminator.
+    return volume
+
+
+def attempt_rest2_exchange(sim_i, sim_j, beta0: float, rng, *,
+                           pressure_bar: float | None = None,
+                           beta_i: float | None = None,
+                           beta_j: float | None = None,
+                           pressure_i_bar: float | None = None,
+                           pressure_j_bar: float | None = None,
+                           periodic: bool | None = None) -> dict:
+    """Attempt a REST2 exchange between two replicas, in the general NPT form.
+
+    REST2 is *Hamiltonian* replica exchange: every replica sits at the same physical temperature
+    and, under NPT, the same physical pressure. What differs between replicas is the Hamiltonian,
+    through the tau scaling. The "effective solute temperature" is an interpretation of that
+    scaling, not a second thermostat.
+
+    Because ``beta`` and ``p`` are shared, the ``pV`` terms cancel algebraically and the criterion
+    collapses to the energy-difference form the previous implementation used. That cancellation is
+    real, but it is a property of this protocol rather than of replica exchange, and relying on it
+    silently is how a criterion survives into a protocol where it no longer holds. All four reduced
+    potentials are therefore computed and recorded, and the cancellation is something the tests
+    demonstrate rather than something the code assumes.
+
+    At an exchange the two configurations are cross-evaluated **each under its own box**: a
+    configuration carries its cell with it, and evaluating positions from one box inside another
+    is a different physical state. On acceptance, positions, box vectors and velocities move
+    together as one complete sampler state. Velocities are *not* rescaled -- the physical
+    temperatures are identical, so rescaling would inject energy that the criterion never
+    accounted for. On rejection both replicas are restored exactly.
     """
     from openmm import unit  # noqa: PLC0415
+
+    beta_i = beta0 if beta_i is None else beta_i
+    beta_j = beta0 if beta_j is None else beta_j
+    p_i = pressure_bar if pressure_i_bar is None else pressure_i_bar
+    p_j = pressure_bar if pressure_j_bar is None else pressure_j_bar
 
     state_i = sim_i.context.getState(getPositions=True, getVelocities=True, getEnergy=True)
     state_j = sim_j.context.getState(getPositions=True, getVelocities=True, getEnergy=True)
@@ -623,22 +747,40 @@ def attempt_rest2_exchange(sim_i, sim_j, beta0: float, rng) -> dict:
     box_i = state_i.getPeriodicBoxVectors()
     box_j = state_j.getPeriodicBoxVectors()
 
+    is_periodic = (sim_i.system.usesPeriodicBoundaryConditions()
+                   if periodic is None else bool(periodic))
+    V_i = _volume_nm3(state_i) if is_periodic else None
+    V_j = _volume_nm3(state_j) if is_periodic else None
+    if not is_periodic:
+        # No box means no pV term. Carrying a pressure into a nonperiodic exchange would multiply
+        # it by a volume that does not exist.
+        p_i = p_j = None
+
     E_ii = state_i.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
     E_jj = state_j.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
 
+    # Each configuration is evaluated under the OTHER Hamiltonian while keeping ITS OWN box.
     sim_i.context.setPeriodicBoxVectors(*box_j)
     sim_i.context.setPositions(pos_j)
-    E_ij = sim_i.context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
+    E_ij = sim_i.context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
+        unit.kilojoule_per_mole)
 
     sim_j.context.setPeriodicBoxVectors(*box_i)
     sim_j.context.setPositions(pos_i)
-    E_ji = sim_j.context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
+    E_ji = sim_j.context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
+        unit.kilojoule_per_mole)
 
-    delta = (E_ij + E_ji) - (E_ii + E_jj)
-    log_accept = -beta0 * delta
+    u_ii = reduced_potential(E_ii, beta_i, p_i, V_i)
+    u_jj = reduced_potential(E_jj, beta_j, p_j, V_j)
+    u_ij = reduced_potential(E_ij, beta_i, p_i, V_j)   # config j, evaluated by Hamiltonian i
+    u_ji = reduced_potential(E_ji, beta_j, p_j, V_i)   # config i, evaluated by Hamiltonian j
+
+    log_accept = exchange_log_acceptance(u_ii, u_jj, u_ij, u_ji)
     accepted = log_accept >= 0.0 or math.log(rng.random()) < log_accept
 
     if accepted:
+        # Positions and boxes are already crossed; velocities complete the swap. No rescaling:
+        # both replicas are at the same physical temperature.
         sim_i.context.setVelocities(vel_j)
         sim_j.context.setVelocities(vel_i)
     else:
@@ -647,12 +789,28 @@ def attempt_rest2_exchange(sim_i, sim_j, beta0: float, rng) -> dict:
         sim_j.context.setPeriodicBoxVectors(*box_j)
         sim_j.context.setPositions(pos_j)
 
+    def _pv(p, V):
+        return None if (p is None or V is None) else p * V * BAR_NM3_TO_KJ_PER_MOL
+
     return {
         "energy_i_on_i_kj_mol": E_ii,
         "energy_j_on_j_kj_mol": E_jj,
         "energy_i_on_j_kj_mol": E_ij,
         "energy_j_on_i_kj_mol": E_ji,
-        "delta_kj_mol": delta,
+        "volume_i_nm3": V_i,
+        "volume_j_nm3": V_j,
+        "pv_i_kj_mol": _pv(p_i, V_i),
+        "pv_j_kj_mol": _pv(p_j, V_j),
+        "beta_i": beta_i,
+        "beta_j": beta_j,
+        "pressure_i_bar": p_i,
+        "pressure_j_bar": p_j,
+        "reduced_u_ii": u_ii,
+        "reduced_u_jj": u_jj,
+        "reduced_u_ij": u_ij,
+        "reduced_u_ji": u_ji,
+        "periodic": is_periodic,
+        "delta_kj_mol": (E_ij + E_ji) - (E_ii + E_jj),
         "log_acceptance": log_accept,
         "accepted": accepted,
     }

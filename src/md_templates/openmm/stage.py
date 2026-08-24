@@ -177,7 +177,9 @@ def _runtime_cfg(payload: dict) -> dict:
         "friction_per_ps": parse_quantity(integrator["friction"], dimension="rate").value,
     })
     execution = payload.get("execution") or {}
-    cfg["production"]["platform"] = execution.get("platform", "CPU")
+    # No default. A defaulted platform decides where the science runs, silently; a payload that
+    # omits it is incomplete and must say so rather than land on the CPU.
+    cfg["production"]["platform"] = execution.get("platform")
     cfg["production"]["precision"] = execution.get("precision", "mixed")
     # Filled in by execute_stage from --devices. Left None here so `_runtime_cfg` stays a pure
     # projection of the payload; a stage that silently chose its own GPU would place work on a
@@ -350,6 +352,7 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     from openmm.app import PDBFile
 
     from .equilibration import (_add_positional_restraints, _apply_coords, _make_simulation,
+                            actual_platform, assert_dynamics_platform,
                                 _set_barostat, solute_atom_indices)
     from .reporting import attach_reporters
 
@@ -461,6 +464,10 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
         ]
         cmd_segments.assert_committed_outputs_intact(streams)
 
+    # Every stage passes through here, so this is the one place the platform can be enforced.
+    # Checked BEFORE the Context is built: constructing one on the wrong device and discarding it
+    # would already have allocated the memory and chosen the device.
+    assert_dynamics_platform(cfg, stage)
     sim = _make_simulation(pdb.topology, system, cfg, seed=int(stage_seeds["integrator"]),
                            device_index=device_index)
     # Velocities are initialised ONCE, on entering dynamics from a state that carries none -- in
@@ -556,6 +563,8 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
     # move in a short stage, so an unchanged box is not evidence that the barostat was missing.
     results: dict = {"stage": stage, "n_restrained_atoms": len(restrained_atoms),
                      "barostat": (payload.get("barostat") or {}).get("type"),
+                     # What the Context reports, not what the configuration asked for.
+                     "platform": actual_platform(sim),
                      # which distance the restraint measured. An implicit run using minimum-image
                      # distance would depend on box vectors it is not supposed to have.
                      "restraint_convention": restraint_convention,

@@ -5,6 +5,8 @@ import csv
 import hashlib
 import json
 import math
+
+from .ensembles import validate_ensemble
 import platform as _platform
 import subprocess
 import sys
@@ -166,14 +168,16 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
     run_dir = out_dir / suffix
     run_dir.mkdir(parents=True, exist_ok=True)
     mcfg = cfg["production"]["md"]
-    ensemble = str(cfg["production"]["ensemble"]).upper()
-    if ensemble != "NVT":
-        raise ValueError(
-            f"production.ensemble is {ensemble!r}; only NVT is implemented for the baseline.  "
-            "See the ensemble note in docs/implementation/explicit_solvent/baseline_setups.md."
-        )
 
     base, pdb, bundle = _load_bundle(system_xml)
+    # The ensemble is checked against the System that was actually loaded, not against a
+    # configuration field alone: periodicity is a property of the System, and it is what decides
+    # whether "NPT" or "nonperiodic constant temperature" is even a meaningful label. Checking the
+    # loaded System also means a bundle and a protocol that disagree are caught here rather than
+    # producing a run whose manifest describes an ensemble it was never in.
+    solvation_mode = "explicit" if base.usesPeriodicBoundaryConditions() else "implicit"
+    ensemble = validate_ensemble(cfg["production"].get("ensemble"), solvation_mode)
+    cfg["production"]["ensemble"] = ensemble
     n_solute = int(bundle["n_solute_atoms"])
     scale = float(mcfg["scale_factor"])
     label = str(mcfg.get("label") or ("cold" if scale == 1.0 else "hot"))

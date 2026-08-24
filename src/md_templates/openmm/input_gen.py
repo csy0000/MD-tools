@@ -81,7 +81,12 @@ IMPLICIT_MD_STAGE_ORDER = ("min", "eq", "cMD_1")
 RESTRAINED_STAGES = ("min", "eq", "eq_nvt", "eq_npt_1")
 
 #: Stages that carry a barostat. Empty under implicit solvent, enforced rather than assumed.
-BAROSTAT_STAGES = ("eq_npt_1", "eq_npt_2", "cMD_1")
+#: REST2_1 belongs here: explicit REST2 is NPT replica exchange at one physical pressure, so
+#: every replica carries its own independently seeded barostat and its box fluctuates during
+#: production. Its absence meant explicit REST2 production ran at fixed volume while the
+#: configuration said otherwise -- the box stopped moving at the exact point the science
+#: started. Safe to add only now that the exchange criterion carries the pV term.
+BAROSTAT_STAGES = ("eq_npt_1", "eq_npt_2", "cMD_1", "REST2_1")
 
 
 def stage_order_for(solvation_mode: str, method: str = "rest2") -> tuple:

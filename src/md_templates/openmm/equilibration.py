@@ -76,6 +76,71 @@ def _platform_and_properties(cfg: dict, device_index: Optional[int] = None):
     return plat, props
 
 
+#: Stages that do no dynamics. Minimisation walks downhill on the potential; it integrates no
+#: equations of motion, so the platform changes only how long it takes, not what is sampled.
+NON_DYNAMICS_STAGES = ("min",)
+
+#: Platforms that use the GPU. "Reference" and "CPU" are correct but far too slow for production
+#: dynamics -- a 5 ns explicit segment that would take minutes on CUDA takes days on CPU.
+ACCELERATED_PLATFORMS = ("CUDA", "HIP", "OpenCL")
+
+
+def assert_dynamics_platform(cfg: dict, stage: str, required: str | None = None) -> None:
+    """Refuse to integrate dynamics on a platform nobody chose.
+
+    `Platform.getPlatformByName` already raises when a named platform is absent, so a run
+    configured for CUDA cannot silently land on the CPU. The gap this closes is upstream of that:
+    `_runtime_cfg` defaulted `execution.platform` to "CPU", so a payload that lost the key would run
+    correct dynamics on the wrong device at a thousandth of the speed and report success.
+
+    An explicitly stated "CPU" is a legitimate choice -- the shipped smoke test and the CPU
+    integration gate both want it -- so this does not hard-require a GPU. What it refuses is a
+    platform that arrived by default rather than by decision.
+
+    `required` (or `MD_REQUIRE_DYNAMICS_PLATFORM` in the environment) additionally pins the
+    platform, so a campaign that must run on GPUs can assert that rather than trust it.
+
+    Minimisation is exempt by name rather than by inspecting the step count, because "zero steps"
+    is also what an interrupted dynamics stage looks like.
+    """
+    import os
+
+    if stage in NON_DYNAMICS_STAGES:
+        return
+    pcfg = cfg["production"]
+    name = pcfg.get("platform")
+    if not name:
+        raise RuntimeError(
+            f"stage {stage!r} integrates dynamics but no execution.platform was resolved. The "
+            f"protocol configuration must state it; it is not defaulted, because the default would "
+            f"decide where the science runs."
+        )
+    required = required or os.environ.get("MD_REQUIRE_DYNAMICS_PLATFORM") or None
+    if required and str(name) != str(required):
+        raise RuntimeError(
+            f"stage {stage!r} integrates dynamics on the {name!r} platform, but this run requires "
+            f"{required!r} (MD_REQUIRE_DYNAMICS_PLATFORM). Minimisation is exempt; every stage that "
+            f"integrates equations of motion is not."
+        )
+
+
+def actual_platform(simulation) -> dict:
+    """What the Context is really running on, read back from the Context itself.
+
+    The configured name and the realised platform are different facts. Recording only the request
+    means a manifest asserts a device rather than reporting one.
+    """
+    platform = simulation.context.getPlatform()
+    record = {"name": platform.getName()}
+    for prop in ("DeviceIndex", "DeviceName", "Precision"):
+        if prop in platform.getPropertyNames():
+            try:
+                record[prop] = platform.getPropertyValue(simulation.context, prop)
+            except Exception:                      # noqa: BLE001
+                pass
+    return record
+
+
 def _make_simulation(topology, system, cfg: dict, seed: int, timestep_fs: Optional[float] = None,
                      device_index: Optional[int] = None):
     from openmm import app
