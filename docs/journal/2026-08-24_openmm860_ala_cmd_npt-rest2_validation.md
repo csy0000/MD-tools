@@ -223,6 +223,57 @@ solvation-aware selection remains as the safety net beneath it, so the two are i
 
 **The exchange state-swap was untested** -- see above.
 
+## Commit roles
+
+The single "code at X" line above was too coarse once corrections started landing. The four runs
+involve four distinct commits, and the distinction matters when reading a manifest:
+
+| role | commit | what it is |
+|---|---|---|
+| bundle-build | `99a7802` | the tree both bundles were built from, recorded in `system_manifest.json` |
+| simulation-run | `99a7802` | the same tree; every protocol was generated and executed from it |
+| post-run audit/fix | `8f1e3af` | the evidence-first audit: geometry docs, legacy barostat, continuity ensemble, README |
+| reviewed `dev` head | see *State* | current head, which includes commits after the runs finished |
+
+Bundle-build and simulation-run coincide here because the bundles were rebuilt from a clean tree
+immediately before the campaign. That is not guaranteed in general, which is why they are separate
+rows.
+
+## Provenance correction for the completed runs
+
+The four run manifests recorded `profile: None`; `MD_input_gen.py` resolved a profile but never
+wrote it down. Each run directory now carries an immutable
+`provenance_correction.json` **beside** its manifest. Nothing in the original manifests, the
+trajectories (80 DCD files), the checkpoints (110) or the serialized States was modified -- verified
+by re-hashing every manifest after the sidecars were written and confirming each still matches the
+hash the sidecar recorded.
+
+| run | recovered profile | manifest SHA-256 | resolved-config SHA-256 |
+|---|---|---|---|
+| `cmd/explicit` | `explicit-md-peptide-v2` | `47ff88df0f77dcde…` | `8f3da190168e17a3…` |
+| `cmd/implicit` | `implicit-md-peptide-v1` | `4ff80c23e71f6533…` | `a7549625becc16b1…` |
+| `rest2/explicit` | `explicit-rest2-peptide-v2` | `455c76fe077e6b0b…` | `89cb2e8e3c45885b…` |
+| `rest2/implicit` | `implicit-rest2-peptide-v1` | `3a482bb8837cdb8d…` | `bb26de526b2e1f6f…` |
+
+The profile was **recovered, not assumed**: every profile-supplied field in each manifest's own
+`value_sources` block is attributed to `profile:<id>`, and that id agrees with the `profile` key of
+the source md config in all four cases. Two independent records, one answer.
+
+## Audit of 2026-08-24 (after the runs)
+
+An evidence-first audit was asked to prove the dodecahedron implementation wrong before changing it.
+It could not: measured on the generated System, the shortest lattice translation is 4.000000 nm with
+twelve translations tied at the minimum, the minimum perpendicular height is 2.828427 nm = width/√2,
+`2·cutoff = 2.0 ≤ 2.828` with 0.828 nm of headroom, and the measured solute-image atom distance is
+3.2503 nm against a conservative bound of 3.0890 nm. **The implementation was correct; the
+explanation was wrong** -- four places called `width/√2` the "minimum image distance".
+
+The same audit found one genuine runtime defect: the legacy `md-openmm md` path attached no barostat,
+so once the ensemble resolver reported "NPT" it labelled its runs NPT and integrated at fixed volume.
+That regression arrived with the resolver in `13a8634` and is fixed in `8f1e3af`. **The four runs
+recorded here are unaffected** -- they are stage-based and attach barostats through
+`BAROSTAT_STAGES`, verified separately.
+
 ## State
 
 `dev` at `7d053ec`. **985 fast tests pass** under OpenMM 8.6.0 (from 906 at the start). All four
