@@ -13,7 +13,9 @@ Two force-field routes, both exercised end to end on this machine:
 
 The route is **declared, never inferred**: a ligand manifest may not name a protein force field and
 a peptide manifest may not name a small-molecule one, because that is precisely how a peptide
-silently becomes a Sage run with the same system name. **Water follows the force field**, because ff19SB and Sage were fitted against different water:
+silently becomes a Sage run with the same system name.
+
+**Water follows the force field**, because ff19SB and Sage were fitted against different water:
 ff19SB gets **OPC**, Sage gets plain **TIP3P**, and an ff19SB + Sage complex defaults to OPC as a
 documented compatibility choice. The rule reads the resolved force-field family rather than the
 input label, and refuses rather than guesses for a force field it does not recognise. Both defaults
@@ -35,8 +37,9 @@ pip install -e . --no-deps          # from source, for development
 resolve them produces a different and usually broken stack. `environment.yml` therefore lists every
 runtime dependency.
 
-To consume the pipeline **without** a checkout, use the shipped package instead — see
-[`docs/implementation/explicit_solvent/HANDOFF_PACKAGE.md`](docs/implementation/explicit_solvent/HANDOFF_PACKAGE.md).
+To consume the pipeline **without** a checkout, install the wheel and use the packaged catalog —
+see [From an installed wheel, with no checkout](#from-an-installed-wheel-with-no-checkout) below, and
+[docs/support-matrix.md](docs/support-matrix.md) for what travels.
 
 ```bash
 md-openmm validate-env    --platform CUDA --device 0
@@ -206,33 +209,79 @@ Conventional MD declares its own plan. An experiment with only a `rest2:` block 
 
 ```text
 src/md_templates/
-  explicit/                    the portable pipeline: CLI, config, bundles, runner, manifests
-  systems/explicit_baseline.py the explicit-solvent build and MD driver
-  systems/openmm_system.py     build_rest2_scaled_system -- the REST2 Hamiltonian
-  systems/topology_prep.py     resolve_remd_scale_ladder, used by run_rest2_remd
-  systems/cv_definition.py     reached lazily from topology_prep
-  methods/md_run.py            attempt_rest2_exchange, exchange_pairs
-  common/paths.py              data_dir / ensure_dir / project_root
-docs/implementation/explicit_solvent/
-  PORTABLE_REST2.md            the design and its limits
-  HANDOFF_PACKAGE.md           the shipped package, its revision, and the source gap below
-  environment.yml              the conda environment
-  scripts/                     the pre-CLI staged scripts (md.py, md_REST2.py, simbox-setup.py, ...)
-tests/                         test_explicit_baseline.py, test_explicit_portable.py
-scripts/rest2_pilot_acceptance.py
+  openmm/                      the pipeline: 34 modules
+    cli.py, cli_system_gen.py, cli_input_gen.py    the three public entry points
+    config.py                  the canonical configuration model and its defaults
+    water_policy.py            which water a force-field family was fitted against
+    solvation.py               box geometry, solvation, ion accounting
+    system.py                  System construction, REST2 scaling, omega policy
+    equilibration.py           the staged build and the restraint conventions
+    stage.py, cmd_segments.py  staged execution and the committed-generation contract
+    runstate.py, dcdtail.py    restart records, and record-aware DCD tail recovery
+    hashing.py                 one definition of a content hash
+    schemas.py, bundle*.py     manifests, bundle validation and portability
+    spec/                      profiles, resolution and the profile registry
+    manifests/systems/         the shipped system definitions
+  core/, engines/              the template catalog and its packaged provenance
+docs/
+  configuration.md             the configuration model, water policy and cMD contract
+  support-matrix.md            what is guaranteed across machines
+  journal/                     dated records of what was changed and why
+tests/                         the suite; `-m "not slow"` is the fast gate
+scripts/ci/                    fast_checks.sh and integration_cpu.sh, the same steps CI runs
 ```
 
-The source tree is 23 modules: `md_templates.openmm.*`, `systems/{explicit_baseline, openmm_system,
-topology_prep, cv_definition}.py`, `methods/md_run.py` and `common/paths.py`.
+The public surface is three commands -- `md-system-gen`, `md-input-gen`, `md-openmm` -- and a
+generated project directory. Everything else is an implementation detail that the manifests record.
 
-That closure was established by **running the pipeline from a pristine checkout**, not by reading
-imports. An import trace of the explicit package loads only eleven modules and would have you
-believe `methods/` is unnecessary — but `explicit_baseline.run_rest2_remd` imports
-`methods.md_run` and `systems.topology_prep` at lines 2186–2187, *inside the function*, so they
-appear only once an exchange is actually attempted. The first cut of this branch imported cleanly,
-prepared a bundle cleanly, and then failed at the first exchange with
-`ModuleNotFoundError: No module named 'md_templates.openmm.md'`. The CPU smoke is the check that
-matters; it now passes from a pristine checkout of this branch (`status: completed`, 4/4 rounds).
+## Relationship to OpenMM
+
+This package is a protocol and a provenance layer around OpenMM, not a reimplementation of it.
+Where OpenMM already does something, it does it here:
+
+| task | who does it |
+|---|---|
+| solvation, ion placement | `Modeller.addSolvent` |
+| hydrogen placement at pH | `Modeller.addHydrogens` |
+| box vectors for a shape | `Modeller._computeBoxVectors` |
+| hydrogen mass repartitioning | `ForceField.createSystem(hydrogenMass=...)` |
+| checkpoints and portable States | `Simulation.saveCheckpoint` / `saveState` |
+| positional restraints | `CustomExternalForce` |
+| topology output | `PDBFile`, `PDBxFile` |
+
+Three things are deliberately **not** delegated, each for a reason that was measured rather than
+assumed:
+
+* **box sizing.** `addSolvent(padding=...)` knows nothing about the nonbonded cutoff. At this
+  package's own defaults -- 1.2 nm padding, rhombic dodecahedron, 1.0 nm cutoff -- it builds a
+  2.400 nm box whose minimum image is 1.697 nm, and `Context` construction then fails with *"the
+  cutoff distance cannot be greater than half the periodic box size"*. `cutoff_fit_policy` grows the
+  box until it clears that limit by a recorded margin, or refuses with the padding that would work.
+* **DCD tail recovery.** Nothing in OpenMM reads DCD records or truncates on a record boundary,
+  which is what crash recovery needs.
+* **the committed-generation contract.** Segment commits, watermarks and continuity identity have no
+  OpenMM counterpart; they are what makes a run resumable rather than merely restartable.
+
+Where a delegation exists, a test asserts it stays equivalent -- including for
+`_computeBoxVectors`, which is a private OpenMM helper, so a local fallback survives and the test
+fails loudly if upstream moves it.
+
+### Box geometry and padding
+
+`solvation.padding_semantics` defaults to **`"openmm"`**, reproducing `Modeller.addSolvent`: a
+bounding-sphere radius about the centre of the solute's axis-aligned bounding box, then
+`width = max(2*radius + padding, 2*padding)`.
+
+That sizes the box **width**. Only in a cube is the width also the minimum-image distance -- a
+rhombic dodecahedron's is `width/sqrt(2)` and a truncated octahedron's is `width*sqrt(6)/3` -- so in
+a non-cubic box the real solute-to-image clearance is smaller than the number requested.
+`"solute-image-gap"` is available for callers who want `padding_nm` to mean that clearance instead.
+
+Under either semantics the box is grown if the minimum image does not clear `2 * cutoff` by
+`system_build.minimum_image_margin_nm`. Under `"openmm"` that growth is usually what sets the box,
+so **if a run aborts with OpenMM's minimum-image error, raise the margin rather than the padding**.
+Every number involved -- bounding radius, requested and final width, minimum image, whether it grew,
+the maximum legal cutoff -- is recorded in the bundle's `geometry` block.
 
 ## State of the science — read before quoting anything
 
@@ -250,11 +299,14 @@ matters; it now passes from a pristine checkout of this branch (`status: complet
 
 ## Source provenance — the wheel and this tree agree
 
-The distributed wheel `md_templates-0.1.0-py3-none-any.whl`
+*Historical, as of the hand-off.* The distributed wheel `md_templates-0.1.0-py3-none-any.whl`
 (sha256 `50e9a1a51ecbd3680d43985786813727186d534c486a9501ebd4895fe639a183`) was built from commit
-`10809c7` of the originating repository. That source is the source in this tree: all nine modules of
-`md_templates/openmm/` are **byte-identical** between `10809c7` and the shipped wheel, verified by
-comparison rather than assumed from a version string.
+`10809c7` of the originating repository, and all nine modules `md_templates/openmm/` then contained
+were **byte-identical** between that commit and the shipped wheel, verified by comparison rather
+than assumed from a version string. The package has since grown to 34 modules and diverged
+substantially, so this records where the tree came from rather than what it currently equals; the
+live check is `scripts/ci/fast_checks.sh`, which rebuilds the wheel and compares the packaged
+resources against the checkout on every run.
 
 Two fixes sit on top of it, both found by running the pipeline rather than reading it:
 
@@ -377,6 +429,17 @@ holding a checkpoint (preferred for continuation) and a portable State (announce
 re-invoking the launcher continues the same run rather than restarting it. Trajectories and logs
 append, with per-stream watermarks so a crash leaves an uncommitted tail that the next invocation
 removes rather than appending after.
+
+A continuation is checked before anything is opened for append. The on-disk record is
+`cmd_schema_version: 3`, which binds the identity of what is being continued by exact bytes: the
+predecessor State, `system_manifest.json` and `forcefield.json`, alongside the System, topology,
+ordered atom identity, integrator, ensemble, restraint convention, segment length and reporting
+cadence. Change any of them and the resume is refused with the field named, because two segments
+that disagree about the Hamiltonian are two simulations sharing a trajectory file -- which is worse
+than an error, since the file still looks continuous. A stream *shorter* than its watermark is
+missing history and is refused rather than silently re-run; a longer one is a crash tail and is
+truncated on real DCD record boundaries. Asking for more segments is the one change that is always
+safe, so segment **count** lives in Bash and never enters the continuity hash.
 
 ```bash
 CMD_NUMBER_OF_SEGMENTS=2 ./run_all.sh   # equilibrate once, then two production segments
