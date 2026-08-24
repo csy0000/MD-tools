@@ -832,6 +832,16 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
                 "n_solute_atoms": manifest["composition"]["n_solute_atoms"],
             },
             "stages": stage_records,
+            # WHICH profile supplied the defaults. resolve_spec has always returned it and the
+            # manifest never recorded it, so `resolved_md_config` carried no `profile` key -- and
+            # anything re-resolving that document fell back to the DEFAULT profile. For an
+            # implicit protocol that default is explicit water, which dragged in PME, a cutoff, an
+            # Ewald tolerance, a minimum-image margin, rigid water, an NVT stage and an NPT stage,
+            # each refused one at a time for a value nobody wrote. Recording the profile is the
+            # provenance fix; solvation-aware selection is the safety net beneath it.
+            "profile": (resolution["profile"].get("profile_id")
+                        if isinstance(resolution["profile"], dict)
+                        else resolution["profile"]),
             "resolved_md_config": resolution["resolved"],
             "configuration_hashes": resolution["hashes"],
             "value_sources": resolution["sources"],

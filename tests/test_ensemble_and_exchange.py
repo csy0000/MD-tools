@@ -528,3 +528,19 @@ def test_serial_fallback_still_advances_every_replica():
 
     propagate_replicas([Sim("a"), Sim("b")], 250, executor=None)
     assert calls == [("a", 250), ("b", 250)]
+
+
+def test_the_run_manifest_records_which_profile_supplied_the_defaults():
+    """resolve_spec has always returned the profile id; the manifest never wrote it down.
+
+    A resolved configuration with no `profile` key cannot be re-resolved faithfully -- selection
+    falls back to the DEFAULT profile, which is explicit-water. That is how an implicit REST2
+    ladder came to inherit PME, a cutoff, rigid water and an NVT stage, each refused separately.
+    """
+    import inspect
+
+    from md_templates.openmm import input_gen
+
+    source = inspect.getsource(input_gen)
+    assert '"profile": (resolution["profile"]' in source, (
+        "the run manifest must record which profile supplied the defaults")

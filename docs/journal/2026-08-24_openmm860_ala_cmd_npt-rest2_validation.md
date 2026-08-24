@@ -66,6 +66,24 @@ The general form is kept anyway, and a test asserts the terms do **not** cancel 
 differ -- relying on the cancellation silently is how a criterion outlives the protocol it was
 correct for.
 
+**A coverage gap found by auditing afterwards, not by a failure.** Nothing tested
+`attempt_rest2_exchange` itself. The arithmetic was covered -- `reduced_potential`,
+`exchange_log_acceptance`, the cancellation -- but not the part that moves the sampler. A criterion
+that computes the right probability and then swaps two of the three quantities samples nothing
+anyone can name, and every energy in the log would still look plausible.
+`tests/test_exchange_state_swap.py` now drives two real Contexts on the Reference platform in double
+precision (mixed precision would be asserting the platform's tolerance, not the code's): an accepted
+exchange must cross positions, box vectors AND velocities; a rejected one must restore all three
+exactly; velocity magnitudes must be unchanged on acceptance, because swapping is not rescaling; and
+a nonperiodic pair must record no volume, no pV and no pressure.
+
+Writing it took three attempts, each instructive. Identical Hamiltonians can never reject -- with
+`H_i == H_j`, `E_ij == E_jj` and `E_ji == E_ii`, so `delta` is exactly zero whatever the geometry.
+Differing only in charge was not enough either: with three particles inside one cutoff the cross
+terms nearly cancelled and `log_acceptance` came out at `-1e-11`, which accepts. A rejection has to
+be forced by a genuine Hamiltonian difference -- here a much larger `sigma` on one replica, with an
+overlapping pair on the other.
+
 `BAROSTAT_STAGES` gained `REST2_1`. Its absence meant explicit REST2 production ran at **fixed
 volume** while the configuration said NPT -- the box stopped moving at exactly the point the science
 started. Added only after the pV term existed, so no commit has accidentally-correct physics. One
@@ -193,9 +211,21 @@ equations of motion asserts the GPU. Minimisation is exempt by name -- it integr
 "zero steps" is also what an interrupted dynamics stage looks like. Each stage records the platform
 the Context actually reports, not the one requested.
 
+## Closed afterwards
+
+Two items were found by auditing after the runs finished, rather than by a failure.
+
+**`run_manifest.profile` was `None` for all four runs.** `resolve_spec` has always returned which
+profile supplied the defaults; the manifest never wrote it down. That is the provenance gap that let
+the implicit failure reach a launch at all -- a resolved configuration with no `profile` key cannot
+be re-resolved faithfully, because selection falls back to the default. Now recorded. The
+solvation-aware selection remains as the safety net beneath it, so the two are independent.
+
+**The exchange state-swap was untested** -- see above.
+
 ## State
 
-`dev` at `7d053ec`. **979 fast tests pass** under OpenMM 8.6.0 (from 906 at the start). All four
+`dev` at `7d053ec`. **985 fast tests pass** under OpenMM 8.6.0 (from 906 at the start). All four
 protocols complete and passing every stated Part 8 gate. The CPU smoke, which was broken on `dev`
 before this work, completes again.
 
@@ -206,8 +236,5 @@ Deferred, with reasons:
 
 * **OpenMM 8.6's native multistate sampler** as a REST2 backend. Forbidden in this task; now more
   attractive, since the propagation problem it would solve has been characterised.
-* **`run_manifest.profile` is `None`.** The generator resolves a profile but does not record which
-  one. That is the provenance gap that let failure 4 reach a launch, and the solvation-aware
-  selection fixes the symptom rather than the gap.
 * **Acceptance at `T_eff = 1200 K`.** Both ladders mix (0.486, 0.547), but the hot rung is a wide
   span for a dipeptide. A sampling question, not a plumbing one.
