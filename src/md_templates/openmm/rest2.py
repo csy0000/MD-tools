@@ -4,7 +4,9 @@ import copy
 import csv
 import hashlib
 import json
+import contextlib
 import math
+from concurrent.futures import ThreadPoolExecutor
 
 from .seeds import as_openmm_seed, derive_seed, replica_purpose
 from .ensembles import EXPLICIT_PRODUCTION_ENSEMBLE as ENSEMBLE_NPT, validate_ensemble
@@ -524,12 +526,16 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
     # resumed run report only the last invocation's statistics.
     lifetime_attempts, lifetime_accepted = _lifetime_counts(log_path) if start_chunk else (0, 0)
     invocation_attempts = invocation_accepted = 0
-    with log_path.open(log_mode, newline="") as fh:
+    with log_path.open(log_mode, newline="") as fh, \
+            replica_propagation_pool(n_replicas) as propagation_pool:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         if log_mode == "w":
             writer.writeheader()
         # The scheduler phase is restored from the commit record when present; the derived value
         # is the fallback and agrees with it for an uninterrupted history.
+        # One pool for the whole invocation. Creating it per round would pay thread setup 500
+        # times; creating it per chunk would still pay it once per committed generation.
+        # `None` when there is nothing to overlap, so a single-replica ladder takes the plain loop.
         stored_phase = committed.get("exchange_phase")
         phase = int(stored_phase) if isinstance(stored_phase, int) and start_chunk else \
             start_chunk * rounds_per_chunk
@@ -540,8 +546,7 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
                 )
             t0 = time.time()
             for _ in range(rounds_per_chunk):
-                for sim in simulations:
-                    sim.step(exchange_steps)
+                propagate_replicas(simulations, exchange_steps, executor=propagation_pool)
                 for i, j in exchange_pairs(n_replicas, phase):
                     result = attempt_rest2_exchange(simulations[i], simulations[j], beta0, rng,
                                              pressure_bar=pressure_bar)
@@ -656,6 +661,50 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
 # ---------------------------------------------------------------------------------------------
 # Replica exchange: neighbour schedule, Metropolis criterion, ladder validation
 # ---------------------------------------------------------------------------------------------
+@contextlib.contextmanager
+def replica_propagation_pool(n_replicas: int):
+    """A thread pool sized to the ladder, joined on every exit path.
+
+    A context manager rather than a bare constructor so that an exception anywhere in the chunk
+    loop still joins the workers instead of leaving threads attached to live CUDA Contexts. Yields
+    `None` for a single-replica ladder, where there is nothing to overlap and the plain loop avoids
+    the thread hand-off entirely.
+    """
+    if n_replicas < 2:
+        yield None
+        return
+    pool = ThreadPoolExecutor(max_workers=n_replicas, thread_name_prefix="rest2-replica")
+    try:
+        yield pool
+    finally:
+        pool.shutdown(wait=True)
+
+
+def propagate_replicas(simulations, steps: int, executor=None) -> None:
+    """Advance every replica by `steps`, concurrently when an executor is supplied.
+
+    Replicas between exchanges are independent: each owns its System, Context, integrator and RNG
+    stream, and none reads another's state until the exchange step that follows. So the loop is a
+    fan-out with a barrier, not a sequence -- but it was written as `for sim in simulations:
+    sim.step(...)`, which is blocking, so six replicas on six GPUs ran one at a time. Measured
+    directly: exactly one of six devices at ~96 % at any instant, the rest holding a Context and
+    idling. Six GPUs delivered one GPU's throughput.
+
+    Threads rather than processes because OpenMM releases the GIL inside `step()` -- measured at
+    2.80x on three devices against an ideal of 3x. A process pool would have to move Systems and
+    States across a pipe at every exchange, which costs more than it saves.
+
+    The barrier is the point: `map` is drained before returning, so no exchange is ever evaluated
+    against a replica that is still integrating. Exceptions raised in a worker surface here, when
+    the results are drained, rather than being swallowed into a thread.
+    """
+    if executor is None or len(simulations) < 2:
+        for sim in simulations:
+            sim.step(steps)
+        return
+    list(executor.map(lambda sim: sim.step(steps), simulations))
+
+
 def exchange_pairs(n_replicas: int, phase: int) -> list[tuple[int, int]]:
     """Return neighbor pairs for one REST2 exchange phase (even/odd alternation)."""
     start = phase % 2

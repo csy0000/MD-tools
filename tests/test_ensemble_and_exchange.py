@@ -434,3 +434,97 @@ def test_every_openmm_seed_call_site_is_clamped():
     assert not unclamped, (
         "these OpenMM seed call sites do not clamp through as_openmm_seed, so a master seed above "
         "2**31-1 would crash them at runtime:\n  " + "\n  ".join(unclamped))
+
+
+# -------------------------------------------------------------------------------------------
+# Replica propagation must actually overlap
+#
+# Replicas between exchanges are independent -- each owns its System, Context, integrator and RNG
+# stream, and none reads another's state until the exchange that follows. The loop was written as
+# a blocking sequence, so six replicas on six GPUs ran one at a time: measured, exactly one of six
+# devices at ~96 % at any instant while the other five held a Context and idled.
+# -------------------------------------------------------------------------------------------
+def test_a_single_replica_ladder_gets_no_pool():
+    """Nothing to overlap, so it takes the plain loop rather than paying thread hand-off."""
+    from md_templates.openmm.rest2 import replica_propagation_pool
+
+    with replica_propagation_pool(1) as pool:
+        assert pool is None
+
+
+def test_a_multi_replica_ladder_gets_a_pool_sized_to_it():
+    from md_templates.openmm.rest2 import replica_propagation_pool
+
+    with replica_propagation_pool(6) as pool:
+        assert pool is not None
+        assert pool._max_workers == 6
+
+
+def test_the_pool_is_joined_even_when_the_body_raises():
+    """A leaked worker stays attached to a live CUDA Context."""
+    from md_templates.openmm.rest2 import replica_propagation_pool
+
+    captured = {}
+    with pytest.raises(RuntimeError):
+        with replica_propagation_pool(4) as pool:
+            captured["pool"] = pool
+            raise RuntimeError("boom")
+    assert captured["pool"]._shutdown
+
+
+def test_propagation_is_a_barrier_not_a_fire_and_forget():
+    """No exchange may be evaluated against a replica that is still integrating."""
+    import threading
+    import time
+
+    from md_templates.openmm.rest2 import propagate_replicas, replica_propagation_pool
+
+    done = []
+    lock = threading.Lock()
+
+    class FakeSim:
+        def __init__(self, delay):
+            self.delay = delay
+
+        def step(self, steps):
+            time.sleep(self.delay)
+            with lock:
+                done.append(self.delay)
+
+    sims = [FakeSim(0.05), FakeSim(0.01), FakeSim(0.03)]
+    with replica_propagation_pool(len(sims)) as pool:
+        propagate_replicas(sims, 10, executor=pool)
+    assert len(done) == len(sims), "propagate_replicas returned before every replica finished"
+
+
+def test_a_failure_in_one_replica_surfaces_to_the_caller():
+    """Swallowed into a thread, a dead replica would let the ladder continue against stale state."""
+    from md_templates.openmm.rest2 import propagate_replicas, replica_propagation_pool
+
+    class Boom:
+        def step(self, steps):
+            raise ValueError("replica died")
+
+    class Fine:
+        def step(self, steps):
+            return None
+
+    with replica_propagation_pool(2) as pool:
+        with pytest.raises(ValueError, match="replica died"):
+            propagate_replicas([Fine(), Boom()], 10, executor=pool)
+
+
+def test_serial_fallback_still_advances_every_replica():
+    from md_templates.openmm.rest2 import propagate_replicas
+
+    calls = []
+
+    class Sim:
+        def __init__(self, tag):
+            self.tag = tag
+
+        def step(self, steps):
+            calls.append((self.tag, steps))
+
+    propagate_replicas([Sim("a"), Sim("b")], 250, executor=None)
+    assert calls == [("a", 250), ("b", 250)]
