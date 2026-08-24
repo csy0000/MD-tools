@@ -71,7 +71,10 @@ DEFAULTS: dict[str, Any] = {
         "protein": "amber19/protein.ff19SB.xml",
         "water": "amber19/opc.xml",
         "ligand": "openff-2.2.0",            # Sage 2.2
-        "ligand_charge_method": "am1bcc",    # requires AmberTools (sqm) on PATH
+        # "am1bcc" requires AmberTools (sqm) on PATH and costs ~40 min for a 79-atom
+        # macrocycle; "am1bcc_nagl" reproduces AM1-BCC ELF10 from the molecular graph in
+        # about a second and needs no conformer.  Changing this changes the Hamiltonian.
+        "ligand_charge_method": "am1bcc",
         "extra_xml": [],
     },
     # ---- step 3: solvation -------------------------------------------------------------------

@@ -111,6 +111,44 @@ def initial_structure(smiles: str, out_dir: Path, cfg: dict) -> dict:
 # ---------------------------------------------------------------------------------------------
 # Force field construction (shared by steps 2, 3, 4)
 # ---------------------------------------------------------------------------------------------
+#: Charge methods that route to OpenFF NAGL's graph model of AM1-BCC.  ``nagl`` is the older
+#: spelling and is kept working; ``am1bcc_nagl`` is preferred because it says which quantity the
+#: model reproduces.  Both resolve to the same model -- see :func:`resolve_nagl_am1bcc_model`.
+NAGL_AM1BCC_METHODS = ("am1bcc_nagl", "nagl")
+
+
+def resolve_nagl_am1bcc_model() -> dict:
+    """Return the newest *production* NAGL AM1-BCC model, as ``{name, path, sha256}``.
+
+    Resolved at call time rather than pinned in this source file.  An earlier version hard-coded
+    ``openff-gnn-am1bcc-0.1.0-rc.3.pt``, which meant that installing a newer `openff-nagl-models`
+    kept using a release candidate that the release notes had superseded -- and that nothing in the
+    recorded provenance revealed, because only the string ``"nagl"`` was ever written down.
+
+    ``production_only=True`` is the point of the query: the package also ships an alpha and three
+    release candidates, and picking the newest file overall would silently prefer a pre-release the
+    moment one is published.  The list is ordered oldest to newest, so the last entry is current.
+
+    The returned digest is what makes a NAGL run reproducible.  The method name alone does not
+    identify a Hamiltonian -- upgrading the models package would change the charges without
+    changing any configuration file -- so callers record the file and its hash alongside the name.
+    """
+    from openff.nagl_models import get_models_by_type
+
+    from md_templates.openmm.hashing import sha256_file
+
+    models = list(get_models_by_type("am1bcc", production_only=True))
+    if not models:
+        raise RuntimeError(
+            "no production NAGL AM1-BCC model is installed, so ligand_charge_method="
+            "'am1bcc_nagl' cannot be honoured.  `openff-nagl-models` is present but ships only "
+            "pre-release models in this environment.  Install a release that carries "
+            "openff-gnn-am1bcc-1.0.0.pt or later, or use ligand_charge_method='am1bcc'."
+        )
+    newest = Path(str(models[-1]))
+    return {"name": newest.name, "path": str(newest), "sha256": sha256_file(newest)}
+
+
 def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
                     route: Optional[str] = None):
     """Return ``(ForceField, info)`` for the baseline: ff19SB + OPC (+ Sage for a ligand).
@@ -152,17 +190,38 @@ def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
                 "forcefield.ligand_charge_method='am1bcc' needs AmberTools' sqm, but the OpenFF "
                 f"toolkit registry only has {wrappers}.  Activate the md-templates environment "
                 "(conda activate md-templates) so antechamber/sqm are on PATH, or set "
-                "forcefield.ligand_charge_method to 'nagl' / 'espaloma' if that is intended.  "
+                "forcefield.ligand_charge_method to 'am1bcc_nagl' if that is intended -- NAGL "
+                "reproduces AM1-BCC ELF10 from the graph alone and needs no sqm.  "
                 "This is checked here because otherwise the charges would silently fall back to "
                 "a different method and the run would be mislabelled."
             )
+        if method in NAGL_AM1BCC_METHODS and "NAGLToolkitWrapper" not in wrappers:
+            raise RuntimeError(
+                f"forcefield.ligand_charge_method={method!r} needs OpenFF NAGL, but the OpenFF "
+                f"toolkit registry only has {wrappers}.  Install `openff-nagl` and "
+                "`openff-nagl-models` into the active environment.  Checked for the same reason as "
+                "the AmberTools case above: without it the charges come from somewhere else and "
+                "the run is mislabelled."
+            )
         offmol = Molecule.from_file(str(ligand_sdf))
+        # What actually identifies the charges, beyond the method name. For AM1-BCC the name plus
+        # the conformer scheme is enough; for NAGL the model file is a trained artefact that can be
+        # upgraded underneath an unchanged configuration, so it is recorded explicitly.
+        charge_provenance: dict[str, Any] = {}
         if method == "am1bcc":
-            offmol.assign_partial_charges("am1bccelf10" if _has_openeye() else "am1bcc")
-        elif method == "nagl":
-            offmol.assign_partial_charges("openff-gnn-am1bcc-0.1.0-rc.3.pt")
+            scheme = "am1bccelf10" if _has_openeye() else "am1bcc"
+            offmol.assign_partial_charges(scheme)
+            charge_provenance["charge_scheme"] = scheme
+        elif method in NAGL_AM1BCC_METHODS:
+            model = resolve_nagl_am1bcc_model()
+            offmol.assign_partial_charges(model["path"])
+            charge_provenance = {"charge_scheme": model["name"],
+                                 "nagl_model_file": model["name"],
+                                 "nagl_model_sha256": model["sha256"]}
         else:
-            raise ValueError(f"unsupported ligand_charge_method {method!r}")
+            supported = ", ".join(repr(m) for m in ("am1bcc", *NAGL_AM1BCC_METHODS))
+            raise ValueError(
+                f"unsupported ligand_charge_method {method!r}; supported: {supported}")
         generator = SMIRNOFFTemplateGenerator(
             molecules=[offmol], forcefield=ff_cfg["ligand"]
         )
@@ -173,6 +232,7 @@ def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
             "net_charge_e": float(sum(c.m for c in offmol.partial_charges)),
             "formal_charge": int(round(sum(a.formal_charge.m for a in offmol.atoms))),
             "n_atoms": offmol.n_atoms,
+            **charge_provenance,
         }
     return forcefield, info
 
