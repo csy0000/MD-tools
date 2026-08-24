@@ -1027,6 +1027,74 @@ def _scale_customgb_force(force, system, solute_set: set, scale_factor: float) -
     force.setGlobalParameterDefaultValue(index, float(scale_factor))
 
 
+#: Force classes this module knows how to scale. Each has an explicit ``_scale_*`` implementation.
+SCALED_FORCE_CLASSES = frozenset({
+    "NonbondedForce", "PeriodicTorsionForce", "CMAPTorsionForce", "CustomGBForce",
+})
+
+#: Energy-bearing forces left unscaled ON PURPOSE, following the standard REST2 convention: bond
+#: and angle terms are not scaled. Scaling them would change the molecule's covalent geometry with
+#: temperature, which is not what REST2 does -- the solute's *conformational* barriers are what the
+#: scaling is meant to lower, not its bond lengths.
+DELIBERATELY_UNSCALED_FORCE_CLASSES = frozenset({
+    "HarmonicBondForce", "HarmonicAngleForce",
+})
+
+#: Forces that contribute no potential energy, so scaling them is meaningless rather than wrong.
+#: A barostat's Monte Carlo move is not a term in U; the centre-of-mass remover only removes drift.
+ENERGY_FREE_FORCE_CLASSES = frozenset({
+    "CMMotionRemover", "MonteCarloBarostat", "MonteCarloAnisotropicBarostat",
+    "MonteCarloFlexibleBarostat", "MonteCarloMembraneBarostat", "AndersenThermostat",
+    "RMSDForce",
+})
+
+
+class UnclassifiedForceError(ValueError):
+    """A System carries an energy-bearing force this module does not know how to scale.
+
+    Raised instead of scaling what is recognised and leaving the rest alone. A force left at s = 1
+    inside a ladder whose other terms are scaled is not a smaller effect -- it is a different
+    Hamiltonian from the one the ladder claims, and it fails silently: the run completes, the
+    exchange log looks healthy, and the acceptance ratio absorbs the discrepancy.
+    """
+
+
+def audit_force_classes(system, *, where: str = "REST2 scaling") -> dict:
+    """Classify every force in *system*; raise on any energy-bearing force we cannot place.
+
+    Returns ``{"scaled": [...], "unscaled_by_convention": [...], "energy_free": [...]}`` with the
+    force indices in each bucket, so a manifest can record what was scaled rather than assert it.
+    """
+    scaled, by_convention, energy_free, unknown = [], [], [], []
+    for index in range(system.getNumForces()):
+        name = system.getForce(index).__class__.__name__
+        if name in SCALED_FORCE_CLASSES:
+            scaled.append((index, name))
+        elif name in DELIBERATELY_UNSCALED_FORCE_CLASSES:
+            by_convention.append((index, name))
+        elif name in ENERGY_FREE_FORCE_CLASSES:
+            energy_free.append((index, name))
+        else:
+            unknown.append((index, name))
+    if unknown:
+        listed = ", ".join(f"force[{i}] {n}" for i, n in unknown)
+        raise UnclassifiedForceError(
+            f"{where}: the System carries {len(unknown)} force(s) this module cannot classify: "
+            f"{listed}.\n"
+            "  Refusing rather than leaving them at the wrong scale. An unscaled energy term inside "
+            "a scaled ladder\n"
+            "  is a different Hamiltonian from the one the ladder claims, and nothing downstream "
+            "reports it: the run\n"
+            "  completes and the acceptance ratio quietly absorbs the discrepancy.\n"
+            f"  Known scalable: {sorted(SCALED_FORCE_CLASSES)}\n"
+            f"  Unscaled by REST2 convention: {sorted(DELIBERATELY_UNSCALED_FORCE_CLASSES)}\n"
+            f"  Carry no potential energy: {sorted(ENERGY_FREE_FORCE_CLASSES)}\n"
+            "  If one of these SHOULD be scaled, add an explicit handler; if it carries no energy, "
+            "add it to ENERGY_FREE_FORCE_CLASSES with a reason."
+        )
+    return {"scaled": scaled, "unscaled_by_convention": by_convention, "energy_free": energy_free}
+
+
 def build_rest2_scaled_system(base_system, solute_atom_indices: np.ndarray, scale_factor: float,
                               exclude_central_bonds=None):
     """Return a deep copy of *base_system* with REST2 Hamiltonian scaling applied.
@@ -1050,6 +1118,10 @@ def build_rest2_scaled_system(base_system, solute_atom_indices: np.ndarray, scal
     openmm.System
         Scaled copy; the original *base_system* is not modified.
     """
+    # Before touching anything: refuse a System carrying an energy term we cannot place. Doing this
+    # first means the failure is "this System has a force I do not understand", not a half-scaled
+    # System that looks finished.
+    audit_force_classes(base_system)
     system = _clone_system(base_system)
     solute_set = {int(i) for i in solute_atom_indices}
     exclude = ({frozenset((int(a), int(b))) for a, b in exclude_central_bonds}

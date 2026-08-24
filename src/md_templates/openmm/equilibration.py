@@ -167,6 +167,11 @@ def _scaled_system(system, cfg: dict, n_solute_atoms: int, scale_factor: float,
     from .system import build_rest2_scaled_system
 
     if abs(scale_factor - 1.0) < 1e-12:
+        # tau = 0 is the unscaled physical Hamiltonian, so it takes a plain copy. It is still
+        # audited: an unclassifiable force must fail at the cold rung too, otherwise the ladder
+        # builds replica 0 happily and only refuses at replica 1.
+        from .system import audit_force_classes
+        audit_force_classes(system, where="REST2 scaling (tau = 0)")
         return copy.deepcopy(system)
     return build_rest2_scaled_system(
         system,

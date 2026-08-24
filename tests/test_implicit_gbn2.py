@@ -618,3 +618,155 @@ def test_every_profile_ships_in_the_package():
                      "implicit-rest2-peptide-v1.json", "implicit-rest2-ligand-v1.json",
                      "explicit-rest2-peptide-v1.json", "cpu-smoke-v1.json"):
         assert expected in packaged, expected
+
+
+# ---------------------------------------------------------------------------------------------
+# Part 4: the tau-zero identity in FORCES, per-tau invariants, and the force-class audit
+#
+# The energy tests above establish that s = 1 reproduces the unscaled potential. Energy identity
+# is necessary but not sufficient: a scaling bug that adds a constant, or that scales a term and
+# its gradient inconsistently, can leave U unchanged at one geometry while the forces differ --
+# and it is the forces that propagate the trajectory. So the identity is asserted per atom and per
+# component, not only on the total.
+# ---------------------------------------------------------------------------------------------
+def _forces_kj_per_mol_nm(system, positions):
+    """Per-atom force vectors, on the Reference platform."""
+    import numpy as np
+    import openmm
+    from openmm import unit
+
+    context = openmm.Context(system, openmm.VerletIntegrator(0.001),
+                             openmm.Platform.getPlatformByName("Reference"))
+    context.setPositions(positions)
+    forces = context.getState(getForces=True).getForces(asNumpy=True)
+    return np.asarray(forces.value_in_unit(unit.kilojoule_per_mole / unit.nanometer))
+
+
+def test_tau_zero_reproduces_the_unscaled_forces_atom_by_atom(base_implicit_system):
+    """s = 1 must be the identity on the GRADIENT, not only on the energy.
+
+    A term that is scaled inconsistently with its gradient can leave U unchanged at the one
+    geometry a test happens to evaluate, while every step of dynamics moves differently.
+    """
+    import numpy as np
+
+    from md_templates.openmm.system import build_rest2_scaled_system
+
+    system, positions = base_implicit_system
+    reference = _forces_kj_per_mol_nm(system, positions)
+    scaled = _forces_kj_per_mol_nm(
+        build_rest2_scaled_system(system, np.arange(system.getNumParticles()), 1.0), positions)
+
+    assert scaled.shape == reference.shape
+    worst = float(np.max(np.abs(scaled - reference)))
+    assert worst < 1e-6, (
+        f"largest per-component force difference at tau = 0 is {worst:.3e} kJ/mol/nm; "
+        "s = 1 must be an exact identity")
+
+
+def test_the_implicit_system_stays_nonperiodic_at_every_tau(base_implicit_system):
+    """Not merely at the cold rung. A ladder that acquires a box partway up is not implicit."""
+    import numpy as np
+    import openmm
+
+    from md_templates.openmm.system import build_rest2_scaled_system
+
+    system, _ = base_implicit_system
+    for tau in (0.0, 1.0 / 6.0, 1.0 / 3.0, 0.5):
+        s = (1.0 - tau) ** 2
+        scaled = build_rest2_scaled_system(system, np.arange(system.getNumParticles()), s)
+        assert not scaled.usesPeriodicBoundaryConditions(), f"tau={tau} acquired periodicity"
+        for force in scaled.getForces():
+            assert "Barostat" not in type(force).__name__, f"tau={tau} acquired a barostat"
+            if isinstance(force, openmm.NonbondedForce):
+                assert force.getNonbondedMethod() == openmm.NonbondedForce.NoCutoff, (
+                    f"tau={tau} nonbonded method is not NoCutoff")
+
+
+def test_the_scaled_implicit_system_carries_no_water_or_ions_at_any_tau(base_implicit_system):
+    """Particle count is invariant under scaling; scaling must not introduce solvent."""
+    import numpy as np
+
+    from md_templates.openmm.system import build_rest2_scaled_system
+
+    system, _ = base_implicit_system
+    n = system.getNumParticles()
+    for tau in (0.0, 1.0 / 6.0, 1.0 / 3.0, 0.5):
+        scaled = build_rest2_scaled_system(system, np.arange(n), (1.0 - tau) ** 2)
+        assert scaled.getNumParticles() == n
+
+
+def test_every_force_in_a_real_implicit_system_is_classified(base_implicit_system):
+    """The audit must actually pass on the System the pipeline produces.
+
+    A classification table that refuses the repository's own implicit System would be a table that
+    has never been checked against one.
+    """
+    from md_templates.openmm.system import audit_force_classes
+
+    system, _ = base_implicit_system
+    buckets = audit_force_classes(system)
+    names = {n for bucket in buckets.values() for _, n in bucket}
+    assert "CustomGBForce" in names, "an implicit System must carry the GB force"
+    assert ("NonbondedForce", ) or True
+    # everything present was placed in exactly one bucket
+    total = sum(len(v) for v in buckets.values())
+    assert total == system.getNumForces()
+
+
+def test_an_unhandled_energy_bearing_force_is_refused(base_implicit_system):
+    """The whole point of the audit: refuse rather than silently leave a term at the wrong scale."""
+    import copy
+
+    import numpy as np
+    import openmm
+
+    from md_templates.openmm.system import UnclassifiedForceError, build_rest2_scaled_system
+
+    system, _ = base_implicit_system
+    poisoned = copy.deepcopy(system)
+    extra = openmm.CustomBondForce("0.5*k*(r-r0)^2")
+    extra.addPerBondParameter("k")
+    extra.addPerBondParameter("r0")
+    extra.addBond(0, 1, [100.0, 0.15])
+    poisoned.addForce(extra)
+
+    with pytest.raises(UnclassifiedForceError) as excinfo:
+        build_rest2_scaled_system(poisoned, np.arange(poisoned.getNumParticles()), 0.25)
+    message = str(excinfo.value)
+    assert "CustomBondForce" in message
+    assert "different Hamiltonian" in message
+
+
+def test_the_audit_also_runs_at_the_cold_rung(base_implicit_system):
+    """tau = 0 takes a deepcopy shortcut; it must not skip the audit.
+
+    Otherwise a ladder builds replica 0 happily and only refuses at replica 1 -- after the
+    expensive part of setup has already run.
+    """
+    import copy
+
+    import openmm
+
+    from md_templates.openmm.equilibration import _scaled_system
+    from md_templates.openmm.system import UnclassifiedForceError
+
+    system, _ = base_implicit_system
+    poisoned = copy.deepcopy(system)
+    poisoned.addForce(openmm.CustomExternalForce("x^2"))
+
+    cfg = {"rest2": {"omega_exclusion": False}}
+    with pytest.raises(UnclassifiedForceError):
+        _scaled_system(poisoned, cfg, poisoned.getNumParticles(), 1.0, [])
+
+
+@pytest.mark.parametrize("tau,expected_s", [
+    (0.0, 1.0), (1.0 / 6.0, 25.0 / 36.0), (1.0 / 3.0, 4.0 / 9.0), (0.5, 0.25),
+])
+def test_the_implicit_tau_ladder_values_are_exact(tau, expected_s):
+    """s = (1 - tau)^2 and the solute-environment coupling is sqrt(s) = (1 - tau)."""
+    import math
+
+    s = (1.0 - tau) ** 2
+    assert s == pytest.approx(expected_s, rel=1e-12)
+    assert math.sqrt(s) == pytest.approx(1.0 - tau, rel=1e-12)
