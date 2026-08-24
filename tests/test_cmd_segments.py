@@ -232,7 +232,19 @@ def test_the_continuity_contract_excludes_the_segment_count(md_project):
                                selected_atoms=list(range(system.getNumParticles())))
     body = json.dumps(contract).lower().replace("steps_per_segment", "")
     assert "number_of_segments" not in body and "segments_completed" not in body
-    assert contract["ensemble"] == "NVT"
+    # Resolved from the loaded System, not pinned to a literal. This line used to read
+    # `== "NVT"`, which encoded the defect fixed in 8f1e3af: the contract keyed its ensemble off
+    # whether a barostat was in the payload, so every IMPLICIT segment recorded itself as NVT --
+    # a restart contract asserting a fixed volume for a System that has none. The assertion this
+    # test exists for is the segment-count exclusion above; the ensemble is checked here against
+    # the canonical resolver so it tracks the definition rather than a remembered string.
+    from md_templates.openmm.ensembles import canonical_ensemble
+
+    expected = canonical_ensemble(
+        "explicit" if system.usesPeriodicBoundaryConditions() else "implicit")
+    assert contract["ensemble"] == expected
+    if not system.usesPeriodicBoundaryConditions():
+        assert contract["ensemble"].upper() not in ("NVT", "NPT")
     assert contract["steps_per_segment"] == payload["steps"]
     # and it binds identity, not merely counts
     assert len(contract["system_xml_sha256"]) == 64
