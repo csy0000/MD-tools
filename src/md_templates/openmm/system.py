@@ -168,7 +168,13 @@ def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
     # "ff19SB" into the manifest of a Sage calculation, which misdescribes the Hamiltonian that
     # actually ran.  Route selection therefore overrides the legacy protein-force-field default.
     protein_xml = None if route == "ligand" else ff_cfg["protein"]
-    xmls = ([protein_xml] if protein_xml else []) + [ff_cfg["water"], *ff_cfg["extra_xml"]]
+    # `water` is None under implicit solvent -- there is no water to parameterise -- and passing
+    # None into ForceField() raised "expected str, bytes or os.PathLike object, not NoneType". The
+    # implicit LIGAND route had never been exercised end to end, so this only surfaced the first
+    # time a macrocycle was built with GBn2: the implicit peptide route always names a protein XML,
+    # which masked it.
+    xmls = [x for x in ([protein_xml] if protein_xml else [])
+            + [ff_cfg["water"], *ff_cfg["extra_xml"]] if x]
     info: dict[str, Any] = {
         "xml": list(xmls),
         "route": route,

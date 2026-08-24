@@ -381,10 +381,23 @@ def test_bash_owns_segment_repetition(generated_project):
 
 
 @pytest.mark.slow
-def test_the_project_root_holds_only_a_driver_a_manifest_and_a_log(generated_project):
+def test_the_project_root_holds_exactly_the_expected_entries(generated_project):
+    """The root is a fixed set, so a stray file is noticed rather than accumulating.
+
+    The set grew when projects became portable: a project that travels has to carry its own
+    identity (`md-template.lock.json`, `METHOD_IDENTITY.txt`), its own copy of the template
+    runtime (`runtime/`), a way to extend without re-equilibrating (`extend.sh`) and a short local
+    README, because the person who opens it may not be the person who made it.
+
+    Asserted as an exact set rather than a subset: "no unexpected files" is the property, and a
+    subset check would let anything accumulate silently.
+    """
     from md_templates.openmm.input_gen import STAGE_ORDER
+
     entries = {p.name for p in generated_project.iterdir()}
-    assert entries == {*STAGE_ORDER, "inputs", "run_all.sh", "run_manifest.json", "run.log"}
+    assert entries == {*STAGE_ORDER, "inputs", "run_all.sh", "run_manifest.json", "run.log",
+                       "extend.sh", "runtime", "md-template.lock.json", "METHOD_IDENTITY.txt",
+                       "README.md"}
 
 
 @pytest.mark.slow

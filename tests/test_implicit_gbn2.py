@@ -855,3 +855,35 @@ def test_resolution_of_a_resolved_implicit_document_is_idempotent():
     once = resolve_spec(json.loads(json.dumps(document)))["resolved"]
     twice = resolve_spec(json.loads(json.dumps(once)))["resolved"]
     assert once == twice
+
+
+def test_the_implicit_ligand_route_builds_without_a_water_force_field():
+    """The implicit LIGAND route had never been exercised end to end, and it was broken.
+
+    `build_forcefield` put `ff_cfg["water"]` into the ForceField argument list unconditionally.
+    Under implicit solvent there is no water to parameterise, so that value is None, and OpenMM
+    raised `expected str, bytes or os.PathLike object, not NoneType` before any chemistry happened.
+
+    The implicit PEPTIDE route always names a protein XML, which kept the list non-empty and masked
+    it -- so the defect only appeared the first time a macrocycle was built with GBn2, months after
+    the code was written.
+    """
+    from md_templates.openmm.system import build_forcefield
+
+    cfg = {"forcefield": {"protein": None, "water": None, "ligand": "openff-2.2.0",
+                          "ligand_charge_method": "am1bcc_nagl", "extra_xml": []}}
+    forcefield, info = build_forcefield(cfg, ligand_sdf=None, route="ligand")
+    assert forcefield is not None
+    assert info["water"] is None
+    assert None not in info["xml"], "a None force-field file must never reach ForceField()"
+
+
+def test_a_named_water_force_field_still_reaches_the_forcefield():
+    """The filter must drop only None, not a real entry."""
+    from md_templates.openmm.system import build_forcefield
+
+    cfg = {"forcefield": {"protein": "amber19/protein.ff19SB.xml", "water": "amber19/opc.xml",
+                          "ligand": None, "ligand_charge_method": None, "extra_xml": []}}
+    _, info = build_forcefield(cfg, ligand_sdf=None, route="pdb")
+    assert "amber19/opc.xml" in info["xml"]
+    assert "amber19/protein.ff19SB.xml" in info["xml"]
