@@ -14,6 +14,9 @@ transportable bundles.
 | ligand route | OpenFF Sage + TIP3P (water follows the force field) | GBn2 / mbondi3 |
 | production ensemble | **NPT** | **nonperiodic constant temperature** — no box, so neither NVT nor NPT |
 | nonbonded | PME, 1.0 nm cutoff | `NoCutoff` |
+| integrator | Langevin-middle, 300 K, **4 fs** | Langevin-middle, 300 K, **4 fs** |
+| hydrogen mass | **3.024 amu**, solute scope | **3.024 amu**, solute scope |
+| ligand charges | **Sage 2.2 + NAGL AM1-BCC** (`am1bcc_nagl`) | same |
 
 Implicit solvent is **not** a side branch: it has its own profiles, its own stage graph, an audited
 `CustomGBForce` scaling path for REST2, and worked examples under `test/ala/implicit/` and
@@ -325,8 +328,11 @@ manifest as **not** the solute-to-copy distance.
   production-ready; the predeclared conjunctive acceptance rule was never formally satisfied.
 * Any other macrocycle needs its own pair-resolved acceptance pilot — start from
   `macrocycle_pilot_8rung.yaml`, which is `ladder_status: unvalidated` by design.
-* **The 2 fs / 4 fs hydrogen-mass-repartitioning equivalence gate is open.** Long production is
-  blocked on it.
+* **The 2 fs / 4 fs hydrogen-mass-repartitioning gate is partly closed.** The *static* half is
+  settled by measurement: repartitioning does not change the potential or its gradient at all
+  (`0.000e+00` on both, mass conserved), so the pinned energy identities still hold. What remains
+  open is the *dynamical* half — whether 4 fs reproduces 2 fs ensemble averages for these systems —
+  and long production is still blocked on that.
 * Restart safety and convergence are not established.
 * The smokes prove installability and mechanical execution. Nothing more.
 * **No ladder is validated for any peptide.** `ace_ala_nme` proves the ff19SB route runs; it says
@@ -390,9 +396,12 @@ python MD_input_gen.py  --system alanine_system/system_manifest.json \
 Each rejects the other's settings rather than ignoring them: a protocol block written into
 `system_config.json` would never be applied, and silence about that is worse than an error.
 
-Why separate: preparing cyclo-RGDfV costs ~27 minutes of AM1-BCC charge derivation. Regenerating a
-protocol against that bundle is instant and needs no GPU, and one prepared system can back several
-protocols with no chance of one of them quietly re-solvating it.
+Why separate: preparing a system costs real time — solvation, parameterisation and charge
+derivation — while regenerating a protocol against an existing bundle is instant and needs no GPU.
+One prepared system can back several protocols with no chance of one of them quietly re-solvating
+it. (The charge step is much cheaper than it was: the default is now NAGL AM1-BCC, which takes about
+a second for cyclo-RGDfV against roughly 40 minutes for single-conformer AmberTools `am1bcc`, still
+selectable.)
 
 ### Supported inputs
 
@@ -506,8 +515,12 @@ work, so the construction branch is part of the Hamiltonian. `system.prmtop` and
 kept as construction provenance; there is no Amber execution engine here.
 
 Only GBn2 with mbondi3 is publicly accepted; other models and radius sets are refused as not
-validated. Implicit profiles do not repartition hydrogen mass and use a 2 fs timestep, stated explicitly rather
-than inherited from the explicit-water profiles. Implicit REST2 requires the whole system as the
+validated. Implicit profiles repartition hydrogen mass to 3.024 amu and use a 4 fs timestep, the
+same as explicit — stated explicitly in each profile rather than inherited. They previously did not,
+on the argument that the GBn2 energy validation was against an unrepartitioned System; that was
+measured and found not to hold, because mass enters the kinetic term only. Repartitioning
+cyclo-(RGDfV)'s 38 hydrogens left the GBn2 potential and every force component unchanged to
+`0.000e+00`. Implicit REST2 requires the whole system as the
 enhanced region and scales the entire GB energy by `s`, including the non-polar term that charge
 scaling alone would miss. Ladders are shorter: 4 replicas for the peptide route, 6 for the ligand
 route.
