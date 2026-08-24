@@ -22,6 +22,7 @@ import json
 import sys
 from pathlib import Path
 from .hashing import sha256_bytes, sha256_text
+from .ensembles import canonical_ensemble
 from .seeds import as_openmm_seed
 
 __all__ = ["main", "validate_stage", "EXECUTION_STATUS"]
@@ -310,7 +311,14 @@ def _cmd_continuity(payload: dict, system, *, here: Path, topology=None,
         "n_particles": system.getNumParticles(),
         "n_constraints": system.getNumConstraints(),
         "periodic": bool(system.usesPeriodicBoundaryConditions()),
-        "ensemble": "NPT" if barostat else "NVT",
+        # Resolved from the LOADED SYSTEM through the canonical resolver, not from whether a
+        # barostat happens to be in the payload. The old expression was `"NPT" if barostat
+        # else "NVT"`, so every implicit segment recorded itself as NVT -- a restart contract
+        # asserting a fixed VOLUME for a System that has none, which is the precise false
+        # label the ensemble model exists to prevent. Replacing one hard-coded ternary with
+        # another would have kept the same failure mode one step further along.
+        "ensemble": canonical_ensemble(
+            "explicit" if system.usesPeriodicBoundaryConditions() else "implicit"),
         "barostat_pressure": barostat.get("pressure"),
         "integrator": {k: integrator.get(k) for k in
                        ("type", "timestep", "temperature", "friction")},

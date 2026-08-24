@@ -1,8 +1,28 @@
-# Explicit-solvent MD and REST2 — OpenMM template
+# MD and REST2 — OpenMM template
 
-A standard, self-contained template for building and running **explicit-water** simulations of
-peptide-like compounds and small-molecule ligands with OpenMM: parameterise from SMILES or a PDB,
-solvate, equilibrate, and run REST2 replica exchange from hash-checked, transportable bundles.
+A standard, self-contained template for building and running molecular simulations of peptide-like
+compounds and small-molecule ligands with OpenMM: parameterise from SMILES or a PDB, solvate (or
+not), equilibrate, and run conventional MD or REST2 replica exchange from hash-checked,
+transportable bundles.
+
+**Supported scope**
+
+| | explicit water | implicit solvent |
+|---|---|---|
+| methods | conventional MD, REST2 | conventional MD, REST2 |
+| peptide route | ff19SB + OPC | ff19SB + GBn2 / mbondi3 |
+| ligand route | OpenFF Sage + TIP3P (water follows the force field) | GBn2 / mbondi3 |
+| production ensemble | **NPT** | **nonperiodic constant temperature** — no box, so neither NVT nor NPT |
+| nonbonded | PME, 1.0 nm cutoff | `NoCutoff` |
+
+Implicit solvent is **not** a side branch: it has its own profiles, its own stage graph, an audited
+`CustomGBForce` scaling path for REST2, and worked examples under `test/ala/implicit/` and
+`test/ala/cMD/implicit/`.
+
+Tested against **OpenMM 8.6.0**, pinned by `short_version` *and* the release tag commit
+`c6173db6e8edd705eb59172bd21e9ce69c572405`. The official builds report a `.dev-<sha>` suffix in
+`full_version` because they ship `release = False`; that is a build stamp, not a development
+snapshot, and it is recorded verbatim rather than relabelled.
 
 Two force-field routes, both exercised end to end on this machine:
 
@@ -22,8 +42,9 @@ input label, and refuses rather than guesses for a force field it does not recog
 are the active `explicit-*-v2` profiles; the superseded `-v1` profiles remain name-resolvable for
 reproducing the earlier TIP3P-FB runs. See `docs/configuration.md` for the primary sources.
 
-Nothing here depends on the project it came from: no annealed-importance-sampling machinery, no implicit-solvent
-work.
+Nothing here depends on the project it came from: no annealed-importance-sampling machinery, no
+project-specific datasets or conclusions. (An earlier version of this line also claimed "no
+implicit-solvent work", which has not been true for some time -- see the scope table above.)
 
 ## Install
 
@@ -343,9 +364,9 @@ Re-running them against the current CLI is the way to restore an evidence direct
 
 ## Provenance
 
-Extracted from the research repository, where this pipeline was developed alongside
-implicit-solvent work. Published as a single initial commit: the tree is what matters for a
-template, and the development history remains in the originating repository.
+Extracted from the research repository. Published as a single initial commit: the tree is what
+matters for a template, and the development history remains in the originating repository.
+Implicit-solvent support has since been developed here and is part of the template.
 
 ## The two public entry points
 

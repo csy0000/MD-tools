@@ -30,9 +30,24 @@ def _box_vectors(width_nm: float, shape: str) -> np.ndarray:
     """Reduced box vectors for a cube / rhombic dodecahedron / truncated octahedron of *width*.
 
     Delegated to OpenMM's own `Modeller._computeBoxVectors`, so there is one definition of these
-    shapes rather than two that can drift apart. In a reduced triclinic box the minimum image
-    distance is `min(a_x, b_y, c_z)` -- the smallest diagonal element, which for a dodecahedron is
-    `width/sqrt(2)` and not `width`. That factor is the whole reason padding needs care.
+    shapes rather than two that can drift apart.
+
+    Two DIFFERENT lengths come out of these vectors and this docstring used to conflate them.
+    Measured on the generated vectors, for all three shapes:
+
+    ==============  ==============  =================  ==================
+    shape           shortest        min perpendicular  max legal cutoff
+                    translation     height             (height / 2)
+    ==============  ==============  =================  ==================
+    cube            `width`         `width`            `width/2`
+    dodecahedron    `width`         `width/sqrt(2)`    `width/(2 sqrt 2)`
+    octahedron      `width`         `sqrt(6)/3 width`  `sqrt(6)/6 width`
+    ==============  ==============  =================  ==================
+
+    The shortest nonzero lattice translation is `width` for ALL THREE -- it is what governs how far
+    the solute sits from its nearest periodic copy. `width/sqrt(2)` is the minimum perpendicular
+    height, which is what OpenMM's cutoff check compares against. Using the height as the image
+    distance understates the real separation by 29 % in a dodecahedron.
 
     `_computeBoxVectors` is private, so `test_box_vectors_match_openmm` asserts the local fallback
     below still reproduces it exactly. If OpenMM ever moves or changes it, that test fails loudly

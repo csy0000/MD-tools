@@ -94,15 +94,28 @@ DEFAULTS: dict[str, Any] = {
         #   max(2*radius + padding, 2*padding).  This is the default so that a box built here is the
         #   box OpenMM would have built, and `padding` means to a reader what the OpenMM
         #   documentation says it means.
-        # "solute-image-gap" instead solves for the width that delivers `padding_nm` of clearance
-        #   between the solute and its nearest periodic image.  The two differ in any non-cubic box,
-        #   because OpenMM's padding sizes the WIDTH while the minimum image distance is
-        #   width/sqrt(2) for a dodecahedron -- so `padding = 1.2` there gives roughly 0.4 nm of
-        #   real clearance, not 1.2.
+        # "solute-image-gap" instead solves for the width that delivers exactly `padding_nm` of
+        #   clearance between the solute and its nearest periodic image.
         #
-        # Under "openmm", `cutoff_fit_policy` usually becomes the binding constraint: the box is
-        # grown until the minimum image clears 2*cutoff by minimum_image_margin_nm.  If a run ever
-        # aborts with OpenMM's minimum-image error, raise that MARGIN, not the padding.
+        # An earlier version of this comment claimed the two readings differ sharply because "the
+        # minimum image distance is width/sqrt(2) for a dodecahedron", and that padding = 1.2 there
+        # gives "roughly 0.4 nm of real clearance". BOTH ARE WRONG, and measurement on the generated
+        # box says so: the shortest nonzero lattice translation is `width` for the cube, the
+        # dodecahedron AND the truncated octahedron alike -- verified by enumerating -3 <= n_i <= 3,
+        # where 12 translations tie at `width`, the 12 nearest neighbours of a rhombic dodecahedron.
+        # `width/sqrt(2)` is the minimum PERPENDICULAR HEIGHT, which is a different quantity used
+        # for a different purpose. At padding 1.2 with alanine the real clearance is 1.489 nm, not
+        # 0.4 nm.
+        #
+        # So under "openmm" semantics padding is a LOWER BOUND on solute-image separation, never an
+        # upper one: width = max(2R + padding, 2*padding), and separation >= width - 2R. When
+        # padding > 2R the 2*padding term wins and the separation EXCEEDS the padding -- at the
+        # 2.0 nm default alanine gets 3.089 nm (bound) and 3.250 nm (measured atom-atom).
+        #
+        # `cutoff_fit_policy` is a SEPARATE check and can still bind: the box is grown until the
+        # minimum perpendicular HEIGHT clears 2*cutoff by minimum_image_margin_nm. Image clearance
+        # and cutoff fit are independent invariants; neither implies the other. If a run aborts with
+        # OpenMM's periodic-box error, raise that MARGIN, not the padding.
         "padding_semantics": "openmm",
         # the minimum image distance must be at least 2x the nonbonded cutoff (an OpenMM hard
         # requirement).  "grow" enlarges the box to satisfy it and records both values; "refuse"

@@ -70,14 +70,22 @@ change.
 
 **(b) `padding = 1.2 nm` does not mean 1.2 nm of water — and it collides with the 1.0 nm cutoff.**
 OpenMM's `Modeller.addSolvent(padding=p)` sets the box width to `max(2·radius + p, 2·p)`, and a
-rhombic dodecahedron's *minimum image distance* is `width/√2`, not `width`. Measured on solvated
-alanine dipeptide (bounding radius 0.472 nm):
+rhombic dodecahedron's *minimum perpendicular height* is `width/√2`. Measured on solvated alanine
+dipeptide (bounding radius 0.472 nm):
+
+> **Corrected 2026-08-24.** This section previously called `width/√2` the "minimum image distance"
+> and derived a 0.753 nm solute-image gap from it. That label was wrong: the shortest nonzero
+> lattice translation is `width` for all three OpenMM box shapes, so the real gap at `padding = 1.2`
+> is 1.456 nm, not 0.753 nm. The *conclusion below is unaffected* -- 1.2 nm padding with a 1.0 nm
+> cutoff still cannot run -- because the blocker is the perpendicular HEIGHT (1.697 nm < 2 × 1.0 nm),
+> not the image distance. Right verdict, wrong reason; both are now labelled.
 
 | | raw OpenMM padding | this baseline (`solute-image-gap`) |
 |---|---|---|
 | box width | 2.400 nm | 3.033 nm |
-| minimum image distance | 1.697 nm | 2.144 nm |
-| **solute-to-image gap** | **0.753 nm** | **1.200 nm** |
+| min perpendicular height (cutoff check) | 1.697 nm | 2.144 nm |
+| shortest lattice translation | 2.400 nm | 3.033 nm |
+| **solute-to-image gap** (translation − 2R) | **1.456 nm** | **2.089 nm** |
 | largest legal cutoff | 0.849 nm | 1.072 nm |
 | box volume | 9.8 nm³ | 19.7 nm³ |
 | waters | 285 | 602 |

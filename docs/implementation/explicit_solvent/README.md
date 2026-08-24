@@ -146,7 +146,7 @@ does all three.
 | | issue | what was done |
 |---|---|---|
 | (a) | "MMFF99" does not exist in RDKit | **MMFF94s**, matching `systems/etkdg.py` |
-| (b) | `padding = 1.2 nm` + `cutoff = 1.0 nm` **cannot run** as literally specified — OpenMM's padding formula plus a dodecahedron's `width/√2` minimum image gives alanine a 0.75 nm solute–image gap and a max legal cutoff of 0.85 nm | box width solved for the *requested* gap; both readings selectable, all numbers recorded |
+| (b) | `padding = 1.2 nm` + `cutoff = 1.0 nm` **cannot run** as literally specified — a dodecahedron's minimum perpendicular height is `width/√2` = 1.697 nm, so the max legal cutoff is 0.85 nm. (Corrected 2026-08-24: the blocker is the *height*, not the solute–image gap, which is 1.456 nm — the shortest lattice translation is `width` for every OpenMM box shape.) | box width solved for the *requested* gap; both readings selectable, all numbers recorded |
 | (c) | 4 fs + **leapfrog** Langevin — 4 fs is normally justified with the middle/BAOAB scheme | **resolved 2026-08-14: `langevin-middle` (BAOAB) is now the default**; leapfrog remains available for reproducing earlier runs |
 | (d) | a peptide cannot come from SMILES (ff19SB matches by residue, RDKit gives one `UNL`) | `--smi` = ligand route (Sage 2.2 + AM1BCC), `--pdb` = peptide route (ff19SB) |
 
