@@ -105,15 +105,37 @@ def load_profile(profile_id: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def select_profile(route: str, method: str) -> dict:
-    """The `default` alias: choose by DECLARED route and method, never by file contents.
+def select_profile(route: str, method: str, solvation: Optional[str] = None) -> dict:
+    """The `default` alias: choose by DECLARED route, method and solvent treatment.
 
     Only a profile marked `is_default` is eligible. Without that, selection was "first match in
     sorted order", which silently chose the CPU smoke profile -- picoseconds of unvalidated
     settings -- for any ligand REST2 document. Ambiguity is refused rather than broken by sorting.
+
+    `solvation` was added because the defaults are only marked for EXPLICIT water, so an implicit
+    document that named no profile inherited an explicit one. That is not a near-miss: it dragged in
+    PME, a cutoff, an Ewald tolerance, a minimum-image margin, `rigid_water`, an NVT stage and an
+    NPT stage, each of which the model then refused -- one at a time, for values the user never
+    wrote. The document already says which treatment it uses; selection now reads it instead of
+    defaulting to the other one and being corrected field by field.
     """
     candidates = [d for d in list_profiles()
                   if d.get("route") == route and d.get("method") == method and d.get("is_default")]
+    if solvation == "implicit":
+        # No implicit profile is marked is_default, so match on the identifier: an implicit document
+        # must never be resolved against explicit-water defaults.
+        implicit = [d for d in list_profiles()
+                    if d.get("route") == route and d.get("method") == method
+                    and str(d.get("profile_id", "")).startswith("implicit-")]
+        if len(implicit) == 1:
+            return implicit[0]
+        if implicit:
+            raise ResolutionError(
+                f"{len(implicit)} implicit profiles for route {route!r} and method {method!r}: "
+                f"{[d['profile_id'] for d in implicit]}. Name one explicitly with `profile:`.")
+        raise ResolutionError(
+            f"no implicit-solvent profile for route {route!r} with method {method!r}; this "
+            f"document declares build.implicit. Name one explicitly with `profile:`.")
     if len(candidates) == 1:
         return candidates[0]
     if not candidates:
@@ -279,8 +301,17 @@ def _refuse_retired_chunk_inputs(document: dict) -> None:
     )
 
 
-#: Protocol defaults that only mean something with a periodic box.
-_BOX_ONLY_EQUILIBRATION_FIELDS = ("npt", "npt_free", "box_average_last")
+#: Protocol defaults that only mean something with a periodic box. This list MUST cover every
+#: field SimulationSpec refuses under implicit solvent -- it is imported from the model rather than
+#: restated, because the two drifted: the model rejected `nvt` and this list did not, so an implicit
+#: document resolved under the default (explicit) profile inherited `nvt` from that profile and was
+#: then refused for a value the user never wrote. It cost a four-replica ladder its launch.
+from .models import BOX_ONLY_NONBONDED_FIELDS as _BOX_ONLY_NONBONDED_FIELDS
+from .models import IMPLICIT_FORBIDDEN_EQUILIBRATION_FIELDS as _BOX_ONLY_EQUILIBRATION_FIELDS
+
+#: The mirror: implicit solvent's unrestrained phase means nothing with a box, so an explicit
+#: document must not inherit it from an implicit profile.
+_IMPLICIT_ONLY_EQUILIBRATION_FIELDS = ("free", "restrained")
 
 
 def _drop_the_other_solvent_treatment(defaults: dict, document: dict) -> None:
@@ -301,8 +332,21 @@ def _drop_the_other_solvent_treatment(defaults: dict, document: dict) -> None:
         if isinstance(equilibration, dict):
             for field in _BOX_ONLY_EQUILIBRATION_FIELDS:
                 equilibration.pop(field, None)
+        # The same argument one level down: PME, a cutoff, an Ewald tolerance and a minimum-image
+        # margin all name a periodic box. An implicit document inheriting them from an explicit
+        # profile is refused for values the user never wrote.
+        nonbonded = build.get("nonbonded")
+        if isinstance(nonbonded, dict):
+            for field in _BOX_ONLY_NONBONDED_FIELDS:
+                nonbonded.pop(field, None)
+            if nonbonded.get("method") not in (None, "NoCutoff"):
+                nonbonded.pop("method", None)
     elif stated.get("solvation") is not None:
         build.pop("implicit", None)
+        equilibration = (defaults.get("protocol") or {}).get("equilibration")
+        if isinstance(equilibration, dict):
+            for field in _IMPLICIT_ONLY_EQUILIBRATION_FIELDS:
+                equilibration.pop(field, None)
 
 
 def resolve_spec(document: dict, *, overrides: Optional[list[str]] = None,
@@ -329,7 +373,9 @@ def resolve_spec(document: dict, *, overrides: Optional[list[str]] = None,
         )
 
     if declared_profile in (None, "default"):
-        profile = select_profile(system["route"], method)
+        # The document's own solvent treatment decides which family of defaults applies.
+        _solvation = "implicit" if (document.get("build") or {}).get("implicit") else "explicit"
+        profile = select_profile(system["route"], method, _solvation)
     else:
         profile = load_profile(str(declared_profile))
         if profile.get("method") != method:

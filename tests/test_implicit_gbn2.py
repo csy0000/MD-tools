@@ -770,3 +770,88 @@ def test_the_implicit_tau_ladder_values_are_exact(tau, expected_s):
     s = (1.0 - tau) ** 2
     assert s == pytest.approx(expected_s, rel=1e-12)
     assert math.sqrt(s) == pytest.approx(1.0 - tau, rel=1e-12)
+
+
+# ---------------------------------------------------------------------------------------------
+# Implicit solvent has neither NVT nor NPT
+#
+# It has no box, so there is no volume to hold fixed and no pressure to hold constant. Two places
+# encode that: the model REFUSES those fields, and the resolver STRIPS them from an explicit
+# profile's defaults before merging. They were separate lists and they drifted -- the model rejected
+# `nvt`, the resolver did not remove it -- so an implicit document resolved under the default
+# (explicit) profile inherited `nvt` and was then refused for a value the user never wrote. That
+# killed a four-replica implicit ladder at launch.
+# ---------------------------------------------------------------------------------------------
+def test_the_refused_and_stripped_field_lists_are_the_same_list():
+    """One list, imported in both places, so a new field cannot be added to only one."""
+    from md_templates.openmm.spec import resolve as resolver
+    from md_templates.openmm.spec.models import IMPLICIT_FORBIDDEN_EQUILIBRATION_FIELDS
+
+    assert resolver._BOX_ONLY_EQUILIBRATION_FIELDS is IMPLICIT_FORBIDDEN_EQUILIBRATION_FIELDS
+    for field in ("nvt", "npt", "npt_free", "box_average_last"):
+        assert field in IMPLICIT_FORBIDDEN_EQUILIBRATION_FIELDS
+
+
+def test_an_implicit_document_resolves_without_a_profile_and_gains_no_box_stage():
+    """The exact failure: a resolved implicit document re-read with no `profile` field.
+
+    `_package_bundle_for_rest2` re-resolves the run manifest's resolved configuration, which
+    carries no profile, so selection falls back to the default -- an explicit-water profile.
+    """
+    from md_templates.openmm.spec.resolve import resolve_spec
+
+    document = {
+        "system": {"system_id": "ace_ala_nme", "route": "pdb", "pdb": "ace_ala_nme.pdb"},
+        # a RESOLVED document, which is what the run manifest holds: it states its own nonbonded
+        # treatment, so only the equilibration fields are left to be inherited from the profile
+        "build": {"implicit": {"model": "GBn2", "radii": "mbondi3"},
+                  "nonbonded": {"method": "NoCutoff", "cutoff": None}},
+        "protocol": {
+            "production": {"method": "md", "duration_per_segment": "5 ns"},
+            "equilibration": {"protocol": "simple", "restrained": "500 ps", "free": "500 ps"},
+        },
+    }
+    assert "profile" not in document
+    equilibration = resolve_spec(document)["spec"].protocol.equilibration
+    assert equilibration.restrained is not None
+    assert equilibration.free is not None
+    for absent in ("nvt", "npt", "npt_free", "box_average_last"):
+        assert getattr(equilibration, absent) is None, absent
+
+
+def test_an_explicit_document_does_not_inherit_the_implicit_only_phases():
+    """The mirror. `free` and `restrained` mean nothing with a box."""
+    from md_templates.openmm.spec.resolve import resolve_spec
+
+    document = {
+        "system": {"system_id": "ace_ala_nme", "route": "pdb", "pdb": "ace_ala_nme.pdb"},
+        "build": {"solvation": {"box_shape": "dodecahedron", "padding": "2.0 nm"}},
+        "protocol": {
+            "production": {"method": "md", "duration_per_segment": "5 ns"},
+            "equilibration": {"protocol": "staged", "nvt": "250 ps", "npt": "250 ps",
+                              "npt_free": "500 ps"},
+        },
+    }
+    equilibration = resolve_spec(document)["spec"].protocol.equilibration
+    assert equilibration.free is None
+    assert equilibration.nvt is not None
+
+
+def test_resolution_of_a_resolved_implicit_document_is_idempotent():
+    """Resolving twice must give the same protocol; that is what re-reading a manifest does."""
+    import json
+
+    from md_templates.openmm.spec.resolve import resolve_spec
+
+    document = {
+        "system": {"system_id": "ace_ala_nme", "route": "pdb", "pdb": "ace_ala_nme.pdb"},
+        "build": {"implicit": {"model": "GBn2", "radii": "mbondi3"},
+                  "nonbonded": {"method": "NoCutoff", "cutoff": None}},
+        "protocol": {
+            "production": {"method": "md", "duration_per_segment": "5 ns"},
+            "equilibration": {"protocol": "simple", "restrained": "500 ps", "free": "500 ps"},
+        },
+    }
+    once = resolve_spec(json.loads(json.dumps(document)))["resolved"]
+    twice = resolve_spec(json.loads(json.dumps(once)))["resolved"]
+    assert once == twice

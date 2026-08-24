@@ -35,6 +35,17 @@ from .units import Quantity, parse_quantity
 #: Independent schema versions. Bumping one must not force the others to move.
 SYSTEM_SCHEMA_VERSION = 1
 BUILD_SCHEMA_VERSION = 1
+#: Equilibration fields an implicit-solvent protocol cannot have. Defined here, next to the
+#: validator that refuses them, and imported by the resolver that must strip them from an explicit
+#: profile's defaults -- one list, so the refusal and the strip cannot disagree.
+IMPLICIT_FORBIDDEN_EQUILIBRATION_FIELDS = ("nvt", "npt", "npt_free", "box_average_last")
+
+#: Nonbonded fields that describe a periodic box. Under `NoCutoff` they name quantities
+#: that do not exist, so the model refuses them -- and the resolver must strip them from an
+#: explicit profile's defaults for the same reason it strips the box-only equilibration
+#: fields. One list, imported by both.
+BOX_ONLY_NONBONDED_FIELDS = ("cutoff", "ewald_error_tolerance", "minimum_image_margin")
+
 PROTOCOL_SCHEMA_VERSION = 6
 
 #: Versions this build recognises but will not accept. Named so a refusal can say "retired" and
@@ -177,7 +188,7 @@ class NonbondedSpec(Strict):
     @model_validator(mode="after")
     def _periodic_fields_match_the_method(self):
         if self.method == "NoCutoff":
-            stated = [name for name in ("cutoff", "ewald_error_tolerance", "minimum_image_margin")
+            stated = [name for name in BOX_ONLY_NONBONDED_FIELDS
                       if getattr(self, name) is not None]
             if stated:
                 raise ValueError(
@@ -185,7 +196,7 @@ class NonbondedSpec(Strict):
                     f"{'are' if len(stated) > 1 else 'is'} stated. Without a periodic box these "
                     "describe quantities that do not exist; set them to null.")
         else:
-            missing = [name for name in ("cutoff", "ewald_error_tolerance", "minimum_image_margin")
+            missing = [name for name in BOX_ONLY_NONBONDED_FIELDS
                        if getattr(self, name) is None]
             if missing:
                 raise ValueError(
@@ -653,7 +664,7 @@ class SimulationSpec(Strict):
         # shell to relax, so an NVT equilibration stage has nothing to do that restrained
         # minimisation has not already done. Refused rather than ignored, so a configuration that
         # asks for one is told it will not happen instead of silently not getting it.
-        for field in ("nvt", "npt", "npt_free", "box_average_last"):
+        for field in IMPLICIT_FORBIDDEN_EQUILIBRATION_FIELDS:
             if getattr(equilibration, field, None) is not None:
                 offenders.append(f"protocol.equilibration.{field}")
         # `free` is the implicit spelling and is allowed here; it is refused for EXPLICIT solvent
