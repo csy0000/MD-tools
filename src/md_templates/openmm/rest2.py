@@ -82,8 +82,14 @@ def _pre_exchange_relaxation(simulations, coords: Path, cfg: dict, run_dir: Path
     relax_dir.mkdir(parents=True, exist_ok=True)
 
     steps = _steps(relax_ps, dt_fs)
-    per_replica, t0 = [], time.time()
-    for r, sim in enumerate(simulations):
+    t0 = time.time()
+
+    # Each replica relaxes under its OWN tau Hamiltonian with no exchanges, so the replicas are
+    # independent here exactly as they are between exchanges -- and this loop was serial for the
+    # same reason the production loop was. On a six-replica ladder that is six times the
+    # relaxation wall clock for no reason: 1 ns each, one GPU at a time.
+    def _relax(r):
+        sim = simulations[r]
         _apply_coords(sim, coords)
         # deterministic and DISTINCT per replica: same positions, independent momenta
         vel_seed = int(seed) + 1000 + r
@@ -96,15 +102,25 @@ def _pre_exchange_relaxation(simulations, coords: Path, cfg: dict, run_dir: Path
         u1 = sim.context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
             unit.kilojoule_per_mole)
         sim.saveCheckpoint(str(checkpoints[r]))
-        per_replica.append({
+        return {
             "replica": r, "scale_factor": float(scale_factors[r]),
             "velocity_seed": vel_seed,
             "potential_before_kj_mol": round(u0, 3), "potential_after_kj_mol": round(u1, 3),
             "delta_kj_mol": round(u1 - u0, 3),
             "checkpoint": str(checkpoints[r]),
-        })
-        print(f"[remd] relax replica {r:02d} s={scale_factors[r]:.4f}: "
-              f"U {u0:.1f} -> {u1:.1f} kJ/mol", flush=True)
+        }
+
+    with replica_propagation_pool(len(simulations)) as pool:
+        if pool is None:
+            per_replica = [_relax(r) for r in range(len(simulations))]
+        else:
+            # Ordered by replica index, not by completion, so the record is reproducible.
+            per_replica = list(pool.map(_relax, range(len(simulations))))
+    for entry in per_replica:
+        print(f"[remd] relax replica {entry['replica']:02d} "
+              f"s={entry['scale_factor']:.4f}: "
+              f"U {entry['potential_before_kj_mol']:.1f} -> "
+              f"{entry['potential_after_kj_mol']:.1f} kJ/mol", flush=True)
 
     info = {
         "performed": True, "reused": False,
