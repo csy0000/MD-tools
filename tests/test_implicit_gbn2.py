@@ -887,3 +887,34 @@ def test_a_named_water_force_field_still_reaches_the_forcefield():
     _, info = build_forcefield(cfg, ligand_sdf=None, route="pdb")
     assert "amber19/opc.xml" in info["xml"]
     assert "amber19/protein.ff19SB.xml" in info["xml"]
+
+
+@pytest.mark.parametrize("profile_id", ["implicit-md-ligand-v1", "implicit-rest2-ligand-v1",
+                                        "implicit-md-peptide-v1", "implicit-rest2-peptide-v1"])
+def test_every_shipped_implicit_profile_can_actually_build_a_forcefield(profile_id):
+    """The packaged profiles must WORK, not merely validate.
+
+    Both implicit LIGAND profiles ship `water: null`, which is correct -- implicit solvent has no
+    water -- and was exactly the value that made `build_forcefield` raise
+    `expected str, bytes or os.PathLike object, not NoneType`. So the shipped route was unusable,
+    and nothing noticed: schema validation passes on a profile that cannot be built from, and the
+    peptide profiles masked it by always naming a protein XML.
+
+    This constructs a ForceField from each shipped profile's own defaults. It is the check that
+    turns "the profile is well-formed" into "the profile runs".
+    """
+    from md_templates.openmm.spec.resolve import load_profile
+    from md_templates.openmm.system import build_forcefield
+
+    defaults = load_profile(profile_id)["defaults"]["build"]["forcefield"]
+    cfg = {"forcefield": {
+        "protein": defaults.get("protein"),
+        "water": defaults.get("water"),
+        "ligand": defaults.get("small_molecule"),
+        "ligand_charge_method": defaults.get("charge_method"),
+        "extra_xml": [],
+    }}
+    route = "ligand" if "ligand" in profile_id else "pdb"
+    forcefield, info = build_forcefield(cfg, ligand_sdf=None, route=route)
+    assert forcefield is not None
+    assert None not in info["xml"]
