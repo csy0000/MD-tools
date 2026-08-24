@@ -40,6 +40,10 @@ EXECUTION_STATUS = {
     "eq": ("implemented: restrained equilibration for implicit solvent -- constant temperature, "
            "no barostat, and no ensemble label, because 'NVT' fixes a volume this System does not "
            "have"),
+    "eq_free": ("implemented: UNRESTRAINED equilibration for implicit solvent -- restraint "
+                "released, constant temperature, no barostat and no ensemble label. Restrained "
+                "dynamics relaxes the solvent response around a held solute; the solute's own "
+                "conformational relaxation only begins here"),
     "eq_nvt": "implemented: restrained NVT",
     "eq_npt_1": "implemented: RESTRAINED NPT -- the box relaxes while the solute is held",
     "eq_npt_2": "implemented: FREE NPT -- restraint released, the solute relaxes in the "

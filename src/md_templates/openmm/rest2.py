@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 
+from .seeds import derive_seed, replica_purpose
 from .ensembles import EXPLICIT_PRODUCTION_ENSEMBLE as ENSEMBLE_NPT, validate_ensemble
 import os
 import platform as _platform
@@ -320,7 +321,12 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
         if npt:
             from openmm import MonteCarloBarostat, unit as _u
 
-            seed = int(rcfg["seed"]) + 100_000 + r
+            # Derived through the package's own seed machinery, not by arithmetic on the master
+            # seed. `master + 100000 + r` overflowed OpenMM's 32-bit signed seed for a master of
+            # 20260824003 and killed a six-replica ladder after its Contexts were built.
+            # derive_seed is deterministic, nonzero and 32-bit safe by construction, and
+            # replica_purpose keeps each replica's barostat stream independent of its integrator's.
+            seed = derive_seed(int(rcfg["seed"]), replica_purpose(r, "barostat"))
             barostat = MonteCarloBarostat(pressure_bar * _u.bar,
                                           float(cfg["production"]["temperature_k"])
                                           if "temperature_k" in cfg["production"] else temperature,

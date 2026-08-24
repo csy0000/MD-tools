@@ -297,3 +297,84 @@ def test_a_version_five_document_is_told_how_to_migrate():
     assert "superseded by 6" in message
     assert "relabelling it 6 is the whole migration" in message
     assert "HASH" in message
+
+
+def test_every_stage_the_generator_can_emit_is_executable():
+    """The generator and the executor keep separate stage lists; they must agree.
+
+    This is the test that would have caught a real failure: `eq_free` was added to the generator's
+    stage graph and a run was launched, which minimised, equilibrated, and then died at
+    `stage: unknown stage 'eq_free'` -- after the GPU work of the preceding stages had been spent.
+
+    Nothing else checks this. The generator validates that it CAN write the stage; the executor
+    validates a stage it has been handed. Neither compares its list against the other's, so the two
+    can drift and only a real run reveals it.
+    """
+    from md_templates.openmm.input_gen import (IMPLICIT_MD_STAGE_ORDER, IMPLICIT_STAGE_ORDER,
+                                               MD_STAGE_ORDER, STAGE_ORDER)
+    from md_templates.openmm.stage import EXECUTION_STATUS
+
+    emittable = (set(STAGE_ORDER) | set(IMPLICIT_STAGE_ORDER)
+                 | set(MD_STAGE_ORDER) | set(IMPLICIT_MD_STAGE_ORDER))
+    missing = sorted(emittable - set(EXECUTION_STATUS))
+    assert not missing, (
+        f"the generator can emit {missing}, which the executor would refuse as an unknown stage. "
+        "A run would fail partway, after the preceding stages had already been computed.")
+
+
+def test_the_executor_declares_no_stage_the_generator_cannot_emit():
+    """The converse: a registered stage nobody generates is dead code claiming to be implemented."""
+    from md_templates.openmm.input_gen import (IMPLICIT_MD_STAGE_ORDER, IMPLICIT_STAGE_ORDER,
+                                               MD_STAGE_ORDER, STAGE_ORDER)
+    from md_templates.openmm.stage import EXECUTION_STATUS
+
+    emittable = (set(STAGE_ORDER) | set(IMPLICIT_STAGE_ORDER)
+                 | set(MD_STAGE_ORDER) | set(IMPLICIT_MD_STAGE_ORDER))
+    orphans = sorted(set(EXECUTION_STATUS) - emittable)
+    assert not orphans, f"executor declares {orphans}, which no stage graph produces"
+
+
+# -------------------------------------------------------------------------------------------
+# Barostat seeds must survive OpenMM's 32-bit seed field
+# -------------------------------------------------------------------------------------------
+def test_derived_barostat_seeds_are_int32_safe_for_a_large_master_seed():
+    """The bug this replaces killed a six-replica ladder after its Contexts were built.
+
+    The barostat seed was `master + 100000 + replica`. Master seeds in this repository are dated
+    integers -- 20260824003 -- which is an order of magnitude above OpenMM's signed 32-bit seed
+    field, so `setRandomNumberSeed` raised OverflowError at replica 0. Arithmetic on a master seed
+    is the mistake; `derive_seed` is 32-bit safe by construction.
+    """
+    from md_templates.openmm.seeds import derive_seed, replica_purpose
+
+    master = 20260824003
+    assert master > 2**31 - 1, "the master seed must exceed int32 for this test to mean anything"
+    for replica in range(6):
+        seed = derive_seed(master, replica_purpose(replica, "barostat"))
+        assert 1 <= seed <= 2**31 - 1
+
+
+def test_each_replica_barostat_stream_is_independent():
+    """Part 3 requires one INDEPENDENTLY seeded barostat per replica.
+
+    Shared or correlated volume moves would break the independence the exchange criterion assumes,
+    and a barostat sharing its integrator's seed is correlated in a way nobody would look for.
+    """
+    from md_templates.openmm.seeds import derive_seed, replica_purpose
+
+    master = 20260824003
+    barostats = [derive_seed(master, replica_purpose(r, "barostat")) for r in range(6)]
+    integrators = [derive_seed(master, replica_purpose(r, "integrator")) for r in range(6)]
+    assert len(set(barostats)) == 6
+    assert not set(barostats) & set(integrators)
+
+
+def test_openmm_rejects_a_seed_above_int32():
+    """Anchors the guard to observed OpenMM behaviour rather than a remembered claim."""
+    openmm = pytest.importorskip("openmm")
+    from openmm import unit
+
+    barostat = openmm.MonteCarloBarostat(1.0 * unit.bar, 300.0 * unit.kelvin, 25)
+    with pytest.raises(OverflowError):
+        barostat.setRandomNumberSeed(20260824003 + 100_000)
+    barostat.setRandomNumberSeed(2**31 - 1)          # the boundary is accepted
