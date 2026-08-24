@@ -179,11 +179,14 @@ DEFAULTS: dict[str, Any] = {
     },
     # ---- steps 6-8: production ---------------------------------------------------------------
     "production": {
-        # NPT. Production keeps the barostat rather than fixing the box at an averaged volume:
-        # BAROSTAT_STAGES has always included cMD_1, and this label previously said NVT, so the two
-        # disagreed. The barostat is what the generator actually attaches, and it is the intended
-        # ensemble -- a fixed box would freeze a volume estimated from a finite equilibration window.
-        "ensemble": "NPT",
+        # DELIBERATELY None, not "NPT". The ensemble is a property of the system, not a
+        # preference: explicit solvent has a volume and a pressure, implicit solvent has neither.
+        # A global default is therefore invalid for one of the two modes -- and it was: an implicit
+        # ladder inherited "NPT" from here and was refused by validate_ensemble for a label the
+        # user never wrote. `None` means "not yet decided"; md.py and rest2.py resolve it from the
+        # loaded System's own periodicity through ensembles.validate_ensemble, which is a fact
+        # rather than a default.
+        "ensemble": None,
         "platform": "CUDA",
         "precision": "mixed",                # explicit: the CUDA default is single
         "device_index": None,

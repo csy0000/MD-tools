@@ -96,7 +96,7 @@
     "seed": null
   },
   "production": {
-    "ensemble": "NPT",
+    "ensemble": null,
     "platform": "CUDA",
     "precision": "mixed",
     "device_index": null,
