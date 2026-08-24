@@ -22,6 +22,7 @@ import json
 import sys
 from pathlib import Path
 from .hashing import sha256_bytes, sha256_text
+from .seeds import as_openmm_seed
 
 __all__ = ["main", "validate_stage", "EXECUTION_STATUS"]
 
@@ -434,7 +435,7 @@ def execute_stage(config_path: Path, payload: dict, devices: str | None = None) 
         pressure = parse_quantity(payload["barostat"]["pressure"], dimension="pressure")
         barostat = MonteCarloBarostat(pressure.value * unit.bar,
                                       cfg["integrator"]["temperature_k"] * unit.kelvin, 25)
-        barostat.setRandomNumberSeed(int(stage_seeds["barostat"]))
+        barostat.setRandomNumberSeed(as_openmm_seed(int(stage_seeds["barostat"])))
         barostat_index = system.addForce(barostat)
 
     run_lock = None

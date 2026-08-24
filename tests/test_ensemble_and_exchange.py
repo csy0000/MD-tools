@@ -378,3 +378,59 @@ def test_openmm_rejects_a_seed_above_int32():
     with pytest.raises(OverflowError):
         barostat.setRandomNumberSeed(20260824003 + 100_000)
     barostat.setRandomNumberSeed(2**31 - 1)          # the boundary is accepted
+
+
+def test_as_openmm_seed_is_the_identity_on_every_legal_seed():
+    """A clamp that changes an already-valid seed silently changes the trajectory.
+
+    The first version used the derive_seed modulus (2**31-2) and mapped the legal seed 2**31-1 to
+    1 -- a collision at exactly the boundary the function exists to protect.
+    """
+    from md_templates.openmm.seeds import as_openmm_seed
+
+    for value in (1, 2, 12345, 2**31 - 2, 2**31 - 1):
+        assert as_openmm_seed(value) == value
+
+
+def test_as_openmm_seed_brings_everything_else_into_range():
+    from md_templates.openmm.seeds import as_openmm_seed
+
+    for value in (2**31, 20260824003, 20260824003 + 100_000, -5, 0):
+        assert 1 <= as_openmm_seed(value) <= 2**31 - 1
+
+
+def test_as_openmm_seed_never_returns_zero():
+    """OpenMM reads 0 as 'choose randomly', which makes a seeded run irreproducible in silence."""
+    from md_templates.openmm.seeds import as_openmm_seed
+
+    assert as_openmm_seed(0) != 0
+    assert all(as_openmm_seed(v) != 0 for v in (0, 2**31 - 1, 2**31, -(2**31)))
+
+
+def test_every_openmm_seed_call_site_is_clamped():
+    """The class of bug, not an instance of it.
+
+    Two ladders died on this: a barostat seed and a velocity seed, at different call sites, both
+    from a dated master seed an order of magnitude above int32. Neither OpenMM message mentions
+    seeds -- one is an OverflowError, the other a TypeError about overloaded prototypes -- so each
+    had to be diagnosed from a stack trace after GPU time had been spent.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / "src" / "md_templates" / "openmm"
+    pattern = re.compile(r"(setRandomNumberSeed|setVelocitiesToTemperature)\s*\(([^)]*)\)")
+    unclamped = []
+    for path in src.glob("*.py"):
+        if path.name == "seeds.py":
+            continue
+        for call in pattern.finditer(path.read_text()):
+            args = call.group(2)
+            # a single-argument setVelocitiesToTemperature takes no seed at all
+            if call.group(1) == "setVelocitiesToTemperature" and "," not in args:
+                continue
+            if "as_openmm_seed" not in args:
+                unclamped.append(f"{path.name}: {call.group(0)[:70]}")
+    assert not unclamped, (
+        "these OpenMM seed call sites do not clamp through as_openmm_seed, so a master seed above "
+        "2**31-1 would crash them at runtime:\n  " + "\n  ".join(unclamped))

@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
+from .seeds import as_openmm_seed
 
 import numpy as np
 
@@ -50,7 +51,7 @@ def make_integrator(cfg: dict, seed: int, timestep_fs: Optional[float] = None):
         integrator = openmm.VerletIntegrator(dt)
     else:
         raise ValueError(f"unknown integrator.kind {icfg['kind']!r}")
-    integrator.setRandomNumberSeed(int(seed) % 2_147_483_647)
+    integrator.setRandomNumberSeed(as_openmm_seed(int(seed)))
     return integrator
 
 
@@ -445,7 +446,7 @@ def _apply_coords(sim, coords: Path, *, require_velocities: bool = False,
             if velocity_seed is None:
                 sim.context.setVelocitiesToTemperature(temperature)
             else:
-                sim.context.setVelocitiesToTemperature(temperature, int(velocity_seed))
+                sim.context.setVelocitiesToTemperature(temperature, as_openmm_seed(int(velocity_seed)))
         return {"coords": str(coords), "kind": "pdb", "velocities": "drawn from Maxwell-Boltzmann",
                 "velocity_seed": velocity_seed}
 
@@ -470,7 +471,8 @@ def _apply_coords(sim, coords: Path, *, require_velocities: bool = False,
             vel = "state carried none; drawn from Maxwell-Boltzmann"
         else:
             used_seed = int(velocity_seed)
-            sim.context.setVelocitiesToTemperature(sim.integrator.getTemperature(), used_seed)
+            sim.context.setVelocitiesToTemperature(sim.integrator.getTemperature(),
+                                                   as_openmm_seed(int(used_seed)))
             vel = "state carried none; drawn from Maxwell-Boltzmann"
     return {"coords": str(coords), "kind": "state-xml", "velocities": vel,
             "velocity_seed": used_seed}
@@ -603,7 +605,8 @@ def minimize_equilibrate(cfg: dict, system_xml: Path, coords: Path, out_dir: Pat
         )
         sim.context.setParameter("k_restraint", k_strong)
         t_from = float(ecfg["heat_from_k"])
-        sim.context.setVelocitiesToTemperature(t_from * unit.kelvin, int(ecfg["seed"]))
+        sim.context.setVelocitiesToTemperature(t_from * unit.kelvin,
+                                               as_openmm_seed(int(ecfg["seed"])))
         n_win = max(1, int(ecfg["heat_n_windows"]))
         per_window = max(1, _steps(float(ecfg["heat_ps"]), dt0) // n_win)
         for w in range(n_win):
@@ -641,7 +644,8 @@ def minimize_equilibrate(cfg: dict, system_xml: Path, coords: Path, out_dir: Pat
                 kineticEnergy=True, temperature=True, volume=True, density=True, speed=True,
             )
         )
-        sim.context.setVelocitiesToTemperature(temperature * unit.kelvin, int(ecfg["seed"]))
+        sim.context.setVelocitiesToTemperature(temperature * unit.kelvin,
+                                               as_openmm_seed(int(ecfg["seed"])))
         sim.integrator.setTemperature(temperature * unit.kelvin)
         dt = float(ecfg["timestep_fs"])
         sim.step(_steps(float(ecfg["nvt_ps"]), dt))

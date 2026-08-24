@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 
-from .seeds import derive_seed, replica_purpose
+from .seeds import as_openmm_seed, derive_seed, replica_purpose
 from .ensembles import EXPLICIT_PRODUCTION_ENSEMBLE as ENSEMBLE_NPT, validate_ensemble
 import os
 import platform as _platform
@@ -85,7 +85,8 @@ def _pre_exchange_relaxation(simulations, coords: Path, cfg: dict, run_dir: Path
         _apply_coords(sim, coords)
         # deterministic and DISTINCT per replica: same positions, independent momenta
         vel_seed = int(seed) + 1000 + r
-        sim.context.setVelocitiesToTemperature(temperature * unit.kelvin, vel_seed)
+        sim.context.setVelocitiesToTemperature(temperature * unit.kelvin,
+                                               as_openmm_seed(int(vel_seed)))
         u0 = sim.context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
             unit.kilojoule_per_mole)
         sim.reporters.clear()                     # no production reporters during relaxation
@@ -332,7 +333,7 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
                                           if "temperature_k" in cfg["production"] else temperature,
                                           int(cfg.get("equilibration", {})
                                               .get("barostat_interval", 25)))
-            barostat.setRandomNumberSeed(seed)
+            barostat.setRandomNumberSeed(as_openmm_seed(seed))
             system.addForce(barostat)
             barostat_seeds.append(seed)
         else:

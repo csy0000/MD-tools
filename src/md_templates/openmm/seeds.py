@@ -50,6 +50,7 @@ from __future__ import annotations
 import hashlib
 
 __all__ = [
+    "as_openmm_seed",
     "DERIVATION_VERSION",
     "DERIVATION_ALGORITHM",
     "DEFAULT_MASTER_SEED",
@@ -88,6 +89,31 @@ def derive_seed(master_seed: int, purpose: str) -> int:
         raise ValueError("a seed purpose must be a non-empty string")
     digest = hashlib.sha256(f"{_PREFIX}|{master_seed}|{purpose}".encode()).digest()
     return 1 + int.from_bytes(digest[:8], "big") % _MODULUS
+
+
+def as_openmm_seed(value) -> int:
+    """Coerce any seed to OpenMM's legal range, [1, 2**31 - 1].
+
+    OpenMM's seed fields are 32-bit SIGNED, and the SWIG binding raises rather than truncating:
+    `setRandomNumberSeed` gives OverflowError, `setVelocitiesToTemperature` gives a TypeError about
+    overloaded prototypes. Neither message mentions seeds, which is what made this expensive to
+    diagnose -- a six-replica ladder died at the first Context after its equilibration was paid for.
+
+    Master seeds in this repository are dated integers such as 20260824003, an order of magnitude
+    above the limit, so ANY arithmetic on a master seed that reaches OpenMM directly is a latent
+    crash. Values already produced by :func:`derive_seed` are in range and pass through unchanged,
+    so this is a safety net rather than a second seed scheme.
+
+    Zero is excluded deliberately: OpenMM reads 0 as "choose randomly", which would silently make a
+    run irreproducible while still looking seeded.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"an OpenMM seed must be an integer, got {value!r}")
+    # The legal range [1, 2**31-1] holds 2**31-1 distinct values, so that is the modulus. Using
+    # _MODULUS (2**31-2, correct for derive_seed, whose range excludes the top value) mapped the
+    # legal seed 2**31-1 to 1 -- a silent collision at exactly the boundary this function exists to
+    # protect. Any already-legal seed must be returned unchanged.
+    return 1 + (abs(value) - 1) % (2**31 - 1) if value else 1
 
 
 def stage_purpose(stage: str, role: str) -> str:
