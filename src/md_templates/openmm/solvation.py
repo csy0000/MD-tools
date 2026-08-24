@@ -29,10 +29,33 @@ ION_RESIDUE_NAMES = frozenset({"NA", "CL", "K", "MG", "CA", "ZN", "BR", "I", "LI
 def _box_vectors(width_nm: float, shape: str) -> np.ndarray:
     """Reduced box vectors for a cube / rhombic dodecahedron / truncated octahedron of *width*.
 
-    These are OpenMM's own reduced forms.  In a reduced triclinic box the minimum image distance is
-    ``min(a_x, b_y, c_z)``, i.e. the smallest diagonal element -- which for a dodecahedron is
-    ``width/sqrt(2)``, not ``width``.  That factor is the whole reason the padding needs care.
+    Delegated to OpenMM's own `Modeller._computeBoxVectors`, so there is one definition of these
+    shapes rather than two that can drift apart. In a reduced triclinic box the minimum image
+    distance is `min(a_x, b_y, c_z)` -- the smallest diagonal element, which for a dodecahedron is
+    `width/sqrt(2)` and not `width`. That factor is the whole reason padding needs care.
+
+    `_computeBoxVectors` is private, so `test_box_vectors_match_openmm` asserts the local fallback
+    below still reproduces it exactly. If OpenMM ever moves or changes it, that test fails loudly
+    and the fallback keeps working rather than the build breaking.
     """
+    w = float(width_nm)
+    if shape not in _SUPPORTED_BOX_SHAPES:
+        raise ValueError(f"unsupported solvation.box_shape {shape!r}")
+    try:
+        from openmm.app import Modeller
+
+        vectors = Modeller._computeBoxVectors(None, w, shape)
+        return np.array([[v.x, v.y, v.z] for v in vectors])
+    except (ImportError, AttributeError, ValueError, TypeError):
+        return _box_vectors_fallback(w, shape)
+
+
+#: The shapes this package supports, which is the set OpenMM's `_computeBoxVectors` accepts.
+_SUPPORTED_BOX_SHAPES = ("cube", "dodecahedron", "octahedron")
+
+
+def _box_vectors_fallback(width_nm: float, shape: str) -> np.ndarray:
+    """OpenMM's reduced forms, written out. Only used if the private helper is unavailable."""
     w = float(width_nm)
     if shape == "cube":
         return np.array([[w, 0.0, 0.0], [0.0, w, 0.0], [0.0, 0.0, w]])

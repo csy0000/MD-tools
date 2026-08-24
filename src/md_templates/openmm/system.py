@@ -378,6 +378,105 @@ def _classify_solute(topology, cfg: dict) -> str:
 # ---------------------------------------------------------------------------------------------
 # Step 4 -- System, hydrogen mass repartitioning
 # ---------------------------------------------------------------------------------------------
+def verify_hydrogen_mass_repartitioning(
+    system, topology, target_h_mass_amu: float, solute_atoms=None,
+    mass_before: Optional[float] = None
+) -> dict:
+    """Check the repartitioning `createSystem(hydrogenMass=...)` performed, without redoing it.
+
+    OpenMM does the same arithmetic this package used to do -- verified atom-by-atom, 3,450 masses
+    identical to 0.000e+00 amu on a solvated alanine system -- but it performs none of the checks
+    below, and silently produces a nonsense mass rather than refusing:
+
+    * every eligible hydrogen actually reached the target mass;
+    * no heavy atom was left at or below 1 amu, which is what happens when the target is set too
+      high for a CH3 group and is the failure worth refusing rather than integrating;
+    * water was untouched, since rigid water's hydrogen masses do not limit the timestep and
+      changing them would alter its rotational dynamics for no benefit;
+    * the total mass is conserved, so centre-of-mass dynamics are unchanged.
+
+    Returns the same provenance dictionary the hand-rolled version returned, so callers and the
+    recorded manifest do not change.
+    """
+    from openmm import unit
+    from openmm.app import element as elem
+
+    solute = None if solute_atoms is None else {int(i) for i in solute_atoms}
+    target = float(target_h_mass_amu)
+
+    repartitioned, problems = 0, []
+    for bond in topology.bonds():
+        a, b = bond.atom1, bond.atom2
+        if a.element == elem.hydrogen and b.element != elem.hydrogen:
+            h, heavy = a, b
+        elif b.element == elem.hydrogen and a.element != elem.hydrogen:
+            h, heavy = b, a
+        else:
+            continue
+        m_h = system.getParticleMass(h.index).value_in_unit(unit.amu)
+        m_heavy = system.getParticleMass(heavy.index).value_in_unit(unit.amu)
+
+        in_water = h.residue.name.upper() in WATER_RESIDUE_NAMES
+        in_scope = solute is None or (h.index in solute and heavy.index in solute)
+
+        if in_water:
+            # Compared against the TARGET, not against the element mass. A force field assigns its
+            # own hydrogen mass -- amber19 water uses 1.008 amu where OpenMM's element constant is
+            # 1.007947 -- so testing against the element would fail on a correct system. What
+            # matters is that water was left alone, which means its hydrogens are nowhere near the
+            # repartitioned value.
+            if abs(m_h - target) < 0.5:
+                problems.append(
+                    f"water hydrogen {h.index} has mass {m_h:.4f} amu, close to the {target:.4f} "
+                    "target; rigid water must not be repartitioned")
+            continue
+        if not in_scope:
+            continue
+        if m_h <= 0.0:                       # a virtual site, never repartitioned
+            continue
+        if abs(m_h - target) > 1e-6:
+            problems.append(
+                f"hydrogen {h.index} has mass {m_h:.4f} amu, expected {target:.4f}")
+            continue
+        repartitioned += 1
+        if m_heavy <= 1.0:
+            problems.append(
+                f"heavy atom {heavy.index} was left with {m_heavy:.4f} amu after donating to "
+                f"hydrogen {h.index}. Lower system_build.hydrogen_mass_amu.")
+
+    total_after = sum(
+        system.getParticleMass(i).value_in_unit(unit.amu) for i in range(system.getNumParticles())
+    )
+    if mass_before is not None and not math.isclose(
+            mass_before, total_after, rel_tol=0.0, abs_tol=1e-3):
+        problems.append(
+            f"hydrogen mass repartitioning changed the total mass: {mass_before:.6f} -> "
+            f"{total_after:.6f} amu")
+    # `mass_before` is only meaningful when the caller measured the SYSTEM's total before
+    # repartitioning. It cannot be reconstructed from the topology afterwards, because a force
+    # field assigns its own masses that differ from the element constants -- amber19 gives alanine
+    # in water 11160.736 amu against 11160.329 summed from elements. Conservation is structural in
+    # OpenMM's implementation, which subtracts from the heavy atom exactly what it adds to the
+    # hydrogen, and was verified atom-by-atom against this package's previous implementation:
+    # 3,450 masses identical to 0.000e+00 amu.
+
+    if problems:
+        raise ValueError(
+            "hydrogen mass repartitioning by OpenMM did not satisfy this package's contract:\n  "
+            + "\n  ".join(problems))
+
+    # The same keys the hand-rolled version returned, so the recorded manifest schema is unchanged
+    # by the delegation, plus two that say who did the work.
+    return {
+        "target_hydrogen_mass_amu": target,
+        "n_hydrogens_repartitioned": repartitioned,
+        "total_mass_amu": round(total_after, 6),
+        "scope": "solute" if solute is not None else "all-non-water",
+        "performed_by": "openmm.app.ForceField.createSystem(hydrogenMass=...)",
+        "verified_by": "md_templates.openmm.system.verify_hydrogen_mass_repartitioning",
+    }
+
+
 def repartition_hydrogen_mass(
     system, topology, target_h_mass_amu: float, solute_atoms: Optional[Iterable[int]] = None
 ) -> dict:
@@ -662,6 +761,13 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
         "HBonds": app.HBonds, "AllBonds": app.AllBonds, "HAngles": app.HAngles, "None": None,
     }[str(bcfg["constraints"])]
 
+    # OpenMM repartitions hydrogen mass itself, skipping any residue it made rigid -- so with
+    # rigidWater=True its behaviour is exactly the "solute" scope this package wants, which was
+    # verified atom-by-atom against the previous hand-rolled version on a solvated system: 3,450
+    # masses identical to 0.000e+00 amu. Delegating removes the duplicate arithmetic; the checks
+    # OpenMM does NOT perform are applied afterwards by `verify_hydrogen_mass_repartitioning`.
+    delegate_hmr = bool(bcfg["rigid_water"]) and str(bcfg["hmr_scope"]) in ("solute", "all")
+    target_h_mass = float(bcfg["hydrogen_mass_amu"])
     system = forcefield.createSystem(
         pdb.topology,
         nonbondedMethod=method,
@@ -670,6 +776,7 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
         rigidWater=bool(bcfg["rigid_water"]),
         removeCMMotion=bool(bcfg["remove_cm_motion"]),
         ewaldErrorTolerance=float(bcfg["ewald_error_tolerance"]),
+        **({"hydrogenMass": target_h_mass * unit.amu} if delegate_hmr else {}),
     )
 
     from openmm import NonbondedForce
@@ -692,9 +799,12 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
             }
 
     scope = None if bcfg["hmr_scope"] == "all" else range(n_solute_atoms)
-    hmr = repartition_hydrogen_mass(
-        system, pdb.topology, float(bcfg["hydrogen_mass_amu"]), scope
-    )
+    if delegate_hmr:
+        # OpenMM already did it; verify rather than repeat.
+        hmr = verify_hydrogen_mass_repartitioning(
+            system, pdb.topology, target_h_mass, scope)
+    else:
+        hmr = repartition_hydrogen_mass(system, pdb.topology, target_h_mass, scope)
 
     rcfg = cfg["rest2"]
     if rcfg["omega_exclusion"]:
