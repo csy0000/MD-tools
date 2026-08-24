@@ -74,22 +74,61 @@ def _box_vectors_fallback(width_nm: float, shape: str) -> np.ndarray:
     raise ValueError(f"unsupported solvation.box_shape {shape!r}")
 
 
+def shortest_lattice_translation(vectors) -> float:
+    """The shortest nonzero lattice translation, by enumeration rather than by formula.
+
+    This is the distance between periodic images of a *point*, and therefore the quantity a
+    solute-to-periodic-copy clearance is measured against. For OpenMM's reduced cube, rhombic
+    dodecahedron and truncated octahedron it equals the box width -- verified here by enumeration
+    rather than asserted, because it is easy to reach for the wrong number.
+
+    It is NOT the quantity OpenMM's cutoff check uses. See `minimum_reduced_box_height`.
+    """
+    import itertools
+
+    vectors = np.asarray(vectors, dtype=float)
+    best = np.inf
+    for i, j, k in itertools.product((-2, -1, 0, 1, 2), repeat=3):
+        if (i, j, k) == (0, 0, 0):
+            continue
+        best = min(best, float(np.linalg.norm(i * vectors[0] + j * vectors[1] + k * vectors[2])))
+    return best
+
+
+def minimum_reduced_box_height(vectors) -> float:
+    """The smallest perpendicular height of the reduced cell: `min(a_x, b_y, c_z)`.
+
+    This is what OpenMM's periodic-box check compares the cutoff against -- it refuses a cutoff
+    larger than half of it -- because a cutoff must not reach beyond the slab the minimum-image
+    convention can resolve. For a cube it equals the width; for a rhombic dodecahedron it is
+    `width/sqrt(2)`; for a truncated octahedron `sqrt(6)/3 * width`.
+
+    Using this as the solute-image distance understates the real separation badly: for a
+    dodecahedron it is 29% smaller than the shortest lattice translation, which is the difference
+    between "0.7 nm of clearance" and "2.4 nm of clearance" on a real macrocycle box.
+    """
+    return float(np.min(np.diag(np.asarray(vectors, dtype=float))))
+
+
 def _resolve_box(modeller, cfg: dict) -> dict:
     """Decide the periodic box, reconciling the requested padding with the nonbonded cutoff.
 
-    Two things go wrong if the box is taken straight from ``addSolvent(padding=...)``:
+    Three quantities are involved and they are NOT interchangeable. Conflating the first two is the
+    error this function was previously written around:
 
-    1. OpenMM's padding is ``width = max(2*radius + padding, 2*padding)`` and a rhombic
-       dodecahedron's minimum image distance is ``width/sqrt(2)``.  For a compact solute the
-       ``2*padding`` branch wins, so ``padding = 1.2 nm`` gives alanine dipeptide a solute-to-image
-       gap of **0.50 nm**, not 1.2 nm.  ``padding_semantics = "solute-image-gap"`` instead solves
-       for the width that delivers the requested gap, which is what "padded by 1.2 nm from the
-       solute" means.
-    2. OpenMM refuses a cutoff larger than half the minimum image distance.  A 1.0 nm cutoff
-       therefore needs a minimum image distance of 2.0 nm, which the raw-padding box does not
-       reach for a small solute -- the run dies at ``Context`` construction.
+    * **shortest lattice translation** -- how far a point is from its own periodic image. Equal to
+      the box width for all three shapes OpenMM builds. This is what a solute-image clearance is
+      measured against.
+    * **minimum reduced-box height** -- `min(a_x, b_y, c_z)`, which is what OpenMM's cutoff legality
+      check uses. Smaller than the width for any non-cubic shape.
+    * **solute bounding radius** -- half the solute's diameter, from OpenMM's own definition.
 
-    Both are resolved here, before any water is placed, and every number is recorded.
+    So the conservative clearance is `shortest_lattice_translation - 2*radius`, while the cutoff must
+    satisfy `minimum_reduced_box_height >= 2*cutoff + margin`. Both are enforced and both are
+    recorded, under names that say which is which.
+
+    OpenMM itself has no numeric `addSolvent` padding default; the default in this repository is its
+    own choice, expressed in OpenMM's semantics.
     """
     from openmm import unit
 
@@ -102,15 +141,19 @@ def _resolve_box(modeller, cfg: dict) -> dict:
     centre = 0.5 * (positions.min(axis=0) + positions.max(axis=0))
     radius = float(np.linalg.norm(positions - centre, axis=1).max())
 
-    # the shortest diagonal element as a fraction of the width
-    frac = float(np.min(np.diag(_box_vectors(1.0, shape))))
+    # per unit width, for this shape
+    unit_vectors = _box_vectors(1.0, shape)
+    height_fraction = minimum_reduced_box_height(unit_vectors)
+    translation_fraction = shortest_lattice_translation(unit_vectors)
 
     semantics = str(scfg["padding_semantics"])
     if semantics == "openmm":
+        # exactly Modeller.addSolvent
         width = max(2 * radius + padding, 2 * padding)
     elif semantics == "solute-image-gap":
-        # min image distance - solute diameter >= padding
-        width = (2 * radius + padding) / frac
+        # solve for the width that delivers `padding` of clearance to the nearest periodic COPY,
+        # which is set by the shortest lattice translation and not by the reduced-box height
+        width = (2 * radius + padding) / translation_fraction
     else:
         raise ValueError(f"unknown solvation.padding_semantics {semantics!r}")
 
@@ -118,19 +161,19 @@ def _resolve_box(modeller, cfg: dict) -> dict:
     if margin < 0.0:
         raise ValueError(
             f"system_build.minimum_image_margin_nm must be >= 0, got {margin}.  A negative margin "
-            "would ask for a box below OpenMM's hard minimum-image limit."
+            "would ask for a box below OpenMM's hard cutoff-height limit."
         )
 
     width_requested = width
-    min_image = frac * width
+    height = height_fraction * width
     hard_limit = 2.0 * cutoff
     # A grown box must clear the hard limit BY THE MARGIN.  Growing to exactly 2*cutoff leaves no
     # room for the NPT contraction that immediately follows, and OpenMM's check is a hard abort.
     needed = hard_limit + margin
     policy = str(scfg["cutoff_fit_policy"])
     grown = False
-    if min_image < needed:
-        required_width = needed / frac
+    if height < needed:
+        required_width = needed / height_fraction
         if policy == "grow":
             # Only ever grow.  A box that is already large enough is left exactly as requested --
             # shrinking it to the threshold would silently change a system the user sized.
@@ -138,11 +181,11 @@ def _resolve_box(modeller, cfg: dict) -> dict:
             grown = True
         elif policy == "refuse":
             raise ValueError(
-                f"a {shape} box with padding {padding} nm gives a minimum image distance of "
-                f"{min_image:.3f} nm, but a {cutoff} nm cutoff with a "
+                f"a {shape} box with padding {padding} nm gives a reduced-box height of "
+                f"{height:.3f} nm, but a {cutoff} nm cutoff with a "
                 f"{margin:.3f} nm margin needs {needed:.3f} nm.  Increase solvation.padding_nm to "
-                f"at least {frac * required_width - 2 * radius:.3f} nm, lower "
-                f"system_build.nonbonded_cutoff_nm to {(min_image - margin) / 2:.3f} nm, reduce "
+                f"at least {required_width - 2 * radius:.3f} nm, lower "
+                f"system_build.nonbonded_cutoff_nm to {(height - margin) / 2:.3f} nm, reduce "
                 f"system_build.minimum_image_margin_nm, or set "
                 "solvation.cutoff_fit_policy='grow'."
             )
@@ -150,30 +193,48 @@ def _resolve_box(modeller, cfg: dict) -> dict:
             raise ValueError(f"unknown solvation.cutoff_fit_policy {policy!r}")
 
     vectors = _box_vectors(width, shape)
-    min_image = frac * width
+    height = minimum_reduced_box_height(vectors)
+    translation = shortest_lattice_translation(vectors)
+    clearance = translation - 2 * radius
     info = {
         "box_shape": shape,
         "box_width_nm": round(width, 5),
         "box_width_requested_nm": round(width_requested, 5),
+        "box_volume_nm3": round(float(abs(np.linalg.det(vectors))), 5),
         "grown_for_cutoff": grown,
         "solute_bounding_radius_nm": round(radius, 5),
         "padding_nm_requested": padding,
         "padding_semantics": semantics,
-        "solute_image_gap_nm": round(min_image - 2 * radius, 5),
-        "min_image_distance_nm": round(min_image, 5),
+        # --- distance to the nearest periodic COPY -------------------------------------------
+        "shortest_lattice_translation_nm": round(translation, 5),
+        "solute_image_clearance_nm": round(clearance, 5),
+        # --- the quantity OpenMM's cutoff check uses -----------------------------------------
+        "min_reduced_box_height_nm": round(height, 5),
         "nonbonded_cutoff_nm": cutoff,
         "minimum_image_margin_nm": margin,
+        "required_cutoff_height_nm": round(needed, 5),
+        "max_legal_cutoff_nm": round(height / 2, 5),
+        # --- LEGACY, retained so old readers do not break ------------------------------------
+        # `min_image_distance_nm` historically held the reduced-box HEIGHT while being described as
+        # the minimum image distance, and `solute_image_gap_nm` was that height minus the solute
+        # diameter. Neither is the solute-to-periodic-copy distance; both are kept only so existing
+        # manifests and tooling still parse. Read the two blocks above instead.
+        "min_image_distance_nm": round(height, 5),
+        "solute_image_gap_nm": round(height - 2 * radius, 5),
         "minimum_image_required_nm": round(needed, 5),
-        "max_legal_cutoff_nm": round(min_image / 2, 5),
+        "legacy_field_note": (
+            "min_image_distance_nm and solute_image_gap_nm are the REDUCED-BOX HEIGHT and that "
+            "height minus the solute diameter. They are not the solute-to-periodic-copy distance; "
+            "use shortest_lattice_translation_nm and solute_image_clearance_nm."
+        ),
         "box_vectors_nm": vectors.tolist(),
     }
     if grown:
         print(
-            f"[solvate] box grown for the cutoff: minimum image {width_requested * frac:.3f} -> "
-            f"{min_image:.3f} nm so a {cutoff} nm cutoff fits with a {margin:.3f} nm margin "
-            f"(needs {needed:.3f} nm, hard limit {hard_limit:.3f}).  The "
-            f"solute-to-image gap is now {info['solute_image_gap_nm']:.3f} nm, above the "
-            f"{padding} nm requested.",
+            f"[solvate] box grown for the cutoff: reduced-box height "
+            f"{width_requested * height_fraction:.3f} -> {height:.3f} nm so a {cutoff} nm cutoff "
+            f"fits with a {margin:.3f} nm margin (needs {needed:.3f} nm, hard limit "
+            f"{hard_limit:.3f}).  Solute-to-copy clearance is now {clearance:.3f} nm.",
             flush=True,
         )
     return info

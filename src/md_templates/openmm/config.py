@@ -81,7 +81,11 @@ DEFAULTS: dict[str, Any] = {
         # while the PARAMETERS come from forcefield.water = amber19/opc.xml.
         "water_model": "opc",
         "box_shape": "dodecahedron",
-        "padding_nm": 1.2,
+        # 2.0 nm, in OpenMM's semantics. OpenMM's addSolvent has NO numeric padding default -- this
+        # is this repository's choice, expressed in OpenMM's definition of the word. At this value a
+        # dodecahedral box gives both alanine and the RGD macrocycle more than 2 nm between the
+        # solute and its nearest periodic copy, which is comfortably beyond twice the 1.0 nm cutoff.
+        "padding_nm": 2.0,
         # "openmm" reproduces Modeller.addSolvent exactly: a bounding-sphere radius is taken about
         #   the centre of the solute's axis-aligned bounding box, and the box WIDTH is set to
         #   max(2*radius + padding, 2*padding).  This is the default so that a box built here is the
@@ -163,8 +167,8 @@ DEFAULTS: dict[str, Any] = {
         "release_ps_each": 200.0,
         "npt_free_ps": 1000.0,
         "timestep_fs": 2.0,                  # after heating, and for the "simple" protocol
-        "nvt_ps": 200.0,                     # "simple" protocol only
-        "npt_ps": 1000.0,                    # "simple" protocol only
+        "nvt_ps": 250.0,                     # "simple" protocol only
+        "npt_ps": 250.0,                     # "simple" protocol only
         "pressure_bar": 1.0,
         "barostat_interval": 50,
         "box_average_last_ps": 500.0,        # NPT window averaged to fix the production box
@@ -172,7 +176,11 @@ DEFAULTS: dict[str, Any] = {
     },
     # ---- steps 6-8: production ---------------------------------------------------------------
     "production": {
-        "ensemble": "NVT",                   # NVT at the equilibrated box; see the doc
+        # NPT. Production keeps the barostat rather than fixing the box at an averaged volume:
+        # BAROSTAT_STAGES has always included cMD_1, and this label previously said NVT, so the two
+        # disagreed. The barostat is what the generator actually attaches, and it is the intended
+        # ensemble -- a fixed box would freeze a volume estimated from a finite equilibration window.
+        "ensemble": "NPT",
         "platform": "CUDA",
         "precision": "mixed",                # explicit: the CUDA default is single
         "device_index": None,

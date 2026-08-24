@@ -594,7 +594,10 @@ def test_box_refuse_policy_reports_the_workable_padding():
     cfg = load_config()
     cfg["solvation"]["padding_semantics"] = "openmm"
     cfg["solvation"]["cutoff_fit_policy"] = "refuse"
-    with pytest.raises(ValueError, match="minimum image distance"):
+    # An explicitly small padding, because the 2.0 nm default is generous enough that the refuse
+    # branch is never reached -- which is the point of the default, and would make this test vacuous.
+    cfg["solvation"]["padding_nm"] = 0.5
+    with pytest.raises(ValueError, match="reduced-box height"):
         _resolve_box(_M(), cfg)
 
 

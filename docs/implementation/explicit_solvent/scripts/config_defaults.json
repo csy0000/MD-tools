@@ -41,7 +41,7 @@
   "solvation": {
     "water_model": "opc",
     "box_shape": "dodecahedron",
-    "padding_nm": 1.2,
+    "padding_nm": 2.0,
     "padding_semantics": "openmm",
     "cutoff_fit_policy": "grow",
     "ionic_strength_molar": 0.15,
@@ -88,15 +88,15 @@
     "release_ps_each": 200.0,
     "npt_free_ps": 1000.0,
     "timestep_fs": 2.0,
-    "nvt_ps": 200.0,
-    "npt_ps": 1000.0,
+    "nvt_ps": 250.0,
+    "npt_ps": 250.0,
     "pressure_bar": 1.0,
     "barostat_interval": 50,
     "box_average_last_ps": 500.0,
     "seed": null
   },
   "production": {
-    "ensemble": "NVT",
+    "ensemble": "NPT",
     "platform": "CUDA",
     "precision": "mixed",
     "device_index": null,

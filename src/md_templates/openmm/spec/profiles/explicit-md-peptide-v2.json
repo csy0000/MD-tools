@@ -17,8 +17,8 @@
       "solvation": {
         "water_model": "opc",
         "box_shape": "dodecahedron",
-        "padding": "1.2 nm",
-        "padding_semantics": "solute-image-gap",
+        "padding": "2.0 nm",
+        "padding_semantics": "openmm",
         "ionic_strength_molar": 0.15,
         "positive_ion": "Na+",
         "negative_ion": "Cl-",
@@ -50,10 +50,10 @@
       "equilibration": {
         "protocol": "staged",
         "minimize_max_iterations": 1000,
-        "npt_free": "10 ps",
+        "npt_free": "500 ps",
         "seed": null,
-        "nvt": "10 ps",
-        "npt": "10 ps"
+        "nvt": "250 ps",
+        "npt": "250 ps"
       },
       "production": {
         "method": "md",

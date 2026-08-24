@@ -252,11 +252,11 @@ Where OpenMM already does something, it does it here:
 Three things are deliberately **not** delegated, each for a reason that was measured rather than
 assumed:
 
-* **box sizing.** `addSolvent(padding=...)` knows nothing about the nonbonded cutoff. At this
-  package's own defaults -- 1.2 nm padding, rhombic dodecahedron, 1.0 nm cutoff -- it builds a
-  2.400 nm box whose minimum image is 1.697 nm, and `Context` construction then fails with *"the
-  cutoff distance cannot be greater than half the periodic box size"*. `cutoff_fit_policy` grows the
-  box until it clears that limit by a recorded margin, or refuses with the padding that would work.
+* **box sizing.** `addSolvent(padding=...)` knows nothing about the nonbonded cutoff. With a small
+  padding -- 1.2 nm, rhombic dodecahedron, 1.0 nm cutoff -- it builds a 2.400 nm box whose reduced-box
+  height is 1.697 nm, and `Context` construction then fails with *"the cutoff distance cannot be
+  greater than half the periodic box size"*. `cutoff_fit_policy` grows the box until that height
+  clears the limit by a recorded margin, or refuses with the padding that would work.
 * **DCD tail recovery.** Nothing in OpenMM reads DCD records or truncates on a record boundary,
   which is what crash recovery needs.
 * **the committed-generation contract.** Segment commits, watermarks and continuity identity have no
@@ -268,20 +268,34 @@ fails loudly if upstream moves it.
 
 ### Box geometry and padding
 
-`solvation.padding_semantics` defaults to **`"openmm"`**, reproducing `Modeller.addSolvent`: a
-bounding-sphere radius about the centre of the solute's axis-aligned bounding box, then
-`width = max(2*radius + padding, 2*padding)`.
+The explicit default is **`padding_nm: 2.0` with `padding_semantics: "openmm"`**, reproducing
+`Modeller.addSolvent`: a bounding-sphere radius `R` about the centre of the solute's axis-aligned
+bounding box, then `width = max(2R + padding, 2*padding)`. **OpenMM has no numeric padding default of
+its own** -- 2.0 nm is this repository's choice, expressed in OpenMM's semantics.
 
-That sizes the box **width**. Only in a cube is the width also the minimum-image distance -- a
-rhombic dodecahedron's is `width/sqrt(2)` and a truncated octahedron's is `width*sqrt(6)/3` -- so in
-a non-cubic box the real solute-to-image clearance is smaller than the number requested.
-`"solute-image-gap"` is available for callers who want `padding_nm` to mean that clearance instead.
+Three quantities are involved and they are **not** interchangeable:
 
-Under either semantics the box is grown if the minimum image does not clear `2 * cutoff` by
-`system_build.minimum_image_margin_nm`. Under `"openmm"` that growth is usually what sets the box,
-so **if a run aborts with OpenMM's minimum-image error, raise the margin rather than the padding**.
-Every number involved -- bounding radius, requested and final width, minimum image, whether it grew,
-the maximum legal cutoff -- is recorded in the bundle's `geometry` block.
+| quantity | what it is | value |
+|---|---|---|
+| shortest lattice translation | distance from a point to its own periodic image | `width`, for all three shapes |
+| minimum reduced-box height | what OpenMM's cutoff check uses, `min(a_x, b_y, c_z)` | `width`, `width/√2`, `√6/3·width` |
+| solute-image clearance | conservative solute-surface to copy-surface distance | `shortest lattice translation − 2R` |
+
+Clearance is measured against the **lattice translation**, not the height. Reading the height as an
+image distance understates the real separation by 29% in a dodecahedron. The cutoff, separately, must
+satisfy `min reduced-box height ≥ 2·cutoff + system_build.minimum_image_margin_nm`, and
+`cutoff_fit_policy: grow` enlarges the box until it does.
+
+At the 2.0 nm default both alanine and the RGD macrocycle get more than 2 nm of solute-image
+clearance, comfortably beyond twice the 1.0 nm cutoff. `"solute-image-gap"` remains available for
+callers who want `padding_nm` to mean the clearance directly.
+
+Every number is recorded in the bundle's `geometry` block: requested padding, bounding radius,
+requested and final width, shortest lattice translation, solute-image clearance, minimum reduced-box
+height, cutoff, required cutoff height, margin, and whether the box was grown. Two legacy fields --
+`min_image_distance_nm` and `solute_image_gap_nm` -- hold the reduced-box height and that height
+minus the solute diameter; they are kept so old manifests still parse and are labelled in the
+manifest as **not** the solute-to-copy distance.
 
 ## State of the science — read before quoting anything
 

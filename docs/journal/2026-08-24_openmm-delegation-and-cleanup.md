@@ -130,3 +130,38 @@ read back from the code rather than trusted.
 
 The full slow suite has not been run since these four commits. The fast suite and goldens are clean,
 and CI runs the full gate on push.
+
+---
+
+## Correction, 2026-08-24 (later the same day)
+
+**The geometry described above conflates two different quantities, and one statement in it is
+wrong.** The record is left as written and corrected here rather than edited, because it is what was
+believed at the time and the error is instructive.
+
+Where this entry says *"the minimum image is `width/sqrt(2)` for a dodecahedron"* and treats that as
+the distance from the solute to its periodic copy, it is describing the **minimum reduced-box
+height** -- `min(a_x, b_y, c_z)`, which is the quantity OpenMM's cutoff legality check uses. It is
+not how far a point sits from its own image.
+
+The **shortest nonzero lattice translation** is what governs periodic-copy separation, and by
+enumeration over integer lattice combinations it equals the box **width** for all three shapes
+OpenMM builds -- cube, rhombic dodecahedron and truncated octahedron alike. So the conservative
+solute-image clearance is
+
+```
+shortest_lattice_translation - 2*R          not      min_reduced_box_height - 2*R
+```
+
+The two differ by 29% in a dodecahedron. On the 2026-08-21 campaign's macrocycle boxes that was the
+difference between an apparent 0.7 nm clearance and an actual 2.4 nm one, and it produced a false
+verdict that a valid 850 ns trajectory was unusable. The measured nearest solute-image *atom*
+distance in that run was 2.134 nm, against a lattice-translation bound of 2.361 nm -- consistent, and
+irreconcilable with the height-based figure.
+
+The correction, the separated quantities and their provenance fields, and eight tests that establish
+each independently are in `2026-08-24_ala-rgdfv-1us-cmd-2nm.md`.
+
+One further clarification to this entry: it says the default was changed to OpenMM's padding
+semantics, which remains true, but should have said that **OpenMM has no numeric padding default of
+its own**. The numeric value is this repository's choice; only the semantics are OpenMM's.

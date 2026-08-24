@@ -232,7 +232,7 @@ def main() -> None:
     run.add_argument("--precision", default="mixed")
 
     box = p.add_argument_group("box and force field")
-    box.add_argument("--padding-nm", type=float, default=1.2, dest="padding_nm")
+    box.add_argument("--padding-nm", type=float, default=2.0, dest="padding_nm")
     box.add_argument("--cutoff-nm", type=float, default=1.0, dest="cutoff_nm")
     box.add_argument("--box-shape", default="dodecahedron", dest="box_shape",
                      choices=("dodecahedron", "cube", "octahedron"))

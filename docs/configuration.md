@@ -53,7 +53,7 @@ wheel.
 profile: explicit-rest2-ligand-v1
 system: {system_id: my_ligand, route: smiles, smiles: "CCO"}
 build:
-  solvation: {padding: 1.2 nm, box_shape: dodecahedron, ionic_strength_molar: 0.15}
+  solvation: {padding: 2.0 nm, box_shape: dodecahedron, ionic_strength_molar: 0.15}
   nonbonded: {cutoff: 1.0 nm, minimum_image_margin: 0.10 nm}
 protocol:
   integrator: {timestep: 4 fs, temperature: 300 K, friction: 1 /ps}
