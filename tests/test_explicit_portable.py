@@ -111,7 +111,7 @@ def test_shipped_rgd_manifest_is_the_project_molecule():
     assert system.canonical_hash == schemas.RGD_CANONICAL_SMILES_SHA256
     assert system.formal_charge == 0
     assert system.doc["parameterization"]["small_molecule_forcefield"] == "openff-2.2.0"
-    assert system.doc["parameterization"]["charge_method"] == "am1bcc"
+    assert system.doc["parameterization"]["charge_method"] == "am1bcc_nagl"
     # the ligand route must not carry a protein force field, or the route is ambiguous
     assert system.doc["parameterization"]["protein_forcefield"] is None
 
@@ -679,7 +679,7 @@ def test_cpu_smoke_prepares_propagates_and_exchanges(tmp_path):
     assert bundle_manifest["composition"]["n_water_molecules"] > 0
     assert bundle_manifest["composition"]["n_degrees_of_freedom"] > 0
     assert bundle_manifest["system"]["formal_charge"] == 0
-    assert bundle_manifest["parameterization"]["charge_method"] == "am1bcc"
+    assert bundle_manifest["parameterization"]["charge_method"] == "am1bcc_nagl"
     assert bundle_manifest["environment"]["toolchain"]["openmm"]
 
 
@@ -729,7 +729,7 @@ def test_rgd_manifest_still_enforces_the_full_identity():
     assert s.formal_charge == 0
     par = s.doc["parameterization"]
     assert par["small_molecule_forcefield"] == "openff-2.2.0"
-    assert par["charge_method"] == "am1bcc"
+    assert par["charge_method"] == "am1bcc_nagl"
     assert par["water_forcefield"] == "amber19/tip3pfb.xml"
     assert par["protein_forcefield"] is None
 

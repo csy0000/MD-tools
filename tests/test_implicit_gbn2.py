@@ -297,7 +297,7 @@ def test_the_rgdfv_bundle_records_its_vetted_chemistry(rgdfv_implicit_bundle):
     """The ligand route's provenance must name the parameters that actually ran."""
     forcefield = json.loads((rgdfv_implicit_bundle / "forcefield.json").read_text())
     assert forcefield["ligand"] == "openff-2.2.0"
-    assert forcefield["ligand_charge_method"] == "am1bcc"
+    assert forcefield["ligand_charge_method"] == "am1bcc_nagl"
     assert forcefield["protein_forcefield"] is None, "a ligand route parameterises no protein"
 
 
@@ -552,7 +552,7 @@ def test_the_ligand_route_records_no_protein_or_water(rgdfv_implicit_bundle):
 
     forcefield = json.loads((rgdfv_implicit_bundle / "forcefield.json").read_text())
     assert forcefield["ligand"] == "openff-2.2.0"
-    assert forcefield["ligand_charge_method"] == "am1bcc"
+    assert forcefield["ligand_charge_method"] == "am1bcc_nagl"
     assert forcefield["protein_forcefield"] is None, (
         "a smiles route may not load a protein force field")
     assert forcefield["water"] is None

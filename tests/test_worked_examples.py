@@ -79,7 +79,7 @@ def test_rgdfv_uses_the_vetted_ligand_route_not_ff19sb():
     """cyclo-RGDfV is parameterised as a ligand. ff19SB would be a different calculation."""
     build = _resolved(RGDFV).build
     assert build.forcefield.small_molecule == "openff-2.2.0"
-    assert build.forcefield.charge_method == "am1bcc"
+    assert build.forcefield.charge_method == "am1bcc_nagl"
     assert build.forcefield.protein is None
 
 

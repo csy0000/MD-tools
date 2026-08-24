@@ -292,7 +292,7 @@ def test_generation_gives_each_route_its_own_water_without_any_override(tmp_path
         # the SMILES route requires the chemistry to be declared, not inferred
         "ligand_build": {"formal_charge": 0, "stereochemistry_policy": "from_smiles",
                          "protonation_policy": "as_given", "conformer_generation": "etkdgv3",
-                         "charge_model": "am1bcc", "parameterization_route": "openff-2.2.0"},
+                         "charge_model": "am1bcc_nagl", "parameterization_route": "openff-2.2.0"},
     }))
     result = _run(SYSTEM_GEN, "-i", str(smiles), "-o", str(ligand), "--config", str(lig_config))
     assert result.returncode == 0, result.stdout + result.stderr

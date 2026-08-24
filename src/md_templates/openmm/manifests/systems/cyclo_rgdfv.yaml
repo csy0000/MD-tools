@@ -27,7 +27,7 @@ input:
 
 parameterization:
   small_molecule_forcefield: openff-2.2.0
-  charge_method: am1bcc
+  charge_method: am1bcc_nagl
   protein_forcefield: null
   # PINNED, not the package default. The active default is OPC (explicit-*-v2 profiles); this
   # manifest reproduces RGD trajectories that were produced under TIP3P-FB, so it must keep
