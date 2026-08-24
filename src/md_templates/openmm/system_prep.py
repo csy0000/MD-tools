@@ -522,10 +522,20 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
         original.mkdir(exist_ok=True)
         shutil.copy2(input_path, original / input_path.name)
 
+        # The software that produced this bundle, recorded IN the bundle. A System is only
+        # reproducible against a named OpenMM build and a named code commit: force-field XML
+        # parsing, box construction and the GB path have all changed across releases, so a bundle
+        # that does not say which build made it cannot be re-derived, only re-guessed.
+        from . import provenance as _prov
+
+        environment = _prov.environment_block()
+        environment["md_templates_commit"] = (_prov.git_state() or {}).get("commit")
+
         manifest = {
             "schema_version": SYSTEM_MANIFEST_SCHEMA_VERSION,
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "generator": "MD_system_gen.py",
+            "environment": environment,
             "prepared_through": "minimisation NOT run; this bundle has never been integrated",
             "system": {
                 "id": cfg["system"]["slug"],
