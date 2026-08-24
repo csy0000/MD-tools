@@ -10,7 +10,7 @@
       "schema_version": 1,
       "forcefield": {
         "small_molecule": "openff-2.2.0",
-        "charge_method": "am1bcc",
+        "charge_method": "am1bcc_nagl",
         "protein": null,
         "water": "amber19/tip3pfb.xml"
       },

@@ -845,7 +845,10 @@ def test_rgd_manifest_records_the_full_hamiltonian_provenance(tmp_path):
     _, info = build_forcefield(cfg, None, route="ligand")
     assert info["protein_forcefield"] is None
     assert cfg["forcefield"]["ligand"] == "openff-2.2.0"
-    assert cfg["forcefield"]["ligand_charge_method"] == "am1bcc"
+    # the shipped ligand default is now Sage 2.2 + NAGL AM1-BCC: it reproduces
+    # AM1-BCC ELF10 from the graph in about a second and takes no conformer,
+    # so it carries no conformational bias. `am1bcc` remains selectable.
+    assert cfg["forcefield"]["ligand_charge_method"] == "am1bcc_nagl"
     smiles = "CC(=O)NC"
     assert hashlib.sha256(smiles.encode()).hexdigest()  # the field build_simbox records
 

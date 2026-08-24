@@ -10,7 +10,7 @@
       "schema_version": 1,
       "forcefield": {
         "small_molecule": "openff-2.2.0",
-        "charge_method": "am1bcc",
+        "charge_method": "am1bcc_nagl",
         "protein": null,
         "water": null
       },
@@ -24,8 +24,8 @@
       },
       "constraints": "HBonds",
       "rigid_water": false,
-      "hydrogen_mass": null,
-      "hmr_scope": "none",
+      "hydrogen_mass": "3.024 amu",
+      "hmr_scope": "solute",
       "remove_cm_motion": true,
       "implicit": {
         "model": "GBn2",
@@ -36,7 +36,7 @@
       "schema_version": 6,
       "integrator": {
         "kind": "langevin-middle",
-        "timestep": "2 fs",
+        "timestep": "4 fs",
         "temperature": "300 K",
         "friction": "1 /ps"
       },

@@ -35,7 +35,7 @@
     "protein": "amber19/protein.ff19SB.xml",
     "water": "amber19/opc.xml",
     "ligand": "openff-2.2.0",
-    "ligand_charge_method": "am1bcc",
+    "ligand_charge_method": "am1bcc_nagl",
     "extra_xml": []
   },
   "solvation": {

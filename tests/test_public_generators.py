@@ -145,7 +145,7 @@ def test_a_mol_or_smi_input_is_a_ligand_without_being_told(tmp_path):
     config.write_text(json.dumps({
         "ligand_build": {"formal_charge": 0, "stereochemistry_policy": "from_smiles",
                          "protonation_policy": "as_given", "conformer_generation": "etkdgv3",
-                         "charge_model": "am1bcc", "parameterization_route": "openff-2.2.0"}}))
+                         "charge_model": "am1bcc_nagl", "parameterization_route": "openff-2.2.0"}}))
     result = _run(SYSTEM_GEN, "-i", str(smi), "-o", str(tmp_path / "out"),
                   "--config", str(config), "--dry-run")
     assert result.returncode == 0, result.stderr

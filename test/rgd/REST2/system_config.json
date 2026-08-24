@@ -8,12 +8,12 @@
     "stereochemistry_policy": "from_smiles",
     "protonation_policy": "as_given",
     "conformer_generation": "etkdgv3",
-    "charge_model": "am1bcc",
+    "charge_model": "am1bcc_nagl",
     "parameterization_route": "openff-2.2.0"
   },
   "forcefield": {
     "ligand": "openff-2.2.0",
-    "ligand_charge_method": "am1bcc",
+    "ligand_charge_method": "am1bcc_nagl",
     "protein": null,
     "water": "amber19/tip3pfb.xml"
   },

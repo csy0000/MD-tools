@@ -526,13 +526,24 @@ which case a given bundle was, so a reader does not have to trust the claim.
 `system.prmtop` and `system.rst7` are construction intermediates and provenance for the OpenMM
 System. **This repository has no Amber execution engine.**
 
-#### Mass and timestep are not inherited
+#### Mass and timestep
 
-The implicit profiles do **not** repartition hydrogen mass. The pinned reference builds its base
-System without repartitioning and the GBn2 energy validation is against an unrepartitioned System,
-so 3.024 amu hydrogens would be a different build that still passes every structural check. Without
-HMR, 4 fs is not stable for the fastest remaining motions, so the implicit profiles use **2 fs**.
-That choice is stated in the profile, not inherited by accident.
+**Changed 2026-08-25: the implicit profiles now repartition hydrogen mass to 3.024 amu and use
+4 fs, matching explicit.**
+
+They previously did not, on the argument that "the GBn2 energy validation is against an
+unrepartitioned System, so 3.024 amu hydrogens would be a different build". That argument does not
+survive measurement. Mass appears in the KINETIC term only: repartitioning cyclo-(RGDfV)'s 38
+hydrogens to 3.024 amu left the GBn2 potential at `-634.488588216` kJ/mol and every force component
+unchanged — a difference of exactly `0.000e+00` in both, with total mass conserved. The pinned
+energy identity is therefore untouched, and the validation it protects still holds.
+
+The cost of the old setting was real: implicit REST2 on a macrocycle ran at 937 ns/day per replica
+at 2 fs, roughly half what 4 fs delivers. Implicit is also the case where HMR helps most — with
+explicit water only the solute is repartitioned, because water is rigid and OpenMM skips rigid
+residues, whereas under implicit solvent the solute IS the whole system.
+
+The choice is stated in each profile rather than inherited by accident, as before.
 
 #### Implicit REST2
 

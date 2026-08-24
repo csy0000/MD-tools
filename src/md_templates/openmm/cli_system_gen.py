@@ -156,7 +156,7 @@ def require_smi_build_fields(config: dict) -> dict:
             '        "stereochemistry_policy": "from_smiles",\n'
             '        "protonation_policy": "as_given",\n'
             '        "conformer_generation": "etkdgv3",\n'
-            '        "charge_model": "am1bcc",\n'
+            '        "charge_model": "am1bcc_nagl",\n'
             '        "parameterization_route": "openff-2.2.0"\n'
             "    }"
         )
