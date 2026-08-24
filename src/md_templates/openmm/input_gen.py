@@ -237,8 +237,25 @@ def _stage_launcher(stage: str, interpreter: str, pythonpath: str) -> str:
     # changes directory -- the recorded absolute path is right there and gets ignored. Appending
     # keeps the caller's entries ahead of ours, so they can still shadow the package deliberately,
     # while guaranteeing the interpreter can find it at all.
-    path_line = (f'PYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}{pythonpath}"\nexport PYTHONPATH\n'
-                 if pythonpath else "")
+    # The exported runtime snapshot, addressed through $PROJECT, which the script derives from
+    # BASH_SOURCE[0]. This used to be the absolute path of the GENERATING CHECKOUT, so the project
+    # ran only on that machine, only while that checkout existed, and silently picked up whatever
+    # the checkout had since become -- editing the template could change a months-old project.
+    #
+    # There is deliberately NO fallback to that path. A snapshot is exported for every project, so
+    # a missing one means the project is incomplete, and reaching for a checkout that may not exist
+    # -- or may have moved on -- would turn a clear failure into a silent change of behaviour.
+    # `pythonpath` is accepted and unused so the signature stays stable for callers.
+    del pythonpath
+    path_line = (
+        'if [ ! -d "$PROJECT/runtime/md_templates" ]; then\n'
+        '    echo "[{stage}] $PROJECT/runtime/md_templates is missing." >&2\n'
+        '    echo "  This project carries its own copy of the template runtime; without it the" >&2\n'
+        '    echo "  project is incomplete. Re-copy the project directory in full." >&2\n'
+        '    exit 2\n'
+        'fi\n'
+        'PYTHONPATH="${{PYTHONPATH:+$PYTHONPATH:}}$PROJECT/runtime"\n'
+        'export PYTHONPATH\n').format(stage=stage)
     return f"""#!/usr/bin/env bash
 # Stage: {stage}
 #
@@ -266,6 +283,48 @@ echo "[{stage}] start $(date -Is)" | tee -a "$PROJECT/run.log"
 "$PYTHON" -m md_templates.openmm.stage --config "{stage}.json" ${{MD_DEVICES:+--devices "$MD_DEVICES"}}
 
 echo "[{stage}] done  $(date -Is)" | tee -a "$PROJECT/run.log"
+"""
+
+
+def _extend_script(stages: tuple[str, ...]) -> str:
+    """A launcher that adds production segments WITHOUT re-running equilibration.
+
+    `run_all.sh` runs every stage, so re-invoking it to "add more" re-runs minimisation and
+    equilibration too. Those stages then write a NEW endpoint state, whose hash no longer matches
+    the one production recorded, and the continuity contract refuses the resume -- correctly, and
+    confusingly, because the user asked to extend and was told the calculation had changed.
+
+    This script exists so extending is one obvious command that cannot fall into that. It touches
+    only the production stage, and only files inside this project directory.
+    """
+    production = "REST2_1" if "REST2_1" in stages else "cMD_1"
+    return f"""#!/usr/bin/env bash
+# Add production segments to a run that has already been equilibrated.
+#
+#   ./extend.sh [N]        # N additional segments, default 1
+#
+# This does NOT re-run minimisation or equilibration. Re-running run_all.sh would, and the new
+# equilibration endpoint would no longer match the one production committed against -- the
+# continuity contract would then refuse the resume, which is right but reads as a puzzle.
+set -euo pipefail
+PROJECT="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+cd "$PROJECT"
+
+N="${{1:-1}}"
+STAGE="{production}"
+
+if [ ! -x "$STAGE/$STAGE.sh" ]; then
+    echo "missing launcher: $STAGE/$STAGE.sh" >&2; exit 1
+fi
+if [ ! -d "$PROJECT/$STAGE" ]; then
+    echo "$STAGE has never run; use ./run_all.sh first." >&2; exit 1
+fi
+
+for (( i=1; i<=N; i++ )); do
+    echo "=== $STAGE extension segment $i/$N ===" | tee -a run.log
+    "./$STAGE/$STAGE.sh"
+done
+echo "extension complete $(date -Is)" | tee -a run.log
 """
 
 
@@ -818,6 +877,7 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
             external_producer = None
 
         _write_script(staging / "run_all.sh", _run_all(stages_to_generate))
+        _write_script(staging / "extend.sh", _extend_script(stages_to_generate))
         (staging / "run.log").write_text(
             f"# generated {datetime.now(timezone.utc).isoformat()} by MD_input_gen.py\n"
             "# lines below are appended by the stage launchers as they execute\n")
@@ -851,6 +911,69 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
             "generated_not_executed": True,
             "completed_segments": 0,
             "lineage": inheritance,
+        }
+
+        # --- make the project independent of the checkout that generated it ---------------------
+        # The package is snapshotted INTO the project and the launchers point at that copy, so the
+        # project can be moved and a later change to the template cannot alter it.
+        from .lockfile import (LOCKFILE_NAME, build_lockfile, human_identity,
+                               write_lockfile)
+        from .runtime_export import export_runtime, runtime_manifest
+
+        exported = export_runtime(staging)
+        lock = build_lockfile(
+            method="REST2" if "REST2_1" in stages_to_generate else "cMD",
+            template_path=f"templates/{'rest2' if 'REST2_1' in stages_to_generate else 'conventional-md'}/openmm",
+            resolved_config=resolution["resolved"],
+            config_schema_version=(resolution["resolved"].get("protocol") or {}).get(
+                "schema_version"),
+            exported_files=runtime_manifest(staging),
+        )
+        write_lockfile(staging, lock)
+
+        # A short local README. A project that travels needs to say what it is and what it still
+        # needs, because the person who opens it may not be the person who made it.
+        _identity = lock["template"]
+        (staging / "README.md").write_text(
+            f"# {lock['method']} project (OpenMM)\n\n"
+            f"Generated by the MD-templates OpenMM template. This directory is self-contained: it\n"
+            f"carries its own copy of the template runtime under `runtime/`, so it does not need\n"
+            f"the checkout it came from and a later change to that checkout cannot alter it.\n\n"
+            f"## Method identity\n\n"
+            f"```\n{human_identity(lock)}\n```\n\n"
+            f"`md-template.lock.json` carries the full record, including the resolved-configuration\n"
+            f"hash and a SHA-256 for every exported runtime file.\n\n"
+            f"## Running it\n\n"
+            f"```bash\n"
+            f"./run_all.sh           # every stage in order\n"
+            f"./extend.sh 2          # 2 more production segments, WITHOUT re-equilibrating\n"
+            f"```\n\n"
+            f"Both scripts locate the project from their own path, so they may be invoked from\n"
+            f"anywhere. Set `PYTHON=` to override the interpreter and `MD_DEVICES=` to choose GPUs;\n"
+            f"leaving `MD_DEVICES` unset lets REST2 select the free visible GPUs automatically.\n\n"
+            f"## Prerequisites (NOT bundled)\n\n"
+            f"OpenMM {lock['openmm']['short_version']}, a CUDA driver if running on GPU, and a\n"
+            f"Python interpreter with `openmm` importable. Bundling those would mean vendoring CUDA;\n"
+            f"portability here means this project needs no MD-templates checkout, not that it needs\n"
+            f"no scientific stack.\n\n"
+            f"## Extending\n\n"
+            f"Use `./extend.sh`. Re-running `./run_all.sh` would re-run equilibration, whose new\n"
+            f"endpoint state no longer matches the one production committed against -- the\n"
+            f"continuity contract then refuses the resume, correctly but confusingly.\n",
+            encoding="utf-8")
+
+        run_manifest["template_identity"] = {
+            "lockfile": LOCKFILE_NAME,
+            "repository": lock["template"]["repository"],
+            "commit": lock["template"]["commit"],
+            "release_tag": lock["template"]["release_tag"],
+            "method": lock["method"],
+        }
+        run_manifest["portable_runtime"] = {
+            "directory": "runtime/",
+            "n_files": exported["n_files"],
+            "note": ("a snapshot of md_templates taken at generation time; OpenMM, CUDA and Python "
+                     "remain prerequisites and are NOT bundled"),
         }
         _write_json(staging / "run_manifest.json", run_manifest)
 

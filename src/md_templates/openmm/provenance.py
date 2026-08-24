@@ -128,6 +128,14 @@ def git_state() -> dict[str, Optional[str]]:
             return {"available": False, "commit": None, "dirty": None}
         commit = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
                                 capture_output=True, text=True, timeout=10)
+        # The remote URL and the tag are what let ANOTHER repository cite this method. A commit
+        # alone identifies the tree but not where to get it; a tag alone moves.
+        remote = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
+                                capture_output=True, text=True, timeout=10)
+        tag = subprocess.run(["git", "-C", str(root), "describe", "--tags", "--exact-match"],
+                             capture_output=True, text=True, timeout=10)
+        nearest = subprocess.run(["git", "-C", str(root), "describe", "--tags", "--abbrev=0"],
+                                 capture_output=True, text=True, timeout=10)
         status = subprocess.run(["git", "-C", str(root), "status", "--porcelain"],
                                 capture_output=True, text=True, timeout=30)
         if commit.returncode != 0:
@@ -136,6 +144,11 @@ def git_state() -> dict[str, Optional[str]]:
             "available": True,
             "commit": commit.stdout.strip(),
             "dirty": bool(status.stdout.strip()),
+            # The remote URL and tag are what let ANOTHER repository cite this method: a commit
+            # alone identifies the tree but not where to get it, and a tag alone moves.
+            "remote_url": (remote.stdout.strip() or None) if remote.returncode == 0 else None,
+            "tag": (tag.stdout.strip() or None) if tag.returncode == 0 else None,
+            "nearest_tag": (nearest.stdout.strip() or None) if nearest.returncode == 0 else None,
         }
     except Exception:                              # noqa: BLE001 - never break a run
         return {"available": False, "commit": None, "dirty": None}

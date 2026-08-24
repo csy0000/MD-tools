@@ -276,9 +276,25 @@ recorded here are unaffected** -- they are stage-based and attach barostats thro
 
 ## State
 
-`dev` at `7d053ec`. **985 fast tests pass** under OpenMM 8.6.0 (from 906 at the start). All four
-protocols complete and passing every stated Part 8 gate. The CPU smoke, which was broken on `dev`
-before this work, completes again.
+**Updated after the release work.** This section named `7d053ec` and 985 fast tests, both of which
+were stale within hours -- the figure was correct when written and stopped being so at the next
+commit, which is what a hard-coded count in a journal does.
+
+At the close of the follow-up audit and release work:
+
+| | |
+|---|---|
+| tests | **1038 fast + 168 slow = 1206**, zero failures |
+| OpenMM | 8.6.0, tag commit `c6173db6e8edd705eb59172bd21e9ce69c572405` |
+| protocols | all four complete, every stated Part 8 gate met |
+| CPU smoke | completes; it was broken on `dev` before this work |
+
+The slow suite ran in full (168 passed, 21 minutes) and earned its keep: it caught a test that
+*asserted* the implicit-NVT defect the audit had just fixed, which the fast suite structurally could
+not see.
+
+For the commit that each artefact belongs to, see *Commit roles* above rather than a single figure
+here -- that table does not go stale.
 
 Deliberately out of scope: alchemical transformations, Deeptime/MSM analysis, RGDfV, and any
 production-length run.

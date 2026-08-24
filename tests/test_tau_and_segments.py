@@ -382,5 +382,25 @@ def test_cpu_has_no_device_mapping():
     assert _resolve_replica_devices(_cfg("CPU"), 6) is None
 
 
-def test_no_device_named_means_no_override():
-    assert _resolve_replica_devices(_cfg("CUDA"), 3) is None
+def test_no_device_named_now_selects_devices_automatically(monkeypatch):
+    """Superseded behaviour, deliberately.
+
+    This asserted `is None` -- "name no device and OpenMM picks". That is what let a six-replica
+    ladder quietly run on one card. Naming nothing now means "use the maximum useful number of free
+    visible GPUs", which is min(n_replicas, n_available): one Context per replica, so more devices
+    than replicas cannot be used and more replicas than devices means sharing.
+
+    Mocked, so the assertion is about the rule rather than about whichever GPUs this machine has
+    free at the moment the suite runs.
+    """
+    from md_templates.openmm import gpus
+
+    fake = [{"physical_index": i, "logical_index": i, "uuid": f"GPU-{i:04d}",
+             "name": "FakeGPU", "memory_total_mib": "10240"} for i in range(8)]
+    monkeypatch.setattr(gpus, "visible_devices", lambda: fake)
+    monkeypatch.setattr(gpus, "busy_physical_devices", set)
+
+    assert _resolve_replica_devices(_cfg("CUDA"), 3) == [0, 1, 2]
+    assert _resolve_replica_devices(_cfg("CUDA"), 8) == list(range(8))
+    # ten replicas, eight devices: round-robin, two devices carry two replicas each
+    assert _resolve_replica_devices(_cfg("CUDA"), 10) == [0, 1, 2, 3, 4, 5, 6, 7, 0, 1]

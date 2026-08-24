@@ -67,34 +67,81 @@ def test_a_prepared_bundle_system_carries_no_barostat():
 # -------------------------------------------------------------------------------------------
 # The legacy public path
 # -------------------------------------------------------------------------------------------
-def test_run_md_attaches_exactly_one_barostat_for_an_explicit_npt_system():
-    """The regression test for the defect: NPT label, no barostat, fixed-volume propagation."""
+def _cfg(ensemble, temperature_k=300.0, pressure_bar=1.0, interval=50):
+    return {"production": {"ensemble": ensemble},
+            "integrator": {"temperature_k": temperature_k},
+            "equilibration": {"pressure_bar": pressure_bar, "barostat_interval": interval}}
+
+
+def test_the_propagated_explicit_system_carries_exactly_one_barostat():
+    """BEHAVIOURAL: builds the System that would be propagated and counts its forces.
+
+    This replaces a source-text assertion, which would still have passed if the barostat call were
+    moved behind a condition that never fired. The System is the evidence; the source is not.
+    """
+    from md_templates.openmm.md import attach_production_barostat
+
+    system = _system(periodic=True)
+    assert _barostats(system) == [], "the bundle System must start with none"
+    seed = attach_production_barostat(system, _cfg(EXPLICIT_PRODUCTION_ENSEMBLE), 20260824003)
+    barostats = _barostats(system)
+    assert len(barostats) == 1
+    assert seed is not None
+
+
+def test_the_propagated_implicit_system_carries_no_barostat():
+    """Nothing for a barostat to act on: no box, no volume, no pressure."""
+    from md_templates.openmm.md import attach_production_barostat
+
+    system = _system(periodic=False)
+    seed = attach_production_barostat(system, _cfg(IMPLICIT_PRODUCTION_ENSEMBLE), 20260824003)
+    assert _barostats(system) == []
+    assert seed is None
+
+
+def test_the_propagated_system_integrates_and_the_barostat_is_active():
+    """A Context is built and stepped, so the force is not merely present but usable."""
+    from md_templates.openmm.md import attach_production_barostat
+
+    system = _system(periodic=True)
+    attach_production_barostat(system, _cfg(EXPLICIT_PRODUCTION_ENSEMBLE), 20260824003)
+    integrator = openmm.LangevinMiddleIntegrator(
+        300 * unit.kelvin, 1 / unit.picosecond, 0.001 * unit.picoseconds)
+    context = openmm.Context(system, integrator,
+                             openmm.Platform.getPlatformByName("Reference"))
+    context.setPositions([[0, 0, 0], [0.3, 0, 0], [0, 0.3, 0], [0, 0, 0.3]] * unit.nanometer)
+    context.setVelocitiesToTemperature(300 * unit.kelvin, 4321)
+    integrator.step(50)
+    assert context.getState(getEnergy=True).getPotentialEnergy() is not None
+
+
+def test_a_second_barostat_is_refused_by_the_guard():
+    """Two apply two independent volume moves per step and sample no defined ensemble."""
+    from md_templates.openmm.md import attach_production_barostat
+
+    system = _system(periodic=True)
+    system.addForce(openmm.MonteCarloBarostat(1.0 * unit.bar, 300.0 * unit.kelvin, 50))
+    with pytest.raises(ValueError) as excinfo:
+        attach_production_barostat(system, _cfg(EXPLICIT_PRODUCTION_ENSEMBLE), 20260824003)
+    assert "requires exactly 1" in str(excinfo.value)
+
+
+def test_an_implicit_system_that_somehow_carries_a_barostat_is_refused():
+    from md_templates.openmm.md import attach_production_barostat
+
+    system = _system(periodic=False)
+    system.addForce(openmm.MonteCarloBarostat(1.0 * unit.bar, 300.0 * unit.kelvin, 50))
+    with pytest.raises(ValueError):
+        attach_production_barostat(system, _cfg(IMPLICIT_PRODUCTION_ENSEMBLE), 20260824003)
+
+
+def test_run_md_uses_the_helper_rather_than_attaching_inline():
+    """One implementation, so the behavioural test above covers the public path."""
     import inspect
 
     from md_templates.openmm import md
 
-    source = inspect.getsource(md.run_md)
-    assert "MonteCarloBarostat" in source, (
-        "run_md must attach a barostat; the bundle System has none, so an NPT label without one "
-        "means the run integrates at fixed volume")
-    assert "requires exactly" in source, "run_md must refuse a System with the wrong barostat count"
-
-
-def test_run_md_derives_a_legal_independently_seeded_barostat():
-    """A dated master seed exceeds OpenMM's 32-bit field; arithmetic on it crashes at the Context."""
-    import inspect
-
-    from md_templates.openmm import md
-    from md_templates.openmm.seeds import as_openmm_seed, derive_seed, stage_purpose
-
-    source = inspect.getsource(md.run_md)
-    assert "derive_seed(" in source and "as_openmm_seed(" in source
-
-    seed = as_openmm_seed(derive_seed(20260824003, stage_purpose("cMD", "barostat")))
-    assert 1 <= seed <= 2**31 - 1
-    barostat = openmm.MonteCarloBarostat(1.0 * unit.bar, 300.0 * unit.kelvin, 50)
-    barostat.setRandomNumberSeed(seed)          # must not raise
-    assert barostat.getRandomNumberSeed() == seed
+    assert "attach_production_barostat(" in inspect.getsource(md.run_md)
 
 
 def test_the_barostat_carries_the_configured_pressure_temperature_and_frequency():

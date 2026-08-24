@@ -426,12 +426,22 @@ print(resolve_identity(load_catalog(root), "rest2/openmm/explicit-water").canoni
 # scope: PR 1 does not persist identity anywhere
 # ================================================================================================
 
-def test_identity_is_not_written_into_bundles_or_runs():
-    """The catalog is metadata in PR 1. Nothing in the runtime references it."""
+def test_the_runtime_does_not_depend_on_the_template_catalog():
+    """The catalog is metadata; the simulation runtime must not import it.
+
+    This used to additionally fail on the literal string `template_identity` anywhere in the
+    runtime, under a PR-1 rule that identity was persisted nowhere. That half is superseded: a
+    generated project now records its own identity -- repository, full 40-character commit and
+    release tag -- in `md-template.lock.json`, so another repository can cite the method it used.
+    That is provenance the project writes about ITSELF and needs no catalog.
+
+    The rule that still holds, and that this test protects, is the dependency direction: no runtime
+    module may import `md_templates.core`.
+    """
     runtime = REPO_ROOT / "src" / "md_templates" / "openmm"
     offenders = []
     for path in sorted(runtime.rglob("*.py")):
         text = path.read_text(encoding="utf-8")
-        if "md_templates.core" in text or "from ..core" in text or "template_identity" in text:
+        if "md_templates.core" in text or "from ..core" in text:
             offenders.append(path.relative_to(REPO_ROOT))
-    assert offenders == [], f"runtime modules reference the catalog: {offenders}"
+    assert offenders == [], f"runtime modules import the catalog: {offenders}"

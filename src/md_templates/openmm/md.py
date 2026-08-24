@@ -151,6 +151,48 @@ def _assert_omega_classified(bundle: dict, *, omega_exclusion: bool = True) -> l
                                          bundle.get("omega_central_bonds", []))]
 
 
+def attach_production_barostat(system, cfg: dict, seed: int):
+    """Attach exactly one `MonteCarloBarostat` for NPT, none otherwise. Returns the seed used.
+
+    A prepared bundle's `System` carries NO barostat -- verified on the shipped explicit bundle,
+    whose forces are Harmonic{Bond,Angle}, PeriodicTorsion, Nonbonded, CMAPTorsion and
+    CMMotionRemover -- so an NPT run has to attach one here. Without it the public `md-openmm md`
+    path resolved the ensemble to "NPT", recorded "NPT", and integrated at FIXED VOLUME.
+
+    Separated from `run_md` so the behaviour can be tested on a real System without running
+    dynamics: a source-text assertion would still pass if this call were moved behind a condition
+    that never fired.
+    """
+    from openmm import MonteCarloBarostat, unit
+
+    from .ensembles import EXPLICIT_PRODUCTION_ENSEMBLE
+    from .seeds import as_openmm_seed, derive_seed, stage_purpose
+
+    ensemble = cfg["production"]["ensemble"]
+    used_seed = None
+    if ensemble == EXPLICIT_PRODUCTION_ENSEMBLE:
+        ecfg = cfg.get("equilibration") or {}
+        used_seed = derive_seed(int(seed), stage_purpose("cMD", "barostat"))
+        barostat = MonteCarloBarostat(
+            float(ecfg.get("pressure_bar", 1.0)) * unit.bar,
+            float(cfg["integrator"]["temperature_k"]) * unit.kelvin,
+            int(ecfg.get("barostat_interval", 50)))
+        barostat.setRandomNumberSeed(as_openmm_seed(used_seed))
+        system.addForce(barostat)
+
+    # Exactly one, or none at all. Two apply two independent volume moves per step and sample no
+    # defined ensemble; none, under an NPT label, is a fixed-volume run wearing the wrong name.
+    n_barostats = sum(1 for f in system.getForces() if "Barostat" in f.__class__.__name__)
+    expected = 1 if ensemble == EXPLICIT_PRODUCTION_ENSEMBLE else 0
+    if n_barostats != expected:
+        raise ValueError(
+            f"the propagated System has {n_barostats} barostat(s) but ensemble {ensemble!r} "
+            f"requires exactly {expected}. Two barostats sample no defined ensemble; none, under "
+            f"an NPT label, is a fixed-volume run wearing the wrong name."
+        )
+    return used_seed
+
+
 def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str) -> dict:
     """Stage (c): one free walker at ``production.md.scale_factor``, written in chunks.
 
@@ -186,37 +228,12 @@ def run_md(cfg: dict, system_xml: Path, coords: Path, out_dir: Path, suffix: str
         bundle, omega_exclusion=bool(cfg["rest2"]["omega_exclusion"]))
     system = _scaled_system(base, cfg, n_solute, scale, omega)
 
-    # The barostat. A prepared bundle's System carries NONE -- checked on the shipped explicit
-    # bundle, whose forces are Harmonic{Bond,Angle}, PeriodicTorsion, Nonbonded, CMAPTorsion and
-    # CMMotionRemover -- so an NPT run has to attach one here. Without this the public `md-openmm
-    # md` path resolved the ensemble to "NPT", wrote "NPT" into its records, and then integrated at
-    # FIXED VOLUME: a label with nothing behind it. The stage path attaches its own through
-    # BAROSTAT_STAGES, which is why the four validation runs were unaffected.
+    # The barostat, attached through a helper so a test can construct the PROPAGATED System and
+    # count barostats rather than grepping this function's source. The earlier regression test read
+    # the source text, which would still have passed if the call were moved behind a condition that
+    # never fired.
     ensemble = cfg["production"]["ensemble"]
-    barostat_seed = None
-    if ensemble == ENSEMBLE_NPT:
-        from openmm import MonteCarloBarostat
-
-        ecfg = cfg.get("equilibration") or {}
-        pressure_bar = float(ecfg.get("pressure_bar", 1.0))
-        temperature_k = float(cfg["integrator"]["temperature_k"])
-        interval = int(ecfg.get("barostat_interval", 50))
-        barostat_seed = derive_seed(int(mcfg["seed"]), stage_purpose("cMD", "barostat"))
-        barostat = MonteCarloBarostat(pressure_bar * unit.bar,
-                                      temperature_k * unit.kelvin, interval)
-        barostat.setRandomNumberSeed(as_openmm_seed(barostat_seed))
-        system.addForce(barostat)
-
-    # Exactly one, or none at all. Two would apply two independent volume moves per step and sample
-    # no defined ensemble; a bundle that already carried one would make this the second.
-    n_barostats = sum(1 for f in system.getForces() if "Barostat" in f.__class__.__name__)
-    expected = 1 if ensemble == ENSEMBLE_NPT else 0
-    if n_barostats != expected:
-        raise ValueError(
-            f"the propagated System has {n_barostats} barostat(s) but ensemble {ensemble!r} "
-            f"requires exactly {expected}. Two barostats sample no defined ensemble; none, under "
-            f"an NPT label, is a fixed-volume run wearing the wrong name."
-        )
+    barostat_seed = attach_production_barostat(system, cfg, int(mcfg["seed"]))
 
     dt_fs = float(cfg["integrator"]["timestep_fs"])
     sim = _make_simulation(pdb.topology, system, cfg, int(mcfg["seed"]))

@@ -8,6 +8,7 @@ import contextlib
 import math
 from concurrent.futures import ThreadPoolExecutor
 
+from .gpus import describe_selection, select_devices
 from .seeds import as_openmm_seed, derive_seed, replica_purpose
 from .ensembles import EXPLICIT_PRODUCTION_ENSEMBLE as ENSEMBLE_NPT, validate_ensemble
 import os
@@ -258,13 +259,22 @@ def _resolve_replica_devices(cfg: dict, n_replicas: int) -> Optional[list[int]]:
     visible in the run manifest rather than silently re-dealt.
     """
     pcfg = cfg["production"]
-    if str(pcfg["platform"]) not in ("CUDA", "OpenCL"):
+    platform = str(pcfg["platform"])
+    if platform not in ("CUDA", "OpenCL"):
         return None
-    devices = pcfg.get("device_indices")
-    if not devices:
-        single = pcfg.get("device_index")
-        return None if single is None else [int(single)] * n_replicas
-    return map_replicas_to_devices(n_replicas, [int(d) for d in devices])
+
+    explicit = pcfg.get("device_indices")
+    if not explicit and pcfg.get("device_index") is not None:
+        explicit = [int(pcfg["device_index"])]
+
+    # Automatic when nothing was specified. One Context per replica, so the useful number of
+    # devices is min(n_replicas, n_available) -- never max, which would claim devices that cannot
+    # be used and hide the fact that surplus replicas share.
+    record = select_devices(n_replicas, platform=platform,
+                            explicit=[int(d) for d in explicit] if explicit else None)
+    cfg.setdefault("_resolved", {})["gpu_selection"] = record
+    print(describe_selection(record), flush=True)
+    return record["replica_devices"]
 
 
 def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
@@ -325,6 +335,12 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
     # several replicas may share a device when they outnumber the devices, which is what makes a
     # ten-replica ladder possible on a four-GPU machine.
     device_map = _resolve_replica_devices(cfg, n_replicas)
+    # Persisted beside the run, not only printed. Which physical card carried which replica is part
+    # of what happened, and a log line is not a record a later reader can parse.
+    gpu_record = (cfg.get("_resolved") or {}).get("gpu_selection")
+    if gpu_record is not None:
+        from . import provenance as _prov
+        _prov.write_json(run_dir / "gpu_selection.json", gpu_record)
 
     # Explicit REST2 is NPT replica exchange: one physical pressure, one physical temperature, and
     # a Hamiltonian that differs between replicas. Each replica therefore carries its OWN barostat.
@@ -562,7 +578,8 @@ def run_rest2_remd(cfg: dict, system_xml: Path, coords: Path, out_dir: Path,
                 )
             t0 = time.time()
             for _ in range(rounds_per_chunk):
-                propagate_replicas(simulations, exchange_steps, executor=propagation_pool)
+                propagate_replicas(simulations, exchange_steps, executor=propagation_pool,
+                                   device_of=device_map)
                 for i, j in exchange_pairs(n_replicas, phase):
                     result = attempt_rest2_exchange(simulations[i], simulations[j], beta0, rng,
                                              pressure_bar=pressure_bar)
@@ -696,7 +713,7 @@ def replica_propagation_pool(n_replicas: int):
         pool.shutdown(wait=True)
 
 
-def propagate_replicas(simulations, steps: int, executor=None) -> None:
+def propagate_replicas(simulations, steps: int, executor=None, device_of=None) -> None:
     """Advance every replica by `steps`, concurrently when an executor is supplied.
 
     Replicas between exchanges are independent: each owns its System, Context, integrator and RNG
@@ -718,7 +735,23 @@ def propagate_replicas(simulations, steps: int, executor=None) -> None:
         for sim in simulations:
             sim.step(steps)
         return
-    list(executor.map(lambda sim: sim.step(steps), simulations))
+    if not device_of:
+        list(executor.map(lambda sim: sim.step(steps), simulations))
+        return
+
+    # Replicas sharing a device are stepped SEQUENTIALLY by one worker. Two workers on one GPU do
+    # not halve the work -- they interleave kernels on the same card and add context-switching to
+    # it -- so the grouping is by device, one worker per device, concurrency across devices only.
+    groups: dict[int, list] = {}
+    for index, sim in enumerate(simulations):
+        groups.setdefault(device_of[index], []).append(sim)
+
+    def _step_group(group):
+        for sim in group:
+            sim.step(steps)
+
+    # Drained before returning, so the barrier holds however replicas are distributed.
+    list(executor.map(_step_group, list(groups.values())))
 
 
 def exchange_pairs(n_replicas: int, phase: int) -> list[tuple[int, int]]:

@@ -1613,7 +1613,12 @@ def test_the_launcher_survives_a_relative_pythonpath_in_the_environment():
     from md_templates.openmm import input_gen
 
     body = input_gen._stage_launcher("min", Path("/usr/bin/python3"), "/abs/path/src")
-    assert 'PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}/abs/path/src"' in body
+    # The property is the APPEND, not which path is appended. What gets appended is now the
+    # project's own runtime snapshot addressed through $PROJECT -- itself derived from
+    # BASH_SOURCE[0], so it is absolute however the script was invoked -- rather than the absolute
+    # path of the generating checkout, which made the project unmovable.
+    assert 'PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$PROJECT/runtime"' in body
+    assert "/abs/path/src" not in body, "a generated launcher must not name the source checkout"
     assert ': "${PYTHONPATH:=' not in body, "defaulting silently loses to a relative value"
 
 
