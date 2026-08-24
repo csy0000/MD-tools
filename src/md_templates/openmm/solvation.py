@@ -339,7 +339,8 @@ def resolve_packing_model(water_model: str) -> tuple[str, bool]:
 
 
 #: `Modeller.addSolvent` chooses WHICH water molecules to replace with ions using Python's global
-#: `random`, and OpenMM 8.5.2 exposes no `randomSeed` parameter to control it. Unseeded, two builds
+#: `random`, and neither OpenMM 8.5.2 nor 8.6.0 exposes a `randomSeed` parameter to control it
+#: (`addSolvent` still takes no such argument in 8.6.0). Unseeded, two builds
 #: from byte-identical configuration produce different bundles: the same water count and the same
 #: Hamiltonian in form, but different coordinates and different ion sites, so `system.xml` and
 #: `topology.pdb` never match. That silently undercuts every bundle hash, relocation check and

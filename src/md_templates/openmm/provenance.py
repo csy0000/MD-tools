@@ -147,6 +147,90 @@ def sqm_path() -> Optional[str]:
     return str(Path(found).resolve()) if found else None
 
 
+#: The OpenMM release this repository is tested against, as the exact stable version string.
+SUPPORTED_OPENMM_VERSION = "8.6.0"
+
+#: The commit the upstream ``8.6.0`` tag points at, verified against
+#: ``api.github.com/repos/openmm/openmm/git/ref/tags/8.6.0``.
+#:
+#: This is the field that actually establishes identity. A string comparison against "8.6.0" would
+#: accept any build claiming that number; the tag commit is what distinguishes the release from a
+#: development snapshot taken near it.
+SUPPORTED_OPENMM_GIT_REVISION = "c6173db6e8edd705eb59172bd21e9ce69c572405"
+
+
+def openmm_identity() -> dict[str, Any]:
+    """Every version string OpenMM reports about itself, kept apart on purpose.
+
+    OpenMM's packaged ``version.py`` carries ``release = False`` on the official conda-forge and
+    PyPI builds, so ``version`` and ``full_version`` gain a ``.dev-<short sha>`` suffix *even for
+    the tagged release*: 8.5.2 reports ``8.5.2.dev-36a30cb`` and 8.6.0 reports
+    ``8.6.0.dev-c6173db``, where each short sha is that release's own tag commit. It is a build
+    stamp, not evidence of a development snapshot.
+
+    Reading `version` and concluding "this is a dev build" is therefore wrong, and reading it and
+    recording it as "8.6.0" would be a false record. Both strings are kept:
+
+    * ``short_version`` -- the exact stable release string, and the one to compare against;
+    * ``full_version`` -- what the build actually reports, recorded verbatim so a manifest never
+      claims a version the installation did not state;
+    * ``git_revision`` -- the identity that matters, checked against the tag.
+    """
+    try:
+        import openmm
+        import openmm.version as v
+    except Exception as exc:                       # noqa: BLE001
+        return {"available": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "available": True,
+        "short_version": getattr(v, "short_version", None),
+        "version": getattr(v, "version", None),
+        "full_version": getattr(v, "full_version", None),
+        "git_revision": getattr(v, "git_revision", None),
+        "release_flag": getattr(v, "release", None),
+        "library_path": getattr(v, "openmm_library_path", None),
+        "dist_metadata_version": _version("openmm"),
+        "platforms": openmm_platforms(),
+        "plugin_load_failures": list(openmm.Platform.getPluginLoadFailures()),
+    }
+
+
+def check_openmm_version(expected_version: str = SUPPORTED_OPENMM_VERSION,
+                         expected_revision: Optional[str] = SUPPORTED_OPENMM_GIT_REVISION,
+                         ) -> tuple[bool, str]:
+    """``(ok, message)`` for "is this the OpenMM release this repository is validated against?".
+
+    Both halves are required. ``short_version`` alone would pass a rebuild of any commit that calls
+    itself 8.6.0; ``git_revision`` alone would not notice a package whose Python layer disagrees
+    with its compiled library.
+    """
+    identity = openmm_identity()
+    if not identity.get("available"):
+        return False, f"OpenMM is not importable: {identity.get('error')}"
+
+    short = identity.get("short_version")
+    revision = identity.get("git_revision")
+    problems = []
+    if short != expected_version:
+        problems.append(
+            f"short_version is {short!r}, expected {expected_version!r}")
+    if expected_revision and revision != expected_revision:
+        problems.append(
+            f"git_revision is {revision!r}, expected {expected_revision!r} "
+            f"(the commit the {expected_version} tag points at)")
+    if problems:
+        return False, (
+            "this is not the validated OpenMM build: " + "; ".join(problems)
+            + f".  Reported full_version: {identity.get('full_version')!r}.  A '.dev-<sha>' suffix "
+              "on full_version is normal for an official release and is not itself a failure -- "
+              "compare short_version and git_revision instead."
+        )
+    return True, (
+        f"OpenMM {short} (reported {identity.get('full_version')!r}, "
+        f"tag commit {revision[:7]}), platforms {identity.get('platforms')}"
+    )
+
+
 def openmm_platforms() -> list[str]:
     try:
         import openmm
@@ -212,6 +296,7 @@ def environment_block() -> dict[str, Any]:
         "python": sys.version.split()[0],
         "toolchain": toolchain_versions(),
         "sqm_path": sqm_path(),
+        "openmm": openmm_identity(),
         "openmm_platforms": openmm_platforms(),
         "hardware": hardware(),
     }

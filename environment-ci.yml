@@ -52,9 +52,10 @@ dependencies:
   - git
 
   # --- simulation engine -----------------------------------------------------------------------
-  # 8.5.1 supplies both Modeller.addSolvent(boxShape=...) and
-  # DCDReporter(atomSubset=..., enforcePeriodicBox=...), which the baseline depends on.
-  - openmm=8.5.1
+  # 8.5.1 first supplied Modeller.addSolvent(boxShape=...) and
+  # DCDReporter(atomSubset=..., enforcePeriodicBox=...), which the baseline depends on; both are
+  # still present in 8.6.0. The pin is 8.6.0 because that is the release the suite is run under.
+  - openmm=8.6.0
   - openmmtools=0.26.0        # NEQ integrators; not used by this template
 
   # LINUX / CUDA environment.  For a CPU-only or non-NVIDIA machine, DELETE the next line --

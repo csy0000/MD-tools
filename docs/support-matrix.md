@@ -8,7 +8,7 @@ gates it, and is described as *locally verified* until then.
 | | version | status |
 |---|---|---|
 | Python | 3.11 | gated by `fast` and `integration-cpu`; locally verified on 3.11.15 |
-| OpenMM | 8.5.1 | locally verified; pinned by `environment-ci.yml` |
+| OpenMM | 8.6.0 | locally verified; pinned by `environment-ci.yml`; identity checked by `short_version` + tag commit `c6173db` |
 | pydantic | ≥ 2 (2.11.10 locally) | gated by the unit suite |
 | OS | ubuntu-latest (CI), Linux x86-64 (local) | no other OS is claimed |
 | Accelerator | **CPU only** | CUDA is neither required nor tested here |

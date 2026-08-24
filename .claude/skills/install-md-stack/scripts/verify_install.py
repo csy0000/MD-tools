@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Verify an Amber26/AmberTools26 and OpenMM 8.5.2 installation."""
+"""Verify an Amber26/AmberTools26 and OpenMM 8.6.0 installation."""
+
+EXPECTED_OPENMM_VERSION = "8.6.0"
+EXPECTED_OPENMM_REVISION = "c6173db6e8edd705eb59172bd21e9ce69c572405"
 
 from __future__ import annotations
 
@@ -42,7 +45,12 @@ platforms = []
 for index in range(openmm.Platform.getNumPlatforms()):
     platform = openmm.Platform.getPlatform(index)
     platforms.append({"name": platform.getName(), "speed": platform.getSpeed()})
-print(json.dumps({"version": openmm.__version__, "platforms": platforms}))
+import openmm.version as _v
+# `openmm.__version__` is NOT a stable identity: 8.5.2 reported "8.5.2" but 8.6.0 reports
+# "8.6" (major.minor only), so an equality check against it breaks across releases.
+# `short_version` is the exact stable string in both; `git_revision` is what pins the build.
+print(json.dumps({"version": _v.short_version, "full_version": _v.full_version,
+                  "git_revision": _v.git_revision, "platforms": platforms}))
 '''
     result = run([str(python), "-c", code], timeout=60)
     if result.get("ok"):
@@ -99,7 +107,7 @@ def main() -> int:
         help="Licensed PMEMD install prefix; defaults to AMBERHOME for a combined installation",
     )
     parser.add_argument("--python", required=True,
-                        help="Python executable from the OpenMM 8.5.2 environment")
+                        help="Python executable from the OpenMM 8.6.0 environment")
     parser.add_argument("--require-cuda", action="store_true")
     parser.add_argument(
         "--require-cuda-mpi", action="store_true",
@@ -136,8 +144,15 @@ def main() -> int:
         errors.append(f"missing executable: {pmemdhome / 'bin' / 'pmemd'}")
     if not openmm.get("ok"):
         errors.append("OpenMM import/platform probe failed")
-    elif (openmm.get("data") or {}).get("version") != "8.5.2":
-        errors.append(f"OpenMM version is {(openmm.get('data') or {}).get('version')!r}, expected '8.5.2'")
+    elif (openmm.get("data") or {}).get("version") != EXPECTED_OPENMM_VERSION:
+        errors.append(f"OpenMM version is {(openmm.get('data') or {}).get('version')!r}, "
+                      f"expected {EXPECTED_OPENMM_VERSION!r}")
+    elif (openmm.get("data") or {}).get("git_revision") != EXPECTED_OPENMM_REVISION:
+        errors.append(
+            f"OpenMM git_revision is {(openmm.get('data') or {}).get('git_revision')!r}, expected "
+            f"{EXPECTED_OPENMM_REVISION!r} (the commit the {EXPECTED_OPENMM_VERSION} tag points at). "
+            f"A '.dev-<sha>' suffix on full_version is normal for an official release; the tag "
+            f"commit is what separates the release from a snapshot taken near it.")
     require_cuda = args.require_cuda or args.require_cuda_mpi
     if require_cuda:
         if not (programs["pmemd.cuda"]["exists"] and programs["pmemd.cuda"]["executable"]):

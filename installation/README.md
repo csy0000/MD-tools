@@ -1,4 +1,4 @@
-# Installing Amber26, AmberTools26, and OpenMM 8.5.2
+# Installing Amber26, AmberTools26, and OpenMM 8.6.0
 
 This guide prepares one Linux machine for the reproducibility comparison in this repository. It
 installs:
@@ -6,7 +6,7 @@ installs:
 - AmberTools26;
 - licensed Amber26/`pmemd` components supplied by the user;
 - `pmemd.cuda.MPI` for replica exchange and other multi-GPU Amber methods;
-- OpenMM 8.5.2 in an isolated Python environment.
+- OpenMM 8.6.0 in an isolated Python environment.
 
 CUDA is preferred on a compatible NVIDIA GPU. CPU is the fallback. OpenCL is not selected
 automatically; use it only when CUDA is unavailable and you intentionally choose it.
@@ -27,7 +27,7 @@ start to finish.
   - [Choosing a CUDA version](#choosing-a-cuda-version)
 - [3. Inspect both archives safely](#3-inspect-both-archives-safely)
 - [4. Create a clean directory layout](#4-create-a-clean-directory-layout)
-- [5. Install OpenMM 8.5.2](#5-install-openmm-852)
+- [5. Install OpenMM 8.6.0](#5-install-openmm-852)
 - [6. Install AmberTools26 and licensed Amber26/pmemd](#6-install-ambertools26-and-licensed-amber26pmemd)
 - [7. Create an optional activation script](#7-create-an-optional-activation-script)
 - [8. Validate the complete stack](#8-validate-the-complete-stack)
@@ -231,7 +231,7 @@ The intended result is:
   build/pmemd26/          out-of-source licensed PMEMD build files
   ambertools26/           installed AMBERHOME
   pmemd26/                installed PMEMDHOME
-  envs/openmm-8.5.2/      isolated OpenMM environment
+  envs/openmm-8.6.0/      isolated OpenMM environment
   logs/                   build and test logs
   manifests/              installation provenance
   activate-md-stack.sh    optional activation helper
@@ -239,7 +239,7 @@ The intended result is:
 
 Keep all build products outside the MD-templates repository.
 
-## 5. Install OpenMM 8.5.2
+## 5. Install OpenMM 8.6.0
 
 Use one of the following routes, not both. The conda-compatible route is generally easier to
 reproduce. OpenMM's official installation guide documents both conda and pip installation and the
@@ -250,9 +250,9 @@ CUDA package choices.
 The CPU-capable baseline environment is:
 
 ```bash
-micromamba create -p "$MD_STACK_PREFIX/envs/openmm-8.5.2" \
+micromamba create -p "$MD_STACK_PREFIX/envs/openmm-8.6.0" \
   -c conda-forge \
-  python=3.11 openmm=8.5.2
+  python=3.11 openmm=8.6.0
 ```
 
 Replace `micromamba` with `mamba` or `conda` if that is your selected manager. For a CUDA-targeted
@@ -260,9 +260,9 @@ environment, add a compatible constraint such as `cuda-version=12` only after ch
 detected NVIDIA driver supports it:
 
 ```bash
-micromamba create -p "$MD_STACK_PREFIX/envs/openmm-8.5.2" \
+micromamba create -p "$MD_STACK_PREFIX/envs/openmm-8.6.0" \
   -c conda-forge \
-  python=3.11 openmm=8.5.2 cuda-version=12
+  python=3.11 openmm=8.6.0 cuda-version=12
 ```
 
 Treat `cuda-version=12` as an example family, not a promise that every driver supports it. Review
@@ -271,7 +271,7 @@ the solver's proposed packages before confirming.
 Activate and test:
 
 ```bash
-micromamba activate "$MD_STACK_PREFIX/envs/openmm-8.5.2"
+micromamba activate "$MD_STACK_PREFIX/envs/openmm-8.6.0"
 python -c 'import openmm; print(openmm.__version__)'
 python -m openmm.testInstallation
 ```
@@ -279,7 +279,7 @@ python -m openmm.testInstallation
 If your shell is not initialized for activation, use:
 
 ```bash
-micromamba run -p "$MD_STACK_PREFIX/envs/openmm-8.5.2" \
+micromamba run -p "$MD_STACK_PREFIX/envs/openmm-8.6.0" \
   python -m openmm.testInstallation
 ```
 
@@ -288,23 +288,23 @@ micromamba run -p "$MD_STACK_PREFIX/envs/openmm-8.5.2" \
 For an NVIDIA/CUDA installation compatible with the CUDA 12 package family:
 
 ```bash
-python3 -m venv "$MD_STACK_PREFIX/envs/openmm-8.5.2"
-"$MD_STACK_PREFIX/envs/openmm-8.5.2/bin/python" -m pip install --upgrade pip
-"$MD_STACK_PREFIX/envs/openmm-8.5.2/bin/python" -m pip install \
-  'openmm[cuda12]==8.5.2'
+python3 -m venv "$MD_STACK_PREFIX/envs/openmm-8.6.0"
+"$MD_STACK_PREFIX/envs/openmm-8.6.0/bin/python" -m pip install --upgrade pip
+"$MD_STACK_PREFIX/envs/openmm-8.6.0/bin/python" -m pip install \
+  'openmm[cuda12]==8.6.0'
 ```
 
 OpenMM also documents a CUDA 13 extra. Choose it only when the installed driver is compatible. For
 a CPU installation use:
 
 ```bash
-"$MD_STACK_PREFIX/envs/openmm-8.5.2/bin/python" -m pip install 'openmm==8.5.2'
+"$MD_STACK_PREFIX/envs/openmm-8.6.0/bin/python" -m pip install 'openmm==8.6.0'
 ```
 
 Test either pip installation:
 
 ```bash
-"$MD_STACK_PREFIX/envs/openmm-8.5.2/bin/python" \
+"$MD_STACK_PREFIX/envs/openmm-8.6.0/bin/python" \
   -m openmm.testInstallation
 ```
 
@@ -454,7 +454,7 @@ unset PYTHONPATH
 
 # Expose OpenMM explicitly rather than putting its bin on PATH, so exactly one
 # `python` is in scope instead of two whose precedence depends on source order.
-export MD_OPENMM_PYTHON=/absolute/path/to/md-stack/envs/openmm-8.5.2/bin/python
+export MD_OPENMM_PYTHON=/absolute/path/to/md-stack/envs/openmm-8.6.0/bin/python
 
 # Stable GPU numbering. Without this, CUDA device indices are ordered by compute
 # capability and can move between reboots -- which matters on mixed-GPU machines.
@@ -475,7 +475,8 @@ new shell.
 
 ## 8. Validate the complete stack
 
-The validator checks the required Amber executables, imports exactly OpenMM 8.5.2, lists OpenMM
+The validator checks the required Amber executables, imports OpenMM and pins it by exact stable
+version string and tag commit, lists OpenMM
 platforms, runs OpenMM's self-test, and—when requested—requires `pmemd.cuda`, `pmemd.cuda.MPI`, an
 MPI/scheduler launcher, and OpenMM CUDA:
 
@@ -483,7 +484,7 @@ MPI/scheduler launcher, and OpenMM CUDA:
 python3 .claude/skills/install-md-stack/scripts/verify_install.py \
   --amberhome "$MD_STACK_PREFIX/ambertools26" \
   --pmemdhome "$MD_STACK_PREFIX/pmemd26" \
-  --python "$MD_STACK_PREFIX/envs/openmm-8.5.2/bin/python" \
+  --python "$MD_STACK_PREFIX/envs/openmm-8.6.0/bin/python" \
   --require-cuda-mpi \
   --mpi-launcher mpirun \
   --output "$MD_STACK_PREFIX/manifests/validation.json"
@@ -501,7 +502,11 @@ Success requires all of the following:
 - `pmemd.cuda.MPI` and the intended launcher exist for replica exchange/multi-GPU Amber;
 - `make test.parallel` passes with the rank counts needed for replica-exchange coverage;
 - `make test.cuda.parallel` and `make test.cuda.parallel.SPFP` pass with one rank per visible GPU;
-- OpenMM reports version `8.5.2`;
+- OpenMM reports `openmm.version.short_version == "8.6.0"` and
+  `git_revision == "c6173db6e8edd705eb59172bd21e9ce69c572405"` (the commit the 8.6.0 tag points
+  at). `full_version` reports `8.6.0.dev-c6173db`: the official builds ship `release = False`, so
+  a `.dev-<sha>` suffix is normal for a tagged release and is not a development snapshot. Do not
+  check `openmm.__version__` -- 8.5.2 reported `8.5.2` but 8.6.0 reports `8.6`;
 - OpenMM reports the CUDA platform when CUDA was selected;
 - `python -m openmm.testInstallation` passes;
 - the appropriate Amber release tests pass.
@@ -528,7 +533,7 @@ of the entire process environment.
 For a conda-compatible environment, also export an explicit package record:
 
 ```bash
-micromamba list -p "$MD_STACK_PREFIX/envs/openmm-8.5.2" --explicit \
+micromamba list -p "$MD_STACK_PREFIX/envs/openmm-8.6.0" --explicit \
   > "$MD_STACK_PREFIX/manifests/openmm-explicit.txt"
 ```
 
@@ -611,7 +616,7 @@ to the alanine-dipeptide equivalence test:
 - 10 ps NVT with the same restraints;
 - 10 ps NPT with the same restraints;
 - 1 ns NPT production;
-- matched Amber26 and OpenMM 8.5.2 settings and recorded provenance.
+- matched Amber26 and OpenMM 8.6.0 settings and recorded provenance.
 
 Installation validation proves that both engines run; the alanine test then checks whether the two
 templates describe the same scientific protocol.

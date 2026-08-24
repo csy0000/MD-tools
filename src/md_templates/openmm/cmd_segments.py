@@ -382,7 +382,8 @@ def close_reporters(sim) -> None:
 def read_restart_position(sim) -> dict:
     """What the restart ACTUALLY restored: the step and time now in the Context.
 
-    `Simulation.currentStep` is a property over `Context.getStepCount()` in OpenMM 8.5.2 -- reading
+    `Simulation.currentStep` is a property over `Context.getStepCount()` in OpenMM 8.5.2 and 8.6.0
+    (re-verified on 8.6.0) -- reading
     it is reading the Context, and *assigning* it calls `Context.setStepCount`. That is why nothing
     may be assigned before this is read: an assignment overwrites the very value to be checked, and
     the comparison that follows then compares the commit against itself.

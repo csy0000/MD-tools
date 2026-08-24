@@ -14,7 +14,7 @@ its box vectors from the *topology*, so a selected-atom trajectory written with
 ``enforcePeriodicBox=False`` still carries a unit cell when the topology has one. The only reliable
 source is the flag in the file, which is what this module reads.
 
-## The format, as OpenMM 8.5.2 writes it
+## The format, as OpenMM writes it (verified on 8.5.2 and 8.6.0)
 
 ::
 

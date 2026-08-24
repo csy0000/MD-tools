@@ -9,7 +9,7 @@ archive layout, CMake options, CUDA compatibility, and test targets.
 - [Information to collect](#information-to-collect)
 - [Suggested layout](#suggested-layout)
 - [Backend decision matrix](#backend-decision-matrix)
-- [OpenMM 8.5.2 patterns](#openmm-852-patterns)
+- [OpenMM 8.6.0 patterns](#openmm-852-patterns)
 - [Amber archive and build pattern](#amber-archive-and-build-pattern)
 - [Activation pattern](#activation-pattern)
 - [Validation and manifest](#validation-and-manifest)
@@ -40,7 +40,7 @@ For a selected prefix named `<PREFIX>`, propose distinct directories:
   build/pmemd26/        # out-of-source licensed PMEMD build
   ambertools26/         # installed AMBERHOME
   pmemd26/              # installed PMEMDHOME; omit only for a documented combined install
-  envs/openmm-8.5.2/    # isolated OpenMM environment
+  envs/openmm-8.6.0/    # isolated OpenMM environment
   logs/                 # configure, build, test, and validation logs
   manifests/            # redacted machine-readable provenance
   activate-md-stack.sh  # optional activation script
@@ -64,7 +64,7 @@ Do not infer Amber CUDA build readiness merely from the presence of `nvidia-smi`
 and source-built Amber have different CUDA prerequisites. Likewise, the existence of `mpirun` alone
 does not prove that `pmemd.cuda.MPI` was built against a compatible MPI library.
 
-## OpenMM 8.5.2 patterns
+## OpenMM 8.6.0 patterns
 
 Prefer an isolated prefix environment and pin the version exactly. Choose only one package-manager
 route.
@@ -74,9 +74,9 @@ route.
 Use micromamba, mamba, or conda according to the user's choice. For example:
 
 ```bash
-micromamba create -p <PREFIX>/envs/openmm-8.5.2 -c conda-forge \
-  python=3.11 openmm=8.5.2
-micromamba run -p <PREFIX>/envs/openmm-8.5.2 \
+micromamba create -p <PREFIX>/envs/openmm-8.6.0 -c conda-forge \
+  python=3.11 openmm=8.6.0
+micromamba run -p <PREFIX>/envs/openmm-8.6.0 \
   python -m openmm.testInstallation
 ```
 
@@ -89,14 +89,14 @@ Do not assume that the locally installed `nvcc` version must equal the environme
 Use this only when the user chooses pip/venv:
 
 ```bash
-python3 -m venv <PREFIX>/envs/openmm-8.5.2
-<PREFIX>/envs/openmm-8.5.2/bin/python -m pip install --upgrade pip
-<PREFIX>/envs/openmm-8.5.2/bin/python -m pip install 'openmm[cuda12]==8.5.2'
-<PREFIX>/envs/openmm-8.5.2/bin/python -m openmm.testInstallation
+python3 -m venv <PREFIX>/envs/openmm-8.6.0
+<PREFIX>/envs/openmm-8.6.0/bin/python -m pip install --upgrade pip
+<PREFIX>/envs/openmm-8.6.0/bin/python -m pip install 'openmm[cuda12]==8.6.0'
+<PREFIX>/envs/openmm-8.6.0/bin/python -m openmm.testInstallation
 ```
 
 The `cuda12` extra is an example, not a universal choice. Use the compatible CUDA extra available
-for OpenMM 8.5.2 and the detected driver. For a CPU installation use `openmm==8.5.2`; do not claim
+for OpenMM 8.6.0 and the detected driver. For a CPU installation use `openmm==8.6.0`; do not claim
 CUDA success unless the test reports the CUDA platform.
 
 ## Amber archive and build pattern
@@ -135,7 +135,7 @@ export AMBERHOME=<PREFIX>/ambertools26
 source "$AMBERHOME/amber.sh"
 export PMEMDHOME=<PREFIX>/pmemd26
 source "$PMEMDHOME/amber.sh"
-export PATH=<PREFIX>/envs/openmm-8.5.2/bin:"$PATH"
+export PATH=<PREFIX>/envs/openmm-8.6.0/bin:"$PATH"
 ```
 
 Use shell-safe quoting for the real prefix. Do not put credentials, archive locations, or host
@@ -149,7 +149,7 @@ Validate the exact executables and environment that the activation script select
 python scripts/verify_install.py \
   --amberhome <PREFIX>/ambertools26 \
   --pmemdhome <PREFIX>/pmemd26 \
-  --python <PREFIX>/envs/openmm-8.5.2/bin/python \
+  --python <PREFIX>/envs/openmm-8.6.0/bin/python \
   --require-cuda-mpi \
   --mpi-launcher mpirun \
   --output <PREFIX>/manifests/validation.json

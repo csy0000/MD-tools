@@ -1,6 +1,6 @@
 ---
 name: install-md-stack
-description: Inspect a Linux workstation and safely install or validate Amber26, AmberTools26, and OpenMM 8.5.2, including pmemd.cuda.MPI for replica exchange and multi-GPU Amber workflows. Use when a user asks to prepare an MD machine, install Amber/OpenMM, inspect CPU/RAM/disk/NVIDIA/CUDA/MPI resources, choose an installation prefix, validate user-supplied Amber or pmemd archives, prefer CUDA over OpenCL, or diagnose an incomplete MD software installation.
+description: Inspect a Linux workstation and safely install or validate Amber26, AmberTools26, and OpenMM 8.6.0, including pmemd.cuda.MPI for replica exchange and multi-GPU Amber workflows. Use when a user asks to prepare an MD machine, install Amber/OpenMM, inspect CPU/RAM/disk/NVIDIA/CUDA/MPI resources, choose an installation prefix, validate user-supplied Amber or pmemd archives, prefer CUDA over OpenCL, or diagnose an incomplete MD software installation.
 ---
 
 # Install the MD stack
@@ -79,9 +79,9 @@ Run the machine and archive inspectors. Read `references/installation-reference.
   wrappers, launcher/scheduler environment, and enough visible GPUs for the intended rank layout;
 - CPU-only readiness: C/C++/Fortran compilers, CMake, build tool, Python, and sufficient disk.
 
-### 2. Install OpenMM 8.5.2
+### 2. Install OpenMM 8.6.0
 
-Create an isolated environment under the chosen prefix. Pin `openmm==8.5.2`. Prefer the official CUDA package path compatible with the detected driver; do not install a newer CUDA runtime than the driver can support. Install the CPU/OpenCL-only package only when CUDA is not selected.
+Create an isolated environment under the chosen prefix. Pin `openmm==8.6.0`. Prefer the official CUDA package path compatible with the detected driver; do not install a newer CUDA runtime than the driver can support. Install the CPU/OpenCL-only package only when CUDA is not selected.
 
 Verify with:
 

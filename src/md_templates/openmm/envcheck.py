@@ -95,6 +95,16 @@ def run_checks(
             module, why, level_if_missing="error" if route == "smiles" else "warning"
         ))
 
+    # Version identity before platforms: a platform list from the wrong OpenMM build is a report
+    # about the wrong software. A mismatch is a warning rather than an error because the package
+    # runs on neighbouring releases -- what must not happen is running on one and recording another.
+    version_ok, version_msg = provenance.check_openmm_version()
+    checks.append(Check(
+        "openmm version",
+        "ok" if version_ok else "warning",
+        version_msg,
+    ))
+
     platforms = provenance.openmm_platforms()
     checks.append(Check(
         "openmm platforms",
