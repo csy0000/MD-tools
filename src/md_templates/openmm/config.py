@@ -82,11 +82,21 @@ DEFAULTS: dict[str, Any] = {
         "water_model": "opc",
         "box_shape": "dodecahedron",
         "padding_nm": 1.2,
-        # "solute-image-gap": padding means what it says -- at least padding_nm of solvent between
-        #   the solute and its nearest periodic image.  "openmm": Modeller.addSolvent's own
-        #   padding semantics, width = max(2*radius + padding, 2*padding), which for a compact
-        #   solute in a dodecahedron delivers far less separation than padding_nm.  See the doc.
-        "padding_semantics": "solute-image-gap",
+        # "openmm" reproduces Modeller.addSolvent exactly: a bounding-sphere radius is taken about
+        #   the centre of the solute's axis-aligned bounding box, and the box WIDTH is set to
+        #   max(2*radius + padding, 2*padding).  This is the default so that a box built here is the
+        #   box OpenMM would have built, and `padding` means to a reader what the OpenMM
+        #   documentation says it means.
+        # "solute-image-gap" instead solves for the width that delivers `padding_nm` of clearance
+        #   between the solute and its nearest periodic image.  The two differ in any non-cubic box,
+        #   because OpenMM's padding sizes the WIDTH while the minimum image distance is
+        #   width/sqrt(2) for a dodecahedron -- so `padding = 1.2` there gives roughly 0.4 nm of
+        #   real clearance, not 1.2.
+        #
+        # Under "openmm", `cutoff_fit_policy` usually becomes the binding constraint: the box is
+        # grown until the minimum image clears 2*cutoff by minimum_image_margin_nm.  If a run ever
+        # aborts with OpenMM's minimum-image error, raise that MARGIN, not the padding.
+        "padding_semantics": "openmm",
         # the minimum image distance must be at least 2x the nonbonded cutoff (an OpenMM hard
         # requirement).  "grow" enlarges the box to satisfy it and records both values; "refuse"
         # stops and reports the padding that would work.

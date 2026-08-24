@@ -42,7 +42,7 @@
     "water_model": "opc",
     "box_shape": "dodecahedron",
     "padding_nm": 1.2,
-    "padding_semantics": "solute-image-gap",
+    "padding_semantics": "openmm",
     "cutoff_fit_policy": "grow",
     "ionic_strength_molar": 0.15,
     "positive_ion": "Na+",
