@@ -207,3 +207,93 @@ def test_an_explicitly_chosen_cpu_is_allowed_without_a_pin():
     from md_templates.openmm.equilibration import assert_dynamics_platform
 
     assert_dynamics_platform({"production": {"platform": "CPU"}}, "cMD_1")
+
+
+# -------------------------------------------------------------------------------------------
+# The unrestrained implicit equilibration phase (protocol.equilibration.free)
+#
+# Restrained dynamics equilibrates the solvent response around a HELD solute; the solute's own
+# conformational relaxation only begins once the restraint is released. A protocol with only a
+# restrained phase therefore enters production still relaxing. `free` is the implicit spelling of
+# that phase, and is deliberately not called `nvt` or `npt_free`: both name a volume, and an
+# implicit system has none.
+# -------------------------------------------------------------------------------------------
+def test_the_implicit_free_stage_appears_only_when_requested():
+    """A stage generated with zero steps is a directory that looks like a completed phase."""
+    from md_templates.openmm.input_gen import stage_order_for
+
+    assert stage_order_for("implicit", "md") == ("min", "eq", "cMD_1")
+    assert stage_order_for("implicit", "md", implicit_free_equilibration=True) == (
+        "min", "eq", "eq_free", "cMD_1")
+    assert stage_order_for("implicit", "rest2", implicit_free_equilibration=True) == (
+        "min", "eq", "eq_free", "cMD_1", "REST2_1")
+
+
+def test_the_free_stage_is_neither_restrained_nor_barostatted():
+    """It is the UNrestrained phase, and implicit solvent has nothing for a barostat to act on."""
+    from md_templates.openmm.input_gen import BAROSTAT_STAGES, RESTRAINED_STAGES
+
+    assert "eq" in RESTRAINED_STAGES
+    assert "eq_free" not in RESTRAINED_STAGES
+    assert "eq_free" not in BAROSTAT_STAGES
+
+
+def test_explicit_solvent_refuses_the_implicit_spelling():
+    """Two field names for one stage drift apart the moment one acquires a default."""
+    pytest.importorskip("pydantic")
+    import copy
+
+    from md_templates.openmm.spec.models import SimulationSpec
+    from md_templates.openmm.spec.resolve import load_profile
+
+    defaults = copy.deepcopy(load_profile("explicit-md-peptide-v2")["defaults"])
+    # profiles carry build/protocol/execution; `system` is the caller's and is supplied here
+    defaults["system"] = {"system_id": "ace_ala_nme", "route": "pdb",
+                          "pdb": "ace_ala_nme.pdb"}
+    # valid as it stands, so the failure below is attributable to the one field under test
+    SimulationSpec(**copy.deepcopy(defaults))
+    defaults["protocol"]["equilibration"]["free"] = "500 ps"
+    with pytest.raises(Exception) as excinfo:
+        SimulationSpec(**defaults)
+    message = str(excinfo.value)
+    assert "implicit solvent only" in message
+    assert "npt_free" in message
+
+
+def test_the_protocol_schema_version_was_bumped_for_the_added_field():
+    """The canonical document gained a key, so an unchanged protocol's HASH moved.
+
+    Two documents that both call themselves version 5 must not hash differently -- signalling that
+    is exactly what the version number is for.
+    """
+    from md_templates.openmm.spec.models import (PROTOCOL_SCHEMA_VERSION,
+                                                 RETIRED_PROTOCOL_SCHEMA_VERSIONS)
+
+    assert PROTOCOL_SCHEMA_VERSION == 6
+    assert 5 in RETIRED_PROTOCOL_SCHEMA_VERSIONS
+
+
+def test_a_version_five_document_is_told_how_to_migrate():
+    """A retirement that does not say what to do makes the user guess."""
+    from md_templates.openmm.spec.models import PROTOCOL_SCHEMA_VERSION
+
+    import md_templates.openmm.spec.models as models
+
+    spec_cls = None
+    for value in vars(models).values():
+        fields = getattr(value, "model_fields", None)
+        if fields and "schema_version" in fields and "equilibration" in fields:
+            spec_cls = value
+            break
+    assert spec_cls is not None, "could not locate the protocol spec model"
+
+    with pytest.raises(Exception) as excinfo:
+        spec_cls(schema_version=5,
+                 integrator={"kind": "langevin-middle", "timestep": "2 fs",
+                             "temperature": "300 K", "friction": "1 /ps"},
+                 equilibration={},
+                 production={"method": "md", "duration_per_segment": "5 ns"})
+    message = str(excinfo.value)
+    assert "superseded by 6" in message
+    assert "relabelling it 6 is the whole migration" in message
+    assert "HASH" in message

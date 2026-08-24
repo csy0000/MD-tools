@@ -1,6 +1,6 @@
 {
   "profile_id": "implicit-rest2-ligand-v1",
-  "profile_schema_version": 5,
+  "profile_schema_version": 6,
   "description": "Implicit-solvent GBn2/mbondi3 REST2, ligand/SMILES route",
   "route": "smiles",
   "method": "rest2",
@@ -33,7 +33,7 @@
       }
     },
     "protocol": {
-      "schema_version": 5,
+      "schema_version": 6,
       "integrator": {
         "kind": "langevin-middle",
         "timestep": "2 fs",

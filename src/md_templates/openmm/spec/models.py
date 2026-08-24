@@ -35,11 +35,11 @@ from .units import Quantity, parse_quantity
 #: Independent schema versions. Bumping one must not force the others to move.
 SYSTEM_SCHEMA_VERSION = 1
 BUILD_SCHEMA_VERSION = 1
-PROTOCOL_SCHEMA_VERSION = 5
+PROTOCOL_SCHEMA_VERSION = 6
 
 #: Versions this build recognises but will not accept. Named so a refusal can say "retired" and
 #: point at the migration, rather than "unknown", which would send a reader hunting for a typo.
-RETIRED_PROTOCOL_SCHEMA_VERSIONS = (1, 2, 3, 4)
+RETIRED_PROTOCOL_SCHEMA_VERSIONS = (1, 2, 3, 4, 5)
 EXECUTION_SCHEMA_VERSION = 1
 
 
@@ -276,6 +276,12 @@ class EquilibrationSpec(Strict):
     #: constant-temperature dynamics -- rather than for an ensemble it cannot have: "NVT" fixes a
     #: volume, and an implicit system has none.
     restrained: Optional[Time] = None
+    #: Implicit solvent's UNRESTRAINED equilibration, following `restrained`. Deliberately not
+    #: called `nvt` or `npt_free`: both name a volume, and an implicit system has none. It exists
+    #: because restrained dynamics equilibrates the solvent response around a held solute, and the
+    #: solute's own conformational relaxation only begins once the restraint is released -- so a
+    #: protocol with only a restrained phase enters production still relaxing.
+    free: Optional[Time] = None
     seed: Optional[int] = None
 
 
@@ -447,6 +453,21 @@ class ProtocolSpec(Strict):
     def _supported_protocol_schema(cls, value: int) -> int:
         if value == PROTOCOL_SCHEMA_VERSION:
             return value
+        if value == 5:
+            raise ValueError(
+                "protocol.schema_version 5 is superseded by 6.\n"
+                "  Version 6 adds ONE optional field, protocol.equilibration.free -- the "
+                "unrestrained implicit-solvent\n"
+                "  equilibration phase. Nothing else changed, and a version-5 document "
+                "means in version 6 exactly what\n"
+                "  it meant before, so relabelling it 6 is the whole migration.\n"
+                "  It is a version bump rather than a silent addition because the "
+                "canonical document gained a key, so the\n"
+                "  configuration HASH of an otherwise unchanged protocol moves. Two "
+                "documents that both call themselves\n"
+                "  version 5 must not hash differently; signalling that is what the "
+                "version number is for."
+            )
         if value in RETIRED_PROTOCOL_SCHEMA_VERSIONS:
             raise ValueError(
                 f"protocol.schema_version {value} is retired. Version "
@@ -598,6 +619,23 @@ class SimulationSpec(Strict):
         return self
 
     @model_validator(mode="after")
+    def _explicit_solvent_uses_npt_free_not_free(self):
+        """`free` is implicit-only. Explicit solvent's unrestrained phase is `npt_free`.
+
+        Refused rather than aliased: two field names for one stage drift apart the moment one of
+        them acquires a default, and a protocol that set both would have no defined meaning.
+        """
+        if self.build.implicit is not None:
+            return self
+        if getattr(self.protocol.equilibration, "free", None) is not None:
+            raise ValueError(
+                "protocol.equilibration.free applies to implicit solvent only; explicit solvent's "
+                "unrestrained equilibration is protocol.equilibration.npt_free, which runs under "
+                "the barostat. Set npt_free instead."
+            )
+        return self
+
+    @model_validator(mode="after")
     def _implicit_solvent_has_no_pressure(self):
         """Refuse NPT and pressure under implicit solvent, before anything is generated.
 
@@ -618,6 +656,8 @@ class SimulationSpec(Strict):
         for field in ("nvt", "npt", "npt_free", "box_average_last"):
             if getattr(equilibration, field, None) is not None:
                 offenders.append(f"protocol.equilibration.{field}")
+        # `free` is the implicit spelling and is allowed here; it is refused for EXPLICIT solvent
+        # in the companion validator, so the two never both apply to one protocol.
         for field in ("pressure", "barostat", "barostat_interval"):
             if getattr(self.protocol.production, field, None) is not None:
                 offenders.append(f"protocol.production.{field}")

@@ -272,7 +272,14 @@ def test_the_shipped_defaults_are_the_corrected_ones(profile):
     defaults = json.loads(path.read_text())["defaults"]
     protocol = defaults["protocol"]
 
-    assert protocol["schema_version"] == 5, "a version-4 label must not carry version-5 semantics"
+    # Compared against the constant, not a literal: the claim is "a shipped profile is labelled
+    # with the schema version whose semantics it actually carries", and pinning a number here made
+    # the test fail for the one reason it should not -- the version being bumped deliberately.
+    from md_templates.openmm.spec.models import PROTOCOL_SCHEMA_VERSION
+
+    assert protocol["schema_version"] == PROTOCOL_SCHEMA_VERSION, (
+        "a shipped profile must be labelled with the current protocol schema version; a stale "
+        "label would carry another version's semantics")
     assert protocol["equilibration"]["minimize_max_iterations"] == 1000
     if profile.startswith("explicit"):
         assert protocol["equilibration"]["nvt"] == "10 ps"

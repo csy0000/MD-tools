@@ -68,14 +68,14 @@ STAGE_ORDER = ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1", "REST2_1")
 #: it is a single stage named `eq` rather than `eq_nvt`. "NVT" names an ensemble at constant volume,
 #: and there is no volume here, so the label would describe something the run does not have. The
 #: dynamics are the same: constant temperature, solute restrained, no barostat.
-IMPLICIT_STAGE_ORDER = ("min", "eq", "cMD_1", "REST2_1")
+IMPLICIT_STAGE_ORDER = ("min", "eq", "eq_free", "cMD_1", "REST2_1")
 
 #: Conventional MD ends at cMD_1. A REST2 stage is not appended to an MD-only project, and no REST2
 #: object -- tau ladder, exchange schedule, omega policy -- is constructed for it. Generating one
 #: anyway would put a replica-exchange calculation in a project that never asked for it, and its
 #: presence in the manifest would misdescribe the run.
 MD_STAGE_ORDER = ("min", "eq_nvt", "eq_npt_1", "eq_npt_2", "cMD_1")
-IMPLICIT_MD_STAGE_ORDER = ("min", "eq", "cMD_1")
+IMPLICIT_MD_STAGE_ORDER = ("min", "eq", "eq_free", "cMD_1")
 
 #: Stages that carry the positional restraint on the solute. `eq_npt_2` deliberately does not.
 RESTRAINED_STAGES = ("min", "eq", "eq_nvt", "eq_npt_1")
@@ -89,19 +89,28 @@ RESTRAINED_STAGES = ("min", "eq", "eq_nvt", "eq_npt_1")
 BAROSTAT_STAGES = ("eq_npt_1", "eq_npt_2", "cMD_1", "REST2_1")
 
 
-def stage_order_for(solvation_mode: str, method: str = "rest2") -> tuple:
+def stage_order_for(solvation_mode: str, method: str = "rest2",
+                    implicit_free_equilibration: bool = False) -> tuple:
     """The stage graph a solvation mode and production method imply.
 
     Four graphs, from two independent facts: implicit solvent has no NPT stage, and conventional MD
     has no REST2 stage. Neither is a subset of the other, so both are decided here rather than by
     trimming a single canonical list somewhere downstream.
+
+    `implicit_free_equilibration` adds the unrestrained implicit stage. It is conditional rather
+    than always present because a stage generated with zero steps is a directory that looks like a
+    completed phase and is not one -- and because a protocol that never asked for it should produce
+    exactly the graph it produced before this option existed.
     """
     from .solvation_mode import IMPLICIT
 
     implicit = solvation_mode == IMPLICIT
-    if method == "md":
-        return IMPLICIT_MD_STAGE_ORDER if implicit else MD_STAGE_ORDER
-    return IMPLICIT_STAGE_ORDER if implicit else STAGE_ORDER
+    if implicit:
+        graph = IMPLICIT_MD_STAGE_ORDER if method == "md" else IMPLICIT_STAGE_ORDER
+        if not implicit_free_equilibration:
+            graph = tuple(st for st in graph if st != "eq_free")
+        return graph
+    return MD_STAGE_ORDER if method == "md" else STAGE_ORDER
 
 #: Keys md_config.json may carry that the canonical model does not model. See _resolved_spec.
 GENERATOR_ONLY_KEYS = ("conventional_md", "minimization")
@@ -484,7 +493,10 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
     skipped = set(inheritance.get("skipped_stages", [])) if inheritance else set()
     solvation_mode = str(
         ((_read_manifest_solvation(system_manifest)) or {}).get("mode", "explicit"))
-    graph = stage_order_for(solvation_mode, md_config_method(md_config))
+    _free_requested = bool(
+        ((md_config.get("protocol") or {}).get("equilibration") or {}).get("free"))
+    graph = stage_order_for(solvation_mode, md_config_method(md_config),
+                            implicit_free_equilibration=_free_requested)
     stages_to_generate = tuple(s for s in graph if s not in skipped)
     if not stages_to_generate:
         raise ValueError(
@@ -540,6 +552,13 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
             equilibration.restrained.value, dt.value,
             duration_source=equilibration.restrained.source,
             timestep_source=dt.source, duration_label="equilibration.restrained")
+    if equilibration.free is not None:
+        # Implicit solvent's unrestrained phase. No barostat and no volume: constant-temperature
+        # dynamics with the restraint released, so the solute relaxes before production begins.
+        stage_steps["eq_free"] = steps_for_duration(
+            equilibration.free.value, dt.value,
+            duration_source=equilibration.free.source,
+            timestep_source=dt.source, duration_label="equilibration.free")
     if equilibration.npt is not None:
         # restrained NPT: the box relaxes while the solute is held
         stage_steps["eq_npt_1"] = steps_for_duration(
@@ -628,6 +647,10 @@ def generate_project(*, system_manifest: Path, md_config: dict, outdir: Path,
             f"eq       {stage_steps.get('eq', 0):,} steps "
             f"({equilibration.restrained.source}, restrained; no ensemble label because implicit "
             "solvent has no volume)")
+    if equilibration.free is not None:
+        summary.append(
+            f"eq_free  {stage_steps.get('eq_free', 0):,} steps "
+            f"({equilibration.free.source}, unrestrained; constant temperature, no barostat)")
     summary.append(f"cMD_1    {stage_steps['cMD_1']:,} steps ({cmd_duration.source})")
     summary.append(f"reporting: full system every {full_steps:,} steps, "
                    f"selected atoms every {selected_steps:,} steps")

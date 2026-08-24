@@ -1,6 +1,6 @@
 {
   "profile_id": "explicit-md-peptide-v2",
-  "profile_schema_version": 5,
+  "profile_schema_version": 6,
   "description": "Explicit-water conventional MD, peptide/PDB route, ff19SB/OPC \u2014 the active default. ff19SB was parameterised against OPC, which is why OPC rather than TIP3P-FB is the default here.",
   "route": "pdb",
   "method": "md",
@@ -40,7 +40,7 @@
       "remove_cm_motion": true
     },
     "protocol": {
-      "schema_version": 5,
+      "schema_version": 6,
       "integrator": {
         "kind": "langevin-middle",
         "timestep": "4 fs",
