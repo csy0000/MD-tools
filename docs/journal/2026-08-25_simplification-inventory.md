@@ -42,3 +42,56 @@ solute indices, the REST2 enhanced region, omega-excluded bonds -- is done ONCE 
 and written to `solute.yaml`. The generated script reads that file and applies the scaling
 arithmetic directly, which is about thirty lines. The chemistry stays in the package where it is
 tested; the runtime script stays readable and standalone.
+
+---
+
+## Outcome
+
+Implemented on `dev` at `ca29fcd`.
+
+```
+source          20,216 lines / 55 modules   ->   4,211 lines / 23 files
+tests           41 files / 1,372 tests      ->   8 files / 32 tests
+commands        3 entry points, 9 subcommands  ->  2 entry points, 6 subcommands
+```
+
+### The scaling was checked, not assumed
+
+`templates/rest2_scaling.py` is standalone code, so the transfer was verified against the
+implementation it replaces rather than trusted. Over every scaled parameter — charges, sigmas,
+epsilons, exception parameters, torsion force constants, CMAP map energies — at tau = 0.1, 0.3,
+0.5:
+
+```
+max |standalone - validated| = 0.000e+00
+```
+
+### A physics bug the refactor exposed
+
+Writing the exchange loop as a plain script made a defect visible that the old layered runner had
+hidden: the cross-energy step put replica *i*'s positions into replica *j*'s context **without**
+`j` adopting `i`'s box. Under NPT each replica has its own volume, so the configuration was
+evaluated in a cell it does not fit — overlapping images, enormous energies, acceptance pinned at
+zero.
+
+```
+before   log_acceptance  -89.3, -472.8, -152.5, -1176.6     0/4 accepted
+after    log_acceptance   -0.078, +0.441                    2/2 accepted
+```
+
+with `tau_max = 0.15` (s = 0.72…1.0). A configuration is positions *and* the cell they are periodic
+in.
+
+### What deletion taught
+
+`seeds.py` was deleted and had to be restored: it is imported **lazily inside `protonate()`**, so a
+top-level import scan does not see it. The suite found it; reading did not. Any further deletion
+should be driven by running, not by static analysis.
+
+### Deliberately not done
+
+`md-template install` was exercised with `--dry-run` only. A real install downloads roughly a
+gigabyte from conda-forge, and the environment it would create already exists on this machine. The
+command's package-manager detection, environment path construction, platform probe and
+`machine.yaml` recording were all exercised directly against the existing environment: `mamba`
+detected, OpenMM 8.6.0, Python 3.12.13, platforms Reference/CPU/CUDA/OpenCL, `cuda_check: ok`.
