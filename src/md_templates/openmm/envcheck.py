@@ -105,6 +105,59 @@ def run_checks(
         version_msg,
     ))
 
+    # The machine itself, reported so a run can be PLANNED rather than guessed at: how many
+    # replicas will fit, how many workers a test run should use, whether a GPU is already busy.
+    # A checklist that says "ok" without saying what it is ok on leaves the operator to go and
+    # look, which is where wrong device choices come from.
+    hw = provenance.hardware()
+    checks.append(Check(
+        "cpu",
+        "ok",
+        f"{hw.get('cpu_count')} logical cores on {hw.get('node')} "
+        f"({hw.get('machine')}, {hw.get('system')} {hw.get('release')})",
+    ))
+
+    from .gpus import discover_devices
+
+    try:
+        found = discover_devices()
+    except Exception as exc:                       # noqa: BLE001 - reporting must never fail a run
+        found = None
+        checks.append(Check("gpu", "warning", f"device discovery failed: {type(exc).__name__}: {exc}"))
+    if found is not None:
+        visible, usable = found["n_visible"], found["n_usable"]
+        busy = len(found["busy_uuids"])
+        if not found["nvidia_smi_available"]:
+            checks.append(Check("gpu", "warning", "nvidia-smi not found; no CUDA device inventory"))
+        elif visible == 0:
+            checks.append(Check("gpu", "warning",
+                                f"no visible CUDA device "
+                                f"(CUDA_VISIBLE_DEVICES={found['cuda_visible_devices']!r})"))
+        else:
+            checks.append(Check(
+                "gpu",
+                "ok" if usable else "warning",
+                f"{usable} usable of {visible} visible ({busy} busy)"
+                + (f", CUDA_VISIBLE_DEVICES={found['cuda_visible_devices']}"
+                   if found["cuda_visible_devices"] else "")))
+            # `gpu` and not `device`: `device` is this function's PARAMETER, and shadowing it here
+            # left it holding the last GPU dict instead of None. The CPU branch below then saw
+            # `device is not None`, emitted a fatal "--device is meaningless for CPU", and that dict
+            # reached `int()` in main() -- so `md-openmm prepare --config` failed on every CPU run.
+            busy_uuids = set(found["busy_uuids"])
+            for gpu in found["visible"]:
+                state = "BUSY" if gpu["uuid"] in busy_uuids else "free"
+                checks.append(Check(
+                    f"  gpu {gpu['logical_index']}",
+                    "ok" if state == "free" else "warning",
+                    f"physical {gpu['physical_index']}  {gpu['name']}  "
+                    f"{gpu['memory_total_mib']} MiB  {state}  {gpu['uuid']}"))
+            # what that inventory means for a ladder, since that is the decision it feeds
+            checks.append(Check(
+                "  rest2 capacity", "ok",
+                f"a ladder of N replicas will use min(N, {usable}) device(s); "
+                f"more replicas than that share, propagating sequentially per device"))
+
     platforms = provenance.openmm_platforms()
     checks.append(Check(
         "openmm platforms",

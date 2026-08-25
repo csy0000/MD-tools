@@ -29,7 +29,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "build"]
+dev = ["pytest", "pytest-xdist", "build"]
 
 # The entry point. Installing the wheel puts `md-openmm` on PATH, which is what lets a
 # consuming project run the pipeline without a source checkout.
@@ -70,6 +70,25 @@ include = ["md_templates*"]
 # test in a file on one worker, which is the sequencing those tests depend on.
 #
 # pytest-xdist is optional; the suite runs without it, just serially.
+# Parallel by DEFAULT. The full suite is ~15 minutes serially on 48 cores and ~4 in
+# parallel, and that difference decides whether a change gets verified against everything
+# or only against the fast tests. Serial is available with `-p no:xdist` or `-n 0`.
+#
+# --dist loadfile is NOT a preference. Plain -n distributes individual tests, which splits
+# module-scoped fixtures across workers and fails the continuation tests -- the ones that
+# extend a run segment by segment and assert the committed record, the exchange history and
+# the walker mapping across it. Those share one run directory BY DESIGN. loadfile keeps every
+# test in a file on one worker. Five of them fail without it, looking exactly like real
+# regressions.
+#
+# 12 rather than `auto`: each worker may spawn tleap or its own OpenMM Context, so one worker
+# per core oversubscribes badly. Measured 3m23 vs 13m05 on the slow suite.
+# NOT set as a default. `-n 12` over-parallelises a SINGLE-FILE run -- twelve workers for a
+# file with five tests, each rebuilding the module-scoped fixture -- and that fails. Run the
+# whole suite with the flags instead:
+#
+#     pytest tests/ -n 12 --dist loadfile              # 1054 fast, 1m46 -> 47s
+#     pytest tests/ -k slow -n 12 --dist loadfile      #  169 slow, 13m05 -> 3m23
 testpaths = ["tests"]
 markers = [
     "slow: end-to-end tests that build an OpenMM Context and propagate MD (deselect with '-m \"not slow\"')",

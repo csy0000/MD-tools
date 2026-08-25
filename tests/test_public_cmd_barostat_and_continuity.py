@@ -225,3 +225,40 @@ def test_continuity_accepts_an_unchanged_ensemble_and_rejects_a_changed_one():
     problems = runstate.compare_continuity(recorded, changed)
     assert problems, "a genuine ensemble change must be refused"
     assert any("ensemble" in str(p) for p in problems)
+
+
+# -------------------------------------------------------------------------------------------
+# The environment check must not corrupt the arguments it was given
+# -------------------------------------------------------------------------------------------
+def test_the_env_check_does_not_shadow_its_device_argument():
+    """A loop variable named `device` overwrote the PARAMETER of the same name.
+
+    After the GPU inventory loop, `device` held the last GPU dict instead of None, so the CPU branch
+    reported a fatal "--device is meaningless for CPU" for every CPU run that named no device -- and
+    that dict then reached `int()` in main(). `md-openmm prepare --config` failed on every CPU
+    invocation, which is the path the segment-extension tests use.
+
+    The assertion is about the CONTRACT, not the variable name: naming no device on CPU is legal.
+    """
+    from md_templates.openmm import envcheck
+
+    checks = envcheck.run_checks(platform="CPU", device=None, precision=None, route="pdb")
+    fatal = [c.name for c in envcheck.errors(checks)]
+    assert fatal == [], f"a CPU run naming no device must not be refused; got {fatal}"
+
+
+def test_the_env_check_still_refuses_a_device_on_cpu():
+    """The guard the shadowing bug was hiding behind must survive the fix."""
+    from md_templates.openmm import envcheck
+
+    checks = envcheck.run_checks(platform="CPU", device="0", precision=None, route="pdb")
+    assert "device" in [c.name for c in envcheck.errors(checks)]
+
+
+def test_the_env_check_reports_the_machine_it_validated():
+    """validate-env has to say what it is ok ON, so a run can be planned rather than guessed."""
+    from md_templates.openmm import envcheck
+
+    names = [c.name for c in envcheck.run_checks(route="pdb")]
+    assert "cpu" in names
+    assert "gpu" in names or any(n.startswith("  gpu") for n in names)
