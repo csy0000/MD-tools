@@ -50,7 +50,20 @@ def _smoke_config() -> dict:
     document["protocol"]["production"]["duration_per_segment"] = "4 ps"
     document["protocol"]["production"]["exchange"] = {"number_of_exchanges_per_segment": 2}
     document["build"]["solvation"]["padding"] = "0.9 nm"
-    document["build"]["nonbonded"]["cutoff"] = "0.7 nm"
+    # 0.5 nm, not 0.7. OpenMM requires the reduced box height to stay above 2 x cutoff, and at
+    # 0.7 nm this fixture started with 0.100 nm of headroom -- 6.7% of the box. Under NPT a few
+    # unlucky volume moves breach that, which is why this module failed intermittently in the full
+    # 12-worker run (1 in 2) while passing every time in isolation.
+    #
+    # Measured, same padding:
+    #     cutoff 0.7 nm -> min height 1.500 nm, floor 1.400, headroom 0.100 nm (6.7%),  754 particles
+    #     cutoff 0.5 nm -> min height 1.307 nm, floor 1.000, headroom 0.307 nm (23.5%), 502 particles
+    #
+    # Both cheaper AND further from the cliff, because a smaller cutoff also shrinks the
+    # cutoff-driven box growth. A 0.5 nm cutoff is poor electrostatics and that is fine here: these
+    # tests assert restart bookkeeping -- continuity, committed generations, walker mapping -- not
+    # energetics. The fixture was already using a non-production 0.7 nm for the same reason.
+    document["build"]["nonbonded"]["cutoff"] = "0.5 nm"
     return document
 
 
