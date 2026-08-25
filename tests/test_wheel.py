@@ -15,8 +15,20 @@ from .conftest import REPO_ROOT
 pytestmark = pytest.mark.slow
 
 #: Every file `md-gen` copies into a generated project, plus the scripts themselves.
-TEMPLATE_FILES = {"cmd_run.py", "rest2_run.py", "md_stages.py", "rest2_scaling.py",
-                  "run.sh", "extend.sh"}
+#: Every file `md-gen` copies into a generated project. Derived from mdgen.py rather than kept by
+#: hand, because a stale list here passed for a whole release while the wheel was quietly picking
+#: up a deleted `run.sh` from a cached build tree.
+def _template_files() -> set[str]:
+    import re
+
+    source = (REPO_ROOT / "src" / "md_templates" / "openmm" / "mdgen.py").read_text(
+        encoding="utf-8")
+    found = set(re.findall(r'TEMPLATES / "([A-Za-z0-9_.]+)"', source))
+    assert found, "mdgen.py copies no templates -- the pattern stopped matching"
+    return found
+
+
+TEMPLATE_FILES = _template_files()
 
 
 def _declared_version() -> str:
@@ -69,11 +81,19 @@ def _outside(site, work, *args):
 
 
 def test_the_wheel_contains_every_generated_project_file(installed):
+    """Every template md-gen copies must be in the wheel, and nothing dead should be."""
     site, _ = installed
     templates = site / "md_templates" / "openmm" / "templates"
     assert templates.is_dir(), "the templates directory did not survive packaging"
     present = {path.name for path in templates.iterdir() if path.is_file()}
     assert TEMPLATE_FILES <= present, f"missing from the wheel: {TEMPLATE_FILES - present}"
+
+    # A template in the wheel that md-gen never copies is dead weight, and usually the sign of a
+    # cached build tree shipping a file that was deleted from the checkout.
+    tracked = {path.name for path in
+               (REPO_ROOT / "src" / "md_templates" / "openmm" / "templates").iterdir()
+               if path.is_file()}
+    assert present <= tracked, f"the wheel carries files not in the checkout: {present - tracked}"
 
 
 def test_both_generators_import_from_the_wheel_rather_than_the_checkout(installed):

@@ -74,32 +74,76 @@ def test_missing_ambertools_executables_are_named():
     assert not any("tleap" in p for p in problems), "tleap is present and must not be reported"
 
 
-def test_an_unusable_cuda_platform_is_a_failure_but_absent_hardware_is_not():
-    """A listed CUDA platform that cannot take a step fails at run time, so it fails here."""
+NO_NVIDIA = {"device_nodes": [], "nvidia_smi": False, "nvidia_smi_lists_gpus": False,
+             "libcuda": False, "present": False}
+HAS_NVIDIA = {"device_nodes": ["/dev/nvidia0"], "nvidia_smi": True,
+              "nvidia_smi_lists_gpus": True, "libcuda": True, "present": True}
+
+
+def _healthy(**overrides):
     base = {"import_errors": {}, "executables": dict.fromkeys(REQUIRED_EXECUTABLES, "/x"),
             "openff_toolkits": ["AmberToolsToolkitWrapper"], "am1bcc_ready": True,
-            "cpu_check": "ok", "reference_check": "ok"}
-    broken = dict(base, cuda_available=True, cuda_check="RuntimeError: no CUDA-capable device")
-    assert _problems(broken), "an unusable CUDA platform must fail"
+            "cpu_check": "ok", "reference_check": "ok", "plugin_load_failures": []}
+    base.update(overrides)
+    return base
 
-    cpu_only = dict(base, cuda_available=False, cuda_check="no CUDA platform")
-    assert _problems(cpu_only) == [], "a CPU-only machine is a supported machine"
-    assert any("MD_PLATFORM" in note for note in warnings_for(cpu_only)), \
-        "a CPU-only machine should be warned that generated runs default to CUDA"
+
+CUDA_PLUGIN_FAILURE = ("Error loading library /opt/env/lib/plugins/libOpenMMCUDA.so: "
+                       "libcuda.so.1: cannot open shared object file: No such file or directory")
+
+
+def test_a_cpu_only_runner_is_not_failed_by_an_unloadable_cuda_plugin():
+    """The exact false failure that broke the openmm-v0.2.0 release.
+
+    conda-forge ships the CUDA plugin unconditionally. On a GitHub runner with no GPU it cannot
+    load, because libcuda.so.1 belongs to the driver and there is no driver. That is the expected
+    state of a machine without a GPU, not a broken environment.
+    """
+    report = _healthy(nvidia=NO_NVIDIA, cuda_available=False, cuda_check="no CUDA platform",
+                      plugin_load_failures=[CUDA_PLUGIN_FAILURE])
+    assert _problems(report) == [], _problems(report)
+    notes = warnings_for(report)
+    assert any("no NVIDIA driver" in note for note in notes), notes
+    assert any("MD_PLATFORM" in note for note in notes), notes
+
+
+def test_reference_and_cpu_remain_required_on_that_same_runner():
+    """Loosening CUDA must not loosen the platforms the smoke tests actually run on."""
+    for name in ("cpu_check", "reference_check"):
+        report = _healthy(nvidia=NO_NVIDIA, cuda_available=False, cuda_check="no CUDA platform",
+                          **{name: "RuntimeError: could not create context"})
+        assert any(name in problem for problem in _problems(report)), _problems(report)
+
+
+def test_a_cuda_plugin_failure_stays_fatal_when_the_machine_has_nvidia_hardware():
+    """Same message, opposite meaning: with a driver present, CUDA is genuinely broken."""
+    report = _healthy(nvidia=HAS_NVIDIA, cuda_available=True, cuda_check="ok",
+                      plugin_load_failures=[CUDA_PLUGIN_FAILURE])
+    problems = _problems(report)
+    assert any("CUDA plugin failed to load" in problem for problem in problems), problems
+
+
+def test_missing_cuda_on_an_nvidia_machine_is_fatal_and_says_what_gave_it_away():
+    report = _healthy(nvidia=HAS_NVIDIA, cuda_available=False, cuda_check="no CUDA platform")
+    problems = _problems(report)
+    assert problems, "a GPU machine with no CUDA platform must fail"
+    assert "nvidia-smi lists GPUs" in problems[0] or "/dev/nvidia" in problems[0], problems
+
+
+def test_an_unusable_cuda_platform_on_an_nvidia_machine_is_fatal():
+    """A listed CUDA platform that cannot take a step fails at run time, so it fails here."""
+    report = _healthy(nvidia=HAS_NVIDIA, cuda_available=True,
+                      cuda_check="RuntimeError: no CUDA-capable device")
+    assert _problems(report), "an unusable CUDA platform must fail"
 
 
 def test_plugins_for_absent_hardware_are_a_note_not_a_failure():
     """conda-forge ships HIP plugins; they cannot load on an NVIDIA box and that is fine."""
-    base = {"import_errors": {}, "executables": dict.fromkeys(REQUIRED_EXECUTABLES, "/x"),
-            "openff_toolkits": ["AmberToolsToolkitWrapper"], "am1bcc_ready": True,
-            "cpu_check": "ok", "reference_check": "ok", "cuda_available": True,
-            "cuda_check": "ok",
-            "plugin_load_failures": ["Error loading library libOpenMMHIP.so: libhiprtc.so.6"]}
-    assert _problems(base) == []
-    assert warnings_for(base), "it should still be reported"
-
-    fatal = dict(base, plugin_load_failures=["Error loading library libOpenMMCUDA.so"])
-    assert _problems(fatal), "a CUDA plugin failure is fatal"
+    report = _healthy(nvidia=HAS_NVIDIA, cuda_available=True, cuda_check="ok",
+                      plugin_load_failures=["Error loading library libOpenMMHIP.so: "
+                                            "libhiprtc.so.6"])
+    assert _problems(report) == []
+    assert warnings_for(report), "it should still be reported"
 
 
 @pytest.mark.slow

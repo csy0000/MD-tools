@@ -181,6 +181,41 @@ import importlib, json, shutil, sys
 out = {"python_version": sys.version.split()[0], "python": sys.executable,
        "versions": {}, "import_errors": {}, "executables": {}}
 
+
+def detect_nvidia():
+    # Whether this MACHINE should be able to run CUDA at all, asked without OpenMM's help.
+    # A CPU-only CI runner ships the CUDA plugin and cannot load it, because libcuda.so.1 is part
+    # of the driver and there is no driver. That is the expected state of a machine with no GPU,
+    # not a broken environment -- but on a machine that DOES have the hardware, the same failure
+    # means CUDA is genuinely broken. These signals are what separates the two.
+    import ctypes, glob, subprocess
+
+    signals = {"device_nodes": sorted(glob.glob("/dev/nvidia[0-9]*"))}
+    signals["nvidia_smi"] = bool(shutil.which("nvidia-smi"))
+    signals["nvidia_smi_lists_gpus"] = False
+    if signals["nvidia_smi"]:
+        try:
+            listed = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True,
+                                    timeout=60)
+            signals["nvidia_smi_lists_gpus"] = (listed.returncode == 0
+                                                and bool(listed.stdout.strip()))
+        except Exception as exc:
+            signals["nvidia_smi_error"] = f"{type(exc).__name__}: {exc}"
+    try:
+        ctypes.CDLL("libcuda.so.1")
+        signals["libcuda"] = True
+    except OSError as exc:
+        signals["libcuda"] = False
+        signals["libcuda_error"] = str(exc)
+    # The driver library is the decisive one: without it nothing CUDA can run, and with it the
+    # machine is expected to.
+    signals["present"] = bool(signals["device_nodes"]) or signals["nvidia_smi_lists_gpus"] \
+        or signals["libcuda"]
+    return signals
+
+
+out["nvidia"] = detect_nvidia()
+
 for module in ("openmm", "yaml", "numpy", "openff.toolkit", "openff.nagl_models",
                "openmmforcefields", "parmed", "rdkit"):
     try:
@@ -305,29 +340,66 @@ def _problems(report: dict[str, Any]) -> list[str]:
         problems.append("standard AM1-BCC is not available: OpenFF has no registered AmberTools "
                         f"toolkit (registered: {report.get('openff_toolkits')})")
 
+    # Reference and CPU are required everywhere, including the GPU-less release runner: they are
+    # what the smoke tests run on.
     for name in ("cpu_check", "reference_check"):
         value = report.get(name)
         if value and value not in ("ok",) and not str(value).startswith("no "):
             problems.append(f"{name}: {value}")
+
+    # Whether a CUDA failure is a fault depends on whether this machine has a GPU at all.
+    #
+    # conda-forge ships the CUDA plugin unconditionally. On a CPU-only runner it cannot load,
+    # because libcuda.so.1 belongs to the driver and there is no driver -- the expected state of a
+    # machine without a GPU, and what failed the openmm-v0.2.0 release for no real reason. On a
+    # machine that HAS the hardware, the identical message means CUDA is genuinely broken and a
+    # production run would land on the CPU or die.
+    nvidia = report.get("nvidia") or {}
+    cuda_expected = bool(nvidia.get("present"))
     cuda = report.get("cuda_check")
-    if report.get("cuda_available") and cuda != "ok":
-        problems.append(f"a CUDA platform is present but unusable: {cuda}")
-    # Plugin load failures are usually a conda-forge build shipping plugins for hardware this
-    # machine does not have -- the HIP ones on an NVIDIA box, for instance. That is not a broken
-    # environment, so it is reported rather than refused. A CUDA plugin failing IS fatal, because
-    # CUDA is what runs production.
-    for failure in report.get("plugin_load_failures") or []:
-        if "CUDA" in failure or "Cuda" in failure:
-            problems.append(f"the CUDA plugin failed to load: {failure}")
+    if cuda_expected:
+        if not report.get("cuda_available"):
+            problems.append(
+                "this machine has NVIDIA hardware or driver "
+                f"({_nvidia_evidence(nvidia)}) but OpenMM offers no CUDA platform")
+        elif cuda != "ok":
+            problems.append(f"a CUDA platform is present but unusable: {cuda}")
+        for failure in report.get("plugin_load_failures") or []:
+            if "CUDA" in failure or "Cuda" in failure:
+                problems.append(f"the CUDA plugin failed to load: {failure}")
+    elif report.get("cuda_available") and cuda not in ("ok", None) \
+            and not str(cuda).startswith("no "):
+        # No driver detected, yet OpenMM lists CUDA and it does not work. Worth naming, because
+        # a run that asks for CUDA here will fail rather than fall back.
+        problems.append(f"OpenMM lists a CUDA platform that cannot take a step: {cuda}")
     return problems
+
+
+def _nvidia_evidence(nvidia: dict[str, Any]) -> str:
+    """Which signal said there is a GPU, so a fatal CUDA verdict can be argued with."""
+    found = []
+    if nvidia.get("device_nodes"):
+        found.append(f"{len(nvidia['device_nodes'])} /dev/nvidia* node(s)")
+    if nvidia.get("nvidia_smi_lists_gpus"):
+        found.append("nvidia-smi lists GPUs")
+    if nvidia.get("libcuda"):
+        found.append("libcuda.so.1 loads")
+    return ", ".join(found) or "no signal"
 
 
 def warnings_for(report: dict[str, Any]) -> list[str]:
     """Worth saying, not worth refusing over."""
     notes = []
+    nvidia = report.get("nvidia") or {}
+    cuda_expected = bool(nvidia.get("present"))
     for failure in report.get("plugin_load_failures") or []:
-        if "CUDA" not in failure and "Cuda" not in failure:
-            notes.append(f"plugin not loaded (hardware absent?): {failure.splitlines()[0]}")
+        is_cuda = "CUDA" in failure or "Cuda" in failure
+        if is_cuda and cuda_expected:
+            continue                       # already fatal in _problems; not also a note
+        notes.append(f"plugin not loaded (hardware absent?): {failure.splitlines()[0]}")
+    if not cuda_expected:
+        notes.append("no NVIDIA driver or device detected, so CUDA is not required here; "
+                     "unavailable CUDA plugins are expected on this machine")
     if not report.get("cuda_available"):
         notes.append("no CUDA platform: generated runs default to CUDA and will refuse to start "
                      "unless MD_PLATFORM names another platform")

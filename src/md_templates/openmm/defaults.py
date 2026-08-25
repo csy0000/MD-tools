@@ -125,9 +125,13 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = "OPC") -> dict[str, 
             "max_iterations": 1000,
             "restraint_k_kcal_mol_a2": 1.0,
         },
+        # One directory per stage is generated from this block, in this order. Every duration is
+        # the length of that stage; a null one means the stage does not apply to this solvent.
         "equilibration": {
-            "nvt_duration_ps": 10,
-            "npt_duration_ps": 0 if implicit else 10,
+            "nvt_restrained_duration_ps": 10.0,
+            "npt_restrained_duration_ps": None if implicit else 10.0,
+            "npt_free_duration_ps": None if implicit else 10.0,
+            "nvt_free_duration_ps": 10.0 if implicit else None,
             "restraint_k_kcal_mol_a2": 1.0,
         },
     }
@@ -135,7 +139,8 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = "OPC") -> dict[str, 
         document["common"]["pressure_note"] = (
             "implicit solvent has no periodic box, so pressure is not applicable and no barostat "
             "is added")
-        document["equilibration"]["npt_note"] = "not applicable without a box"
+        document["equilibration"]["npt_note"] = (
+            "not applicable without a box: the free stage is NVT")
 
     if "cMD" in methods:
         document["cMD"] = {
@@ -156,6 +161,9 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = "OPC") -> dict[str, 
             "tau_interpolation": "linear",
             # Time BETWEEN consecutive exchange rounds. Total production is
             # duration_per_segment_ps * number_of_exchanges, so this default is 10 ns per replica.
+            # Per-tau equilibration, run once per replica by `REST2/equilibrate.py` before any
+            # exchange. It is NOT production and is not counted in the totals below.
+            "equilibration_duration_ps": 1000.0,
             "duration_per_segment_ps": 10,
             "number_of_exchanges": 1000,
             "enhanced_region": "solute",

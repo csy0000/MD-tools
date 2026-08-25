@@ -140,17 +140,69 @@ md-openmm md-gen -if ./inputs/ --config md.config.yaml -of ./MD/
 MD/
 ├── md.config.yaml          # the resolved protocol, read by every run.py
 ├── provenance.yaml
-├── cMD/
-│   ├── run.py              # an ordinary OpenMM script
-│   ├── md_stages.py        # minimisation/NVT/NPT/production, shared by both methods
+├── md_stages.py            # the shared helper, one copy for the whole project
+├── run_all.sh              # convenience wrapper; the stage scripts below are authoritative
+├── minimization/           # the common chain: each stage reads its parent's final_state.xml
+│   ├── run.py  run.sh  stage.yaml
+├── eq/                     # the equilibration stages, grouped
+│   ├── nvt_1kcal/          #   restrained NVT
+│   ├── npt_1kcal/          #   restrained NPT     (explicit solvent only)
+│   └── npt_free/           #   unrestrained NPT   (explicit solvent only)
+├── cMD/                    # production, from the last common stage
+│   ├── run.py
 │   └── run.sh
-└── REST2/
-    ├── run.py
-    ├── md_stages.py
-    ├── rest2_scaling.py    # the tau scaling, beside the script that uses it
+└── REST2/                  # production, from the SAME last common stage
+    ├── equilibrate.py      # per-tau equilibration, one directory per replica
+    ├── equilibrate.sh
+    ├── run.py              # exchange production
     ├── run.sh
-    └── extend.sh
+    ├── extend.sh           # extends exchange production only
+    ├── rest2_scaling.py    # the tau scaling, beside the script that uses it
+    ├── replica_00/{equilibration,production}/
+    └── replica_01/{equilibration,production}/
 ```
+
+**The common chain**
+
+Each stage is its own directory and its own run. They depend on each other through files:
+
+```text
+inputs -> minimization -> eq/nvt_1kcal -> eq/npt_1kcal -> eq/npt_free
+                                                            ├─> cMD
+                                                            └─> REST2
+```
+
+```bash
+cd MD && ./run_all.sh                      # all of it, in order
+cd MD/eq/npt_1kcal && ./run.sh             # or one stage at a time, which is authoritative
+```
+
+A stage reads only its parent's `final_state.xml` and writes `stage.log`, `stage.csv`,
+`checkpoint.chk`, `final_state.xml`, `final.pdb` and `resolved_stage.yaml`. The checkpoint resumes
+*that* stage; the final state is the handoff, and is written only once the stage succeeds — a
+downstream stage that consumed a checkpoint would be starting from a partially finished parent
+while every file on disk still looked normal. Run a stage whose parent has not finished and it
+tells you which file is missing and which command makes it.
+
+The solute is held by the configured `restraint_k_kcal_mol_a2` (`U = 1/2 k |r - r0|^2`,
+1 kcal mol⁻¹ Å⁻² = 418.4 kJ mol⁻¹ nm⁻²) through minimisation and the restrained stages, then
+released. There is no active barostat during minimisation or NVT and exactly one during NPT.
+Implicit systems have no box: the chain is `minimization -> eq/nvt_1kcal -> eq/nvt_free`, and no
+barostat exists in the System at all. If the restraint is not 1 kcal mol⁻¹ Å⁻², the directory is
+named `eq/nvt_restrained` rather than claiming a strength it does not have.
+
+A completed stage will not silently run again — downstream stages may already have consumed its
+`final_state.xml`. Re-running says so and changes nothing. To redo it, generate into a new output
+directory or remove that stage's runtime outputs (`stage.log`, `stage.csv`, `checkpoint.chk`,
+`final_state.xml`, `final.pdb`, `resolved_stage.yaml` — not `run.py`, `run.sh` or `stage.yaml`) and
+run it again; anything downstream was built on the old final state and is yours to regenerate.
+
+Completion is identified by a SHA-256 of the whole `stage.yaml`, recorded as `stage_config_sha256`.
+Change any field — the input state, the pressure, a seed — and the stage refuses rather than
+accepting outputs that came from a different request.
+
+Interrupt a stage and re-run it and it resumes from its own `checkpoint.chk` at the step it
+reached, rather than starting the stage over.
 
 **Conventional MD**
 
@@ -158,16 +210,9 @@ MD/
 cd MD/cMD && ./run.sh
 ```
 
-On a fresh run:
-
-```text
-restrained minimisation -> restrained NVT -> restrained NPT -> unrestrained production
-```
-
-The solute atoms are held by the configured `restraint_k_kcal_mol_a2` (`U = 1/2 k |r - r0|^2`,
-1 kcal mol⁻¹ Å⁻² = 418.4 kJ mol⁻¹ nm⁻²) through minimisation and equilibration, and released for
-production. There is no barostat during NVT and exactly one during NPT. Implicit systems have no
-box, so they skip NPT and never carry a barostat at all.
+Production only — it does not minimise or equilibrate. It starts from the last common stage's
+`final_state.xml`, the same file `REST2/equilibrate.py` starts from, so the two are siblings and
+neither has to run before the other.
 
 It writes `whole_system.dcd` and a solute-only `solute.dcd` at their own intervals, `production.csv`
 and `production.chk`. Read `solute.dcd` against `inputs/solute.pdb`, which `sys-gen` writes from the
@@ -179,8 +224,14 @@ and the barostat is restored before the checkpoint is loaded.
 **REST2**
 
 ```bash
-cd MD/REST2 && ./run.sh
+cd MD/REST2 && ./equilibrate.sh      # per-tau equilibration, once
+cd MD/REST2 && ./run.sh              # exchange production
 ```
+
+`equilibrate.py` takes every replica from the same common final state, applies that rung's scaled
+Hamiltonian and relaxes under it into `replica_NN/equilibration/`. It repeats none of the common
+minimisation or NVT/NPT preparation, and none of its steps count as production. `run.py` then runs
+exchange production from each replica's equilibrated state into `replica_NN/production/`.
 
 One replica per rung of a tau ladder. Only the solute Hamiltonian is scaled, so every replica is
 the same physical system at a different effective solute temperature:
@@ -222,10 +273,11 @@ attempt_index,phase,step,time_ps,replica_i,replica_j,log_acceptance,accepted
 **Extending from checkpoints**
 
 ```bash
-cd MD/REST2 && ./extend.sh 3      # three more segments
+cd MD/REST2 && ./extend.sh 3      # three more exchange-production segments
 ```
 
-Each replica resumes from its own checkpoint and the exchange history is appended, never rewritten.
+Each replica resumes from its own `production/production.chk` and the exchange history is appended,
+never rewritten. Extending does not repeat the common chain or the per-tau equilibration.
 The attempt indices continue, so a resumed run is one trajectory rather than several. For cMD,
 raise `duration_ns` in `MD/md.config.yaml` and run `./run.sh` again.
 
@@ -255,8 +307,11 @@ particular cards, name them.
 md-openmm sys-config --method cMD --peptide false --solvent GBn2
 md-openmm sys-gen -i ./ligand.smi --config sys.config.yaml -of ./inputs/
 md-openmm md-gen -if ./inputs/ --config md.config.yaml -of ./MD/
-cd MD/cMD && ./run.sh
+cd MD && ./run_all.sh
 ```
+
+The chain here is `minimization -> eq/nvt_1kcal -> eq/nvt_free -> cMD`: no NPT stage, and no
+barostat anywhere, because a non-periodic system has no box to control.
 
 The input is a file containing a SMILES string. The ligand is parameterised with Sage 2.2 and
 standard AM1-BCC charges (AmberTools `sqm`).
@@ -306,6 +361,24 @@ graph network *trained to predict* AM1-BCC ELF10 charges — close to them, but 
 so it is a different Hamiltonian.
 
 ---
+
+## Running the tests
+
+Molecular dynamics runs on a GPU, and so do the tests that exercise it:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 pytest tests/ -q      # everything, on CUDA
+pytest tests/ -q -m "not gpu"                      # packaging and unit tests, no GPU needed
+```
+
+Every test that minimises or integrates a molecular system is marked `gpu` and runs on CUDA. A CPU
+or Reference run of those would exercise a different code path from the one the work is done on,
+so on a machine without a working CUDA platform they are deselected rather than passed. CPU and
+Reference are used only for installation and platform probes and for tests that build no system.
+
+The release workflow runs on a GPU-less GitHub runner and therefore validates **packaging only** —
+it deselects every `gpu` test and says so in its output. Runtime acceptance comes from the command
+above, on the GPU machine.
 
 ## Tests
 

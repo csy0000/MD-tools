@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "md-templates"
-version = "0.2.0"
+version = "0.3.0"
 description = "Reusable OpenMM templates for explicit-water molecular dynamics and omega-selective REST2."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -42,4 +42,8 @@ include = ["md_templates*"]
 testpaths = ["tests"]
 markers = [
     "slow: builds a system or runs dynamics (deselect with '-m \"not slow\"')",
+    # Anything that minimises or integrates a molecular system. These run on CUDA and are the
+    # only evidence that the runtime works; a CPU-only machine cannot produce that evidence, so
+    # they are DESELECTED there rather than quietly passing on the wrong platform.
+    "gpu: needs a working CUDA platform (deselect with '-m \"not gpu\"')",
 ]
