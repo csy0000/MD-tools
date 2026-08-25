@@ -1,6 +1,11 @@
 # --- generated data / outputs ---
 # data/ includes data/runs/ (relocated from the old top-level runs/)
 data/
+# ...but the test fixture is source, not data. `data/` matches at any depth, so tests/data/
+# was silently never committed: the suite passed on machines that happened to have ALA.pdb and
+# could not run at all from a fresh clone. Negated explicitly rather than relying on -f.
+!tests/data/
+!tests/data/**
 graphify-out/
 logs/
 # claudecode-instructions/
