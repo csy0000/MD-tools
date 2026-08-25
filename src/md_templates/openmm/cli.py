@@ -521,6 +521,27 @@ def _synthetic_system_manifest(spec, *, pdb_path=None):
         route_input["pdb"] = Path(pdb_path).name
         route_input["pdb_sha256"] = spec.system.pdb_sha256 or _sha256_of_file(pdb_path)
 
+    if spec.build.solvation is None or spec.build.implicit is not None:
+        raise SystemExit(
+            "`md-openmm prepare --config` builds EXPLICIT-solvent bundles only, and this document "
+            "declares implicit solvent.\n"
+            "\n"
+            "This is a refusal, not a missing feature. Implicit systems are built by the two-"
+            "generator route, and that is deliberate: hydrogen mass repartitioning is build-"
+            "defining, so the System has to be built by the generator that can read a profile. A "
+            "second builder here would be a second place for the profile and the System to "
+            "disagree, which is exactly the defect this route exists to avoid.\n"
+            "\n"
+            "Use:\n"
+            "    MD_system_gen.py -i <input.pdb|.smi> -o <bundle> --config <system_config.json> \\\n"
+            "        [--profile <implicit-...-hmr-v1>]\n"
+            "    MD_input_gen.py --system <bundle>/system_manifest.json --outdir <project> \\\n"
+            "        --config <md_config.json>\n"
+            "\n"
+            "where system_config.json declares:\n"
+            '    "solvation": {"mode": "implicit", "implicit_model": "GBn2", "radii": "mbondi3"}'
+        )
+
     doc = {
         "schema_version": 1,
         "system_id": spec.system.system_id,

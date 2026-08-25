@@ -59,6 +59,38 @@ def implicit_bundle(tmp_path_factory):
     return out
 
 
+@pytest.fixture(scope="module")
+def implicit_hmr_bundle(tmp_path_factory):
+    """The same system built through the `-hmr-v1` performance profile.
+
+    Built with `--profile`, which is how a build-defining setting reaches the System builder under
+    the two-generator split: the profile is the single source and the masses are baked into
+    system.xml, rather than being applied later against a System that says otherwise.
+    """
+    out = tmp_path_factory.mktemp("implicit_hmr") / "bundle"
+    config = REPO_ROOT / "test" / "ala" / "implicit" / "system_config.json"
+    result = _run(SYSTEM_GEN, "-i", str(ALANINE_PDB), "-o", str(out), "--config", str(config),
+                  "--profile", "implicit-md-peptide-hmr-v1")
+    if result.returncode != 0:
+        pytest.skip(f"implicit preparation unavailable (tleap?): {result.stderr[-400:]}")
+    return out
+
+
+def _masses(bundle: Path) -> list[float]:
+    """Particle masses read back from the built System, in amu."""
+    from openmm import XmlSerializer, unit
+
+    system = XmlSerializer.deserialize((bundle / "system.xml").read_text())
+    return [system.getParticleMass(i).value_in_unit(unit.dalton)
+            for i in range(system.getNumParticles())]
+
+
+def _run_cli(*args):
+    """The `md-openmm` entry point as a user invokes it."""
+    return subprocess.run([sys.executable, "-m", "md_templates.openmm.cli", *args],
+                          capture_output=True, text=True, cwd=REPO_ROOT)
+
+
 def _reference_system(prmtop: Path, coordinates: Path, radii: str = "mbondi3"):
     """The pinned reference construction, rebuilt here rather than trusted."""
     import parmed as pmd
@@ -196,19 +228,64 @@ def test_the_implicit_system_has_no_box_no_water_no_ions_and_no_barostat(implici
     assert manifest["resolved_system_config"]["solvation"]["mode"] == "implicit"
 
 
-def test_the_implicit_system_is_not_hydrogen_mass_repartitioned(implicit_bundle):
-    """The GBn2 comparison is against an unrepartitioned System, so this is load-bearing.
+# ---------------------------------------------------------------------------------------------
+# Hydrogen mass: the DEFAULT bundle and the PERFORMANCE bundle, checked as a pair.
+#
+# The single test that used to live here asserted only that hydrogens stayed below 1.5 amu, which
+# was true of the defect too: the implicit route silently discarded every repartitioning request,
+# so an `-hmr-v1` profile produced 1.008 amu hydrogens and this test passed while the protocol
+# integrated them at 4 fs. A replacement that would also have passed under the old behaviour would
+# be no replacement, so the performance half is the load-bearing one.
+# ---------------------------------------------------------------------------------------------
 
-    3.024 amu hydrogens would be a different build that still passes every structural check.
-    """
-    from openmm import XmlSerializer, unit
-
-    system = XmlSerializer.deserialize((implicit_bundle / "system.xml").read_text())
-    masses = [system.getParticleMass(i).value_in_unit(unit.dalton)
-              for i in range(system.getNumParticles())]
+def test_the_default_implicit_system_is_not_hydrogen_mass_repartitioned(implicit_bundle):
+    """The conservative default: hydrogens keep the masses the force field gave them."""
+    masses = _masses(implicit_bundle)
     light = [m for m in masses if 0 < m < 2.0]
     assert light, "no hydrogen-mass particles found at all"
     assert max(light) < 1.5, f"hydrogens appear repartitioned: heaviest light mass {max(light)}"
+
+    record = json.loads((implicit_bundle / "system_simbox.json").read_text())["hmr"]
+    assert record["scope"] == "none"
+    assert record["target_hydrogen_mass_amu"] is None
+    assert record["n_hydrogens_repartitioned"] == 0
+
+
+def test_the_performance_implicit_system_carries_the_declared_hydrogen_mass(implicit_hmr_bundle):
+    """The half that fails against the old behaviour, which is the point of the pair."""
+    masses = _masses(implicit_hmr_bundle)
+    hydrogens = [m for m in masses if 0 < m < 5.0]
+    assert hydrogens, "no hydrogen-mass particles found at all"
+    assert all(abs(m - 3.024) < 1e-6 for m in hydrogens), (
+        f"hydrogens were not repartitioned to 3.024 amu: {sorted(set(hydrogens))}")
+
+
+def test_repartitioning_conserves_total_mass(implicit_bundle, implicit_hmr_bundle):
+    """Repartitioning MOVES mass between bonded atoms; a change in the total means it was lost."""
+    assert sum(_masses(implicit_bundle)) == pytest.approx(sum(_masses(implicit_hmr_bundle)),
+                                                          abs=1e-6)
+
+
+def test_the_repartitioned_count_matches_the_topology(implicit_hmr_bundle):
+    """The record must agree with the System, not merely with the request that produced it."""
+    from openmm import app
+
+    record = json.loads((implicit_hmr_bundle / "system_simbox.json").read_text())["hmr"]
+    topology = app.PDBFile(str(implicit_hmr_bundle / "topology.pdb")).topology
+    hydrogens = sum(1 for a in topology.atoms() if a.element is not None
+                    and a.element.symbol == "H")
+    assert record["n_hydrogens"] == hydrogens
+    assert record["n_hydrogens_repartitioned"] == hydrogens
+    assert record["scope"] == "solute"
+    assert record["target_hydrogen_mass_amu"] == pytest.approx(3.024)
+    # implicit solvent has no solvent, so the two scopes coincide -- stated, not left implicit
+    assert "same particles" in record["scope_note"]
+
+
+def test_no_heavy_atom_is_driven_below_hydrogen_mass(implicit_hmr_bundle):
+    """The guard that makes an over-aggressive target a build failure rather than a silent one."""
+    record = json.loads((implicit_hmr_bundle / "system_simbox.json").read_text())["hmr"]
+    assert record["lightest_heavy_atom_amu"] > 1.0
 
 
 def test_the_bundle_carries_its_amber_construction_files(implicit_bundle):
@@ -918,3 +995,107 @@ def test_every_shipped_implicit_profile_can_actually_build_a_forcefield(profile_
     forcefield, info = build_forcefield(cfg, ligand_sdf=None, route=route)
     assert forcefield is not None
     assert None not in info["xml"]
+
+
+# ---------------------------------------------------------------------------------------------
+# The GBn2 energy identity under repartitioning
+# ---------------------------------------------------------------------------------------------
+
+@pytest.mark.slow
+def test_repartitioning_leaves_the_gbn2_potential_and_every_force_unchanged(implicit_bundle):
+    """Mass enters the kinetic term only, so the potential and its gradient cannot move.
+
+    This is what makes HMR safe to offer for implicit solvent at all, and it is measured here
+    rather than argued: the same positions are evaluated on two Systems built from one prmtop,
+    differing only in particle masses. The expected difference is not "small" -- it is exactly
+    zero, because no term in the potential reads a mass.
+
+    It also protects the pinned ParmEd-vs-AmberPrmtopFile evidence: if repartitioning perturbed
+    the potential, the 16.05 kJ/mol CustomGBForce comparison would no longer be a comparison of
+    construction paths.
+    """
+    import numpy as np
+    import parmed as pmd
+    from openmm import LangevinMiddleIntegrator, Platform, app, unit
+    from parmed.tools import changeRadii
+
+    prmtop = implicit_bundle / "system.prmtop"
+    coordinates = implicit_bundle / "system.rst7"
+    if not (prmtop.is_file() and coordinates.is_file()):
+        pytest.skip("bundle does not carry its Amber construction files")
+
+    def _build(hydrogen_mass):
+        structure = pmd.load_file(str(prmtop), xyz=str(coordinates))
+        changeRadii(structure, "mbondi3").execute()
+        kwargs = {} if hydrogen_mass is None else {"hydrogenMass": hydrogen_mass * unit.dalton}
+        return structure, structure.createSystem(
+            nonbondedMethod=app.NoCutoff, constraints=app.HBonds,
+            implicitSolvent=app.GBn2, removeCMMotion=True, **kwargs)
+
+    structure, plain = _build(None)
+    _, heavy = _build(3.024)
+
+    reference = Platform.getPlatformByName("Reference")
+    results = []
+    for system in (plain, heavy):
+        context = app.Simulation(structure.topology, system,
+                                 LangevinMiddleIntegrator(300 * unit.kelvin, 1 / unit.picosecond,
+                                                          0.002 * unit.picoseconds),
+                                 reference).context
+        context.setPositions(structure.positions)
+        state = context.getState(getEnergy=True, getForces=True)
+        results.append((
+            state.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole),
+            np.array(state.getForces(asNumpy=True).value_in_unit(
+                unit.kilojoule_per_mole / unit.nanometer)),
+        ))
+
+    (energy_plain, forces_plain), (energy_heavy, forces_heavy) = results
+    energy_delta = abs(energy_heavy - energy_plain)
+    force_delta = float(np.max(np.abs(forces_heavy - forces_plain)))
+
+    # printed so the measurement is recoverable from a test run, not only from the journal
+    print(f"\n  GBn2 potential  plain {energy_plain:.9f} kJ/mol"
+          f"  repartitioned {energy_heavy:.9f} kJ/mol  delta {energy_delta:.3e}")
+    print(f"  max |force delta| {force_delta:.3e} kJ/mol/nm")
+
+    assert energy_delta == 0.0, f"the potential moved by {energy_delta:.3e} kJ/mol"
+    assert force_delta == 0.0, f"a force component moved by {force_delta:.3e} kJ/mol/nm"
+
+    masses_plain = [plain.getParticleMass(i).value_in_unit(unit.dalton)
+                    for i in range(plain.getNumParticles())]
+    masses_heavy = [heavy.getParticleMass(i).value_in_unit(unit.dalton)
+                    for i in range(heavy.getNumParticles())]
+    assert masses_plain != masses_heavy, "the two Systems must actually differ in mass"
+    assert sum(masses_plain) == pytest.approx(sum(masses_heavy), abs=1e-6)
+
+
+def test_prepare_from_a_canonical_document_refuses_implicit_with_a_usable_message(tmp_path):
+    """`prepare --config` used to raise AttributeError on any implicit document.
+
+    A traceback is not a refusal: it names an attribute, not a route. The replacement says which
+    route is supported, why, and the two commands that do the job.
+    """
+    document = {
+        "system": {"route": "pdb", "system_id": "ace_ala_nme", "pdb": str(ALANINE_PDB)},
+        "build": {"implicit": {"model": "GBn2", "radii": "mbondi3"}},
+        "protocol": {
+            "integrator": {"kind": "langevin-middle", "timestep": "2 fs",
+                           "temperature": "300 K", "friction": "1 /ps"},
+            "equilibration": {"protocol": "simple", "minimize_max_iterations": 10,
+                              "restrained": "2 ps"},
+            "production": {"method": "md", "duration_per_segment": "2 ps"},
+        },
+        "randomness": {"master_seed": 1},
+        "execution": {"platform": "CPU", "precision": "mixed",
+                      "reporting": {"all_atom": "1 ps", "solute": "1 ps"}},
+    }
+    config = tmp_path / "implicit.json"
+    config.write_text(json.dumps(document))
+    result = _run_cli("prepare", "--config", str(config),
+                      "--out-root", str(tmp_path / "runs"), "--platform", "CPU")
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "AttributeError" not in output, "a traceback is not a refusal"
+    assert "implicit solvent" in output
+    assert "MD_system_gen.py" in output and "MD_input_gen.py" in output

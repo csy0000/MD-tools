@@ -890,8 +890,11 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
         # The conservative default: hydrogens keep the masses the force field gave them. Recorded
         # explicitly rather than omitted, so a manifest states that HMR was OFF instead of leaving
         # a reader to infer it from a missing key.
+        # `n_hydrogens_repartitioned`, matching what repartition_hydrogen_mass and
+        # verify_hydrogen_mass_repartitioning already emit. A third spelling for the same field
+        # would make every consumer handle both.
         hmr = {"scope": "none", "target_hydrogen_mass_amu": None,
-               "n_hydrogens_modified": 0,
+               "n_hydrogens_repartitioned": 0,
                "note": "hydrogen mass repartitioning disabled; masses are as parameterised"}
     elif delegate_hmr:
         # OpenMM already did it; verify rather than repeat.
