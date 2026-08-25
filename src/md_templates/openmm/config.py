@@ -114,7 +114,31 @@ def resolve_md_config(document: dict[str, Any], *, implicit: bool) -> dict[str, 
                 "Set it (1.0 bar is the default) or switch the system config to GBn2.")
 
     _check_timestep(resolved)
+    _check_tau(resolved)
     return resolved
+
+
+def _check_tau(resolved: dict[str, Any]) -> None:
+    """`cMD.tau` selects one fixed rung of the REST2 ladder; validate it before anything is built.
+
+    Refused here rather than deep inside a generated script, where the failure would arrive after
+    the System had been constructed and the run directory opened. tau = 1 is excluded because
+    s = (1 - tau)^2 would be zero: a solute with no intramolecular Hamiltonian at all is not a rung
+    of the ladder, it is a different calculation.
+    """
+    block = resolved.get("cMD") or {}
+    if "tau" not in block:
+        return
+    tau = block["tau"]
+    try:
+        tau = float(tau)
+    except (TypeError, ValueError):
+        raise ConfigError(f"cMD.tau must be a number in [0, 1); got {block['tau']!r}") from None
+    if not 0.0 <= tau < 1.0:
+        raise ConfigError(
+            f"cMD.tau must be in [0, 1); got {tau}. tau = 0 is ordinary conventional MD on the "
+            "unscaled Hamiltonian, and tau -> 1 removes the solute Hamiltonian entirely.")
+    resolved["cMD"]["tau"] = tau
 
 
 def _check_timestep(resolved: dict[str, Any]) -> None:

@@ -6,6 +6,27 @@ Entries below `0.2.0` predate the reduction to the six-command CLI in `ca29fcd` 
 registry/bundle/schema architecture that no longer exists. They are kept as history; they do not
 describe the current package.
 
+## Unreleased — fixed-tau MD, and two scaling/restart fixes
+
+**`cMD.tau` runs a single walker on one fixed rung of the REST2 ladder.** `tau: 0` (the default) is
+ordinary conventional MD and leaves the System byte-identical; `tau > 0` scales the solute
+Hamiltonian through the same `rest2_scaling` module the ladder uses, with the same omega exclusion.
+The thermostat is unchanged — this is Hamiltonian scaling, not high-temperature MD. Verified on
+CUDA: energies and per-atom forces match ordinary cMD at tau = 0, and match the REST2 rung at
+tau = 0.5, to `0.000e+00`.
+
+**Implicit REST2 was not scaling `CustomGBForce`.** Every other term scaled while the entire
+generalised-Born energy stayed at s = 1 — 64 kJ/mol on ACE-ALA-NME at tau = 0.5. The template
+scaler now scales it, and audits every force so an unclassifiable energy-bearing term is refused
+rather than left at the wrong scale. **Any implicit REST2 result produced before this is wrong at
+every rung above tau = 0 and must be rerun.**
+
+**Reporter output past the checkpoint is now discarded on resume.** An interrupted stage left
+frames ahead of its checkpoint; resuming appended after them, duplicating that interval. A 1 ns run
+killed and resumed produced 108 frames instead of 100. `cMD` and `REST2` both trim to the
+checkpoint before opening anything for append. **Migration:** a trajectory from an interrupted run
+that was resumed may contain duplicated frames; check for a non-monotonic step column.
+
 ## 0.3.0 — one directory per stage
 
 `md-gen` now writes one directory per stage instead of one per method, and the dependency between

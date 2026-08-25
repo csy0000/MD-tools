@@ -22,7 +22,8 @@ It lives in the generated project rather than being imported, so a moved project
 """
 import math
 
-from openmm import (CMAPTorsionForce, NonbondedForce, PeriodicTorsionForce, XmlSerializer)
+from openmm import (CMAPTorsionForce, CustomGBForce, NonbondedForce, PeriodicTorsionForce,
+                    XmlSerializer)
 
 
 def scale_factor_for_tau(tau):
@@ -77,9 +78,118 @@ def _scale_cmap(force, solute, s):
         force.setMapParameters(map_index, size, [e * s for e in energy])
 
 
+#: Name of the global parameter injected into every CustomGBForce energy term. Chosen not to clash
+#: with any parameter already present in the GBn2 or HCT expressions.
+REST2_GB_SCALE_PARAMETER = "rest2_scale_gb"
+
+
+def _scale_customgb(force, system, solute, s):
+    """Scale the ENTIRE generalised-Born energy by `s`.
+
+    Charge scaling alone is not enough, and this is the part that is easy to get wrong. GBn2 has
+    three energy terms: two are proportional to charge products and would follow `charge*sqrt(s)`
+    correctly, but the third is a non-polar/dispersion correction with no charge dependence. It
+    still has to scale by `s`, and scaling charges leaves it untouched. Multiplying every term by
+    one global parameter scales all three uniformly.
+
+    The whole system must be the enhanced region. A GB energy is not decomposable per atom the way
+    a bonded term is: every Born radius depends on every other atom's position, so a partial
+    selection would need a validated treatment of the solute-environment cross terms, and there is
+    none here. Refused rather than approximated.
+
+    The expressions are rewritten in place and the parameter is added to the System, so this MUST
+    happen before a Context is created -- the compiled kernels have to already reference it.
+    """
+    missing = [i for i in range(system.getNumParticles()) if i not in solute]
+    if missing:
+        shown = ", ".join(str(i) for i in missing[:8])
+        more = f" and {len(missing) - 8} more" if len(missing) > 8 else ""
+        raise ValueError(
+            f"implicit REST2 requires the entire system to be the enhanced region, but "
+            f"{len(missing)} of {system.getNumParticles()} particles are outside it "
+            f"({shown}{more}). A generalised-Born energy is not separable per atom.")
+
+    existing = {force.getGlobalParameterName(i)
+                for i in range(force.getNumGlobalParameters())}
+    if REST2_GB_SCALE_PARAMETER not in existing:
+        force.addGlobalParameter(REST2_GB_SCALE_PARAMETER, 1.0)
+        for term in range(force.getNumEnergyTerms()):
+            expression, computation = force.getEnergyTermParameters(term)
+            # Only the leading expression is scaled; everything after the first ';' defines
+            # intermediate variables, and multiplying those would change what they mean.
+            if ";" in expression:
+                head, tail = expression.split(";", 1)
+                scaled = f"{REST2_GB_SCALE_PARAMETER}*({head});{tail}"
+            else:
+                scaled = f"{REST2_GB_SCALE_PARAMETER}*({expression})"
+            force.setEnergyTermParameters(term, scaled, computation)
+
+    index = [force.getGlobalParameterName(i)
+             for i in range(force.getNumGlobalParameters())].index(REST2_GB_SCALE_PARAMETER)
+    force.setGlobalParameterDefaultValue(index, float(s))
+
+
+#: Force classes this module knows how to scale. Each has an explicit `_scale_*` implementation.
+SCALED_FORCE_CLASSES = frozenset({
+    "NonbondedForce", "PeriodicTorsionForce", "CMAPTorsionForce", "CustomGBForce",
+})
+
+#: Energy-bearing forces left unscaled ON PURPOSE, following the standard REST2 convention. Scaling
+#: bonds and angles would change the molecule's covalent geometry with tau, which is not what REST2
+#: does: the solute's conformational barriers are what the scaling lowers, not its bond lengths.
+DELIBERATELY_UNSCALED_FORCE_CLASSES = frozenset({
+    "HarmonicBondForce", "HarmonicAngleForce",
+})
+
+#: Forces contributing no potential energy, so scaling them is meaningless rather than wrong.
+ENERGY_FREE_FORCE_CLASSES = frozenset({
+    "CMMotionRemover", "MonteCarloBarostat", "MonteCarloAnisotropicBarostat",
+    "MonteCarloFlexibleBarostat", "MonteCarloMembraneBarostat", "AndersenThermostat", "RMSDForce",
+})
+
+
+class UnclassifiedForceError(ValueError):
+    """The System carries an energy-bearing force this module cannot scale.
+
+    Raised instead of scaling what is recognised and leaving the rest alone. A force left at s = 1
+    inside a scaled Hamiltonian is not a smaller effect -- it is a different Hamiltonian from the
+    one the configuration claims, and it fails silently: the run completes, the exchange log looks
+    healthy, and the acceptance ratio absorbs the discrepancy.
+    """
+
+
+def audit_force_classes(system, where="tau scaling"):
+    """Classify every force; raise on any energy-bearing force that cannot be placed."""
+    scaled, by_convention, energy_free, unknown = [], [], [], []
+    for index in range(system.getNumForces()):
+        name = system.getForce(index).__class__.__name__
+        if name in SCALED_FORCE_CLASSES:
+            scaled.append((index, name))
+        elif name in DELIBERATELY_UNSCALED_FORCE_CLASSES:
+            by_convention.append((index, name))
+        elif name in ENERGY_FREE_FORCE_CLASSES:
+            energy_free.append((index, name))
+        else:
+            unknown.append((index, name))
+    if unknown:
+        listed = ", ".join(f"force[{i}] {n}" for i, n in unknown)
+        raise UnclassifiedForceError(
+            f"{where}: the System carries {len(unknown)} force(s) this module cannot classify: "
+            f"{listed}.\n"
+            "  Refusing rather than leaving them at the wrong scale.\n"
+            f"  Known scalable: {sorted(SCALED_FORCE_CLASSES)}\n"
+            f"  Unscaled by convention: {sorted(DELIBERATELY_UNSCALED_FORCE_CLASSES)}\n"
+            f"  Carry no potential energy: {sorted(ENERGY_FREE_FORCE_CLASSES)}")
+    return {"scaled": scaled, "unscaled_by_convention": by_convention, "energy_free": energy_free}
+
+
 def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=()):
     """A copy of `base_system` with the solute Hamiltonian scaled for this rung."""
     s = scale_factor_for_tau(tau)
+    # Before touching anything: refuse a System carrying an energy term that cannot be placed.
+    # Doing this first means the failure is "this System has a force I do not understand", not a
+    # half-scaled System that looks finished.
+    audit_force_classes(base_system)
     system = clone_system(base_system)
     if s == 1.0:
         return system                              # the cold replica is the unmodified system
@@ -93,6 +203,8 @@ def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=()):
             _scale_torsions(force, solute, s, excluded)
         elif isinstance(force, CMAPTorsionForce):
             _scale_cmap(force, solute, s)
+        elif isinstance(force, CustomGBForce):
+            _scale_customgb(force, system, solute, s)
     return system
 
 

@@ -145,6 +145,15 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = "OPC") -> dict[str, 
     if "cMD" in methods:
         document["cMD"] = {
             "ensemble": ensemble,
+            # A single walker on ONE fixed rung of the REST2 ladder. tau = 0 is ordinary cMD: the
+            # unscaled, physical Hamiltonian, and the System is left byte-identical. tau > 0 keeps
+            # the same thermostat temperature and scales only the solute Hamiltonian, exactly as
+            # the matching REST2 rung does -- it is NOT high-temperature MD, and beta is unchanged.
+            # tau is the SOURCE parameter; s = (1 - tau)^2 is a derived diagnostic.
+            "tau": 0.0,
+            # Only meaningful at tau > 0, and matched to the REST2 default so a fixed-tau walker
+            # and the ladder rung at the same tau are the same Hamiltonian.
+            "omega_exclusion": True,
             "duration_ns": 5,
             "checkpoint_interval_ps": 100,
             "whole_system_interval_ps": 100,
