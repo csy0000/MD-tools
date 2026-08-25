@@ -71,16 +71,23 @@ jobs:
           md-openmm sys-gen -i ./ALA.pdb --config sys.config.yaml -of ./inputs/
           md-openmm md-gen -if ./inputs/ --config md.config.yaml -of ./MD/
 
-      - name: tiny cMD and REST2 runs from the generated project
+      - name: the common stage chain, then both production branches
         working-directory: ${{ runner.temp }}
         env:
           MD_PLATFORM: CPU
         run: |
-          (cd MD/cMD && python run.py)
-          (cd MD/REST2 && python run.py)
-          (cd MD/REST2 && python run.py)      # and it continues rather than restarting
+          # run_all.sh is the wrapper; the stage scripts are what it calls, and they are what
+          # this step is really exercising.
+          (cd MD && ./run_all.sh)
+          for stage in minimization eq1_nvt_1kcal eq2_npt_1kcal eq3_npt_free; do
+            test -s "MD/$stage/final_state.xml" || { echo "::error::$stage wrote no final state"; exit 1; }
+            test -s "MD/$stage/resolved_stage.yaml" || { echo "::error::$stage wrote no record"; exit 1; }
+          done
           test -s MD/cMD/whole_system.dcd && test -s MD/cMD/solute.dcd
-          test -s MD/REST2/replica_00_whole.dcd && test -s MD/REST2/replica_00_solute.dcd
+          test -s MD/REST2/replica_00/equilibration/final_state.xml
+          test -s MD/REST2/replica_00/production/whole_system.dcd
+          test -s MD/REST2/replica_00/production/solute.dcd
+          (cd MD/REST2 && python run.py)      # extends rather than restarting
           python "${GITHUB_WORKSPACE}/scripts/check_exchange_history.py" MD/REST2 6
 
       - name: the test suite, with skips forbidden

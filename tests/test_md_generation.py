@@ -30,59 +30,20 @@ def project(tmp_path_factory):
     md_config = work / "md.config.yaml"
     protocol = yaml.safe_load(md_config.read_text())
     protocol["minimization"]["max_iterations"] = 50
-    protocol["equilibration"] = {"nvt_duration_ps": 0.2, "npt_duration_ps": 0.2,
-                                 "restraint_k_kcal_mol_a2": 1.0}
+    for key, value in list(protocol["equilibration"].items()):
+        if key.endswith("_duration_ps") and value is not None:
+            protocol["equilibration"][key] = 0.02
     protocol["cMD"].update({"duration_ns": 0.002, "checkpoint_interval_ps": 1,
                             "whole_system_interval_ps": 1, "solute_interval_ps": 1})
     protocol["REST2"].update({"number_of_replicas": 2, "duration_per_segment_ps": 0.2,
-                              "number_of_exchanges": 1, "tau_max": 0.1})
+                              "number_of_exchanges": 1, "tau_max": 0.1,
+                              "equilibration_duration_ps": 0.02})
     md_config.write_text(yaml.safe_dump(protocol, sort_keys=False))
 
     generated = run_cli("md_openmm", "md-gen", "-if", "./inputs/", "--config", "md.config.yaml",
                         "-of", "./MD/", cwd=work)
     assert generated.returncode == 0, generated.stdout + generated.stderr
     return work
-
-
-def test_the_layout_is_what_the_documentation_promises(project):
-    md = project / "MD"
-    assert (md / "md.config.yaml").is_file()
-    assert (md / "provenance.yaml").is_file()
-    for name in ("run.py", "run.sh"):
-        assert (md / "cMD" / name).is_file(), name
-        assert (md / "REST2" / name).is_file(), name
-    assert (md / "REST2" / "extend.sh").is_file()
-    assert (md / "REST2" / "rest2_scaling.py").is_file()
-    # Both run.py files import it beside themselves; a project without it cannot start at all.
-    for folder in ("cMD", "REST2"):
-        assert (md / folder / "md_stages.py").is_file(), folder
-
-
-def test_the_launchers_are_executable(project):
-    for path in ((project / "MD" / "cMD" / "run.sh"),
-                 (project / "MD" / "REST2" / "run.sh"),
-                 (project / "MD" / "REST2" / "extend.sh")):
-        assert path.stat().st_mode & stat.S_IXUSR, path
-
-
-def test_no_generated_file_contains_a_path_into_this_checkout(project):
-    """A project that names the checkout stops working the moment either one moves."""
-    offenders = {}
-    for path in (project / "MD").rglob("*"):
-        if not path.is_file():
-            continue
-        text = path.read_text(errors="ignore")
-        if str(REPO_ROOT) in text:
-            offenders[str(path.relative_to(project))] = [
-                line.strip() for line in text.splitlines() if str(REPO_ROOT) in line][:2]
-    assert not offenders, offenders
-
-
-def test_the_scripts_do_not_import_this_package(project):
-    """Generated scripts may depend on OpenMM; they must not depend on md_templates."""
-    for path in (project / "MD").rglob("*.py"):
-        text = path.read_text()
-        assert "md_templates" not in text, f"{path.name} imports the template package"
 
 
 def test_the_inputs_folder_is_addressed_relatively(project):

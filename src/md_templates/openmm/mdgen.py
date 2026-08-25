@@ -1,9 +1,20 @@
 """Write a runnable MD project from a built system and `md.config.yaml`.
 
+One directory per stage, in the order they depend on each other:
+
+    MD/
+      minimization/  eq1_nvt_1kcal/  eq2_npt_1kcal/  eq3_npt_free/     the common chain
+      cMD/                                                            production, from the last
+      REST2/                                                          common stage -- siblings
+
+Each common stage reads its parent's `final_state.xml` and writes its own. `cMD` and `REST2` both
+branch from the LAST common stage, so neither has to run before the other and REST2 never repeats
+the minimisation or the NVT/NPT preparation.
+
 The generated project contains ordinary OpenMM scripts and the configuration they read. It does not
 import this package at run time and does not carry a copy of it: the classification work was done
-by `sys-gen` and is in `inputs/solute.yaml`, and the REST2 scaling arithmetic travels as one small
-readable module beside the script that uses it.
+by `sys-gen` and is in `inputs/solute.yaml`, and the stage helper plus the REST2 scaling arithmetic
+travel as two small readable modules beside the scripts that use them.
 """
 from __future__ import annotations
 
@@ -21,6 +32,7 @@ from .config import ConfigError, check_timestep_against_masses, resolve_md_confi
     sha256_of_document, write_yaml
 from .defaults import canonical_method
 from .provenance_min import package_provenance, sha256_file
+from .stages import stage_plan
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 
@@ -71,27 +83,67 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
         relative_inputs = str(inputs)
     resolved["paths"] = {"inputs_folder": relative_inputs}
 
+    plan = stage_plan(resolved, implicit=implicit)
+    resolved["paths"]["common_stages"] = [stage["name"] for stage in plan]
+    resolved["paths"]["common_final_stage"] = plan[-1]["name"]
+    # Both production methods read this one file. Written into the config rather than recomputed by
+    # each script, so "where does production start" has exactly one answer in the project.
+    resolved["paths"]["common_final_state"] = f"../{plan[-1]['name']}/final_state.xml"
+
     write_yaml(out / "md.config.yaml", resolved,
                header="# Resolved protocol, read by every run.py in this project.\n")
+
+    # One copy for the whole project: every script adds its parent directory to sys.path.
+    shutil.copy2(TEMPLATES / "md_stages.py", out / "md_stages.py")
+
+    seed = _base_seed(resolved)
+    for index, stage in enumerate(plan):
+        directory = out / stage["name"]
+        directory.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(TEMPLATES / "stage_run.py", directory / "run.py")
+        _write_launcher(TEMPLATES / "stage_run.sh", directory / "run.sh", stage["name"])
+
+        document = dict(stage)
+        document["input_state"] = (
+            stage["input_state"] if index else
+            os.path.join(os.path.relpath(inputs, directory), "initial_state.xml"))
+        document.update({
+            "temperature_kelvin": resolved["common"]["temperature_kelvin"],
+            "timestep_fs": resolved["common"]["timestep_fs"],
+            "friction_per_ps": resolved["common"]["friction_per_ps"],
+            "integrator_seed": _seed(seed, stage["name"], "integrator"),
+            "velocity_seed": _seed(seed, stage["name"], "velocities"),
+            "barostat_seed": _seed(seed, stage["name"], "barostat"),
+            # Only the first stage after minimisation assigns fresh velocities; every later stage
+            # inherits them through its parent's final_state.xml.
+            "assign_velocities": False,
+            "template_commit": _template_commit(),
+        })
+        write_yaml(directory / "stage.yaml", document,
+                   header=f"# Stage {index + 1} of {len(plan)}. Read by run.py beside this file.\n")
 
     for method in methods:
         directory = out / method
         directory.mkdir(parents=True, exist_ok=True)
-        source = "cmd_run.py" if method == "cMD" else "rest2_run.py"
-        shutil.copy2(TEMPLATES / source, directory / "run.py")
-        # Both scripts import it beside themselves; a project without it cannot run at all.
-        shutil.copy2(TEMPLATES / "md_stages.py", directory / "md_stages.py")
-        if method == "REST2":
+        if method == "cMD":
+            shutil.copy2(TEMPLATES / "cmd_run.py", directory / "run.py")
+            _write_launcher(TEMPLATES / "stage_run.sh", directory / "run.sh", "cMD production")
+        else:
+            shutil.copy2(TEMPLATES / "rest2_run.py", directory / "run.py")
+            shutil.copy2(TEMPLATES / "rest2_equilibrate.py", directory / "equilibrate.py")
             shutil.copy2(TEMPLATES / "rest2_scaling.py", directory / "rest2_scaling.py")
-
-        run_sh = (TEMPLATES / "run.sh").read_text()
-        run_sh = run_sh.replace("__PYTHON__", _interpreter()).replace("__METHOD__", method)
-        (directory / "run.sh").write_text(run_sh, encoding="utf-8")
-        _executable(directory / "run.sh")
-
-        if method == "REST2":
+            _write_launcher(TEMPLATES / "stage_run.sh", directory / "run.sh",
+                            "REST2 exchange production")
+            _write_launcher(TEMPLATES / "stage_run.sh", directory / "equilibrate.sh",
+                            "REST2 per-tau equilibration", script="equilibrate.py")
             shutil.copy2(TEMPLATES / "extend.sh", directory / "extend.sh")
             _executable(directory / "extend.sh")
+            for replica in range(int(resolved["REST2"]["number_of_replicas"])):
+                for phase in ("equilibration", "production"):
+                    (directory / f"replica_{replica:02d}" / phase).mkdir(parents=True,
+                                                                        exist_ok=True)
+
+    _write_run_all(out, plan, methods)
 
     write_yaml(out / "provenance.yaml", {
         **package_provenance(),
@@ -102,4 +154,52 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
             "md_config_hash": sha256_of_document(document),
         },
     })
-    return {"output_folder": str(out), "methods": methods, "implicit": implicit}
+    return {"output_folder": str(out), "methods": methods, "implicit": implicit,
+            "common_stages": [stage["name"] for stage in plan]}
+
+
+def _template_commit() -> str | None:
+    """Which revision of the run-script templates this project was written from."""
+    return (package_provenance().get("md_templates") or {}).get("git_commit")
+
+
+def _base_seed(resolved: dict[str, Any]) -> int:
+    value = (resolved.get("common") or {}).get("random_seed")
+    return int(value) if value is not None else 20260825
+
+
+def _seed(base: int, *purpose: Any) -> int:
+    """The same derivation the generated scripts use, so a stage.yaml and a run agree."""
+    value = int(base)
+    for part in purpose:
+        for byte in str(part).encode("utf-8"):
+            value = (value * 1000003 + byte) & 0xFFFFFFFF
+    seed = value % (2 ** 31 - 1)
+    return seed or 1
+
+
+def _write_launcher(template: Path, path: Path, label: str, *, script: str = "run.py") -> None:
+    text = (template.read_text()
+            .replace("__PYTHON__", _interpreter())
+            .replace("__STAGE__", label)
+            .replace("__SCRIPT__", script)
+            .replace("__LOG__", Path(script).stem + ".log"))
+    path.write_text(text, encoding="utf-8")
+    _executable(path)
+
+
+def _write_run_all(out: Path, plan: list[dict[str, Any]], methods: list[str]) -> None:
+    """The convenience wrapper. It calls the stage scripts; it does not reimplement them."""
+    lines = []
+    if "cMD" in methods:
+        lines += ['echo "== cMD production =="', '( cd cMD && ./run.sh )']
+    if "REST2" in methods:
+        lines += ['echo "== REST2 per-tau equilibration =="',
+                  '( cd REST2 && ./equilibrate.sh )',
+                  'echo "== REST2 exchange production =="',
+                  '( cd REST2 && ./run.sh )']
+    text = ((TEMPLATES / "run_all.sh").read_text()
+            .replace("__COMMON_STAGES__", " ".join(stage["name"] for stage in plan))
+            .replace("__PRODUCTION__", "\n".join(lines)))
+    (out / "run_all.sh").write_text(text, encoding="utf-8")
+    _executable(out / "run_all.sh")

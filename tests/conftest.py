@@ -82,3 +82,71 @@ def dcd_header(path: Path) -> dict:
     offset += 4 + title_bytes + 4
     atoms = struct.unpack("<i", raw[offset + 4:offset + 8])[0]
     return {"frames": frames, "interval": interval, "atoms": atoms}
+
+
+#: A smoke protocol: picoseconds of dynamics and a box as small as the cutoff allows. What these
+#: sizes test is the stage chain and the bookkeeping, not any scientific quantity.
+SMOKE_STAGE_PS = 0.02
+SMOKE_MIN_ITERATIONS = 25
+
+
+def tiny_project(work: Path, *, solvent: str = "OPC", methods=("cMD", "REST2"),
+                 replicas: int = 2, exchanges: int = 3, edit=None) -> Path:
+    """Build inputs/ and MD/ for a project small enough to run through every stage on a CPU.
+
+    Shared by the layout, cMD and REST2 tests so they exercise one generator call each rather than
+    three slightly different hand-written configurations.
+    """
+    import shutil
+
+    import yaml
+
+    shutil.copy2(ALA_PDB, work / "ALA.pdb")
+    run_cli("md_openmm", "sys-config", "--method", *methods, "--solvent", solvent, cwd=work)
+
+    system_config = work / "sys.config.yaml"
+    document = yaml.safe_load(system_config.read_text())
+    if solvent == "OPC":
+        document["solvent"]["padding_nm"] = 0.5
+        document["solvent"]["cutoff_nm"] = 0.5
+    system_config.write_text(yaml.safe_dump(document, sort_keys=False))
+    built = run_cli("md_openmm", "sys-gen", "-i", "./ALA.pdb", "--config", "sys.config.yaml",
+                    "-of", "./inputs/", cwd=work)
+    assert built.returncode == 0, built.stdout + built.stderr
+
+    protocol_path = work / "md.config.yaml"
+    protocol = yaml.safe_load(protocol_path.read_text())
+    protocol["minimization"]["max_iterations"] = SMOKE_MIN_ITERATIONS
+    for key, value in list((protocol["equilibration"] or {}).items()):
+        if key.endswith("_duration_ps") and value is not None:
+            protocol["equilibration"][key] = SMOKE_STAGE_PS
+    if "cMD" in protocol:
+        protocol["cMD"].update({"duration_ns": 0.00004, "checkpoint_interval_ps": 0.02,
+                                "whole_system_interval_ps": 0.02, "solute_interval_ps": 0.01})
+    if "REST2" in protocol:
+        protocol["REST2"].update({"number_of_replicas": replicas,
+                                  "equilibration_duration_ps": SMOKE_STAGE_PS,
+                                  "duration_per_segment_ps": SMOKE_STAGE_PS,
+                                  "number_of_exchanges": exchanges, "tau_max": 0.05,
+                                  "checkpoint_interval_ps": 0.02,
+                                  "whole_system_interval_ps": 0.04,
+                                  "solute_interval_ps": 0.02})
+    if edit is not None:
+        edit(protocol)
+    protocol_path.write_text(yaml.safe_dump(protocol, sort_keys=False))
+
+    generated = run_cli("md_openmm", "md-gen", "-if", "./inputs/", "--config", "md.config.yaml",
+                        "-of", "./MD/", cwd=work)
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+    return work / "MD"
+
+
+def run_stage(directory: Path, script: str = "run.py", platform: str = "CPU"):
+    """Run one generated stage the way a user does, on a platform that needs no GPU."""
+    import os
+    import subprocess
+    import sys as _sys
+
+    environment = dict(os.environ, MD_PLATFORM=platform)
+    return subprocess.run([_sys.executable, script], cwd=str(directory), capture_output=True,
+                          text=True, env=environment, timeout=1800)

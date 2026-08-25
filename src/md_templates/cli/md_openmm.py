@@ -98,10 +98,19 @@ def cmd_md_gen(args) -> int:
                              output_folder=Path(args.output_folder))
     except (ConfigError, FileNotFoundError, ValueError) as error:
         raise SystemExit(f"md-gen: {error}")
+    out = Path(args.output_folder)
     print()
+    print("  common stages, in the order they depend on each other:")
+    for name in result["common_stages"]:
+        print(f"    {out / name}")
+    print("  production, both branching from the last common stage:")
     for method in result["methods"]:
-        print(f"  {method:6} -> {Path(args.output_folder) / method}")
-    print(f"  run with: cd {Path(args.output_folder) / result['methods'][0]} && ./run.sh")
+        print(f"    {out / method}")
+    print()
+    print("  run every stage in order:")
+    print(f"    cd {out} && ./run_all.sh")
+    print("  or one stage at a time, which is the authoritative way:")
+    print(f"    cd {out / result['common_stages'][0]} && ./run.sh")
     return 0
 
 

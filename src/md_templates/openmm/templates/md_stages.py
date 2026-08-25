@@ -14,9 +14,10 @@ Under implicit solvent there is no box, so there is no barostat and no NPT stage
 production ensemble is NVT.
 """
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from openmm import (CustomExternalForce, LangevinMiddleIntegrator, MonteCarloBarostat, Platform,
-                    unit)
+                    XmlSerializer, unit)
 from openmm.app import Simulation
 
 #: U = 1/2 k |r - r0|^2, with k given in kcal mol^-1 A^-2.
@@ -193,107 +194,66 @@ def steps_for(picoseconds, timestep_fs):
     return int(round(exact))
 
 
-def equilibrate(simulation, *, config, implicit, temperature, timestep_fs, velocity_seed,
-                log=print, label=""):
-    """restrained minimization -> restrained NVT -> restrained NPT -> production handoff.
+def require_parent_state(path, *, stage_name, command):
+    """The finalized state of the parent stage, or a refusal that says how to produce it.
 
-    `minimization.restraint_k_kcal_mol_a2` holds the solute while the initial clashes are relieved;
-    `equilibration.restraint_k_kcal_mol_a2` holds it while the solvent relaxes around it. They are
-    two settings in the public configuration, so they are two strengths here rather than one of
-    them being quietly ignored.
-
-    Returns a record of what actually ran, so the caller can log it and a test can check it rather
-    than trusting that a configured stage happened.
+    A stage is never allowed to fall back to its parent's `checkpoint.chk`. A checkpoint is written
+    while a stage is still running, so consuming one as input means starting from a partially
+    completed parent while every artifact looks normal.
     """
-    prefix = f"[{label}] " if label else ""
-    record = {}
-
-    equilibration = config.get("equilibration") or {}
-    minimization_k = float(config["minimization"]["restraint_k_kcal_mol_a2"])
-    equilibration_k = float(equilibration.get("restraint_k_kcal_mol_a2", minimization_k))
-
-    set_restraint(simulation, minimization_k)
-    record["restraint_kcal_minimization"] = minimization_k
-    record["restraint_kj_nm2"] = restraint_strength(simulation)
-
-    # Minimisation and NVT with the barostat inactive: a barostat during minimisation moves the box
-    # against forces that are still enormous.
-    set_barostat_frequency(simulation, 0)
-    record["barostats_active_minimization"] = active_barostat_count(simulation)
-
-    iterations = int(config["minimization"]["max_iterations"])
-    log(f"{prefix}minimising, max {iterations} iterations, restraint "
-        f"{minimization_k} kcal/mol/A^2 on the solute")
-    simulation.minimizeEnergy(maxIterations=iterations)
-
-    simulation.context.setVelocitiesToTemperature(temperature, int(velocity_seed))
-
-    set_restraint(simulation, equilibration_k)
-    record["restraint_kcal_equilibration"] = equilibration_k
-    record["restraint_kj_nm2_equilibration"] = restraint_strength(simulation)
-
-    nvt_ps = float(equilibration.get("nvt_duration_ps") or 0.0)
-    npt_ps = float(equilibration.get("npt_duration_ps") or 0.0)
-
-    nvt_steps = steps_for(nvt_ps, timestep_fs) if nvt_ps else 0
-    if nvt_steps:
-        record["barostats_active_nvt"] = active_barostat_count(simulation)
-        log(f"{prefix}NVT {nvt_ps} ps, restraint {equilibration_k} kcal/mol/A^2, "
-            f"{record['barostats_active_nvt']} active barostat(s)")
-        simulation.step(nvt_steps)
-    record.setdefault("barostats_active_nvt", active_barostat_count(simulation))
-
-    npt_steps = steps_for(npt_ps, timestep_fs) if (npt_ps and not implicit) else 0
-    if npt_steps:
-        set_barostat_frequency(simulation, PRODUCTION_BAROSTAT_FREQUENCY)
-        active = active_barostat_count(simulation)
-        if active != 1:
-            raise SystemExit(f"NPT equilibration needs exactly one active barostat; found {active}")
-        record["barostats_active_npt"] = active
-        log(f"{prefix}NPT {npt_ps} ps, restraint {equilibration_k} kcal/mol/A^2, "
-            f"{active} active barostat")
-        simulation.step(npt_steps)
-    elif implicit:
-        record["barostats_active_npt"] = 0
-
-    record.update(enter_production(simulation, implicit=implicit))
-    record["restraint_after_equilibration"] = record["restraint_kj_nm2_production"]
-    simulation.context.setStepCount(0)
-    log(f"{prefix}equilibration complete; restraint off, "
-        f"{record['barostats_active_production']} active barostat(s) for production")
-    return record
+    path = Path(path)
+    if not path.is_file():
+        raise SystemExit(
+            f"missing {path.name}: this stage reads {path}, which stage '{stage_name}' writes "
+            f"only when it finishes.\n"
+            f"Run it first:\n"
+            f"    cd {command} && ./run.sh")
+    return XmlSerializer.deserialize(path.read_text(encoding="utf-8"))
 
 
-def enter_production(simulation, *, implicit):
-    """The Force layout production runs in: restraint off, barostat active unless implicit.
+def build_stage_system(inputs, *, implicit, restrained, barostat_active, pressure_bar,
+                       temperature, barostat_seed, solute_indices):
+    """The System a stage integrates, with its Force layout fixed before any state is loaded.
 
-    Production is unrestrained. The Force stays in the System -- only its strength goes to zero --
-    so the checkpoint layout is the same before and after.
+    The restraint Force is always present, at zero strength when the stage is unrestrained, so a
+    State carrying a `restraint_k` parameter can be loaded into any stage's Context. The barostat
+    is present only under explicit solvent, and its frequency -- not its presence -- is what makes
+    a stage NVT or NPT.
     """
+    system = XmlSerializer.deserialize((Path(inputs) / "system.xml").read_text(encoding="utf-8"))
+    initial = XmlSerializer.deserialize(
+        (Path(inputs) / "initial_state.xml").read_text(encoding="utf-8"))
+    add_positional_restraint(system, initial.getPositions(), solute_indices)
     if not implicit:
-        set_barostat_frequency(simulation, PRODUCTION_BAROSTAT_FREQUENCY)
-    set_restraint(simulation, 0.0)
-    return {"restraint_kj_nm2_production": restraint_strength(simulation),
-            "barostats_active_production": active_barostat_count(simulation)}
+        add_barostat(system, pressure_bar, temperature, barostat_seed,
+                     frequency=PRODUCTION_BAROSTAT_FREQUENCY if barostat_active else 0)
+    barostats = count_barostats(system)
+    if implicit and barostats:
+        raise SystemExit(f"implicit solvent must have no barostat in the System; found {barostats}")
+    return system
 
 
-def resume_production(simulation, checkpoint_path, *, implicit):
-    """Load a production checkpoint into the production Force layout.
+def write_final_state(simulation, path):
+    """The handoff to the next stage: positions, velocities, box, time and parameters.
 
-    Order matters. A barostat's frequency lives in the System, NOT in the checkpoint, so a resumed
-    run that only loaded the checkpoint would keep the inactive barostat the fresh run used for
-    minimisation: NPT production that is silently NVT. The layout is therefore set BEFORE loading,
-    which also avoids a `reinitialize` afterwards -- that would restart the integrator's random
-    stream, and the point of loading a checkpoint is that it restores it.
+    Written only once the stage has finished, and written atomically, so a downstream stage cannot
+    read a half-written file and start from a state that never existed.
     """
-    if not implicit:
-        set_barostat_frequency(simulation, PRODUCTION_BAROSTAT_FREQUENCY)
-    simulation.loadCheckpoint(str(checkpoint_path))
-    # A Context parameter, so this needs no reinitialisation and disturbs nothing that was loaded.
-    set_restraint(simulation, 0.0)
-    return {"restraint_kj_nm2_production": restraint_strength(simulation),
-            "barostats_active_production": active_barostat_count(simulation),
-            "resumed_at_step": simulation.context.getStepCount()}
+    state = simulation.context.getState(getPositions=True, getVelocities=True,
+                                        getParameters=True, enforcePeriodicBox=False)
+    path = Path(path)
+    temporary = path.with_suffix(path.suffix + ".partial")
+    temporary.write_text(XmlSerializer.serialize(state), encoding="utf-8")
+    temporary.replace(path)
+    return state
+
+
+def write_final_pdb(simulation, path, *, implicit):
+    from openmm.app import PDBFile
+
+    state = simulation.context.getState(getPositions=True, enforcePeriodicBox=not implicit)
+    with Path(path).open("w", encoding="utf-8") as handle:
+        PDBFile.writeFile(simulation.topology, state.getPositions(), handle, keepIds=True)
 
 
 def device_groups(n_replicas, devices):
