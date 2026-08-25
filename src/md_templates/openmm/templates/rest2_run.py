@@ -39,7 +39,8 @@ sys.path.insert(0, str(HERE))
 from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, active_barostat_count, add_barostat,
                        add_positional_restraint, count_barostats, derive_seed, device_groups,
                        make_simulation, propagate_segment, require_parent_state, resolve_platform,
-                       set_barostat_frequency, set_restraint, steps_for, write_final_state)
+                       set_barostat_frequency, set_restraint, steps_for,
+                       trim_to_checkpoint, write_final_state)
 from rest2_scaling import (build_scaled_system, exchange_log_acceptance, exchange_pairs,
                            linear_tau_ladder, reduced_potential, scale_factor_for_tau)
 
@@ -175,8 +176,16 @@ def main():
         resuming = checkpoint.is_file()
         if resuming:
             simulation.loadCheckpoint(str(checkpoint))
-            print(f"[remd] replica {replica}: resumed production at step "
-                  f"{simulation.context.getStepCount():,}")
+            done = simulation.context.getStepCount()
+            print(f"[remd] replica {replica}: resumed production at step {done:,}")
+            # Reporters fire far more often than the checkpoint, so an interrupted invocation
+            # leaves frames past it. Appending after them would duplicate that interval in this
+            # replica's trajectory while every file still looked healthy.
+            kept = trim_to_checkpoint(replica_dir(replica, "production"), done,
+                                      whole_every=whole_every, solute_every=solute_every,
+                                      table_every=solute_every)
+            print(f"[remd] replica {replica}: trimmed to the checkpoint: "
+                  + ", ".join(f"{name} -> {n}" for name, n in kept.items()))
         else:
             # The per-tau equilibration this replica already ran. Not a shared state, and not a
             # checkpoint: each rung relaxed under its OWN Hamiltonian before production began.

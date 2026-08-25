@@ -56,7 +56,11 @@ def test_the_explicit_tree_is_the_documented_one(explicit):
     for name in EXPLICIT_STAGES:
         assert {p.name for p in (explicit / name).iterdir()} >= {"run.py", "run.sh", "stage.yaml"}
     assert (explicit / "run_all.sh").is_file()
-    assert {p.name for p in (explicit / "cMD").iterdir()} == {"run.py", "run.sh"}
+    # cMD carries the scaling module because it may run at tau > 0: a fixed-tau single walker on
+    # one rung of the ladder. It is the SAME file REST2 gets, so the walker cannot drift from the
+    # rung it is meant to match.
+    assert {p.name for p in (explicit / "cMD").iterdir()} == {
+        "run.py", "run.sh", "rest2_scaling.py"}
     assert {p.name for p in (explicit / "REST2").iterdir()} >= {
         "equilibrate.py", "equilibrate.sh", "run.py", "run.sh", "extend.sh", "rest2_scaling.py",
         "replica_00", "replica_01"}

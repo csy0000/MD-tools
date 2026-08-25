@@ -135,6 +135,9 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
         directory.mkdir(parents=True, exist_ok=True)
         if method == "cMD":
             shutil.copy2(TEMPLATES / "cmd_run.py", directory / "run.py")
+            # cMD carries the scaling module because it may run at tau > 0. It is the SAME file
+            # REST2 gets, so a fixed-tau walker cannot drift from the ladder it is meant to match.
+            shutil.copy2(TEMPLATES / "rest2_scaling.py", directory / "rest2_scaling.py")
             _write_launcher(TEMPLATES / "stage_run.sh", directory / "run.sh", "cMD production")
         else:
             shutil.copy2(TEMPLATES / "rest2_run.py", directory / "run.py")

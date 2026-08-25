@@ -14,6 +14,7 @@ Under implicit solvent there is no box, so there is no barostat and no NPT stage
 production ensemble is NVT.
 """
 from concurrent.futures import ThreadPoolExecutor
+import struct
 from pathlib import Path
 
 from openmm import (CustomExternalForce, LangevinMiddleIntegrator, MonteCarloBarostat, Platform,
@@ -212,15 +213,24 @@ def require_parent_state(path, *, stage_name, command):
 
 
 def build_stage_system(inputs, *, implicit, restrained, barostat_active, pressure_bar,
-                       temperature, barostat_seed, solute_indices):
+                       temperature, barostat_seed, solute_indices, scale_system=None):
     """The System a stage integrates, with its Force layout fixed before any state is loaded.
 
     The restraint Force is always present, at zero strength when the stage is unrestrained, so a
     State carrying a `restraint_k` parameter can be loaded into any stage's Context. The barostat
     is present only under explicit solvent, and its frequency -- not its presence -- is what makes
     a stage NVT or NPT.
+
+    `scale_system` applies a fixed-tau REST2 Hamiltonian scaling to the System as it comes off
+    disk. It runs FIRST, on the bare System, for two reasons: the scaler audits every force and
+    refuses one it cannot classify, and the restraint and barostat are stage machinery rather than
+    terms of the molecular Hamiltonian, so neither may be scaled. This is the same order
+    `REST2/run.py` uses -- scale, then restrain -- so a fixed-tau walker and the matching ladder
+    rung construct the identical System.
     """
     system = XmlSerializer.deserialize((Path(inputs) / "system.xml").read_text(encoding="utf-8"))
+    if scale_system is not None:
+        system = scale_system(system)
     initial = XmlSerializer.deserialize(
         (Path(inputs) / "initial_state.xml").read_text(encoding="utf-8"))
     add_positional_restraint(system, initial.getPositions(), solute_indices)
@@ -247,6 +257,84 @@ def write_final_state(simulation, path):
     temporary.replace(path)
     return state
 
+
+
+# ---------------------------------------------------------------------------------------------
+# Uncommitted tails
+# ---------------------------------------------------------------------------------------------
+# A checkpoint is written every `checkpoint_interval_ps`; the trajectories and the table are
+# written far more often. An interrupted stage therefore leaves reporter output that runs PAST the
+# last checkpoint, and resuming from that checkpoint replays the interval -- appending frames the
+# files already contain. The run completes, every file looks healthy, and the trajectory silently
+# carries duplicated frames and a non-monotonic step column.
+#
+# So on resume every stream is cut back to the checkpoint before anything is opened for append.
+# The checkpoint is the authority for where the stage actually is; a file length is a fact about
+# when the process died.
+
+
+def _dcd_layout(path):
+    """(header_bytes, frame_bytes, n_atoms, n_frames) for a DCD written by OpenMM."""
+    with open(path, "rb") as handle:
+        if struct.unpack("<i", handle.read(4))[0] != 84:
+            raise ValueError(f"{path}: not a little-endian DCD")
+        control = handle.read(84)                      # b'CORD' + 20 int32
+        n_frames = struct.unpack("<i", control[4:8])[0]
+        has_unitcell = struct.unpack("<i", control[44:48])[0] != 0
+        handle.read(4)                                 # closing record marker
+        title_bytes = struct.unpack("<i", handle.read(4))[0]
+        handle.read(title_bytes + 4)
+        handle.read(4)
+        n_atoms = struct.unpack("<i", handle.read(4))[0]
+        handle.read(4)
+        header_bytes = handle.tell()
+    frame_bytes = (56 if has_unitcell else 0) + 3 * (8 + 4 * n_atoms)
+    return header_bytes, frame_bytes, n_atoms, n_frames
+
+
+def truncate_dcd(path, keep_frames):
+    """Cut a DCD back to `keep_frames`, rewriting the frame count in its header."""
+    path = Path(path)
+    if not path.is_file():
+        return 0
+    header_bytes, frame_bytes, _, n_frames = _dcd_layout(path)
+    if keep_frames >= n_frames:
+        return n_frames
+    with open(path, "r+b") as handle:
+        handle.truncate(header_bytes + keep_frames * frame_bytes)
+        handle.seek(8)                                 # icntrl[0], the frame count
+        handle.write(struct.pack("<i", keep_frames))
+    return keep_frames
+
+
+def truncate_table(path, keep_rows):
+    """Cut a StateDataReporter CSV back to `keep_rows` data rows, keeping its single header."""
+    path = Path(path)
+    if not path.is_file():
+        return 0
+    lines = path.read_text().splitlines(keepends=True)
+    if not lines:
+        return 0
+    header, body = lines[0], lines[1:]
+    if len(body) <= keep_rows:
+        return len(body)
+    path.write_text("".join([header] + body[:keep_rows]))
+    return keep_rows
+
+
+def trim_to_checkpoint(directory, done_steps, *, whole_every, solute_every, table_every):
+    """Discard reporter output past the checkpoint. Returns what each stream was cut to.
+
+    Reporters fire at multiples of their interval, so a checkpoint at step N means exactly
+    N // interval frames belong to the committed history.
+    """
+    directory = Path(directory)
+    kept = {
+        "whole_system.dcd": truncate_dcd(directory / "whole_system.dcd", done_steps // whole_every),
+        "solute.dcd": truncate_dcd(directory / "solute.dcd", done_steps // solute_every),
+        "production.csv": truncate_table(directory / "production.csv", done_steps // table_every),
+    }
+    return kept
 
 #: The runtime outputs a stage writes. `run.py`, `run.sh` and `stage.yaml` are inputs and are not
 #: in this list: removing them would delete the stage rather than its results.
