@@ -679,7 +679,10 @@ def test_cpu_smoke_prepares_propagates_and_exchanges(tmp_path):
     assert bundle_manifest["composition"]["n_water_molecules"] > 0
     assert bundle_manifest["composition"]["n_degrees_of_freedom"] > 0
     assert bundle_manifest["system"]["formal_charge"] == 0
-    assert bundle_manifest["parameterization"]["charge_method"] == "am1bcc_nagl"
+    # the SMOKE system keeps am1bcc deliberately: small_macrocycle_smoke.yaml is a tiny
+    # installability check, not a documented default, so it does not follow the ligand
+    # default to NAGL -- exactly as the cpu-smoke PROFILE keeps its own settings.
+    assert bundle_manifest["parameterization"]["charge_method"] == "am1bcc"
     assert bundle_manifest["environment"]["toolchain"]["openmm"]
 
 

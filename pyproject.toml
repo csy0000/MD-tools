@@ -59,6 +59,17 @@ include = ["md_templates*"]
                           "manifests/systems/*.pdb"]
 
 [tool.pytest.ini_options]
+# Running the slow suite in parallel needs --dist loadfile, not plain -n:
+#
+#     pytest tests/ -k slow -n 12 --dist loadfile     # 169 tests, ~3m20 on 48 cores
+#     pytest tests/ -k slow                           # the same 169, ~13m
+#
+# Plain `-n 12` splits module-scoped fixtures across workers and breaks five continuation tests
+# that share one run directory BY DESIGN -- they extend a run segment by segment and assert the
+# committed record, the exchange history and the walker mapping across it. loadfile keeps every
+# test in a file on one worker, which is the sequencing those tests depend on.
+#
+# pytest-xdist is optional; the suite runs without it, just serially.
 testpaths = ["tests"]
 markers = [
     "slow: end-to-end tests that build an OpenMM Context and propagate MD (deselect with '-m \"not slow\"')",
