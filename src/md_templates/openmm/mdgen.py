@@ -25,7 +25,7 @@ from .provenance_min import package_provenance, sha256_file
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 
 #: What sys-gen writes and md-gen needs. A missing one is named rather than discovered later.
-REQUIRED_INPUTS = ("system.xml", "topology.pdb", "initial_state.xml", "solute.yaml",
+REQUIRED_INPUTS = ("system.xml", "topology.pdb", "solute.pdb", "initial_state.xml", "solute.yaml",
                    "resolved_sys.config.yaml")
 
 
@@ -79,6 +79,8 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
         directory.mkdir(parents=True, exist_ok=True)
         source = "cmd_run.py" if method == "cMD" else "rest2_run.py"
         shutil.copy2(TEMPLATES / source, directory / "run.py")
+        # Both scripts import it beside themselves; a project without it cannot run at all.
+        shutil.copy2(TEMPLATES / "md_stages.py", directory / "md_stages.py")
         if method == "REST2":
             shutil.copy2(TEMPLATES / "rest2_scaling.py", directory / "rest2_scaling.py")
 

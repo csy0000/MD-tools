@@ -104,9 +104,11 @@ MD/
 ├── provenance.yaml
 ├── cMD/
 │   ├── run.py              # an ordinary OpenMM script
+│   ├── md_stages.py        # minimisation/NVT/NPT/production, shared by both methods
 │   └── run.sh
 └── REST2/
     ├── run.py
+    ├── md_stages.py
     ├── rest2_scaling.py    # the tau scaling, beside the script that uses it
     ├── run.sh
     └── extend.sh
@@ -118,8 +120,23 @@ MD/
 cd MD/cMD && ./run.sh
 ```
 
-Minimises, equilibrates, then runs production, checkpointing as it goes. Run it again and it
-continues from `production.chk` rather than starting over.
+On a fresh run:
+
+```text
+restrained minimisation -> restrained NVT -> restrained NPT -> unrestrained production
+```
+
+The solute atoms are held by the configured `restraint_k_kcal_mol_a2` (`U = 1/2 k |r - r0|^2`,
+1 kcal mol⁻¹ Å⁻² = 418.4 kJ mol⁻¹ nm⁻²) through minimisation and equilibration, and released for
+production. There is no barostat during NVT and exactly one during NPT. Implicit systems have no
+box, so they skip NPT and never carry a barostat at all.
+
+It writes `whole_system.dcd` and a solute-only `solute.dcd` at their own intervals, `production.csv`
+and `production.chk`. Read `solute.dcd` against `inputs/solute.pdb`, which `sys-gen` writes from the
+same atom indices.
+
+Run it again and it continues from `production.chk` rather than starting over — reporters append,
+and the barostat is restored before the checkpoint is loaded.
 
 **REST2**
 
@@ -135,10 +152,28 @@ solute–solute        (1 - tau)^2
 solute–environment   (1 - tau)
 ```
 
-Torsions about a peptide bond are left unscaled, so the hot rungs cannot rotate an amide that the
-cold rung never rotates. Exchanges are attempted between alternating nearest neighbours, and under
-NPT the acceptance carries the pV term explicitly — replicas share a pressure but not a beta, so it
-does not cancel.
+Every rung is thermostatted at the same temperature, so the whole ladder shares one beta; the rungs
+differ by Hamiltonian, not by thermostat. Torsions about a peptide bond are left unscaled, so the
+hot rungs cannot rotate an amide that the cold rung never rotates.
+
+Each replica is equilibrated separately at its own tau, then the run alternates:
+
+```text
+propagate every replica for duration_per_segment_ps -> attempt neighbour exchanges
+```
+
+`number_of_exchanges` times, so one invocation advances each replica by
+`duration_per_segment_ps × number_of_exchanges`. Exchanges are attempted between alternating
+nearest neighbours; a two-rung ladder exchanges on every round. Positions and box vectors travel
+together, so the acceptance is
+
+```text
+log(alpha) = beta * [U_i(x_i,V_i) + U_j(x_j,V_j) - U_i(x_j,V_j) - U_j(x_i,V_i)]
+```
+
+with the pV contributions cancelling at the common beta and pressure. Every replica writes
+`replica_NN_whole.dcd`, `replica_NN_solute.dcd`, `replica_NN.csv` and `replica_NN.chk`, and gets its
+own integrator, velocity and barostat seeds.
 
 Every attempt is appended to `exchange_attempts.csv`:
 
@@ -158,14 +193,21 @@ raise `duration_ns` in `MD/md.config.yaml` and run `./run.sh` again.
 
 **Choosing hardware**
 
+Runs use **CUDA by default**, and there is no quiet fallback: if no CUDA platform is available and
+you have not named another one, the run fails rather than spending days on the CPU while looking
+healthy.
+
 ```bash
-MD_PLATFORM=CPU ./run.sh        # force a platform
-MD_DEVICE=0 ./run.sh            # cMD: pin one CUDA device
-CUDA_VISIBLE_DEVICES=0,1,2 ./run.sh   # REST2: use these three
+./run.sh                              # CUDA
+MD_DEVICE=0 ./run.sh                  # cMD: pin one CUDA device
+CUDA_VISIBLE_DEVICES=0,1,2 ./run.sh   # REST2: spread the replicas over these three
+MD_PLATFORM=CPU ./run.sh              # anything but CUDA must be asked for by name
 ```
 
-REST2 uses at most `min(number_of_replicas, visible GPUs)`, assigning replicas round-robin. There
-is no busy-device detection: if you want particular cards, name them.
+REST2 uses at most `min(number_of_replicas, visible GPUs)`, assigning replicas round-robin.
+Different devices propagate concurrently; replicas sharing a device propagate in turn, and every
+replica is awaited before exchanges are attempted. There is no busy-device detection: if you want
+particular cards, name them.
 
 ---
 

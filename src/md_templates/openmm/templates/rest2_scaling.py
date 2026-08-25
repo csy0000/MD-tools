@@ -15,6 +15,9 @@ Torsions about an omega bond are LEFT ALONE -- scaling them lets a peptide bond 
 rungs, so the ladder samples cis/trans interconversion the cold rung never sees, and the exchange
 no longer connects two states of the same system.
 
+Every rung is thermostatted at the same temperature. "Effective solute temperature" is a way of
+describing the scaling, not a second thermostat: beta is common to the whole ladder.
+
 It lives in the generated project rather than being imported, so a moved project needs only OpenMM.
 """
 import math
@@ -96,8 +99,11 @@ def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=()):
 def reduced_potential(energy_kj_mol, beta, pressure_bar=None, volume_nm3=None):
     """u = beta * (U + p V), the NPT form.
 
-    The pV term cancels only when two replicas share beta AND pressure; under REST2 they share
-    pressure but not beta, so it does not cancel and is carried explicitly.
+    REST2 replicas share one thermostat temperature and one pressure, so they share beta: the pV
+    terms cancel exactly in `exchange_log_acceptance` below, because a swap moves each configuration
+    -- positions AND its box -- to the other rung, and the same two volumes appear on both sides.
+    They are carried anyway so the cancellation is arithmetic that can be checked rather than an
+    omission that has to be trusted.
     """
     u = beta * energy_kj_mol
     if pressure_bar is not None and volume_nm3 is not None:
@@ -107,7 +113,12 @@ def reduced_potential(energy_kj_mol, beta, pressure_bar=None, volume_nm3=None):
 
 
 def exchange_log_acceptance(u_ii, u_jj, u_ij, u_ji):
-    """log of the Metropolis criterion for swapping configurations i and j."""
+    """log of the Metropolis criterion for swapping configurations i and j.
+
+        log(alpha) = beta * [U_i(x_i,V_i) + U_j(x_j,V_j) - U_i(x_j,V_j) - U_j(x_i,V_i)]
+
+    where u_ij is replica j's configuration evaluated in replica i's Hamiltonian.
+    """
     return (u_ii + u_jj) - (u_ij + u_ji)
 
 

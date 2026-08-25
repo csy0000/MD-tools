@@ -53,6 +53,9 @@ def test_the_layout_is_what_the_documentation_promises(project):
         assert (md / "REST2" / name).is_file(), name
     assert (md / "REST2" / "extend.sh").is_file()
     assert (md / "REST2" / "rest2_scaling.py").is_file()
+    # Both run.py files import it beside themselves; a project without it cannot start at all.
+    for folder in ("cMD", "REST2"):
+        assert (md / folder / "md_stages.py").is_file(), folder
 
 
 def test_the_launchers_are_executable(project):

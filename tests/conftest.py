@@ -29,3 +29,38 @@ def md_template(tmp_path):
     def call(*args, cwd=None):
         return run_cli("md_template", *args, cwd=cwd or tmp_path)
     return call
+
+
+def template_module(name: str):
+    """Import one of the modules that is copied into a generated project.
+
+    The generated scripts import these by filename beside themselves, so there is no package to
+    import them from. Loading them by path is how a test exercises the same code the run does.
+    """
+    import importlib.util
+
+    path = REPO_ROOT / "src" / "md_templates" / "openmm" / "templates" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"_template_{name}", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def dcd_header(path: Path) -> dict:
+    """Frame and atom counts straight out of a DCD header.
+
+    No DCD reader is a declared dependency of this repository, and adding one to assert a frame
+    count would be a dependency bought for a test. The header carries both numbers, and the atom
+    count is the part that matters: a solute-subset trajectory read against the whole-system
+    topology is the mistake being guarded against.
+    """
+    import struct
+
+    raw = Path(path).read_bytes()
+    frames = struct.unpack("<i", raw[8:12])[0]
+    interval = struct.unpack("<i", raw[16:20])[0]
+    offset = 4 + 84 + 4
+    title_bytes = struct.unpack("<i", raw[offset:offset + 4])[0]
+    offset += 4 + title_bytes + 4
+    atoms = struct.unpack("<i", raw[offset + 4:offset + 8])[0]
+    return {"frames": frames, "interval": interval, "atoms": atoms}

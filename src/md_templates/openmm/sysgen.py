@@ -20,7 +20,7 @@ import yaml
 
 from .config import ConfigError, resolve_sys_config, sha256_of_document, write_yaml
 
-OUTPUT_FILES = ("system.xml", "topology.pdb", "initial_state.xml", "solute.yaml",
+OUTPUT_FILES = ("system.xml", "topology.pdb", "solute.pdb", "initial_state.xml", "solute.yaml",
                 "resolved_sys.config.yaml", "provenance.yaml", "sys-gen.log")
 
 
@@ -211,6 +211,8 @@ def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
     shutil.copy2(record["system_xml"], out / "system.xml")
     shutil.copy2(record["topology_pdb"], out / "topology.pdb")
     shutil.copy2(record["initial_state"], out / "initial_state.xml")
+    _write_solute_pdb(record["topology_pdb"], solute_indices, out / "solute.pdb")
+    log(f"solute.pdb   : {len(solute_indices)} atoms, the topology a solute-only DCD needs")
 
     write_yaml(out / "solute.yaml",
                _solute_document(topology, solute_indices, omega, route=route))
@@ -303,6 +305,24 @@ def _build_implicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
     return {"system_xml": built["system_xml"], "topology_pdb": built["topology_pdb"],
             "initial_state": state_path, "n_solute_atoms": built["n_solute_atoms"],
             "ligand_sdf": None, "omega": built.get("build_record") or {}}
+
+
+def _write_solute_pdb(topology_pdb: Path, solute_indices, path: Path) -> Path:
+    """The topology a solute-only trajectory needs.
+
+    `DCDReporter(atomSubset=...)` writes only those atoms, so the frames cannot be read against the
+    whole-system topology. Built from the SAME indices recorded in solute.yaml, so the subset
+    trajectory and this file cannot disagree.
+    """
+    from openmm import app
+
+    source = app.PDBFile(str(topology_pdb))
+    keep = set(int(i) for i in solute_indices)
+    modeller = app.Modeller(source.topology, source.positions)
+    modeller.delete([a for a in source.topology.atoms() if a.index not in keep])
+    with Path(path).open("w", encoding="utf-8") as handle:
+        app.PDBFile.writeFile(modeller.topology, modeller.positions, handle, keepIds=True)
+    return Path(path)
 
 
 def _write_initial_state(system, pdb, staging: Path) -> Path:

@@ -154,10 +154,15 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = "OPC") -> dict[str, 
             "tau_max": 0.5,
             "number_of_replicas": 6,
             "tau_interpolation": "linear",
+            # Time BETWEEN consecutive exchange rounds. Total production is
+            # duration_per_segment_ps * number_of_exchanges, so this default is 10 ns per replica.
             "duration_per_segment_ps": 10,
             "number_of_exchanges": 1000,
             "enhanced_region": "solute",
             "omega_exclusion": True,
+            "checkpoint_interval_ps": 100,
+            "whole_system_interval_ps": 100,
+            "solute_interval_ps": 10,
         }
     return document
 
