@@ -19,6 +19,26 @@ TEMPLATE_FILES = {"cmd_run.py", "rest2_run.py", "md_stages.py", "rest2_scaling.p
                   "run.sh", "extend.sh"}
 
 
+def _declared_version() -> str:
+    """The one version in pyproject.toml, read without a TOML parser dependency."""
+    import re
+
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    assert match, "pyproject.toml has no version"
+    return match.group(1)
+
+
+def test_the_package_and_project_versions_agree():
+    """Two places state the version; a release where they disagree ships a lie in its metadata."""
+    import re
+
+    init = (REPO_ROOT / "src" / "md_templates" / "__init__.py").read_text(encoding="utf-8")
+    match = re.search(r'^__version__\s*=\s*"([^"]+)"', init, re.MULTILINE)
+    assert match, "md_templates/__init__.py has no __version__"
+    assert match.group(1) == _declared_version()
+
+
 @pytest.fixture(scope="module")
 def installed(tmp_path_factory):
     """Build the wheel and install it into a bare prefix, with no source checkout on the path."""
@@ -84,6 +104,23 @@ def test_each_public_command_runs_from_outside_the_checkout(installed, command):
     site, work = installed
     result = _outside(site, work, "-m", *command)
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+
+
+def test_the_built_wheel_carries_the_declared_version(installed):
+    """What was built, not what was asked for."""
+    _site, work = installed
+    wheels = list((work / "dist").glob("md_templates-*.whl"))
+    assert len(wheels) == 1, wheels
+    built = wheels[0].name.split("-")[1]
+    assert built == _declared_version(), f"wheel is {built}, pyproject says {_declared_version()}"
+
+
+def test_the_installed_package_reports_the_declared_version(installed):
+    site, work = installed
+    result = _outside(site, work, "-c",
+                      "import md_templates; print(md_templates.__version__)")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip().splitlines()[-1] == _declared_version()
 
 
 def test_the_console_scripts_are_installed(installed):

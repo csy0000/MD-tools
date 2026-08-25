@@ -4,15 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "md-templates"
-version = "0.1.1"
+version = "0.2.0"
 description = "Reusable OpenMM templates for explicit-water molecular dynamics and omega-selective REST2."
 readme = "README.md"
 requires-python = ">=3.11"
-# Heavy scientific dependencies (openmm, openmmtools, ambertools, rdkit, mdtraj, deeptime, ...)
-# are provided by the conda environment defined in environment.yml — install the package with
-# `pip install -e . --no-deps` inside that env. Only the pure-Python, pip-resolvable core is listed here.
-# The heavy scientific stack (openmm, openff-toolkit, ambertools, rdkit, parmed) comes from the
-# conda environment `md-template install` creates. Only the pure-Python core is listed here.
+# The scientific stack -- openmm, openff-toolkit, openmmforcefields, ambertools, parmed, rdkit --
+# comes from the conda environment `md-template install` creates (see environment-ci.yml for the
+# same list). Install this package into that environment with `--no-deps`, or pip will resolve a
+# second, pip-built OpenMM alongside the conda one. Only the pure-Python core is declared here.
 dependencies = [
     "pyyaml",
     "numpy",
@@ -31,13 +30,10 @@ md-openmm = "md_templates.cli.md_openmm:main"
 where = ["src"]
 include = ["md_templates*"]
 
-# The shipped system/experiment manifests must travel inside the wheel: `--system cyclo_rgdfv`
-# resolving to a package resource is what keeps the documented commands free of machine-local
-# paths. The directory is `manifests/`, NOT `data/` — this repository gitignores `data/` at any
-# depth, which would silently keep these files out of version control.
 [tool.setuptools.package-data]
-# The generated projects are copies of these. A wheel without them has a `md-gen` that cannot
-# write anything.
+# `md-gen` writes a generated project by COPYING these files. A wheel without them installs an
+# md-gen that cannot write anything, which is why tests/test_wheel.py checks the built wheel
+# rather than trusting this glob.
 "md_templates.openmm" = ["templates/*.py", "templates/*.sh"]
 
 [tool.pytest.ini_options]

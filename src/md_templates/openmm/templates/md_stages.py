@@ -44,15 +44,42 @@ def derive_seed(base, *purpose):
     return seed if seed else 1              # never 0: OpenMM reads that as "choose randomly"
 
 
+#: U = 1/2 k |r - r0|^2 under periodic boundaries: the minimum image, so an atom that crosses a
+#: box face is pulled back to the nearest image of its reference rather than across the whole cell.
+PERIODIC_RESTRAINT = "0.5*{k}*periodicdistance(x, y, z, x0, y0, z0)^2"
+#: The same energy without a box. There is no minimum image to take, and asking for one is not
+#: merely redundant -- see `add_positional_restraint`.
+NONPERIODIC_RESTRAINT = "0.5*{k}*((x-x0)^2 + (y-y0)^2 + (z-z0)^2)"
+
+
 def add_positional_restraint(system, reference_positions, atom_indices):
     """A `CustomExternalForce` holding `atom_indices` near their reference coordinates.
+
+    The energy expression depends on whether the System has a box:
+
+        periodic      0.5*k*periodicdistance(x, y, z, x0, y0, z0)^2
+        non-periodic  0.5*k*((x-x0)^2 + (y-y0)^2 + (z-z0)^2)
+
+    They are the same energy whenever an atom is far from any box face, so the difference is easy
+    to miss. It matters because `periodicdistance` makes the Force report
+    `usesPeriodicBoundaryConditions() == True`, and OpenMM answers that question for a System by
+    asking its Forces: adding a periodic restraint to an implicit GBn2 system flips
+    `System.usesPeriodicBoundaryConditions()` from False to True. The system then describes itself
+    as periodic while having no meaningful box, which is a false statement about the physics being
+    sampled and the kind of thing a later check reads and trusts.
+
+    Periodicity is taken from the System, not from a file name or a solvent label: the System is
+    what OpenMM will actually integrate. It must be read BEFORE the Force is added, because adding
+    a periodic Force is precisely what would change the answer.
 
     The Force stays in the System for the whole run so the checkpoint layout never changes; its
     strength is a global Context parameter, set to zero before production. Removing the Force
     instead would make a production checkpoint structurally incompatible with the equilibration
     that produced it.
     """
-    force = CustomExternalForce(f"0.5*{RESTRAINT_PARAMETER}*periodicdistance(x, y, z, x0, y0, z0)^2")
+    periodic = system.usesPeriodicBoundaryConditions()
+    template = PERIODIC_RESTRAINT if periodic else NONPERIODIC_RESTRAINT
+    force = CustomExternalForce(template.format(k=RESTRAINT_PARAMETER))
     force.addGlobalParameter(RESTRAINT_PARAMETER, 0.0)
     for name in ("x0", "y0", "z0"):
         force.addPerParticleParameter(name)

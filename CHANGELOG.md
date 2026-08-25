@@ -1,8 +1,61 @@
 # Changelog
 
-Entries describe behaviour changes and the migration each one needs. No release has been published.
+Entries describe behaviour changes and the migration each one needs.
 
-## Unreleased
+Entries below `0.2.0` predate the reduction to the six-command CLI in `ca29fcd` and describe a
+registry/bundle/schema architecture that no longer exists. They are kept as history; they do not
+describe the current package.
+
+## 0.2.0 — OpenMM six-command CLI
+
+First release of the simplified package. `md-template init`, `md-template install`,
+`md-openmm sys-config`, `md-openmm show-default`, `md-openmm sys-gen` and `md-openmm md-gen` are
+the whole public surface, and `md-gen` writes ordinary standalone OpenMM scripts that do not import
+this package.
+
+**Scientific corrections since `openmm-v0.1.0`.** These change what a run does, not only how it is
+spelled:
+
+* REST2 `duration_per_segment_ps` is the propagation time BETWEEN exchange rounds. The runner
+  previously divided one segment among the exchanges, so the default `10 ps x 1000` advanced 10 ps
+  in total instead of 10 ns.
+* Both methods, and every REST2 replica, now run the configured restrained minimisation ->
+  restrained NVT -> restrained NPT -> unrestrained production. The `equilibration` block was
+  previously read for cMD, ignored for REST2, and its positional restraint applied by neither.
+* Positional restraints follow the System: `periodicdistance` under a box, plain Cartesian
+  `(x-x0)^2+(y-y0)^2+(z-z0)^2` without one. A periodic restraint on an implicit GBn2 system made
+  `System.usesPeriodicBoundaryConditions()` report True for a system with no meaningful box.
+* A resumed NPT run restores the production barostat before loading its checkpoint. A barostat's
+  frequency lives in the System, not the checkpoint, so a resumed run previously continued with the
+  inactive barostat equilibration had left behind — NPT that was silently NVT.
+* Every REST2 replica gets its own integrator, velocity and barostat seed; the shared constant
+  integrator seed is gone.
+* A two-replica ladder exchanges on every round. Phase 1 offers no pair with two rungs, so the
+  runner falls back to the other phase.
+* Whole-system and solute-subset trajectories are written at their own configured intervals, for
+  cMD and per REST2 replica, and append on restart. `sys-gen` also writes `solute.pdb`, since a
+  subset DCD cannot be read against the whole-system topology.
+* REST2 replicas share one thermostat temperature and one beta and differ by Hamiltonian, so the pV
+  terms cancel in the NPT acceptance criterion. Positions and box vectors travel together through
+  the cross-energy evaluation and an accepted swap.
+* Runs use CUDA by default and refuse a silent CPU fallback; name another platform with
+  `MD_PLATFORM`.
+* Multi-GPU REST2 propagates device groups concurrently and replicas sharing a device in turn.
+
+**Packaging and tooling.**
+
+* `md-template install` installs and validates the whole preparation stack — OpenFF, AmberTools,
+  openmmforcefields, ParmEd, RDKit — not OpenMM alone, and `--validate PREFIX` checks an
+  environment it did not create.
+* One release-only CI workflow, triggered by `workflow_dispatch` and an `openmm-v*` tag.
+
+**Migration.** There is no migration path from the pre-`ca29fcd` registry/bundle interface; it was
+removed rather than deprecated. Prepare systems again with `md-openmm sys-config` and `sys-gen`.
+Existing run directories produced by `openmm-v0.1.0` should be restarted rather than resumed: the
+REST2 segment semantics and the equilibration sequence both changed, so a continued run would not
+be one trajectory.
+
+## Unreleased (pre-0.2.0, historical)
 
 ### Packaged template catalog and build provenance (metadata only)
 

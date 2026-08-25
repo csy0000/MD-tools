@@ -38,6 +38,121 @@ def test_the_same_base_and_purpose_always_give_the_same_seed():
             == stages.derive_seed(7, "REST2", 3, "integrator"))
 
 
+# --- positional restraint ---------------------------------------------------
+
+def _system(*, periodic):
+    """A two-particle System that is periodic or not, decided the way a real one is: by its forces."""
+    from openmm import NonbondedForce, System, unit
+
+    system = System()
+    for _ in range(2):
+        system.addParticle(12.0 * unit.amu)
+    nonbonded = NonbondedForce()
+    for _ in range(2):
+        nonbonded.addParticle(0.0, 0.3, 0.5)
+    if periodic:
+        nonbonded.setNonbondedMethod(NonbondedForce.PME)       # as an explicit solvent build does
+        system.setDefaultPeriodicBoxVectors((3, 0, 0), (0, 3, 0), (0, 0, 3))
+    else:
+        nonbonded.setNonbondedMethod(NonbondedForce.NoCutoff)   # as implicit GBn2 does
+    system.addForce(nonbonded)
+    assert system.usesPeriodicBoundaryConditions() is periodic
+    return system
+
+
+def _reference_positions():
+    from openmm import unit
+
+    return unit.Quantity([(0.0, 0.0, 0.0), (0.1, 0.0, 0.0)], unit.nanometer)
+
+
+class _ContextHolder:
+    """`set_restraint` takes a Simulation; a bare Context is all these tests build."""
+
+    def __init__(self, context):
+        self.context = context
+
+
+def test_an_explicit_periodic_restraint_uses_the_minimum_image():
+    """With a box, an atom that crosses a face must be pulled to the nearest image of r0."""
+    system = _system(periodic=True)
+    force = stages.add_positional_restraint(system, _reference_positions(), [0])
+
+    assert "periodicdistance" in force.getEnergyFunction()
+    assert force.usesPeriodicBoundaryConditions() is True
+    assert system.usesPeriodicBoundaryConditions() is True
+
+
+def test_an_implicit_nonperiodic_restraint_is_plain_cartesian():
+    """There is no box, so there is no minimum image to take."""
+    system = _system(periodic=False)
+    force = stages.add_positional_restraint(system, _reference_positions(), [0])
+
+    expression = force.getEnergyFunction().replace(" ", "")
+    assert "periodicdistance" not in expression, expression
+    assert "(x-x0)^2" in expression and "(y-y0)^2" in expression and "(z-z0)^2" in expression
+
+
+def test_restraining_an_implicit_system_does_not_make_it_periodic():
+    """The failure this guards against is a lie the System tells about itself.
+
+    OpenMM answers `System.usesPeriodicBoundaryConditions()` by asking its Forces, and a
+    `periodicdistance` restraint answers yes. Adding one to an implicit GBn2 system therefore
+    flipped the System to "periodic" while it still had no meaningful box -- and anything that
+    later reads that property is told something untrue about the physics being sampled.
+    """
+    system = _system(periodic=False)
+    stages.add_positional_restraint(system, _reference_positions(), [0, 1])
+    assert system.usesPeriodicBoundaryConditions() is False
+
+
+def test_both_forms_give_the_same_energy_away_from_a_box_face():
+    """Why this survived: the two expressions agree everywhere the solute normally sits.
+
+    1 kcal/mol/A^2 = 418.4 kJ/mol/nm^2 and the displacement is 0.2 nm, so
+    U = 0.5 * 418.4 * 0.2^2 = 8.368 kJ/mol under either expression.
+    """
+    from openmm import Context, Platform, VerletIntegrator, unit
+
+    energies = {}
+    for periodic in (True, False):
+        system = _system(periodic=periodic)
+        stages.add_positional_restraint(system, _reference_positions(), [0])
+        context = Context(system, VerletIntegrator(0.001 * unit.picoseconds),
+                          Platform.getPlatformByName("Reference"))
+        if periodic:
+            context.setPeriodicBoxVectors((3, 0, 0), (0, 3, 0), (0, 0, 3))
+        context.setPositions([(0.2, 0.0, 0.0), (1.0, 0.0, 0.0)])
+        holder = _ContextHolder(context)
+
+        # Difference against k = 0 so this measures the RESTRAINT, not the nonbonded force that
+        # also lives in the System. Taking the raw total here would silently fold that in.
+        stages.set_restraint(holder, 0.0)
+        baseline = context.getState(
+            getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
+        stages.set_restraint(holder, 1.0)
+        total = context.getState(
+            getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
+        energies[periodic] = total - baseline
+        del context
+
+    assert energies[True] == pytest.approx(8.368, abs=1e-6)
+    assert energies[False] == pytest.approx(energies[True], abs=1e-9)
+
+
+def test_the_restraint_strength_and_selected_atoms_are_unchanged_by_the_fix():
+    """Only the distance expression moved. Strength, parameter name and atom selection did not."""
+    for periodic in (True, False):
+        system = _system(periodic=periodic)
+        force = stages.add_positional_restraint(system, _reference_positions(), [1])
+        assert force.getNumParticles() == 1
+        index, parameters = force.getParticleParameters(0)
+        assert index == 1, "the restraint must be on the atom it was given"
+        assert [round(v, 6) for v in parameters] == [0.1, 0.0, 0.0]
+        assert force.getGlobalParameterName(0) == stages.RESTRAINT_PARAMETER
+        assert force.getGlobalParameterDefaultValue(0) == 0.0, "restraints start off"
+
+
 # --- durations -------------------------------------------------------------
 
 def test_a_duration_that_is_not_a_whole_number_of_steps_is_refused():
