@@ -1,8 +1,11 @@
 #!/usr/bin/env python
-"""Shrink the configs in the working directory to something a CPU runner can finish.
+"""Shrink the configs in the working directory to smoke sizes.
 
-Used by the release workflow so that what CI runs and what a developer can run are the same file,
-rather than a block of YAML pasted into a workflow that nobody can reproduce locally.
+Used by the release-packaging workflow, which GENERATES a project and checks its tree without
+running any dynamics -- its runner has no GPU. Kept as a file rather than a block of YAML pasted
+into the workflow so that what CI does and what a developer can run are the same thing.
+
+The same shrink is what the CUDA smoke tests use locally, where the dynamics do run.
 
     md-openmm sys-config --method cMD REST2 --solvent OPC
     python scripts/shrink_configs_for_ci.py

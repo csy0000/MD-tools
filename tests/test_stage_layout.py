@@ -277,31 +277,109 @@ def test_every_launcher_is_executable(explicit):
 
 # --- restart accounting and the no-overwrite guard ---------------------------
 
-def test_a_finished_stage_is_not_rerun_or_overwritten(explicit_run):
-    """Downstream stages have already consumed this final state.
+def test_rerunning_a_completed_stage_changes_nothing_at_all(explicit_run):
+    """Byte-for-byte, across every runtime output.
 
-    Silently redoing the stage would move the ground under a chain already built on it, and the
-    trajectories downstream would no longer follow from the state their directories claim.
+    Downstream stages have already consumed this final state. Rewriting any of these -- even the
+    record -- would make the directory describe a run that is not the one downstream was built on.
     """
+    import hashlib
+
     stage = explicit_run / "eq/npt_1kcal"
-    before = (stage / "final_state.xml").read_bytes()
-    record_before = (stage / "resolved_stage.yaml").read_text()
+    outputs = ("stage.log", "stage.csv", "checkpoint.chk", "final_state.xml", "final.pdb",
+               "resolved_stage.yaml")
+    before = {name: hashlib.sha256((stage / name).read_bytes()).hexdigest() for name in outputs}
 
     result = run_stage(stage)
     assert result.returncode == 0, result.stdout[-1500:] + result.stderr[-1500:]
     assert "already complete" in result.stdout, result.stdout[-800:]
-    assert "MD_REDO=1" in result.stdout
-    assert (stage / "final_state.xml").read_bytes() == before, "the final state was overwritten"
-    assert (stage / "resolved_stage.yaml").read_text() == record_before
+
+    after = {name: hashlib.sha256((stage / name).read_bytes()).hexdigest() for name in outputs}
+    assert after == before, {k: (before[k][:12], after[k][:12])
+                             for k in outputs if before[k] != after[k]}
 
 
-def test_redoing_a_stage_requires_saying_so(explicit_run):
+def test_the_runner_neither_advertises_nor_honours_a_redo_flag(explicit_run):
+    """A completed dynamics stage still holds its terminal checkpoint.
+
+    Anything that "reran" in place would load that checkpoint, find zero steps remaining, and
+    rewrite the completion artifacts without integrating a single step from the parent. That is a
+    redo in name only, so there is no flag for it.
+    """
     stage = explicit_run / "eq/npt_1kcal"
+    assert "MD_REDO" not in (stage / "run.py").read_text()
+
     result = run_stage(stage, extra_env={"MD_REDO": "1"})
+    assert result.returncode == 0
+    assert "already complete" in result.stdout, "MD_REDO was honoured"
+    assert "MD_REDO" not in result.stdout, "the runner still advertises MD_REDO"
+    assert "rm -f" in result.stdout and "run.py, run.sh and stage.yaml" in result.stdout
+    assert "downstream" in result.stdout.lower(), "it must warn about downstream stages"
+
+
+def test_the_recorded_signature_is_the_hash_of_the_current_stage_yaml(explicit_run):
+    from .conftest import template_module
+
+    md_stages = template_module("md_stages")
+    for name in EXPLICIT_STAGES:
+        request = yaml.safe_load((explicit_run / name / "stage.yaml").read_text())
+        record = yaml.safe_load((explicit_run / name / "resolved_stage.yaml").read_text())
+        recorded = record.get("stage_config_sha256")
+        assert recorded, f"{name} recorded no stage_config_sha256"
+        assert recorded == md_stages.stage_config_sha256(request), name
+
+
+@pytest.mark.parametrize("field,value", [
+    ("input_state", "../../minimization/final_state.xml"),
+    ("system_pressure_bar", 50.0),
+    ("integrator_seed", 123456789),
+])
+def test_changing_any_run_defining_field_makes_a_completed_stage_refuse(tmp_path, field, value):
+    """The old check kept a list of fields that mattered, and these were not on it."""
+    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    assert run_stage(project / "minimization").returncode == 0
+    stage = project / "eq/npt_1kcal"
+    assert run_stage(project / "eq/nvt_1kcal").returncode == 0
+    assert run_stage(stage).returncode == 0
+
+    request = yaml.safe_load((stage / "stage.yaml").read_text())
+    assert field in request, f"{field} is not part of the stage request"
+    assert request[field] != value, "the test must actually change something"
+    request[field] = value
+    (stage / "stage.yaml").write_text(yaml.safe_dump(request, sort_keys=False))
+
+    result = run_stage(stage)
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, f"a changed {field} was accepted as complete"
+    assert "different stage request" in combined, combined[-800:]
+
+
+def test_removing_the_runtime_outputs_starts_the_stage_fresh_from_its_parent(tmp_path):
+    """Deliberate cleanup is the redo operation, and it must be a real one.
+
+    The checkpoint is removed with the rest, so the stage cannot resume it: it loads the parent,
+    resets its own step count, and integrates the configured number of steps.
+    """
+    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    assert run_stage(project / "minimization").returncode == 0
+    stage = project / "eq/nvt_1kcal"
+    assert run_stage(stage).returncode == 0
+
+    request = yaml.safe_load((stage / "stage.yaml").read_text())
+    configured = int(round(request["duration_ps"] * 1000 / request["timestep_fs"]))
+    for name in ("stage.log", "stage.csv", "checkpoint.chk", "final_state.xml", "final.pdb",
+                 "resolved_stage.yaml"):
+        (stage / name).unlink()
+    for kept in ("run.py", "run.sh", "stage.yaml"):
+        assert (stage / kept).is_file(), f"cleanup must not remove {kept}"
+
+    result = run_stage(stage)
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
-    assert "already complete" not in result.stdout
+    assert "started from" in result.stdout, result.stdout[-800:]
+    assert "resuming" not in result.stdout, "it resumed a checkpoint that was removed"
+    assert f"{configured:,} of {configured:,} steps" in result.stdout, result.stdout[-800:]
     record = yaml.safe_load((stage / "resolved_stage.yaml").read_text())
-    assert record["steps"] == record["steps"]  # it ran again and rewrote its record
+    assert record["steps"] == configured
 
 
 def test_an_interrupted_stage_resumes_and_runs_exactly_the_missing_steps(tmp_path):
@@ -368,44 +446,40 @@ def test_a_stage_with_only_half_its_completion_artifacts_refuses_to_run(tmp_path
     assert "new output directory" in combined or "remove this stage" in combined
 
 
-def test_a_completion_record_describing_a_different_stage_refuses_to_run(tmp_path):
-    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
-    assert run_stage(project / "minimization").returncode == 0
-    stage = project / "eq/nvt_1kcal"
-    assert run_stage(stage).returncode == 0
+def test_a_completion_record_from_a_different_request_refuses_to_run(tmp_path):
+    """The recorded signature IS the identity, so that is what gets tampered with here.
 
-    record = yaml.safe_load((stage / "resolved_stage.yaml").read_text())
-    record["restraint_k_kcal_mol_a2"] = 99.0      # not the stage anyone asked for
-    (stage / "resolved_stage.yaml").write_text(yaml.safe_dump(record, sort_keys=False))
-    result = run_stage(stage)
-    assert result.returncode != 0
-    combined = result.stdout + result.stderr
-    assert "different stage" in combined and "restraint_k_kcal_mol_a2" in combined, combined[-800:]
-
-
-def test_resuming_a_stage_from_its_own_checkpoint_does_not_restart_the_count(tmp_path):
-    """The two loads mean different things, and the step counter is where they differ.
-
-    Loading this stage's OWN checkpoint means it was interrupted: the count is how far it has come
-    and must stand. Loading the PARENT's state means this stage has not begun: the parent's count
-    belongs to the parent and must not carry over.
+    The record's other fields are output, not input; `stage_config_sha256` is the one value that
+    says which request produced these files.
     """
     project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
     assert run_stage(project / "minimization").returncode == 0
     stage = project / "eq/nvt_1kcal"
     assert run_stage(stage).returncode == 0
 
-    total = yaml.safe_load((stage / "stage.yaml").read_text())
-    expected = int(round(total["duration_ps"] * 1000 / total["timestep_fs"]))
     record = yaml.safe_load((stage / "resolved_stage.yaml").read_text())
-    assert record["steps"] == expected
+    record["stage_config_sha256"] = "0" * 64
+    (stage / "resolved_stage.yaml").write_text(yaml.safe_dump(record, sort_keys=False))
+    result = run_stage(stage)
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0, combined[-800:]
+    assert "different stage request" in combined, combined[-800:]
 
-    # The finished stage keeps a checkpoint at the end of its run; re-running with MD_REDO must
-    # resume from it and find nothing left to do rather than integrating a second full stage.
-    result = run_stage(stage, extra_env={"MD_REDO": "1"})
-    assert result.returncode == 0, result.stdout[-1500:] + result.stderr[-1500:]
-    assert "resuming this stage from checkpoint.chk" in result.stdout, result.stdout[-800:]
-    assert f"0 of {expected:,} steps" in result.stdout, result.stdout[-800:]
+
+def test_a_completion_record_with_no_signature_refuses_to_run(tmp_path):
+    """A record written before signatures existed cannot vouch for what produced it."""
+    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    assert run_stage(project / "minimization").returncode == 0
+    stage = project / "eq/nvt_1kcal"
+    assert run_stage(stage).returncode == 0
+
+    record = yaml.safe_load((stage / "resolved_stage.yaml").read_text())
+    record.pop("stage_config_sha256")
+    (stage / "resolved_stage.yaml").write_text(yaml.safe_dump(record, sort_keys=False))
+    result = run_stage(stage)
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "no stage_config_sha256" in combined, combined[-800:]
 
 
 def test_a_fresh_stage_starts_its_own_step_count_at_zero(explicit_run):

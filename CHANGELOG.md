@@ -67,7 +67,14 @@ not need to run again.
   loaded unconditionally before the checkpoint, and a stage's own count was never reset when it
   should have been.
 * **A finished stage is not silently rerun.** `final_state.xml` is what downstream stages have
-  already consumed, so re-running stops with a message; `MD_REDO=1` redoes it deliberately.
+  already consumed, so re-running reports completion and changes nothing. Redoing a stage means
+  generating into a new directory or removing that stage's six runtime outputs by hand; there is
+  no flag for it, because a completed dynamics stage still holds its terminal checkpoint and
+  anything that "reran" in place would load it, find zero steps remaining and rewrite the
+  completion artifacts without integrating anything — a redo in name only.
+* **Completion is identified by a canonical SHA-256 of the whole `stage.yaml`**, recorded as
+  `stage_config_sha256`. A hand-kept list of significant fields accepted a completed stage after
+  its input state, pressure, seeds or solvent mode had changed, because those keys were not on it.
 * **`md_config_hash` hashes the generated `MD/md.config.yaml`.** It hashed the input document,
   which is not the file the project runs.
 * **REST2 per-tau equilibration is concurrent** across devices and sequential within one, the same

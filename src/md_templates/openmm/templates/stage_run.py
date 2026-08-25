@@ -42,10 +42,11 @@ def _project_root(start):
 
 PROJECT = _project_root(HERE)
 sys.path.insert(0, str(PROJECT))
-from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, active_barostat_count, build_stage_system,
-                       count_barostats, make_simulation, require_parent_state, resolve_platform,
-                       restraint_strength, set_restraint, steps_for, write_final_pdb,
-                       write_final_state, write_yaml_atomic)
+from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, STAGE_RUNTIME_OUTPUTS,
+                       active_barostat_count, build_stage_system, count_barostats,
+                       make_simulation, require_parent_state, resolve_platform,
+                       restraint_strength, set_restraint, stage_config_sha256, steps_for,
+                       write_final_pdb, write_final_state, write_yaml_atomic)
 
 STAGE = yaml.safe_load((HERE / "stage.yaml").read_text())
 CONFIG = yaml.safe_load((PROJECT / "md.config.yaml").read_text())
@@ -63,10 +64,30 @@ RESTRAINED = {"minimization", "nvt_restrained", "npt_restrained"}
 BAROSTAT_ACTIVE = {"npt_restrained", "npt_free"}
 
 
-#: What a completed stage must agree with the request about. A record that differs in any of these
-#: describes a different calculation from the one being asked for.
-COMPLETION_KEYS = ("kind", "ensemble", "duration_ps", "max_iterations",
-                   "restraint_k_kcal_mol_a2", "temperature_kelvin", "timestep_fs")
+#: This stage's request, as one signature. Every key in stage.yaml is covered, so a change to the
+#: input state, the pressure, a seed or the solvent mode is a different stage -- without anyone
+#: having to keep a list of which fields count.
+STAGE_SIGNATURE = stage_config_sha256(STAGE)
+
+
+def redo_instructions():
+    """How to redo a stage, which is a thing only you can decide to do.
+
+    There is deliberately no flag for this. A completed dynamics stage still holds its terminal
+    checkpoint, so anything that "reruns" in place would load that checkpoint, find zero steps
+    remaining, and rewrite the completion artifacts without integrating anything from the parent --
+    a redo in name only. Removing the outputs is the operation that actually means it.
+
+    Nothing downstream is touched automatically: which of those runs you still want is a judgement
+    about your science, not a cleanup rule.
+    """
+    return (f"  To redo this stage, either generate into a NEW output directory, or remove this "
+            f"stage's runtime outputs and run it again:\n"
+            f"      cd {HERE}\n"
+            f"      rm -f {' '.join(STAGE_RUNTIME_OUTPUTS)}\n"
+            f"  run.py, run.sh and stage.yaml are the stage itself -- leave them.\n"
+            f"  WARNING: any downstream stage was built on this stage's old final_state.xml. "
+            f"Regenerate or remove those yourself; nothing here deletes them for you.")
 
 
 def completion_state():
@@ -84,25 +105,16 @@ def completion_state():
     except Exception as error:
         return "ambiguous", f"{record.name} is unreadable ({type(error).__name__}: {error})"
 
-    disagreements = []
-    for key in COMPLETION_KEYS:
-        wanted, got = STAGE.get(key), written.get(key)
-        if wanted is None and got is None:
-            continue
-        if wanted is None or got is None or float_or_text(wanted) != float_or_text(got):
-            disagreements.append(f"{key}: stage.yaml says {wanted!r}, the record says {got!r}")
-    if disagreements:
-        return "ambiguous", ("the completion record describes a different stage -- "
-                             + "; ".join(disagreements))
-    return "complete", f"{final.name} and {record.name} agree with stage.yaml"
-
-
-def float_or_text(value):
-    """Compare 10 and 10.0 as equal; anything else by its text."""
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return str(value)
+    recorded = written.get("stage_config_sha256")
+    if not recorded:
+        return "ambiguous", (f"{record.name} records no stage_config_sha256, so there is no way to "
+                             f"tell which request produced these outputs")
+    if recorded != STAGE_SIGNATURE:
+        return "ambiguous", (f"the completion record belongs to a different stage request: "
+                             f"stage.yaml hashes to {STAGE_SIGNATURE[:16]}..., the record records "
+                             f"{recorded[:16]}...")
+    return "complete", (f"{final.name} and {record.name} match this stage.yaml "
+                        f"({STAGE_SIGNATURE[:16]}...)")
 
 
 def main():
@@ -118,19 +130,15 @@ def main():
     #                 result of the stage that is being asked for. Fail and say what to do.
     #   absent     -> run it.
     verdict, detail = completion_state()
-    if verdict == "complete" and not os.environ.get("MD_REDO"):
+    if verdict == "complete":
         print(f"[{STAGE['name']}] already complete: {detail}\n"
-              f"  Nothing was run, and nothing was modified. To deliberately redo this stage:\n"
-              f"      MD_REDO=1 ./run.sh      (or remove this stage's outputs)", flush=True)
+              f"  Nothing was run, and nothing was modified.\n" + redo_instructions(), flush=True)
         return 0
     if verdict == "ambiguous":
         raise SystemExit(
             f"[{STAGE['name']}] refusing to run: {detail}\n"
             f"  The files here are not the result of the stage stage.yaml describes, so reusing "
-            f"them and overwriting them are both wrong.\n"
-            f"  Either generate into a new output directory, or deliberately remove this stage's "
-            f"outputs:\n"
-            f"      rm -f final_state.xml resolved_stage.yaml checkpoint.chk stage.csv")
+            f"them and overwriting them are both wrong.\n" + redo_instructions())
 
     def log(message):
         line = f"[{STAGE['name']}] {message}"
@@ -240,6 +248,7 @@ def main():
         "barostat_seed": int(STAGE["barostat_seed"]),
         "barostats_in_system": count_barostats(system),
         "barostats_active": active,
+        "stage_config_sha256": STAGE_SIGNATURE,
         "input_state": STAGE["input_state"],
         "output_state": STAGE["output_state"],
         "platform": platform_name,

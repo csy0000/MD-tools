@@ -92,10 +92,11 @@ SMOKE_MIN_ITERATIONS = 25
 
 def tiny_project(work: Path, *, solvent: str = "OPC", methods=("cMD", "REST2"),
                  replicas: int = 2, exchanges: int = 3, edit=None) -> Path:
-    """Build inputs/ and MD/ for a project small enough to run through every stage on a CPU.
+    """Build inputs/ and MD/ for a project small enough to run through every stage on CUDA.
 
-    Shared by the layout, cMD and REST2 tests so they exercise one generator call each rather than
-    three slightly different hand-written configurations.
+    Small means picoseconds and a box at the cutoff -- not a different platform. Shared by the
+    layout, cMD and REST2 tests so they exercise one generator call each rather than three
+    slightly different hand-written configurations.
     """
     import shutil
 

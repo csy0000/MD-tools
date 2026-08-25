@@ -3,9 +3,10 @@
 One directory per stage, in the order they depend on each other:
 
     MD/
-      minimization/  eq1_nvt_1kcal/  eq2_npt_1kcal/  eq3_npt_free/     the common chain
-      cMD/                                                            production, from the last
-      REST2/                                                          common stage -- siblings
+      minimization/                                       the common chain
+      eq/nvt_1kcal/  eq/npt_1kcal/  eq/npt_free/          equilibration, grouped
+      cMD/                                                production, both branching from
+      REST2/                                              the LAST common stage -- siblings
 
 Each common stage reads its parent's `final_state.xml` and writes its own. `cMD` and `REST2` both
 branch from the LAST common stage, so neither has to run before the other and REST2 never repeats

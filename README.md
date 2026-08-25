@@ -191,10 +191,18 @@ Implicit systems have no box: the chain is `minimization -> eq/nvt_1kcal -> eq/n
 barostat exists in the System at all. If the restraint is not 1 kcal mol⁻¹ Å⁻², the directory is
 named `eq/nvt_restrained` rather than claiming a strength it does not have.
 
-A stage that has already written `final_state.xml` will not silently run again — downstream stages
-may already have consumed it. Re-running prints what is missing and stops; `MD_REDO=1 ./run.sh`
-redoes it deliberately. Interrupt a stage and re-run it and it resumes from its own
-`checkpoint.chk` at the step it reached, rather than starting the stage over.
+A completed stage will not silently run again — downstream stages may already have consumed its
+`final_state.xml`. Re-running says so and changes nothing. To redo it, generate into a new output
+directory or remove that stage's runtime outputs (`stage.log`, `stage.csv`, `checkpoint.chk`,
+`final_state.xml`, `final.pdb`, `resolved_stage.yaml` — not `run.py`, `run.sh` or `stage.yaml`) and
+run it again; anything downstream was built on the old final state and is yours to regenerate.
+
+Completion is identified by a SHA-256 of the whole `stage.yaml`, recorded as `stage_config_sha256`.
+Change any field — the input state, the pressure, a seed — and the stage refuses rather than
+accepting outputs that came from a different request.
+
+Interrupt a stage and re-run it and it resumes from its own `checkpoint.chk` at the step it
+reached, rather than starting the stage over.
 
 **Conventional MD**
 
