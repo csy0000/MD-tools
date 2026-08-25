@@ -123,7 +123,20 @@ Explicit ALA/OPC, 5,722 particles, on this machine's GPUs:
   frames and 15 whole-system frames per replica across the three runs.
 - Concurrency, identical resumed work: 29.9 s on one GPU, 13.1 s on four.
 
-`pytest tests/` — 55 passed in 47 s.
+Implicit GBn2, both methods, on GPU: no `MonteCarloBarostat` in `system.xml`, zero active
+barostats at every stage, `usesPeriodicBoundaryConditions()` False, both ensembles resolved to NVT
+and `npt_duration_ps` to 0. cMD 25,000 steps at ~2,680 ns/day; REST2 4 replicas x 2 invocations =
+50 contiguous rounds, 50,000 steps per replica, trajectories appended. In implicit solvent the
+solute is the whole system, so the two DCDs hold the same atoms at different intervals — redundant
+rather than wrong.
+
+Installed wheel, from outside the checkout: all six template files packaged, both generators
+importable from the installed location, the six public commands and a full
+`sys-config -> sys-gen -> md-gen -> cMD/REST2` pipeline run against the wheel. The only absolute
+path in a generated file is the recorded interpreter in `run.sh`, which has a `python3` fallback
+and is not a checkout path.
+
+`pytest tests/` — 64 passed in 50 s.
 
 ## Not yet done
 
