@@ -163,6 +163,13 @@ def main():
             simulation.step(per_exchange)
         phase = (attempt_index) % 2
         pairs = exchange_pairs(N_REPLICAS, phase)
+        if not pairs:
+            # Alternating nearest-neighbour phases: with an even replica count one phase has no
+            # pair to offer, and with exactly 2 replicas that is every other round. The dynamics
+            # still advance -- only the exchange is skipped -- but say so rather than leaving a
+            # silent gap in the history.
+            print(f"[remd] attempt {attempt_index}: phase {phase} offers no pair for "
+                  f"{N_REPLICAS} replicas; dynamics advanced, no exchange attempted")
         rows = []
         for i, j in pairs:
             state_i = simulations[i].context.getState(getEnergy=True)

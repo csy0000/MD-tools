@@ -1,0 +1,95 @@
+"""Configuration files are generated correctly, and from ONE set of defaults."""
+from __future__ import annotations
+
+import yaml
+
+from md_templates.openmm import defaults as D
+
+
+def test_explicit_opc_configuration(md_openmm, tmp_path):
+    result = md_openmm("sys-config", "--method", "cMD", "REST2",
+                       "--peptide", "true", "--solvent", "OPC")
+    assert result.returncode == 0, result.stderr
+
+    sys_doc = yaml.safe_load((tmp_path / "sys.config.yaml").read_text())
+    md_doc = yaml.safe_load((tmp_path / "md.config.yaml").read_text())
+
+    assert sys_doc["solute"]["peptide"] is True
+    assert sys_doc["solvent"]["model"] == "OPC"
+    assert sys_doc["solvent"]["padding_nm"] == 2.0
+    assert sys_doc["solvent"]["box_shape"] == "dodecahedron"
+    assert sys_doc["solvent"]["ionic_strength_molar"] == 0.15
+    assert sys_doc["solvent"]["cutoff_nm"] == 1.0
+    assert sys_doc["solute"]["ligand_charge_method"] == "am1bcc", "NAGL is never a silent default"
+    assert sys_doc["constraints"]["hydrogen_mass_amu"] is None, "HMR is off by default"
+    # the implicit block must be absent: one file describes ONE system
+    assert "implicit_solvent" not in sys_doc
+
+    assert md_doc["methods"] == ["cMD", "REST2"]
+    assert md_doc["common"]["timestep_fs"] == 2.0
+    assert md_doc["common"]["pressure_bar"] == 1.0
+    assert md_doc["cMD"]["ensemble"] == "NPT"
+    assert md_doc["REST2"]["ensemble"] == "NPT"
+    assert md_doc["REST2"]["number_of_replicas"] == 6
+    assert md_doc["REST2"]["omega_exclusion"] is True
+
+
+def test_implicit_gbn2_configuration(md_openmm, tmp_path):
+    result = md_openmm("sys-config", "--method", "cMD", "REST2",
+                       "--peptide", "false", "--solvent", "GBn2")
+    assert result.returncode == 0, result.stderr
+
+    sys_doc = yaml.safe_load((tmp_path / "sys.config.yaml").read_text())
+    md_doc = yaml.safe_load((tmp_path / "md.config.yaml").read_text())
+
+    assert sys_doc["solute"]["peptide"] is False
+    assert sys_doc["implicit_solvent"] == {"model": "GBn2", "radii": "mbondi3"}
+    assert "solvent" not in sys_doc, "an implicit system has no water box"
+    assert sys_doc["forcefield"]["water"] is None
+    assert sys_doc["constraints"]["rigid_water"] is False
+
+    # no box means no barostat and no pressure; saying NPT would name an unsamplable ensemble
+    assert md_doc["common"]["pressure_bar"] is None
+    assert md_doc["cMD"]["ensemble"] == "NVT"
+    assert md_doc["REST2"]["ensemble"] == "NVT"
+    assert "pressure_note" in md_doc["common"]
+
+
+def test_names_are_accepted_case_insensitively_and_written_canonically(md_openmm, tmp_path):
+    result = md_openmm("sys-config", "--method", "cmd", "rest2", "--solvent", "opc")
+    assert result.returncode == 0, result.stderr
+    md_doc = yaml.safe_load((tmp_path / "md.config.yaml").read_text())
+    assert md_doc["methods"] == ["cMD", "REST2"]
+    sys_doc = yaml.safe_load((tmp_path / "sys.config.yaml").read_text())
+    assert sys_doc["solvent"]["model"] == "OPC"
+
+
+def test_show_default_and_sys_config_use_the_same_definitions(md_openmm, tmp_path):
+    """Two sources of the same defaults is how this repository drifted before."""
+    md_openmm("sys-config", "--method", "cMD", "REST2", "--solvent", "OPC")
+    written = yaml.safe_load((tmp_path / "sys.config.yaml").read_text())
+    shown = yaml.safe_load(md_openmm("show-default", "sys").stdout)
+    assert shown == written
+
+    rest2_shown = yaml.safe_load(md_openmm("show-default", "REST2").stdout)
+    written_md = yaml.safe_load((tmp_path / "md.config.yaml").read_text())
+    assert rest2_shown["REST2"] == written_md["REST2"]
+    assert "cMD" not in rest2_shown
+
+
+def test_show_default_all_covers_both_documents(md_openmm):
+    document = yaml.safe_load(md_openmm("show-default", "all").stdout)
+    assert set(document) == {"sys", "md"}
+
+
+def test_an_unknown_name_is_refused(md_openmm):
+    result = md_openmm("show-default", "nonsense")
+    assert result.returncode != 0
+    assert "expected sys" in (result.stdout + result.stderr)
+
+
+def test_output_dir_is_honoured(md_openmm, tmp_path):
+    target = tmp_path / "elsewhere"
+    md_openmm("sys-config", "--output-dir", str(target))
+    assert (target / "sys.config.yaml").is_file()
+    assert (target / "md.config.yaml").is_file()

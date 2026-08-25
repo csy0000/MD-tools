@@ -19,7 +19,6 @@ import numpy as np
 from openmm import (CMAPTorsionForce, CustomGBForce, NonbondedForce,
                     PeriodicTorsionForce, XmlSerializer)
 
-from .config_legacy import write_manifest
 
 WATER_RESIDUE_NAMES = frozenset({"HOH", "WAT", "SOL", "TIP3", "TIP", "H2O"})
 ION_RESIDUE_NAMES = frozenset({"NA", "CL", "K", "MG", "CA", "ZN", "BR", "I", "LI", "RB", "CS"})
@@ -104,7 +103,6 @@ def initial_structure(smiles: str, out_dir: Path, cfg: dict) -> dict:
     (out_dir / "initial_structure.json").write_text(
         json.dumps(info, indent=2) + "\n", encoding="utf-8"
     )
-    write_manifest(out_dir, "step1_initial_structure", cfg, {"result": info})
     return info
 
 
@@ -353,7 +351,6 @@ def protonate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path]
         "forcefield": ff_info,
     }
     (out_dir / "protonation.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
-    write_manifest(out_dir, "step2_protonate", cfg, {"result": info})
     return info
 
 
@@ -942,7 +939,6 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
         ),
     }
     (out_dir / "system_build.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
-    write_manifest(out_dir, "step4_build_system", cfg, {"result": info})
     return info
 
 

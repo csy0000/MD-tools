@@ -50,7 +50,7 @@ def _legacy_cfg(resolved: dict[str, Any]) -> dict[str, Any]:
     against a large nested configuration; rewriting their signatures would risk the chemistry for a
     cosmetic gain, so the mapping is explicit and the science is untouched.
     """
-    from .config_legacy import DEFAULTS
+    from .builder_defaults import DEFAULTS
 
     cfg = yaml.safe_load(yaml.safe_dump(DEFAULTS))
     solute = resolved.get("solute") or {}

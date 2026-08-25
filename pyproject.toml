@@ -1,14 +1,6 @@
 [build-system]
-# pyyaml and pydantic are BUILD requirements, not just runtime ones: the build stages the template
-# catalog into the distribution and validates it first with the same strict loader the runtime uses.
-# Validating with a different implementation than the one shipped would prove nothing.
-requires = ["setuptools>=64", "pyyaml", "pydantic>=2"]
-# An IN-TREE backend that wraps setuptools and stamps the git identity of the tree being built
-# into `md_templates/_build_info.py`. A wheel installed into a clean environment has no `.git`,
-# so the commit has to be captured while the build still has the checkout -- asking git at
-# project-generation time cannot answer it. Everything else is delegated to setuptools unchanged.
-build-backend = "md_templates_build"
-backend-path = ["build_backend"]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "md-templates"
@@ -19,18 +11,11 @@ requires-python = ">=3.11"
 # Heavy scientific dependencies (openmm, openmmtools, ambertools, rdkit, mdtraj, deeptime, ...)
 # are provided by the conda environment defined in environment.yml — install the package with
 # `pip install -e . --no-deps` inside that env. Only the pure-Python, pip-resolvable core is listed here.
+# The heavy scientific stack (openmm, openff-toolkit, ambertools, rdkit, parmed) comes from the
+# conda environment `md-template install` creates. Only the pure-Python core is listed here.
 dependencies = [
-    # Strict typed configuration: unknown-key rejection, cross-field validation, discriminated
-    # method models and machine-readable JSON Schema. Present in the documented conda environment.
-    "pydantic>=2",
-    "numpy",
-    "scipy",
-    "pandas",
-    "matplotlib",
-    "tqdm",
     "pyyaml",
-    "scikit-learn",
-    "numba",
+    "numpy",
 ]
 
 [project.optional-dependencies]
@@ -39,9 +24,8 @@ dev = ["pytest", "pytest-xdist", "build"]
 # The entry point. Installing the wheel puts `md-openmm` on PATH, which is what lets a
 # consuming project run the pipeline without a source checkout.
 [project.scripts]
-md-system-gen = "md_templates.openmm.cli_system_gen:main"
-md-input-gen = "md_templates.openmm.cli_input_gen:main"
-md-openmm = "md_templates.openmm.cli:main"
+md-template = "md_templates.cli.md_template:main"
+md-openmm = "md_templates.cli.md_openmm:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -52,49 +36,14 @@ include = ["md_templates*"]
 # paths. The directory is `manifests/`, NOT `data/` — this repository gitignores `data/` at any
 # depth, which would silently keep these files out of version control.
 [tool.setuptools.package-data]
-"md_templates.openmm.spec" = [
-    # Versioned default profiles ARE the scientific defaults. A wheel without them has a
-    # `config` command that cannot resolve anything, so they must travel with the package.
-    "profiles/*.json",
-]
-"md_templates.openmm" = ["manifests/systems/*.yaml", "manifests/experiments/*.yaml",
-                          # The pdb route's manifest points at a sibling structure file, so
-                          # the structure must travel in the wheel too or `--system ace_ala_nme`
-                          # resolves to a manifest whose input does not exist.
-                          "manifests/systems/*.pdb"]
+# The generated projects are copies of these. A wheel without them has a `md-gen` that cannot
+# write anything.
+"md_templates.openmm" = ["templates/*.py", "templates/*.sh"]
 
 [tool.pytest.ini_options]
-# Running the slow suite in parallel needs --dist loadfile, not plain -n:
-#
-#     pytest tests/ -k slow -n 12 --dist loadfile     # 169 tests, ~3m20 on 48 cores
-#     pytest tests/ -k slow                           # the same 169, ~13m
-#
-# Plain `-n 12` splits module-scoped fixtures across workers and breaks five continuation tests
-# that share one run directory BY DESIGN -- they extend a run segment by segment and assert the
-# committed record, the exchange history and the walker mapping across it. loadfile keeps every
-# test in a file on one worker, which is the sequencing those tests depend on.
-#
-# pytest-xdist is optional; the suite runs without it, just serially.
-# Parallel by DEFAULT. The full suite is ~15 minutes serially on 48 cores and ~4 in
-# parallel, and that difference decides whether a change gets verified against everything
-# or only against the fast tests. Serial is available with `-p no:xdist` or `-n 0`.
-#
-# --dist loadfile is NOT a preference. Plain -n distributes individual tests, which splits
-# module-scoped fixtures across workers and fails the continuation tests -- the ones that
-# extend a run segment by segment and assert the committed record, the exchange history and
-# the walker mapping across it. Those share one run directory BY DESIGN. loadfile keeps every
-# test in a file on one worker. Five of them fail without it, looking exactly like real
-# regressions.
-#
-# 12 rather than `auto`: each worker may spawn tleap or its own OpenMM Context, so one worker
-# per core oversubscribes badly. Measured 3m23 vs 13m05 on the slow suite.
-# NOT set as a default. `-n 12` over-parallelises a SINGLE-FILE run -- twelve workers for a
-# file with five tests, each rebuilding the module-scoped fixture -- and that fails. Run the
-# whole suite with the flags instead:
-#
-#     pytest tests/ -n 12 --dist loadfile              # 1054 fast, 1m46 -> 47s
-#     pytest tests/ -k slow -n 12 --dist loadfile      #  169 slow, 13m05 -> 3m23
+# The MD smoke tests build systems and integrate them, so they are marked slow and run before a
+# release rather than on every commit. `pytest tests/ -m "not slow"` is the fast lane.
 testpaths = ["tests"]
 markers = [
-    "slow: end-to-end tests that build an OpenMM Context and propagate MD (deselect with '-m \"not slow\"')",
+    "slow: builds a system or runs dynamics (deselect with '-m \"not slow\"')",
 ]

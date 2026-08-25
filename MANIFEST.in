@@ -1,18 +1,4 @@
-# The canonical catalog and the build hook must travel in an sdist, or a wheel built from that
-# sdist would have nothing to package and no way to validate it.
-include registry.yaml
-recursive-include templates *.yaml
-recursive-include build_support *.py
-# The in-tree PEP 517 backend named by pyproject's `backend-path`. Without it an sdist cannot be
-# built at all -- pip stops at "backend-path entry 'build_backend' does not exist" before reaching
-# any of the packaging logic above.
-recursive-include build_backend *.py
-include setup.py
-include CHANGELOG.md
-include environment-ci.yml
-
-# The public entry points and the worked examples. A consuming project that installs an sdist should
-# be able to read how the generators are meant to be driven, not just import the package.
-include MD_system_gen.py
-include MD_input_gen.py
-recursive-include test *.json *.md *.smi *.pdb
+# The run-script templates are the generated projects: a distribution without them has an md-gen
+# that cannot write anything.
+recursive-include src/md_templates/openmm/templates *.py *.sh
+include README.md
