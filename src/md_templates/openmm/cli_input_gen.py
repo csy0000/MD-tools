@@ -162,3 +162,8 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+if __name__ == "__main__":                         # pragma: no cover
+    # Without this, `python -m md_templates.openmm.cli_input_gen` runs the module body, defines
+    # main(), calls nothing and exits 0 -- a command that reports success while producing no files.
+    # The console script entry point always called main(); `python -m` silently did not.
+    raise SystemExit(main())

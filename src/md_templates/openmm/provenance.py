@@ -69,6 +69,11 @@ def package_version() -> str:
         return "unknown"
 
 
+def python_version() -> str:
+    """The interpreter that generated the project; part of the identity the release review asked for."""
+    return sys.version.split()[0]
+
+
 def package_location() -> str:
     """Where the installed package actually lives — the fastest way to catch a shadowed import."""
     import md_templates
@@ -152,6 +157,112 @@ def git_state() -> dict[str, Optional[str]]:
         }
     except Exception:                              # noqa: BLE001 - never break a run
         return {"available": False, "commit": None, "dirty": None}
+
+
+class UnknownSourceIdentityError(RuntimeError):
+    """Raised when the MD-templates commit that produced a project cannot be established.
+
+    Generation fails on this rather than writing `commit: null`. A run whose method cannot be
+    named is not reproducible, and a lock file that records the absence of a commit looks, to
+    every later reader, exactly like one that was never asked.
+    """
+
+
+#: Where a source identity came from, most trustworthy first. Recorded in the lock file so a
+#: reader can weigh it: a live checkout is authoritative, a build stamp is a claim made by the
+#: build, PEP 610 is a claim made by the installer.
+IDENTITY_SOURCES = ("git-worktree", "build-stamp", "pep610-vcs")
+
+
+def _build_stamp() -> dict[str, Any]:
+    """Identity embedded at build time, for a wheel installed away from any checkout."""
+    try:
+        from .. import _build_info as info          # generated; absent in a bare source tree
+    except Exception:                              # noqa: BLE001
+        return {}
+    commit = getattr(info, "BUILD_COMMIT", None)
+    if not commit:
+        return {}
+    return {"commit": commit,
+            "remote_url": getattr(info, "BUILD_REMOTE_URL", None),
+            "tag": getattr(info, "BUILD_TAG", None),
+            "dirty": getattr(info, "BUILD_DIRTY", None),
+            "identity_source": "build-stamp"}
+
+
+def _pep610_vcs() -> dict[str, Any]:
+    """Identity recorded by pip for a `pip install git+https://...` install (PEP 610).
+
+    pip writes the RESOLVED commit into `vcs_info.commit_id`, so this is a full SHA even when the
+    user installed a branch or tag. It says nothing about dirtiness -- a VCS install is by
+    construction a clean checkout of that commit.
+    """
+    try:
+        dist = metadata.distribution("md-templates")
+        raw = dist.read_text("direct_url.json")
+    except Exception:                              # noqa: BLE001
+        return {}
+    if not raw:
+        return {}
+    try:
+        info = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    vcs = info.get("vcs_info") or {}
+    commit = vcs.get("commit_id")
+    if not commit:
+        return {}
+    return {"commit": commit,
+            "remote_url": info.get("url"),
+            "tag": vcs.get("requested_revision"),
+            "dirty": False,
+            "identity_source": "pep610-vcs"}
+
+
+def source_identity() -> dict[str, Any]:
+    """The MD-templates commit behind this process, from whichever source can establish it.
+
+    Order is by trustworthiness, not convenience:
+
+    1. a live git worktree -- authoritative, and the only source that can observe dirtiness now;
+    2. the build stamp -- what the wheel was built from, the case that has no `.git` at all;
+    3. PEP 610 `vcs_info` -- what pip resolved for a `git+https` install.
+
+    Returns `{}` when none of them can name a full commit. Callers that write provenance must
+    treat that as fatal; `require_source_identity` does.
+    """
+    live = git_state()
+    if live.get("available") and live.get("commit"):
+        return {"commit": live["commit"],
+                "remote_url": live.get("remote_url"),
+                "tag": live.get("tag"),
+                "nearest_tag": live.get("nearest_tag"),
+                "dirty": live.get("dirty"),
+                "identity_source": "git-worktree"}
+    for candidate in (_build_stamp(), _pep610_vcs()):
+        if candidate:
+            return candidate
+    return {}
+
+
+def require_source_identity() -> dict[str, Any]:
+    """`source_identity()`, but refusing to return anything a lock file could not stand behind."""
+    identity = source_identity()
+    commit = identity.get("commit")
+    if not commit or len(str(commit)) != 40:
+        raise UnknownSourceIdentityError(
+            "the MD-templates commit that would produce this project cannot be determined, so the "
+            "run could not be traced back to a method.\n"
+            f"  package     : {package_version()} at {package_location()}\n"
+            f"  install kind: {installed_from_wheel().get('install_kind')}\n"
+            "Tried, in order: a git worktree around the package, the build stamp embedded by\n"
+            "build_backend/md_templates_build.py, and PEP 610 direct_url.json vcs_info.\n"
+            "Fix by installing from a built wheel or from git rather than from a plain copy of\n"
+            "the source tree:\n"
+            "  pip install md-templates@git+https://github.com/csy0000/MD-templates@<40-char sha>\n"
+            "  # or, from a checkout:  python -m build && pip install dist/*.whl"
+        )
+    return identity
 
 
 def sqm_path() -> Optional[str]:

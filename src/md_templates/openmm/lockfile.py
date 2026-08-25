@@ -50,9 +50,13 @@ def build_lockfile(*, method: str, template_path: str, resolved_config: dict,
     if method not in ("cMD", "REST2"):
         raise ValueError(f"method must be 'cMD' or 'REST2'; got {method!r}")
 
-    git = provenance.git_state() or {}
-    commit = git.get("commit")
-    if commit is not None and len(commit) != 40:
+    # Not `git_state()`: that only answers inside a checkout, and a wheel installed into a clean
+    # environment has none. `require_source_identity` also consults the build stamp embedded at
+    # wheel-build time and PEP 610 vcs_info, and RAISES rather than returning a null commit -- a
+    # lock file recording `commit: null` is indistinguishable from one that was never asked.
+    git = provenance.require_source_identity()
+    commit = git["commit"]
+    if len(commit) != 40:
         raise ValueError(
             f"the recorded commit must be the full 40-character SHA; got {commit!r}. An abbreviated "
             "SHA collides once a repository is large enough, and a citation has to survive that.")
@@ -72,6 +76,13 @@ def build_lockfile(*, method: str, template_path: str, resolved_config: dict,
             "nearest_release_tag": git.get("nearest_tag"),
             "template_path": template_path,
             "source_tree_clean": (None if git.get("dirty") is None else not git["dirty"]),
+            # Recorded positively as well: a consumer checking "was this a clean build?" should not
+            # have to reason about a negated tri-state, and `dirty: true` is the form the release
+            # review asked for.
+            "dirty": git.get("dirty"),
+            # Which mechanism established the commit, so a reader can weigh it: a live worktree is
+            # authoritative, a build stamp is a claim by the build, PEP 610 a claim by the installer.
+            "identity_source": git.get("identity_source"),
             "note": ("A branch name is not an identity: `dev` and `main` move. Cite the release tag "
                      "together with the full commit."),
         },
@@ -85,6 +96,7 @@ def build_lockfile(*, method: str, template_path: str, resolved_config: dict,
                      "a build stamp rather than a development snapshot."),
         },
         "package_version": provenance.package_version(),
+        "python_version": provenance.python_version(),
         "configuration": {
             "schema_version": config_schema_version,
             "resolved_sha256": provenance.sha256_bytes(canonical)

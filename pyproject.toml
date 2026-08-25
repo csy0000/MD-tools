@@ -3,11 +3,16 @@
 # catalog into the distribution and validates it first with the same strict loader the runtime uses.
 # Validating with a different implementation than the one shipped would prove nothing.
 requires = ["setuptools>=64", "pyyaml", "pydantic>=2"]
-build-backend = "setuptools.build_meta"
+# An IN-TREE backend that wraps setuptools and stamps the git identity of the tree being built
+# into `md_templates/_build_info.py`. A wheel installed into a clean environment has no `.git`,
+# so the commit has to be captured while the build still has the checkout -- asking git at
+# project-generation time cannot answer it. Everything else is delegated to setuptools unchanged.
+build-backend = "md_templates_build"
+backend-path = ["build_backend"]
 
 [project]
 name = "md-templates"
-version = "0.1.0"
+version = "0.1.1"
 description = "Reusable OpenMM templates for explicit-water molecular dynamics and omega-selective REST2."
 readme = "README.md"
 requires-python = ">=3.11"

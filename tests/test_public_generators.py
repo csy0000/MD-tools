@@ -1749,3 +1749,22 @@ def test_the_conformer_seed_can_be_pinned(tmp_path):
         {"system": {"id": "x", "type": "ligand"}, "randomness": {"structure_seed": 4242}},
         smi, "smi", "ligand")
     assert cfg["structure"]["etkdg"]["seed"] == 4242
+
+
+# -------------------------------------------------------------------------------------------
+# `python -m` must behave like the console script
+# -------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("module", ["cli_system_gen", "cli_input_gen"])
+def test_running_the_generator_as_a_module_does_not_silently_succeed(module):
+    """`python -m ...cli_system_gen` used to exit 0 having done nothing at all.
+
+    The module body defines main() and calls it only from the console-script entry point, so
+    `python -m` ran the definitions and stopped -- reporting success while writing no files. That
+    is the worst possible failure for a generator: a pipeline step that "passes" and produces
+    nothing. With no arguments it must now fail the way the console script does.
+    """
+    res = subprocess.run([sys.executable, "-m", f"md_templates.openmm.{module}"],
+                         capture_output=True, text=True, cwd=REPO_ROOT)
+    assert res.returncode != 0, (
+        f"python -m {module} exited 0 with no arguments; it did nothing and said nothing")
+    assert "required" in (res.stdout + res.stderr).lower()
