@@ -22,9 +22,16 @@ select physical GPU 7. Every selection here therefore carries both, and the mapp
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
+import sys
 from typing import Optional, Sequence
+
+#: `GPU 0: NVIDIA RTX A5000 (UUID: GPU-7a14ba65-...)`
+_GPU_LINE = re.compile(r"^GPU (?P<index>\d+): (?P<name>.+?) \(UUID: (?P<uuid>GPU-[0-9a-f-]+)\)$")
+#: `  MIG 1g.5gb Device 0: (UUID: MIG-...)`
+_MIG_LINE = re.compile(r"^MIG (?P<name>\S+) Device (?P<dev>\d+): \(UUID: (?P<uuid>MIG-[0-9A-Za-z-]+)\)$")
 
 __all__ = [
     "GpuDiscoveryError",
@@ -32,6 +39,8 @@ __all__ = [
     "busy_physical_devices",
     "describe_selection",
     "discover_devices",
+    "ensure_pci_bus_id_order",
+    "mig_devices",
     "select_devices",
     "visible_devices",
 ]
@@ -67,7 +76,7 @@ def _run_smi(args: Sequence[str]) -> Optional[str]:
 
 def _all_physical_devices() -> list[dict]:
     """Every device the driver reports, ignoring `CUDA_VISIBLE_DEVICES`."""
-    text = _run_smi(["--query-gpu=index,uuid,name,memory.total",
+    text = _run_smi(["--query-gpu=index,uuid,name,memory.total,pci.bus_id",
                      "--format=csv,noheader,nounits"])
     if not text:
         return []
@@ -81,8 +90,90 @@ def _all_physical_devices() -> list[dict]:
         except ValueError:
             continue
         devices.append({"physical_index": index, "uuid": parts[1], "name": parts[2],
-                        "memory_total_mib": parts[3]})
+                        "memory_total_mib": parts[3],
+                        # PCI bus ID is the only identifier that is stable across CUDA_DEVICE_ORDER
+                        # settings AND meaningful to a human reading `lspci`. Older drivers may not
+                        # report it, so it is optional rather than assumed.
+                        "pci_bus_id": parts[4] if len(parts) > 4 else None})
     return devices
+
+
+def mig_devices() -> list[dict]:
+    """MIG instances, parsed from `nvidia-smi -L`, keyed to their parent GPU.
+
+    MIG UUIDs may appear in `CUDA_VISIBLE_DEVICES` (`MIG-<uuid>`), and they are NOT in the
+    `--query-gpu` output, so a MIG token would otherwise look like a device the driver does not
+    report and be dropped. Dropping it silently would run the ladder on the wrong devices.
+    """
+    text = _run_smi(["-L"])
+    if not text:
+        return []
+    out: list[dict] = []
+    parent_uuid = None
+    parent_index = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        gpu = _GPU_LINE.match(stripped)
+        if gpu:
+            parent_index = int(gpu.group("index"))
+            parent_uuid = gpu.group("uuid")
+            continue
+        mig = _MIG_LINE.match(stripped)
+        if mig and parent_uuid is not None:
+            out.append({"uuid": mig.group("uuid"), "name": mig.group("name"),
+                        "mig": True, "parent_uuid": parent_uuid,
+                        "physical_index": parent_index,
+                        "mig_device_index": int(mig.group("dev"))})
+    return out
+
+
+def ensure_pci_bus_id_order() -> dict:
+    """Make CUDA enumerate devices in the same order `nvidia-smi` prints them.
+
+    This is the correctness problem the release review named. `nvidia-smi` numbers devices by PCI
+    bus order, but CUDA's DEFAULT is `CUDA_DEVICE_ORDER=FASTEST_FIRST`, which sorts by capability.
+    On a machine with mixed cards the two orders genuinely differ, so "GPU 5" in nvidia-smi and
+    logical index 5 in OpenMM can be different cards -- and every busy-device exclusion computed
+    from the first would then be applied to the second.
+
+    Setting the variable only has effect BEFORE the CUDA driver initialises, so this reports what
+    it actually managed to do rather than claiming success:
+
+    * `already_pci`    -- the caller had set it correctly; nothing to do
+    * `set`            -- set here, in time
+    * `conflicting`    -- the caller explicitly asked for a different order; left alone, because
+                          overriding an explicit choice is worse than reporting it
+    """
+    current = os.environ.get("CUDA_DEVICE_ORDER")
+    if current == "PCI_BUS_ID":
+        return {"action": "already_pci", "cuda_device_order": current, "trustworthy": True}
+    if current:
+        return {"action": "conflicting", "cuda_device_order": current, "trustworthy": False,
+                "note": (f"CUDA_DEVICE_ORDER={current!r} was set by the caller. nvidia-smi indices "
+                         "and CUDA ordinals may disagree; identity is matched by UUID, which is "
+                         "unaffected, but physical_index is reported as nvidia-smi sees it.")}
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    return {"action": "set", "cuda_device_order": "PCI_BUS_ID",
+            "trustworthy": not _cuda_already_initialised(),
+            "note": ("set here; it takes effect only if the CUDA driver had not already "
+                     "initialised in this process")}
+
+
+def _cuda_already_initialised() -> bool:
+    """Whether a CUDA context already exists, in which case the order variable is too late.
+
+    Checked without importing anything heavy: if OpenMM has not been imported, CUDA cannot have
+    been initialised by it.
+    """
+    module = sys.modules.get("openmm")
+    if module is None:
+        return False
+    try:
+        return any(module.Platform.getPlatform(i).getName() == "CUDA"
+                   and module.Platform.getPlatform(i).getPropertyDefaultValue("DeviceIndex") != ""
+                   for i in range(module.Platform.getNumPlatforms()))
+    except Exception:                              # noqa: BLE001
+        return False
 
 
 def busy_physical_devices() -> set[str]:
@@ -111,6 +202,12 @@ def visible_devices() -> list[dict]:
     physical = _all_physical_devices()
     by_index = {d["physical_index"]: d for d in physical}
     by_uuid = {d["uuid"]: d for d in physical}
+    # MIG instances are absent from --query-gpu, so a `MIG-...` token would look like a device the
+    # driver does not report and be dropped -- silently running the ladder on the wrong devices.
+    # They are only looked up if a token needs them, because `nvidia-smi -L` is a second call.
+    mig_by_uuid: dict[str, dict] = {}
+    if raw_mentions_mig := ("MIG-" in (os.environ.get("CUDA_VISIBLE_DEVICES") or "")):
+        mig_by_uuid = {d["uuid"]: d for d in mig_devices()}
 
     raw = os.environ.get("CUDA_VISIBLE_DEVICES")
     if raw is None:
@@ -123,7 +220,12 @@ def visible_devices() -> list[dict]:
     for token in (t.strip() for t in raw.split(",")):
         if not token:
             continue
-        found = by_uuid.get(token)
+        found = by_uuid.get(token) or mig_by_uuid.get(token)
+        if found is None and token.startswith("MIG-"):
+            # A MIG token the -L listing did not resolve: keep it rather than drop it, because a
+            # dropped entry shifts every later logical index and moves work to another card.
+            found = {"uuid": token, "name": None, "mig": True, "physical_index": None,
+                     "pci_bus_id": None, "memory_total_mib": None, "unresolved": True}
         if found is None:
             try:
                 found = by_index.get(int(token))
@@ -137,16 +239,25 @@ def visible_devices() -> list[dict]:
 
 def discover_devices(*, exclude_busy: bool = True) -> dict:
     """The usable device set, with everything needed to explain the choice afterwards."""
+    # Do this BEFORE enumerating, so the ordinals reported here are the ordinals OpenMM will use.
+    order = ensure_pci_bus_id_order()
     visible = visible_devices()
     busy = busy_physical_devices() if exclude_busy else set()
-    usable = [d for d in visible if d["uuid"] not in busy]
+    # Busy-matching is by UUID, and for a MIG instance by its PARENT's UUID: compute apps are
+    # reported against the parent, so comparing a MIG UUID to them would never match and a busy
+    # card would be handed out as free.
+    def _busy(d: dict) -> bool:
+        return d.get("uuid") in busy or (d.get("parent_uuid") in busy if d.get("mig") else False)
+
+    usable = [d for d in visible if not _busy(d)]
     return {
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
         "cuda_device_order": os.environ.get("CUDA_DEVICE_ORDER"),
+        "device_order_action": order,
         "nvidia_smi_available": shutil.which("nvidia-smi") is not None,
         "visible": visible,
         "busy_uuids": sorted(busy),
-        "excluded_busy": [d for d in visible if d["uuid"] in busy],
+        "excluded_busy": [d for d in visible if _busy(d)],
         "usable": usable,
         "n_visible": len(visible),
         "n_usable": len(usable),
@@ -229,6 +340,18 @@ def select_devices(n_replicas: int, *, platform: str = "CUDA",
         "device_details": chosen,
         "physical_of_logical": {int(d["logical_index"]): d.get("physical_index") for d in chosen},
         "uuid_of_logical": {int(d["logical_index"]): d.get("uuid") for d in chosen},
+        "pci_bus_id_of_logical": {int(d["logical_index"]): d.get("pci_bus_id") for d in chosen},
+        # The full identity per selected device, which is what gpu_selection.json must carry: an
+        # ordinal alone is meaningless once CUDA_VISIBLE_DEVICES or CUDA_DEVICE_ORDER differ.
+        "device_identity": [
+            {"logical_index": int(d["logical_index"]),
+             "physical_index": d.get("physical_index"),
+             "uuid": d.get("uuid"),
+             "pci_bus_id": d.get("pci_bus_id"),
+             "name": d.get("name"),
+             "mig": bool(d.get("mig")),
+             "parent_uuid": d.get("parent_uuid")}
+            for d in chosen],
         "replica_devices": replica_devices,
         "replicas_per_device": {int(k): v for k, v in sorted(per_device.items())},
         "shared_devices": sorted(k for k, v in per_device.items() if len(v) > 1),
@@ -248,7 +371,8 @@ def describe_selection(record: dict) -> str:
         physical = record["physical_of_logical"].get(logical)
         uuid = record["uuid_of_logical"].get(logical)
         replicas = record["replicas_per_device"].get(logical, [])
-        lines.append(f"[gpu]   logical {logical} -> physical {physical}  {uuid}  "
+        pci = record.get("pci_bus_id_of_logical", {}).get(logical)
+        lines.append(f"[gpu]   logical {logical} -> physical {physical}  pci {pci}  {uuid}  "
                      f"replicas {replicas}")
     if record["shared_devices"]:
         lines.append(f"[gpu]   shared devices {record['shared_devices']}: their replicas propagate "
