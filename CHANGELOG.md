@@ -6,6 +6,20 @@ Entries below `0.2.0` predate the reduction to the six-command CLI in `ca29fcd` 
 registry/bundle/schema architecture that no longer exists. They are kept as history; they do not
 describe the current package.
 
+## 0.3.1 — commit the test fixture
+
+`tests/data/ALA.pdb` had never been committed. `.gitignore` carries `data/`, which matches
+`tests/data/` at any depth, so the fixture every MD test depends on was invisible to git.
+
+The consequence was larger than a red CI job: **a fresh clone could not run the test suite at
+all**, and every passing test result reported from a working tree was passing against a file that
+happened to exist on that machine. The suite was not reproducible from the repository.
+
+`.gitignore` now negates `tests/data/**` explicitly, so the next fixture cannot disappear the same
+way. No package code changed; the 0.3.0 wheel and commands were unaffected.
+
+This is the first release whose CI run is green.
+
 ## 0.3.0 — one directory per stage
 
 `md-gen` now writes one directory per stage instead of one per method, and the dependency between
