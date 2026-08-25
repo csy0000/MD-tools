@@ -18,5 +18,8 @@
   },
   "randomness": {
     "master_seed": 20260820
+  },
+  "forcefield": {
+    "ligand_charge_method": "am1bcc_nagl"
   }
 }
