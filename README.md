@@ -42,13 +42,51 @@ md-template install -e openmm -ev 8.6.0
 ```
 
 `init` writes `$MD_STACK/machine.yaml`: cores, memory, GPUs (by UUID, so the record survives
-renumbering), and the paths it will use. `install` creates `$MD_STACK/envs/openmm-8.6.0`, prefers
-CUDA if a GPU is present, then imports OpenMM and allocates a CUDA context to check the platform
-actually works. What it found is recorded under `installed.openmm`, and the full command and output
-go to `$MD_STACK/logs/`.
+renumbering), and the paths it will use.
+
+`install` creates `$MD_STACK/envs/openmm-8.6.0` containing everything the six commands need, not
+only OpenMM — building a system parameterises with OpenFF and AmberTools, so an environment holding
+OpenMM alone fails part-way through `sys-gen`:
+
+| package | needed for |
+|---|---|
+| `openmm` | the simulations themselves |
+| `pyyaml`, `numpy` | configuration, box geometry |
+| `openff-toolkit`, `openmmforcefields` | ligand parameterisation (SMIRNOFF templates) |
+| `openff-nagl-models` | the optional `am1bcc_nagl` charge method |
+| `ambertools` | `sqm`/`antechamber` for AM1-BCC, `tleap` for implicit peptide topologies |
+| `parmed` | prmtop/rst7 ⇄ OpenMM |
+| `rdkit` | SMILES → 3D conformer |
+
+It then validates what it built: imports each package, lists the platforms, takes one integration
+step on Reference, on CPU and — if a GPU is present — on CUDA, and checks that OpenFF has a
+registered AmberTools toolkit so standard AM1-BCC actually resolves. Package versions, executable
+paths and every check go into `machine.yaml` under `installed.openmm`; the full command and output
+go to `$MD_STACK/logs/`. If the environment cannot run the advertised workflows, the command fails
+and names what is missing.
+
+To check an environment you built yourself, or re-check one later:
+
+```bash
+md-template install --validate /path/to/env
+```
 
 It uses whichever of `micromamba`, `mamba` or `conda` is already installed. It will not install a
 package manager, a driver, or another MD engine — if something is missing it says so and stops.
+
+### 1b. Activate the environment and put the CLI in it
+
+The environment is a normal conda prefix. Activate it, then install this package inside it, so
+`md-openmm` and the OpenMM it drives are the same Python:
+
+```bash
+conda activate $MD_STACK/envs/openmm-8.6.0     # or: micromamba activate $MD_STACK/envs/openmm-8.6.0
+pip install --no-deps md-templates             # or: pip install --no-deps -e /path/to/MD-templates
+```
+
+`--no-deps` is deliberate: the scientific stack is already there from conda, and letting pip
+re-resolve it would pull a second, pip-built OpenMM alongside the conda one. Check it landed in the
+right place with `python -c "import md_templates, openmm; print(md_templates.__file__)"`.
 
 ### 2. Write the configuration
 
@@ -283,6 +321,7 @@ commit.
 
 ## Requirements
 
-Python ≥ 3.11, OpenMM 8.6.0, and for system preparation the OpenFF toolkit, AmberTools and ParmEd.
-`md-template install` sets up an environment with OpenMM; the preparation stack is expected in the
-environment you run `sys-gen` from.
+Python ≥ 3.11 and OpenMM 8.6.0 to run; the OpenFF toolkit, openmmforcefields, AmberTools, ParmEd
+and RDKit to prepare a system. `md-template install` installs all of them and then validates that
+they work — see the table in Example 1 for what each is for. Simulations run on CUDA by default and
+refuse to fall back to the CPU silently; name another platform with `MD_PLATFORM` if you want one.

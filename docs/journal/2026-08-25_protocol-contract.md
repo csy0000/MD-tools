@@ -142,3 +142,46 @@ and is not a checkout path.
 
 Sections 8 (installer dependency set), 9 (release-only CI), 10 (stale surfaces) and the wheel
 completeness check of this task remain open.
+
+## The installer (task section 8)
+
+`md-template install` created an environment holding `openmm` and `python` and reported success.
+That environment cannot run `sys-gen`: building a system parameterises through OpenFF and
+AmberTools, so the failure surfaced part-way through a build rather than at install time.
+
+The solve now carries what `src/` actually imports — derived from the imports, not from a wish
+list: `pyyaml`, `numpy`, `openff-toolkit`, `openff-nagl-models`, `openmmforcefields`, `ambertools`,
+`parmed`, `rdkit`. AmberTools is there for two distinct reasons that are easy to conflate:
+`sqm`/`antechamber` for standard AM1-BCC, and `tleap` for implicit peptide topologies.
+
+Validation replaced the old platform-only probe. It runs inside the target environment, imports
+every required package, records versions, locates the AmberTools executables, checks that OpenFF
+has a registered AmberTools toolkit — without which `am1bcc` does not resolve at all — and takes
+one integration step on Reference, on CPU and on CUDA when present. An environment that cannot run
+the advertised workflows fails the command and names what is missing.
+
+Two distinctions the check has to make, or it is worse than none:
+
+- **CUDA absent is not a failure.** A CPU-only machine is supported. A CUDA platform that is
+  *listed but cannot take a step* IS a failure, because that one fails at run time instead.
+- **Plugins for absent hardware are a note, not a failure.** conda-forge ships HIP plugins; on an
+  NVIDIA machine they cannot load, and refusing over that would fail every correct installation
+  here. A CUDA plugin failing to load stays fatal.
+
+`--validate PREFIX` runs the same check against an environment this command did not create, and
+records it identically. An environment built by hand is not less obliged to work.
+
+### Validation
+
+`md-template install --dry-run` emits the full solve. Against the existing OpenMM 8.6.0
+environment, `md-template install --validate` exits 0 with: openmm 8.6.0 / python 3.12.13,
+openff.toolkit 0.19.0, openff.nagl_models 2025.9.0, openmmforcefields 0.16.0, parmed 4.3.1, rdkit
+2026.03.1, numpy 2.5.2, pyyaml 6.0.3; sqm, antechamber and tleap all present; `am1bcc_ready: true`
+with `AmberToolsToolkitWrapper` registered; platforms Reference/CPU/CUDA/OpenCL with all three
+one-step checks `ok`; four HIP plugin notes; `problems: []`. All of it in `machine.yaml`.
+
+`pytest tests/` — 73 passed in 62 s.
+
+## Still open
+
+Sections 9 (release-only CI) and 10 (stale surfaces) of the task remain.

@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from ..install.inspect import initialise, load_machine
-from ..install.openmm import InstallError, install_openmm
+from ..install.openmm import InstallError, install_openmm, validate_existing
 
 
 def _stack_from(args) -> Path:
@@ -52,6 +52,30 @@ def cmd_init(args) -> int:
     return 0
 
 
+def _report_environment(result: dict) -> None:
+    """What the environment can actually do, not what was requested."""
+    versions = result.get("versions") or {}
+    executables = result.get("executables") or {}
+    print(f"  openmm        : {result.get('openmm_version')} "
+          f"(python {result.get('python_version')})")
+    for module in ("yaml", "numpy", "openff.toolkit", "openff.nagl_models",
+                   "openmmforcefields", "parmed", "rdkit"):
+        if module in versions:
+            print(f"  {module:<14}: {versions[module]}")
+    print(f"  ambertools    : " + ", ".join(
+        f"{name} {'ok' if executables.get(name) else 'MISSING'}"
+        for name in ("sqm", "antechamber", "tleap")))
+    print(f"  am1bcc        : {'ready' if result.get('am1bcc_ready') else 'NOT available'}")
+    print(f"  platforms     : {', '.join(result.get('platforms') or [])}")
+    print(f"  reference     : {result.get('reference_check')}")
+    print(f"  cpu           : {result.get('cpu_check')}")
+    print(f"  cuda          : {result.get('cuda_check')}")
+    for note in result.get("warnings") or []:
+        print(f"  note          : {note}")
+    print()
+    print("Recorded in machine.yaml under `installed.openmm`.")
+
+
 def cmd_install(args) -> int:
     stack = _stack_from(args)
     engine = str(args.engine).lower()
@@ -59,6 +83,18 @@ def cmd_install(args) -> int:
         raise SystemExit(
             f"engine {args.engine!r} is not supported. This repository installs OpenMM only; "
             "Amber and GROMACS are not implemented and are not presented as available.")
+
+    if args.validate:
+        # Validate an environment that already exists instead of building one. The check is
+        # identical; only its subject differs.
+        try:
+            result = validate_existing(stack, args.validate)
+        except (InstallError, FileNotFoundError) as error:
+            raise SystemExit(str(error))
+        print(f"  environment   : {result['prefix']}  (validated, not created)")
+        _report_environment(result)
+        return 0
+
     try:
         result = install_openmm(stack, args.engine_version, dry_run=args.dry_run)
     except (InstallError, FileNotFoundError) as error:
@@ -69,12 +105,7 @@ def cmd_install(args) -> int:
     if result.get("dry_run"):
         print("  dry run: nothing was installed")
         return 0
-    print(f"  openmm        : {result.get('openmm_version')} "
-          f"(python {result.get('python_version')})")
-    print(f"  platforms     : {', '.join(result.get('platforms') or [])}")
-    print(f"  cuda          : {result.get('cuda_check')}")
-    print()
-    print("Recorded in machine.yaml under `installed.openmm`.")
+    _report_environment(result)
     return 0
 
 
@@ -97,6 +128,9 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--target-dir", "--target_dir", dest="target_dir", default=None)
     install.add_argument("--dry-run", action="store_true",
                          help="write the command that would run, install nothing")
+    install.add_argument("--validate", metavar="PREFIX", default=None,
+                         help="validate an environment that already exists instead of creating "
+                              "one, and record the result in machine.yaml")
     install.set_defaults(func=cmd_install)
     return parser
 
