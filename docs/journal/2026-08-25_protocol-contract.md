@@ -185,3 +185,64 @@ one-step checks `ok`; four HIP plugin notes; `problems: []`. All of it in `machi
 ## Still open
 
 Sections 9 (release-only CI) and 10 (stale surfaces) of the task remain.
+
+## CI (task section 9)
+
+Both workflows were red and would have stayed red. They fired on every push to `main`/`dev`/
+`openmm`, on every pull request and on a Monday cron, and they executed scripts importing seven
+modules deleted in `ca29fcd` — `core.packaged`, `openmm.spec`, `cmd_segments`, `bundlecheck`,
+`dcdtail`, `runstate`, `schemas` — plus two test files that no longer exist. A permanently red
+gate is worse than no gate: it teaches everyone to ignore the one signal that is supposed to stop
+a bad release.
+
+Deleted: `.github/workflows/fast.yml`, `.github/workflows/integration-cpu.yml`, and all of
+`scripts/ci/`. Added `.github/workflows/release-validation`, triggered ONLY by `workflow_dispatch`
+and a `openmm-v*` tag. It creates the documented CPU environment, builds and installs the wheel,
+validates that environment the way `md-template install` does, runs the six public commands and a
+full `sys-config -> sys-gen -> md-gen` pipeline from `$RUNNER_TEMP` with no checkout on the path,
+runs tiny cMD and REST2 jobs from the generated project, invokes REST2 twice to prove the exchange
+history continues, and finishes with the suite.
+
+`environment-ci.yml` was rewritten. It had drifted into the old framework's environment: Python
+3.11, `pydantic`, `openmmtools`, `pymbar`, `mdtraj`, `numba`, `scipy`, `pandas`, `matplotlib`,
+`scikit-learn`, `netcdf4`, `ipykernel` — none of which `src/` imports — and it pointed at a
+`docs/implementation/` path. It now mirrors `CONDA_PACKAGES` from the installer with the CUDA pin
+removed, and `tests/test_install.py` asserts the two agree, so the environment CI validates and the
+environment a user installs cannot drift apart again.
+
+### Failing on a skipped scientific test
+
+Section 9 requires that a smoke test which skips is a failure. pytest has no such switch, so
+`--error-on-skip` was added in `tests/conftest.py`: a `pytest_runtest_makereport` wrapper turning
+any skip into a failure. Release validation passes it. Demonstrated on a deliberately skipping
+test: without the flag `1 passed, 1 skipped`; with it, `1 failed, 1 passed`.
+
+### Two helper scripts rather than YAML
+
+`scripts/shrink_configs_for_ci.py` and `scripts/check_exchange_history.py` hold the smoke
+configuration and the continuity assertion. Inlining them in the workflow would have made what CI
+runs unreproducible locally, which is how the previous scripts drifted from the code in the first
+place.
+
+### Validation
+
+Every step was rehearsed locally against the real environment before committing: openmm 8.6.0,
+openff 0.19.0, openmmforcefields 0.16.0, parmed 4.3.1, rdkit 2026.03.1; `sqm`/`antechamber`/`tleap`
+found; `--validate` reporting am1bcc ready and reference/cpu/cuda all ok; all six commands from
+outside the checkout; cMD plus two REST2 invocations on `MD_PLATFORM=CPU` with trajectories written
+and `exchange history continuous over 6 round(s), 6 attempt(s), through step 60`.
+
+`pytest tests/ --error-on-skip` — 74 passed in 62 s.
+
+`docs/support-matrix.md` named `fast` and `integration-cpu` as its gates and listed `pydantic`,
+which is no longer a dependency. Deleting the workflows made those claims false, so the matrix was
+corrected here rather than left for section 10, and the two sections describing the removed bundle
+architecture are now marked historical.
+
+## Still open
+
+Section 10 (stale surfaces): the root `test/` directory, `docs/configuration.md`,
+`docs/implementation/explicit_solvent/` (which contains a second, unmaintained copy of the run
+scripts), `installation/README.md`, the `install-md-stack` skill, and `scripts/capture_goldens.py`,
+which imports the deleted `spec`, `bundlev2` and `runstate` modules and is referenced by nothing
+outside the journals.

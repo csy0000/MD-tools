@@ -11,6 +11,24 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ALA_PDB = Path(__file__).resolve().parent / "data" / "ALA.pdb"
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--error-on-skip", action="store_true", default=False,
+        help="turn every skip into a failure. Release validation uses this: a scientific smoke "
+             "test that skipped because a dependency was missing is a test that did not run, and "
+             "reporting that as a pass with a note is how a broken release ships.")
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    if report.skipped and item.config.getoption("--error-on-skip"):
+        report.outcome = "failed"
+        report.longrepr = (f"{item.nodeid} skipped, and --error-on-skip forbids skips here:\n"
+                           f"{report.longrepr}")
+
+
 def run_cli(module: str, *args, cwd: Path | None = None):
     """Invoke an entry point the way a user does."""
     return subprocess.run([sys.executable, "-m", f"md_templates.cli.{module}", *args],

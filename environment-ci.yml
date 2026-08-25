@@ -1,94 +1,49 @@
-# CI environment: the documented environment with the CUDA pin removed.
-# Kept as a separate file rather than edited in place so the supported environment and
-# the CI environment cannot drift apart silently -- any other difference is a bug.
-# Environment for the explicit-solvent baseline.
+# The documented CPU preparation environment, for release validation.
 #
-#   conda env create -f docs/implementation/explicit_solvent/environment.yml
-#   conda activate md-templates
+#   micromamba create -f environment-ci.yml
+#   micromamba activate md-templates-ci
+#   pip install --no-deps dist/md_templates-*.whl
 #
-# then EITHER build and install a wheel (the portable route, and what a consuming repository
-# does -- no source checkout required afterwards):
+# This mirrors the package list `md-template install` solves for -- see CONDA_PACKAGES in
+# src/md_templates/install/openmm.py -- with the CUDA pin removed, because CI runners have no GPU.
+# `tests/test_install.py` asserts the two agree, so an environment that CI validates and one a user
+# installs cannot drift apart silently.
 #
-#   python -m build                       # from the repository root; writes dist/md_templates-*.whl
-#   python -m pip install dist/md_templates-*.whl --no-deps
+# Everything here has a caller in src/. Nothing is included because it might be useful later:
+# an unused dependency is one more thing that can fail to solve.
 #
-# OR install the checkout in place, for development:
+# ACTIVATE THE ENVIRONMENT BEFORE RUNNING ANYTHING. AM1-BCC goes through AmberTools' `sqm`, which
+# the OpenFF toolkit discovers by looking on PATH. In a bare shell it is not found even though it
+# is installed, AmberToolsToolkitWrapper is silently absent from the registry, and AM1-BCC becomes
+# unavailable under its own name.
 #
-#   pip install -e . --no-deps            # from the repository root
-#
-# Either way it is `--no-deps`, so EVERY runtime dependency declared in pyproject.toml must be
-# listed HERE -- pip will not pull them in.  numba is the one that is easy to miss.  The wheel
-# route additionally puts the `md-openmm` console script on PATH; see
-# docs/implementation/explicit_solvent/PORTABLE_REST2.md.
-#
-# THIS IS NOT A LOCK FILE.  It pins the primary package versions the baseline was validated
-# against; build strings and transitive dependencies are unpinned, so conda is free to resolve
-# those differently on another day or platform.  Treat it as "validated primary package versions",
-# not as a guarantee of bit-identical reproduction.  If a true lock is ever needed, generate a
-# platform-specific one (`conda list --explicit`) and commit that alongside.
-#
-# ACTIVATE THE ENVIRONMENT BEFORE RUNNING ANYTHING.  AM1BCC charge assignment goes through
-# AmberTools' `sqm`, which the OpenFF toolkit discovers by looking for it on PATH.  In a bare shell
-# it is not found even though it is installed, AmberToolsToolkitWrapper is silently absent from the
-# toolkit registry, and AM1BCC becomes unavailable.  build_forcefield() checks and fails loudly
-# rather than letting the charges fall back to another method under an AM1BCC label.
+# NOT A LOCK FILE. Primary packages only; transitive dependencies and build strings are free.
 
 name: md-templates-ci
 
 channels:
   - conda-forge
-  - nodefaults                # no channel mixing: conda-forge only
+  - nodefaults                # conda-forge only, no channel mixing
 
 dependencies:
-  # 3.11.15 is what the validation ran on; the series is pinned rather than the patch so the
-  # environment stays solvable.  See the "not a lock file" note above.
-  - python=3.11
+  - python=3.12
 
-  # --- packaging / test toolchain (needed because the install is `pip install -e . --no-deps`) --
+  # --- what the six commands import ------------------------------------------------------------
+  - openmm=8.6.0              # the simulations themselves
+  - pyyaml                    # every configuration file read or written
+  - numpy                     # box geometry in solvation.py and system.py
+  - openff-toolkit            # Molecule, GLOBAL_TOOLKIT_REGISTRY -- ligand parameterisation
+  - openff-nagl-models        # the optional `am1bcc_nagl` charge method
+  - openmmforcefields         # SMIRNOFFTemplateGenerator
+  - ambertools                # sqm/antechamber for AM1-BCC, tleap for implicit peptide topologies
+  - parmed                    # prmtop/rst7 <-> OpenMM
+  - rdkit                     # SMILES -> 3D conformer
+
+  # cuda-version is deliberately ABSENT: the runners are CPU-only. OpenMM still provides the
+  # Reference and CPU platforms, which is what the smoke tests use.
+
+  # --- packaging and test toolchain ------------------------------------------------------------
   - pip
-  - setuptools>=64            # PEP 660 editable installs
-  - python-build                     # `python -m build` -> the wheel a consuming repository installs
+  - setuptools>=64
+  - python-build              # `python -m build` -> the wheel a consuming repository installs
   - pytest
-  - git
-
-  # --- simulation engine -----------------------------------------------------------------------
-  # 8.5.1 first supplied Modeller.addSolvent(boxShape=...) and
-  # DCDReporter(atomSubset=..., enforcePeriodicBox=...), which the baseline depends on; both are
-  # still present in 8.6.0. The pin is 8.6.0 because that is the release the suite is run under.
-  - openmm=8.6.0
-  - openmmtools=0.26.0        # NEQ integrators; not used by this template
-
-  # LINUX / CUDA environment.  For a CPU-only or non-NVIDIA machine, DELETE the next line --
-  # OpenMM still provides the Reference and CPU platforms, and every stage runs on
-  # `production.platform: CPU`, only slower.
-  # cuda-version is deliberately ABSENT: CI runs on CPU-only runners and must
-  # not require an NVIDIA toolchain. OpenMM still provides Reference and CPU.
-
-  # --- force fields ----------------------------------------------------------------------------
-  - openmmforcefields=0.16.0  # SMIRNOFFTemplateGenerator -> Sage 2.2 (openff-2.2.0)
-  - openff-toolkit=0.17.1
-  - openff-interchange=0.4.5
-  - ambertools=24.8           # sqm, for AM1BCC.  MUST be on PATH -- see the note above.
-  - parmed=4.3.1              # the enforced GBn2/mbondi3 implicit route
-
-  # --- structure generation --------------------------------------------------------------------
-  - rdkit=2025.03.6           # ETKDGv3 embedding, MMFF94s minimisation, amide SMARTS matching
-
-  # --- analysis --------------------------------------------------------------------------------
-  # pymbar is a first-class dependency of the analysis that follows these runs -- the MBAR + Zwanzig
-  # hot term for window-strat-cBAR, and the all-replica MBAR cold reference.  It arrived here only
-  # as a transitive dependency of openmmtools before, which is not something to rely on.
-  - pymbar=4.2.0
-  - mdtraj=1.11.1             # trajectory reading and CV extraction (NOT used by the writers)
-  - numba                     # declared in pyproject.toml; --no-deps will not install it
-  - numpy=2.4.6
-  - scipy=1.17.1
-  - pandas=2.3.3
-  - matplotlib=3.10.9
-  - scikit-learn=1.9.0
-  - netcdf4=1.7.2
-
-  # --- convenience -----------------------------------------------------------------------------
-  - pyyaml
-  - tqdm
-  - ipykernel

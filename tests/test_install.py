@@ -35,6 +35,23 @@ def test_every_required_import_is_actually_imported_by_this_package():
             f"{module} is required but never imported"
 
 
+def test_the_ci_environment_and_the_installer_solve_for_the_same_packages():
+    """An environment CI validates and one a user installs must not drift apart.
+
+    The CI file omits only the CUDA pin, because the runners have no GPU.
+    """
+    document = yaml.safe_load(
+        Path(__file__).resolve().parents[1].joinpath("environment-ci.yml").read_text())
+    listed = {str(entry).split("=")[0].split(">")[0].split("<")[0].strip()
+              for entry in document["dependencies"] if isinstance(entry, str)}
+    for spec in CONDA_PACKAGES:
+        name = spec.split("=")[0]
+        assert name in listed, f"{name} is in the installer solve but not in environment-ci.yml"
+    assert "openmm" in listed, "the CI environment must pin OpenMM itself"
+    assert not any(entry.startswith("cuda") for entry in listed), \
+        "the CI runners are CPU-only; a CUDA pin would make the environment unsolvable there"
+
+
 def test_a_missing_package_is_named_with_the_package_that_fixes_it():
     report = {"import_errors": {"openff.toolkit": "ModuleNotFoundError: no openff"},
               "executables": {"sqm": "/x/sqm", "antechamber": "/x/antechamber",

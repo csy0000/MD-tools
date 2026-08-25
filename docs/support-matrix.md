@@ -3,20 +3,31 @@
 ## Matrix
 
 Determined by what actually passes, not by aspiration. A version enters this table when a CI run
-gates it, and is described as *locally verified* until then.
+gates it, and is described as *locally verified* until then. The only workflow is
+`release-validation`, which runs on `workflow_dispatch` and on an `openmm-v*` tag — not on every
+push — so "gated" here means gated at release, not continuously.
 
 | | version | status |
 |---|---|---|
-| Python | 3.11 | gated by `fast` and `integration-cpu`; locally verified on 3.11.15 |
-| OpenMM | 8.6.0 | locally verified; pinned by `environment-ci.yml`; identity checked by `short_version` + tag commit `c6173db` |
-| pydantic | ≥ 2 (2.11.10 locally) | gated by the unit suite |
+| Python | 3.12 | pinned by `environment-ci.yml`; gated by `release-validation`; locally verified on 3.12.13 |
+| OpenMM | 8.6.0 | pinned by `environment-ci.yml`; gated by `release-validation`; locally verified on 8.6.0 |
+| OpenFF toolkit | 0.19.0 locally | installed and import-checked by `md-template install`; unpinned in the solve |
+| openmmforcefields | 0.16.0 locally | as above |
+| AmberTools | `sqm`, `antechamber`, `tleap` on PATH | presence and AM1-BCC readiness checked at install and in CI |
+| ParmEd / RDKit | 4.3.1 / 2026.03.1 locally | installed and import-checked |
 | OS | ubuntu-latest (CI), Linux x86-64 (local) | no other OS is claimed |
-| Accelerator | **CPU only** | CUDA is neither required nor tested here |
+| Accelerator (CI) | **CPU only** | the runners have no GPU; `environment-ci.yml` omits the CUDA pin |
+| Accelerator (runs) | **CUDA by default** | generated scripts refuse a silent CPU fallback; locally verified on RTX A5000 + RTX 3080 |
+
+`pydantic` is no longer a dependency of this package and has been removed from the table.
 
 No second Python or OpenMM version is listed, because none has been run. Adding one means adding it
 to the workflow matrix and seeing it pass first.
 
 ## What portability means here
+
+> **Partly historical.** Points 1, 2 and 5 describe the removed bundle architecture. Points 3 and 4,
+> on checkpoints and serialized States, still hold.
 
 **Precise claims, in descending strength.**
 
@@ -46,6 +57,11 @@ to the workflow matrix and seeing it pass first.
 **Not claimed:** cross-machine bitwise reproducibility of dynamics, in any configuration.
 
 ## Bundle schema versions
+
+> **Historical.** The bundle architecture described below was removed in `ca29fcd`. `sys-gen` now
+> writes a plain `inputs/` folder and `md-gen` a plain `MD/` project. This section is retained to
+> interpret validation reports produced before that change, and describes nothing in the current
+> package.
 
 | version | guarantees |
 |---|---|
