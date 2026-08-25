@@ -6,9 +6,7 @@ Entries below `0.2.0` predate the reduction to the six-command CLI in `ca29fcd` 
 registry/bundle/schema architecture that no longer exists. They are kept as history; they do not
 describe the current package.
 
-## Unreleased / 0.3.0 — one directory per stage
-
-**Not released.** Package metadata reads `0.3.0.dev0`; `openmm-v0.2.0` remains the latest tag.
+## 0.3.0 — one directory per stage
 
 `md-gen` now writes one directory per stage instead of one per method, and the dependency between
 them is a file on disk rather than a sequence inside a single script:
@@ -53,7 +51,7 @@ box, so there is no barostat and no NPT stage.
 these directories; regenerate it with `md-openmm md-gen`. `inputs/` is unchanged, so `sys-gen` does
 not need to run again.
 
-### Correction, same unreleased version
+### Corrections made before release
 
 * **Equilibration is grouped under `MD/eq/`** — `eq/nvt_1kcal`, `eq/npt_1kcal`, `eq/npt_free`, and
   `eq/nvt_1kcal`, `eq/nvt_free` for implicit. The ordinal prefixes are gone: the group already
@@ -66,6 +64,12 @@ not need to run again.
   to zero, because the parent's count belongs to the parent. Previously the parent state was
   loaded unconditionally before the checkpoint, and a stage's own count was never reset when it
   should have been.
+* **Completion is identified by a canonical SHA-256 of the whole `stage.yaml`**, recorded as
+  `stage_config_sha256`, and there is no redo flag. An earlier `MD_REDO=1` shortcut was removed
+  before release because it did not redo anything: a completed dynamics stage still holds its
+  terminal checkpoint, so it loaded that, found zero steps remaining, and rewrote the completion
+  artifacts without integrating a step from the parent. Redoing a stage means generating into a
+  new directory or removing that stage's six runtime outputs by hand.
 * **A finished stage is not silently rerun.** `final_state.xml` is what downstream stages have
   already consumed, so re-running reports completion and changes nothing. Redoing a stage means
   generating into a new directory or removing that stage's six runtime outputs by hand; there is
