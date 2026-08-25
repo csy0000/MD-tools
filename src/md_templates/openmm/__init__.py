@@ -28,7 +28,7 @@ is the REST2 convention used throughout; ``s = 1`` is cold.
 """
 from __future__ import annotations
 
-from .config import (  # noqa: F401
+from .config_legacy import (  # noqa: F401
     DEFAULTS,
     dump_defaults,
     exchange_rounds,

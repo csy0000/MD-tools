@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import provenance
-from .config import resolve_config
+from .config_legacy import resolve_config
 from .fingerprint import build_projection, fingerprint
 from .solvation import salt_accounting
 from .schemas import (

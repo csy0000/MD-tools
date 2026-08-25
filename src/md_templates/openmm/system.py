@@ -19,7 +19,7 @@ import numpy as np
 from openmm import (CMAPTorsionForce, CustomGBForce, NonbondedForce,
                     PeriodicTorsionForce, XmlSerializer)
 
-from .config import write_manifest
+from .config_legacy import write_manifest
 
 WATER_RESIDUE_NAMES = frozenset({"HOH", "WAT", "SOL", "TIP3", "TIP", "H2O"})
 ION_RESIDUE_NAMES = frozenset({"NA", "CL", "K", "MG", "CA", "ZN", "BR", "I", "LI", "RB", "CS"})

@@ -19,7 +19,7 @@ from typing import Any, Iterable, Optional, Sequence
 import numpy as np
 
 from . import runstate
-from .config import resolve_chunk_plan, write_manifest
+from .config_legacy import resolve_chunk_plan, write_manifest
 from .equilibration import (_apply_coords, _load_bundle, _make_simulation,
                             _scaled_system, _steps)
 

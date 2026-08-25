@@ -44,7 +44,7 @@ from typing import Any, Optional
 
 from . import provenance, runstate
 from .bundle import BUNDLE_MANIFEST, validate_bundle
-from .config import exchange_rounds, resolve_config
+from .config_legacy import exchange_rounds, resolve_config
 from .fingerprint import check_compatible, fingerprint
 from .schemas import (
     ExperimentManifest,

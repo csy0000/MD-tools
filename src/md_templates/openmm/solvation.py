@@ -17,7 +17,7 @@ from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 
-from .config import write_manifest
+from .config_legacy import write_manifest
 from .system import build_forcefield
 
 WATER_RESIDUE_NAMES = frozenset({"HOH", "WAT", "SOL", "TIP3", "TIP", "H2O"})

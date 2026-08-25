@@ -16,7 +16,7 @@ from .seeds import as_openmm_seed
 
 import numpy as np
 
-from .config import write_manifest
+from .config_legacy import write_manifest
 from .system import build_system, initial_structure, protonate
 from .solvation import solvate
 from .hashing import sha256_text
