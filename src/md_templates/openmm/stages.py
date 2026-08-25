@@ -54,6 +54,7 @@ def stage_plan(config: dict[str, Any], *, implicit: bool) -> list[dict[str, Any]
 
     plan: list[dict[str, Any]] = [{
         "name": "minimization",
+        "group": None,                      # minimisation is not equilibration; it stays at the top
         "kind": "minimization",
         "ensemble": "none",
         "restraint_k_kcal_mol_a2": float(minimization.get("restraint_k_kcal_mol_a2",
@@ -63,7 +64,8 @@ def stage_plan(config: dict[str, Any], *, implicit: bool) -> list[dict[str, Any]
         "barostat_active": False,           # a barostat during minimisation moves the box against
                                             # forces that are still enormous
     }, {
-        "name": f"eq1_nvt_{label}",
+        "name": f"nvt_{label}",
+        "group": "eq",
         "kind": "nvt_restrained",
         "ensemble": "NVT",
         "restraint_k_kcal_mol_a2": restraint_k,
@@ -74,7 +76,8 @@ def stage_plan(config: dict[str, Any], *, implicit: bool) -> list[dict[str, Any]
 
     if implicit:
         plan.append({
-            "name": "eq2_nvt_free",
+            "name": "nvt_free",
+            "group": "eq",
             "kind": "nvt_free",
             "ensemble": "NVT",
             "restraint_k_kcal_mol_a2": 0.0,
@@ -84,7 +87,8 @@ def stage_plan(config: dict[str, Any], *, implicit: bool) -> list[dict[str, Any]
         })
     else:
         plan.append({
-            "name": f"eq2_npt_{label}",
+            "name": f"npt_{label}",
+            "group": "eq",
             "kind": "npt_restrained",
             "ensemble": "NPT",
             "restraint_k_kcal_mol_a2": restraint_k,
@@ -93,7 +97,8 @@ def stage_plan(config: dict[str, Any], *, implicit: bool) -> list[dict[str, Any]
             "barostat_active": True,
         })
         plan.append({
-            "name": "eq3_npt_free",
+            "name": "npt_free",
+            "group": "eq",
             "kind": "npt_free",
             "ensemble": "NPT",
             "restraint_k_kcal_mol_a2": 0.0,
@@ -107,6 +112,11 @@ def stage_plan(config: dict[str, Any], *, implicit: bool) -> list[dict[str, Any]
     for index, stage in enumerate(plan):
         stage["implicit"] = bool(implicit)
         stage["output_state"] = "final_state.xml"
+        # Where the directory lives under MD/. The equilibration stages are grouped so the project
+        # root shows the four things that matter -- minimisation, equilibration, and the two
+        # production methods -- instead of a flat list that grows with every stage added.
+        stage["path"] = (f"{stage['group']}/{stage['name']}" if stage.get("group")
+                         else stage["name"])
         # Under explicit solvent EVERY stage carries a barostat in its System, so a State written
         # by an NPT stage -- which holds the barostat's context parameters -- loads into an NVT
         # stage's Context. `barostat_active` alone decides whether it attempts a move, and
@@ -115,11 +125,27 @@ def stage_plan(config: dict[str, Any], *, implicit: bool) -> list[dict[str, Any]
         stage["pressure_bar"] = pressure if stage["barostat_active"] else None
         if index == 0:
             stage["parent"] = None
+            stage["parent_path"] = None
             stage["input_state"] = None      # md-gen fills this from the inputs folder
         else:
-            stage["parent"] = plan[index - 1]["name"]
-            stage["input_state"] = f"../{plan[index - 1]['name']}/final_state.xml"
+            parent = plan[index - 1]
+            stage["parent"] = parent["name"]
+            stage["parent_path"] = parent["path"]
+            # Relative from THIS stage's directory to the parent's, so the depths of the two
+            # groups are accounted for rather than assumed equal.
+            stage["input_state"] = _relative_state(stage["path"], parent["path"])
     return plan
+
+
+def _relative_state(from_path: str, to_path: str) -> str:
+    """`../nvt_1kcal/final_state.xml`, or `../../minimization/final_state.xml` across groups.
+
+    Relative to the stage's OWN directory, which is where its run.py executes -- not to the group
+    it sits in. Getting that wrong points a grouped stage one level too shallow.
+    """
+    import posixpath
+
+    return posixpath.join(posixpath.relpath(to_path, from_path), "final_state.xml")
 
 
 def _duration(equilibration: dict[str, Any], key: str) -> float:
@@ -135,6 +161,11 @@ def stage_names(config: dict[str, Any], *, implicit: bool) -> list[str]:
     return [stage["name"] for stage in stage_plan(config, implicit=implicit)]
 
 
+def stage_paths(config: dict[str, Any], *, implicit: bool) -> list[str]:
+    """Directory of every common stage, relative to `MD/`."""
+    return [stage["path"] for stage in stage_plan(config, implicit=implicit)]
+
+
 def final_common_stage(config: dict[str, Any], *, implicit: bool) -> str:
-    """The stage both production methods branch from."""
-    return stage_plan(config, implicit=implicit)[-1]["name"]
+    """The directory both production methods branch from, relative to `MD/`."""
+    return stage_plan(config, implicit=implicit)[-1]["path"]

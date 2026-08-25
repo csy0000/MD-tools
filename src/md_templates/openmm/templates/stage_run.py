@@ -25,15 +25,31 @@ from openmm import unit
 from openmm.app import CheckpointReporter, PDBFile, StateDataReporter
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))
+
+
+def _project_root(start):
+    """The `MD/` directory, found rather than assumed.
+
+    Stages are not all at the same depth -- the equilibration ones live under `eq/` -- so counting
+    `..` here would be a second statement of the layout that can disagree with the first.
+    """
+    for candidate in [start, *start.parents]:
+        if (candidate / "md.config.yaml").is_file():
+            return candidate
+    raise SystemExit(f"no md.config.yaml above {start}; this script must live inside a project "
+                     f"written by `md-openmm md-gen`.")
+
+
+PROJECT = _project_root(HERE)
+sys.path.insert(0, str(PROJECT))
 from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, active_barostat_count, build_stage_system,
                        count_barostats, make_simulation, require_parent_state, resolve_platform,
                        restraint_strength, set_restraint, steps_for, write_final_pdb,
                        write_final_state)
 
 STAGE = yaml.safe_load((HERE / "stage.yaml").read_text())
-CONFIG = yaml.safe_load((HERE.parent / "md.config.yaml").read_text())
-INPUTS = (HERE.parent / CONFIG["paths"]["inputs_folder"]).resolve()
+CONFIG = yaml.safe_load((PROJECT / "md.config.yaml").read_text())
+INPUTS = (PROJECT / CONFIG["paths"]["inputs_folder"]).resolve()
 SOLUTE = yaml.safe_load((INPUTS / "solute.yaml").read_text())
 
 IMPLICIT = bool(STAGE["implicit"])
@@ -50,6 +66,18 @@ BAROSTAT_ACTIVE = {"npt_restrained", "npt_free"}
 def main():
     kind = STAGE["kind"]
     log_lines = []
+
+    # A finished stage is not re-run by accident. Its final_state.xml is what every downstream
+    # stage has already consumed, so silently redoing it would move the ground under a chain that
+    # has already been built on it -- and the trajectories downstream would no longer follow from
+    # the state their directories claim.
+    finished = HERE / STAGE["output_state"]
+    if finished.is_file() and not os.environ.get("MD_REDO"):
+        print(f"[{STAGE['name']}] already complete: {finished.name} exists and downstream stages "
+              f"may already have used it.\n"
+              f"  Nothing was run. To deliberately redo this stage and everything after it:\n"
+              f"      MD_REDO=1 ./run.sh", flush=True)
+        return 0
 
     def log(message):
         line = f"[{STAGE['name']}] {message}"
@@ -74,13 +102,27 @@ def main():
                                  seed=int(STAGE["integrator_seed"]),
                                  platform_name=platform_name, device=device)
 
-    # The parent's finalized state. For the first stage that is the built system's initial state,
-    # which sys-gen wrote and which always exists.
-    parent_state = require_parent_state(
-        (HERE / STAGE["input_state"]).resolve(),
-        stage_name=STAGE.get("parent") or "sys-gen",
-        command=STAGE.get("parent") or "..")
-    simulation.context.setState(parent_state)
+    # Two different starting points, and the difference is the step counter.
+    #
+    #   own checkpoint  -> this stage was interrupted. Its step count is how far IT has come, and
+    #                      resetting it would run the whole stage again on top of itself.
+    #   parent state    -> this stage has not started. The parent's counter belongs to the parent,
+    #                      so the count starts at zero here.
+    checkpoint = HERE / "checkpoint.chk"
+    resuming = checkpoint.is_file()
+    if resuming:
+        simulation.loadCheckpoint(str(checkpoint))
+        done = simulation.context.getStepCount()
+        log(f"resuming this stage from checkpoint.chk at step {done:,}")
+    else:
+        parent_state = require_parent_state(
+            (HERE / STAGE["input_state"]).resolve(),
+            stage_name=STAGE.get("parent") or "sys-gen",
+            command=STAGE.get("parent_path") or "..")
+        simulation.context.setState(parent_state)
+        simulation.context.setStepCount(0)
+        done = 0
+        log(f"started from {STAGE['input_state']}")
 
     # The State carries whatever restraint the parent left set. This stage states its own.
     set_restraint(simulation, float(STAGE["restraint_k_kcal_mol_a2"]))
@@ -90,26 +132,30 @@ def main():
         f"{count_barostats(system)} in the System")
 
     if kind == "minimization":
+        steps = 0
         iterations = int(STAGE["max_iterations"])
+        # Minimisation produces the same artifacts as every other stage. A stage whose directory
+        # is missing half the files is one nobody can inspect the same way as its neighbours.
+        table = StateDataReporter(str(HERE / "stage.csv"), 1, step=True, time=True,
+                                  potentialEnergy=True, temperature=True, volume=not IMPLICIT)
+        table.report(simulation, simulation.context.getState(
+            getEnergy=True, getPositions=True, getVelocities=True))
         log(f"minimising, max {iterations} iterations")
         simulation.minimizeEnergy(maxIterations=iterations)
         simulation.context.setVelocitiesToTemperature(TEMPERATURE, int(STAGE["velocity_seed"]))
-        steps = 0
+        table.report(simulation, simulation.context.getState(
+            getEnergy=True, getPositions=True, getVelocities=True))
+        del table
+        simulation.saveCheckpoint(str(checkpoint))
     else:
         steps = steps_for(float(STAGE["duration_ps"]), TIMESTEP_FS)
-        if STAGE.get("assign_velocities"):
+        if STAGE.get("assign_velocities") and not resuming:
             simulation.context.setVelocitiesToTemperature(TEMPERATURE, int(STAGE["velocity_seed"]))
-        checkpoint = HERE / "checkpoint.chk"
-        done = 0
-        if checkpoint.is_file():
-            simulation.loadCheckpoint(str(checkpoint))
-            done = simulation.context.getStepCount()
-            log(f"resuming this stage from checkpoint.chk at step {done:,}")
         report_every = max(1, steps // 10)
         simulation.reporters.append(CheckpointReporter(str(checkpoint), report_every))
         simulation.reporters.append(StateDataReporter(
             str(HERE / "stage.csv"), report_every, step=True, time=True, potentialEnergy=True,
-            temperature=True, volume=not IMPLICIT, append=checkpoint.is_file() and done > 0))
+            temperature=True, volume=not IMPLICIT, append=resuming and done > 0))
         log(f"{STAGE['ensemble']}, {steps - done:,} of {steps:,} steps "
             f"({STAGE['duration_ps']} ps at {TIMESTEP_FS} fs)")
         if steps - done > 0:

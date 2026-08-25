@@ -84,24 +84,25 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
     resolved["paths"] = {"inputs_folder": relative_inputs}
 
     plan = stage_plan(resolved, implicit=implicit)
-    resolved["paths"]["common_stages"] = [stage["name"] for stage in plan]
-    resolved["paths"]["common_final_stage"] = plan[-1]["name"]
+    resolved["paths"]["common_stages"] = [stage["path"] for stage in plan]
+    resolved["paths"]["common_final_stage"] = plan[-1]["path"]
     # Both production methods read this one file. Written into the config rather than recomputed by
-    # each script, so "where does production start" has exactly one answer in the project.
-    resolved["paths"]["common_final_state"] = f"../{plan[-1]['name']}/final_state.xml"
+    # each script, so "where does production start" has exactly one answer in the project. cMD/ and
+    # REST2/ sit one level under MD/, so `../` reaches the grouped stage directory.
+    resolved["paths"]["common_final_state"] = f"../{plan[-1]['path']}/final_state.xml"
 
     write_yaml(out / "md.config.yaml", resolved,
                header="# Resolved protocol, read by every run.py in this project.\n")
 
-    # One copy for the whole project: every script adds its parent directory to sys.path.
+    # One copy for the whole project. Every script locates MD/ by looking for md.config.yaml above
+    # itself, so stages at different depths all find the same helper.
     shutil.copy2(TEMPLATES / "md_stages.py", out / "md_stages.py")
 
     seed = _base_seed(resolved)
     for index, stage in enumerate(plan):
-        directory = out / stage["name"]
+        directory = out / stage["path"]
         directory.mkdir(parents=True, exist_ok=True)
         shutil.copy2(TEMPLATES / "stage_run.py", directory / "run.py")
-        _write_launcher(TEMPLATES / "stage_run.sh", directory / "run.sh", stage["name"])
 
         document = dict(stage)
         document["input_state"] = (
@@ -121,6 +122,7 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
         })
         write_yaml(directory / "stage.yaml", document,
                    header=f"# Stage {index + 1} of {len(plan)}. Read by run.py beside this file.\n")
+        _write_launcher(TEMPLATES / "stage_run.sh", directory / "run.sh", stage["path"])
 
     for method in methods:
         directory = out / method
@@ -151,11 +153,15 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "input_hashes": {name: sha256_file(inputs / name) for name in REQUIRED_INPUTS},
             "sys_config_hash": sha256_of_document(sys_resolved),
-            "md_config_hash": sha256_of_document(document),
+            # The RESOLVED protocol this project actually runs, hashed from the bytes written to
+            # MD/md.config.yaml. Hashing the input document instead recorded a hash for a file
+            # that is not in the project: resolution fills in stage paths, drops the solvent block
+            # that does not apply, and reconciles the ensemble with the solvent.
+            "md_config_hash": sha256_file(out / "md.config.yaml"),
         },
     })
     return {"output_folder": str(out), "methods": methods, "implicit": implicit,
-            "common_stages": [stage["name"] for stage in plan]}
+            "common_stages": [stage["path"] for stage in plan]}
 
 
 def _template_commit() -> str | None:
@@ -199,7 +205,7 @@ def _write_run_all(out: Path, plan: list[dict[str, Any]], methods: list[str]) ->
                   'echo "== REST2 exchange production =="',
                   '( cd REST2 && ./run.sh )']
     text = ((TEMPLATES / "run_all.sh").read_text()
-            .replace("__COMMON_STAGES__", " ".join(stage["name"] for stage in plan))
+            .replace("__COMMON_STAGES__", " ".join(stage["path"] for stage in plan))
             .replace("__PRODUCTION__", "\n".join(lines)))
     (out / "run_all.sh").write_text(text, encoding="utf-8")
     _executable(out / "run_all.sh")

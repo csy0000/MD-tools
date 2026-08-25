@@ -141,12 +141,67 @@ def tiny_project(work: Path, *, solvent: str = "OPC", methods=("cMD", "REST2"),
     return work / "MD"
 
 
-def run_stage(directory: Path, script: str = "run.py", platform: str = "CPU"):
-    """Run one generated stage the way a user does, on a platform that needs no GPU."""
+def run_stage(directory: Path, script: str = "run.py", platform: str | None = None,
+              extra_env: dict | None = None):
+    """Run one generated stage the way a user does: on CUDA.
+
+    MD runs on a GPU. A minimisation, an equilibration, a production run or a restart validated on
+    the CPU says nothing about the platform the work is actually done on, and the CPU and CUDA
+    paths differ in exactly the places these tests exist to check -- device assignment, context
+    creation, and which replica lands where. `MD_PLATFORM` is left unset so the generated script
+    resolves CUDA itself, which is also the resolution being tested.
+    """
     import os
     import subprocess
     import sys as _sys
 
-    environment = dict(os.environ, MD_PLATFORM=platform)
+    environment = dict(os.environ)
+    environment.pop("MD_PLATFORM", None)
+    if platform:
+        environment["MD_PLATFORM"] = platform
+    if extra_env:
+        environment.update(extra_env)
     return subprocess.run([_sys.executable, script], cwd=str(directory), capture_output=True,
                           text=True, env=environment, timeout=1800)
+
+
+def cuda_is_available() -> bool:
+    """Whether this machine can run the MD tests at all."""
+    try:
+        from openmm import Platform
+
+        names = {Platform.getPlatform(i).getName() for i in range(Platform.getNumPlatforms())}
+    except Exception:
+        return False
+    if "CUDA" not in names:
+        return False
+    try:
+        import openmm
+
+        system = openmm.System()
+        system.addParticle(1.0)
+        context = openmm.Context(system, openmm.VerletIntegrator(0.001),
+                                 Platform.getPlatformByName("CUDA"))
+        context.setPositions([(0, 0, 0)])
+        context.getState(getEnergy=True)
+        del context
+        return True
+    except Exception:
+        return False
+
+
+def pytest_collection_modifyitems(config, items):
+    """Fail, do not silently pass, when a GPU test is collected on a machine without one.
+
+    `-m "not gpu"` is the supported way to run the rest of the suite on a CPU-only machine. What
+    is not supported is a green suite on such a machine that looks like it validated the runtime.
+    """
+    if not any("gpu" in item.keywords for item in items):
+        return
+    if cuda_is_available():
+        return
+    skip = pytest.mark.skip(reason="no working CUDA platform; MD tests validate nothing on CPU. "
+                                   "Run them on the GPU machine, or deselect with -m 'not gpu'.")
+    for item in items:
+        if "gpu" in item.keywords:
+            item.add_marker(skip)

@@ -26,9 +26,10 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
 from md_stages import (active_barostat_count, add_barostat, add_positional_restraint,
-                       count_barostats, derive_seed, make_simulation, require_parent_state,
-                       resolve_platform, restraint_strength, set_restraint, steps_for,
-                       write_final_pdb, write_final_state)
+                       count_barostats, derive_seed, device_groups, make_simulation,
+                       propagate_segment, require_parent_state, resolve_platform,
+                       restraint_strength, set_restraint, steps_for, write_final_pdb,
+                       write_final_state)
 from rest2_scaling import build_scaled_system, linear_tau_ladder, scale_factor_for_tau
 
 CONFIG = yaml.safe_load((HERE.parent / "md.config.yaml").read_text())
@@ -76,43 +77,76 @@ def XmlSerializerLoad(path):
     return XmlSerializer.deserialize(Path(path).read_text(encoding="utf-8"))
 
 
+def visible_devices():
+    """The CUDA devices this process may use, honouring CUDA_VISIBLE_DEVICES."""
+    raw = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if raw is not None:
+        tokens = [t.strip() for t in raw.split(",") if t.strip()]
+        return list(range(len(tokens)))
+    try:
+        import subprocess
+        out = subprocess.run(["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+                             capture_output=True, text=True, timeout=15)
+        if out.returncode == 0:
+            return list(range(len([l for l in out.stdout.splitlines() if l.strip()])))
+    except Exception:
+        pass
+    return []
+
+
 def main():
     platform_name = resolve_platform(os.environ.get("MD_PLATFORM") or None)
-    device = os.environ.get("MD_DEVICE")
     taus = linear_tau_ladder(float(method["tau_min"]), float(method["tau_max"]), N_REPLICAS)
     steps = steps_for(float(method["equilibration_duration_ps"]), TIMESTEP_FS)
+
+    devices = visible_devices() if platform_name == "CUDA" else []
+    if platform_name == "CUDA" and not devices:
+        devices = [0]
+    groups = device_groups(N_REPLICAS, devices)
+    device_of = {replica: (devices[index] if devices else None)
+                 for index, group in enumerate(groups) for replica in group}
 
     print(f"[remd-eq] platform {platform_name}; {N_REPLICAS} replicas, "
           f"tau {taus[0]:.3f}..{taus[-1]:.3f}")
     print(f"[remd-eq] {method['equilibration_duration_ps']} ps per replica = {steps:,} steps. "
           f"This is NOT exchange production and is not counted in it.")
-    print(f"[remd-eq] every replica starts from ../{PARENT_STAGE}/final_state.xml")
+    print(f"[remd-eq] every replica starts from {BRANCH}")
+    if devices:
+        # The same rule production uses: one rung per device, and rungs that share a device take
+        # turns. Equilibrating them one after another wasted every GPU but one.
+        shape = ("devices run concurrently, replicas sharing one device take turns"
+                 if len(groups) > 1 else "all replicas share it, so they take turns")
+        print(f"[remd-eq] {len(groups)} GPU(s) of {len(devices)} visible, replicas per device "
+              f"{[list(g) for g in groups]}; {shape}")
+    else:
+        print(f"[remd-eq] no CUDA device; replicas equilibrate sequentially")
 
     branch_state = require_parent_state((HERE / BRANCH).resolve(), stage_name=PARENT_STAGE,
                                         command=f"../{PARENT_STAGE}")
     initial_positions = XmlSerializerLoad(INPUTS / "initial_state.xml").getPositions()
     pdb = PDBFile(str(INPUTS / "topology.pdb"))
 
-    for replica, tau in enumerate(taus):
+    def equilibrate_replica(replica):
+        tau = taus[replica]
         directory = HERE / f"replica_{replica:02d}" / "equilibration"
         directory.mkdir(parents=True, exist_ok=True)
         final = directory / "final_state.xml"
         if final.is_file():
-            print(f"[remd-eq] replica {replica}: already equilibrated, skipping")
-            continue
+            print(f"[remd-eq] replica {replica}: already equilibrated, skipping", flush=True)
+            return
 
         seeds = replica_seeds(replica)
         system = build_replica_system(replica, tau, initial_positions)
         simulation = make_simulation(pdb.topology, system, temperature=TEMPERATURE,
                                      friction=FRICTION, timestep=TIMESTEP_FS * unit.femtoseconds,
                                      seed=seeds["integrator"], platform_name=platform_name,
-                                     device=device)
+                                     device=device_of.get(replica))
         checkpoint = directory / "checkpoint.chk"
         done = 0
         if checkpoint.is_file():
             simulation.loadCheckpoint(str(checkpoint))
             done = simulation.context.getStepCount()
-            print(f"[remd-eq] replica {replica}: resuming at step {done:,}")
+            print(f"[remd-eq] replica {replica}: resuming at step {done:,}", flush=True)
         else:
             simulation.context.setState(branch_state)
             simulation.context.setStepCount(0)
@@ -127,7 +161,8 @@ def main():
 
         active = active_barostat_count(simulation)
         print(f"[remd-eq] replica {replica}: tau {tau:.3f}, s = {scale_factor_for_tau(tau):.4f}, "
-              f"seeds {seeds}, {active} active barostat(s), {steps - done:,} steps to run")
+              f"device {device_of.get(replica)}, seeds {seeds}, {active} active barostat(s), "
+              f"{steps - done:,} steps to run", flush=True)
         if steps - done > 0:
             simulation.step(steps - done)
         simulation.saveCheckpoint(str(checkpoint))
@@ -154,6 +189,7 @@ def main():
             "barostats_in_system": count_barostats(system),
             "barostats_active": active,
             "input_state": BRANCH,
+            "device": device_of.get(replica),
             "output_state": "final_state.xml",
             "platform": platform_name,
             "template_commit": CONFIG.get("provenance", {}).get("template_commit"),
@@ -162,9 +198,11 @@ def main():
         (directory / "resolved_stage.yaml").write_text(
             yaml.safe_dump(resolved, sort_keys=False), encoding="utf-8")
         (directory / "stage.log").write_text(
-            f"replica {replica} tau {tau} equilibrated for {steps} steps\n", encoding="utf-8")
+            f"replica {replica} tau {tau} equilibrated for {steps} steps on device "
+            f"{device_of.get(replica)}\n", encoding="utf-8")
         del simulation
 
+    propagate_segment(groups, equilibrate_replica)
     print(f"[remd-eq] all {N_REPLICAS} replicas equilibrated. Now: ./run.sh")
     return 0
 

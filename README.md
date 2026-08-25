@@ -144,9 +144,10 @@ MD/
 ├── run_all.sh              # convenience wrapper; the stage scripts below are authoritative
 ├── minimization/           # the common chain: each stage reads its parent's final_state.xml
 │   ├── run.py  run.sh  stage.yaml
-├── eq1_nvt_1kcal/          # restrained NVT
-├── eq2_npt_1kcal/          # restrained NPT      (explicit solvent only)
-├── eq3_npt_free/           # unrestrained NPT    (explicit solvent only)
+├── eq/                     # the equilibration stages, grouped
+│   ├── nvt_1kcal/          #   restrained NVT
+│   ├── npt_1kcal/          #   restrained NPT     (explicit solvent only)
+│   └── npt_free/           #   unrestrained NPT   (explicit solvent only)
 ├── cMD/                    # production, from the last common stage
 │   ├── run.py
 │   └── run.sh
@@ -166,14 +167,14 @@ MD/
 Each stage is its own directory and its own run. They depend on each other through files:
 
 ```text
-inputs -> minimization -> eq1_nvt_1kcal -> eq2_npt_1kcal -> eq3_npt_free
-                                                              ├─> cMD
-                                                              └─> REST2
+inputs -> minimization -> eq/nvt_1kcal -> eq/npt_1kcal -> eq/npt_free
+                                                            ├─> cMD
+                                                            └─> REST2
 ```
 
 ```bash
 cd MD && ./run_all.sh                      # all of it, in order
-cd MD/eq2_npt_1kcal && ./run.sh            # or one stage at a time, which is authoritative
+cd MD/eq/npt_1kcal && ./run.sh             # or one stage at a time, which is authoritative
 ```
 
 A stage reads only its parent's `final_state.xml` and writes `stage.log`, `stage.csv`,
@@ -186,9 +187,14 @@ tells you which file is missing and which command makes it.
 The solute is held by the configured `restraint_k_kcal_mol_a2` (`U = 1/2 k |r - r0|^2`,
 1 kcal mol⁻¹ Å⁻² = 418.4 kJ mol⁻¹ nm⁻²) through minimisation and the restrained stages, then
 released. There is no active barostat during minimisation or NVT and exactly one during NPT.
-Implicit systems have no box: the chain is `minimization -> eq1_nvt_1kcal -> eq2_nvt_free`, and no
+Implicit systems have no box: the chain is `minimization -> eq/nvt_1kcal -> eq/nvt_free`, and no
 barostat exists in the System at all. If the restraint is not 1 kcal mol⁻¹ Å⁻², the directory is
-named `eq1_nvt_restrained` rather than claiming a strength it does not have.
+named `eq/nvt_restrained` rather than claiming a strength it does not have.
+
+A stage that has already written `final_state.xml` will not silently run again — downstream stages
+may already have consumed it. Re-running prints what is missing and stops; `MD_REDO=1 ./run.sh`
+redoes it deliberately. Interrupt a stage and re-run it and it resumes from its own
+`checkpoint.chk` at the step it reached, rather than starting the stage over.
 
 **Conventional MD**
 
@@ -296,7 +302,7 @@ md-openmm md-gen -if ./inputs/ --config md.config.yaml -of ./MD/
 cd MD && ./run_all.sh
 ```
 
-The chain here is `minimization -> eq1_nvt_1kcal -> eq2_nvt_free -> cMD`: no NPT stage, and no
+The chain here is `minimization -> eq/nvt_1kcal -> eq/nvt_free -> cMD`: no NPT stage, and no
 barostat anywhere, because a non-periodic system has no box to control.
 
 The input is a file containing a SMILES string. The ligand is parameterised with Sage 2.2 and
@@ -347,6 +353,24 @@ graph network *trained to predict* AM1-BCC ELF10 charges — close to them, but 
 so it is a different Hamiltonian.
 
 ---
+
+## Running the tests
+
+Molecular dynamics runs on a GPU, and so do the tests that exercise it:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 pytest tests/ -q      # everything, on CUDA
+pytest tests/ -q -m "not gpu"                      # packaging and unit tests, no GPU needed
+```
+
+Every test that minimises or integrates a molecular system is marked `gpu` and runs on CUDA. A CPU
+or Reference run of those would exercise a different code path from the one the work is done on,
+so on a machine without a working CUDA platform they are deselected rather than passed. CPU and
+Reference are used only for installation and platform probes and for tests that build no system.
+
+The release workflow runs on a GPU-less GitHub runner and therefore validates **packaging only** —
+it deselects every `gpu` test and says so in its output. Runtime acceptance comes from the command
+above, on the GPU machine.
 
 ## Tests
 

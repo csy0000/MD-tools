@@ -53,6 +53,36 @@ box, so there is no barostat and no NPT stage.
 these directories; regenerate it with `md-openmm md-gen`. `inputs/` is unchanged, so `sys-gen` does
 not need to run again.
 
+### Correction, same unreleased version
+
+* **Equilibration is grouped under `MD/eq/`** — `eq/nvt_1kcal`, `eq/npt_1kcal`, `eq/npt_free`, and
+  `eq/nvt_1kcal`, `eq/nvt_free` for implicit. The ordinal prefixes are gone: the group already
+  says what these are, and an ordinal in a directory name is a second statement of order that can
+  disagree with the chain. Minimisation stays at `MD/minimization/` — it is not equilibration.
+  Stages now locate `MD/` by looking for `md.config.yaml` above themselves rather than counting
+  `..`, so stages at different depths all resolve correctly.
+* **Restart accounting.** Loading the stage's OWN checkpoint keeps its step count — it was
+  interrupted, and that count is how far it has come. Loading the PARENT's state resets the count
+  to zero, because the parent's count belongs to the parent. Previously the parent state was
+  loaded unconditionally before the checkpoint, and a stage's own count was never reset when it
+  should have been.
+* **A finished stage is not silently rerun.** `final_state.xml` is what downstream stages have
+  already consumed, so re-running stops with a message; `MD_REDO=1` redoes it deliberately.
+* **`md_config_hash` hashes the generated `MD/md.config.yaml`.** It hashed the input document,
+  which is not the file the project runs.
+* **REST2 per-tau equilibration is concurrent** across devices and sequential within one, the same
+  rule exchange production uses. It ran one replica after another, idling every GPU but one.
+* **Every common stage writes the complete artifact set**, minimisation included.
+
+**Testing platform policy.** Every test that minimises or integrates a molecular system is marked
+`gpu` and runs on CUDA; on a machine without a working CUDA platform they are deselected rather
+than passed, because a CPU run of them exercises a different code path from the one the work is
+done on. CPU and Reference remain in use for installation and platform probes and for tests that
+build no system. The GitHub workflow is renamed `release-packaging`: it runs on a GPU-less runner,
+so it generates a project and checks the tree but **runs no dynamics at all**, deselects every
+`gpu` test, and prints a notice saying what it did not validate. Runtime acceptance comes from
+`CUDA_VISIBLE_DEVICES=... pytest tests/ -q` on the GPU machine.
+
 **Also fixed.** Environment validation no longer fails a CPU-only runner because OpenMM's CUDA
 plugin cannot load without `libcuda.so.1` — the false failure that broke the `openmm-v0.2.0`
 release job. CUDA plugin and platform failures stay fatal on machines where an NVIDIA driver or

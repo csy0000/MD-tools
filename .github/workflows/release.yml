@@ -1,12 +1,19 @@
-name: release-validation
+name: release-packaging
 
-# The only workflow. It runs when a release is being cut, not on every push: the scientific
-# smoke tests build systems and integrate them, and running that on every commit trains everyone
-# to ignore it.
+# The only workflow, and it validates PACKAGING -- not science.
 #
-# CPU only. Nothing here assumes CUDA, and environment-ci.yml omits the CUDA pin deliberately.
-# The generated scripts default to CUDA and refuse a silent CPU fallback, so the smoke tests name
-# MD_PLATFORM=CPU explicitly -- which is also what they do locally.
+# The runner has no GPU. Molecular dynamics runs on a GPU, so nothing here minimises, equilibrates
+# or integrates anything: a green run on this machine would say the wheel installs and the
+# commands parse, and it must not be read as saying the simulations are correct. Running MD on a
+# CPU runner and calling the result validation is worse than not running it, because it produces a
+# green tick that means something other than what people will take it to mean.
+#
+# GPU runtime acceptance comes from the local GPU machine:
+#
+#     CUDA_VISIBLE_DEVICES=0,1,2,3 pytest tests/ -q
+#
+# which runs the `gpu`-marked tests -- every stage, restart, cMD, REST2 and portability runtime
+# test -- on CUDA. This workflow deselects exactly those.
 
 on:
   workflow_dispatch:
@@ -22,8 +29,8 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: wheel, public commands, suite, cMD and REST2 smoke
+  package:
+    name: wheel, public commands, generation and non-MD tests (no simulation)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
@@ -59,7 +66,8 @@ jobs:
           md-template init --target-dir "${RUNNER_TEMP}/stack"
           md-template install --target-dir "${RUNNER_TEMP}/stack" --validate "${CONDA_PREFIX}"
 
-      - name: the six public commands, from outside the checkout
+      - name: the six public commands and project generation, from outside the checkout
+        # Generation only. `md-gen` writes scripts; it does not run them.
         working-directory: ${{ runner.temp }}
         run: |
           md-template --help > /dev/null
@@ -71,35 +79,38 @@ jobs:
           md-openmm sys-gen -i ./ALA.pdb --config sys.config.yaml -of ./inputs/
           md-openmm md-gen -if ./inputs/ --config md.config.yaml -of ./MD/
 
-      - name: the common stage chain, then both production branches
+      - name: the generated tree is the documented one (no simulation is run)
         working-directory: ${{ runner.temp }}
-        env:
-          MD_PLATFORM: CPU
         run: |
-          # run_all.sh is the wrapper; the stage scripts are what it calls, and they are what
-          # this step is really exercising.
-          (cd MD && ./run_all.sh)
-          for stage in minimization eq1_nvt_1kcal eq2_npt_1kcal eq3_npt_free; do
-            test -s "MD/$stage/final_state.xml" || { echo "::error::$stage wrote no final state"; exit 1; }
-            test -s "MD/$stage/resolved_stage.yaml" || { echo "::error::$stage wrote no record"; exit 1; }
+          for stage in minimization eq/nvt_1kcal eq/npt_1kcal eq/npt_free; do
+            for f in run.py run.sh stage.yaml; do
+              test -f "MD/$stage/$f" || { echo "::error::MD/$stage/$f missing"; exit 1; }
+            done
           done
-          test -s MD/cMD/whole_system.dcd && test -s MD/cMD/solute.dcd
-          test -s MD/REST2/replica_00/equilibration/final_state.xml
-          test -s MD/REST2/replica_00/production/whole_system.dcd
-          test -s MD/REST2/replica_00/production/solute.dcd
-          (cd MD/REST2 && python run.py)      # extends rather than restarting
-          python "${GITHUB_WORKSPACE}/scripts/check_exchange_history.py" MD/REST2 6
+          test -x MD/run_all.sh
+          test -f MD/cMD/run.py && test -f MD/REST2/equilibrate.py && test -f MD/REST2/run.py
+          test -d MD/REST2/replica_00/equilibration && test -d MD/REST2/replica_00/production
+          echo "generated tree OK. No dynamics were run: this runner has no GPU."
 
-      - name: the test suite, with skips forbidden
-        # A scientific smoke test that skips because a dependency is missing is a test that did
-        # not run. In release validation that is a failure, not a pass with a note.
-        run: python -m pytest tests/ -q --error-on-skip
+      - name: the non-MD tests, with skips forbidden
+        # Everything that minimises or integrates is marked `gpu` and is DESELECTED here, because
+        # this runner cannot produce that evidence. Skips are still forbidden among what remains:
+        # a packaging test that skipped because a dependency was missing is a test that did not
+        # run, and that is a failure, not a pass with a note.
+        run: python -m pytest tests/ -q -m "not gpu" --error-on-skip
+
+      - name: state plainly what this job did NOT validate
+        run: |
+          echo "::notice title=No simulation validation::This job validated packaging only."
+          echo "Every test that minimises or integrates a molecular system was deselected (-m 'not gpu')."
+          echo "GPU runtime acceptance for this revision must come from the local GPU machine:"
+          echo "    CUDA_VISIBLE_DEVICES=0,1,2,3 pytest tests/ -q"
 
       - name: upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: release-validation-logs
+          name: release-packaging-logs
           # diagnostics only: no trajectories, no checkpoints
           path: |
             dist/*.whl

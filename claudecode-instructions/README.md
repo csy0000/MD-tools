@@ -7,6 +7,8 @@ root defines the durable rules that outlive any of them.
 
 - `20260825_focused-scientific-runtime-correction.md` — the scientific and execution corrections to
   the generated scripts, the installer, CI and the working tree.
+- `20260825_eq-grouping-restart-gpu-correction.md` — equilibration grouped under `MD/eq/`, restart
+  accounting, the no-overwrite guard, and the GPU-only runtime testing policy.
 
 ## Historical — not executable
 
