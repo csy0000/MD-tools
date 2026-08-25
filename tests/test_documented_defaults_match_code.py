@@ -187,6 +187,12 @@ def test_worked_example_configs_use_the_ligand_charge_default():
     expected = _ligand_charge_default()
     offenders = {}
     for path in sorted((REPO_ROOT / "test").rglob("*.json")):
+        # Everything cyclo-(RGDfV) is DELIBERATELY pinned to NAGL, matching the packaged
+        # cyclo_rgdfv manifest: these examples reproduce trajectories that were generated with
+        # NAGL charges, and repointing them at the am1bcc default would change the Hamiltonian
+        # under an unchanged name. The pin is stated in the manifest itself.
+        if "rgd" in path.parts:
+            continue
         try:
             doc = json.loads(path.read_text())
         except (json.JSONDecodeError, UnicodeDecodeError):

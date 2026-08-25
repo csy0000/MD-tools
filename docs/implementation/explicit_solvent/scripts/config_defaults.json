@@ -35,7 +35,7 @@
     "protein": "amber19/protein.ff19SB.xml",
     "water": "amber19/opc.xml",
     "ligand": "openff-2.2.0",
-    "ligand_charge_method": "am1bcc_nagl",
+    "ligand_charge_method": "am1bcc",
     "extra_xml": []
   },
   "solvation": {
@@ -58,13 +58,13 @@
     "ewald_error_tolerance": 0.0005,
     "constraints": "HBonds",
     "rigid_water": true,
-    "hydrogen_mass_amu": 3.024,
-    "hmr_scope": "solute",
+    "hydrogen_mass_amu": null,
+    "hmr_scope": "none",
     "remove_cm_motion": true
   },
   "integrator": {
     "kind": "langevin-middle",
-    "timestep_fs": 4.0,
+    "timestep_fs": 2.0,
     "friction_per_ps": 1.0,
     "temperature_k": 300.0
   },

@@ -41,7 +41,11 @@ SYSTEM_CONFIG = {
 }
 
 MD_CONFIG = {
-    "profile": "explicit-rest2-peptide-v1",
+    # The performance profile, because SYSTEM_CONFIG above builds a bundle WITH hydrogen mass
+    # repartitioning and MD_CONFIG integrates at 4 fs. Naming a base profile here would declare no
+    # HMR against a System that has it -- a disagreement MD_input_gen now refuses, and rightly:
+    # the profile and the bundle must describe the same masses.
+    "profile": "explicit-rest2-peptide-hmr-v1",
     "protocol": {
         "integrator": {"kind": "langevin-middle", "timestep": "4 fs",
                        "temperature": "300 K", "friction": "1 /ps"},
@@ -145,7 +149,7 @@ def test_a_mol_or_smi_input_is_a_ligand_without_being_told(tmp_path):
     config.write_text(json.dumps({
         "ligand_build": {"formal_charge": 0, "stereochemistry_policy": "from_smiles",
                          "protonation_policy": "as_given", "conformer_generation": "etkdgv3",
-                         "charge_model": "am1bcc_nagl", "parameterization_route": "openff-2.2.0"}}))
+                         "charge_model": "am1bcc", "parameterization_route": "openff-2.2.0"}}))
     result = _run(SYSTEM_GEN, "-i", str(smi), "-o", str(tmp_path / "out"),
                   "--config", str(config), "--dry-run")
     assert result.returncode == 0, result.stderr
@@ -1681,13 +1685,17 @@ def test_the_rgdfv_protocol_resolves_to_ten_replicas_on_cpu(prepared_system, tmp
     what is under test is that md_config.json resolves to TEN replicas. The RGDfV system route is
     covered separately by test_rgdfv_system_generation_validates_on_cpu.
 
-    The pinned profile is dropped: profiles are route-bound, so `explicit-rest2-ligand-v1` (smiles)
-    correctly refuses a pdb bundle. That refusal is desirable behaviour and is asserted below rather
-    than worked around silently.
+    The pinned profile is REPLACED rather than dropped: profiles are route-bound, so
+    `explicit-rest2-ligand-v1` (smiles) correctly refuses a pdb bundle, but simply removing it
+    falls back to the conservative default, which declares no hydrogen mass repartitioning against
+    an alanine bundle that HAS it. MD_input_gen refuses that disagreement -- correctly, because the
+    run manifest would otherwise record "no HMR" for a System with 3.024 amu hydrogens. The
+    peptide performance profile matches the bundle and leaves the ten-replica ladder, which is what
+    this test is actually about, coming from the document.
     """
     config = tmp_path / "rgd_md.json"
     rgd = json.loads((REPO_ROOT / "test" / "rgd" / "REST2" / "md_config.json").read_text())
-    rgd.pop("profile", None)             # see the docstring: profiles are route-bound
+    rgd["profile"] = "explicit-rest2-peptide-hmr-v1"
     rgd["execution"]["platform"] = "CPU"
     rgd["execution"].pop("precision", None)
     config.write_text(json.dumps(rgd))
