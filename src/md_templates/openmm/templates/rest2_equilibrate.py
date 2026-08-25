@@ -192,7 +192,7 @@ def main():
             "device": device_of.get(replica),
             "output_state": "final_state.xml",
             "platform": platform_name,
-            "template_commit": CONFIG.get("provenance", {}).get("template_commit"),
+            "template_commit": (CONFIG.get("provenance") or {}).get("template_commit"),
             "finished_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         (directory / "resolved_stage.yaml").write_text(

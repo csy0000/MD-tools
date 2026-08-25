@@ -290,3 +290,38 @@ def test_a_failure_inside_one_group_reaches_the_caller_before_any_exchange():
 
     with pytest.raises(RuntimeError, match="NaN"):
         stages.propagate_segment([[0, 1], [2, 3]], step)
+
+
+# --- REST2 equilibration scheduling ------------------------------------------
+
+def test_equilibration_uses_the_same_device_policy_as_exchange_production():
+    """Per-tau equilibration ran replicas one after another, idling every GPU but one.
+
+    Pure scheduling, so this needs no GPU: `device_groups` is the single place the policy lives,
+    and both `equilibrate.py` and `run.py` call it.
+    """
+    assert stages.device_groups(4, [0, 1, 2, 3]) == [[0], [1], [2], [3]]
+    assert stages.device_groups(6, [0, 1]) == [[0, 2, 4], [1, 3, 5]]
+    assert stages.device_groups(2, [0, 1, 2, 3]) == [[0], [1]], "no more devices than replicas"
+
+
+def test_both_rest2_scripts_schedule_through_the_same_helper():
+    """One policy, not two that can drift apart."""
+    from .conftest import REPO_ROOT
+
+    templates = REPO_ROOT / "src" / "md_templates" / "openmm" / "templates"
+    for name in ("rest2_equilibrate.py", "rest2_run.py"):
+        source = (templates / name).read_text()
+        assert "device_groups(" in source, name
+        assert "propagate_segment(" in source, name
+
+
+def test_a_failing_replica_stops_equilibration_before_it_reports_success():
+    """Every replica is awaited and exceptions propagate, or a ladder with a dead rung would be
+    declared equilibrated and then produce from a state that was never written."""
+    def step(replica):
+        if replica == 2:
+            raise RuntimeError("particle position is NaN")
+
+    with pytest.raises(RuntimeError, match="NaN"):
+        stages.propagate_segment([[0, 1], [2, 3]], step)

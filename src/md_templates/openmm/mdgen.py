@@ -90,6 +90,11 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
     # each script, so "where does production start" has exactly one answer in the project. cMD/ and
     # REST2/ sit one level under MD/, so `../` reaches the grouped stage directory.
     resolved["paths"]["common_final_state"] = f"../{plan[-1]['path']}/final_state.xml"
+    # Recorded once, read by every generated script. REST2's per-tau equilibration used to look
+    # for a key that was never written and recorded null.
+    resolved["provenance"] = {"template_commit": _template_commit(),
+                              "md_templates_version": package_provenance()
+                              .get("md_templates", {}).get("version")}
 
     write_yaml(out / "md.config.yaml", resolved,
                header="# Resolved protocol, read by every run.py in this project.\n")
@@ -104,11 +109,11 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
         directory.mkdir(parents=True, exist_ok=True)
         shutil.copy2(TEMPLATES / "stage_run.py", directory / "run.py")
 
-        document = dict(stage)
-        document["input_state"] = (
+        stage_document = dict(stage)
+        stage_document["input_state"] = (
             stage["input_state"] if index else
             os.path.join(os.path.relpath(inputs, directory), "initial_state.xml"))
-        document.update({
+        stage_document.update({
             "temperature_kelvin": resolved["common"]["temperature_kelvin"],
             "timestep_fs": resolved["common"]["timestep_fs"],
             "friction_per_ps": resolved["common"]["friction_per_ps"],
@@ -120,7 +125,7 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
             "assign_velocities": False,
             "template_commit": _template_commit(),
         })
-        write_yaml(directory / "stage.yaml", document,
+        write_yaml(directory / "stage.yaml", stage_document,
                    header=f"# Stage {index + 1} of {len(plan)}. Read by run.py beside this file.\n")
         _write_launcher(TEMPLATES / "stage_run.sh", directory / "run.sh", stage["path"])
 

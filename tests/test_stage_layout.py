@@ -304,6 +304,85 @@ def test_redoing_a_stage_requires_saying_so(explicit_run):
     assert record["steps"] == record["steps"]  # it ran again and rewrote its record
 
 
+def test_an_interrupted_stage_resumes_and_runs_exactly_the_missing_steps(tmp_path):
+    """The bug this guards against, stated exactly.
+
+    `Context.setState()` COPIES the parent's step count -- verified: a context stepped 37 times
+    hands a State that sets a fresh context to 37, not 0. So a fresh stage that loaded its parent
+    and then computed `configured - getStepCount()` was subtracting the PARENT's progress from its
+    own target, giving too few remaining steps or a negative number.
+    """
+    import csv
+
+    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    assert run_stage(project / "minimization").returncode == 0
+    stage = project / "eq/nvt_1kcal"
+    request = yaml.safe_load((stage / "stage.yaml").read_text())
+    configured = int(round(request["duration_ps"] * 1000 / request["timestep_fs"]))
+    assert configured >= 4, "the smoke stage needs enough steps to interrupt in the middle"
+
+    # Reach a genuinely PARTIAL checkpoint: run a copy of the stage configured for half the steps,
+    # which leaves a checkpoint mid-way through the real stage's work.
+    half = configured // 2
+    partial = dict(request)
+    partial["duration_ps"] = request["duration_ps"] * half / configured
+    (stage / "stage.yaml").write_text(yaml.safe_dump(partial, sort_keys=False))
+    assert run_stage(stage).returncode == 0
+    interrupted = yaml.safe_load((stage / "resolved_stage.yaml").read_text())
+    assert interrupted["steps"] == half
+
+    # An interruption leaves the checkpoint and stage.csv, and NO completion artifacts -- a killed
+    # process never reaches the point where those are written. Reproduce that exactly.
+    (stage / "stage.yaml").write_text(yaml.safe_dump(request, sort_keys=False))
+    (stage / "final_state.xml").unlink()
+    (stage / "resolved_stage.yaml").unlink()
+    assert (stage / "checkpoint.chk").is_file(), "the interruption must leave a checkpoint"
+    rows_before = len(list(csv.reader((stage / "stage.csv").open())))
+
+    result = run_stage(stage)
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+
+    # It resumes AT the interrupted count and runs exactly what is missing -- not the whole stage
+    # again, and not `configured` minus the parent's progress.
+    assert f"resuming this stage from checkpoint.chk at step {half:,}" in result.stdout, \
+        result.stdout[-800:]
+    assert f"{configured - half:,} of {configured:,} steps" in result.stdout, result.stdout[-800:]
+    record = yaml.safe_load((stage / "resolved_stage.yaml").read_text())
+    assert record["steps"] == configured, "the stage did not finish at its configured length"
+    rows_after = len(list(csv.reader((stage / "stage.csv").open())))
+    assert rows_after > rows_before, "stage.csv restarted instead of appending"
+
+
+def test_a_stage_with_only_half_its_completion_artifacts_refuses_to_run(tmp_path):
+    """Neither reusing nor overwriting is safe when the two records disagree."""
+    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    assert run_stage(project / "minimization").returncode == 0
+    stage = project / "eq/nvt_1kcal"
+    assert run_stage(stage).returncode == 0
+
+    (stage / "resolved_stage.yaml").unlink()      # a final state with no record of what made it
+    result = run_stage(stage)
+    assert result.returncode != 0, result.stdout[-800:]
+    combined = result.stdout + result.stderr
+    assert "refusing to run" in combined and "resolved_stage.yaml" in combined, combined[-800:]
+    assert "new output directory" in combined or "remove this stage" in combined
+
+
+def test_a_completion_record_describing_a_different_stage_refuses_to_run(tmp_path):
+    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    assert run_stage(project / "minimization").returncode == 0
+    stage = project / "eq/nvt_1kcal"
+    assert run_stage(stage).returncode == 0
+
+    record = yaml.safe_load((stage / "resolved_stage.yaml").read_text())
+    record["restraint_k_kcal_mol_a2"] = 99.0      # not the stage anyone asked for
+    (stage / "resolved_stage.yaml").write_text(yaml.safe_dump(record, sort_keys=False))
+    result = run_stage(stage)
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "different stage" in combined and "restraint_k_kcal_mol_a2" in combined, combined[-800:]
+
+
 def test_resuming_a_stage_from_its_own_checkpoint_does_not_restart_the_count(tmp_path):
     """The two loads mean different things, and the step counter is where they differ.
 
@@ -351,6 +430,17 @@ def test_md_config_hash_is_the_hash_of_the_generated_md_config(explicit):
     provenance = yaml.safe_load((explicit / "provenance.yaml").read_text())
     written = (explicit / "md.config.yaml").read_bytes()
     assert provenance["generated"]["md_config_hash"] == hashlib.sha256(written).hexdigest()
+
+
+def test_the_template_commit_is_recorded_not_null(explicit_run):
+    """Which revision of the run scripts produced this project."""
+    for name in EXPLICIT_STAGES:
+        record = yaml.safe_load((explicit_run / name / "resolved_stage.yaml").read_text())
+        assert record["template_commit"], f"{name} recorded no template commit"
+    equilibration = yaml.safe_load(
+        (explicit_run / "REST2" / "replica_00" / "equilibration"
+         / "resolved_stage.yaml").read_text())
+    assert equilibration["template_commit"], "REST2 per-tau equilibration recorded no commit"
 
 
 # --- GPU placement -----------------------------------------------------------

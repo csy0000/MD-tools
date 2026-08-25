@@ -248,6 +248,21 @@ def write_final_state(simulation, path):
     return state
 
 
+def write_yaml_atomic(path, document):
+    """Replace, never partially overwrite.
+
+    A completion record is read to decide whether a stage is finished. Half of one, left by an
+    interrupted write, would be read as a stage in a state it was never in.
+    """
+    import yaml
+
+    path = Path(path)
+    temporary = path.with_suffix(path.suffix + ".partial")
+    temporary.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    temporary.replace(path)
+    return path
+
+
 def write_final_pdb(simulation, path, *, implicit):
     from openmm.app import PDBFile
 

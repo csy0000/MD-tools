@@ -45,7 +45,7 @@ sys.path.insert(0, str(PROJECT))
 from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, active_barostat_count, build_stage_system,
                        count_barostats, make_simulation, require_parent_state, resolve_platform,
                        restraint_strength, set_restraint, steps_for, write_final_pdb,
-                       write_final_state)
+                       write_final_state, write_yaml_atomic)
 
 STAGE = yaml.safe_load((HERE / "stage.yaml").read_text())
 CONFIG = yaml.safe_load((PROJECT / "md.config.yaml").read_text())
@@ -63,21 +63,74 @@ RESTRAINED = {"minimization", "nvt_restrained", "npt_restrained"}
 BAROSTAT_ACTIVE = {"npt_restrained", "npt_free"}
 
 
+#: What a completed stage must agree with the request about. A record that differs in any of these
+#: describes a different calculation from the one being asked for.
+COMPLETION_KEYS = ("kind", "ensemble", "duration_ps", "max_iterations",
+                   "restraint_k_kcal_mol_a2", "temperature_kelvin", "timestep_fs")
+
+
+def completion_state():
+    """`complete`, `ambiguous` or `absent`, with the reason."""
+    final = HERE / STAGE["output_state"]
+    record = HERE / "resolved_stage.yaml"
+    if not final.is_file() and not record.is_file():
+        return "absent", "no completion artifacts"
+    if final.is_file() != record.is_file():
+        present, missing = ((final, record) if final.is_file() else (record, final))
+        return "ambiguous", (f"{present.name} exists but {missing.name} does not, so this stage "
+                             f"did not finish cleanly")
+    try:
+        written = yaml.safe_load(record.read_text()) or {}
+    except Exception as error:
+        return "ambiguous", f"{record.name} is unreadable ({type(error).__name__}: {error})"
+
+    disagreements = []
+    for key in COMPLETION_KEYS:
+        wanted, got = STAGE.get(key), written.get(key)
+        if wanted is None and got is None:
+            continue
+        if wanted is None or got is None or float_or_text(wanted) != float_or_text(got):
+            disagreements.append(f"{key}: stage.yaml says {wanted!r}, the record says {got!r}")
+    if disagreements:
+        return "ambiguous", ("the completion record describes a different stage -- "
+                             + "; ".join(disagreements))
+    return "complete", f"{final.name} and {record.name} agree with stage.yaml"
+
+
+def float_or_text(value):
+    """Compare 10 and 10.0 as equal; anything else by its text."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+
 def main():
     kind = STAGE["kind"]
     log_lines = []
 
-    # A finished stage is not re-run by accident. Its final_state.xml is what every downstream
-    # stage has already consumed, so silently redoing it would move the ground under a chain that
-    # has already been built on it -- and the trajectories downstream would no longer follow from
-    # the state their directories claim.
-    finished = HERE / STAGE["output_state"]
-    if finished.is_file() and not os.environ.get("MD_REDO"):
-        print(f"[{STAGE['name']}] already complete: {finished.name} exists and downstream stages "
-              f"may already have used it.\n"
-              f"  Nothing was run. To deliberately redo this stage and everything after it:\n"
-              f"      MD_REDO=1 ./run.sh", flush=True)
+    # Three states, and they are not the same thing.
+    #
+    #   complete   -> both completion artifacts present and agreeing with stage.yaml. Downstream
+    #                 stages have already consumed this final state, so say so and change nothing.
+    #   ambiguous  -> one artifact without the other, or a record that disagrees with the request.
+    #                 Neither reusing nor overwriting is safe, because what is on disk is not the
+    #                 result of the stage that is being asked for. Fail and say what to do.
+    #   absent     -> run it.
+    verdict, detail = completion_state()
+    if verdict == "complete" and not os.environ.get("MD_REDO"):
+        print(f"[{STAGE['name']}] already complete: {detail}\n"
+              f"  Nothing was run, and nothing was modified. To deliberately redo this stage:\n"
+              f"      MD_REDO=1 ./run.sh      (or remove this stage's outputs)", flush=True)
         return 0
+    if verdict == "ambiguous":
+        raise SystemExit(
+            f"[{STAGE['name']}] refusing to run: {detail}\n"
+            f"  The files here are not the result of the stage stage.yaml describes, so reusing "
+            f"them and overwriting them are both wrong.\n"
+            f"  Either generate into a new output directory, or deliberately remove this stage's "
+            f"outputs:\n"
+            f"      rm -f final_state.xml resolved_stage.yaml checkpoint.chk stage.csv")
 
     def log(message):
         line = f"[{STAGE['name']}] {message}"
@@ -193,8 +246,7 @@ def main():
         "template_commit": STAGE.get("template_commit"),
         "finished_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    (HERE / "resolved_stage.yaml").write_text(yaml.safe_dump(resolved, sort_keys=False),
-                                              encoding="utf-8")
+    write_yaml_atomic(HERE / "resolved_stage.yaml", resolved)
     (HERE / "stage.log").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
     return 0
 
