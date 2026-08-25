@@ -19,6 +19,28 @@ md-openmm md-gen
 Work only on `dev`. Do not merge to `main`, move an existing tag, create a release, introduce a
 new engine abstraction, or restore the deleted framework.
 
+## Canonical locations of the two generators
+
+The two scientifically central components previously appeared at the repository root as
+`MD_system_gen.py` and `MD_input_gen.py`. Their implementations must live in the installable
+`src/` package, not at the repository root.
+
+Use this mapping:
+
+| Legacy concept | Canonical implementation | Public command |
+|---|---|---|
+| `MD_system_gen.py` | `src/md_templates/openmm/sysgen.py` with `generate_system()` | `md-openmm sys-gen` |
+| `MD_input_gen.py` | `src/md_templates/openmm/mdgen.py` with `generate_md()` | `md-openmm md-gen` |
+
+The current lowercase module names are preferable Python package names. Do not create duplicate
+capitalized implementations under `src/`, and do not restore executable root-level shims. The
+single CLI module `src/md_templates/cli/md_openmm.py` must only parse arguments and delegate to
+these two functions.
+
+The wheel must contain both generator modules and the generated-script templates. Add a small
+installed-wheel check that imports both functions and invokes their CLI help/entry paths from
+outside the checkout.
+
 ## 1. Establish the protocol contract before editing code
 
 Add a short table to the current journal recording these invariants:
