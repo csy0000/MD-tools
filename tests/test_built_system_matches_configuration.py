@@ -34,10 +34,11 @@ SYSTEM_GEN = REPO_ROOT / "MD_system_gen.py"
 ALANINE_PDB = (REPO_ROOT / "src" / "md_templates" / "openmm" / "manifests"
                / "systems" / "ace_ala_nme.pdb")
 
-#: A deliberately tiny ligand. The guard checks mass, constraints and periodicity, none of which
-#: depend on which molecule it is, and AM1-BCC on ethanol takes seconds where a macrocycle takes
-#: roughly forty minutes.
-LIGAND_SMILES = "CCO"
+#: Phenol, the standard small molecule for charge-derivation tests (see tests/molecules.py).
+#: The guard checks mass, constraints and periodicity, none of which depend on which molecule it
+#: is, so it must not pay for a macrocycle: 0.6 s here against ~40 min for cyclo-(RGDfV). Phenol
+#: over ethanol because an aromatic ring and a hydroxyl exercise bond perception for 0.3 s more.
+LIGAND_SMILES = "c1ccc(cc1)O"
 
 #: Small enough to keep the explicit builds quick. Padding does not enter anything this guard
 #: compares -- box SIZE is checked by the geometry tests, box EXISTENCE is what matters here.

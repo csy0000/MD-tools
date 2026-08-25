@@ -285,7 +285,9 @@ def test_generation_gives_each_route_its_own_water_without_any_override(tmp_path
 
     ligand = tmp_path / "ligand"
     smiles = tmp_path / "lig.smi"
-    smiles.write_text("O=C1CNC(=O)CNC(=O)CN1 ggg\n")
+    # phenol, not a macrocycle: this test asserts the WATER model chosen per route, so the ligand
+    # is incidental and paying 5.8 s of sqm for a 21-atom ring bought nothing. Phenol is 0.6 s.
+    smiles.write_text("c1ccc(cc1)O phenol\n")
     lig_config = tmp_path / "ligand.json"
     lig_config.write_text(json.dumps({
         "system": {"id": "ggg", "type": "ligand"},

@@ -17,6 +17,8 @@ import pytest
 
 from md_templates.openmm.spec.resolve import PROFILE_DIR, list_profiles
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 #: The conservative settings the review specified, as they appear in a resolved profile.
 CONSERVATIVE_TIMESTEP = "2 fs"
 PERFORMANCE_TIMESTEP = "4 fs"
@@ -166,3 +168,53 @@ def test_implicit_profiles_specify_gbn2_with_mbondi3():
         implicit = profile["defaults"]["build"]["implicit"]
         assert implicit["model"] == "GBn2"
         assert implicit["radii"] == "mbondi3"
+
+
+# -------------------------------------------------------------------------------------------
+# Test-cost guard: am1bcc must not be requested on a large molecule in routine tests
+# -------------------------------------------------------------------------------------------
+
+def test_no_test_config_charges_a_large_molecule_with_am1bcc():
+    """AM1-BCC cost scales hard with size, so a routine test must not pay for a macrocycle.
+
+    Measured with openff-toolkit on this machine:
+
+        phenol             13 atoms     0.6 s
+        cyclo-triglycine   21 atoms     5.8 s
+        cyclo-tetraglycine 28 atoms    26.5 s
+        cyclo-(RGDfV)     ~70 atoms   ~40 min
+
+    A single test reaching for cyclo-(RGDfV) with `am1bcc` adds forty minutes to the suite, which
+    is how a suite stops being run. cyclo-(RGDfV) is affordable only because it is pinned to NAGL
+    (~1 s) everywhere; that pin is deliberate and is recorded in its manifest.
+
+    Use `tests.molecules.PHENOL` for anything testing the charge method itself.
+    """
+    from molecules import MAX_ATOMS_FOR_ROUTINE_AM1BCC
+
+    Chem = pytest.importorskip("rdkit.Chem")
+    offenders = {}
+    for config in sorted((REPO_ROOT / "test").rglob("*.json")):
+        try:
+            document = json.loads(config.read_text())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(document, dict):
+            continue
+        if (document.get("ligand_build") or {}).get("charge_model") != "am1bcc":
+            continue
+        # the SMILES lives beside the config, as the .smi the generator is pointed at
+        for smi in config.parent.glob("*.smi"):
+            text = smi.read_text().strip().split()
+            if not text:
+                continue
+            molecule = Chem.MolFromSmiles(text[0])
+            if molecule is None:
+                continue
+            n_atoms = Chem.AddHs(molecule).GetNumAtoms()
+            if n_atoms > MAX_ATOMS_FOR_ROUTINE_AM1BCC:
+                offenders[f"{config.relative_to(REPO_ROOT)} + {smi.name}"] = n_atoms
+    assert not offenders, (
+        f"these configs charge a molecule of more than {MAX_ATOMS_FOR_ROUTINE_AM1BCC} atoms with "
+        f"am1bcc: {offenders}. Use phenol, or pin the molecule to am1bcc_nagl if the molecule "
+        f"itself is what is under test.")

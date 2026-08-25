@@ -1,0 +1,322 @@
+# Test dependency and scheduling map.
+#
+# Purpose: let a future run fan work out across threads/agents WITHOUT the two failure modes that
+# cost real time on 2026-08-25 -- running things in an order that invalidates them, and running a
+# 12-minute suite to discover that 84 errors shared one root cause.
+#
+# Measured on 2026-08-25, 48-core machine, `pytest tests/ -n 12 --dist loadfile`:
+#
+#     module CPU-time, summed   1359 s
+#     wall time                  207 s
+#     modules                     41
+#
+# THE CRITICAL PATH IS ONE MODULE. `--dist loadfile` keeps every test in a file on ONE worker
+# (required: module-scoped fixtures share a run directory by design). So wall time cannot fall
+# below the largest module, and today that is test_bundle_portability.py at 198.9 s -- within 5%
+# of the whole suite's 207 s. Adding workers buys nothing. The only lever is splitting or
+# fixture-sharing the top modules, in this order:
+#
+#     test_bundle_portability.py    198.9 s   <- the floor
+#     test_crash_boundaries.py      179.1 s   <- becomes the floor if the above is split
+#     test_explicit_portable.py     138.8 s
+#     test_crash_recovery.py        124.8 s
+#
+# 20 of 41 modules run in under 5 s. Parallelising THOSE is already free and already done.
+
+schema_version: 1
+
+# ------------------------------------------------------------------------------------------------
+# Phases. Anything within a phase may run concurrently; phases are barriers.
+# ------------------------------------------------------------------------------------------------
+phases:
+
+  - id: 0-source-fixes
+    description: >
+      Edits to src/ and packaging. Group failures by ROOT CAUSE first and fan out one agent per
+      cause; they touch disjoint files. Never dispatch a "make this test pass" task for a failure
+      whose answer is a scope decision -- see decisions_that_do_not_parallelise below.
+    parallel: true
+    barrier_after: true
+
+  - id: 1-derived-artifacts
+    description: >
+      Regenerate everything DERIVED from src/ and the profiles. Must be serial and must follow
+      phase 0, or a half-finished state gets baked in and regenerated twice.
+    parallel: false
+    steps:
+      - "python scripts/capture_goldens.py            # tests/goldens/*.json"
+      - "python -c 'from md_templates.openmm.config import dump_defaults; dump_defaults(\"docs/implementation/explicit_solvent/scripts/config_defaults.json\")'"
+    barrier_after: true
+
+  - id: 2-fast-lane
+    description: >
+      1186 tests in 50 s. Run on every edit. Catches schema, resolution, refusal-message and
+      drift-guard regressions -- most of what a source edit breaks.
+    command: 'pytest tests/ -n 12 --dist loadfile -q -m "not slow"'
+    parallel: true
+    barrier_after: false
+
+  - id: 3-full-gate
+    description: >
+      179 slow tests build OpenMM Contexts, run tleap and derive charges. This is the MERGE GATE
+      and is never skipped or subsetted. 1365 tests, 3m27.
+    command: "pytest tests/ -n 12 --dist loadfile -q"
+    parallel: true
+    barrier_after: true
+
+# ------------------------------------------------------------------------------------------------
+# Ordering constraints that are NOT obvious from imports
+# ------------------------------------------------------------------------------------------------
+ordering_constraints:
+  - after: "any change to spec/profiles/*.json or config.py DEFAULTS"
+    regenerate: ["tests/goldens/profiles.json", "tests/goldens/configuration_hashes.json"]
+    reason: >
+      The goldens are a projection of the resolved configuration. Regenerating them before the
+      profile edits settle bakes in an intermediate state and costs a second pass.
+
+  - after: "any change to config.py DEFAULTS"
+    regenerate: ["docs/implementation/explicit_solvent/scripts/config_defaults.json"]
+    reason: "test_explicit_baseline compares the committed dump against the live tree."
+
+  - after: "any change to a documented default (timestep, HMR, charge method)"
+    also_update: ["README.md", "test/**/*.json", "manifests/systems/*.yaml"]
+    reason: >
+      The same fact is declared in five places. On 2026-08-25 a defaults change updated two of
+      them and the drift guards caught the other three -- but only in the full suite.
+
+  - before: "adding a profile"
+    check: "select_profile must stay unambiguous"
+    reason: >
+      The implicit branch of select_profile matches on identifier PREFIX, not is_default. Eight
+      new -hmr-v1 profiles made every implicit document ambiguous. Performance variants now carry
+      performance_variant: true; a new profile family must decide how it is excluded.
+
+# ------------------------------------------------------------------------------------------------
+# What must NOT be dispatched to an agent that only sees one failing test
+# ------------------------------------------------------------------------------------------------
+decisions_that_do_not_parallelise:
+  - symptom: "a worked example's assertion disagrees with a new default"
+    wrong_fix: "rewrite the assertion to match the default"
+    why: >
+      test/ala/REST2/alanine_rest2.json and test/rgd/REST2/rgdfv_rest2.json exist to DEMONSTRATE
+      the HMR opt-in. The config changes; the 4 fs assertion stays. An agent seeing only the
+      failure produces a green suite that quietly deleted the demonstration.
+  - symptom: "a cyclo-(RGDfV) fixture requests a charge method that is not the default"
+    wrong_fix: "change it to the default"
+    why: >
+      Everything RGD is pinned to am1bcc_nagl to reproduce existing trajectories. Switching to
+      am1bcc changes the Hamiltonian under an unchanged name AND adds ~40 min of sqm per fixture.
+  - symptom: "a profile disagrees with the bundle it runs against"
+    wrong_fix: "relax the check, or pick one value"
+    why: >
+      That refusal is the point. Both values are named and neither wins; the fix is to rebuild the
+      bundle with MD_system_gen.py --profile <id>.
+
+# ------------------------------------------------------------------------------------------------
+# Cost classes. `needs` is what a module actually pays for.
+# ------------------------------------------------------------------------------------------------
+resource_notes:
+  bundle-build: "tleap and/or solvation. The dominant cost; 13 modules each build their own."
+  sqm-charges: >
+    AM1-BCC scales hard: phenol 13 atoms 0.6 s, cyclo-triglycine 21 atoms 5.8 s,
+    cyclo-tetraglycine 28 atoms 26.5 s, cyclo-(RGDfV) ~70 atoms ~40 min. Use tests/molecules.py
+    PHENOL unless the molecule itself is under test.
+  openmm-context: "constructs a Context and propagates; CPU platform so it runs anywhere."
+  wheel-build: "python -m build plus a venv. Slow but touches nothing shared -- safe to run first."
+  gpu-discovery(mocked): "nvidia-smi is mocked; asserts the mapping, not this machine's hardware."
+
+# ------------------------------------------------------------------------------------------------
+# Known intermittent failures. A scheduler must not treat these as deterministic signal.
+# ------------------------------------------------------------------------------------------------
+known_flaky:
+  - module: test_segment_extension.py
+    tests: [test_a_fresh_run_then_two_extensions_form_one_continuous_trajectory,
+            test_the_committed_record_tracks_every_generation]
+    symptom: "openmm.OpenMMException: The periodic box size has decreased to less than twice the nonbonded cutoff."
+    observed: "1 failure in 2 full-suite runs; 0 in 4 isolated runs (1 serial + 3 concurrent)"
+    mechanism: >
+      Marginal BY CONSTRUCTION, not by regression. The fixture shrinks the alanine example to CPU
+      size with padding 0.9 nm against a 0.7 nm cutoff, so the reduced box height starts with very
+      little room above the 2 x cutoff = 1.4 nm floor. Under NPT a few unlucky volume moves breach
+      it. It surfaces only under the full 12-worker run, where the CPU platform's thread count --
+      and therefore its summation order -- differs from an isolated run, so the trajectory diverges.
+    not_caused_by: >
+      The conservative 2 fs revert. This fixture inherits test/ala/REST2/alanine_rest2.json, which
+      is one of the two worked examples that DEMONSTRATE the HMR opt-in: it runs at 4 fs with
+      3.024 amu hydrogens, unchanged. An earlier hypothesis that halving the timestep doubled the
+      barostat's volume-move rate per picosecond -- barostat_interval is 50 STEPS, not a time --
+      is real in general but does not apply to this test.
+    fix_options:
+      - "raise the fixture's padding so the box is not within a whisker of the cutoff floor"
+      - "express barostat_interval as a time rather than a step count (wider change; affects every config)"
+    status: open
+
+modules:
+  - module: test_bundle_portability.py
+    seconds: 198.9
+    needs: [bundle-build, sqm-charges]
+    consumes: [-]
+  - module: test_crash_boundaries.py
+    seconds: 179.1
+    needs: [bundle-build, openmm-context]
+    consumes: [-]
+  - module: test_explicit_portable.py
+    seconds: 138.8
+    needs: [bundle-build, sqm-charges, openmm-context, gpu-discovery(mocked)]
+    consumes: [config_defaults.json]
+  - module: test_crash_recovery.py
+    seconds: 124.8
+    needs: [bundle-build]
+    consumes: [-]
+  - module: test_cmd_continuity_and_crash.py
+    seconds: 87.7
+    needs: [bundle-build, openmm-context]
+    consumes: [-]
+  - module: test_segment_extension.py
+    seconds: 81.4
+    needs: [bundle-build]
+    consumes: [-]
+  - module: test_public_generators.py
+    seconds: 81.1
+    needs: [bundle-build, sqm-charges, openmm-context]
+    consumes: [README.md]
+  - module: test_cmd_segments.py
+    seconds: 67.4
+    needs: [bundle-build, openmm-context]
+    consumes: [-]
+  - module: test_built_system_matches_configuration.py
+    seconds: 64.6
+    needs: [bundle-build, sqm-charges]
+    consumes: [spec/profiles/*.json]
+  - module: test_continuity_identity.py
+    seconds: 60.8
+    needs: [bundle-build, openmm-context]
+    consumes: [-]
+  - module: test_implicit_gbn2.py
+    seconds: 60.2
+    needs: [bundle-build, sqm-charges, openmm-context]
+    consumes: [-]
+  - module: test_packaged_catalog.py
+    seconds: 48.4
+    needs: [wheel-build, openmm-context]
+    consumes: [README.md]
+  - module: test_restart_verification.py
+    seconds: 40.9
+    needs: [bundle-build, openmm-context]
+    consumes: [-]
+  - module: test_opc_default.py
+    seconds: 28.4
+    needs: [bundle-build, sqm-charges]
+    consumes: [spec/profiles/*.json]
+  - module: test_nagl_charges.py
+    seconds: 21.6
+    needs: [sqm-charges]
+    consumes: [-]
+  - module: test_installed_wheel_provenance.py
+    seconds: 14.7
+    needs: [bundle-build, wheel-build]
+    consumes: [-]
+  - module: test_bundle_reproducibility.py
+    seconds: 11.3
+    needs: [bundle-build]
+    consumes: [-]
+  - module: test_water_policy.py
+    seconds: 9.1
+    needs: [bundle-build, sqm-charges, openmm-context]
+    consumes: [spec/profiles/*.json]
+  - module: test_config_resolve_command.py
+    seconds: 7.2
+    needs: [pure-python]
+    consumes: [-]
+  - module: test_openmm_delegation.py
+    seconds: 5.7
+    needs: [openmm-context]
+    consumes: [-]
+  - module: test_public_cmd_barostat_and_continuity.py
+    seconds: 5.1
+    needs: [openmm-context]
+    consumes: [-]
+  - module: test_tau_and_segments.py
+    seconds: 4.4
+    needs: [pure-python]
+    consumes: [-]
+  - module: test_box_geometry.py
+    seconds: 3.7
+    needs: [openmm-context]
+    consumes: [-]
+  - module: test_template_catalog.py
+    seconds: 3.5
+    needs: [sqm-charges]
+    consumes: [spec/profiles/*.json]
+  - module: test_project_portability.py
+    seconds: 2.1
+    needs: [openmm-context]
+    consumes: [README.md]
+  - module: test_compat_goldens.py
+    seconds: 2.0
+    needs: [sqm-charges]
+    consumes: [tests/goldens/*]
+  - module: test_openmm_version.py
+    seconds: 1.9
+    needs: [pure-python]
+    consumes: [README.md]
+  - module: test_template_identity.py
+    seconds: 1.6
+    needs: [pure-python]
+    consumes: [-]
+  - module: test_gpu_allocation.py
+    seconds: 0.8
+    needs: [gpu-discovery(mocked)]
+    consumes: [-]
+  - module: test_explicit_baseline.py
+    seconds: 0.5
+    needs: [sqm-charges]
+    consumes: [config_defaults.json]
+  - module: test_dcd_tail_recovery.py
+    seconds: 0.4
+    needs: [openmm-context]
+    consumes: [-]
+  - module: test_conservative_defaults.py
+    seconds: 0.1
+    needs: [sqm-charges]
+    consumes: [spec/profiles/*.json]
+  - module: test_spec_config.py
+    seconds: 0.1
+    needs: [sqm-charges]
+    consumes: [spec/profiles/*.json]
+  - module: test_worked_examples.py
+    seconds: 0.1
+    needs: [sqm-charges, openmm-context]
+    consumes: [README.md]
+  - module: test_exchange_state_swap.py
+    seconds: 0.1
+    needs: [openmm-context]
+    consumes: [-]
+  - module: test_ensemble_and_exchange.py
+    seconds: 0.1
+    needs: [pure-python]
+    consumes: [-]
+  - module: test_hashing.py
+    seconds: 0.1
+    needs: [bundle-build]
+    consumes: [README.md]
+  - module: test_dodecahedron_geometry_audit.py
+    seconds: 0.1
+    needs: [pure-python]
+    consumes: [-]
+  - module: test_restraint_periodicity.py
+    seconds: 0.0
+    needs: [pure-python]
+    consumes: [-]
+  - module: test_documented_defaults_match_code.py
+    seconds: 0.0
+    needs: [sqm-charges]
+    consumes: [README.md]
+  - module: test_gpu_mapping.py
+    seconds: 0.0
+    needs: [gpu-discovery(mocked)]
+    consumes: [-]
+  - module: test_dependency_map.py
+    seconds: 0.2
+    needs: [pure-python]
+    consumes: [-]
