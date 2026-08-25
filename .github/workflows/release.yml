@@ -1,0 +1,102 @@
+name: release-validation
+
+# The only workflow. It runs when a release is being cut, not on every push: the scientific
+# smoke tests build systems and integrate them, and running that on every commit trains everyone
+# to ignore it.
+#
+# CPU only. Nothing here assumes CUDA, and environment-ci.yml omits the CUDA pin deliberately.
+# The generated scripts default to CUDA and refuse a silent CPU fallback, so the smoke tests name
+# MD_PLATFORM=CPU explicitly -- which is also what they do locally.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "openmm-v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false      # a release validation is not worth cancelling
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: wheel, public commands, suite, cMD and REST2 smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash -el {0}          # -l so the conda environment is activated
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: create the documented CPU preparation environment
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment-ci.yml
+          environment-name: md-templates-ci
+          cache-environment: true
+          cache-downloads: true
+
+      - name: record the environment under test
+        run: |
+          python --version
+          python -c "import openmm; print('openmm', openmm.version.short_version)"
+          python -c "from openmm import Platform; print('platforms', [Platform.getPlatform(i).getName() for i in range(Platform.getNumPlatforms())])"
+          python -c "import openff.toolkit, openmmforcefields, parmed, rdkit.rdBase as r; print('openff', openff.toolkit.__version__, '| openmmforcefields', openmmforcefields.__version__, '| parmed', parmed.__version__, '| rdkit', r.rdkitVersion)"
+          for exe in sqm antechamber tleap; do command -v "$exe" || { echo "::error::$exe missing from the environment"; exit 1; }; done
+
+      - name: build and install the wheel
+        run: |
+          rm -rf dist && python -m build --wheel --outdir dist
+          python -m pip install --no-deps dist/*.whl
+
+      - name: validate the environment the way md-template install does
+        run: |
+          md-template init --target-dir "${RUNNER_TEMP}/stack"
+          md-template install --target-dir "${RUNNER_TEMP}/stack" --validate "${CONDA_PREFIX}"
+
+      - name: the six public commands, from outside the checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          md-template --help > /dev/null
+          md-openmm --help > /dev/null
+          md-openmm show-default all > /dev/null
+          md-openmm sys-config --method cMD REST2 --solvent OPC
+          cp "${GITHUB_WORKSPACE}/tests/data/ALA.pdb" .
+          python "${GITHUB_WORKSPACE}/scripts/shrink_configs_for_ci.py"
+          md-openmm sys-gen -i ./ALA.pdb --config sys.config.yaml -of ./inputs/
+          md-openmm md-gen -if ./inputs/ --config md.config.yaml -of ./MD/
+
+      - name: tiny cMD and REST2 runs from the generated project
+        working-directory: ${{ runner.temp }}
+        env:
+          MD_PLATFORM: CPU
+        run: |
+          (cd MD/cMD && python run.py)
+          (cd MD/REST2 && python run.py)
+          (cd MD/REST2 && python run.py)      # and it continues rather than restarting
+          test -s MD/cMD/whole_system.dcd && test -s MD/cMD/solute.dcd
+          test -s MD/REST2/replica_00_whole.dcd && test -s MD/REST2/replica_00_solute.dcd
+          python "${GITHUB_WORKSPACE}/scripts/check_exchange_history.py" MD/REST2 6
+
+      - name: the test suite, with skips forbidden
+        # A scientific smoke test that skips because a dependency is missing is a test that did
+        # not run. In release validation that is a failure, not a pass with a note.
+        run: python -m pytest tests/ -q --error-on-skip
+
+      - name: upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validation-logs
+          # diagnostics only: no trajectories, no checkpoints
+          path: |
+            dist/*.whl
+            ${{ runner.temp }}/**/*.log
+            ${{ runner.temp }}/**/*.yaml
+          retention-days: 14
+          if-no-files-found: ignore

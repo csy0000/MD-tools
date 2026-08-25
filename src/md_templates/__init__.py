@@ -1,3 +1,3 @@
-"""Reusable OpenMM templates for explicit-water molecular dynamics."""
+"""Reusable OpenMM templates for conventional MD and REST2."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

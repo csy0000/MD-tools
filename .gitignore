@@ -61,3 +61,8 @@ campaigns/*/phase1_controls/
 build/
 dist/
 *.egg-info/
+
+# Generated at build time by build_backend/md_templates_build.py: the git identity of the tree the
+# artifact was built from. Regenerated on every build, so tracking it would only ever record a
+# stale commit and make every build look like a source change.
+src/md_templates/_build_info.py

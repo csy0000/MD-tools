@@ -1,5 +1,0 @@
-{
-  "system": {"id": "ace_ala_nme", "type": "protein"},
-  "solvation": {"mode": "implicit", "implicit_model": "GBn2", "radii": "mbondi3"},
-  "randomness": {"master_seed": 20260820}
-}

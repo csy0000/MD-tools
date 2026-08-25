@@ -17,7 +17,6 @@ from typing import Any, Iterable, Optional, Sequence
 
 import numpy as np
 
-from .config import write_manifest
 from .system import build_forcefield
 
 WATER_RESIDUE_NAMES = frozenset({"HOH", "WAT", "SOL", "TIP3", "TIP", "H2O"})
@@ -482,7 +481,6 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
         "forcefield": ff_info,
     }
     (out_dir / "solvation.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
-    write_manifest(out_dir, "step3_solvate", cfg, {"result": info})
     return info
 
 

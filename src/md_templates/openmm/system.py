@@ -19,7 +19,6 @@ import numpy as np
 from openmm import (CMAPTorsionForce, CustomGBForce, NonbondedForce,
                     PeriodicTorsionForce, XmlSerializer)
 
-from .config import write_manifest
 
 WATER_RESIDUE_NAMES = frozenset({"HOH", "WAT", "SOL", "TIP3", "TIP", "H2O"})
 ION_RESIDUE_NAMES = frozenset({"NA", "CL", "K", "MG", "CA", "ZN", "BR", "I", "LI", "RB", "CS"})
@@ -104,7 +103,6 @@ def initial_structure(smiles: str, out_dir: Path, cfg: dict) -> dict:
     (out_dir / "initial_structure.json").write_text(
         json.dumps(info, indent=2) + "\n", encoding="utf-8"
     )
-    write_manifest(out_dir, "step1_initial_structure", cfg, {"result": info})
     return info
 
 
@@ -196,8 +194,10 @@ def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
                 "forcefield.ligand_charge_method='am1bcc' needs AmberTools' sqm, but the OpenFF "
                 f"toolkit registry only has {wrappers}.  Activate the md-templates environment "
                 "(conda activate md-templates) so antechamber/sqm are on PATH, or set "
-                "forcefield.ligand_charge_method to 'am1bcc_nagl' if that is intended -- NAGL "
-                "reproduces AM1-BCC ELF10 from the graph alone and needs no sqm.  "
+                "forcefield.ligand_charge_method to 'am1bcc_nagl' if that is intended -- NAGL is "
+                "a graph network TRAINED to predict AM1-BCC ELF10 charges and needs no sqm, but it "
+                "is not that calculation and not numerically identical to it, so it is a different "
+                "Hamiltonian rather than a drop-in substitute.  "
                 "This is checked here because otherwise the charges would silently fall back to "
                 "a different method and the run would be mislabelled."
             )
@@ -351,7 +351,6 @@ def protonate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path]
         "forcefield": ff_info,
     }
     (out_dir / "protonation.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
-    write_manifest(out_dir, "step2_protonate", cfg, {"result": info})
     return info
 
 
@@ -832,8 +831,27 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
     # verified atom-by-atom against the previous hand-rolled version on a solvated system: 3,450
     # masses identical to 0.000e+00 amu. Delegating removes the duplicate arithmetic; the checks
     # OpenMM does NOT perform are applied afterwards by `verify_hydrogen_mass_repartitioning`.
-    delegate_hmr = bool(bcfg["rigid_water"]) and str(bcfg["hmr_scope"]) in ("solute", "all")
-    target_h_mass = float(bcfg["hydrogen_mass_amu"])
+    # `hmr_scope` and `hydrogen_mass_amu` must agree: a scope with no mass has nothing to apply,
+    # and a mass with scope "none" is a value that silently does nothing. Both are configuration
+    # mistakes worth naming rather than resolving by guessing.
+    hmr_scope_name = str(bcfg["hmr_scope"] or "none")
+    raw_mass = bcfg["hydrogen_mass_amu"]
+    if hmr_scope_name in ("solute", "all") and raw_mass is None:
+        raise ValueError(
+            f"system_build.hmr_scope={hmr_scope_name!r} asks for hydrogen mass repartitioning but "
+            "system_build.hydrogen_mass_amu is null, so there is no mass to repartition to. "
+            "Set hydrogen_mass_amu (the repository's performance profiles use 3.024) or set "
+            "hmr_scope to 'none'.")
+    if hmr_scope_name == "none" and raw_mass is not None:
+        raise ValueError(
+            f"system_build.hydrogen_mass_amu={raw_mass!r} is set but system_build.hmr_scope is "
+            "'none', so it would be silently ignored and the run would integrate with unmodified "
+            "hydrogen masses while the manifest recorded a repartitioned one. Set hmr_scope to "
+            "'solute' to apply it, or clear hydrogen_mass_amu.")
+    delegate_hmr = bool(bcfg["rigid_water"]) and hmr_scope_name in ("solute", "all")
+    # Only meaningful when HMR is actually requested; computing it unconditionally raised
+    # TypeError on the conservative default, where the mass is deliberately null.
+    target_h_mass = float(raw_mass) if raw_mass is not None else None
     system = forcefield.createSystem(
         pdb.topology,
         nonbondedMethod=method,
@@ -865,7 +883,17 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
             }
 
     scope = None if bcfg["hmr_scope"] == "all" else range(n_solute_atoms)
-    if delegate_hmr:
+    if hmr_scope_name == "none":
+        # The conservative default: hydrogens keep the masses the force field gave them. Recorded
+        # explicitly rather than omitted, so a manifest states that HMR was OFF instead of leaving
+        # a reader to infer it from a missing key.
+        # `n_hydrogens_repartitioned`, matching what repartition_hydrogen_mass and
+        # verify_hydrogen_mass_repartitioning already emit. A third spelling for the same field
+        # would make every consumer handle both.
+        hmr = {"scope": "none", "target_hydrogen_mass_amu": None,
+               "n_hydrogens_repartitioned": 0,
+               "note": "hydrogen mass repartitioning disabled; masses are as parameterised"}
+    elif delegate_hmr:
         # OpenMM already did it; verify rather than repeat.
         hmr = verify_hydrogen_mass_repartitioning(
             system, pdb.topology, target_h_mass, scope)
@@ -911,7 +939,6 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
         ),
     }
     (out_dir / "system_build.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
-    write_manifest(out_dir, "step4_build_system", cfg, {"result": info})
     return info
 
 
