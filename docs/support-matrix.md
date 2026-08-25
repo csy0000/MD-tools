@@ -19,25 +19,21 @@ push — so "gated" here means gated at release, not continuously.
 | Accelerator (CI) | **CPU only** | the runners have no GPU; `environment-ci.yml` omits the CUDA pin |
 | Accelerator (runs) | **CUDA by default** | generated scripts refuse a silent CPU fallback; locally verified on RTX A5000 + RTX 3080 |
 
-`pydantic` is no longer a dependency of this package and has been removed from the table.
-
 No second Python or OpenMM version is listed, because none has been run. Adding one means adding it
 to the workflow matrix and seeing it pass first.
 
 ## What portability means here
 
-> **Partly historical.** Points 1, 2 and 5 describe the removed bundle architecture. Points 3 and 4,
-> on checkpoints and serialized States, still hold.
-
 **Precise claims, in descending strength.**
 
-1. **Transferred prepared artifacts are byte-identical when the checksums match.** `checksums.json`
-   hashes the bytes of every required artifact and original input. A bundle that validates after
-   relocation contains exactly the files it was prepared with.
+1. **A generated project moves.** `sys-gen` writes `inputs/` and `md-gen` writes `MD/`, and `MD/`
+   addresses `inputs/` by a relative path. Moving the two together to another machine needs no
+   edit. The only absolute path written is the recorded interpreter in `run.sh`, which falls back
+   to whatever `python3` provides.
 
-2. **A relocated bundle runs.** Both canonical routes are prepared, copied to an unrelated
-   directory, their originating directories deleted, and then validated, inspected, run and
-   resumed from the copies — with the package installed from a wheel and no checkout on the path.
+2. **The generated scripts do not depend on this package.** They import OpenMM, PyYAML and the two
+   modules copied in beside them. A project keeps working after the checkout is deleted; a test
+   asserts no generated file names the checkout or imports `md_templates`.
 
 3. **Binary checkpoints are environment-specific.** They give exact same-environment continuation
    and must never be described as portable. Moving a run directory between machines or OpenMM
@@ -49,29 +45,19 @@ to the workflow matrix and seeing it pass first.
    trajectory diverges from what an uninterrupted run would have produced. The fallback is
    announced on use and recorded in the run summary.
 
-5. **Rebuilding from original inputs may be scientifically consistent without being bitwise
-   identical.** Parameterisation depends on the toolkit versions recorded in `environment.json`.
-   Reproducing a bundle exactly requires reproducing that environment; transferring the prepared
-   bundle does not.
+5. **Rebuilding from the original structure may be scientifically consistent without being bitwise
+   identical.** Parameterisation depends on the toolkit versions recorded by `md-template install`
+   in `machine.yaml` and by `sys-gen` in `inputs/provenance.yaml`. Reproducing a build exactly
+   requires reproducing that environment; moving the already-built `inputs/` does not.
 
 **Not claimed:** cross-machine bitwise reproducibility of dynamics, in any configuration.
-
-## Bundle schema versions
-
-> **Historical.** The bundle architecture described below was removed in `ca29fcd`. `sys-gen` now
-> writes a plain `inputs/` folder and `md-gen` a plain `MD/` project. This section is retained to
-> interpret validation reports produced before that change, and describes nothing in the current
-> package.
-
-| version | guarantees |
-|---|---|
-| 2 | checksums, original inputs, force-field and environment provenance, separated topology-atom / OpenMM-particle / virtual-site / massless counts, mmCIF topology, canonical configuration and hashes |
-| 1 | readable and runnable through the compatibility path; **none** of the above. `bundle validate` reports it as `v1-compatibility` and names what is missing |
-
-A version-1 bundle is never reported as satisfying the version-2 contract.
 
 ## Scientific status, which portability does not address
 
 Mechanical portability is not scientific validity. No ladder is validated by any of this, the
 2 fs / 4 fs hydrogen-mass-repartitioning equivalence gate is open, and every run in CI is
 picoseconds long and proves execution only.
+
+Deletion is not evidence either. Removing the code that described the old architecture says nothing
+about whether the current simulations are correct; that question is answered only by the tests and
+the runs recorded in `docs/journal/`.

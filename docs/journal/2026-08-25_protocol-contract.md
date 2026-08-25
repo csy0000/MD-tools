@@ -246,3 +246,56 @@ Section 10 (stale surfaces): the root `test/` directory, `docs/configuration.md`
 scripts), `installation/README.md`, the `install-md-stack` skill, and `scripts/capture_goldens.py`,
 which imports the deleted `spec`, `bundlev2` and `runstate` modules and is referenced by nothing
 outside the journals.
+
+## Stale surfaces (task section 10)
+
+Everything below was reachable from the working tree and described an architecture removed in
+`ca29fcd`. A user following any of it would have been following instructions for software that is
+not here. Git history keeps all of it; `docs/journal/` is untouched.
+
+### Deleted
+
+| surface | why |
+|---|---|
+| `test/` (36 files) | the retired JSON interface — `md_config.json`, `system_config.json`, `run_all.sh` |
+| `docs/configuration.md` (663 lines) | the deleted four-section canonical model, `schema_version` per section, profile resolution. The current configuration is two YAML files, documented in the root `README.md` — one document, so they cannot drift |
+| `docs/implementation/explicit_solvent/scripts/` | a SECOND, unmaintained copy of `md.py`, `md_REST2.py`, `min-eq.py`. This was the most dangerous item here: runnable scripts that never received the duration, equilibration, seed or trajectory corrections. Someone running them would have reproduced every bug this task fixed |
+| `.claude/skills/install-md-stack/` | instructed an Amber26 / AmberTools26 / `pmemd.cuda.MPI` build. No Amber engine exists here, and the OpenMM half duplicated `md-template install` |
+| `scripts/capture_goldens.py` | imports `openmm.spec`, `bundlev2` and `runstate`, all deleted. Referenced by nothing outside the journals |
+| `scripts/rest2_pilot_acceptance.py` | reads columns `i`, `j`, `walker_at_replica_*`. The current `exchange_attempts.csv` has `replica_i`, `replica_j` and no walker columns, so it cannot read a log this repository produces. **The per-pair acceptance statistics it computed are a capability now absent**, not something replaced |
+
+### Rewritten
+
+`installation/README.md` was 630 lines about installing Amber26 and licensed `pmemd`. It is now 124
+lines about the OpenMM 8.6.0 CLI: what the environment contains and why each package is in it, what
+the installer validates, how to activate the prefix and install the CLI into it with `--no-deps`,
+and `--validate` for an environment built by hand. It says plainly that Amber and GROMACS are not
+installed or driven here, and that AmberTools is present for `sqm` and `tleap` rather than as an
+engine.
+
+`docs/support-matrix.md` lost the bundle-schema section entirely and had its portability claims
+rewritten: claims 1 and 2 now describe what actually holds — a generated project moves because
+`MD/` addresses `inputs/` relatively, and the generated scripts do not import this package. Claims
+3 and 4, on checkpoints and serialized States, were always true and are unchanged.
+
+### Kept, labelled historical
+
+`docs/implementation/explicit_solvent/*.md` and its `environment.yml` carry a banner saying they
+are not current usage and that their scripts were deleted. `PORTABLE_REST2.md` is cited by
+`reports/explicit_solvent/20260815_ff19sb_peptide_route/logs/ff19sb_smoke_fixed.log`, and a
+retained validation report needs the document that explains what was run.
+
+`claudecode-instructions/` gains a `README.md` separating the one current task file from twenty
+historical ones, and stating that the rest instruct against an architecture that no longer exists —
+kept because the journals cite them by name, and a journal entry naming an unreadable instruction
+file records nothing.
+
+`reports/` is untouched. Those are validation results.
+
+### Not evidence
+
+Deleting the code that described the old architecture says nothing about whether the current
+simulations are correct. That is answered by the tests and by the GPU runs recorded above, and the
+support matrix now says so in as many words.
+
+`pytest tests/ --error-on-skip` — 74 passed in 63 s.

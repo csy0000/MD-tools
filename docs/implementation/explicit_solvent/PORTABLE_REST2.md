@@ -1,5 +1,16 @@
 # Portable explicit-solvent REST2
 
+> **HISTORICAL — not current usage.**
+>
+> This describes the explicit-solvent baseline as it stood before the repository was reduced to the
+> six-command CLI in `ca29fcd`. Its runnable scripts have been deleted: they were a second,
+> unmaintained copy of the run scripts, and they never received the REST2 duration, equilibration,
+> seed and trajectory corrections of 2026-08-25. Running them would reproduce those bugs.
+>
+> It is kept because `reports/explicit_solvent/` cites it, and a retained validation report needs
+> the document that explains what was run. For current usage see the root `README.md`.
+
+
 How to run this project's explicit-solvent REST2 from **another repository or another machine**,
 through an installed package, without the source checkout, without `/home/...` paths, without
 fixed GPU numbers, and without undocumented molecular inputs.

@@ -1,5 +1,16 @@
 # Explicit-solvent baseline setups
 
+> **HISTORICAL — not current usage.**
+>
+> This describes the explicit-solvent baseline as it stood before the repository was reduced to the
+> six-command CLI in `ca29fcd`. Its runnable scripts have been deleted: they were a second,
+> unmaintained copy of the run scripts, and they never received the REST2 duration, equilibration,
+> seed and trajectory corrections of 2026-08-25. Running them would reproduce those bugs.
+>
+> It is kept because `reports/explicit_solvent/` cites it, and a retained validation report needs
+> the document that explains what was run. For current usage see the root `README.md`.
+
+
 **Status:** authoritative for explicit solvent · **Written:** 2026-08-14 · **Scope:** REST2-REMD
 references and free cold/hot walkers (conditional BAR is *not* part of this baseline yet)
 
