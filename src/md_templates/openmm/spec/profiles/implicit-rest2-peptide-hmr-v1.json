@@ -1,7 +1,7 @@
 {
-  "profile_id": "implicit-rest2-peptide-v1",
+  "profile_id": "implicit-rest2-peptide-hmr-v1",
   "profile_schema_version": 6,
-  "description": "Implicit-solvent GBn2/mbondi3 REST2, peptide/PDB route",
+  "description": "Implicit-solvent GBn2/mbondi3 REST2, peptide/PDB route  PERFORMANCE VARIANT: hydrogen mass repartitioning (3.024 Da on solute hydrogens) with a 4 fs timestep, roughly halving wall-clock per nanosecond. Opt in by naming this profile; it is never selected automatically. HMR moves mass from heavy atoms into the hydrogens they are bonded to; it changes the mass distribution, not the potential.",
   "route": "pdb",
   "method": "rest2",
   "is_default": false,
@@ -24,8 +24,8 @@
       },
       "constraints": "HBonds",
       "rigid_water": false,
-      "hydrogen_mass": null,
-      "hmr_scope": "none",
+      "hydrogen_mass": "3.024 amu",
+      "hmr_scope": "solute",
       "remove_cm_motion": true,
       "implicit": {
         "model": "GBn2",
@@ -36,7 +36,7 @@
       "schema_version": 6,
       "integrator": {
         "kind": "langevin-middle",
-        "timestep": "2 fs",
+        "timestep": "4 fs",
         "temperature": "300 K",
         "friction": "1 /ps"
       },
@@ -85,5 +85,6 @@
         "checkpoint": "100 ps"
       }
     }
-  }
+  },
+  "performance_variant": true
 }

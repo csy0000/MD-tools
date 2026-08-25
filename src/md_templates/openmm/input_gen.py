@@ -210,7 +210,68 @@ def _resolved_spec(md_config: dict, manifest: dict):
     # build settings come from the bundle; the model still needs them to validate
     forcefield = json.loads((Path(manifest["_bundle_dir"]) / "forcefield.json").read_text())
     document.setdefault("build", {})
-    return resolve.resolve_spec(document), forcefield
+    resolved = resolve.resolve_spec(document)
+    _refuse_a_profile_the_bundle_cannot_honour(resolved["spec"], forcefield,
+                                               resolved.get("profile") or {})
+    return resolved, forcefield
+
+
+class BundleProfileMismatch(ValueError):
+    """A protocol's build-defining settings disagree with the bundle it would run against.
+
+    Typed so the CLI can present it as a refusal rather than a traceback, without catching bare
+    ValueError -- which would swallow genuine bugs from the same call and report them as if they
+    were a user configuration problem.
+    """
+
+
+def _refuse_a_profile_the_bundle_cannot_honour(spec, forcefield: dict, profile: dict) -> None:
+    """Refuse a protocol whose profile disagrees with the System it would run against.
+
+    Hydrogen mass repartitioning is BUILD-DEFINING: the masses live in the serialized System, which
+    `MD_system_gen.py` produced before any profile was read. So a profile can ASK for 3.024 amu
+    hydrogens and a 4 fs timestep against a bundle whose hydrogens are 1.008 amu, and until this
+    check nothing noticed -- the implicit route produced exactly that, measured as
+    `{1.008: 12, 12.01: 6, 14.01: 2, 16.0: 2}` integrated at 4 fs.
+
+    Both values are named and neither wins. Choosing the bundle's would run a timestep the profile
+    never sanctioned; choosing the profile's would describe masses the System does not have. The
+    fix is for the operator to rebuild the bundle with `MD_system_gen.py --profile <id>`, which is
+    named in the message because a refusal a reader cannot act on is only half useful.
+    """
+    declared = spec.build.hydrogen_mass
+    declared_amu = float(declared.value) if declared is not None else None
+    declared_scope = str(spec.build.hmr_scope or "none")
+
+    built = forcefield.get("hmr") or {}
+    built_amu = built.get("target_hydrogen_mass_amu")
+    built_amu = float(built_amu) if built_amu is not None else None
+    built_scope = str(built.get("scope") or "none")
+
+    def _same(a, b) -> bool:
+        if a is None or b is None:
+            return a is b or (a is None and b is None)
+        return abs(a - b) <= 1e-9
+
+    if _same(declared_amu, built_amu) and (declared_scope == "none") == (built_scope == "none"):
+        return
+
+    profile_id = profile.get("profile_id", "<none>")
+    raise BundleProfileMismatch(
+        "the protocol's hydrogen mass repartitioning disagrees with the prepared bundle, and the "
+        "masses that would actually be integrated are the bundle's:\n"
+        f"    profile {profile_id!r} asks for : hydrogen_mass="
+        f"{declared_amu if declared_amu is not None else 'none'} amu, hmr_scope={declared_scope!r}\n"
+        f"    the bundle's System carries    : hydrogen_mass="
+        f"{built_amu if built_amu is not None else 'none'} amu, hmr_scope={built_scope!r}\n"
+        f"    the protocol would integrate at: {spec.protocol.integrator.timestep.source}\n"
+        "Neither value is chosen for you: running the bundle's masses at the profile's timestep is "
+        "the unstable combination this check exists to prevent, and claiming the profile's masses "
+        "would describe a System that does not exist.\n"
+        "Rebuild the bundle so the two agree:\n"
+        f"    MD_system_gen.py -i <input> -o <bundle> --config <system_config.json> "
+        f"--profile {profile_id}"
+    )
 
 
 def _interpreter_defaults() -> tuple[str, str]:

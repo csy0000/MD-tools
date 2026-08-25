@@ -419,7 +419,13 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
             built = build_implicit_bundle_inputs(
                 route=("ligand" if system_type == "ligand" else "peptide"),
                 cfg=cfg, staging=staging, pdb=pdb, smiles=smiles,
-                implicit_model=solvation["implicit_model"], radii=solvation["radii"])
+                implicit_model=solvation["implicit_model"], radii=solvation["radii"],
+                # The System is what actually gets integrated, so the repartitioning is baked in
+                # here rather than applied later. These come from system_config.json's
+                # `system_build` section, which MD_system_gen can also populate from a named
+                # profile (--profile), keeping the profile the single source of the fact.
+                hydrogen_mass_amu=cfg["system_build"].get("hydrogen_mass_amu"),
+                hmr_scope=str(cfg["system_build"].get("hmr_scope") or "none"))
             # The implicit peptide route is parameterised by tleap, so the force field it used is
             # the leaprc -- not the OpenMM XML the explicit defaults name. Recording both names for
             # one force field is exactly what the agreement check exists to catch.
@@ -442,6 +448,16 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
             # The build settings must describe the System that was built. The package defaults are
             # explicit-water ones -- PME, a 1.0 nm cutoff, HMR to 3.024 amu, rigid water -- and
             # leaving them here made the manifest claim a Hamiltonian this bundle does not have.
+            # WATER-AND-BOX fields only. These are genuinely route-derived: an implicit System has
+            # no periodic box, so PME, a cutoff, a dispersion correction and rigid water are not
+            # choices a user can make here.
+            #
+            # `hydrogen_mass_amu` and `hmr_scope` are deliberately NOT in this list. They were,
+            # unconditionally, which silently discarded whatever the user or the selected profile
+            # asked for -- so an implicit `-hmr-v1` profile produced 4 fs on 1.008 amu hydrogens
+            # (measured: {1.008: 12, 12.01: 6, 14.01: 2, 16.0: 2}, total 144.176 amu). Hydrogen
+            # mass is not a water-only field; it is a property of the solute, which is the entire
+            # system under implicit solvent.
             cfg["system_build"].update({
                 "nonbonded_method": "NoCutoff",
                 "nonbonded_cutoff_nm": None,
@@ -451,12 +467,9 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
                 "minimum_image_margin_nm": None,
                 "constraints": "HBonds",
                 "rigid_water": False,
-                "hydrogen_mass_amu": None,
-                "hmr_scope": "none",
                 "remove_cm_motion": True,
             })
-            for key in ("nonbonded_method", "nonbonded_cutoff_nm", "hydrogen_mass_amu",
-                        "hmr_scope", "rigid_water"):
+            for key in ("nonbonded_method", "nonbonded_cutoff_nm", "rigid_water"):
                 cfg.setdefault("_value_sources", {})[f"system_build.{key}"] = (
                     "route-derived: implicit solvent")
                 cfg.setdefault("_value_sources", {})["forcefield.protein"] = (
@@ -469,10 +482,12 @@ def prepare_system(*, input_path: Path, input_format: str, system_type: str, con
                 "forcefield": _implicit_forcefield_record(cfg, built),
                 "nonbonded": {"method": "NoCutoff", "cutoff_nm": None,
                               "note": "implicit solvent has no periodic box and no cutoff"},
-                "hmr": {"scope": "none", "target_hydrogen_mass_amu": None,
-                        "note": ("the pinned reference does not repartition hydrogen mass; the "
-                                 "implicit profile does not either, so the GBn2 energy comparison "
-                                 "is against an unrepartitioned System")},
+                # What actually happened, read off the built System rather than asserted. The
+                # superseded note that lived here appealed to a measurement overturned in e187c85:
+                # mass enters the kinetic term only, so repartitioning leaves the GBn2 potential
+                # and every force component unchanged.
+                "hmr": built.get("hmr") or {"scope": "none", "target_hydrogen_mass_amu": None,
+                                            "n_hydrogens_repartitioned": 0},
                 "implicit": implicit_provenance(built["build"]),
                 "box": None,
                 "salt": None,

@@ -13,7 +13,7 @@
     "stereochemistry_policy": "from_smiles",
     "protonation_policy": "as_given",
     "conformer_generation": "etkdgv3",
-    "charge_model": "am1bcc_nagl",
+    "charge_model": "am1bcc",
     "parameterization_route": "openff-2.2.0"
   },
   "randomness": {

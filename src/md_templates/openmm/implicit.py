@@ -88,16 +88,72 @@ def radii_of(structure) -> list:
     return [float(atom.solvent_radius) for atom in structure.atoms]
 
 
+def _implicit_hmr_record(system, structure, scope: str, target: Optional[float],
+                         mass_before: float) -> dict:
+    """What the repartitioning actually did, measured on the built System.
+
+    Reported rather than asserted: the count comes from comparing each particle's mass against the
+    topology's element, so a record claiming 12 repartitioned hydrogens means twelve were found to
+    have moved, not that twelve were asked for.
+    """
+    from openmm import unit as _u
+
+    masses = [system.getParticleMass(i).value_in_unit(_u.dalton)
+              for i in range(system.getNumParticles())]
+    total_after = sum(masses)
+    n_hydrogens = sum(1 for a in structure.atoms if a.atomic_number == 1)
+    moved = sum(1 for a, m in zip(structure.atoms, masses)
+                if a.atomic_number == 1 and abs(m - a.mass) > 1e-9)
+    heaviest_donor_drop = min(
+        (m for a, m in zip(structure.atoms, masses) if a.atomic_number != 1), default=None)
+    record = {
+        "scope": scope,
+        "target_hydrogen_mass_amu": (float(target) if target is not None else None),
+        "n_hydrogens": n_hydrogens,
+        "n_hydrogens_repartitioned": moved,
+        "total_mass_amu_before": round(float(mass_before), 6),
+        "total_mass_amu_after": round(float(total_after), 6),
+        "lightest_heavy_atom_amu": (round(float(heaviest_donor_drop), 6)
+                                    if heaviest_donor_drop is not None else None),
+    }
+    if scope in ("solute", "all"):
+        # Under implicit solvent there is no solvent to exclude, so the two scopes coincide.
+        record["scope_note"] = ("implicit solvent has no solvent atoms, so 'solute' and 'all' "
+                                "select the same particles")
+        if abs(total_after - mass_before) > 1e-6:
+            raise RuntimeError(
+                f"hydrogen mass repartitioning changed the total mass from {mass_before:.6f} to "
+                f"{total_after:.6f} amu. Repartitioning moves mass between bonded atoms and must "
+                f"conserve it; a change means mass was created or destroyed.")
+        if heaviest_donor_drop is not None and heaviest_donor_drop < 1.0:
+            raise RuntimeError(
+                f"repartitioning drove a heavy atom to {heaviest_donor_drop:.4f} amu, which is "
+                f"lighter than hydrogen. Lower the target hydrogen mass ({target}).")
+    return record
+
+
 def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = None, *,
                           implicit_model: str = "GBn2", radii: str = "mbondi3",
-                          remove_cm_motion: bool = True):
+                          remove_cm_motion: bool = True,
+                          hydrogen_mass_amu: Optional[float] = None,
+                          hmr_scope: str = "none"):
     """Build the implicit-solvent System, and report what the radius change actually did.
 
     Returns `(system, info)`. `info` records the radii before and after `changeRadii`, so a bundle
     can state whether the call mattered for this topology rather than asserting that it did.
+
+    `hydrogen_mass_amu` repartitions at BUILD time, through ParmEd's own `createSystem`, so the
+    serialized System is what will actually be integrated. It used to be impossible to ask for:
+    the implicit route dropped the request and returned 1.008 amu hydrogens, which a `-hmr-v1`
+    profile then integrated at 4 fs.
+
+    Under implicit solvent there is no solvent, so the solute IS the whole system and `hmr_scope`
+    "solute" and "all" name the same set of atoms. Both are accepted and recorded, rather than
+    letting "solute" look like a setting that was ignored.
     """
     import parmed as pmd
     from openmm import app
+    from openmm import unit as u
     from parmed.tools import changeRadii
 
     gb_object = _gb_object(implicit_model)
@@ -108,12 +164,31 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
     changeRadii(structure, str(radii)).execute()
     after = radii_of(structure)
 
+    scope = str(hmr_scope or "none")
+    if scope not in ("none", "solute", "all"):
+        raise ValueError(f"hmr_scope must be 'none', 'solute' or 'all'; got {scope!r}")
+    if scope != "none" and hydrogen_mass_amu is None:
+        raise ValueError(
+            f"hmr_scope={scope!r} asks for hydrogen mass repartitioning but no "
+            "hydrogen_mass_amu was given, so there is no target mass to repartition to.")
+    if scope == "none" and hydrogen_mass_amu is not None:
+        raise ValueError(
+            f"hydrogen_mass_amu={hydrogen_mass_amu!r} was given with hmr_scope='none', so it "
+            "would be silently ignored while the manifest recorded a repartitioned System.")
+
+    mass_before = sum(a.mass for a in structure.atoms)
     system = structure.createSystem(
         nonbondedMethod=app.NoCutoff,
         constraints=app.HBonds,
         implicitSolvent=gb_object,
         removeCMMotion=remove_cm_motion,
+        # ParmEd applies the repartitioning itself. Delegating avoids a THIRD implementation of
+        # arithmetic that already exists twice in system.py, and keeps the masses inside the
+        # System that gets serialized.
+        **({"hydrogenMass": float(hydrogen_mass_amu) * u.dalton} if scope != "none" else {}),
     )
+
+    hmr_record = _implicit_hmr_record(system, structure, scope, hydrogen_mass_amu, mass_before)
 
     max_change = max((abs(a - b) for a, b in zip(after, before)), default=0.0)
     info = {
@@ -131,6 +206,7 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
         "n_particles": system.getNumParticles(),
         "n_constraints": system.getNumConstraints(),
         "uses_periodic_boundary_conditions": system.usesPeriodicBoundaryConditions(),
+        "hmr": hmr_record,
     }
     if system.usesPeriodicBoundaryConditions():
         raise RuntimeError(
@@ -234,7 +310,9 @@ def build_amber_topology_via_tleap(pdb_path: Path, out_dir: Path, *, radii: str 
 
 def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
                                  pdb: Optional[Path] = None, smiles: Optional[str] = None,
-                                 implicit_model: str = "GBn2", radii: str = "mbondi3") -> dict:
+                                 implicit_model: str = "GBn2", radii: str = "mbondi3",
+                                 hydrogen_mass_amu: Optional[float] = None,
+                                 hmr_scope: str = "none") -> dict:
     """Produce every Amber and OpenMM artefact an implicit bundle needs.
 
     Two routes reach the same ParmEd construction from different directions:
@@ -260,7 +338,8 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
 
     system, info = build_implicit_system(
         amber["prmtop"], amber["coordinates"],
-        implicit_model=implicit_model, radii=radii)
+        implicit_model=implicit_model, radii=radii,
+        hydrogen_mass_amu=hydrogen_mass_amu, hmr_scope=hmr_scope)
 
     (staging / "system.xml").write_text(XmlSerializer.serialize(system), encoding="utf-8")
     pdb_file = app.PDBFile(str(topology_source))
@@ -294,7 +373,8 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
         "water": None,
         "geometry": None,
         "nonbonded": {"method": "NoCutoff", "cutoff_nm": None},
-        "hmr": {"scope": "none", "target_hydrogen_mass_amu": None},
+        # measured on the built System, not restated from the request
+        "hmr": info["hmr"],
         "constraints": "HBonds",
         "rigid_water": False,
         "omega_central_bonds": omega_central_bonds(topology, solute),
@@ -313,6 +393,10 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
         "system_xml": staging / "system.xml",
         "topology_pdb": staging / "topology.pdb",
         "build_record": build_record,
+        # Surfaced at the top level so the caller writing forcefield.json states what the System
+        # actually carries. Without it that file said "none" while system_manifest.json said
+        # "solute", and the bundle's own three-way agreement check refused to publish -- correctly.
+        "hmr": info["hmr"],
         "prmtop": amber["prmtop"],
         "coordinates": amber["coordinates"],
         "n_particles": system.getNumParticles(),

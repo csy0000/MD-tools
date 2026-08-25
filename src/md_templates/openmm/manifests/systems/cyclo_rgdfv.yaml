@@ -27,6 +27,11 @@ input:
 
 parameterization:
   small_molecule_forcefield: openff-2.2.0
+  # PINNED, not the package default, for the same reason as water_forcefield below. The default
+  # is standard AM1-BCC; this manifest reproduces cyclo-(RGDfV) trajectories that were generated
+  # with NAGL charges, so it must keep naming NAGL. NAGL is a graph network trained to predict
+  # AM1-BCC ELF10 charges -- close to them (RMSD 0.0247 e, r = 0.9976 on this molecule) but not
+  # identical, so swapping it for am1bcc here would change the Hamiltonian under an unchanged name.
   charge_method: am1bcc_nagl
   protein_forcefield: null
   # PINNED, not the package default. The active default is OPC (explicit-*-v2 profiles); this

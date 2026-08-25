@@ -1,7 +1,7 @@
 {
-  "profile_id": "implicit-rest2-peptide-v1",
+  "profile_id": "explicit-rest2-peptide-hmr-v1",
   "profile_schema_version": 6,
-  "description": "Implicit-solvent GBn2/mbondi3 REST2, peptide/PDB route",
+  "description": "Standard explicit-water, peptide/PDB route, ff19SB/OPC \u2014 the active default. ff19SB was parameterised against OPC, which is why OPC rather than TIP3P-FB is the default here.  PERFORMANCE VARIANT: hydrogen mass repartitioning (3.024 Da on solute hydrogens) with a 4 fs timestep, roughly halving wall-clock per nanosecond. Opt in by naming this profile; it is never selected automatically. HMR moves mass from heavy atoms into the hydrogens they are bonded to; it changes the mass distribution, not the potential.",
   "route": "pdb",
   "method": "rest2",
   "is_default": false,
@@ -12,39 +12,48 @@
         "small_molecule": null,
         "charge_method": null,
         "protein": "amber19/protein.ff19SB.xml",
-        "water": null
+        "water": "amber19/opc.xml"
+      },
+      "solvation": {
+        "water_model": "opc",
+        "box_shape": "dodecahedron",
+        "padding": "2.0 nm",
+        "padding_semantics": "openmm",
+        "ionic_strength_molar": 0.15,
+        "positive_ion": "Na+",
+        "negative_ion": "Cl-",
+        "neutralize": true,
+        "cutoff_fit_policy": "grow"
       },
       "nonbonded": {
-        "method": "NoCutoff",
-        "cutoff": null,
+        "method": "PME",
+        "cutoff": "1.0 nm",
         "switch_distance": null,
-        "use_dispersion_correction": false,
-        "ewald_error_tolerance": null,
-        "minimum_image_margin": null
+        "use_dispersion_correction": true,
+        "ewald_error_tolerance": 0.0005,
+        "minimum_image_margin": "0.10 nm"
       },
       "constraints": "HBonds",
-      "rigid_water": false,
-      "hydrogen_mass": null,
-      "hmr_scope": "none",
-      "remove_cm_motion": true,
-      "implicit": {
-        "model": "GBn2",
-        "radii": "mbondi3"
-      }
+      "rigid_water": true,
+      "hydrogen_mass": "3.024 amu",
+      "hmr_scope": "solute",
+      "remove_cm_motion": true
     },
     "protocol": {
       "schema_version": 6,
       "integrator": {
         "kind": "langevin-middle",
-        "timestep": "2 fs",
+        "timestep": "4 fs",
         "temperature": "300 K",
         "friction": "1 /ps"
       },
       "equilibration": {
-        "protocol": "simple",
+        "protocol": "staged",
         "minimize_max_iterations": 1000,
+        "npt_free": "500 ps",
         "seed": null,
-        "restrained": "20 ps"
+        "nvt": "250 ps",
+        "npt": "250 ps"
       },
       "production": {
         "method": "rest2",
@@ -54,7 +63,7 @@
         "tau_ladder": {
           "minimum": 0.0,
           "maximum": 0.5,
-          "count": 4,
+          "count": 6,
           "interpolation": "linear"
         },
         "omega_exclusion": {
@@ -85,5 +94,6 @@
         "checkpoint": "100 ps"
       }
     }
-  }
+  },
+  "performance_variant": true
 }

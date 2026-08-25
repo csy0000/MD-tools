@@ -35,15 +35,15 @@
       },
       "constraints": "HBonds",
       "rigid_water": true,
-      "hydrogen_mass": "3.024 amu",
-      "hmr_scope": "solute",
+      "hydrogen_mass": null,
+      "hmr_scope": "none",
       "remove_cm_motion": true
     },
     "protocol": {
       "schema_version": 6,
       "integrator": {
         "kind": "langevin-middle",
-        "timestep": "4 fs",
+        "timestep": "2 fs",
         "temperature": "300 K",
         "friction": "1 /ps"
       },

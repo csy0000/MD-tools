@@ -26,35 +26,61 @@ PROFILES = REPO_ROOT / "src" / "md_templates" / "openmm" / "spec" / "profiles"
 README = REPO_ROOT / "README.md"
 
 
-def _profiles():
+def _profiles(*, performance: bool = False):
+    """Shipped profiles. `performance=True` selects the opt-in `-hmr-` variants instead.
+
+    The two tiers are checked separately because they legitimately state DIFFERENT numbers: the
+    defaults are conservative, the opt-ins are fast. Lumping them together would make the guard
+    assert that everything agrees, which is exactly the drift-hiding it exists to prevent.
+    """
     out = {}
     for path in sorted(PROFILES.glob("*.json")):
         if "smoke" in path.stem:
             continue                       # deliberately tiny, not a documented default
+        if path.stem.endswith("-hmr-v1") is not performance:
+            continue
         out[path.stem] = json.loads(path.read_text())["defaults"]
     return out
 
 
-def test_every_profile_agrees_on_the_timestep_the_readme_states():
-    """One number, stated once in the README, true of every shipped profile."""
+def test_every_default_profile_agrees_on_the_timestep_the_readme_states():
+    """One number, stated once in the README, true of every shipped DEFAULT profile."""
     timesteps = {name: d["protocol"]["integrator"]["timestep"] for name, d in _profiles().items()}
+    assert set(timesteps.values()) == {"2 fs"}, timesteps
+    assert "**2 fs**" in README.read_text(), "the README must state the timestep it ships"
+
+
+def test_every_performance_profile_agrees_on_the_timestep_the_readme_states():
+    timesteps = {name: d["protocol"]["integrator"]["timestep"]
+                 for name, d in _profiles(performance=True).items()}
     assert set(timesteps.values()) == {"4 fs"}, timesteps
-    assert "**4 fs**" in README.read_text(), "the README must state the timestep it ships"
+    assert "**4 fs**" in README.read_text(), "the README must state the opt-in timestep too"
 
 
-def test_every_profile_agrees_on_hydrogen_mass_repartitioning():
+def test_default_profiles_state_that_they_do_not_repartition_hydrogen_mass():
     masses = {name: d["build"].get("hydrogen_mass") for name, d in _profiles().items()}
-    assert set(masses.values()) == {"3.024 amu"}, masses
+    assert set(masses.values()) == {None}, masses
     scopes = {name: d["build"].get("hmr_scope") for name, d in _profiles().items()}
+    assert set(scopes.values()) == {"none"}, scopes
+
+
+def test_performance_profiles_agree_on_hydrogen_mass_repartitioning():
+    perf = _profiles(performance=True)
+    masses = {name: d["build"].get("hydrogen_mass") for name, d in perf.items()}
+    assert set(masses.values()) == {"3.024 amu"}, masses
+    scopes = {name: d["build"].get("hmr_scope") for name, d in perf.items()}
     assert set(scopes.values()) == {"solute"}, scopes
     assert "3.024 amu" in README.read_text()
 
 
-def test_the_readme_does_not_still_claim_implicit_skips_hmr():
-    """The exact sentence that was false for one commit."""
-    text = README.read_text().lower()
-    assert "do not repartition hydrogen mass" not in text
-    assert "use a 2 fs timestep" not in text
+def test_the_readme_separates_the_conservative_default_from_the_opt_in():
+    """Both tiers must be stated, or a reader cannot tell which one they are getting."""
+    text = README.read_text()
+    assert "**2 fs**" in text and "**4 fs**" in text
+    lowered = text.lower()
+    assert "hmr" in lowered or "hydrogen mass repartition" in lowered
+    # the opt-in must be named as such, not presented as what everyone gets
+    assert "opt-in" in lowered or "opt in" in lowered
 
 
 def test_every_ligand_profile_agrees_on_the_charge_method():
@@ -62,8 +88,15 @@ def test_every_ligand_profile_agrees_on_the_charge_method():
                for name, d in _profiles().items()
                if (d["build"]["forcefield"] or {}).get("small_molecule")}
     assert methods, "there must be ligand profiles to check"
-    assert set(methods.values()) == {"am1bcc_nagl"}, methods
-    assert "am1bcc_nagl" in README.read_text(), "the README must name the ligand charge default"
+    assert set(methods.values()) == {"am1bcc"}, methods
+    readme = README.read_text()
+    assert "am1bcc" in readme, "the README must name the ligand charge default"
+    # NAGL must be documented as an opt-in, and never described as the same calculation
+    assert "am1bcc_nagl" in readme, "the README must document the NAGL opt-in"
+    for forbidden in ("identical to AM1-BCC", "same as AM1-BCC", "equivalent to AM1-BCC"):
+        assert forbidden.lower() not in readme.lower(), (
+            f"the README claims NAGL is {forbidden!r}; it is a trained approximation, not that "
+            "calculation")
 
 
 def test_the_readme_does_not_still_quote_the_am1bcc_preparation_cost():
@@ -107,7 +140,17 @@ MANIFESTS = REPO_ROOT / "src" / "md_templates" / "openmm" / "manifests" / "syste
 #: - small_macrocycle_smoke: a tiny installability check, not a documented default. It keeps its own
 #:   settings exactly as the cpu-smoke PROFILE does.
 #: - ace_ala_nme: the peptide route. There is no ligand, so charge_method is null by definition.
-_MANIFEST_EXCEPTIONS = {"small_macrocycle_smoke", "ace_ala_nme"}
+_MANIFEST_EXCEPTIONS = {
+    # a tiny installability check, not a documented default; it keeps the cpu-smoke settings
+    "small_macrocycle_smoke",
+    # the peptide route: no ligand, so charge_method is null by definition
+    "ace_ala_nme",
+    # DELIBERATELY PINNED to NAGL. This manifest reproduces cyclo-(RGDfV) trajectories that were
+    # generated with NAGL charges; repointing it at the am1bcc default would change the
+    # Hamiltonian under an unchanged name. The manifest states the pin and the reason, exactly as
+    # it already does for its TIP3P-FB water.
+    "cyclo_rgdfv",
+}
 
 
 def _ligand_charge_default() -> str:
@@ -171,7 +214,7 @@ def test_the_two_declared_charge_methods_are_the_supported_ones():
 def test_no_place_declares_a_timestep_that_disagrees_with_the_profiles():
     """The timestep is stated in profiles and in worked-example configs."""
     expected = {d["protocol"]["integrator"]["timestep"] for d in _profiles().values()}
-    assert expected == {"4 fs"}
+    assert expected == {"2 fs"}
     offenders = {}
     for path in sorted((REPO_ROOT / "test").rglob("*.json")):
         try:
@@ -181,8 +224,13 @@ def test_no_place_declares_a_timestep_that_disagrees_with_the_profiles():
         if not isinstance(doc, dict):
             continue
         stated = ((doc.get("protocol") or {}).get("integrator") or {}).get("timestep")
-        # a worked example may deliberately shrink durations, but not the integration timestep,
-        # because that is a Hamiltonian-integration choice rather than a length
-        if stated is not None and stated not in expected:
+        declares_hmr = bool((doc.get("build") or {}).get("hydrogen_mass"))
+        # A worked example may deliberately shrink durations, but not the integration timestep --
+        # that is a Hamiltonian-integration choice rather than a length. The ONE exception is an
+        # example that also declares HMR: those two examples exist to demonstrate the opt-in, and
+        # 4 fs is correct there precisely BECAUSE the hydrogen mass is declared with it. An example
+        # at 4 fs WITHOUT HMR is the unstable combination and is still refused.
+        allowed = {*expected, "4 fs"} if declares_hmr else expected
+        if stated is not None and stated not in allowed:
             offenders[str(path.relative_to(REPO_ROOT))] = stated
     assert not offenders, f"worked examples disagree with the profile timestep: {offenders}"

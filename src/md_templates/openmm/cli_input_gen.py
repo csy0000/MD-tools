@@ -141,6 +141,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     except DestinationExists as error:
         raise InputError(str(error))
+    except input_gen.BundleProfileMismatch as error:
+        # A build-defining disagreement between the profile and the prepared bundle. It names both
+        # values and the command that fixes it, so it is a refusal, not a crash.
+        raise InputError(str(error))
     except ResolutionError as error:
         # A configuration that names retired fields gets its migration message, not a traceback.
         raise InputError(str(error))

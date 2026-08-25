@@ -73,7 +73,9 @@ def _configuration_goldens() -> dict:
                 "integrator.temperature_K": spec.protocol.integrator.temperature.value,
                 "nonbonded.cutoff_nm": spec.build.nonbonded.cutoff.value,
                 "solvation.padding_nm": spec.build.solvation.padding.value,
-                "hydrogen_mass_amu": spec.build.hydrogen_mass.value,
+                # None under the conservative default, where hydrogens are not repartitioned
+                "hydrogen_mass_amu": (spec.build.hydrogen_mass.value
+                                      if spec.build.hydrogen_mass else None),
                 "constraints": spec.build.constraints,
                 "production.method": production.method,
                 "production.duration_per_segment_ps": production.duration_per_segment.value,

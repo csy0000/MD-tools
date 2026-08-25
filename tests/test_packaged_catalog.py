@@ -49,8 +49,12 @@ REST2_PATH = f"templates/{REST2_ID}/template.yaml"
 #: `.gitignore` is not optional here: a build writes `build/`, `dist/` and `*.egg-info/` into the
 #: source root, and without the ignore rules those artifacts would make the tree look dirty and
 #: every clean-build test would fail for a reason that has nothing to do with the catalog.
+#: Everything a build needs, copied into the synthetic repository. `build_backend` is the in-tree
+#: PEP 517 backend named by pyproject's `backend-path`; without it every build here fails with
+#: "backend-path entry 'build_backend' does not exist", which is a missing FILE, not a defect in
+#: what these tests are about.
 SOURCE_ITEMS = ("pyproject.toml", "setup.py", "MANIFEST.in", "README.md", ".gitignore",
-                "registry.yaml", "templates", "src", "build_support")
+                "registry.yaml", "templates", "src", "build_support", "build_backend")
 
 
 # ------------------------------------------------------------------------------------------------

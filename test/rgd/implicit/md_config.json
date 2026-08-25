@@ -3,7 +3,7 @@
   "protocol": {
     "integrator": {
       "kind": "langevin-middle",
-      "timestep": "4 fs",
+      "timestep": "2 fs",
       "temperature": "300 K",
       "friction": "1 /ps"
     },

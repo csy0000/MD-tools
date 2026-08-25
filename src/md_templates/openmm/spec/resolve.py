@@ -120,13 +120,19 @@ def select_profile(route: str, method: str, solvation: Optional[str] = None) -> 
     defaulting to the other one and being corrected field by field.
     """
     candidates = [d for d in list_profiles()
-                  if d.get("route") == route and d.get("method") == method and d.get("is_default")]
+                  if d.get("route") == route and d.get("method") == method and d.get("is_default")
+                  and not d.get("performance_variant")]
     if solvation == "implicit":
         # No implicit profile is marked is_default, so match on the identifier: an implicit document
         # must never be resolved against explicit-water defaults.
         implicit = [d for d in list_profiles()
                     if d.get("route") == route and d.get("method") == method
-                    and str(d.get("profile_id", "")).startswith("implicit-")]
+                    and str(d.get("profile_id", "")).startswith("implicit-")
+                    # Performance variants are OPT-IN: they must be named, never selected by the
+                    # `default` alias. Without this the eight `-hmr-v1` profiles made every
+                    # implicit document ambiguous, because this branch matches on the identifier
+                    # rather than on is_default.
+                    and not d.get("performance_variant")]
         if len(implicit) == 1:
             return implicit[0]
         if implicit:

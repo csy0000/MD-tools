@@ -19,7 +19,7 @@
   },
   "system_build": {
     "nonbonded_cutoff_nm": 1.0,
-    "hydrogen_mass_amu": 3.024,
-    "hmr_scope": "solute"
+    "hydrogen_mass_amu": null,
+    "hmr_scope": "none"
   }
 }

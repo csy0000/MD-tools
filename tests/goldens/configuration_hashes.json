@@ -1,23 +1,23 @@
 {
   "md_ligand_smiles": {
-    "canonical_json_sha256": "95494d5f1773fa9672be88544d75f70ea8c46c66a82d346df620ae23b5b77c79",
+    "canonical_json_sha256": "9e7ca9ef80c7dd1cd3501f852c70e259ac4dbaf96a1b52fd1b9d6af7f1e9c4db",
     "hashes": {
       "execution_sha256": "4ce46337fbab3ef3eca86b7e0cea3fce195feadb3e472593ad74fd1581c5f966",
-      "prepared_state_sha256": "5dfcfef898f2f397949c29860ce09d8bafe10429ec4d3a951673dd6564d5b0a1",
-      "protocol_at_prepare_sha256": "7082a9f3a2d9309cfc3afb42eab376a5d82ab9a38440042439bad39987085c01",
-      "protocol_sha256": "09ea0a9129da9729161b798b37cdb256bbee2e8cad50e83efdb9dd899cc1442a",
-      "system_build_sha256": "eb4c5a3c1a000af294c9b291a0b64ad54deebeb04093d6e01560e3982766d440"
+      "prepared_state_sha256": "07eafada2b43bbed26f19607ed099e1b66826e622fe868438c3088cc4f227a05",
+      "protocol_at_prepare_sha256": "aeafaada24018380424d02d7a9b33b51570c13996e77e483f5c058a0fed3f7d1",
+      "protocol_sha256": "dc3729379e905a71dcb08fb0bc59300305b56d6527f865c73a31861c7d0ebce7",
+      "system_build_sha256": "03493422e7a44f5d347b11fb5ecc7a7bc4fe3d0a1e727e2d48a004dcb6bf8728"
     },
     "profile": {
       "profile_id": "explicit-md-ligand-v2",
       "profile_schema_version": 6,
-      "sha256": "65a267b752ef7dc2e8ae17262767a8017292939d1f8fd12a44a9cd8e6e8d9f00"
+      "sha256": "028f3d887ad06ab8f55f905f19f4638a4ab912f4b294068d33150760c4f23509"
     },
     "resolved": {
       "constraints": "HBonds",
-      "hydrogen_mass_amu": 3.024,
+      "hydrogen_mass_amu": null,
       "integrator.temperature_K": 300.0,
-      "integrator.timestep_ps": 0.004,
+      "integrator.timestep_ps": 0.002,
       "nonbonded.cutoff_nm": 1.0,
       "production.derived_scale_factors": null,
       "production.duration_per_segment_ps": 5000.0,
@@ -28,24 +28,24 @@
     }
   },
   "md_peptide_pdb": {
-    "canonical_json_sha256": "5e11a8be6a49f2f9802fd91b22d8169978a5794f71a7f64c762ef915386c8775",
+    "canonical_json_sha256": "523a6aca133efffddc4269a4680214d0f12de91de335bc65c410ecc51295bd9b",
     "hashes": {
       "execution_sha256": "4ce46337fbab3ef3eca86b7e0cea3fce195feadb3e472593ad74fd1581c5f966",
-      "prepared_state_sha256": "3b500464afde2f206eaf951a6975a4a72577653cc65e838e8ee10c68dfc35e16",
-      "protocol_at_prepare_sha256": "7082a9f3a2d9309cfc3afb42eab376a5d82ab9a38440042439bad39987085c01",
-      "protocol_sha256": "09ea0a9129da9729161b798b37cdb256bbee2e8cad50e83efdb9dd899cc1442a",
-      "system_build_sha256": "5973827c6bde544f2224a77ca570c5469ecfd2358e8a313b6e8f7a62b9fb09a9"
+      "prepared_state_sha256": "83d70b886bea7d58bcf4122500820b2af8e699770028ff89f9feebea90c6a8e4",
+      "protocol_at_prepare_sha256": "aeafaada24018380424d02d7a9b33b51570c13996e77e483f5c058a0fed3f7d1",
+      "protocol_sha256": "dc3729379e905a71dcb08fb0bc59300305b56d6527f865c73a31861c7d0ebce7",
+      "system_build_sha256": "8b8ed6c54891caaea25ce5ff3c1da03984bd2305073d16deafe40ca4b5d6f9d7"
     },
     "profile": {
       "profile_id": "explicit-md-peptide-v2",
       "profile_schema_version": 6,
-      "sha256": "08b785c3b424f04ed88fa3aa3d350cc8af01a3ee03be04a3418f57ffd7eb82c1"
+      "sha256": "cd63bba3ed5e3bdf519cb21b951f7167302a4bf1519dd0323700cad36cc10e52"
     },
     "resolved": {
       "constraints": "HBonds",
-      "hydrogen_mass_amu": 3.024,
+      "hydrogen_mass_amu": null,
       "integrator.temperature_K": 300.0,
-      "integrator.timestep_ps": 0.004,
+      "integrator.timestep_ps": 0.002,
       "nonbonded.cutoff_nm": 1.0,
       "production.derived_scale_factors": null,
       "production.duration_per_segment_ps": 5000.0,
@@ -56,24 +56,24 @@
     }
   },
   "rest2_ligand_smiles": {
-    "canonical_json_sha256": "32c47a4b91874ce8c999a4f711be5a9d3617223174a30645ad7cf9c2b7364c8b",
+    "canonical_json_sha256": "5086b3e65f90242bb4fc6e42acf021ae32016b00e77d7adc5ebc3116f9ccb45d",
     "hashes": {
       "execution_sha256": "4ce46337fbab3ef3eca86b7e0cea3fce195feadb3e472593ad74fd1581c5f966",
-      "prepared_state_sha256": "5dfcfef898f2f397949c29860ce09d8bafe10429ec4d3a951673dd6564d5b0a1",
-      "protocol_at_prepare_sha256": "209a2d98c0581327f01899aff1cdb1475e64b518e59d67e15bec651b79f71870",
-      "protocol_sha256": "e448f144657a081f835d6c48927b3663ec73f65435897f0d5601f9b2d7b8afbc",
-      "system_build_sha256": "eb4c5a3c1a000af294c9b291a0b64ad54deebeb04093d6e01560e3982766d440"
+      "prepared_state_sha256": "07eafada2b43bbed26f19607ed099e1b66826e622fe868438c3088cc4f227a05",
+      "protocol_at_prepare_sha256": "d6fa8e3c3379ea0c32867b577cdd4ce411960e5d0eb473a67bdc8463a61a1fb6",
+      "protocol_sha256": "29c13086d2b85dae05388c17be54cc0737793a6003652aa71ceceff85ec5f00c",
+      "system_build_sha256": "03493422e7a44f5d347b11fb5ecc7a7bc4fe3d0a1e727e2d48a004dcb6bf8728"
     },
     "profile": {
       "profile_id": "explicit-rest2-ligand-v2",
       "profile_schema_version": 6,
-      "sha256": "e297dd5babd424dec64d58f65c0219e0ae0b35b4d4b8e493d49836211693f3d0"
+      "sha256": "2db5c70ef0b4fceda9ad8f671012a381a5a8c6dfe26af799626a0e0ad3a26c92"
     },
     "resolved": {
       "constraints": "HBonds",
-      "hydrogen_mass_amu": 3.024,
+      "hydrogen_mass_amu": null,
       "integrator.temperature_K": 300.0,
-      "integrator.timestep_ps": 0.004,
+      "integrator.timestep_ps": 0.002,
       "nonbonded.cutoff_nm": 1.0,
       "production.derived_scale_factors": [
         1.0,
@@ -106,24 +106,24 @@
     }
   },
   "rest2_peptide_pdb": {
-    "canonical_json_sha256": "7dde29674524f841eb25140408d084c03a1b4ac0dafc73fda764f331a4ded046",
+    "canonical_json_sha256": "7c6400569a6dd58bf65ee31dae460e688cc194e9a4c2885d830781b8c1e192ff",
     "hashes": {
       "execution_sha256": "4ce46337fbab3ef3eca86b7e0cea3fce195feadb3e472593ad74fd1581c5f966",
-      "prepared_state_sha256": "3b500464afde2f206eaf951a6975a4a72577653cc65e838e8ee10c68dfc35e16",
-      "protocol_at_prepare_sha256": "5356ce0e3f7ff007793784f8af49114ad5e6214baff36af0f263b66ef38bff06",
-      "protocol_sha256": "694af61255457aa206d0c65ef01324c54214bdfd7256f42ca71e06685c9cf879",
-      "system_build_sha256": "5973827c6bde544f2224a77ca570c5469ecfd2358e8a313b6e8f7a62b9fb09a9"
+      "prepared_state_sha256": "83d70b886bea7d58bcf4122500820b2af8e699770028ff89f9feebea90c6a8e4",
+      "protocol_at_prepare_sha256": "a95353598493971c8e766c3a52a9711efbde816f9b7ab6251ac39f4be712f483",
+      "protocol_sha256": "c4d55d29f98ad75689547aad7fc3a488722200a14f00b9018163d69239292dbd",
+      "system_build_sha256": "8b8ed6c54891caaea25ce5ff3c1da03984bd2305073d16deafe40ca4b5d6f9d7"
     },
     "profile": {
       "profile_id": "explicit-rest2-peptide-v2",
       "profile_schema_version": 6,
-      "sha256": "b3857cb437b149853f23a5f2c80634d12af0ce13ac2751e9e273ff0d214f364b"
+      "sha256": "667c2725be9e7f3800d144c5816a603c76b25551f0f88e281fdeb3371c28c45c"
     },
     "resolved": {
       "constraints": "HBonds",
-      "hydrogen_mass_amu": 3.024,
+      "hydrogen_mass_amu": null,
       "integrator.temperature_K": 300.0,
-      "integrator.timestep_ps": 0.004,
+      "integrator.timestep_ps": 0.002,
       "nonbonded.cutoff_nm": 1.0,
       "production.derived_scale_factors": [
         1.0,

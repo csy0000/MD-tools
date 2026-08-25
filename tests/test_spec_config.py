@@ -55,7 +55,7 @@ def test_quantities_serialise_with_their_unit_not_as_a_bare_tuple():
     """A canonical document must say what a number means."""
     data = canonical.to_plain(canonical.dump_model(resolved()["spec"]))
     ts = data["protocol"]["integrator"]["timestep"]
-    assert ts == {"value": 0.004, "unit": "ps"}
+    assert ts == {"value": 0.002, "unit": "ps"}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -122,10 +122,10 @@ def test_a_segment_that_does_not_divide_into_exchanges_is_refused():
     doc = json.loads(json.dumps(MINIMAL))
     doc["protocol"]["production"] = {"method": "rest2",
                                      "tau_ladder": {"maximum": 0.5, "count": 2},
-                                     "duration_per_segment": "0.024 ps",
+                                     "duration_per_segment": "0.010 ps",
                                      "exchange": {"number_of_exchanges_per_segment": 4},
                                      "relaxation": "1 ps"}
-    # 0.024 ps is 6 steps at the profile's 4 fs timestep; 6 / 4 is not an integer
+    # 0.010 ps is 5 steps at the profile's conservative 2 fs timestep; 5 / 4 is not an integer
     with pytest.raises(Exception, match="does not divide into"):
         resolved(doc)
 
@@ -135,7 +135,7 @@ def test_a_segment_that_is_not_whole_steps_is_refused():
     doc = json.loads(json.dumps(MINIMAL))
     doc["protocol"]["production"] = {"method": "rest2",
                                      "tau_ladder": {"maximum": 0.5, "count": 2},
-                                     "duration_per_segment": "0.006 ps",   # 1.5 steps at 4 fs
+                                     "duration_per_segment": "0.003 ps",   # 1.5 steps at 2 fs
                                      "exchange": {"number_of_exchanges_per_segment": 1},
                                      "relaxation": "1 ps"}
     with pytest.raises(Exception, match="not a whole number of"):
@@ -293,7 +293,8 @@ def test_changing_a_profile_value_changes_its_hash():
 
 @pytest.mark.parametrize("field,value,expected", [
     ("build.solvation.padding", "1.5 nm", "bundle-defining"),
-    ("protocol.integrator.timestep", "2 fs", "continuity-defining"),
+    # 4 fs, because 2 fs is now the default and setting a field to its default is not a change
+    ("protocol.integrator.timestep", "4 fs", "continuity-defining"),
     ("execution.platform", "CUDA", "execution-only"),
 ])
 def test_diff_classifies_each_change_by_its_consequence(field, value, expected):

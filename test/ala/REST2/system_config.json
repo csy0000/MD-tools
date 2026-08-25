@@ -1,8 +1,25 @@
 {
-  "system": {"id": "ace_ala_nme", "type": "protein"},
-  "forcefield": {"protein": "amber19/protein.ff19SB.xml", "water": "amber19/opc.xml",
-                 "ligand": null, "ligand_charge_method": null},
-  "solvation": {"water_model": "opc", "box_shape": "dodecahedron", "padding_nm": 1.2,
-                "ionic_strength_molar": 0.15, "positive_ion": "Na+", "negative_ion": "Cl-"},
-  "system_build": {"nonbonded_cutoff_nm": 1.0, "hydrogen_mass_amu": 3.024, "hmr_scope": "solute"}
+  "system": {
+    "id": "ace_ala_nme",
+    "type": "protein"
+  },
+  "forcefield": {
+    "protein": "amber19/protein.ff19SB.xml",
+    "water": "amber19/opc.xml",
+    "ligand": null,
+    "ligand_charge_method": null
+  },
+  "solvation": {
+    "water_model": "opc",
+    "box_shape": "dodecahedron",
+    "padding_nm": 1.2,
+    "ionic_strength_molar": 0.15,
+    "positive_ion": "Na+",
+    "negative_ion": "Cl-"
+  },
+  "system_build": {
+    "nonbonded_cutoff_nm": 1.0,
+    "hydrogen_mass_amu": null,
+    "hmr_scope": "none"
+  }
 }

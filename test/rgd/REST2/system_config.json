@@ -8,12 +8,12 @@
     "stereochemistry_policy": "from_smiles",
     "protonation_policy": "as_given",
     "conformer_generation": "etkdgv3",
-    "charge_model": "am1bcc_nagl",
+    "charge_model": "am1bcc",
     "parameterization_route": "openff-2.2.0"
   },
   "forcefield": {
     "ligand": "openff-2.2.0",
-    "ligand_charge_method": "am1bcc_nagl",
+    "ligand_charge_method": "am1bcc",
     "protein": null,
     "water": "amber19/tip3pfb.xml"
   },
@@ -27,7 +27,7 @@
   },
   "system_build": {
     "nonbonded_cutoff_nm": 1.0,
-    "hydrogen_mass_amu": 3.024,
-    "hmr_scope": "solute"
+    "hydrogen_mass_amu": null,
+    "hmr_scope": "none"
   }
 }

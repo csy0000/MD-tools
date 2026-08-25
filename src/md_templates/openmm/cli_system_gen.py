@@ -26,6 +26,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from typing import Optional
 
 
 #: Extensions we accept, and the input route each implies. The extension chooses the READER; it
@@ -215,9 +216,62 @@ def build_parser() -> argparse.ArgumentParser:
     modes.add_argument("--overwrite-generated", action="store_true",
                        help="rewrite only the files this generator produces, keeping anything "
                             "else in the destination")
+    parser.add_argument("--profile", default=None, metavar="PROFILE_ID",
+                        help="take build-defining settings (currently hydrogen mass "
+                             "repartitioning) from a named profile, so the profile is the single "
+                             "source of a fact that must be baked into the System")
     parser.add_argument("--dry-run", action="store_true",
                         help="validate input, config and routing, then stop without building")
     return parser
+
+
+def _apply_profile_build_settings(config: dict, profile_id: Optional[str]) -> dict:
+    """Fold a named profile's build-defining settings into the system configuration.
+
+    HMR is build-defining: the masses live in the serialized System, so they have to be decided
+    HERE, before `MD_input_gen.py` ever reads a profile. Without this the same fact has to be
+    written twice -- once in the profile that declares the timestep and once in
+    `system_config.json` -- and the two can silently disagree. That is exactly what produced a
+    4 fs protocol on 1.008 amu hydrogens.
+
+    A value stated in BOTH places is not merged or resolved by precedence: if they disagree the
+    build is refused with both values named, because either one could be the intended answer and
+    guessing wrong changes the Hamiltonian.
+    """
+    if not profile_id:
+        return config
+    from .spec.resolve import ResolutionError, load_profile
+
+    try:
+        profile = load_profile(str(profile_id))
+    except (ResolutionError, FileNotFoundError) as error:
+        raise ValueError(f"--profile {profile_id!r} could not be loaded: {error}")
+
+    build = (profile.get("defaults") or {}).get("build") or {}
+    mass = build.get("hydrogen_mass")
+    wanted = {
+        "hydrogen_mass_amu": (_amu(mass) if mass else None),
+        "hmr_scope": build.get("hmr_scope") or "none",
+    }
+    stated = dict(config.get("system_build") or {})
+    for key, value in wanted.items():
+        if key in stated and stated[key] != value:
+            raise ValueError(
+                f"system_config.json declares system_build.{key}={stated[key]!r} but profile "
+                f"{profile_id!r} declares {value!r}. These describe the same System and disagree; "
+                f"refusing rather than choosing one, because either could be intended and the "
+                f"wrong choice changes the masses that get integrated. Remove one of them.")
+    config = dict(config)
+    config["system_build"] = {**stated, **wanted}
+    return config
+
+
+def _amu(quantity) -> float:
+    """A profile quantity (`"3.024 amu"` or a parsed mapping) as a float in amu."""
+    if isinstance(quantity, dict):
+        return float(quantity["value"])
+    text = str(quantity).strip()
+    return float(text.split()[0])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -230,6 +284,10 @@ def main(argv: list[str] | None = None) -> int:
     if not config_path.is_file():
         raise InputError(f"config not found: {config_path}")
     config = json.loads(config_path.read_text())
+    try:
+        config = _apply_profile_build_settings(config, args.profile)
+    except ValueError as error:
+        raise InputError(str(error))
 
     fmt = detect_format(input_path)
     system_type = classify_system(fmt, config, input_path)

@@ -14,9 +14,21 @@ transportable bundles.
 | ligand route | OpenFF Sage + TIP3P (water follows the force field) | GBn2 / mbondi3 |
 | production ensemble | **NPT** | **nonperiodic constant temperature** — no box, so neither NVT nor NPT |
 | nonbonded | PME, 1.0 nm cutoff | `NoCutoff` |
-| integrator | Langevin-middle, 300 K, **4 fs** | Langevin-middle, 300 K, **4 fs** |
-| hydrogen mass | **3.024 amu**, solute scope | **3.024 amu**, solute scope |
-| ligand charges | **Sage 2.2 + NAGL AM1-BCC** (`am1bcc_nagl`) | same |
+| integrator | Langevin-middle, 300 K, **2 fs** | Langevin-middle, 300 K, **2 fs** |
+| hydrogen mass | unmodified (no HMR) | unmodified (no HMR) |
+| ligand charges | **Sage 2.2 + standard AM1-BCC** (`am1bcc`, AmberTools `sqm`) | same |
+| salt | 0.15 M NaCl | — |
+
+**Defaults are conservative; the fast settings are opt-in.** Each performance option changes the
+model, so none of them is applied to a run that did not ask:
+
+| opt-in | how | what it changes |
+|---|---|---|
+| HMR + **4 fs** | name the `…-hmr-v1` profile (e.g. `explicit-rest2-peptide-hmr-v1`) | hydrogens repartitioned to **3.024 amu**, solute scope; roughly halves wall-clock per ns |
+| NAGL charges | `--set build.forcefield.charge_method=am1bcc_nagl` | a graph network *trained to predict* AM1-BCC ELF10 charges — close to them but **not that calculation**, so a different Hamiltonian |
+
+The two are independent: an `-hmr-` profile keeps standard AM1-BCC charges. If AmberTools `sqm` is
+missing, `am1bcc` **fails with a dependency error** — it never silently falls back to NAGL.
 
 Implicit solvent is **not** a side branch: it has its own profiles, its own stage graph, an audited
 `CustomGBForce` scaling path for REST2, and worked examples under `test/ala/implicit/` and
@@ -328,11 +340,12 @@ manifest as **not** the solute-to-copy distance.
   production-ready; the predeclared conjunctive acceptance rule was never formally satisfied.
 * Any other macrocycle needs its own pair-resolved acceptance pilot — start from
   `macrocycle_pilot_8rung.yaml`, which is `ladder_status: unvalidated` by design.
-* **The 2 fs / 4 fs hydrogen-mass-repartitioning gate is partly closed.** The *static* half is
-  settled by measurement: repartitioning does not change the potential or its gradient at all
-  (`0.000e+00` on both, mass conserved), so the pinned energy identities still hold. What remains
-  open is the *dynamical* half — whether 4 fs reproduces 2 fs ensemble averages for these systems —
-  and long production is still blocked on that.
+* **The 2 fs / 4 fs hydrogen-mass-repartitioning gate is still open, and 2 fs is therefore the
+  default.** The *static* half is settled by measurement: repartitioning does not change the
+  potential or its gradient at all (`0.000e+00` on both, mass conserved), so the pinned energy
+  identities still hold. The *dynamical* half — whether 4 fs reproduces 2 fs ensemble averages for
+  these systems — has **not** been established. HMR was briefly made the default for every profile;
+  that was wider than the evidence supported and has been reverted to an opt-in.
 * Restart safety and convergence are not established.
 * The smokes prove installability and mechanical execution. Nothing more.
 * **No ladder is validated for any peptide.** `ace_ala_nme` proves the ff19SB route runs; it says
@@ -399,9 +412,10 @@ Each rejects the other's settings rather than ignoring them: a protocol block wr
 Why separate: preparing a system costs real time — solvation, parameterisation and charge
 derivation — while regenerating a protocol against an existing bundle is instant and needs no GPU.
 One prepared system can back several protocols with no chance of one of them quietly re-solvating
-it. (The charge step is much cheaper than it was: the default is now NAGL AM1-BCC, which takes about
-a second for cyclo-RGDfV against roughly 40 minutes for single-conformer AmberTools `am1bcc`, still
-selectable.)
+it. The charge step dominates that cost: standard AM1-BCC — the default — takes roughly 40 minutes
+for cyclo-RGDfV via AmberTools `sqm`. The `am1bcc_nagl` opt-in takes about a second, because it
+predicts the charges from the molecular graph instead of computing them; on this molecule the two
+agreed to RMSD 0.0247 e with correlation 0.9976. Close, and measured, but not the same numbers.
 
 ### Supported inputs
 
@@ -515,11 +529,11 @@ work, so the construction branch is part of the Hamiltonian. `system.prmtop` and
 kept as construction provenance; there is no Amber execution engine here.
 
 Only GBn2 with mbondi3 is publicly accepted; other models and radius sets are refused as not
-validated. Implicit profiles repartition hydrogen mass to 3.024 amu and use a 4 fs timestep, the
-same as explicit — stated explicitly in each profile rather than inherited. They previously did not,
-on the argument that the GBn2 energy validation was against an unrepartitioned System; that was
-measured and found not to hold, because mass enters the kinetic term only. Repartitioning
-cyclo-(RGDfV)'s 38 hydrogens left the GBn2 potential and every force component unchanged to
+validated. Implicit profiles use the same conservative 2 fs timestep with unmodified hydrogen
+masses as the explicit ones, stated explicitly in each profile rather than inherited, and the same
+`…-hmr-v1` opt-in is available for them. HMR is safe for GBn2 in the *static* sense — that was
+measured, because mass enters the kinetic term only. Repartitioning cyclo-(RGDfV)'s 38 hydrogens
+left the GBn2 potential and every force component unchanged to
 `0.000e+00`. Implicit REST2 requires the whole system as the
 enhanced region and scales the entire GB energy by `s`, including the non-polar term that charge
 scaling alone would miss. Ladders are shorter: 4 replicas for the peptide route, 6 for the ligand

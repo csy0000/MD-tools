@@ -71,12 +71,18 @@ DEFAULTS: dict[str, Any] = {
         "protein": "amber19/protein.ff19SB.xml",
         "water": "amber19/opc.xml",
         "ligand": "openff-2.2.0",            # Sage 2.2
-        # "am1bcc_nagl" is the default: it reproduces AM1-BCC ELF10 from the molecular graph in
-        # about a second, takes no conformer, and therefore carries no conformational bias. On
-        # cyclo-(RGDfV) it matched a single-conformer AmberTools am1bcc run to RMSD 0.0247 e with
-        # correlation 0.9976, in 1.3 s against roughly 40 minutes of sqm. "am1bcc" remains
-        # available and needs AmberTools on PATH. Changing this changes the Hamiltonian.
-        "ligand_charge_method": "am1bcc_nagl",
+        # Standard AM1-BCC via AmberTools' sqm is the DEFAULT: it is the method the Sage line was
+        # parameterised and published against, so it is the conservative choice for work that will
+        # be compared with the literature. It needs AmberTools on PATH; a missing sqm is an ERROR,
+        # never a silent substitution.
+        #
+        # "am1bcc_nagl" is available as a deliberate opt-in. It is a graph neural network TRAINED
+        # to predict AM1-BCC ELF10 charges; it is not that calculation and is not numerically
+        # identical to it. On cyclo-(RGDfV) the two agreed to RMSD 0.0247 e with correlation 0.9976
+        # -- close, and measured, but a difference in the Hamiltonian nonetheless. It takes no
+        # conformer, so it carries no conformational bias, and runs in ~1.3 s against roughly
+        # 40 minutes of sqm. Choose it when that trade is intended.
+        "ligand_charge_method": "am1bcc",
         "extra_xml": [],
     },
     # ---- step 3: solvation -------------------------------------------------------------------
@@ -147,19 +153,24 @@ DEFAULTS: dict[str, Any] = {
         "ewald_error_tolerance": 5.0e-4,
         "constraints": "HBonds",
         "rigid_water": True,
-        "hydrogen_mass_amu": 3.024,          # 3x1.008; enables the 4 fs timestep
-        "hmr_scope": "solute",               # solute | all -- never touches rigid water
+        # Conservative default: hydrogens keep their real mass and the timestep stays at 2 fs.
+        # HMR (3.024 amu, scope "solute") with a 4 fs timestep is available through the "-hmr-"
+        # profiles, and must be chosen deliberately -- it redistributes mass within every solute
+        # bond to a hydrogen, which is a change to the model, not a tuning knob.
+        "hydrogen_mass_amu": None,
+        "hmr_scope": "none",                 # none | solute | all -- never touches rigid water
         "remove_cm_motion": True,
     },
     # ---- integrator --------------------------------------------------------------------------
     "integrator": {
         # "langevin-middle" is openmm.LangevinMiddleIntegrator (BAOAB): the position update sits
-        # between two half-kicks, which is what makes a 4 fs timestep defensible with HMR + HBonds.
+        # between two half-kicks, which is what makes a 4 fs timestep defensible WHEN HMR is also
+        # enabled. Without HMR the conservative 2 fs default applies.
         # "leapfrog-langevin" is openmm.LangevinIntegrator, the legacy leapfrog scheme; it samples a
         # slightly hot configurational distribution at long timesteps and is kept for reproducing
         # runs made before 2026-08-14.
         "kind": "langevin-middle",           # langevin-middle | leapfrog-langevin | verlet
-        "timestep_fs": 4.0,
+        "timestep_fs": 2.0,
         "friction_per_ps": 1.0,
         "temperature_k": 300.0,
     },
