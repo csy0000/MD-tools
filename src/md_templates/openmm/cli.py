@@ -325,9 +325,37 @@ def cmd_config_resolve(args) -> int:
     _emit({"profile": result["profile"],
            "hashes": result["hashes"],
            "sources": result["sources"],
-           "derived": {"protocol.production.total_ps": result["spec"].protocol.production.total},
+           "derived": _derived_durations(result["spec"]),
            "configuration": canonical.dump_model(result["spec"])}, args)
     return runner.EXIT_OK
+
+
+def _derived_durations(spec) -> dict:
+    """Durations the configuration implies but does not state, for both production methods.
+
+    Reports the SEGMENT, never a total. `duration_per_segment` is the length of one segment; how
+    many segments run is a launcher/environment decision, so a "total" here would be invented. The
+    previous version read `production.total`, which exists on neither MDProduction nor
+    REST2Production -- so `config resolve` raised AttributeError on every configuration that
+    resolved successfully, for both methods. It had no test.
+    """
+    production = spec.protocol.production
+    timestep = spec.protocol.integrator.timestep
+    per_segment_ps = production.duration_per_segment.value
+    derived = {
+        "protocol.production.duration_per_segment_ps": per_segment_ps,
+        "protocol.integrator.timestep_ps": timestep.value,
+        # exact by construction: the model refuses a duration that is not a whole number of steps
+        "steps_per_segment": round(per_segment_ps / timestep.value),
+    }
+    exchange = getattr(production, "exchange", None)
+    if exchange is not None:                      # REST2 only
+        steps = derived["steps_per_segment"]
+        n = exchange.number_of_exchanges_per_segment
+        derived["number_of_exchanges_per_segment"] = n
+        derived["steps_per_exchange"] = round(steps / n)
+        derived["exchange_interval_ps"] = (steps / n) * timestep.value
+    return derived
 
 
 def cmd_config_diff(args) -> int:

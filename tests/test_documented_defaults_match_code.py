@@ -88,3 +88,101 @@ def test_the_readme_scope_table_names_both_solvents_and_both_methods():
         assert claim.lower() in text.lower(), claim
     assert "nonperiodic constant temperature" in text.lower(), (
         "the implicit production ensemble must be named, since it is neither NVT nor NPT")
+
+
+# -------------------------------------------------------------------------------------------
+# The same fact is declared in five places. They must agree.
+#
+# The ligand charge method is stated in the profiles, in config.py DEFAULTS, in the packaged system
+# manifests, in the worked-example configs and in the README. A defaults change updated the first
+# two and missed the rest, and nothing failed until the full suite ran -- because the assertions
+# that would have caught it were slow-marked. These tests close that gap by checking the places
+# themselves rather than the tests that read them.
+# -------------------------------------------------------------------------------------------
+import yaml  # noqa: E402
+
+MANIFESTS = REPO_ROOT / "src" / "md_templates" / "openmm" / "manifests" / "systems"
+
+#: Deliberate exceptions, each for a stated reason rather than because it was awkward.
+#: - small_macrocycle_smoke: a tiny installability check, not a documented default. It keeps its own
+#:   settings exactly as the cpu-smoke PROFILE does.
+#: - ace_ala_nme: the peptide route. There is no ligand, so charge_method is null by definition.
+_MANIFEST_EXCEPTIONS = {"small_macrocycle_smoke", "ace_ala_nme"}
+
+
+def _ligand_charge_default() -> str:
+    methods = {(d["build"]["forcefield"] or {}).get("charge_method")
+               for d in _profiles().values()
+               if (d["build"]["forcefield"] or {}).get("small_molecule")}
+    assert len(methods) == 1, f"the ligand profiles disagree: {methods}"
+    return methods.pop()
+
+
+def test_packaged_system_manifests_use_the_ligand_charge_default():
+    """These were missed when the default moved, and only the slow suite noticed."""
+    expected = _ligand_charge_default()
+    offenders = {}
+    for path in sorted(MANIFESTS.glob("*.yaml")):
+        if path.stem in _MANIFEST_EXCEPTIONS:
+            continue
+        doc = yaml.safe_load(path.read_text()) or {}
+        stated = ((doc.get("parameterization") or doc.get("ligand_build") or {})
+                  .get("charge_method"))
+        if stated is not None and stated != expected:
+            offenders[path.name] = stated
+    assert not offenders, (
+        f"packaged manifests disagree with the ligand default {expected!r}: {offenders}")
+
+
+def test_worked_example_configs_use_the_ligand_charge_default():
+    """A shipped example that names the old default is refused by the consistency check.
+
+    That is not a cosmetic mismatch: `ligand_build.charge_model` must agree with the resolved
+    `forcefield.ligand_charge_method`, so a stale example fails at generation with a message about
+    chemistry that never ran.
+    """
+    expected = _ligand_charge_default()
+    offenders = {}
+    for path in sorted((REPO_ROOT / "test").rglob("*.json")):
+        try:
+            doc = json.loads(path.read_text())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        for block, key in (("ligand_build", "charge_model"),
+                           ("forcefield", "ligand_charge_method"),
+                           ("parameterization", "charge_method")):
+            stated = (doc.get(block) or {}).get(key)
+            if stated is not None and stated != expected:
+                offenders[f"{path.relative_to(REPO_ROOT)}:{block}.{key}"] = stated
+    assert not offenders, (
+        f"worked-example configs disagree with the ligand default {expected!r}: {offenders}")
+
+
+def test_the_two_declared_charge_methods_are_the_supported_ones():
+    """Whatever the default is, it must be a method build_forcefield actually implements."""
+    from md_templates.openmm.system import NAGL_AM1BCC_METHODS
+
+    supported = {"am1bcc", *NAGL_AM1BCC_METHODS}
+    assert _ligand_charge_default() in supported
+
+
+def test_no_place_declares_a_timestep_that_disagrees_with_the_profiles():
+    """The timestep is stated in profiles and in worked-example configs."""
+    expected = {d["protocol"]["integrator"]["timestep"] for d in _profiles().values()}
+    assert expected == {"4 fs"}
+    offenders = {}
+    for path in sorted((REPO_ROOT / "test").rglob("*.json")):
+        try:
+            doc = json.loads(path.read_text())
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(doc, dict):
+            continue
+        stated = ((doc.get("protocol") or {}).get("integrator") or {}).get("timestep")
+        # a worked example may deliberately shrink durations, but not the integration timestep,
+        # because that is a Hamiltonian-integration choice rather than a length
+        if stated is not None and stated not in expected:
+            offenders[str(path.relative_to(REPO_ROOT))] = stated
+    assert not offenders, f"worked examples disagree with the profile timestep: {offenders}"
