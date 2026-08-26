@@ -404,7 +404,11 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
         "route": route,
         "build": {**info, **{k: v for k, v in amber.items()
                              if k in ("tleap_commands", "protein_forcefield", "radii_requested",
-                                      "small_molecule_forcefield", "charge_method")}},
+                                      "small_molecule_forcefield", "charge_method",
+                                      # The OpenFF report from the ligand route, so
+                                      # forcefield.json can name the resource actually selected
+                                      # rather than only the human-facing Sage label.
+                                      "forcefield_info")}},
     }
 
 

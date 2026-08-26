@@ -644,6 +644,10 @@ def test_the_implicit_run_records_gbn2_and_no_pressure(implicit):
 
     forcefield = json.loads(
         (implicit.parent / "inputs" / "forcefield.json").read_text())
-    assert forcefield["implicit_solvent"] == {"model": "GBn2", "radii": "mbondi3"}
+    # `applied_by` was added so the record says HOW the radii were set, not only which set.
+    assert forcefield["implicit_solvent"]["model"] == "GBn2"
+    assert forcefield["implicit_solvent"]["radii"] == "mbondi3"
+    assert forcefield["protein"]["openmm_resource"] is None, "no OpenMM protein XML was loaded"
+    assert forcefield["builder"]["route"] == "parmed.Structure.createSystem"
     assert forcefield["water"]["openmm_resource"] is None
     assert forcefield["explicit_solvent"] is None

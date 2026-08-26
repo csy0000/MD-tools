@@ -232,6 +232,11 @@ def main():
     write_final_state(simulation, HERE / "final_state.xml")
     write_final_pdb(simulation, HERE / "final.pdb", implicit=IMPLICIT)
 
+    # The log is finished and written BEFORE its own size and hash are read for the record.
+    # Writing it afterwards meant `outputs["stage.log"]` described the previous run's log on a
+    # resume, and nothing at all on a first run -- metadata for a file that did not yet exist.
+    (HERE / "stage.log").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+
     input_state_path = (HERE / STAGE["input_state"]).resolve()
     resolved = {
         "format": RECORD_FORMAT,
@@ -278,7 +283,6 @@ def main():
         "template_commit": STAGE.get("template_commit"),
     }
     write_yaml_atomic(HERE / "resolved_stage.yaml", resolved)
-    (HERE / "stage.log").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
     return 0
 
 

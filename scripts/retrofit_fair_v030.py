@@ -11,9 +11,10 @@ The directories are READ-ONLY. Nothing here opens a source file for writing, ren
 timestamp or adds a file inside `inputs/` or `MD/`. Everything produced goes to `--output`, which
 must not already exist or must be empty.
 
-What this cannot do is invent history. A 0.3.x directory did not record its original input hash,
-its build environment or its exact code identity, and no amount of reading the tree will recover
-them. Every retrospective value therefore carries an evidence status -- `recorded`, `derived`,
+What this cannot do is invent history. A 0.3.x directory DID record the original input's SHA-256
+in `inputs/provenance.yaml` when one was available -- but it generally did not retain the original
+bytes, and it recorded neither the build environment nor an exact code identity. No amount of
+reading the tree recovers those. Every retrospective value therefore carries an evidence status -- `recorded`, `derived`,
 `user_supplied` or `unknown` -- and `unknown` is a legitimate, final answer. There is deliberately
 no `inferred`: a guess dressed as a scientific value is worse than a gap.
 """
@@ -23,6 +24,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -76,7 +78,9 @@ def inventory(root: Path, *, exclude_dirs: tuple[Path, ...] = ()) -> list[dict[s
     for path in sorted(root.rglob("*"), key=lambda p: p.relative_to(root).as_posix()):
         if not path.is_file() or path.is_symlink():
             continue
-        if any(str(path).startswith(str(d)) for d in exclude_dirs):
+        # Path-aware, not string-prefix: `/x/out` must not exclude `/x/outputs`, which a
+        # startswith() check silently would.
+        if any(path.is_relative_to(d) for d in exclude_dirs):
             continue
         relative = path.relative_to(root).as_posix()
         stat = path.stat()
@@ -87,10 +91,21 @@ def inventory(root: Path, *, exclude_dirs: tuple[Path, ...] = ()) -> list[dict[s
     return entries
 
 
+def snapshot(root: Path, base: Path) -> dict[str, tuple]:
+    """Path, size, mtime and digest for every file, for a real before/after comparison."""
+    return {path.relative_to(base).as_posix():
+            (path.stat().st_size, path.stat().st_mtime_ns, sha256_file(path))
+            for path in sorted(root.rglob("*")) if path.is_file() and not path.is_symlink()}
+
+
 def classify(system: dict, run: dict, has_original: bool) -> dict[str, Any]:
     """A, B or C, with every reason that lowered it, machine-readable.
 
-    A grade is never raised by a filename looking right. Each reason names the missing evidence.
+    Grade A is a strong claim -- "this can be rebuilt from the original input" -- so it needs the
+    original input retained AND verified, an EXACT code identity, the build environment, and the
+    runtime records the configured protocol actually requires. A package version like `0.3.1` is
+    not exact identity: it names a release, not a build, and two builds of the same version can
+    differ. A grade is never raised because a directory name looks right.
     """
     reasons = []
     prepared = all(system["payload_present"].get(name) for name in
@@ -105,30 +120,74 @@ def classify(system: dict, run: dict, has_original: bool) -> dict[str, Any]:
         reasons.append({"code": "md_config_missing", "detail": "MD/md.config.yaml is absent"})
     if not has_original:
         reasons.append({"code": "original_input_absent",
-                        "detail": "the original molecular input is not present and was not "
-                                  "supplied, so parameterisation cannot be rebuilt from source"})
-    if system["implementation"]["value"] in (None, {}, "unknown"):
-        reasons.append({"code": "implementation_identity_incomplete",
-                        "detail": "0.3.x recorded no installed fingerprint; the exact code "
-                                  "identity that built this system is unknown"})
+                        "detail": "the original molecular input was not supplied and verified, so "
+                                  "parameterisation cannot be rebuilt from source"})
+
+    # Exact identity: a recorded commit or an installed fingerprint. Not a version string.
+    identity = system["implementation"]["value"] or {}
+    exact = bool(identity.get("git_commit") or identity.get("installed_fingerprint"))
+    if not exact:
+        reasons.append({"code": "implementation_identity_not_exact",
+                        "detail": "no git_commit and no installed_fingerprint were recorded; a "
+                                  "package version alone names a release, not the build that ran"})
     if not system["environment_known"]:
         reasons.append({"code": "build_environment_unknown",
                         "detail": "preparation package versions were not recorded and were not "
                                   "supplied"})
 
+    for gap in run.get("runtime_gaps", []):
+        reasons.append(gap)
+
     blocking = {"prepared_system_incomplete", "resolved_system_config_missing",
                 "md_config_missing"}
     if any(r["code"] in blocking for r in reasons):
         grade = "C"
-    elif has_original and not reasons:
+    elif not reasons:
         grade = "A"
     else:
         grade = "B"
     return {"grade": grade,
             "meaning": {"A": "rebuildable from the original molecular input",
-                        "B": "prepared-system reproducible; parameterisation not fully rebuildable",
+                        "B": "prepared-system reproducible; parameterisation, code identity, "
+                             "environment or runtime closure incomplete",
                         "C": "archival/analysis only"}[grade],
             "reasons": reasons}
+
+
+def runtime_gaps(md: Path, md_config: Optional[dict]) -> list[dict[str, str]]:
+    """Which records the CONFIGURED protocol requires and this directory does not have.
+
+    The protocol is read from md.config.yaml. If it cannot be read, that is itself the gap -- the
+    requirement is never guessed from folder names, because a folder called `cMD` proves only that
+    somebody made a folder.
+    """
+    if not md_config:
+        return [{"code": "protocol_undeterminable",
+                 "detail": "MD/md.config.yaml could not be read, so the records this run should "
+                           "have cannot be determined; the protocol is not inferred from folders"}]
+    gaps = []
+    methods = [str(m) for m in (md_config.get("methods") or [])]
+    if not methods:
+        gaps.append({"code": "protocol_undeterminable",
+                     "detail": "md.config.yaml lists no methods"})
+    for stage_dir in ("minimization",):
+        if not (md / stage_dir / "resolved_stage.yaml").is_file():
+            gaps.append({"code": "common_stage_record_missing",
+                         "detail": f"{stage_dir}/resolved_stage.yaml is absent"})
+    eq = md / "eq"
+    if eq.is_dir() and not any(eq.rglob("resolved_stage.yaml")):
+        gaps.append({"code": "common_stage_record_missing",
+                     "detail": "no equilibration stage recorded a resolved_stage.yaml"})
+    for method in methods:
+        if method == "cMD" and not any((md / "cMD").glob("resolved_*.yaml")):
+            gaps.append({"code": "cmd_runtime_record_missing",
+                         "detail": "md.config.yaml configures cMD but MD/cMD has no resolved run "
+                                   "record"})
+        if method == "REST2" and not (md / "REST2" / "resolved_run.yaml").is_file():
+            gaps.append({"code": "rest2_runtime_record_missing",
+                         "detail": "md.config.yaml configures REST2 but MD/REST2 has no "
+                                   "resolved_run.yaml"})
+    return gaps
 
 
 def main(argv=None) -> int:
@@ -188,7 +247,11 @@ def main(argv=None) -> int:
             return 3
         original_status = "user_supplied"
         original_record = {"name": args.original_input.name, "sha256": supplied,
-                           "verified_against": "inputs/provenance.yaml"}
+                           "verified_against": "inputs/provenance.yaml",
+                           # Filled in below once the output directory exists: a verified original
+                           # that is not retained leaves the candidate un-rebuildable, which is the
+                           # whole distinction between grade A and grade B.
+                           "retained_path": None}
         print(f"  original input verified against the recorded hash: {supplied[:16]}...")
     elif recorded_hashes:
         original_status = "recorded"
@@ -198,10 +261,29 @@ def main(argv=None) -> int:
 
     supplied_environment = load_yaml(args.environment) if args.environment else None
 
+    # Retain the evidence that was supplied, so the candidate is self-contained.
+    if original_status == "user_supplied":
+        kept = out / "original_inputs" / args.original_input.name
+        kept.parent.mkdir(parents=True, exist_ok=True)
+        if kept.exists() and sha256_file(kept) != original_record["sha256"]:
+            print(f"error: {kept} already exists with different content", file=sys.stderr)
+            return 2
+        shutil.copy2(args.original_input, kept)
+        original_record["retained_path"] = kept.relative_to(out).as_posix()
+        print(f"  retained the original input at {original_record['retained_path']}")
+    environment_source = None
+    if supplied_environment is not None:
+        retained = out / "environment" / args.environment.name
+        retained.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(args.environment, retained)
+        # The retained relative path, never the absolute one it came from.
+        environment_source = retained.relative_to(out).as_posix()
+
     # --- inventory, read-only ----------------------------------------------------------------
     print("  hashing source files (read-only)")
     common_root = Path(os.path.commonpath([str(inputs), str(md)]))
-    exclude = (out,) if str(out).startswith(str(common_root)) else ()
+    before_snapshot = {**snapshot(inputs, common_root), **snapshot(md, common_root)}
+    exclude = (out,) if out.is_relative_to(common_root) else ()
     files = []
     for root in (inputs, md):
         for entry in inventory(root, exclude_dirs=exclude):
@@ -222,7 +304,7 @@ def main(argv=None) -> int:
                                    source="inputs/provenance.yaml"),
         "environment": evidence(supplied_environment,
                                 "user_supplied" if supplied_environment else "unknown",
-                                source=str(args.environment) if args.environment else None),
+                                source=environment_source),
         "payload_present": {name: (inputs / name).is_file() for name in
                             ("system.xml", "topology.pdb", "solute.pdb", "initial_state.xml",
                              "solute.yaml", "resolved_sys.config.yaml", "provenance.yaml")},
@@ -242,6 +324,7 @@ def main(argv=None) -> int:
                                              source="MD/provenance.yaml"),
         "stages": _stage_records(md),
         "md_config_present": md_config is not None,
+        "runtime_gaps": runtime_gaps(md, md_config),
         # A replay suggestion, never presented as what was actually run: 0.3.x did not record the
         # command, and labelling a reconstruction as the original would be a fabricated fact.
         "reconstructed_command": evidence(
@@ -258,16 +341,39 @@ def main(argv=None) -> int:
     (out / "run-record.yaml").write_text(yaml.safe_dump(run_record, sort_keys=False),
                                          encoding="utf-8")
     (out / "forcefield.json").write_text(json.dumps(forcefield, indent=2) + "\n", encoding="utf-8")
+    # No absolute common_root: the manifest documents the root by describing it, not by baking in
+    # a path that stops being true the moment the tree is archived elsewhere.
     (out / "file-inventory.yaml").write_text(
-        yaml.safe_dump({"format": FORMAT, "common_root": common_root.as_posix(),
+        yaml.safe_dump({"format": FORMAT,
+                        "paths_relative_to": "the common parent of inputs/ and MD/",
+                        "inputs_dir": inputs.relative_to(common_root).as_posix(),
+                        "md_dir": md.relative_to(common_root).as_posix(),
                         "file_count": len(files), "files": files}, sort_keys=False),
         encoding="utf-8")
+
+    # Compare real snapshots rather than asserting a literal. "source_modified: false" written
+    # unconditionally is a claim, not a check -- and a claim in a validation file is worse than
+    # no claim, because it is the field a reader trusts.
+    after_snapshot = {**snapshot(inputs, common_root), **snapshot(md, common_root)}
+    changed = sorted(k for k in before_snapshot.keys() & after_snapshot.keys()
+                     if before_snapshot[k] != after_snapshot[k])
+    added = sorted(after_snapshot.keys() - before_snapshot.keys())
+    removed = sorted(before_snapshot.keys() - after_snapshot.keys())
 
     validation = {
         "format": FORMAT,
         "created_utc": system_record["created_utc"],
         "classification": grade,
-        "source_modified": False,
+        "source_verification": {
+            "method": "path, size, mtime_ns and SHA-256 compared before and after sidecar creation",
+            "files_before": len(before_snapshot),
+            "files_after": len(after_snapshot),
+            "counts_match": len(before_snapshot) == len(after_snapshot),
+            "changed": changed,
+            "added": added,
+            "removed": removed,
+            "unmodified": not (changed or added or removed),
+        },
         "source_file_count": len(files),
         "evidence_counts": _evidence_counts(system_record, run_record),
         "not_performed": [
@@ -288,11 +394,22 @@ def main(argv=None) -> int:
     _write_readme(out, grade, common_root, inputs, md)
 
     # Sidecar manifest last: covers the source tree plus the sidecar payload, minus itself.
+    # Every entry resolves from ONE documented root: the common project root. The sidecar's own
+    # prefix is its real directory name, computed -- hardcoding "fair-registration/" broke every
+    # path the moment anyone passed --output out.
     lines = [f"{entry['sha256']}  {entry['path']}" for entry in files]
-    for name in sorted(p.name for p in out.iterdir()
-                       if p.is_file() and p.name not in SELF_EXCLUDED):
-        lines.append(f"{sha256_file(out / name)}  fair-registration/{name}")
+    if out.is_relative_to(common_root):
+        prefix = out.relative_to(common_root).as_posix()
+    else:
+        prefix = out.name
+        print(f"  note: --output is outside the project root; sidecar entries are prefixed "
+              f"'{prefix}/' and resolve from {out.parent}")
+    for path in sorted(out.rglob("*")):
+        if not path.is_file() or path.name in SELF_EXCLUDED:
+            continue
+        lines.append(f"{sha256_file(path)}  {prefix}/{path.relative_to(out).as_posix()}")
     (out / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    manifest_root = common_root if out.is_relative_to(common_root) else out.parent
 
     print(f"\nclassification: {grade['grade']} -- {grade['meaning']}")
     for reason in grade["reasons"]:

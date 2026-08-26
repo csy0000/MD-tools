@@ -224,26 +224,43 @@ def _copy_original_input(input_path: Path, out: Path) -> str:
 
 
 def _keep_preparation_artifacts(staging: Path, out: Path) -> list[str]:
-    """Only the construction artifacts that carry science.
+    """Only the construction artifacts that carry science, at their staging-relative subpath.
 
     A prmtop carries the radii and charges the System was built from; `tleap.log` records what
     tleap did. A solvent scratch file or a cache carries neither, and copying the whole `_work/`
     tree would bury the ones that matter.
+
+    The subpath is preserved rather than flattened to a basename. Two routes can both produce a
+    `solute.sdf` in different staging directories, and collapsing them onto one name would either
+    silently drop one or record a checksum for the wrong file. A genuine content collision at the
+    same subpath is refused; an identical rerun is not a collision and is included again, so the
+    recorded artifact list is complete whether or not this is the first run.
     """
     kept: list[str] = []
     if not staging.is_dir():
         return kept
+    from .provenance_min import sha256_file
+
     destination = out / PREPARATION_DIR
     for path in sorted(staging.rglob("*")):
         if not path.is_file():
             continue
         if path.name not in PREPARATION_KEEP and path.suffix not in PREPARATION_KEEP_SUFFIXES:
             continue
-        destination.mkdir(parents=True, exist_ok=True)
-        target = destination / path.name
-        if not target.exists():
+        relative = path.relative_to(staging).as_posix()
+        target = destination / relative
+        if target.exists():
+            if sha256_file(target) != sha256_file(path):
+                raise ConfigError(
+                    f"{PREPARATION_DIR}/{relative} already exists with different content. "
+                    f"Refusing to overwrite a retained construction artifact; write this system "
+                    f"into a new output folder.")
+            # Identical: a rerun of the same build. Still recorded, so the list does not depend
+            # on whether the directory happened to be fresh.
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
-            kept.append(f"{PREPARATION_DIR}/{target.name}")
+        kept.append(f"{PREPARATION_DIR}/{relative}")
     return kept
 
 
@@ -365,9 +382,13 @@ def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
     artifacts = {}
     for relative in kept:
         if relative.endswith((".sdf", ".mol2")):
-            artifacts["ligand_sdf"] = relative
+            artifacts.setdefault("ligand_sdf", relative)
         elif relative.endswith(".prmtop"):
-            artifacts["prmtop"] = relative
+            artifacts.setdefault("prmtop", relative)
+        elif relative.endswith((".rst7", ".inpcrd")):
+            artifacts.setdefault("coordinates", relative)
+        elif relative.endswith("tleap.log"):
+            artifacts.setdefault("tleap_log", relative)
     forcefield = build_forcefield_record(resolved=resolved, route=route, record=record,
                                          inputs_dir=out, artifacts=artifacts)
     (out / "forcefield.json").write_text(
@@ -421,8 +442,10 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
     ligand_sdf = None
     if route == "ligand":
         prepared = initial_structure(_smiles_from(input_path), staging, cfg)
-        source = Path(prepared["pdb"])
-        ligand_sdf = Path(prepared["sdf"])
+        # `solute_pdb` / `solute_sdf` are the keys initial_structure actually returns; `pdb`/`sdf`
+        # never existed, so the SMILES route raised KeyError before reaching parameterisation.
+        source = Path(prepared["solute_pdb"])
+        ligand_sdf = Path(prepared["solute_sdf"])
         log(f"ligand       : {prepared.get('canonical_smiles', '')[:60]}")
     else:
         source = staging / "input.pdb"
@@ -486,7 +509,13 @@ def _build_implicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
     state_path = _write_initial_state(system, pdb, staging)
     return {"system_xml": built["system_xml"], "topology_pdb": built["topology_pdb"],
             "initial_state": state_path, "n_solute_atoms": built["n_solute_atoms"],
-            "ligand_sdf": None, "omega": built.get("build_record") or {}}
+            "ligand_sdf": built.get("ligand_sdf"),
+            "omega": built.get("build_record") or {},
+            # The builder's own report of what it loaded: the tleap protein resource, the radii,
+            # and on the ligand route the OpenFF report from build_forcefield. Surfaced here so
+            # forcefield.json states the resources actually used rather than re-deriving them.
+            "implicit_report": built.get("build") or {},
+            "hmr": built.get("hmr") or {}}
 
 
 def _write_solute_pdb(topology_pdb: Path, solute_indices, path: Path) -> Path:

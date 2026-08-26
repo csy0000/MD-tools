@@ -29,7 +29,11 @@ rather than a family label. `amber19-all.xml` is a file; "Amber19" is a conversa
 **Reusable** is the point of the provenance:
 
 - `inputs/original_inputs/` — the user's own file, byte-for-byte;
-- `inputs/forcefield.json` — how the System was parameterised, recorded where it was decided;
+- `inputs/forcefield.json` — how the System was parameterised, from the **builder's own report of
+  what it loaded**, not from the configuration that was requested. `openmm_resource` is the exact
+  resource (`amber19/opc.xml`, not the `opc.xml` label); `requested_label` keeps the human-facing
+  name separately; `null` means the concept does not apply on this route — a ligand-only run loads
+  no protein force field, and an implicit run loads no OpenMM protein XML at all;
 - `inputs/resolved_sys.config.yaml`, `MD/md.config.yaml` — what was asked for, after resolution;
 - `implementation` in both provenance files — version, git commit when available, and an installed
   fingerprint that is never null;
@@ -48,6 +52,16 @@ Legacy 0.3.x output is classified **A** (rebuildable from the original input), *
 system reusable, parameterisation not fully rebuildable) or **C** (archival and analysis only), and
 every reason that lowered the grade is machine-readable. A grade is never raised because a filename
 looks right.
+
+Grade **A** requires the verified original input *retained in the candidate*, an **exact**
+implementation identity — a recorded git commit or installed fingerprint, since a version string
+names a release rather than a build — the build environment, and the runtime records the
+*configured* protocol requires. The protocol is read from `md.config.yaml`; if it cannot be read,
+that is itself a gap and is never inferred from directory names.
+
+0.3.x did record the original input's SHA-256 in `inputs/provenance.yaml` when one was available,
+but it generally did not retain the original bytes, and recorded neither the environment nor an
+exact code identity. Most legacy data therefore lands at **B**, correctly.
 
 ## What MD-data still has to do
 

@@ -36,7 +36,7 @@ from openmm.app import CheckpointReporter, DCDReporter, PDBFile, StateDataReport
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
-from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, RECORD_FORMAT, active_barostat_count,
+from md_stages import (sha256_file, PRODUCTION_BAROSTAT_FREQUENCY, RECORD_FORMAT, active_barostat_count,
                        add_barostat, add_positional_restraint, append_jsonl, count_barostats,
                        derive_seed, device_groups, file_record, make_simulation,
                        next_invocation_index, project_identity, propagate_segment,
@@ -137,6 +137,18 @@ def attach_reporters(simulation, replica, *, resuming, whole_every, solute_every
         volume=not implicit, speed=True, append=resuming and table.is_file()))
 
 
+def _starting_artifact(path, *, role):
+    """Exactly what a replica consumed: role, path relative to REST2/, size and SHA-256."""
+    path = Path(path)
+    if not path.is_file():
+        return {"role": role, "path": None, "bytes": None, "sha256": None,
+                "note": "the starting artifact was not present"}
+    return {"role": role,
+            "path": os.path.relpath(path.resolve(), HERE),
+            "bytes": path.stat().st_size,
+            "sha256": sha256_file(path)}
+
+
 def main():
     started_utc = utc_now()
     invocations_path = HERE / "invocations.jsonl"
@@ -174,11 +186,19 @@ def main():
     checkpoint_every = required_steps("checkpoint_interval_ps")
 
     simulations = []
+    started_from = {}
     for replica, tau in enumerate(taus):
         simulation, seeds = build_replica(replica, tau, base, pdb.topology, initial_positions,
                                           device_of.get(replica), platform_name)
         checkpoint = replica_dir(replica, "production") / "production.chk"
         resuming = checkpoint.is_file()
+        equilibrated = replica_dir(replica, "equilibration") / "final_state.xml"
+        # Hashed before this invocation can overwrite it: on a resume the production checkpoint is
+        # rewritten at completion, so a later hash would name what this run produced rather than
+        # what it started from.
+        started_from[replica] = _starting_artifact(
+            checkpoint if resuming else equilibrated,
+            role=("own_production_checkpoint" if resuming else "tau_equilibration_final_state"))
         if resuming:
             simulation.loadCheckpoint(str(checkpoint))
             done = simulation.context.getStepCount()
@@ -321,6 +341,7 @@ def main():
             "started_at_step": started_steps[replica],
             "ended_at_step": int(simulation.context.getStepCount()),
             "equilibration_final_state": f"replica_{replica:02d}/equilibration/final_state.xml",
+            "started_from": started_from.get(replica),
             "outputs": {name: file_record(directory / name,
                                           digest=name in ("final_state.xml", "production.chk"))
                         for name in ("replica.csv", "production.chk", "final_state.xml")},

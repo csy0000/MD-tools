@@ -48,7 +48,17 @@ def initial_structure(smiles: str, out_dir: Path, cfg: dict) -> dict:
     if ecfg["version"] != "ETKDGv3":
         raise ValueError(f"structure.etkdg.version must be 'ETKDGv3', got {ecfg['version']!r}")
     params = rdDistGeom.ETKDGv3()
-    params.randomSeed = int(ecfg["seed"])
+    # A null seed means "unset", and RDKit's own default is a RANDOM embedding -- two runs of the
+    # same SMILES would give different starting coordinates, which is the one thing a prepared
+    # system must not do. Fall back to the run seed so the conformer is reproducible.
+    seed = ecfg.get("seed")
+    if seed is None:
+        seed = (cfg.get("run") or {}).get("seed")
+    if seed is None:
+        raise ValueError(
+            "structure.etkdg.seed and run.seed are both null, so the SMILES embedding would be "
+            "random and this prepared system would not be reproducible. Set one of them.")
+    params.randomSeed = int(seed)
     params.useRandomCoords = bool(ecfg["use_random_coords"])
     params.pruneRmsThresh = float(ecfg["prune_rms_thresh"])
     params.numThreads = int(ecfg["num_threads"])

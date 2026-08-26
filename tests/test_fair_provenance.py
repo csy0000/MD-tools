@@ -91,30 +91,108 @@ def test_the_checksum_manifest_is_deterministic_and_detects_mutation(tmp_path):
 
 # --- forcefield.json ---------------------------------------------------------
 
-@pytest.mark.parametrize("solvent,implicit", [("OPC", False), ("GBn2", True)])
-def test_the_forcefield_record_states_what_applies_and_nulls_what_does_not(solvent, implicit):
+def _record_for(solvent, route, reported=None, implicit_report=None):
     from md_templates.openmm.config import resolve_sys_config
     from md_templates.openmm.defaults import sys_defaults
     from md_templates.openmm.forcefield_record import build_forcefield_record
 
-    resolved = resolve_sys_config(sys_defaults(solvent=solvent))
-    record = build_forcefield_record(resolved=resolved, route="peptide", record={},
-                                     inputs_dir=Path("."), artifacts={})
-    assert record["format"] == "md-templates-forcefield/v1"
-    assert record["protein"]["openmm_resource"] == "amber19-all.xml"
+    resolved = resolve_sys_config(sys_defaults(solvent=solvent, peptide=(route == "peptide")))
+    record = {}
+    if reported is not None:
+        record["forcefield"] = reported
+    if implicit_report is not None:
+        record["implicit_report"] = implicit_report
+    return build_forcefield_record(resolved=resolved, route=route, record=record,
+                                   inputs_dir=Path("."), artifacts={})
 
-    if implicit:
-        assert record["water"]["openmm_resource"] is None, "implicit solvent has no water model"
-        assert record["explicit_solvent"] is None
-        assert record["implicit_solvent"] == {"model": "GBn2", "radii": "mbondi3"}
-        assert record["nonbonded"]["method"] == "NoCutoff", "no box means no PME"
-        assert record["nonbonded"]["cutoff_nm"] is None
-        assert "ParmEd" in record["builder"]["notes"]
-    else:
-        assert record["water"]["openmm_resource"] == "opc.xml"
-        assert record["implicit_solvent"] is None
-        assert record["nonbonded"]["method"] == "PME"
-        assert record["explicit_solvent"]["box_shape"] == "dodecahedron"
+
+def test_explicit_peptide_records_the_qualified_water_resource_that_was_loaded():
+    """`ForceField()` is given `amber19/opc.xml`; the short `opc.xml` is only the user's label.
+
+    The qualified file also carries the Na+/Cl- templates this box needed, so recording the short
+    name describes a file that would have failed to solvate it.
+    """
+    record = _record_for("OPC", "peptide", reported={
+        "xml": ["amber19-all.xml", "amber19/opc.xml"], "route": "peptide",
+        "protein_forcefield": "amber19-all.xml", "water": "amber19/opc.xml", "ligand": None})
+
+    assert record["protein"]["openmm_resource"] == "amber19-all.xml"
+    assert record["protein"]["tleap_resource"] is None
+    assert record["water"]["openmm_resource"] == "amber19/opc.xml"
+    assert record["water"]["requested_label"] == "OPC"
+    assert record["builder"]["openmm_xml_loaded"] == ["amber19-all.xml", "amber19/opc.xml"]
+    assert record["builder"]["route"] == "openmm.app.ForceField.createSystem"
+    assert record["nonbonded"]["method"] == "PME"
+
+
+def test_the_ligand_only_route_records_no_protein_force_field():
+    """It deliberately does not load ff19SB; naming it would attribute parameters to nothing."""
+    record = _record_for("OPC", "ligand", reported={
+        "xml": ["amber19/opc.xml"], "route": "ligand", "protein_forcefield": None,
+        "water": "amber19/opc.xml",
+        "ligand": {"forcefield": "openff-2.2.0", "charge_method": "am1bcc"}})
+
+    assert record["protein"]["forcefield"] is None
+    assert record["protein"]["openmm_resource"] is None
+    assert "loads no protein force field" in record["protein"]["note"]
+    assert "amber19-all.xml" not in (record["builder"]["openmm_xml_loaded"] or [])
+    # the exact resource, kept distinct from the human-facing label the user typed
+    assert record["ligand"]["openff_resource"] == "openff-2.2.0"
+    assert record["ligand"]["requested_label"] == "sage-2.2.0"
+    assert record["ligand"]["charge_method"] == "am1bcc"
+
+
+def test_implicit_peptide_records_tleap_not_an_openmm_protein_xml():
+    """No OpenMM protein XML constructed this System; tleap wrote the topology."""
+    record = _record_for("GBn2", "peptide", implicit_report={
+        "protein_forcefield": "leaprc.protein.ff19SB", "implicit_model": "GBn2",
+        "radii": "mbondi3"})
+
+    assert record["protein"]["openmm_resource"] is None, "no OpenMM protein XML was loaded"
+    assert record["protein"]["tleap_resource"] == "leaprc.protein.ff19SB"
+    assert record["builder"]["route"] == "parmed.Structure.createSystem"
+    assert record["builder"]["openmm_xml_loaded"] is None
+    assert record["builder"]["tleap_used"] is True
+    assert record["implicit_solvent"]["model"] == "GBn2"
+    assert record["implicit_solvent"]["radii"] == "mbondi3"
+    assert record["water"]["openmm_resource"] is None
+    assert record["nonbonded"]["method"] == "NoCutoff"
+    assert record["explicit_solvent"] is None
+
+
+def test_implicit_ligand_records_the_openff_provenance_used_before_parmed():
+    record = _record_for("GBn2", "ligand", implicit_report={
+        "implicit_model": "GBn2", "radii": "mbondi3", "protein_forcefield": None,
+        "forcefield_info": {"route": "ligand", "protein_forcefield": None, "water": None,
+                            "ligand": {"forcefield": "openff-2.2.0",
+                                       "charge_method": "am1bcc"}}})
+
+    assert record["protein"]["openmm_resource"] is None
+    assert record["ligand"]["openff_resource"] == "openff-2.2.0"
+    assert record["ligand"]["charge_method"] == "am1bcc"
+    assert record["builder"]["route"] == "parmed.Structure.createSystem"
+    assert record["implicit_solvent"]["radii"] == "mbondi3"
+
+
+def test_a_retained_artifact_collision_is_refused(tmp_path):
+    """Two routes can both produce `solute.sdf`; flattening them would mis-checksum one."""
+    from md_templates.openmm.config import ConfigError
+    from md_templates.openmm.sysgen import _keep_preparation_artifacts
+
+    staging = tmp_path / "_work"
+    (staging / "structure").mkdir(parents=True)
+    (staging / "structure" / "solute.sdf").write_text("first\n")
+    out = tmp_path / "inputs"
+
+    kept = _keep_preparation_artifacts(staging, out)
+    assert kept == ["preparation/structure/solute.sdf"], "the subpath must be preserved"
+
+    # an identical rerun is not a collision, and must still be listed
+    assert _keep_preparation_artifacts(staging, out) == kept
+
+    (staging / "structure" / "solute.sdf").write_text("DIFFERENT\n")
+    with pytest.raises(ConfigError, match="different content"):
+        _keep_preparation_artifacts(staging, out)
 
 
 # --- the 0.3.x retrofit ------------------------------------------------------
@@ -151,6 +229,23 @@ def _legacy_fixture(root: Path, *, with_hash: bool = True) -> Path:
     return original
 
 
+def _complete_fixture(root: Path) -> Path:
+    """A 0.3.x tree that genuinely earns grade A: exact identity and every required record."""
+    original = _legacy_fixture(root)
+    provenance = yaml.safe_load((root / "inputs" / "provenance.yaml").read_text())
+    provenance["md_templates"].update({
+        "git_commit": "0" * 40,
+        "installed_fingerprint": "a" * 64,
+    })
+    (root / "inputs" / "provenance.yaml").write_text(yaml.safe_dump(provenance))
+    # md.config.yaml declares cMD only, so a cMD record is what closure requires here.
+    (root / "MD" / "cMD" / "resolved_run.yaml").write_text(
+        yaml.safe_dump({"record_kind": "cmd_run", "status": "completed"}))
+    (root / "MD" / "minimization").mkdir(parents=True, exist_ok=True)
+    (root / "MD" / "minimization" / "resolved_stage.yaml").write_text("stage: minimization\n")
+    return original
+
+
 def _run_retrofit(*args):
     return subprocess.run([sys.executable, str(RETROFIT), *[str(a) for a in args]],
                           capture_output=True, text=True, timeout=600)
@@ -178,7 +273,11 @@ def test_the_retrofit_never_modifies_the_source(tmp_path):
     assert not (tmp_path / "inputs" / "SHA256SUMS").exists(), "nothing may be added to inputs/"
 
 
-def test_a_verified_original_and_environment_grade_a(tmp_path):
+def test_a_version_string_alone_is_not_exact_identity(tmp_path):
+    """The old fixture has `git_commit: null` and no cMD record, so it must NOT reach A.
+
+    `0.3.1` names a release, not the build that ran; two builds of one version can differ.
+    """
     original = _legacy_fixture(tmp_path)
     (tmp_path / "env.yaml").write_text(yaml.safe_dump({"openmm": "8.6.0", "python": "3.12.13"}))
 
@@ -186,9 +285,89 @@ def test_a_verified_original_and_environment_grade_a(tmp_path):
                            "--output", tmp_path / "out", "--original-input", original,
                            "--environment", tmp_path / "env.yaml")
     assert result.returncode == 0, result.stdout + result.stderr
+    classification = json.loads(
+        (tmp_path / "out" / "validation.json").read_text())["classification"]
+    assert classification["grade"] == "B", classification
+    codes = {r["code"] for r in classification["reasons"]}
+    assert "implementation_identity_not_exact" in codes, codes
+    assert "cmd_runtime_record_missing" in codes, codes
+
+
+def test_a_genuinely_complete_fixture_grades_a(tmp_path):
+    """Exact identity plus every record the declared protocol requires."""
+    original = _complete_fixture(tmp_path)
+    (tmp_path / "env.yaml").write_text(yaml.safe_dump({"openmm": "8.6.0", "python": "3.12.13"}))
+
+    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
+                           "--output", tmp_path / "out", "--original-input", original,
+                           "--environment", tmp_path / "env.yaml")
+    assert result.returncode == 0, result.stdout + result.stderr
     validation = json.loads((tmp_path / "out" / "validation.json").read_text())
-    assert validation["classification"]["grade"] == "A", validation["classification"]
-    assert validation["source_modified"] is False
+    assert validation["classification"]["grade"] == "A", validation["classification"]["reasons"]
+    assert validation["source_verification"]["unmodified"] is True
+
+
+def test_the_verified_original_input_is_retained_and_checksummed(tmp_path):
+    original = _complete_fixture(tmp_path)
+    _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
+                  "--output", tmp_path / "out", "--original-input", original)
+    kept = tmp_path / "out" / "original_inputs" / original.name
+    assert kept.is_file(), "a verified original must be retained in the candidate"
+    assert kept.read_bytes() == original.read_bytes()
+
+    record = yaml.safe_load((tmp_path / "out" / "system-record.yaml").read_text())
+    entry = record["original_input"]["value"]
+    assert entry["retained_path"] == f"original_inputs/{original.name}"
+    manifest = (tmp_path / "out" / "SHA256SUMS").read_text()
+    assert f"original_inputs/{original.name}" in manifest
+
+
+def test_the_source_verification_is_a_real_before_after_comparison(tmp_path):
+    """`source_modified: false` written unconditionally is a claim, not a check."""
+    _legacy_fixture(tmp_path)
+    _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
+                  "--output", tmp_path / "out")
+    verification = json.loads(
+        (tmp_path / "out" / "validation.json").read_text())["source_verification"]
+    assert "SHA-256" in verification["method"] and "mtime" in verification["method"]
+    assert verification["files_before"] == verification["files_after"] > 0
+    assert verification["changed"] == [] and verification["added"] == []
+    assert verification["removed"] == [] and verification["unmodified"] is True
+
+
+@pytest.mark.parametrize("output_name", ["fair-registration", "out"])
+def test_every_manifest_path_resolves_for_any_output_name(tmp_path, output_name):
+    """The sidecar prefix was hardcoded, so any other output name broke every path."""
+    import hashlib
+
+    original = _complete_fixture(tmp_path)
+    out = tmp_path / output_name
+    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
+                           "--output", out, "--original-input", original)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    lines = [l for l in (out / "SHA256SUMS").read_text().splitlines() if l.strip()]
+    assert lines
+    for line in lines:
+        digest, relative = line.split("  ", 1)
+        path = tmp_path / relative           # one documented root: the common project root
+        assert path.is_file(), f"{relative} does not resolve from the project root"
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, relative
+    assert any(l.endswith(f"{output_name}/system-record.yaml") for l in lines), \
+        f"the sidecar prefix must be the real directory name, not a hardcoded one"
+
+
+def test_no_record_contains_a_required_absolute_path(tmp_path):
+    original = _complete_fixture(tmp_path)
+    (tmp_path / "env.yaml").write_text(yaml.safe_dump({"openmm": "8.6.0"}))
+    out = tmp_path / "out"
+    _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD", "--output", out,
+                  "--original-input", original, "--environment", tmp_path / "env.yaml")
+
+    for name in ("system-record.yaml", "run-record.yaml", "file-inventory.yaml", "SHA256SUMS"):
+        text = (out / name).read_text()
+        assert str(tmp_path) not in text, f"{name} embeds an absolute path"
+        assert "common_root" not in text, f"{name} still records an absolute common_root"
 
 
 def test_without_the_original_input_the_grade_drops_to_b_with_reasons(tmp_path):

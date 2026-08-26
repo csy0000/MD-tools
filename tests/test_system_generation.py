@@ -112,7 +112,12 @@ def test_the_forcefield_record_is_written(explicit_inputs):
     record = json.loads((explicit_inputs / "forcefield.json").read_text())
     assert record["format"] == "md-templates-forcefield/v1"
     assert record["protein"]["openmm_resource"] == "amber19-all.xml"
-    assert record["water"]["openmm_resource"] == "opc.xml"
+    # The QUALIFIED resource `ForceField()` was actually given. The short `opc.xml` is the
+    # user-facing label and is a different file -- water only, no ion templates -- so recording it
+    # would name a file that could not have solvated this box.
+    assert record["water"]["openmm_resource"] == "amber19/opc.xml"
+    assert record["water"]["requested_label"] == "OPC"
+    assert record["builder"]["openmm_xml_loaded"] == ["amber19-all.xml", "amber19/opc.xml"]
     assert record["package_versions"]["openmm"]
 
 

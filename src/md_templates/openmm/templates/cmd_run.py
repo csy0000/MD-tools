@@ -34,7 +34,7 @@ from openmm.app import CheckpointReporter, DCDReporter, PDBFile, StateDataReport
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
-from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, RECORD_FORMAT, active_barostat_count,
+from md_stages import (sha256_file, PRODUCTION_BAROSTAT_FREQUENCY, RECORD_FORMAT, active_barostat_count,
                        append_jsonl, build_stage_system, count_barostats, derive_seed,
                        file_record, make_simulation, next_invocation_index, project_identity,
                        require_parent_state, resolve_platform, restraint_strength,
@@ -62,6 +62,19 @@ TAU = float(method.get("tau", 0.0) or 0.0)
 # two cannot disagree about which torsions are omega.
 OMEGA_EXCLUDED = (SOLUTE["rest2"]["omega_excluded_bonds"]
                   if method.get("omega_exclusion", True) else [])
+
+
+def _starting_artifact(path, *, role):
+    """Exactly what this invocation consumed: role, relative path, size and SHA-256."""
+    path = Path(path)
+    if not path.is_file():
+        return {"role": role, "path": None, "bytes": None, "sha256": None,
+                "note": "the starting artifact was not present"}
+    return {"role": role,
+            # Relative to this script's directory, so the record survives relocation.
+            "path": os.path.relpath(path.resolve(), HERE),
+            "bytes": path.stat().st_size,
+            "sha256": sha256_file(path)}
 
 
 def main():
@@ -106,6 +119,12 @@ def main():
 
     checkpoint = HERE / "production.chk"
     resuming = checkpoint.is_file()
+    # Hash the starting artifact NOW, before this invocation can overwrite it. On a resume the
+    # checkpoint is rewritten at completion, so a hash taken afterwards would identify the state
+    # this run PRODUCED, not the one it consumed -- which is the opposite of lineage.
+    started_from_record = _starting_artifact(checkpoint if resuming else (HERE / BRANCH),
+                                             role=("own_production_checkpoint" if resuming
+                                                   else "parent_final_state"))
     if resuming:
         # The barostat frequency lives in the System, not the checkpoint, so the production layout
         # is set before loading. loadCheckpoint then restores the integrator RNG state.
@@ -203,7 +222,7 @@ def main():
         "ended_at_step": ended_step,
         "steps_this_invocation": ended_step - started_step,
         "time_ps": round(ended_step * TIMESTEP_FS / 1000.0, 6),
-        "started_from": ("production.chk" if resuming else BRANCH),
+        "started_from": started_from_record,
         "platform": platform_name,
         "cuda_device": device if platform_name == "CUDA" else None,
         "seeds": seeds,
