@@ -338,6 +338,35 @@ If the recorded interpreter is missing, `run.sh` falls back to whatever `python3
 
 ---
 
+## Archiving finished results
+
+`inputs/` is not scratch. It is the statement of *what was simulated*, and it is the half of a
+finished run that is easiest to leave behind:
+
+| file | what it settles |
+|---|---|
+| `system.xml` | the built System — including whether hydrogen mass was actually repartitioned |
+| `solute.yaml` | solute indices, and the omega bonds REST2 leaves unscaled |
+| `initial_state.xml` | where the chain started |
+| `topology.pdb`, `solute.pdb` | what the trajectories are read against |
+| `provenance.yaml`, `resolved_sys.config.yaml` | what produced them, and from what |
+
+So archive `inputs/` alongside the trajectories, not only `MD/`. Results without it cannot answer
+which Hamiltonian produced them, and rebuilding one from the configuration afterwards is a weaker
+claim than keeping the original: **the configuration records what was requested, `system.xml`
+records what was built.** Those two disagreeing is not hypothetical — a profile requesting
+`hydrogen_mass_amu: 3.024` once coexisted with a System carrying 1.008 amu hydrogens, and every
+check that read only the configuration passed.
+
+If an archive layout is imposed from outside (a project's own data tree, say), publish `inputs/`
+into it too. Linking rather than copying keeps the archive readable while the generated restart
+tree is still active.
+
+Read a solute trajectory against `inputs/solute.pdb`, which `sys-gen` writes for exactly that
+purpose — the whole-system topology has a different atom count.
+
+---
+
 ## Faster settings, if you want them
 
 The defaults are conservative: 2 fs with unmodified hydrogen masses. To trade that for speed, set

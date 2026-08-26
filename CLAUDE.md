@@ -99,6 +99,9 @@ Rules:
 - do not hash trajectories at runtime — record path, size and frame count; MD-data hashes them once
   at archival;
 - a failed or interrupted invocation is never labelled completed.
+- results are archived WITH the prepared inputs that produced them: `system.xml` records what was
+  built, the configuration records only what was requested, and the two can disagree. An archive
+  holding trajectories alone cannot say which Hamiltonian produced them.
 
 ## Testing
 
