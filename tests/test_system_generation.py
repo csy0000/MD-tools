@@ -33,7 +33,12 @@ def explicit_inputs(tmp_path_factory):
 def test_the_expected_files_are_written_and_nothing_else(explicit_inputs):
     from md_templates.openmm.sysgen import OUTPUT_FILES
 
-    assert sorted(p.name for p in explicit_inputs.iterdir()) == sorted(OUTPUT_FILES)
+    present = sorted(p.name for p in explicit_inputs.iterdir() if p.is_file())
+    assert present == sorted(OUTPUT_FILES), present
+    # ...plus the retained original, which lives in its own directory so it can never be confused
+    # with a file this package produced.
+    assert (explicit_inputs / "original_inputs").is_dir()
+    assert [p.name for p in (explicit_inputs / "original_inputs").iterdir()] == ["ALA.pdb"]
 
 
 def test_the_system_loads_and_is_periodic_with_the_configured_cutoff(explicit_inputs):
@@ -61,11 +66,54 @@ def test_solute_yaml_records_the_indices_and_the_rest2_region(explicit_inputs):
 
 
 def test_provenance_is_recorded_without_blocking_on_git(explicit_inputs):
+    """Git metadata is often absent; the record must still identify the implementation."""
     document = yaml.safe_load((explicit_inputs / "provenance.yaml").read_text())
-    assert set(document) == {"md_templates", "openmm", "generated"}
-    assert document["openmm"]["version"]
-    assert "ALA.pdb" in document["generated"]["input_hashes"]
-    assert len(document["generated"]["sys_config_hash"]) == 64
+    assert document["format"] == "md-templates-system-provenance/v1"
+    assert document["environment"]["openmm"]
+    assert isinstance(document["command"], list), "the command is an argument list, not a string"
+
+    identity = document["implementation"]
+    assert identity["version"], "the installed version must be recorded"
+    assert identity["installed_fingerprint"]["value"], \
+        "the fingerprint must be present even when git_commit is null"
+
+    assert document["original_input"]["path"].startswith("original_inputs/")
+    assert len(document["original_input"]["sha256"]) == 64
+    assert len(document["sys_config_hash"]) == 64
+    assert len(document["forcefield_json_sha256"]) == 64
+    assert document["system"]["periodic"] is True
+    assert document["checksum_manifest"] == "SHA256SUMS"
+
+
+def test_the_original_input_is_kept_byte_for_byte(explicit_inputs):
+    """A bundle you cannot rebuild from is a bundle you can only rerun."""
+    from md_templates.openmm.provenance_min import sha256_file
+
+    document = yaml.safe_load((explicit_inputs / "provenance.yaml").read_text())
+    kept = explicit_inputs / document["original_input"]["path"]
+    assert kept.is_file(), "the original molecular input was not retained"
+    assert sha256_file(kept) == document["original_input"]["sha256"]
+
+
+def test_the_checksum_manifest_covers_the_bundle_and_verifies(explicit_inputs):
+    from md_templates.openmm.sysgen import verify_checksum_manifest
+
+    result = verify_checksum_manifest(explicit_inputs)
+    assert result["ok"] is True, result
+    assert result["verified"] >= 9, result
+    manifest = (explicit_inputs / "SHA256SUMS").read_text()
+    assert "SHA256SUMS" not in manifest, "the manifest cannot hash itself"
+    assert "original_inputs/" in manifest, "the retained original must be covered"
+
+
+def test_the_forcefield_record_is_written(explicit_inputs):
+    import json
+
+    record = json.loads((explicit_inputs / "forcefield.json").read_text())
+    assert record["format"] == "md-templates-forcefield/v1"
+    assert record["protein"]["openmm_resource"] == "amber19-all.xml"
+    assert record["water"]["openmm_resource"] == "opc.xml"
+    assert record["package_versions"]["openmm"]
 
 
 def test_the_resolved_config_states_which_solvation_was_used(explicit_inputs):

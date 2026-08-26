@@ -45,7 +45,8 @@ sys.path.insert(0, str(PROJECT))
 from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, STAGE_RUNTIME_OUTPUTS,
                        active_barostat_count, build_stage_system, count_barostats,
                        make_simulation, require_parent_state, resolve_platform,
-                       restraint_strength, set_restraint, stage_config_sha256, steps_for,
+                       RECORD_FORMAT, file_record, project_identity, restraint_strength,
+                       set_restraint, sha256_file, stage_config_sha256, steps_for, utc_now,
                        write_final_pdb, write_final_state, write_yaml_atomic)
 
 STAGE = yaml.safe_load((HERE / "stage.yaml").read_text())
@@ -119,6 +120,7 @@ def completion_state():
 
 def main():
     kind = STAGE["kind"]
+    started_utc = utc_now()
     log_lines = []
 
     # Three states, and they are not the same thing.
@@ -230,7 +232,16 @@ def main():
     write_final_state(simulation, HERE / "final_state.xml")
     write_final_pdb(simulation, HERE / "final.pdb", implicit=IMPLICIT)
 
+    input_state_path = (HERE / STAGE["input_state"]).resolve()
     resolved = {
+        "format": RECORD_FORMAT,
+        "record_kind": "common_stage",
+        "started_utc": started_utc,
+        "finished_utc": utc_now(),
+        # `completed` only after the final state exists. A stage that died before that is not
+        # complete, however much of its trajectory happens to be on disk.
+        "status": "completed",
+        "implementation": project_identity(CONFIG),
         "stage": STAGE["name"],
         "kind": kind,
         "ensemble": STAGE["ensemble"],
@@ -249,11 +260,22 @@ def main():
         "barostats_in_system": count_barostats(system),
         "barostats_active": active,
         "stage_config_sha256": STAGE_SIGNATURE,
+        "configured_steps": steps if kind != "minimization" else None,
+        "completed_steps": simulation.context.getStepCount(),
+        "configured_iterations": STAGE.get("max_iterations") if kind == "minimization" else None,
         "input_state": STAGE["input_state"],
+        # The parent's FINAL state, which is the handoff. A parent checkpoint is a mid-run
+        # artifact and is deliberately not hashed here.
+        "input_state_sha256": (sha256_file(input_state_path)
+                               if input_state_path.is_file() else None),
         "output_state": STAGE["output_state"],
         "platform": platform_name,
+        "cuda_device": device if platform_name == "CUDA" else None,
+        "outputs": {name: file_record(HERE / name,
+                                      digest=name in ("final_state.xml", "checkpoint.chk"))
+                    for name in ("stage.log", "stage.csv", "checkpoint.chk", "final_state.xml",
+                                 "final.pdb")},
         "template_commit": STAGE.get("template_commit"),
-        "finished_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     write_yaml_atomic(HERE / "resolved_stage.yaml", resolved)
     (HERE / "stage.log").write_text("\n".join(log_lines) + "\n", encoding="utf-8")

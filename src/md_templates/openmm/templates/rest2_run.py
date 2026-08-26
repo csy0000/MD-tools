@@ -36,11 +36,13 @@ from openmm.app import CheckpointReporter, DCDReporter, PDBFile, StateDataReport
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
-from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, active_barostat_count, add_barostat,
-                       add_positional_restraint, count_barostats, derive_seed, device_groups,
-                       make_simulation, propagate_segment, require_parent_state, resolve_platform,
-                       set_barostat_frequency, set_restraint, steps_for,
-                       trim_to_checkpoint, write_final_state)
+from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, RECORD_FORMAT, active_barostat_count,
+                       add_barostat, add_positional_restraint, append_jsonl, count_barostats,
+                       derive_seed, device_groups, file_record, make_simulation,
+                       next_invocation_index, project_identity, propagate_segment,
+                       require_parent_state, resolve_platform, set_barostat_frequency,
+                       set_restraint, steps_for, trajectory_record, trim_to_checkpoint, utc_now,
+                       write_final_state, write_yaml_atomic)
 from rest2_scaling import (build_scaled_system, exchange_log_acceptance, exchange_pairs,
                            linear_tau_ladder, reduced_potential, scale_factor_for_tau)
 
@@ -136,6 +138,9 @@ def attach_reporters(simulation, replica, *, resuming, whole_every, solute_every
 
 
 def main():
+    started_utc = utc_now()
+    invocations_path = HERE / "invocations.jsonl"
+    invocation_index = next_invocation_index(invocations_path)
     pdb = PDBFile(str(INPUTS / "topology.pdb"))
     base = XmlSerializer.deserialize((INPUTS / "system.xml").read_text())
     initial_positions = XmlSerializer.deserialize(
@@ -228,6 +233,8 @@ def main():
           f"({method['duration_per_segment_ps']} ps) = {segment_steps * n_exchanges:,} steps "
           f"= {total_ps:g} ps of production per replica this invocation")
 
+    invocation_first_round = attempt_index
+    started_steps = [int(s.context.getStepCount()) for s in simulations]
     rng = random.Random(derive_seed(BASE_SEED, "REST2", "exchange", attempt_index))
     accepted_total = 0
     attempted_total = 0
@@ -295,10 +302,79 @@ def main():
             csv.writer(handle).writerows(rows)
         attempt_index += 1
 
+    replica_records = []
     for replica, simulation in enumerate(simulations):
         directory = replica_dir(replica, "production")
         simulation.saveCheckpoint(str(directory / "production.chk"))
         write_final_state(simulation, directory / "final_state.xml")
+        tau = taus[replica]
+        replica_records.append({
+            "replica": f"replica_{replica:02d}",
+            "tau": tau,
+            # tau is the source parameter; these two are labelled derived so nothing downstream
+            # can feed them back in as inputs.
+            "derived_scale_factor_s": scale_factor_for_tau(tau),
+            "derived_solute_environment_coupling_sqrt_s": 1.0 - tau,
+            "seeds": {name: derive_seed(BASE_SEED, "REST2", replica, name)
+                      for name in ("integrator", "velocities", "barostat")},
+            "cuda_device": device_of.get(replica),
+            "started_at_step": started_steps[replica],
+            "ended_at_step": int(simulation.context.getStepCount()),
+            "equilibration_final_state": f"replica_{replica:02d}/equilibration/final_state.xml",
+            "outputs": {name: file_record(directory / name,
+                                          digest=name in ("final_state.xml", "production.chk"))
+                        for name in ("replica.csv", "production.chk", "final_state.xml")},
+            "trajectories": {
+                "whole_system": trajectory_record(directory / "whole_system.dcd",
+                                                  atom_scope="all_atoms"),
+                "solute": trajectory_record(directory / "solute.dcd",
+                                            atom_scope=f"solute:{len(SOLUTE_INDICES)}_atoms")},
+        })
+
+    lifetime_rounds = attempt_index
+    record = {
+        "format": RECORD_FORMAT,
+        "record_kind": "rest2_run",
+        "invocation_index": invocation_index,
+        "started_utc": started_utc,
+        "finished_utc": utc_now(),
+        "status": "completed",
+        "implementation": project_identity(CONFIG),
+        "command": list(sys.argv),
+        "ensemble": method["ensemble"],
+        "implicit_solvent": implicit,
+        # One physical temperature and one beta for the whole ladder; the rungs differ by
+        # Hamiltonian, which is why the pV terms cancel in the NPT criterion.
+        "thermodynamics": {
+            "temperature_kelvin": float(common["temperature_kelvin"]),
+            "pressure_bar": common.get("pressure_bar"),
+            "beta_kj_mol_inverse": BETA,
+            "hamiltonian_scaling": "solute-solute (1-tau)^2, solute-environment (1-tau)",
+            "common_beta_across_replicas": True,
+            "positions_and_box_vectors_exchanged_together": True,
+        },
+        "exchange": {
+            "rounds_this_invocation": n_exchanges,
+            "attempts_this_invocation": attempted_total,
+            "accepted_this_invocation": accepted_total,
+            "first_round_index": invocation_first_round,
+            "last_round_index": lifetime_rounds - 1,
+            "lifetime_rounds": lifetime_rounds,
+            "starting_phase": invocation_first_round % 2,
+            "rng_provenance": "random.Random(derive_seed(base_seed, 'REST2', 'exchange', "
+                              "first_round_index)) -- reconstructed from the resumed round index",
+            "history": "exchange_attempts.csv",
+        },
+        "segment": {
+            "duration_per_segment_ps": float(method["duration_per_segment_ps"]),
+            "steps_per_segment": segment_steps,
+            "steps_per_replica_this_invocation": segment_steps * n_exchanges,
+        },
+        "platform": platform_name,
+        "replicas": replica_records,
+    }
+    write_yaml_atomic(HERE / "resolved_run.yaml", record)
+    append_jsonl(invocations_path, record)
 
     ratio = (accepted_total / attempted_total) if attempted_total else float("nan")
     print(f"[remd] segment complete: {n_exchanges} exchange rounds, "

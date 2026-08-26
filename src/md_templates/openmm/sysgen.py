@@ -11,7 +11,9 @@ never import this package.
 """
 from __future__ import annotations
 
+import json
 import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -19,9 +21,20 @@ from typing import Any, Optional
 import yaml
 
 from .config import ConfigError, resolve_sys_config, sha256_of_document, write_yaml
+from .forcefield_record import build_forcefield_record
 
 OUTPUT_FILES = ("system.xml", "topology.pdb", "solute.pdb", "initial_state.xml", "solute.yaml",
-                "resolved_sys.config.yaml", "provenance.yaml", "sys-gen.log")
+                "forcefield.json", "resolved_sys.config.yaml", "provenance.yaml", "SHA256SUMS",
+                "sys-gen.log")
+
+#: Copied verbatim so the bundle can be rebuilt from what a user actually supplied.
+ORIGINAL_INPUTS_DIR = "original_inputs"
+#: Construction artifacts worth keeping: they carry bond orders, charges or radii that the
+#: parameterisation depended on. Caches, environments and the whole `_work/` tree are not kept.
+PREPARATION_DIR = "preparation"
+PREPARATION_KEEP = ("tleap.in", "tleap.log", "solute.sdf", "ligand.sdf", "solute.mol2",
+                    "ligand.mol2", "solute.frcmod", "ligand.frcmod")
+PREPARATION_KEEP_SUFFIXES = (".prmtop", ".rst7", ".inpcrd")
 
 
 class Log:
@@ -145,17 +158,140 @@ def _solute_document(topology, solute_indices, omega, *, route: str) -> dict[str
     }
 
 
-def _provenance(sys_config: dict, inputs: dict[str, str]) -> dict[str, Any]:
-    from .provenance_min import package_provenance
+SYSTEM_PROVENANCE_FORMAT = "md-templates-system-provenance/v1"
+CHECKSUM_MANIFEST = "SHA256SUMS"
+
+
+def _provenance(*, sys_config: dict, resolved: dict, out: Path, original_relative: str,
+                original_sha256: str, system, payload: dict[str, str],
+                command: list[str]) -> dict[str, Any]:
+    """Everything needed to know what produced this bundle, and from what.
+
+    Paths are relative to `inputs/`. An absolute path would say where the bundle happened to be
+    written, which stops being true the moment it is moved -- and moving it is the point.
+    """
+    from .provenance_min import (environment_versions, implementation_identity, sha256_file)
+
+    box = None
+    if system.usesPeriodicBoundaryConditions():
+        vectors = system.getDefaultPeriodicBoxVectors()
+        box = [[float(v.x), float(v.y), float(v.z)] for v in vectors]
 
     return {
-        **package_provenance(),
-        "generated": {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "input_hashes": inputs,
-            "sys_config_hash": sha256_of_document(sys_config),
+        "format": SYSTEM_PROVENANCE_FORMAT,
+        "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        # An argument list, not a shell string: a string has to be re-parsed to be used, and
+        # re-parsing is where quoting mistakes turn into a different command.
+        "command": list(command),
+        "implementation": implementation_identity(),
+        "environment": environment_versions(),
+        "original_input": {"path": original_relative, "sha256": original_sha256},
+        "sys_config_hash": sha256_of_document(sys_config),
+        "resolved_sys_config_hash": sha256_of_document(resolved),
+        "forcefield_json_sha256": (sha256_file(out / "forcefield.json")
+                                   if (out / "forcefield.json").is_file() else None),
+        "system": {
+            "topology_atoms": payload.get("topology_atoms"),
+            "openmm_particles": payload.get("openmm_particles"),
+            "solute_atoms": payload.get("solute_atoms"),
+            "periodic": bool(system.usesPeriodicBoundaryConditions()),
+            "box_vectors_nm": box,
         },
+        "payload_paths": payload.get("paths"),
+        "checksum_manifest": CHECKSUM_MANIFEST,
     }
+
+
+def _copy_original_input(input_path: Path, out: Path) -> str:
+    """The user's own file, byte-for-byte, under its own name.
+
+    A collision is refused rather than resolved: silently renaming or overwriting would make the
+    recorded checksum describe a file that is not the one the reader is looking at.
+    """
+    directory = out / ORIGINAL_INPUTS_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = directory / input_path.name
+    if destination.exists():
+        from .provenance_min import sha256_file
+
+        if sha256_file(destination) != sha256_file(input_path):
+            raise ConfigError(
+                f"{destination} already exists with different content. Refusing to overwrite the "
+                f"recorded original input; write this system into a new output folder.")
+    else:
+        shutil.copy2(input_path, destination)
+    return f"{ORIGINAL_INPUTS_DIR}/{destination.name}"
+
+
+def _keep_preparation_artifacts(staging: Path, out: Path) -> list[str]:
+    """Only the construction artifacts that carry science.
+
+    A prmtop carries the radii and charges the System was built from; `tleap.log` records what
+    tleap did. A solvent scratch file or a cache carries neither, and copying the whole `_work/`
+    tree would bury the ones that matter.
+    """
+    kept: list[str] = []
+    if not staging.is_dir():
+        return kept
+    destination = out / PREPARATION_DIR
+    for path in sorted(staging.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.name not in PREPARATION_KEEP and path.suffix not in PREPARATION_KEEP_SUFFIXES:
+            continue
+        destination.mkdir(parents=True, exist_ok=True)
+        target = destination / path.name
+        if not target.exists():
+            shutil.copy2(path, target)
+            kept.append(f"{PREPARATION_DIR}/{target.name}")
+    return kept
+
+
+def write_checksum_manifest(directory: Path, *, exclude=(CHECKSUM_MANIFEST,)) -> Path:
+    """`SHA256SUMS` over every regular file here, written last.
+
+    Deterministic: sorted relative POSIX paths, streamed contents, `sha256sum` format. The manifest
+    cannot hash itself, and that exclusion is the only one.
+    """
+    from .provenance_min import sha256_file
+
+    directory = Path(directory)
+    skip = set(exclude)
+    lines = []
+    for path in sorted(directory.rglob("*"), key=lambda p: p.relative_to(directory).as_posix()):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(directory).as_posix()
+        if relative in skip or any(part == "_work" for part in path.relative_to(directory).parts):
+            continue
+        lines.append(f"{sha256_file(path)}  {relative}")
+    manifest = directory / CHECKSUM_MANIFEST
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return manifest
+
+
+def verify_checksum_manifest(directory: Path) -> dict[str, Any]:
+    """Recompute every digest. Returns what matched, what changed and what went missing."""
+    from .provenance_min import sha256_file
+
+    directory = Path(directory)
+    manifest = directory / CHECKSUM_MANIFEST
+    if not manifest.is_file():
+        return {"ok": False, "reason": f"{CHECKSUM_MANIFEST} is missing"}
+    ok, mismatched, missing = [], [], []
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        digest, relative = line.split("  ", 1)
+        path = directory / relative
+        if not path.is_file():
+            missing.append(relative)
+        elif sha256_file(path) == digest:
+            ok.append(relative)
+        else:
+            mismatched.append(relative)
+    return {"ok": not mismatched and not missing, "verified": len(ok),
+            "mismatched": mismatched, "missing": missing}
 
 
 def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
@@ -217,8 +353,44 @@ def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
     write_yaml(out / "solute.yaml",
                _solute_document(topology, solute_indices, omega, route=route))
     write_yaml(out / "resolved_sys.config.yaml", resolved)
-    write_yaml(out / "provenance.yaml",
-               _provenance(document, {input_path.name: sha256_file(input_path)}))
+
+    # The user's own file, and the construction artifacts that carry science. Both before the
+    # force-field record, which checksums whatever ligand representation survived.
+    original_relative = _copy_original_input(input_path, out)
+    kept = _keep_preparation_artifacts(staging, out)
+    log(f"original     : {original_relative} (kept byte-for-byte)")
+    if kept:
+        log("preparation  : " + ", ".join(kept))
+
+    artifacts = {}
+    for relative in kept:
+        if relative.endswith((".sdf", ".mol2")):
+            artifacts["ligand_sdf"] = relative
+        elif relative.endswith(".prmtop"):
+            artifacts["prmtop"] = relative
+    forcefield = build_forcefield_record(resolved=resolved, route=route, record=record,
+                                         inputs_dir=out, artifacts=artifacts)
+    (out / "forcefield.json").write_text(
+        json.dumps(forcefield, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    log(f"forcefield   : {forcefield['protein']['openmm_resource']}"
+        + (f" + {forcefield['water']['openmm_resource']}" if forcefield["water"]["openmm_resource"]
+           else f" + {(forcefield['implicit_solvent'] or {}).get('model')}"
+                f"/{(forcefield['implicit_solvent'] or {}).get('radii')}"))
+
+    write_yaml(out / "provenance.yaml", _provenance(
+        sys_config=document, resolved=resolved, out=out,
+        original_relative=original_relative, original_sha256=sha256_file(input_path),
+        system=system,
+        payload={"topology_atoms": topology.getNumAtoms(),
+                 "openmm_particles": system.getNumParticles(),
+                 "solute_atoms": record["n_solute_atoms"],
+                 "paths": {"system": "system.xml", "topology": "topology.pdb",
+                           "solute_topology": "solute.pdb", "initial_state": "initial_state.xml",
+                           "solute": "solute.yaml", "forcefield": "forcefield.json",
+                           "resolved_config": "resolved_sys.config.yaml",
+                           "original_input": original_relative,
+                           "preparation": kept or None}},
+        command=list(sys.argv)))
 
     if system.usesPeriodicBoundaryConditions():
         vectors = system.getDefaultPeriodicBoxVectors()
@@ -230,6 +402,11 @@ def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
     log("written      : " + ", ".join(OUTPUT_FILES))
     log.save()
     shutil.rmtree(staging, ignore_errors=True)
+    # Last, so it covers the finished bundle including the log that describes writing it.
+    manifest = write_checksum_manifest(out)
+    n = len(manifest.read_text(encoding="utf-8").strip().splitlines())
+    if echo:
+        print(f"  checksums    : {n} files in {CHECKSUM_MANIFEST}")
     return {"output_folder": str(out), "n_particles": system.getNumParticles(),
             "n_solute_atoms": record["n_solute_atoms"], "implicit": implicit}
 
@@ -275,7 +452,12 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
     state_path = _write_initial_state(system, pdb, staging)
     return {"system_xml": built["system_xml"], "topology_pdb": solvated["output_pdb"],
             "initial_state": state_path, "n_solute_atoms": solvated["n_solute_atoms"],
-            "ligand_sdf": ligand_sdf, "omega": built}
+            "ligand_sdf": ligand_sdf, "omega": built,
+            # Carried through for forcefield.json: what the box actually ended up containing is
+            # part of how the system was parameterised, not a log line.
+            "n_waters": solvated.get("n_waters"), "ions": solvated.get("ions"),
+            "box_shape": solvated.get("box_shape"),
+            "box_volume_nm3": solvated.get("box_volume_nm3")}
 
 
 def _build_implicit(input_path: Path, cfg: dict, staging: Path, *, route: str, log: Log) -> dict:

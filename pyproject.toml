@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "md-templates"
-version = "0.3.1"
+version = "0.4.0.dev0"
 description = "Reusable OpenMM templates for explicit-water molecular dynamics and omega-selective REST2."
 readme = "README.md"
 requires-python = ">=3.11"

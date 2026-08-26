@@ -392,6 +392,57 @@ commit.
 
 ---
 
+## Where this sits
+
+MD-templates is one of three repositories. It makes simulation data **FAIR-ready**; it does not
+make it FAIR, and it never assigns a dataset identifier or writes into `$MD_DATA`.
+
+| repository | owns |
+|---|---|
+| [MD-templates](https://github.com/csy0000/MD-templates) | system construction, force-field record, resolved protocol, seeds, generated scripts, execution provenance |
+| [MD-data](https://github.com/csy0000/MD-data) | permanent dataset ID, immutable `$MD_DATA` storage, complete archive checksums, metadata, retention and access |
+| [MD-analysis](https://github.com/csy0000/MD-analysis) | analysis configuration, software identity, consumed dataset IDs and checksums, derived-result lineage |
+| project-template | project inputs, configs, workflows and component locks — **not yet available** |
+
+See [`docs/FAIR_HANDOFF.md`](docs/FAIR_HANDOFF.md) for what each letter of FAIR requires and which
+repository delivers it.
+
+## Provenance the generators write
+
+`sys-gen` keeps your original file and records how the System was parameterised:
+
+```text
+inputs/
+├── original_inputs/<your file>   byte-for-byte, checksummed
+├── preparation/                  tleap/prmtop/ligand artifacts, when the route produces them
+├── forcefield.json               how the System was parameterised, recorded where it was decided
+├── provenance.yaml               command, implementation identity, environment, box, lineage
+└── SHA256SUMS                    every file here, deterministic and reproducible
+```
+
+`md-gen` records which prepared system it came from — hashes of the parent `provenance.yaml`,
+`forcefield.json` and `SHA256SUMS` — plus the stage plan, every seed, and `generated-files.sha256`
+over what it wrote before any dynamics.
+
+At runtime each stage writes `resolved_stage.yaml`; cMD and REST2 additionally write
+`resolved_run.yaml` and append one line per invocation to `invocations.jsonl`, so a continued run
+keeps its full history rather than overwriting it.
+
+Trajectories are recorded by path, size and frame count, never hashed during a run — MD-data
+computes archival checksums once.
+
+### Retrofitting 0.3.x data
+
+```bash
+python scripts/retrofit_fair_v030.py --inputs ./inputs --md ./MD --output ./fair-registration \
+    [--original-input ./original.pdb] [--environment ./env.yaml]
+```
+
+Reads only — it never modifies, renames or adds a file in `inputs/` or `MD/`. Every retrospective
+value carries an evidence status (`recorded`, `derived`, `user_supplied`, `unknown`), and the result
+is graded **A** rebuildable, **B** prepared-system reproducible, or **C** archival only, with every
+reason machine-readable.
+
 ## Requirements
 
 Python ≥ 3.11 and OpenMM 8.6.0 to run; the OpenFF toolkit, openmmforcefields, AmberTools, ParmEd

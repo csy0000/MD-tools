@@ -5,6 +5,8 @@ reads well proves nothing about which state a stage actually started from.
 """
 from __future__ import annotations
 
+import json
+import re
 import stat
 
 import pytest
@@ -263,7 +265,10 @@ def test_no_generated_file_names_this_checkout_or_imports_the_package(explicit):
         if not path.is_file():
             continue
         text = path.read_text(errors="ignore")
-        if path.suffix == ".py" and "md_templates" in text:
+        # An IMPORT of the package, not any mention of it: `md_templates_version` is a field
+        # name in a runtime record and is not a dependency.
+        if path.suffix == ".py" and re.search(r"^\s*(import|from)\s+md_templates\b", text,
+                                              re.MULTILINE):
             offenders[str(path.relative_to(explicit))] = "imports md_templates"
         elif path.suffix == ".py" and str(REPO_ROOT) in text:
             offenders[str(path.relative_to(explicit))] = "names the checkout"
@@ -507,7 +512,14 @@ def test_md_config_hash_is_the_hash_of_the_generated_md_config(explicit):
 
     provenance = yaml.safe_load((explicit / "provenance.yaml").read_text())
     written = (explicit / "md.config.yaml").read_bytes()
-    assert provenance["generated"]["md_config_hash"] == hashlib.sha256(written).hexdigest()
+    assert provenance["md_config_hash"] == hashlib.sha256(written).hexdigest()
+    # and the lineage back to the prepared system it was generated from
+    parent = provenance["parent_system"]
+    inputs = (explicit / parent["inputs_path"]).resolve()
+    for key, name in (("provenance_sha256", "provenance.yaml"),
+                      ("forcefield_sha256", "forcefield.json"),
+                      ("checksums_sha256", "SHA256SUMS")):
+        assert parent[key] == hashlib.sha256((inputs / name).read_bytes()).hexdigest(), name
 
 
 def test_the_template_commit_is_recorded_not_null(explicit_run):
@@ -541,3 +553,97 @@ def test_rest2_equilibration_and_production_agree_on_device_placement(explicit_r
     if any(device is not None for device in devices):
         assert len(set(devices)) == len(devices), \
             f"two replicas were pinned to the same device while others were idle: {devices}"
+
+
+# --- FAIR runtime records ----------------------------------------------------
+
+def test_every_common_stage_records_what_ran_at_runtime(explicit_run):
+    """The record is written only after the final state exists, so `completed` cannot be early."""
+    for name in EXPLICIT_STAGES:
+        record = yaml.safe_load((explicit_run / name / "resolved_stage.yaml").read_text())
+        assert record["format"] == "md-templates-runtime-record/v1"
+        assert record["record_kind"] == "common_stage"
+        assert record["status"] == "completed"
+        assert record["started_utc"] and record["finished_utc"]
+        assert record["platform"] == "CUDA", f"{name} did not run on CUDA"
+        assert record["implementation"]["md_templates_version"], name
+        assert record["outputs"]["final_state.xml"]["sha256"], name
+        assert record["outputs"]["final_state.xml"]["bytes"] > 0
+        if name != "minimization":
+            assert record["completed_steps"] == record["configured_steps"], name
+
+
+def test_a_stage_hashes_its_parents_final_state_and_not_a_checkpoint(explicit_run):
+    record = yaml.safe_load((explicit_run / "eq/npt_1kcal" / "resolved_stage.yaml").read_text())
+    assert record["input_state"].endswith("final_state.xml")
+    assert record["input_state_sha256"], "the handoff it consumed must be identified"
+    parent = yaml.safe_load((explicit_run / "eq/nvt_1kcal" / "resolved_stage.yaml").read_text())
+    assert record["input_state_sha256"] == parent["outputs"]["final_state.xml"]["sha256"], \
+        "the recorded input hash must be the parent's recorded output hash"
+
+
+def test_cmd_writes_a_run_record_and_an_append_only_history(explicit_run):
+    import json
+
+    record = yaml.safe_load((explicit_run / "cMD" / "resolved_run.yaml").read_text())
+    assert record["record_kind"] == "cmd_run" and record["status"] == "completed"
+    assert record["platform"] == "CUDA"
+    assert record["trajectories"]["solute"]["frames"] is not None
+    # Trajectories are sized and counted, never hashed at runtime.
+    assert "sha256" not in record["trajectories"]["solute"]
+    assert record["outputs"]["final_state.xml"]["sha256"]
+
+    lines = [json.loads(l) for l in
+             (explicit_run / "cMD" / "invocations.jsonl").read_text().splitlines() if l.strip()]
+    assert lines, "no invocation was recorded"
+    assert [e["invocation_index"] for e in lines] == list(range(len(lines)))
+
+
+def test_rest2_records_every_replica_and_the_exchange_lifetime(explicit_run):
+    record = yaml.safe_load((explicit_run / "REST2" / "resolved_run.yaml").read_text())
+    assert record["record_kind"] == "rest2_run" and record["status"] == "completed"
+    thermo = record["thermodynamics"]
+    assert thermo["common_beta_across_replicas"] is True
+    assert thermo["positions_and_box_vectors_exchanged_together"] is True
+
+    exchange = record["exchange"]
+    assert exchange["lifetime_rounds"] >= exchange["rounds_this_invocation"]
+    assert exchange["rng_provenance"]
+
+    seeds = []
+    for replica in record["replicas"]:
+        assert replica["derived_scale_factor_s"] == pytest.approx((1 - replica["tau"]) ** 2)
+        assert replica["ended_at_step"] >= replica["started_at_step"]
+        seeds.extend(replica["seeds"].values())
+    assert len(set(seeds)) == len(seeds), "replica seeds repeat"
+
+
+def test_a_continuation_appends_and_keeps_indices_monotonic(explicit_run):
+    import json
+
+    path = explicit_run / "REST2" / "invocations.jsonl"
+    before = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    result = run_stage(explicit_run / "REST2", "run.py")
+    assert result.returncode == 0, result.stdout[-1500:] + result.stderr[-1500:]
+
+    after = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    assert len(after) == len(before) + 1, "the continuation did not append one entry"
+    assert after[:len(before)] == before, "earlier invocation history was rewritten"
+    assert [e["invocation_index"] for e in after] == list(range(len(after)))
+    assert after[-1]["exchange"]["first_round_index"] == before[-1]["exchange"]["lifetime_rounds"]
+    assert after[-1]["exchange"]["lifetime_rounds"] > before[-1]["exchange"]["lifetime_rounds"]
+
+
+def test_the_implicit_run_records_gbn2_and_no_pressure(implicit):
+    for name in IMPLICIT_STAGES:
+        result = run_stage(implicit / name)
+        assert result.returncode == 0, result.stdout[-1500:] + result.stderr[-1500:]
+    record = yaml.safe_load((implicit / "eq/nvt_free" / "resolved_stage.yaml").read_text())
+    assert record["pressure_bar"] is None
+    assert record["barostats_in_system"] == 0
+
+    forcefield = json.loads(
+        (implicit.parent / "inputs" / "forcefield.json").read_text())
+    assert forcefield["implicit_solvent"] == {"model": "GBn2", "radii": "mbondi3"}
+    assert forcefield["water"]["openmm_resource"] is None
+    assert forcefield["explicit_solvent"] is None

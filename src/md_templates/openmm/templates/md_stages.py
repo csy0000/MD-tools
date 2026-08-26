@@ -362,6 +362,95 @@ def stage_config_sha256(document):
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+RECORD_FORMAT = "md-templates-runtime-record/v1"
+
+
+def utc_now():
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def sha256_file(path):
+    """Streamed, so a multi-gigabyte checkpoint does not have to fit in memory."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def file_record(path, *, digest=True):
+    """Name, size and optionally checksum. Missing files are recorded as null, not omitted."""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    record = {"path": path.name, "bytes": path.stat().st_size}
+    if digest:
+        record["sha256"] = sha256_file(path)
+    return record
+
+
+def dcd_frame_count(path):
+    """Frames from the DCD header, without a trajectory library.
+
+    Trajectories are NOT checksummed at runtime: they are large, they grow across invocations, and
+    MD-data computes the archival digests once. Path, size and frame count are what runtime knows
+    cheaply and exactly.
+    """
+    import struct
+
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size < 24:
+        return None
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(24)
+        return int(struct.unpack("<i", head[8:12])[0])
+    except Exception:                                   # noqa: BLE001
+        return None
+
+
+def trajectory_record(path, *, atom_scope):
+    path = Path(path)
+    if not path.is_file():
+        return None
+    return {"path": path.name, "atom_scope": atom_scope, "bytes": path.stat().st_size,
+            "frames": dcd_frame_count(path)}
+
+
+def append_jsonl(path, entry):
+    """One JSON object per line, appended.
+
+    Append-only on purpose: an invocation history that can be rewritten is not a history. Opening
+    in append mode means a crash mid-write costs the last line, never the earlier ones.
+    """
+    import json
+
+    path = Path(path)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, sort_keys=False) + "\n")
+    return path
+
+
+def next_invocation_index(path):
+    """How many invocations have already been recorded here."""
+    path = Path(path)
+    if not path.is_file():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
+def project_identity(config):
+    """Which MD-templates generated this project, as carried in md.config.yaml."""
+    provenance = config.get("provenance") or {}
+    return {"md_templates_version": provenance.get("md_templates_version"),
+            "template_commit": provenance.get("template_commit"),
+            "installed_fingerprint": provenance.get("installed_fingerprint")}
+
+
 def write_yaml_atomic(path, document):
     """Replace, never partially overwrite.
 

@@ -34,11 +34,12 @@ from openmm.app import CheckpointReporter, DCDReporter, PDBFile, StateDataReport
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
-from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, active_barostat_count, build_stage_system,
-                       count_barostats, derive_seed, make_simulation, require_parent_state,
-                       resolve_platform, restraint_strength, set_barostat_frequency, set_restraint,
-                       steps_for, trim_to_checkpoint, write_final_state,
-                       write_yaml_atomic)
+from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, RECORD_FORMAT, active_barostat_count,
+                       append_jsonl, build_stage_system, count_barostats, derive_seed,
+                       file_record, make_simulation, next_invocation_index, project_identity,
+                       require_parent_state, resolve_platform, restraint_strength,
+                       set_barostat_frequency, set_restraint, steps_for, trajectory_record,
+                       trim_to_checkpoint, utc_now, write_final_state, write_yaml_atomic)
 from rest2_scaling import build_scaled_system, scale_factor_for_tau
 
 CONFIG = yaml.safe_load((HERE.parent / "md.config.yaml").read_text())
@@ -64,6 +65,9 @@ OMEGA_EXCLUDED = (SOLUTE["rest2"]["omega_excluded_bonds"]
 
 
 def main():
+    started_utc = utc_now()
+    invocations = HERE / "invocations.jsonl"
+    invocation_index = next_invocation_index(invocations)
     platform_name = resolve_platform(os.environ.get("MD_PLATFORM") or None)
     device = os.environ.get("MD_DEVICE")
     print(f"[cMD] platform {platform_name}"
@@ -132,6 +136,7 @@ def main():
         raise SystemExit("implicit solvent must have no barostat")
 
     remaining = total - done
+    started_step = done
     if remaining <= 0:
         print(f"[cMD] already complete: {done:,} of {total:,} steps")
         return 0
@@ -176,7 +181,47 @@ def main():
         "input_state": f"../{PARENT_STAGE}/final_state.xml",
         "output_state": "final_state.xml",
     })
-    print(f"[cMD] complete: {simulation.context.getStepCount():,} steps")
+
+    # FAIR runtime record, beside the scientific one above. Written only now, because it says
+    # `completed` and must not be able to say that before the final state it describes exists.
+    ended_step = int(simulation.context.getStepCount())
+    record = {
+        "format": RECORD_FORMAT,
+        "record_kind": "cmd_run",
+        "invocation_index": invocation_index,
+        "started_utc": started_utc,
+        "finished_utc": utc_now(),
+        "status": "completed",
+        "implementation": project_identity(CONFIG),
+        "command": list(sys.argv),
+        "ensemble": method["ensemble"],
+        "implicit_solvent": implicit,
+        "tau": TAU,
+        "configured_total_steps": total,
+        "configured_duration_ns": float(method["duration_ns"]),
+        "started_at_step": started_step,
+        "ended_at_step": ended_step,
+        "steps_this_invocation": ended_step - started_step,
+        "time_ps": round(ended_step * TIMESTEP_FS / 1000.0, 6),
+        "started_from": ("production.chk" if resuming else BRANCH),
+        "platform": platform_name,
+        "cuda_device": device if platform_name == "CUDA" else None,
+        "seeds": seeds,
+        "restraint_kj_mol_nm2": restraint_strength(simulation),
+        "barostats_active": active_barostat_count(simulation),
+        # Trajectories are sized and counted, never hashed at runtime: they grow across
+        # invocations and MD-data computes the archival digests once.
+        "trajectories": {
+            "whole_system": trajectory_record(whole, atom_scope="all_atoms"),
+            "solute": trajectory_record(solute,
+                                        atom_scope=f"solute:{len(SOLUTE_INDICES)}_atoms")},
+        "outputs": {name: file_record(HERE / name,
+                                      digest=name in ("final_state.xml", "production.chk"))
+                    for name in ("production.csv", "production.chk", "final_state.xml")},
+    }
+    write_yaml_atomic(HERE / "resolved_run.yaml", record)
+    append_jsonl(invocations, record)
+    print(f"[cMD] complete: {ended_step:,} steps; invocation {invocation_index} recorded")
     return 0
 
 

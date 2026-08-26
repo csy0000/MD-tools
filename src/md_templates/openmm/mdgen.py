@@ -25,14 +25,14 @@ import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import yaml
 
 from .config import ConfigError, check_timestep_against_masses, resolve_md_config, \
     sha256_of_document, write_yaml
 from .defaults import canonical_method
-from .provenance_min import package_provenance, sha256_file
+from .provenance_min import implementation_identity, package_provenance, sha256_file
 from .stages import stage_plan
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
@@ -93,9 +93,15 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
     resolved["paths"]["common_final_state"] = f"../{plan[-1]['path']}/final_state.xml"
     # Recorded once, read by every generated script. REST2's per-tau equilibration used to look
     # for a key that was never written and recorded null.
-    resolved["provenance"] = {"template_commit": _template_commit(),
-                              "md_templates_version": package_provenance()
-                              .get("md_templates", {}).get("version")}
+    # Carried INTO the project so runtime records can name the implementation that wrote them.
+    # The scripts cannot import md_templates to ask, and a run months later should not have to
+    # guess which version produced it.
+    identity = implementation_identity()
+    resolved["provenance"] = {
+        "template_commit": identity["git_commit"],
+        "md_templates_version": identity["version"],
+        "installed_fingerprint": identity["installed_fingerprint"]["value"],
+    }
 
     write_yaml(out / "md.config.yaml", resolved,
                header="# Resolved protocol, read by every run.py in this project.\n")
@@ -156,21 +162,100 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
 
     _write_run_all(out, plan, methods)
 
-    write_yaml(out / "provenance.yaml", {
-        **package_provenance(),
-        "generated": {
-            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "input_hashes": {name: sha256_file(inputs / name) for name in REQUIRED_INPUTS},
-            "sys_config_hash": sha256_of_document(sys_resolved),
-            # The RESOLVED protocol this project actually runs, hashed from the bytes written to
-            # MD/md.config.yaml. Hashing the input document instead recorded a hash for a file
-            # that is not in the project: resolution fills in stage paths, drops the solvent block
-            # that does not apply, and reconciles the ensemble with the solvent.
-            "md_config_hash": sha256_file(out / "md.config.yaml"),
-        },
-    })
+    write_yaml(out / "provenance.yaml", _md_provenance(
+        out=out, inputs=inputs, relative_inputs=relative_inputs, resolved=resolved,
+        sys_resolved=sys_resolved, plan=plan, methods=methods, seed=seed))
+    manifest = write_generated_manifest(out)
+    if manifest is not None:
+        pass
     return {"output_folder": str(out), "methods": methods, "implicit": implicit,
             "common_stages": [stage["path"] for stage in plan]}
+
+
+MD_PROVENANCE_FORMAT = "md-templates-md-provenance/v1"
+#: What `md-gen` itself wrote. NOT the dataset checksum manifest: trajectories, checkpoints and
+#: final states do not exist yet when this is written, and MD-data computes those at archival.
+GENERATED_MANIFEST = "generated-files.sha256"
+
+
+def _md_provenance(*, out: Path, inputs: Path, relative_inputs: str, resolved: dict,
+                   sys_resolved: dict, plan: list, methods: list, seed: int) -> dict[str, Any]:
+    """Which implementation generated this project, from which prepared system, with which seeds.
+
+    The lineage fields -- the three hashes of the parent `inputs/` records -- are what let a reader
+    confirm that this MD/ belongs to that inputs/, rather than to a different bundle that happens
+    to sit beside it.
+    """
+    from .provenance_min import environment_versions, implementation_identity, sha256_file
+
+    def parent_hash(name: str) -> Optional[str]:
+        path = inputs / name
+        return sha256_file(path) if path.is_file() else None
+
+    stage_seeds = {}
+    for stage in plan:
+        stage_seeds[stage["path"]] = {
+            "integrator": _seed(seed, stage["name"], "integrator"),
+            "velocities": _seed(seed, stage["name"], "velocities"),
+            "barostat": _seed(seed, stage["name"], "barostat"),
+        }
+    replica_seeds = {}
+    if "REST2" in methods:
+        for replica in range(int((resolved.get("REST2") or {}).get("number_of_replicas", 0))):
+            replica_seeds[f"replica_{replica:02d}"] = {
+                name: _seed(seed, "REST2", replica, name)
+                for name in ("integrator", "velocities", "barostat")}
+
+    return {
+        "format": MD_PROVENANCE_FORMAT,
+        "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "command": list(sys.argv),
+        "implementation": implementation_identity(),
+        "environment": environment_versions(),
+        "parent_system": {
+            "inputs_path": relative_inputs,
+            "provenance_sha256": parent_hash("provenance.yaml"),
+            "forcefield_sha256": parent_hash("forcefield.json"),
+            "checksums_sha256": parent_hash("SHA256SUMS"),
+            "input_hashes": {name: sha256_file(inputs / name) for name in REQUIRED_INPUTS},
+        },
+        "sys_config_hash": sha256_of_document(sys_resolved),
+        # The RESOLVED protocol this project runs, hashed from the bytes written to
+        # MD/md.config.yaml -- resolution fills in stage paths and reconciles the ensemble with
+        # the solvent, so the input document is a different file.
+        "md_config_hash": sha256_file(out / "md.config.yaml"),
+        "methods": list(methods),
+        "common_stage_plan": [{"path": s["path"], "kind": s["kind"], "ensemble": s["ensemble"],
+                               "parent": s.get("parent_path"),
+                               "input_state": s["input_state"]} for s in plan],
+        "seeds": {"base": seed, "common_stages": stage_seeds, "rest2_replicas": replica_seeds},
+        "generated_paths": sorted(
+            p.relative_to(out).as_posix() for p in out.rglob("*")
+            if p.is_file() and p.name != GENERATED_MANIFEST),
+        "checksum_manifest": GENERATED_MANIFEST,
+        "checksum_manifest_scope": (
+            "files written by md-gen before any dynamics: scripts, launchers, stage.yaml and "
+            "md.config.yaml. Trajectories, checkpoints and final states are produced later and "
+            "are checksummed by MD-data at archival, not here."),
+    }
+
+
+def write_generated_manifest(out: Path) -> Path:
+    """Hash what md-gen produced, deterministically, excluding the manifest itself."""
+    from .provenance_min import sha256_file
+
+    out = Path(out)
+    lines = []
+    for path in sorted(out.rglob("*"), key=lambda p: p.relative_to(out).as_posix()):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(out).as_posix()
+        if relative == GENERATED_MANIFEST:
+            continue
+        lines.append(f"{sha256_file(path)}  {relative}")
+    manifest = out / GENERATED_MANIFEST
+    manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return manifest
 
 
 def _template_commit() -> str | None:
