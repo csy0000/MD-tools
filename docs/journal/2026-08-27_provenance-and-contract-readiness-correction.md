@@ -130,12 +130,60 @@ tests that need a real run. **Device 0, NVIDIA RTX A5000, driver 580.173.02**; t
 confirm `platform: CUDA` for both minimisation and cMD. No nanosecond runs, no REST2 campaign, no
 repeat of the previous full GPU campaign.
 
+### Re-verification from a clean checkout
+
+The corrections were implemented from a dirty working tree, so the clean-checkout path could only
+be exercised by presenting the raw identity observation as clean. After committing (`5d5fb47`) the
+checkout is genuinely clean, and the whole path was re-run through the real CLI with nothing
+simulated. That evidence supersedes the simulated form and is what is reported below.
+
+```text
+md-openmm sys-gen -i ./ALA.pdb --config sys.config.yaml -of "$MD_DATA_LOCAL/common/"
+md-openmm md-gen  -if "$MD_DATA_LOCAL/common/" --config md.config.yaml -of "$MD_DATA_LOCAL/"
+
+dataset.yaml                       5d5fb472ea82ab7b195b6cdd12c331ccfc7cccf5
+provenance.yaml                    5d5fb472ea82ab7b195b6cdd12c331ccfc7cccf5
+common/provenance.yaml             5d5fb472ea82ab7b195b6cdd12c331ccfc7cccf5
+resolved_sys.config.yaml           5d5fb472ea82ab7b195b6cdd12c331ccfc7cccf5
+md.config.yaml                     5d5fb472ea82ab7b195b6cdd12c331ccfc7cccf5
+eq/npt_1kcal/stage.yaml            5d5fb472ea82ab7b195b6cdd12c331ccfc7cccf5
+eq/npt_free/stage.yaml             5d5fb472ea82ab7b195b6cdd12c331ccfc7cccf5
+eq/nvt_1kcal/stage.yaml            5d5fb472ea82ab7b195b6cdd12c331ccfc7cccf5
+minimization/stage.yaml            5d5fb472ea82ab7b195b6cdd12c331ccfc7cccf5
+AIS/path_definition.yaml           5d5fb472ea82ab7b195b6cdd12c331ccfc7cccf5
+--> 1 distinct value across 10 records
+```
+
+Preflight on that project: `[PASS] template provenance  5d5fb472ea82 agrees across 6 record(s)`,
+`12/12 ok`. From the AIS component the sixth record is `path_definition.yaml`, and corrupting it
+alone fails: `dataset.yaml records templates.commit 5d5fb472ea82 but path_definition.yaml says
+bbbbbbbbbbbb`.
+
+Missing fields, deleted from the real generated files one at a time:
+
+```text
+provenance.yaml records no template.commit
+md.config.yaml records no provenance.template_commit
+this stage's stage.yaml records no template_commit
+```
+
+Mismatch, with `dataset.yaml` edited: every other record is named in the failure, and restoring it
+returns `12/12 ok`.
+
+The dirty refusal was re-checked against a genuinely dirty repository — one scratch line appended
+to `README.md`, the CLI run, then the line reverted:
+
+```text
+sys-gen: the MD-templates generating this dataset is a Git checkout at 5d5fb472ea82 with
+UNCOMMITTED CHANGES, so that commit does not describe the code that would run.
+```
+
 ### Provenance routes
 
 | route | result |
 |---|---|
-| clean Git checkout | `commit = HEAD`, `evidence = git checkout`, `dirty = false`, `reproducible_from_commit = true`; the same commit appears in all 8 records of a generated contract project |
-| `direct_url.json`, no checkout | `commit` from `vcs_info.commit_id`, `evidence = direct_url.json`, `dirty = false`; the same commit appears in all 8 records — the case that previously wrote nulls into every `stage.yaml` |
+| clean Git checkout | `commit = HEAD`, `evidence = git checkout`, `dirty = false`, `reproducible_from_commit = true`; the same commit appears in all 10 records of a real generated contract project (see above) |
+| `direct_url.json`, no checkout | `commit` from `vcs_info.commit_id`, `evidence = direct_url.json`, `dirty = false`; the same commit appears in every record — the case that previously wrote nulls into every `stage.yaml`. Exercised in-process, since this machine has no VCS-installed copy |
 | dirty Git checkout, contract | **refused**, `UNCOMMITTED CHANGES`, before construction: no `system.xml`, no `topology.pdb`, no `dataset.yaml` on disk; refusal took 1.6 s |
 | dirty Git checkout, unregistered | permitted; `system.xml` built; every record carries `dirty: true`, `reproducible_from_commit: false` and the "does NOT reproduce" statement; `contract_managed: false` |
 | no establishable commit | `commit = None`, `evidence = unavailable`; contract generation refused; version and fingerprint still recorded and never promoted to a commit |
