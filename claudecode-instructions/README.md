@@ -5,6 +5,9 @@ root defines the durable rules that outlive any of them.
 
 ## Current
 
+- `20260827_preserve-unevaluated-capability-state.md` — **pending**; preserve `None` as the
+  unevaluated MD-data capability state instead of collapsing it to unavailable through `bool(None)`,
+  including the corresponding warning behavior. Unit-level correction only.
 - `20260827_dry-run-and-validation-shape-finalization.md` — **executed 2026-08-27**; see
   `docs/journal/2026-08-27_dry-run-and-validation-shape-finalization.md`. Made the real
   `md-template install --dry-run` command reach the MD-data record it already knew how to
