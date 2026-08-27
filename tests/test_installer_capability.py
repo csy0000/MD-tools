@@ -248,3 +248,131 @@ def test_validation_records_the_same_shape_as_installation(stack, monkeypatch):
     assert reloaded["md_data"]["commit"] == MD.MD_DATA_COMMIT
     # ...and validation surfaces the same banner installation does.
     assert any("MD-DATA CONTRACT SUPPORT UNAVAILABLE" in note for note in result["warnings"])
+
+
+# --- 4. the REAL command path, and one canonical record shape -----------------------------------
+
+def _dry_run_cli(stack, monkeypatch):
+    """`md-template install -e openmm -ev 8.6.0 --dry-run`, through main().
+
+    Only the package-manager lookup and the CUDA-ceiling probe are stubbed -- both shell out, and
+    a dry run must not. `subprocess.run` is made to raise, so any attempt to execute anything at
+    all fails the test rather than silently succeeding.
+    """
+    import contextlib
+
+    from md_templates.cli import md_template as cli
+
+    def executed(*args, **kwargs):
+        raise AssertionError("a dry run executed a subprocess")
+
+    monkeypatch.setattr(installer, "find_package_manager",
+                        lambda: ("micromamba", "/usr/bin/micromamba"))
+    monkeypatch.setattr(installer, "driver_cuda_ceiling", lambda: "13.0")
+    monkeypatch.setattr(installer.subprocess, "run", executed)
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        code = cli.main(["install", "-e", "openmm", "-ev", "8.6.0", "--dry-run",
+                         "--target-dir", str(stack)])
+    return code, buffer.getvalue()
+
+
+def test_the_real_dry_run_command_reports_md_data_as_not_evaluated(stack, monkeypatch):
+    """The branch existed and was unreachable: install_openmm returned before building the record.
+
+    Exercised through `main()` rather than by calling the reporter, because "the code can print
+    this" and "the command prints this" are different claims and only the second one matters.
+    """
+    code, text = _dry_run_cli(stack, monkeypatch)
+    assert code == 0
+    assert "md-data contract: not evaluated (dry run)" in text
+    # It must claim neither outcome.
+    assert "ready" not in text
+    assert "UNAVAILABLE" not in text
+
+
+def test_the_real_dry_run_installs_validates_and_records_nothing(stack, monkeypatch):
+    _dry_run_cli(stack, monkeypatch)
+    machine = yaml.safe_load((stack / "machine.yaml").read_text())
+    assert not (machine.get("installed") or {}).get("openmm"), \
+        "a dry run wrote an installed-environment record"
+    assert not (stack / "envs" / "openmm-8.6.0").exists(), "a dry run created the environment"
+
+
+def test_the_dry_run_result_carries_the_structured_record(stack, monkeypatch):
+    monkeypatch.setattr(installer, "find_package_manager",
+                        lambda: ("micromamba", "/usr/bin/micromamba"))
+    monkeypatch.setattr(installer, "driver_cuda_ceiling", lambda: "13.0")
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda *a, **k: pytest.fail("a dry run executed a subprocess"))
+
+    result = installer.install_openmm(stack, "8.6.0", dry_run=True)
+    assert result["dry_run"] is True
+    assert set(result["md_data"]) == set(installer._md_data_record(installer.md_data_pin()))
+    assert result["md_data"]["attempted"] is False
+    assert result["md_data"]["contract_support_ready"] is None
+    assert result["capabilities"]["md_data_contract_support_ready"] is False
+    assert "not evaluated" in result["md_data"]["reasons"][0]
+
+
+def _installed_record(monkeypatch, probe):
+    monkeypatch.setattr(installer.subprocess, "run", lambda *a, **k: _Result(0))
+    monkeypatch.setattr(installer, "probe_md_data", lambda prefix: probe)
+    return installer.install_md_data("/nowhere")
+
+
+def test_installation_and_validation_records_have_identical_key_sets(monkeypatch):
+    """One shape, from one definition. A key on only one of them is a reader's problem later."""
+    probe = _probe(installed_commit=MD.MD_DATA_COMMIT, source_kind="vcs")
+    installed = _installed_record(monkeypatch, probe)
+    monkeypatch.setattr(installer, "probe_md_data", lambda prefix: probe)
+    validated = installer.verify_md_data("/nowhere")
+
+    canonical = set(installer._md_data_record(installer.md_data_pin()))
+    assert set(installed) == canonical
+    assert set(validated) == canonical
+    assert set(installed) == set(validated)
+
+
+@pytest.mark.parametrize("probe, ready", [
+    (_probe(installed_commit=MD.MD_DATA_COMMIT, source_kind="vcs"), True),
+    (_probe(source_kind="local directory", installed_source="file:///x"), False),
+])
+def test_validation_is_evaluated_and_is_not_a_dry_run(monkeypatch, probe, ready):
+    """`attempted: null` means "not a pip operation", not "not evaluated"."""
+    monkeypatch.setattr(installer, "probe_md_data", lambda prefix: probe)
+    record = installer.verify_md_data("/nowhere")
+
+    assert record["attempted"] is None, "false is reserved for a dry run"
+    assert record["command"] is None and record["returncode"] is None
+    assert record["contract_support_ready"] is ready
+    assert record["installed"] is True          # observable: it imported
+    assert (record["reasons"] == []) is ready
+
+    text = _report(_environment(record, installer.capability_summary(record)))
+    assert "not evaluated" not in text, "validation must not look like a dry run"
+    assert ("md-data contract: ready" in text) is ready
+    assert ("md-data contract: UNAVAILABLE" in text) is (not ready)
+
+
+def test_a_validation_record_round_trips_through_machine_yaml(stack, monkeypatch):
+    reason_probe = _probe(source_kind="local directory", installed_source="file:///x")
+    monkeypatch.setattr(installer, "verify_environment",
+                        lambda prefix, version="": {"openmm_version": "8.6.0", "warnings": []})
+    monkeypatch.setattr(installer, "probe_md_data", lambda prefix: reason_probe)
+
+    result = installer.validate_existing(stack, stack / "envs" / "openmm-8.6.0")
+    reloaded = yaml.safe_load((stack / "machine.yaml").read_text())["installed"]["openmm"]
+    md_data = reloaded["md_data"]
+
+    assert set(md_data) == set(installer._md_data_record(installer.md_data_pin()))
+    assert md_data["attempted"] is None
+    assert md_data["command"] is None and md_data["returncode"] is None
+    assert md_data["contract_support_ready"] is False
+    assert md_data["reasons"] and "no source commit" in md_data["reasons"][0]
+    assert md_data["commit"] == MD.MD_DATA_COMMIT
+    assert reloaded["capabilities"]["md_data_contract_support_ready"] is False
+    assert reloaded["capabilities"]["md_data_unavailable_reasons"] == md_data["reasons"]
+    # The persisted record is what the reporter would speak from, and it is not a dry run.
+    assert "not evaluated" not in _report(_environment(md_data, reloaded["capabilities"]))

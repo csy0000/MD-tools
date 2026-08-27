@@ -104,6 +104,7 @@ def _md_data_record(pin: dict[str, str], **fields: Any) -> dict[str, Any]:
         "commit_verified": False,
         "contract_support_ready": False,
         "reasons": [],
+        "probe": None,
         "error": None,
         "note": None,
     }
@@ -145,10 +146,10 @@ def install_md_data(prefix: Path, *, dry_run: bool = False) -> dict[str, Any]:
                      f"{error.splitlines()[-1] if error else 'no output'}",
                      f"install it manually with: pip install '{pin['requirement']}'"])
 
-    verified = verify_md_data(prefix)
-    return _md_data_record(pin, attempted=True, command=command,
-                           returncode=result.returncode, installed=True,
-                           **{k: v for k, v in verified.items() if k not in pin})
+    # Only the fields the pip OPERATION establishes are overlaid; everything else is what the
+    # verifier observed about the installation.
+    return {**verify_md_data(prefix), "attempted": True, "command": command,
+            "returncode": result.returncode, "installed": True}
 
 
 #: The probe, run inside the TARGET environment. It reports what is installed there, including
@@ -252,17 +253,25 @@ def verify_md_data(prefix: Path) -> dict[str, Any]:
         reasons.append(f"the installed md-data is from commit {installed_commit[:12]}, not the "
                        f"pinned {pin['commit'][:12]}")
 
-    return {
-        **pin,
-        "probe": probe,
-        "installed_version": probe.get("version"),
-        "installed_commit": probe.get("installed_commit"),
-        "installed_source": probe.get("installed_source"),
-        "source_kind": probe.get("source_kind"),
-        "commit_verified": bool(installed_commit and installed_commit == pin["commit"].lower()),
-        "contract_support_ready": not reasons,
-        "reasons": reasons,
-    }
+    # The canonical shape, so a record from validation and a record from installation have the
+    # same keys and a reader never has to ask which produced it.
+    #
+    # `attempted` is None, NOT False. False is reserved for a dry run -- the CLI reads it as "not
+    # evaluated" -- and validation did evaluate: it just did not run pip, which is why `command`
+    # and `returncode` stay null.
+    return _md_data_record(
+        pin,
+        attempted=None, command=None, returncode=None,
+        installed=bool(probe.get("import_ok") or probe.get("version")),
+        installed_version=probe.get("version"),
+        installed_commit=probe.get("installed_commit"),
+        installed_source=probe.get("installed_source"),
+        source_kind=probe.get("source_kind"),
+        commit_verified=bool(installed_commit and installed_commit == pin["commit"].lower()),
+        contract_support_ready=not reasons,
+        reasons=reasons,
+        probe=probe,
+        error=probe.get("error") or probe.get("metadata_error"))
 
 
 class InstallError(RuntimeError):
@@ -425,8 +434,16 @@ def install_openmm(stack: Path, version: str = "8.6.0", *,
              "$ " + " ".join(command), ""]
 
     if dry_run:
-        log.write_text("\n".join(lines + ["# dry run: nothing was executed"]), encoding="utf-8")
-        return {"prefix": str(prefix), "log": str(log), "dry_run": True}
+        # The MD-data record is built here too, from the one source of truth, so the dry run can
+        # SAY that readiness was not evaluated. It runs no pip, imports nothing and writes no
+        # environment record; previously this returned first and the "not evaluated" branch in the
+        # CLI was unreachable.
+        md_data = install_md_data(prefix, dry_run=True)
+        log.write_text("\n".join(lines + ["", "# md-data (pinned, not installed)",
+                                          "$ " + " ".join(md_data.get("command") or []),
+                                          "# dry run: nothing was executed"]), encoding="utf-8")
+        return {"prefix": str(prefix), "log": str(log), "dry_run": True,
+                "md_data": md_data, "capabilities": capability_summary(md_data)}
 
     result = subprocess.run(command, capture_output=True, text=True)
     lines += [result.stdout, result.stderr]

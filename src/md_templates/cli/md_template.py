@@ -160,6 +160,9 @@ def cmd_install(args) -> int:
     print(f"  log           : {result['log']}")
     if result.get("dry_run"):
         print("  dry run: nothing was installed")
+        # Said explicitly rather than left out: a dry run that prints nothing about MD-data reads
+        # as though contract support were fine.
+        _report_md_data(result)
         return 0
     _report_environment(result)
     return 0
