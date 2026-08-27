@@ -5,6 +5,10 @@ root defines the durable rules that outlive any of them.
 
 ## Current
 
+- `20260827_ais-method-and-release-gap-correction.md` — **next task**; close edited explicit-pair
+  validation and exact OpenMM 8.6.0 acceptance gaps, then add standalone forward AIS using the
+  existing REST2 tau scaling, trajectory/time-window source selection, 21 endpoint-inclusive
+  coordinate/work observations, and focused CUDA validation.
 - `20260827_evidence-based-scientific-defaults.md` — **executed 2026-08-27**; see
   `docs/journal/2026-08-27_evidence-based-defaults-and-rationale.md`. Changed the method-development
   explicit default to ff14SB/Sage 2.2.1/TIP3P, retained ff19SB/OPC as `--solvent OPC`, set the
