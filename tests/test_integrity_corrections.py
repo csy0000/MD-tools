@@ -60,40 +60,91 @@ def test_the_source_record_carries_bounded_observations_not_a_digest(prepared_ai
 
 @pytest.mark.gpu
 @pytest.mark.slow
-def test_ais_prepares_with_the_hashing_helper_sabotaged(tiny_ais_project):
-    """`sha256_file` is made to raise. Preparation must still succeed through `iterload`."""
+def test_the_production_source_is_never_passed_to_the_hashing_helper(tiny_ais_project):
+    """PATH-SPECIFIC, not size-based.
+
+    The previous version of this test raised only after 4 MB had been fed to SHA-256, while the
+    fixture's source trajectory is ~288 kB. It would have passed with the source being hashed on
+    every run, which makes it worse than no test: it reported a guarantee it never checked.
+
+    This guard rejects the exact resolved source path and nothing else, so hashing it fails
+    regardless of how small it is, while the named small prepared-system files are still hashed
+    normally.
+    """
     project, environment = tiny_ais_project
+    source = (project / "cMD" / "whole_system.dcd").resolve()
+    assert source.is_file()
+    shutil.rmtree(project / "AIS" / "inputs")     # force preparation to read the source again
+
     guard = project / "AIS" / "sitecustomize.py"
     guard.write_text(
         "import pathlib\n"
+        "FORBIDDEN = pathlib.Path(%r)\n"
+        "MARK = pathlib.Path(__file__).with_name('_guard')\n"
+        "MARK.write_text('installed')\n"
         "import builtins\n"
-        "_open = builtins.open\n"
-        "import hashlib\n"
-        "_sha = hashlib.sha256\n"
-        "class _Guard:\n"
-        "    def __init__(self, *a, **k):\n"
-        "        self._d = _sha(*a, **k)\n"
-        "        self._n = 0\n"
-        "    def update(self, data):\n"
-        "        self._n += len(data)\n"
-        "        if self._n > 4_000_000:\n"
-        "            raise AssertionError('a large file was hashed')\n"
-        "        return self._d.update(data)\n"
-        "    def hexdigest(self):\n"
-        "        return self._d.hexdigest()\n"
-        "hashlib.sha256 = _Guard\n"
-        "pathlib.Path(__file__).with_name('_hash_guard').write_text('on')\n")
+        "_real_open = builtins.open\n"
+        "def open(file, *a, **k):\n"
+        "    try:\n"
+        "        same = pathlib.Path(file).resolve() == FORBIDDEN\n"
+        "    except Exception:\n"
+        "        same = False\n"
+        "    if same:\n"
+        "        import traceback\n"
+        "        stack = ''.join(traceback.format_stack())\n"
+        "        if 'sha256_file' in stack or 'hashlib' in stack:\n"
+        "            MARK.write_text('TRIGGERED')\n"
+        "            raise AssertionError('the production source was opened for hashing')\n"
+        "    return _real_open(file, *a, **k)\n"
+        "builtins.open = open\n" % str(source))
     try:
         result = subprocess.run(
             ["bash", "run.sh"], cwd=str(project / "AIS"), capture_output=True, text=True,
             env=dict(environment, PYTHONPATH=str(project / "AIS")), timeout=1800)
-        assert (project / "AIS" / "_hash_guard").is_file(), "the guard never installed"
+        mark = (project / "AIS" / "_guard")
+        assert mark.is_file(), "the guard never installed, so this test proved nothing"
+        assert mark.read_text() == "installed", "the production source was hashed"
         assert result.returncode == 0, result.stdout + result.stderr
-        assert "a large file was hashed" not in result.stdout + result.stderr
+        assert "opened for hashing" not in result.stdout + result.stderr
+
+        # ...and the selected frames were still prepared, through bounded iterload.
+        record = yaml.safe_load((project / "AIS" / "inputs" / "sources.yaml").read_text())
+        assert record["n_paths"] == 2
+        assert record["source"]["loader"] == "mdtraj.iterload"
+        assert record["source"]["trajectory_sha256"] is None
+        assert struct.unpack("<i", (project / "AIS" / "inputs" / "sources.dcd")
+                             .read_bytes()[8:12])[0] == 2
     finally:
         guard.unlink(missing_ok=True)
-        (project / "AIS" / "_hash_guard").unlink(missing_ok=True)
+        (project / "AIS" / "_guard").unlink(missing_ok=True)
         shutil.rmtree(project / "AIS" / "__pycache__", ignore_errors=True)
+
+
+def test_the_hashing_guard_would_actually_fire(tmp_path):
+    """The guard is only evidence if it triggers when the thing it forbids happens.
+
+    Without this, a guard that silently failed to match the path would look exactly like a guard
+    that was never triggered -- which is the flaw in the test this replaces.
+    """
+    ais = template_module_with_stubs()
+    target = tmp_path / "whole_system.dcd"
+    target.write_bytes(b"not really a dcd")
+    small = tmp_path / "solute.yaml"
+    small.write_text("n_solute_atoms: 22\n")
+
+    forbidden = target.resolve()
+    real = ais.sha256_file
+
+    def guarded(path):
+        if Path(path).resolve() == forbidden:
+            raise AssertionError("the production source was passed to sha256_file")
+        return real(path)
+
+    # A named small file still hashes.
+    assert len(guarded(small)) == 64
+    # The production source does not.
+    with pytest.raises(AssertionError, match="production source"):
+        guarded(target)
 
 
 # --- 2. physical truncation, with the header left alone -----------------------------------------
@@ -301,25 +352,10 @@ def test_an_unavailable_generator_identity_refuses_rather_than_accepting(monkeyp
     assert "refuses rather than record an unverified pin" in str(error.value)
 
 
-def test_preflight_refuses_records_that_disagree_about_the_generator(tmp_path):
-    preflight = template_module("preflight")
-    project = tmp_path / "ds"
-    (project / "minimization").mkdir(parents=True)
-    manifest = {"templates": {"commit": "a" * 40}}
-    (project / "provenance.yaml").write_text(
-        yaml.safe_dump({"implementation": {"git_commit": "a" * 40}}))
-    (project / "minimization" / "stage.yaml").write_text(
-        yaml.safe_dump({"template_commit": "a" * 40}))
-    row, = preflight.check_template_provenance(project / "minimization", project,
-                                               manifest=manifest)
-    assert row.status == preflight.PASS
-
-    (project / "minimization" / "stage.yaml").write_text(
-        yaml.safe_dump({"template_commit": "b" * 40}))
-    row, = preflight.check_template_provenance(project / "minimization", project,
-                                               manifest=manifest)
-    assert row.status == preflight.FAIL
-    assert "not generated by the same MD-templates" in row.detail
+# Preflight's provenance comparison is exercised against REAL generated projects in
+# tests/test_template_provenance.py -- matching, missing and mismatching records, for both the
+# clean-checkout and direct_url.json identity routes. A hand-built stub of the record set was the
+# weaker form of the same check and is deliberately not kept beside it.
 
 
 # --- 6. atom identity and order, not names and counts -------------------------------------------
@@ -363,6 +399,7 @@ def template_module_with_stubs():
     # Everything above the first function definition is project-configuration loading.
     cut = source.index("def relative_to_project")
     module = types.ModuleType("_ais_pure")
+    module.__dict__.update({name: __import__(name) for name in ("hashlib", "csv", "json", "yaml")})
     module.__dict__.update({"Path": __import__("pathlib").Path, "np": __import__("numpy")})
     exec(compile(source[cut:], str(path), "exec"), module.__dict__)
     return module
@@ -716,3 +753,107 @@ def completed_chain(tmp_path_factory):
                                 capture_output=True, text=True, env=environment, timeout=1800)
         assert result.returncode == 0, f"{stage}: {result.stdout}{result.stderr}"
     return project, environment
+
+
+# --- the instruction index ----------------------------------------------------------------------
+
+def test_no_instruction_is_indexed_twice():
+    """A file listed both pending and executed leaves a reader with no way to tell which is true."""
+    index = (REPO_ROOT / "claudecode-instructions" / "README.md").read_text()
+    duplicated = {}
+    for path in sorted((REPO_ROOT / "claudecode-instructions").glob("2026*.md")):
+        count = index.count(f"`{path.name}`")
+        if count > 1:
+            duplicated[path.name] = count
+    assert not duplicated, duplicated
+
+
+def test_every_instruction_executed_this_round_is_indexed_once():
+    index = (REPO_ROOT / "claudecode-instructions" / "README.md").read_text()
+    for name in ("20260827_final-md-data-integrity-correction.md",
+                 "20260827_provenance-and-contract-readiness-correction.md"):
+        assert index.count(f"`{name}`") == 1, name
+
+
+# --- the installed validator, not the intended one ----------------------------------------------
+
+def test_verification_uses_the_installed_source_not_the_intended_pin(monkeypatch):
+    """Echoing the pin describes our wish; direct_url.json describes the bytes on disk."""
+    from md_templates.install import openmm as installer
+
+    pin = installer.md_data_pin()
+
+    def probe(_prefix, **fields):
+        base = {"import_ok": True, "validator_available": True, "version": "0.2.0",
+                "contract_version": pin["contract_version"], "installed_commit": None,
+                "installed_source": None, "source_kind": "unknown"}
+        base.update(fields)
+        return base
+
+    # Installed from the exact pin: ready.
+    monkeypatch.setattr(installer, "probe_md_data", lambda p: probe(
+        p, installed_commit=pin["commit"], source_kind="vcs",
+        installed_source=pin["repository"]))
+    report = installer.verify_md_data("/nowhere")
+    assert report["contract_support_ready"] is True
+    assert report["commit_verified"] is True and not report["reasons"]
+
+    # Installed from a DIFFERENT commit: imports fine, validates fine, still not ready.
+    monkeypatch.setattr(installer, "probe_md_data", lambda p: probe(
+        p, installed_commit="b" * 40, source_kind="vcs"))
+    report = installer.verify_md_data("/nowhere")
+    assert report["contract_support_ready"] is False and report["commit_verified"] is False
+    assert "not the pinned" in report["reasons"][0]
+
+    # Installed from a local directory: no source commit to check at all.
+    monkeypatch.setattr(installer, "probe_md_data", lambda p: probe(
+        p, source_kind="local directory", installed_source="file:///somewhere"))
+    report = installer.verify_md_data("/nowhere")
+    assert report["contract_support_ready"] is False
+    assert "records no source commit" in report["reasons"][0]
+
+    # A contract version this repository does not target.
+    monkeypatch.setattr(installer, "probe_md_data", lambda p: probe(
+        p, installed_commit=pin["commit"], source_kind="vcs", contract_version="2.0"))
+    report = installer.verify_md_data("/nowhere")
+    assert report["contract_support_ready"] is False
+    assert any("contract version" in reason for reason in report["reasons"])
+
+    # Does not import.
+    monkeypatch.setattr(installer, "probe_md_data", lambda p: {
+        "import_ok": False, "validator_available": False, "error": "ModuleNotFoundError"})
+    report = installer.verify_md_data("/nowhere")
+    assert report["contract_support_ready"] is False
+    assert "does not import" in report["reasons"][0]
+
+
+def test_contract_unavailability_is_a_prominent_warning_not_a_failed_installation():
+    """A researcher doing unregistered local simulation has a working installation either way."""
+    from md_templates.install import openmm as installer
+
+    report = {"cuda_available": True, "nvidia": {"present": True},
+              "capabilities": {"openmm_runtime_ready": True,
+                               "md_data_contract_support_ready": False,
+                               "md_data_unavailable_reasons": ["md_data does not import"]}}
+    notes = installer.warnings_for(report)
+    banner = [n for n in notes if "MD-DATA CONTRACT SUPPORT UNAVAILABLE" in n]
+    assert banner, notes
+    assert "unregistered local simulation works" in banner[0]
+    assert "dataset.enabled: true` will fail" in banner[0]
+    # ...and it is a warning, not a problem that fails the install.
+    assert not any("MD-DATA" in problem for problem in installer._problems(report))
+
+    ready = {**report, "capabilities": {**report["capabilities"],
+                                        "md_data_contract_support_ready": True}}
+    assert not [n for n in installer.warnings_for(ready) if "MD-DATA" in n]
+
+
+def test_the_probe_reads_installed_distribution_metadata():
+    """It must inspect the installation, so the probe has to look at direct_url.json."""
+    from md_templates.install import openmm as installer
+
+    assert "direct_url.json" in installer._MD_DATA_PROBE
+    assert "vcs_info" in installer._MD_DATA_PROBE
+    assert "commit_id" in installer._MD_DATA_PROBE
+    # And it must not simply echo the pin back.
+    assert MD.MD_DATA_COMMIT not in installer._MD_DATA_PROBE

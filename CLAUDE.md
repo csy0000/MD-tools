@@ -131,10 +131,25 @@ A stored hash that is merely PRESENT proves nothing. Every one of these recomput
 - Force-field preflight is route-aware and exact. An ABSENT expected field FAILS — that is the case
   where what was built is least knowable. A peptide system must claim no ligand force field, a
   ligand system no protein one, and an implicit system neither a water model nor a barostat.
-- `dataset.templates.commit` must equal the commit that is actually generating the dataset,
-  established from a Git checkout or PEP 610 `direct_url.json`. Never derive one from a version, a
-  branch or a date. When no exact commit can be established, REFUSE contract-managed generation.
-  A dirty checkout pins HEAD and says so loudly; `provenance.yaml` carries `git_dirty`.
+- There is ONE resolution of "which MD-templates is this": `provenance_min.template_identity()`.
+  Never reach past it for `implementation_identity()["git_commit"]` — that is null in a
+  VCS-installed package whose `direct_url.json` proves the commit, and it is how `dataset.yaml`
+  came to carry a verified commit while the `stage.yaml` files beside it carried nulls.
+- The same established commit goes into `dataset.yaml`, both `provenance.yaml` files,
+  `resolved_sys.config.yaml`, `md.config.yaml`, every `stage.yaml` and every method record.
+  Contract-managed preflight REQUIRES every one of them and fails on a missing field, not only a
+  mismatched one.
+- Contract-managed generation refuses three states before the System is built: a claimed commit
+  that is not the generating one, an install with no establishable commit, and **a dirty working
+  tree** — its HEAD is real but checking it out gives different code, which is a false provenance.
+  Never derive a commit from a version, a branch or a date.
+- Unregistered generation from a dirty tree is permitted and must record `git_dirty`,
+  `reproducible_from_commit: false` and a plain statement that the commit alone does not reproduce
+  it. Never present it as contract-verified.
+- MD-data readiness is verified against the INSTALLED distribution's PEP 610 metadata, never by
+  echoing the intended pin. Report three states — runtime ready, contract support ready, contract
+  support unavailable — and never call contract support ready without import, both validator entry
+  points, a matching contract version and a proven source commit.
 - AIS compares full per-index atom identity — chain, residue index and id, residue name, atom name,
   element — plus bond connectivity. Atom names repeat within a protein, so names and counts cannot
   tell two topologies apart.

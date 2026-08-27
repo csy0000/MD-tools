@@ -543,11 +543,33 @@ validator itself. It is pinned to an exact commit over **HTTPS**, in one maintai
 pip install 'md-data @ git+https://github.com/csy0000/MD-data.git@48628f9a5d3ace6c6398a63bc3905cd58d542de3'
 ```
 
-`md-template install` does this for you as part of creating the OpenMM environment, and records the
-package version, the pinned commit, whether the import succeeded and whether the validator
-functions are present. It is not fatal if it fails — `dataset.enabled` is off by default and an
-unregistered project never needs it — but the outcome is recorded either way, so a user who follows
-the documented installation is not told one thing and given another.
+> **A pin is not an installation.** The line above is what this repository *targets*.
+> Whether your environment actually has it is a separate question, and `md-template install`
+> answers it by reading the installed distribution's own PEP 610 `direct_url.json` rather than
+> echoing the pin back. A package installed from a local checkout, from an index, or from a
+> different commit imports and validates perfectly well while being a different contract.
+
+> **Anonymous installation is currently not possible.** `github.com/csy0000/MD-data` is private —
+> an unauthenticated `git ls-remote` fails and the repository and commit APIs return 404 while a
+> public control returns 200 — and `md-data` is not on PyPI. The pinned command therefore works
+> only for someone with access to the repository. Making MD-data public, or publishing a package
+> release, is the owner action required; nothing in this repository can substitute for it.
+
+`md-template install` attempts the install as part of creating the OpenMM environment and reports
+**three separate states**, never collapsed into one:
+
+| state | meaning |
+|---|---|
+| OpenMM runtime ready | you can build systems and run unregistered local simulations |
+| MD-data contract support ready | `dataset.enabled: true` will work |
+| MD-data contract support unavailable | the runtime is fine; contract-managed generation will fail |
+
+Contract support is called ready only when **all** of these hold: the pinned requirement installed,
+`md_data` imports, both validator entry points exist, the installed contract version matches the
+one targeted here, and the installed distribution's metadata *proves* it came from the pinned
+commit. Anything else prints a prominent warning, records `contract_support_ready: false` with the
+exact reason, and leaves the OpenMM installation usable. `dataset.enabled: true` remains the hard
+gate: it fails before a system is built.
 
 A branch over SSH is deliberately *not* what is documented. `git+ssh://.../dev` needs a key agent
 and moves under your feet: two people running the same documented command on the same day can end
@@ -580,10 +602,25 @@ in `sys.config.yaml`, and never retyped.
 `md-openmm show-default dataset` prints the block with every required field `null`:
 
 `templates.commit` is additionally **checked against the MD-templates that is actually running**,
-established from a Git checkout or a PEP 610 `direct_url.json`. A syntactically valid 40-hex string
-that names a different commit is refused, and so is generation from an install where no exact commit
-can be established — a pin that points at nothing is worse than none. A dirty checkout pins its HEAD
-and says so loudly; `provenance.yaml` records `git_dirty`.
+established once and used everywhere — from a clean Git checkout, or from a PEP 610
+`direct_url.json` when the package was installed from a VCS URL and there is no checkout to read.
+That one resolved identity is written into `dataset.yaml`, both `provenance.yaml` files,
+`resolved_sys.config.yaml`, `md.config.yaml`, every `stage.yaml` and every method record, and
+preflight requires **all** of them to be present and to agree.
+
+Three refusals, all before the System is built:
+
+* a 40-hex string that is not the generating commit — it records a provenance that can be checked
+  out and will not reproduce the run;
+* an install where no exact commit can be established — a pin that points at nothing is worse than
+  none;
+* **a dirty working tree.** Its HEAD is a real commit, but checking it out gives someone different
+  code than ran, which is a false provenance rather than an imprecise one.
+
+Unregistered local generation (`dataset.enabled: false`) is unaffected by the third: develop from a
+dirty tree freely. It records `git_dirty`, `reproducible_from_commit: false` and a plain statement
+that the commit alone does not reproduce the run, and `sys-gen` prints `NOT REPRODUCIBLE` while it
+works.
 
 | field | why this repository cannot invent it |
 |---|---|

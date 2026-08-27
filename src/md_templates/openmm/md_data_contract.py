@@ -100,48 +100,28 @@ def require_md_data():
 # ---------------------------------------------------------------------------------------------
 
 def generator_commit() -> dict[str, Any]:
-    """The commit of the MD-templates that is ACTUALLY RUNNING, and how it was established.
+    """The canonical template identity, as this module's callers expect it.
 
-    Returns `{"commit": <40-hex or None>, "route": ..., "detail": ...}`.
-
-    A user-supplied `templates.commit` is a claim. This is the evidence it gets checked against,
-    because a syntactically valid 40-hex string is not identity -- it can name a commit that never
-    generated anything. Two routes are accepted and neither is invented:
-
-    * a real Git checkout (`git rev-parse HEAD`), refused when the tree is dirty, because a dirty
-      checkout is not the commit it names;
-    * PEP 610 `direct_url.json`, which pip writes when a package is installed from a VCS URL.
-
-    An installed wheel built from a tarball has neither, and this returns `None` rather than
-    guessing. Deriving a commit from a version string, a branch name or the date would produce a
-    pin that points at nothing.
+    A thin adaptor over `provenance_min.template_identity()` so there is exactly ONE resolution of
+    "which MD-templates is this" in the package. Kept as a name because the contract code and its
+    tests speak in terms of the generating commit.
     """
-    from .provenance_min import implementation_identity
+    from .provenance_min import template_identity
 
-    identity = implementation_identity()
-    commit = (identity.get("git_commit") or "").strip()
-    if commit and COMMIT.match(commit):
-        # A dirty checkout still HAS an exact HEAD, and that is the pin. What it does not have is
-        # a faithful description of itself, so the deviation is recorded and reported rather than
-        # either hidden or treated as no identity at all. `provenance.yaml` carries `git_dirty`.
-        return {"commit": commit, "route": "git checkout",
-                "dirty": bool(identity.get("git_dirty")),
-                "detail": ("git rev-parse HEAD, with uncommitted changes in the working tree"
-                           if identity.get("git_dirty") else "git rev-parse HEAD")}
-
-    direct = identity.get("direct_url") or {}
-    vcs = (direct.get("vcs_info") or {})
-    resolved = (vcs.get("commit_id") or "").strip()
-    if resolved and COMMIT.match(resolved):
-        return {"commit": resolved, "route": "direct_url.json", "dirty": False,
-                "detail": f"installed from {direct.get('url')} at {resolved[:12]}"}
-    return {"commit": None, "route": "unavailable", "dirty": None,
-            "detail": ("this MD-templates was installed without an exact commit: there is no Git "
-                       "checkout and no PEP 610 direct_url.json recording one")}
+    identity = template_identity()
+    return {"commit": identity["commit"], "route": identity["evidence"],
+            "dirty": identity["dirty"], "detail": identity["detail"], "identity": identity}
 
 
 def check_templates_commit(claimed: str) -> dict[str, Any]:
-    """`dataset.templates.commit` must be the commit that is actually generating this dataset."""
+    """`dataset.templates.commit` must be the commit that is actually generating this dataset.
+
+    Three refusals, and a dirty checkout is one of them. A working tree with uncommitted changes is
+    NOT reproducible from its HEAD: someone who checks that commit out gets different code. For
+    unregistered local work that is a limitation worth recording; for a dataset that will be
+    registered, archived and cited it is a FALSE provenance rather than an imprecise one, so
+    contract-managed generation stops here -- before the System is built, so the refusal is cheap.
+    """
     from .defaults import MD_TEMPLATES_REPOSITORY
 
     established = generator_commit()
@@ -154,6 +134,17 @@ def check_templates_commit(claimed: str) -> dict[str, Any]:
             f"from a clean Git checkout, or install with "
             f"`pip install 'md-templates @ git+{MD_TEMPLATES_REPOSITORY}.git@<commit>'`, or set "
             f"dataset.enabled false for an unregistered local project.")
+    if established["dirty"]:
+        raise ContractError(
+            f"the MD-templates generating this dataset is a Git checkout at "
+            f"{established['commit'][:12]} with UNCOMMITTED CHANGES, so that commit does not "
+            f"describe the code that would run.\n"
+            f"  A registered dataset records templates.commit as the way to reproduce it. "
+            f"Checking out {established['commit'][:12]} would give someone different code than "
+            f"this ran, which is a false provenance rather than an imprecise one.\n"
+            f"  Commit or stash the changes, or set dataset.enabled false for unregistered local "
+            f"generation -- which records git_dirty and states plainly that the commit alone does "
+            f"not reproduce it.")
     if str(claimed).strip().lower() != established["commit"].lower():
         raise ContractError(
             f"dataset.templates.commit is {claimed!r}, but the MD-templates actually generating "

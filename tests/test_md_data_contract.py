@@ -12,6 +12,7 @@ drifts, and these tests would drift with it.
 """
 from __future__ import annotations
 
+import contextlib
 import csv
 import os
 import shutil
@@ -517,6 +518,52 @@ def test_the_default_selection_minimises_on_cuda(request, fixture, expect):
 
 # --- a contract-managed dataset, end to end -----------------------------------------------------
 
+@contextlib.contextmanager
+def clean_checkout():
+    """Present this checkout's raw identity as clean, without touching the working tree.
+
+    The RAW observation is what is faked -- `implementation_identity()` -- so the resolution in
+    `template_identity()` and every comparison downstream is the real one. The commit is this
+    repository's actual HEAD, which is what `_dataset_block` claims, so the records still have to
+    agree with each other for anything to pass.
+    """
+    from md_templates.openmm import provenance_min
+
+    real = provenance_min.implementation_identity
+
+    def clean():
+        observed = dict(real())
+        observed["git_commit"] = GENERATOR_COMMIT
+        observed["git_dirty"] = False
+        return observed
+
+    patch = pytest.MonkeyPatch()
+    patch.setattr(provenance_min, "implementation_identity", clean)
+    try:
+        yield
+    finally:
+        patch.undo()
+
+
+def _generate_in_process(build, local, *, methods, stage):
+    """`sys-gen` or `md-gen`, called directly so the patched identity applies."""
+    from md_templates.openmm import mdgen, sysgen
+
+    environment = dict(os.environ)
+    os.environ.update({"MD_DATA": str(local.parents[2]), "MD_DATA_LOCAL": str(local)})
+    try:
+        if stage == "system":
+            sysgen.generate_system(input_path=build / "ALA.pdb",
+                                   config_path=build / "sys.config.yaml",
+                                   output_folder=local / "common", echo=False)
+        else:
+            mdgen.generate_md(input_folder=local / "common",
+                              config_path=build / "md.config.yaml", output_folder=local)
+    finally:
+        os.environ.clear()
+        os.environ.update(environment)
+
+
 @pytest.fixture(scope="module")
 def managed(tmp_path_factory):
     """A contract-managed dataset with a multi-chunk AIS source, generated but not yet run."""
@@ -541,9 +588,13 @@ def managed(tmp_path_factory):
     document["dataset"] = block
     path.write_text(yaml.safe_dump(document, sort_keys=False))
 
-    built = cli("sys-gen", "-i", "./ALA.pdb", "--config", "sys.config.yaml",
-                "-of", f"{local}/common/")
-    assert built.returncode == 0, built.stdout + built.stderr
+    # Generation runs IN-PROCESS with the raw identity observation presented as a clean checkout
+    # of the real HEAD. Contract-managed generation refuses a dirty working tree by design, and a
+    # development checkout is always dirty -- so a subprocess CLI call could never build this
+    # fixture. Only the two generation calls change; every stage below still runs through its own
+    # `run.sh` exactly as a user's would.
+    with clean_checkout():
+        _generate_in_process(build, local, methods=("cMD", "AIS"), stage="system")
 
     protocol_path = build / "md.config.yaml"
     protocol = yaml.safe_load(protocol_path.read_text())
@@ -560,9 +611,8 @@ def managed(tmp_path_factory):
                                       "start_time_ps": 0.002, "end_time_ps": 0.24,
                                       "number_of_trajectories": 2})
     protocol_path.write_text(yaml.safe_dump(protocol, sort_keys=False))
-    generated = cli("md-gen", "-if", f"{local}/common/", "--config", "md.config.yaml",
-                    "-of", f"{local}/")
-    assert generated.returncode == 0, generated.stdout + generated.stderr
+    with clean_checkout():
+        _generate_in_process(build, local, methods=("cMD", "AIS"), stage="md")
     return {"root": root, "local": local, "env": environment}
 
 

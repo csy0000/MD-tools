@@ -34,7 +34,8 @@ from . import md_data_contract as MD
 from .config import ConfigError, check_timestep_against_masses, resolve_md_config, \
     sha256_of_document, write_yaml
 from .defaults import canonical_method
-from .provenance_min import implementation_identity, package_provenance, sha256_file
+from .provenance_min import (implementation_identity, package_provenance, sha256_file,
+                             template_identity)
 from .stages import stage_plan
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
@@ -114,12 +115,10 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
         "note": (None if dataset_plan["contract_managed"]
                  else "unregistered local project: not MD-data compliant"),
     }
-    identity = implementation_identity()
-    resolved["provenance"] = {
-        "template_commit": identity["git_commit"],
-        "md_templates_version": identity["version"],
-        "installed_fingerprint": identity["installed_fingerprint"]["value"],
-    }
+    # ONE resolution of the generator identity, written identically everywhere. Reaching for
+    # `implementation_identity()["git_commit"]` here used to produce null in a VCS-installed
+    # package while the dataset manifest carried the verified commit from direct_url.json.
+    resolved["provenance"] = _template_provenance()
 
     write_yaml(out / "md.config.yaml", resolved,
                header="# Resolved protocol, read by every run.py in this project.\n")
@@ -227,7 +226,8 @@ def _md_provenance(*, out: Path, inputs: Path, relative_inputs: str, resolved: d
     confirm that this MD/ belongs to that inputs/, rather than to a different bundle that happens
     to sit beside it.
     """
-    from .provenance_min import environment_versions, implementation_identity, sha256_file
+    from .provenance_min import (environment_versions, implementation_identity, sha256_file,
+                                 template_identity)
 
     def parent_hash(name: str) -> Optional[str]:
         path = inputs / name
@@ -256,6 +256,11 @@ def _md_provenance(*, out: Path, inputs: Path, relative_inputs: str, resolved: d
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "command": list(sys.argv),
         "implementation": implementation_identity(),
+        # The canonical generator identity, resolved once. `implementation` is the raw
+        # observation; this is the answer every record in the project agrees on, and it
+        # carries the direct_url.json commit that `implementation.git_commit` is null for
+        # in a VCS-installed package.
+        "template": template_identity(),
         "environment": environment_versions(),
         # Whether this project belongs to a contract-managed MD-data dataset, and which validator
         # said so. An unregistered local tree says so rather than leaving it to be assumed.
@@ -336,8 +341,29 @@ def write_generated_manifest(out: Path) -> Path:
 
 
 def _template_commit() -> str | None:
-    """Which revision of the run-script templates this project was written from."""
-    return (package_provenance().get("md_templates") or {}).get("git_commit")
+    """The exact commit of the MD-templates that wrote this project, or None.
+
+    From the canonical resolution, so a VCS install records the commit `direct_url.json` proves
+    rather than the null a checkout-only lookup returns.
+    """
+    return template_identity()["commit"]
+
+
+def _template_provenance() -> dict[str, Any]:
+    """The generator identity as it is written into every record that names it."""
+    identity = template_identity()
+    return {
+        "template_commit": identity["commit"],
+        "template_commit_evidence": identity["evidence"],
+        "template_repository": identity["repository"],
+        "md_templates_version": identity["version"],
+        "installed_fingerprint": identity["installed_fingerprint"],
+        "git_dirty": identity["dirty"],
+        # Spelled out where an unregistered project records it, because a commit beside a dirty
+        # tree looks exactly like a commit that reproduces the run.
+        "reproducible_from_commit": (None if identity["commit"] is None
+                                     else not identity["dirty"]),
+    }
 
 
 def _base_seed(resolved: dict[str, Any]) -> int:
@@ -436,11 +462,6 @@ def _write_dataset_manifest(plan: dict[str, Any], *, echo: bool = True) -> dict[
         print(f"  manifest     : {path.name} validated by md-data "
               f"{report['validator']['version']} (contract v"
               f"{report['validator']['contract_version']}), layout verified")
-    established = plan.get("generator") or {}
-    if echo and established.get("dirty"):
-        print(f"  WARNING      : templates.commit {established['commit'][:12]} is this "
-              f"checkout's HEAD, but the working tree has uncommitted changes, so the recorded "
-              f"pin does not fully describe what ran. provenance.yaml records git_dirty: true.")
     # `md_data` / `md_data_local` are deliberately absent: they are this machine's storage
     # location, and the record must survive the tree being moved.
     return {"contract_managed": True, "manifest": MD.MANIFEST_NAME, **report}
@@ -462,7 +483,6 @@ def _ais_path_definition(resolved: dict[str, Any], *, implicit: bool) -> dict[st
         parameter_update_interval_steps=int(path["parameter_update_interval_steps"]),
         number_of_observations=int(block["output"]["number_of_observations"]),
         timestep_fs=float(common["timestep_fs"]))
-    identity = implementation_identity()
     return {
         "format": "md-templates-ais-path/v1",
         "path": path,
@@ -496,8 +516,7 @@ def _ais_path_definition(resolved: dict[str, Any], *, implicit: bool) -> dict[st
                      "frame keeps its own box. An NPT source ensemble may seed these paths, but "
                      "pressure-volume work is not part of this implementation."),
         },
-        "template_commit": identity["git_commit"],
-        "md_templates_version": identity["version"],
+        **_template_provenance(),
     }
 
 

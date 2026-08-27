@@ -6,6 +6,44 @@ Entries below `0.2.0` predate the reduction to the six-command CLI in `ca29fcd` 
 registry/bundle/schema architecture that no longer exists. They are kept as history; they do not
 describe the current package.
 
+## Unreleased — provenance consistency and honest contract readiness
+
+* **One canonical template identity.** `provenance_min.template_identity()` is the single
+  resolution of which MD-templates is running — repository, exact commit, evidence route, version,
+  installed fingerprint, dirty status, and whether the commit reproduces the generation. Every
+  writer reads it. Reaching past it for `implementation_identity()["git_commit"]` is what made a
+  VCS-installed package write a verified commit into `dataset.yaml` and nulls into every
+  `stage.yaml` beside it.
+* **The same commit reaches every record**: `dataset.yaml`, both `provenance.yaml` files,
+  `resolved_sys.config.yaml` (which did not carry it at all before), `md.config.yaml`, every
+  `stage.yaml` and every method record.
+* **Contract-managed generation now refuses a dirty checkout**, before the System is built. Its
+  HEAD is a real commit, but checking it out gives different code than ran — a false provenance
+  rather than an imprecise one. The previous release warned and continued while its own docstring
+  said it refused.
+* **Unregistered generation from a dirty tree stays permitted** and records `git_dirty`,
+  `reproducible_from_commit: false` and a plain statement that the commit alone does not reproduce
+  it; `sys-gen` prints `NOT REPRODUCIBLE` while it works.
+* **Preflight requires every applicable provenance record** for a contract-managed project. It
+  previously compared only the fields that happened to be present, so deleting one was enough to
+  pass. A record whose own `git_commit` and `direct_url.vcs_info.commit_id` disagree also fails.
+* **MD-data readiness is verified, not echoed.** `verify_md_data()` reads the installed
+  distribution's PEP 610 `direct_url.json` and compares the actual source commit against the pin.
+  Installation now reports three states — OpenMM runtime ready, contract support ready, contract
+  support unavailable — and calls contract support ready only on import, both validator entry
+  points, a matching contract version and a proven source commit. A failure warns prominently and
+  leaves the OpenMM install usable; `dataset.enabled: true` remains the hard gate.
+* **The source-hashing regression test was replaced.** The old one raised only past 4 MB while its
+  fixture source is ~288 kB — it would have passed with the source hashed every run. The
+  replacement rejects the exact resolved source path regardless of size and proves the guard
+  installed.
+* Corrected `path_is_complete()`'s docstring, which still claimed only the DCD header was read.
+
+**Migration.** Contract-managed generation from a dirty working tree now fails; commit or stash
+first, or use `dataset.enabled: false`. Projects generated before this change carry no
+`template.commit` in `resolved_sys.config.yaml` and will fail contract-managed preflight — regenerate
+or add the field.
+
 ## Unreleased — integrity corrections
 
 Seven corrections that share one shape: a record that LOOKS complete.

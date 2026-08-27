@@ -185,7 +185,8 @@ def _provenance(*, sys_config: dict, resolved: dict, out: Path, original_relativ
     Paths are relative to `inputs/`. An absolute path would say where the bundle happened to be
     written, which stops being true the moment it is moved -- and moving it is the point.
     """
-    from .provenance_min import (environment_versions, implementation_identity, sha256_file)
+    from .provenance_min import (environment_versions, implementation_identity, sha256_file,
+                             template_identity)
 
     box = None
     if system.usesPeriodicBoundaryConditions():
@@ -199,6 +200,11 @@ def _provenance(*, sys_config: dict, resolved: dict, out: Path, original_relativ
         # re-parsing is where quoting mistakes turn into a different command.
         "command": list(command),
         "implementation": implementation_identity(),
+        # The canonical generator identity, resolved once. `implementation` is the raw
+        # observation; this is the answer every record in the project agrees on, and it
+        # carries the direct_url.json commit that `implementation.git_commit` is null for
+        # in a VCS-installed package.
+        "template": template_identity(),
         "environment": environment_versions(),
         "original_input": {"path": original_relative, "sha256": original_sha256},
         "sys_config_hash": sha256_of_document(sys_config),
@@ -290,6 +296,23 @@ DATASET_HEADER = """\
 """
 
 
+def _warn_if_not_reproducible(log) -> None:
+    """Say it out loud when the commit in these records does not reproduce them.
+
+    Only reachable for UNREGISTERED generation: contract-managed generation refuses this state
+    before anything is built. A researcher iterating locally should not be stopped, but they should
+    not later find a commit in their provenance and assume it describes the code.
+    """
+    from .provenance_min import template_identity
+
+    identity = template_identity()
+    if identity["reproducible_from_commit"]:
+        return
+    log(f"NOT REPRODUCIBLE : {identity['reproducibility']}")
+    log("               : this is unregistered local generation. Contract-managed generation "
+        "(dataset.enabled: true) refuses it.")
+
+
 def _plan_dataset(resolved: dict[str, Any], out: Path) -> dict[str, Any]:
     """Everything the contract needs, resolved and validated BEFORE anything is built.
 
@@ -350,11 +373,6 @@ def _write_dataset_manifest(plan: dict[str, Any], *, echo: bool = True) -> dict[
         print(f"  manifest     : {path.name} validated by md-data "
               f"{report['validator']['version']} (contract v"
               f"{report['validator']['contract_version']})")
-    established = plan.get("generator") or {}
-    if echo and established.get("dirty"):
-        print(f"  WARNING      : templates.commit {established['commit'][:12]} is this "
-              f"checkout's HEAD, but the working tree has uncommitted changes, so the recorded "
-              f"pin does not fully describe what ran. provenance.yaml records git_dirty: true.")
     # `md_data` / `md_data_local` are deliberately absent: they are this machine's storage
     # location, and the record must survive the tree being moved.
     return {"contract_managed": True, "manifest": MD.MANIFEST_NAME, **report}
@@ -531,9 +549,18 @@ def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
     shutil.copy2(record["initial_state"], out / "initial_state.xml")
     _write_solute_pdb(record["topology_pdb"], solute_indices, out / "solute.pdb")
     log(f"solute.pdb   : {len(solute_indices)} atoms, the topology a solute-only DCD needs")
+    _warn_if_not_reproducible(log)
 
     write_yaml(out / "solute.yaml",
                _solute_document(topology, solute_indices, omega, route=route))
+    # The generator identity travels with the resolved configuration too. `md-gen` reads this
+    # file back, and preflight compares it against every other record that names a generator: a
+    # dataset whose system was prepared by one MD-templates and whose scripts were written by
+    # another has a single recorded provenance that is true of only half of it.
+    from .provenance_min import template_identity as _template_identity
+
+    resolved = dict(resolved)
+    resolved["provenance"] = {"template": _template_identity()}
     write_yaml(out / "resolved_sys.config.yaml", resolved)
 
     # The user's own file, and the construction artifacts that carry science. Both before the

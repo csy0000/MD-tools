@@ -108,29 +108,58 @@ def install_md_data(prefix: Path, *, dry_run: bool = False) -> dict[str, Any]:
                        "error": (result.stderr or result.stdout)[-800:].strip()})
         return record
     record["installed"] = True
-    return {**record, **probe_md_data(prefix)}
+    return {**record, **verify_md_data(prefix)}
+
+
+#: The probe, run inside the TARGET environment. It reports what is installed there, including
+#: the installed distribution's own PEP 610 record -- which is the only thing that can say which
+#: source the package actually came from. Echoing the intended pin would describe our wish, not
+#: the installation.
+_MD_DATA_PROBE = r"""
+import json
+out = {"import_ok": False, "validator_available": False, "version": None,
+       "contract_version": None, "installed_commit": None, "installed_source": None,
+       "source_kind": "unknown"}
+try:
+    from importlib import metadata
+    distribution = metadata.distribution("md-data")
+    out["version"] = distribution.version
+    try:
+        record = json.loads(distribution.read_text("direct_url.json") or "{}")
+    except Exception:
+        record = {}
+    out["installed_source"] = record.get("url")
+    vcs = record.get("vcs_info") or {}
+    if vcs.get("commit_id"):
+        out["installed_commit"] = str(vcs["commit_id"]).strip().lower()
+        out["source_kind"] = "vcs"
+    elif record.get("dir_info") is not None:
+        out["source_kind"] = "local directory"
+    elif record.get("archive_info") is not None:
+        out["source_kind"] = "archive"
+    elif record:
+        out["source_kind"] = "other"
+    else:
+        out["source_kind"] = "index or wheel (no direct_url.json)"
+except Exception as error:
+    out["metadata_error"] = "%s: %s" % (type(error).__name__, error)
+try:
+    import md_data
+    import md_data.storage as storage
+    out["import_ok"] = True
+    out["version"] = getattr(md_data, "__version__", out["version"])
+    out["contract_version"] = getattr(md_data, "CONTRACT_VERSION", None)
+    out["validator_available"] = (hasattr(md_data, "validate_dataset")
+                                  and hasattr(storage, "check_dataset_tree"))
+except Exception as error:
+    out["error"] = "%s: %s" % (type(error).__name__, error)
+print(json.dumps(out))
+"""
 
 
 def probe_md_data(prefix: Path) -> dict[str, Any]:
-    """Whether the installed validator imports, and what it says it is."""
-    script = ("import json\n"
-              "out = {}\n"
-              "try:\n"
-              "    import md_data\n"
-              "    out['import_ok'] = True\n"
-              "    out['version'] = getattr(md_data, '__version__', 'unknown')\n"
-              "    out['contract_version'] = getattr(md_data, 'CONTRACT_VERSION', 'unknown')\n"
-              "    out['validator_available'] = all(\n"
-              "        hasattr(md_data, name) for name in ('validate_dataset',))\n"
-              "    import md_data.storage as storage\n"
-              "    out['validator_available'] = (out['validator_available']\n"
-              "                                  and hasattr(storage, 'check_dataset_tree'))\n"
-              "except Exception as error:\n"
-              "    out['import_ok'] = False\n"
-              "    out['validator_available'] = False\n"
-              "    out['error'] = f'{type(error).__name__}: {error}'\n"
-              "print(json.dumps(out))\n")
-    result = subprocess.run([str(Path(prefix) / "bin" / "python"), "-c", script],
+    """What is ACTUALLY installed: version, contract version, validator, and source commit."""
+    result = subprocess.run([str(Path(prefix) / "bin" / "python"), "-c", _MD_DATA_PROBE],
                             capture_output=True, text=True)
     if result.returncode != 0:
         return {"import_ok": False, "validator_available": False,
@@ -140,6 +169,60 @@ def probe_md_data(prefix: Path) -> dict[str, Any]:
     except Exception as error:
         return {"import_ok": False, "validator_available": False,
                 "error": f"unreadable probe output ({type(error).__name__}: {error})"}
+
+
+def verify_md_data(prefix: Path) -> dict[str, Any]:
+    """Whether contract support is READY, and if not, exactly why.
+
+    "Ready" is a conjunction, and every term is checked against the installation rather than
+    against the intention:
+
+    * the package imports;
+    * both validator entry points exist;
+    * its contract version equals the one this repository targets;
+    * its installed source is the pinned commit, PROVED from the distribution's own
+      `direct_url.json`.
+
+    That last one is the reason this function exists. Recording the pin we asked for and calling it
+    verification describes our wish, not the bytes on disk -- and a package installed from a local
+    checkout, an index, or a different commit imports and validates perfectly well while being a
+    different contract.
+    """
+    pin = md_data_pin()
+    probe = probe_md_data(prefix)
+    reasons = []
+
+    if not probe.get("import_ok"):
+        reasons.append(f"md_data does not import ({probe.get('error', 'no detail')})")
+    elif not probe.get("validator_available"):
+        reasons.append("md_data imports but validate_dataset / storage.check_dataset_tree are "
+                       "not both available")
+    installed_contract = probe.get("contract_version")
+    if probe.get("import_ok") and str(installed_contract) != pin["contract_version"]:
+        reasons.append(f"installed contract version {installed_contract!r} is not the "
+                       f"{pin['contract_version']!r} this repository targets")
+
+    installed_commit = (probe.get("installed_commit") or "").lower()
+    if not installed_commit:
+        reasons.append(
+            f"the installed md-data records no source commit (installed from "
+            f"{probe.get('source_kind')}: {probe.get('installed_source')}), so it cannot be shown "
+            f"to be the pinned {pin['commit'][:12]}")
+    elif installed_commit != pin["commit"].lower():
+        reasons.append(f"the installed md-data is from commit {installed_commit[:12]}, not the "
+                       f"pinned {pin['commit'][:12]}")
+
+    return {
+        **pin,
+        "probe": probe,
+        "installed_version": probe.get("version"),
+        "installed_commit": probe.get("installed_commit"),
+        "installed_source": probe.get("installed_source"),
+        "source_kind": probe.get("source_kind"),
+        "commit_verified": bool(installed_commit and installed_commit == pin["commit"].lower()),
+        "contract_support_ready": not reasons,
+        "reasons": reasons,
+    }
 
 
 class InstallError(RuntimeError):
@@ -326,9 +409,21 @@ def install_openmm(stack: Path, version: str = "8.6.0", *,
     # The MD-data validator the contract-managed workflow needs. Attempted here so the documented
     # installation delivers what the documentation advertises, and recorded either way.
     md_data = install_md_data(prefix)
+    if not md_data.get("contract_support_ready"):
+        # The install may have failed outright, or succeeded from a source that cannot be shown to
+        # be the pin. Either way the verification is re-run so the record says what is on disk.
+        md_data = {**md_data, **verify_md_data(prefix)} if md_data.get("installed") else md_data
     lines += ["", "# md-data (pinned)", "$ " + " ".join(md_data.get("command", [])),
               repr(md_data)]
     check["md_data"] = md_data
+    # Three states, never collapsed into one. A researcher who only wants unregistered local
+    # simulation has a working installation even when contract support is unavailable, and saying
+    # otherwise would either block them or promise them something they did not get.
+    check["capabilities"] = {
+        "openmm_runtime_ready": True,
+        "md_data_contract_support_ready": bool(md_data.get("contract_support_ready")),
+        "md_data_unavailable_reasons": list(md_data.get("reasons") or []),
+    }
     log.write_text("\n".join(lines), encoding="utf-8")
 
     record = record_environment(stack, prefix, check, log=log, version=version)
@@ -692,4 +787,17 @@ def warnings_for(report: dict[str, Any]) -> list[str]:
     if "openff.nagl_models" in (report.get("import_errors") or {}):
         notes.append("openff-nagl-models missing: the `am1bcc_nagl` charge option is unavailable "
                      "(standard am1bcc is unaffected)")
+
+    # Contract support is a separate capability from the OpenMM runtime, and stating it plainly is
+    # the whole point: a researcher doing unregistered local simulation is unaffected, and one who
+    # intended `dataset.enabled: true` needs to know now rather than at sys-gen.
+    capabilities = report.get("capabilities") or {}
+    if capabilities and not capabilities.get("md_data_contract_support_ready"):
+        reasons = capabilities.get("md_data_unavailable_reasons") or ["no reason recorded"]
+        notes.append(
+            "MD-DATA CONTRACT SUPPORT UNAVAILABLE: the OpenMM runtime is ready and unregistered "
+            "local simulation works, but `dataset.enabled: true` will fail before building a "
+            "system. Reason: " + reasons[0])
+        for extra in reasons[1:]:
+            notes.append(f"  also: {extra}")
     return notes

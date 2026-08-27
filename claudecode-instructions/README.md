@@ -5,10 +5,13 @@ root defines the durable rules that outlive any of them.
 
 ## Current
 
-- `20260827_provenance-and-contract-readiness-correction.md` — **pending**; make one
-  canonical template identity propagate through every generated record, refuse dirty contract
-  generation, verify installed MD-data provenance and public readiness honestly, strengthen the
-  source no-hashing test, and clean the duplicate instruction index entry.
+- `20260827_provenance-and-contract-readiness-correction.md` — **executed 2026-08-27**; see
+  `docs/journal/2026-08-27_provenance-and-contract-readiness-correction.md`. Made one canonical
+  template identity propagate through every generated record, refused dirty contract-managed
+  generation before system construction, made preflight require every applicable provenance
+  record, verified the ACTUALLY INSTALLED MD-data source commit rather than echoing the intended
+  pin, made contract-support readiness an explicit three-state capability, and replaced the
+  size-based source-hashing test with a path-specific guard.
 - `20260827_md-data-contract-preflight-and-iterload.md` — **executed 2026-08-27**; see
   `docs/journal/2026-08-27_md-data-contract-preflight-and-iterload.md`. Made generated projects
   optionally conform to MD-data dataset v1 using MD-data's own imported validator, added a shared

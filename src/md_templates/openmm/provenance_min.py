@@ -11,6 +11,7 @@ fingerprint closes that gap by hashing the installed package's own source and te
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Optional
@@ -115,6 +116,86 @@ def implementation_identity() -> dict[str, Any]:
         "installed_fingerprint": installed_fingerprint(),
         "direct_url": direct_url_record(),
     }
+
+
+#: The one repository URL. Everything that records the generator reads it from here.
+REPOSITORY = "https://github.com/csy0000/MD-templates"
+
+#: An exact 40-hex commit. A branch, a tag or an abbreviation is not a pin.
+COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+
+
+def template_identity() -> dict[str, Any]:
+    """THE canonical answer to "which MD-templates is this", resolved once.
+
+    Everything that records the generator -- `dataset.yaml`, both `provenance.yaml` files,
+    `resolved_sys.config.yaml`, `md.config.yaml`, every `stage.yaml`, every method record -- reads
+    this. Before, each writer reached for `implementation_identity()["git_commit"]` on its own,
+    and in a VCS-installed package that is `None` even though `direct_url.json` records the exact
+    commit: the dataset manifest would carry a verified commit while the stage files beside it
+    carried nulls, and nothing compared them.
+
+    Two evidence routes, in order of directness:
+
+    * `git checkout` -- a real checkout, `git rev-parse HEAD`. `dirty` says whether the working
+      tree matches it.
+    * `direct_url.json` -- PEP 610, written by pip when a package is installed from a VCS URL. A
+      wheel built from a tarball has neither, and then `commit` is None.
+
+    `commit` is None rather than guessed. A version string, a branch name, a date or an installed
+    fingerprint identifies an implementation but is not a commit, and writing one as though it
+    were would produce a pin that can be checked out and will not reproduce the run.
+    """
+    identity = implementation_identity()
+    resolved = {
+        "repository": REPOSITORY,
+        "commit": None,
+        "evidence": "unavailable",
+        "version": identity["version"],
+        "installed_fingerprint": identity["installed_fingerprint"]["value"],
+        "dirty": None,
+        # Spelled out rather than left to be inferred from `dirty`. A commit beside a modified
+        # working tree looks exactly like a commit that reproduces the run, and this is the field
+        # that says it does not. Contract-managed generation refuses this state outright; an
+        # unregistered project may proceed and carries this statement in every record.
+        "reproducible_from_commit": False,
+        "reproducibility": ("no exact commit could be established for this installation, so these "
+                            "files record WHAT ran only by installed fingerprint and version"),
+        "detail": ("no Git checkout and no PEP 610 direct_url.json records an exact commit for "
+                   "this installation"),
+    }
+
+    commit = (identity.get("git_commit") or "").strip().lower()
+    if commit and COMMIT_PATTERN.match(commit):
+        dirty = bool(identity.get("git_dirty"))
+        resolved.update({
+            "commit": commit, "evidence": "git checkout", "dirty": dirty,
+            "reproducible_from_commit": not dirty,
+            "reproducibility": (
+                f"the working tree has uncommitted changes, so checking out {commit[:12]} does "
+                f"NOT reproduce this generation; the installed fingerprint identifies what ran"
+                if dirty else
+                f"a clean checkout: {commit[:12]} reproduces this generation"),
+            "detail": ("git rev-parse HEAD, with uncommitted changes in the working tree"
+                       if dirty else "git rev-parse HEAD"),
+        })
+        return resolved
+
+    direct = identity.get("direct_url") or {}
+    vcs = direct.get("vcs_info") or {}
+    installed = (vcs.get("commit_id") or "").strip().lower()
+    if installed and COMMIT_PATTERN.match(installed):
+        resolved.update({
+            "commit": installed, "evidence": "direct_url.json",
+            # A VCS install is a fixed set of bytes: there is no working tree to be dirty.
+            "dirty": False, "reproducible_from_commit": True,
+            "reproducibility": f"installed from a VCS pin: {installed[:12]} reproduces this "
+                               f"generation",
+            "detail": f"installed from {direct.get('url')} at {installed[:12]}",
+        })
+        if direct.get("url"):
+            resolved["repository"] = str(direct["url"])
+    return resolved
 
 
 def environment_versions() -> dict[str, Any]:

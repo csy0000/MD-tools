@@ -519,13 +519,18 @@ def path_is_complete(directory, index=None):
         closed on some failure paths;
       * `observations.dcd` EXISTS -- a missing DCD with a healthy JSON and CSV is exactly the
         case this must not skip;
-      * the DCD has exactly the expected frame count -- a truncated file is not a short one;
+      * the DCD holds exactly the expected frames AND THEY CAN BE READ -- a truncated file is not
+        a short one, and its header still claims the count the writer intended;
       * every CSV coordinate index maps one-to-one onto a DCD frame;
       * the recorded schedule and trajectory index are the ones being asked for now -- a path
         completed against a different switching duration is not this path.
 
-    Bounded: the CSV is 21 small rows and only the DCD's 100-byte header is read. No coordinate
-    block is opened and nothing is hashed.
+    Bounded, but no longer header-only: `validate_generated_dcd` READS every frame of this path's
+    `observations.dcd` with `mdtraj.iterload` in bounded chunks, checking the exact count, a
+    readable final frame, finite coordinates and a non-degenerate periodic box under explicit
+    solvent. That is affordable because the file holds the configured observations -- 21 frames by
+    default -- and it is the only way to tell a complete file from one whose header survived an
+    interrupted write. Nothing is hashed, and no production trajectory is read this way.
     """
     directory = Path(directory)
     marker = directory / COMPLETION_NAME
