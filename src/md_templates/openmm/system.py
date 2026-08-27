@@ -159,7 +159,11 @@ def resolve_nagl_am1bcc_model() -> dict:
 
 def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
                     route: Optional[str] = None):
-    """Return ``(ForceField, info)`` for the baseline: ff19SB + OPC (+ Sage for a ligand).
+    """Return ``(ForceField, info)`` for the configured combination (+ Sage for a ligand).
+
+    The default is ff14SB + TIP3P; ``--solvent OPC`` selects ff19SB + OPC. Which one is loaded is
+    the user's ``forcefield`` block, not a constant here, and the resources that were actually
+    given to ``ForceField()`` are reported back in ``info``.
 
     A ligand is parameterised through :class:`openmmforcefields.generators.SMIRNOFFTemplateGenerator`,
     which registers a residue template on the fly.  ``ligand_charge_method='am1bcc'`` runs
@@ -185,6 +189,10 @@ def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
             + [ff_cfg["water"], *ff_cfg["extra_xml"]] if x]
     info: dict[str, Any] = {
         "xml": list(xmls),
+        # `amber14-all.xml` is a manifest of includes, not a parameter file. A record that names
+        # only the wrapper cannot say which protein XML supplied the dihedrals, so the includes are
+        # expanded and recorded beside it.
+        "xml_includes": {name: _xml_includes(name) for name in xmls},
         "route": route,
         "protein_forcefield": protein_xml,
         "water": ff_cfg["water"],
@@ -251,6 +259,29 @@ def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
             **charge_provenance,
         }
     return forcefield, info
+
+
+def _xml_includes(resource: str) -> list:
+    """The `<Include file=...>` entries of an OpenMM force-field resource, in order.
+
+    Empty for a leaf file. Resolved against OpenMM's own data directory, and returns an empty list
+    rather than raising if the file cannot be located: this is a provenance detail, and failing to
+    expand it must not fail a build that OpenMM itself loaded successfully.
+    """
+    import xml.etree.ElementTree as ET
+    from pathlib import Path as _Path
+
+    try:
+        from openmm import app as _app
+
+        path = _Path(_app.__file__).resolve().parent / "data" / str(resource)
+        if not path.is_file():
+            return []
+        root = ET.parse(path).getroot()
+        return [element.get("file") for element in root.findall("Include")
+                if element.get("file")]
+    except Exception:
+        return []
 
 
 def _has_openeye() -> bool:
@@ -817,6 +848,99 @@ def omega_central_bonds(topology, solute_atoms: Iterable[int]) -> list[tuple[int
     return sorted({c["bond"] for c in _amide_candidates(topology, solute) if not c["ambiguous"]})
 
 
+def nonbonded_method_name(code) -> str:
+    """`NonbondedForce.PME` -> `"PME"`, read off the built Force rather than off the request.
+
+    The configuration says what was asked for; this says what the Force reports. They differ if a
+    builder ever substitutes a method, and it is the second one that describes the Hamiltonian.
+    """
+    from openmm import NonbondedForce
+
+    names = {NonbondedForce.NoCutoff: "NoCutoff",
+             NonbondedForce.CutoffNonPeriodic: "CutoffNonPeriodic",
+             NonbondedForce.CutoffPeriodic: "CutoffPeriodic",
+             NonbondedForce.Ewald: "Ewald",
+             NonbondedForce.PME: "PME",
+             NonbondedForce.LJPME: "LJPME"}
+    return names.get(int(code), f"unknown({int(code)})")
+
+
+def verify_hmr_group_masses(system, reference_system, topology, *, target_h_mass_amu,
+                            solute_atoms=None) -> dict:
+    """Check HMR against the SAME System built without it, group by group.
+
+    `verify_hydrogen_mass_repartitioning` checks that each hydrogen reached the target and that no
+    heavy atom was driven below 1 amu. What it cannot check on its own is conservation, because a
+    force field assigns its own masses and the pre-repartitioning total cannot be reconstructed
+    from the topology afterwards -- amber19 gives alanine in water 11160.736 amu against 11160.329
+    summed from element constants.
+
+    So the reference is built: the identical `createSystem` call with `hydrogenMass` omitted. Then
+    conservation is checked where repartitioning actually happens -- within each heavy atom and the
+    hydrogens bonded to it -- rather than only on the box total, where two errors of opposite sign
+    would cancel. A nonpositive heavy-atom mass is refused here as well as in the per-hydrogen
+    check, because a mass of exactly zero is a fixed particle in OpenMM rather than an error.
+    """
+    from openmm import unit
+    from openmm.app import element as elem
+
+    solute = None if solute_atoms is None else {int(i) for i in solute_atoms}
+    groups: dict[int, list[int]] = {}
+    for bond in topology.bonds():
+        a, b = bond.atom1, bond.atom2
+        if a.element == elem.hydrogen and b.element != elem.hydrogen:
+            h, heavy = a, b
+        elif b.element == elem.hydrogen and a.element != elem.hydrogen:
+            h, heavy = b, a
+        else:
+            continue
+        if solute is not None and (h.index not in solute or heavy.index not in solute):
+            continue
+        groups.setdefault(heavy.index, []).append(h.index)
+
+    def mass(sys_, index):
+        return sys_.getParticleMass(int(index)).value_in_unit(unit.amu)
+
+    problems, worst, checked = [], 0.0, 0
+    lightest_heavy = None
+    for heavy, hydrogens in groups.items():
+        before = mass(reference_system, heavy) + sum(mass(reference_system, h) for h in hydrogens)
+        after = mass(system, heavy) + sum(mass(system, h) for h in hydrogens)
+        worst = max(worst, abs(after - before))
+        checked += 1
+        if abs(after - before) > 1e-6:
+            problems.append(
+                f"heavy atom {heavy} and its {len(hydrogens)} hydrogen(s) weigh {after:.6f} amu "
+                f"after repartitioning and {before:.6f} amu before it")
+        m_heavy = mass(system, heavy)
+        lightest_heavy = m_heavy if lightest_heavy is None else min(lightest_heavy, m_heavy)
+        if m_heavy <= 0.0:
+            problems.append(
+                f"heavy atom {heavy} was left with {m_heavy:.6f} amu, which OpenMM reads as a "
+                f"fixed particle rather than an atom. Lower the target hydrogen mass "
+                f"({target_h_mass_amu}).")
+
+    total_before = sum(mass(reference_system, i)
+                       for i in range(reference_system.getNumParticles()))
+    total_after = sum(mass(system, i) for i in range(system.getNumParticles()))
+    if abs(total_after - total_before) > 1e-3:
+        problems.append(
+            f"repartitioning changed the System total mass: {total_before:.6f} -> "
+            f"{total_after:.6f} amu")
+    if problems:
+        raise ValueError("hydrogen mass repartitioning did not conserve mass:\n  "
+                         + "\n  ".join(problems))
+    return {
+        "groups_checked": checked,
+        "max_group_mass_change_amu": round(worst, 9),
+        "lightest_heavy_atom_amu": (round(lightest_heavy, 6)
+                                    if lightest_heavy is not None else None),
+        "total_mass_amu_before": round(total_before, 6),
+        "total_mass_amu_after": round(total_after, 6),
+        "verified_against": "the same createSystem call without hydrogenMass",
+    }
+
+
 def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: int,
                  ligand_sdf: Optional[Path] = None, route: str = "peptide") -> dict:
     """Create the OpenMM ``System`` (PME, 1.0 nm, HBonds, HMR) and serialise it to XML."""
@@ -884,11 +1008,22 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
                 force.setSwitchingDistance(
                     float(bcfg["switch_distance_nm"]) * unit.nanometer
                 )
+            switching = bool(force.getUseSwitchingFunction())
             nb_info = {
-                "method": force.getNonbondedMethod(),
+                # The NAME, read back off the built Force. `getNonbondedMethod()` returns an int,
+                # and an integer in a provenance record is a number a reader has to look up in the
+                # OpenMM headers of whichever version happened to write it.
+                "method": nonbonded_method_name(force.getNonbondedMethod()),
+                "method_code": int(force.getNonbondedMethod()),
                 "cutoff_nm": force.getCutoffDistance().value_in_unit(unit.nanometer),
-                "switching": force.getUseSwitchingFunction(),
-                "dispersion_correction": force.getUseDispersionCorrection(),
+                "switching": switching,
+                # null, not 0.0, when the switching function is off: OpenMM keeps a switching
+                # distance on the Force whether or not it is used, and reporting it unconditionally
+                # describes a taper that is not applied.
+                "switch_distance_nm": (
+                    force.getSwitchingDistance().value_in_unit(unit.nanometer)
+                    if switching else None),
+                "dispersion_correction": bool(force.getUseDispersionCorrection()),
                 "ewald_error_tolerance": force.getEwaldErrorTolerance(),
             }
 
@@ -904,9 +1039,24 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
                "n_hydrogens_repartitioned": 0,
                "note": "hydrogen mass repartitioning disabled; masses are as parameterised"}
     elif delegate_hmr:
-        # OpenMM already did it; verify rather than repeat.
+        # OpenMM already did it; verify rather than repeat. The reference System -- the identical
+        # call with `hydrogenMass` omitted -- is what makes conservation checkable, and it is built
+        # only when HMR was actually asked for.
         hmr = verify_hydrogen_mass_repartitioning(
             system, pdb.topology, target_h_mass, scope)
+        reference = forcefield.createSystem(
+            pdb.topology,
+            nonbondedMethod=method,
+            nonbondedCutoff=float(bcfg["nonbonded_cutoff_nm"]) * unit.nanometer,
+            constraints=constraints,
+            rigidWater=bool(bcfg["rigid_water"]),
+            removeCMMotion=bool(bcfg["remove_cm_motion"]),
+            ewaldErrorTolerance=float(bcfg["ewald_error_tolerance"]),
+        )
+        hmr["group_conservation"] = verify_hmr_group_masses(
+            system, reference, pdb.topology,
+            target_h_mass_amu=target_h_mass, solute_atoms=scope)
+        del reference
     else:
         hmr = repartition_hydrogen_mass(system, pdb.topology, target_h_mass, scope)
 

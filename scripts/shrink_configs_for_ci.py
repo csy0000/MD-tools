@@ -7,7 +7,7 @@ into the workflow so that what CI does and what a developer can run are the same
 
 The same shrink is what the CUDA smoke tests use locally, where the dynamics do run.
 
-    md-openmm sys-config --method cMD REST2 --solvent OPC
+    md-openmm sys-config --method cMD REST2
     python scripts/shrink_configs_for_ci.py
 
 This makes a SMOKE configuration: a 0.5 nm box, 25 minimisation steps and picoseconds of dynamics.

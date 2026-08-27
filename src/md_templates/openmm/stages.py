@@ -51,6 +51,14 @@ def stage_plan(config: dict[str, Any], *, implicit: bool) -> list[dict[str, Any]
                                                     DEFAULT_RESTRAINT_KCAL)))
     label = restraint_label(restraint_k)
     pressure = None if implicit else common.get("pressure_bar")
+    # The public setting, resolved once. `resolve_md_config` has already refused a value that is
+    # not a positive whole number of steps, and written null under implicit solvent.
+    frequency = None if implicit else common.get("barostat_frequency_steps")
+    if not implicit and frequency is None:
+        raise ValueError(
+            "common.barostat_frequency_steps is missing from the protocol, and explicit solvent "
+            "needs it to construct the MonteCarloBarostat. `resolve_md_config` fills it in; a "
+            "configuration reaching stage_plan without it was not resolved.")
 
     plan: list[dict[str, Any]] = [{
         "name": "minimization",
@@ -123,6 +131,12 @@ def stage_plan(config: dict[str, Any], *, implicit: bool) -> list[dict[str, Any]
         # `pressure_bar` is the applicable pressure: null when nothing is controlling it.
         stage["system_pressure_bar"] = pressure
         stage["pressure_bar"] = pressure if stage["barostat_active"] else None
+        # The interval the barostat in THIS stage's System is constructed with. `barostat_active`
+        # decides whether it attempts a move at all; this is how often it does when it is active.
+        # 0 in an NVT stage is not a missing value -- it is the frequency that makes the barostat
+        # present-but-inert, which is what keeps the Force layout identical across the chain.
+        stage["barostat_frequency_steps"] = (
+            None if implicit else (int(frequency) if stage["barostat_active"] else 0))
         if index == 0:
             stage["parent"] = None
             stage["parent_path"] = None

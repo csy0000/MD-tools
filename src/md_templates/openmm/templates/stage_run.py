@@ -42,7 +42,7 @@ def _project_root(start):
 
 PROJECT = _project_root(HERE)
 sys.path.insert(0, str(PROJECT))
-from md_stages import (PRODUCTION_BAROSTAT_FREQUENCY, STAGE_RUNTIME_OUTPUTS,
+from md_stages import (STAGE_RUNTIME_OUTPUTS,
                        active_barostat_count, build_stage_system, count_barostats,
                        make_simulation, require_parent_state, resolve_platform,
                        RECORD_FORMAT, file_record, project_identity, restraint_strength,
@@ -55,6 +55,9 @@ INPUTS = (PROJECT / CONFIG["paths"]["inputs_folder"]).resolve()
 SOLUTE = yaml.safe_load((INPUTS / "solute.yaml").read_text())
 
 IMPLICIT = bool(STAGE["implicit"])
+#: MonteCarloBarostat attempt interval, in steps, from md.config.yaml by way of stage.yaml. null
+#: under implicit solvent, where no barostat exists in the System at all.
+BAROSTAT_FREQUENCY_STEPS = STAGE.get("barostat_frequency_steps")
 SOLUTE_INDICES = list(range(int(SOLUTE["n_solute_atoms"])))
 TEMPERATURE = float(STAGE["temperature_kelvin"]) * unit.kelvin
 TIMESTEP_FS = float(STAGE["timestep_fs"])
@@ -156,6 +159,7 @@ def main():
         INPUTS, implicit=IMPLICIT, restrained=kind in RESTRAINED,
         barostat_active=barostat_active, pressure_bar=STAGE.get("system_pressure_bar"),
         temperature=TEMPERATURE, barostat_seed=int(STAGE["barostat_seed"]),
+        barostat_frequency_steps=BAROSTAT_FREQUENCY_STEPS,
         solute_indices=SOLUTE_INDICES)
 
     pdb = PDBFile(str(INPUTS / "topology.pdb"))
@@ -192,7 +196,10 @@ def main():
     log(f"restraint {STAGE['restraint_k_kcal_mol_a2']} kcal/mol/A^2 "
         f"({restraint_strength(simulation):g} kJ/mol/nm^2) on {len(SOLUTE_INDICES)} solute atoms")
     log(f"{active_barostat_count(simulation)} active barostat(s), "
-        f"{count_barostats(system)} in the System")
+        f"{count_barostats(system)} in the System"
+        + (f", attempt interval {BAROSTAT_FREQUENCY_STEPS} steps "
+           f"({float(BAROSTAT_FREQUENCY_STEPS) * TIMESTEP_FS / 1000:g} ps)"
+           if barostat_active and BAROSTAT_FREQUENCY_STEPS else ""))
 
     if kind == "minimization":
         steps = 0
@@ -264,6 +271,14 @@ def main():
         "barostat_seed": int(STAGE["barostat_seed"]),
         "barostats_in_system": count_barostats(system),
         "barostats_active": active,
+        # The interval this stage's barostat was constructed with, and what it is in time. 0 in an
+        # NVT stage says the barostat is present and inert; null says the System has none at all.
+        "barostat_frequency_steps": (int(STAGE["barostat_frequency_steps"])
+                                     if STAGE.get("barostat_frequency_steps") is not None
+                                     else None),
+        "barostat_interval_ps": (
+            round(float(STAGE["barostat_frequency_steps"]) * TIMESTEP_FS / 1000.0, 6)
+            if STAGE.get("barostat_frequency_steps") else None),
         "stage_config_sha256": STAGE_SIGNATURE,
         "configured_steps": steps if kind != "minimization" else None,
         "completed_steps": simulation.context.getStepCount(),

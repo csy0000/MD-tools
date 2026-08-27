@@ -21,6 +21,7 @@ from typing import Any, Optional
 import yaml
 
 from .config import ConfigError, resolve_sys_config, sha256_of_document, write_yaml
+from .defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT
 from .forcefield_record import build_forcefield_record
 
 OUTPUT_FILES = ("system.xml", "topology.pdb", "solute.pdb", "initial_state.xml", "solute.yaml",
@@ -92,32 +93,58 @@ def _legacy_cfg(resolved: dict[str, Any]) -> dict[str, Any]:
     else:
         solvent = resolved.get("solvent") or {}
         cfg["system_build"]["nonbonded_cutoff_nm"] = solvent.get("cutoff_nm", 1.0)
-        cfg["solvation"]["water_model"] = str(solvent.get("model", "OPC")).lower()
+        cfg["solvation"]["water_model"] = str(solvent.get("model", DEFAULT_SOLVENT)).lower()
         cfg["solvation"]["box_shape"] = solvent.get("box_shape", "dodecahedron")
-        cfg["solvation"]["padding_nm"] = solvent.get("padding_nm", 2.0)
+        cfg["solvation"]["padding_nm"] = solvent.get("padding_nm", DEFAULT_PADDING_NM)
         cfg["solvation"]["ionic_strength_molar"] = solvent.get("ionic_strength_molar", 0.15)
         cfg["solvation"]["positive_ion"] = solvent.get("positive_ion", "Na+")
         cfg["solvation"]["negative_ion"] = solvent.get("negative_ion", "Cl-")
     return cfg
 
 
-def _water_xml(name: Optional[str]) -> Optional[str]:
-    """`opc.xml` is what a user writes; `amber19/opc.xml` is the file that also defines the ions.
+#: Short water labels an older configuration may still carry, and the QUALIFIED OpenMM resource
+#: each one has to become.
+#:
+#: OpenMM ships both spellings. The top-level `opc.xml` / `tip3p.xml` define water only, so a box
+#: that needed Na+ and Cl- failed with "No template found for residue (NA)" -- after solvation had
+#: already placed them. The `amber14/` and `amber19/` copies carry the ion templates alongside the
+#: same water parameters.
+#:
+#: An explicit table rather than a blanket `amber19/` prefix: that prefix silently turned
+#: `tip3p.xml` into `amber19/tip3p.xml`, which OpenMM does not ship. Written defaults are already
+#: qualified, so this only rescues a hand-written or pre-0.4 file.
+_QUALIFIED_WATER = {
+    "opc.xml": "amber19/opc.xml",
+    "opc3.xml": "amber19/opc3.xml",
+    "tip3p.xml": "amber14/tip3p.xml",
+    "tip3pfb.xml": "amber14/tip3pfb.xml",
+}
 
-    OpenMM ships both. The top-level `opc.xml` has water only, so a box that needed Na+ and Cl-
-    failed with "No template found for residue (NA)" -- after solvation had already placed them.
-    The amber19 copy carries the ion templates alongside the same water parameters.
-    """
+
+def _water_xml(name: Optional[str]) -> Optional[str]:
+    """The OpenMM water resource that will actually be loaded, or a refusal that names the file."""
     if not name:
         return None
     text = str(name).strip()
     if "/" in text:
         return text                                # already qualified; take it as written
-    return f"amber19/{text}"
+    qualified = _QUALIFIED_WATER.get(text.lower())
+    if qualified is None:
+        raise ConfigError(
+            f"forcefield.water = {text!r} is not a resource this package can qualify. OpenMM ships "
+            f"the ion-carrying water files under a directory, so write the full resource name "
+            f"(for example {', '.join(sorted(set(_QUALIFIED_WATER.values())))}). Known short "
+            f"labels: {', '.join(sorted(_QUALIFIED_WATER))}.")
+    return qualified
 
 
 def _openff_name(name: Optional[str]) -> Optional[str]:
-    """`sage-2.2.0` is what a user writes; `openff-2.2.0` is what the toolkit loads."""
+    """`sage-2.2.1` is what a user writes; `openff-2.2.1` is what the toolkit loads.
+
+    The installed `openforcefields` package ships the file as `openff-2.2.1.offxml`, and
+    `SMIRNOFFTemplateGenerator` resolves the name with or without the suffix. A name that does not
+    resolve raises there, at the point the parameters would have been assigned.
+    """
     if not name:
         return None
     text = str(name).strip().lower()
@@ -164,7 +191,7 @@ CHECKSUM_MANIFEST = "SHA256SUMS"
 
 def _provenance(*, sys_config: dict, resolved: dict, out: Path, original_relative: str,
                 original_sha256: str, system, payload: dict[str, str],
-                command: list[str]) -> dict[str, Any]:
+                command: list[str], forcefield: Optional[dict] = None) -> dict[str, Any]:
     """Everything needed to know what produced this bundle, and from what.
 
     Paths are relative to `inputs/`. An absolute path would say where the bundle happened to be
@@ -196,9 +223,64 @@ def _provenance(*, sys_config: dict, resolved: dict, out: Path, original_relativ
             "solute_atoms": payload.get("solute_atoms"),
             "periodic": bool(system.usesPeriodicBoundaryConditions()),
             "box_vectors_nm": box,
+            "n_constraints": system.getNumConstraints(),
+            "n_forces": system.getNumForces(),
+            "force_classes": sorted({type(system.getForce(i)).__name__
+                                     for i in range(system.getNumForces())}),
         },
+        # A summary of `forcefield.json`, so a reader of this file alone can say which Hamiltonian
+        # was built. The full record, including checksums and package versions, is that file --
+        # `forcefield_json_sha256` above ties the two together.
+        "forcefield_summary": _forcefield_summary(forcefield or {}),
         "payload_paths": payload.get("paths"),
         "checksum_manifest": CHECKSUM_MANIFEST,
+    }
+
+
+def _forcefield_summary(forcefield: dict[str, Any]) -> dict[str, Any]:
+    """The parameterisation decisions, from `forcefield.json`, in one flat block.
+
+    Every key is present and null where it does not apply, so "implicit solvent has no water model"
+    reads as information rather than as a gap. Values are copied, never re-derived: re-deriving
+    them here would be a second implementation that can disagree with the first.
+    """
+    protein = forcefield.get("protein") or {}
+    ligand = forcefield.get("ligand") or {}
+    water = forcefield.get("water") or {}
+    explicit = forcefield.get("explicit_solvent") or {}
+    implicit = forcefield.get("implicit_solvent") or {}
+    nonbonded = forcefield.get("nonbonded") or {}
+    constraints = forcefield.get("constraints") or {}
+    geometry = explicit.get("box_geometry") or {}
+    return {
+        "solvation": forcefield.get("solvation"),
+        "route": forcefield.get("route"),
+        "protein_forcefield": protein.get("openmm_resource") or protein.get("tleap_resource"),
+        "protein_forcefield_includes": protein.get("openmm_resource_includes"),
+        "ligand_forcefield": ligand.get("openff_resource"),
+        "ligand_charge_method": ligand.get("charge_method"),
+        "ligand_charge_scheme": ligand.get("charge_model"),
+        "water_model": water.get("model"),
+        "water_forcefield": water.get("openmm_resource"),
+        "implicit_model": implicit.get("model") if forcefield.get("implicit_solvent") else None,
+        "implicit_radii": implicit.get("radii") if forcefield.get("implicit_solvent") else None,
+        "implicit_nonpolar_sasa": (implicit.get("nonpolar_sasa")
+                                   if forcefield.get("implicit_solvent") else None),
+        "implicit_parameter_coverage": (implicit.get("parameter_coverage")
+                                        if forcefield.get("implicit_solvent") else None),
+        "nonbonded": dict(nonbonded),
+        "box": {
+            "shape": explicit.get("box_shape"),
+            "volume_nm3": explicit.get("box_volume_nm3"),
+            "vectors_nm": explicit.get("box_vectors_nm"),
+            "padding_nm_requested": geometry.get("padding_nm_requested"),
+            "solute_image_clearance_nm": geometry.get("solute_image_clearance_nm"),
+            "min_reduced_box_height_nm": geometry.get("min_reduced_box_height_nm"),
+            "required_cutoff_height_nm": geometry.get("required_cutoff_height_nm"),
+            "grown_for_cutoff": geometry.get("grown_for_cutoff"),
+        } if forcefield.get("explicit_solvent") else None,
+        "salt": explicit.get("salt") if forcefield.get("explicit_solvent") else None,
+        "constraints": dict(constraints),
     }
 
 
@@ -390,7 +472,7 @@ def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
         elif relative.endswith("tleap.log"):
             artifacts.setdefault("tleap_log", relative)
     forcefield = build_forcefield_record(resolved=resolved, route=route, record=record,
-                                         inputs_dir=out, artifacts=artifacts)
+                                         inputs_dir=out, artifacts=artifacts, builder=cfg)
     (out / "forcefield.json").write_text(
         json.dumps(forcefield, indent=2, sort_keys=False) + "\n", encoding="utf-8")
     log(f"forcefield   : {forcefield['protein']['openmm_resource']}"
@@ -411,7 +493,7 @@ def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
                            "resolved_config": "resolved_sys.config.yaml",
                            "original_input": original_relative,
                            "preparation": kept or None}},
-        command=list(sys.argv)))
+        command=list(sys.argv), forcefield=forcefield))
 
     if system.usesPeriodicBoundaryConditions():
         vectors = system.getDefaultPeriodicBoxVectors()
@@ -465,10 +547,21 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
         f"ions {ions.get('counts', ions)}, box {solvated.get('box_shape')} "
         f"({solvated.get('box_volume_nm3', 0):.1f} nm^3)")
 
+    geometry = solvated.get("geometry") or {}
+    log(f"box geometry : requested {geometry.get('padding_nm_requested')} nm padding -> "
+        f"solute-to-copy clearance {geometry.get('solute_image_clearance_nm')} nm, "
+        f"reduced-box height {geometry.get('min_reduced_box_height_nm')} nm "
+        f"(needs {geometry.get('required_cutoff_height_nm')} nm for a "
+        f"{geometry.get('nonbonded_cutoff_nm')} nm cutoff"
+        + (", box grown to fit" if geometry.get("grown_for_cutoff") else "") + ")")
+
     built = build_system(Path(solvated["output_pdb"]), staging, cfg, solvated["n_solute_atoms"],
                          ligand_sdf=ligand_sdf, route=route)
-    log(f"system       : PME, cutoff {cfg['system_build']['nonbonded_cutoff_nm']} nm, "
-        f"{cfg['system_build']['constraints']}")
+    nonbonded = built.get("nonbonded") or {}
+    log(f"system       : {nonbonded.get('method')}, cutoff {nonbonded.get('cutoff_nm')} nm, "
+        f"switching {nonbonded.get('switching')}, dispersion correction "
+        f"{nonbonded.get('dispersion_correction')}, Ewald tolerance "
+        f"{nonbonded.get('ewald_error_tolerance')}, {cfg['system_build']['constraints']}")
 
     pdb = app.PDBFile(str(solvated["output_pdb"]))
     system = XmlSerializer.deserialize(Path(built["system_xml"]).read_text())
@@ -480,7 +573,18 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
             # part of how the system was parameterised, not a log line.
             "n_waters": solvated.get("n_waters"), "ions": solvated.get("ions"),
             "box_shape": solvated.get("box_shape"),
-            "box_volume_nm3": solvated.get("box_volume_nm3")}
+            "box_volume_nm3": solvated.get("box_volume_nm3"),
+            "box_vectors_nm": solvated.get("box_vectors_nm"),
+            # The full geometry resolution: requested padding, the three distances that are not
+            # interchangeable, and whether the box had to be grown for the cutoff. Recorded rather
+            # than reduced to one number, because "1.5 nm padding" alone does not say what
+            # clearance the built box actually has.
+            "box_geometry": solvated.get("geometry"),
+            "salt": solvated.get("salt"),
+            "water_model": solvated.get("water_model"),
+            "water_packing_model": solvated.get("water_packing_model"),
+            "water_packing_substituted": solvated.get("water_packing_substituted"),
+            "water_model_reconciled": solvated.get("water_model_reconciled")}
 
 
 def _build_implicit(input_path: Path, cfg: dict, staging: Path, *, route: str, log: Log) -> dict:

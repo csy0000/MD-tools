@@ -49,6 +49,26 @@ TEMPERATURE = float(common["temperature_kelvin"]) * unit.kelvin
 TIMESTEP_FS = float(common["timestep_fs"])
 FRICTION = float(common["friction_per_ps"]) / unit.picosecond
 BASE_SEED = int(common["random_seed"]) if common.get("random_seed") is not None else 20260101
+def _barostat_frequency_steps():
+    """MonteCarloBarostat attempt interval, in steps, from md.config.yaml.
+
+    Required under explicit solvent, with no fallback: this is the interval the recorded provenance
+    names, so a script that supplied its own could integrate at an interval no record mentions.
+    """
+    if implicit:
+        return None
+    value = common.get("barostat_frequency_steps")
+    if value is None:
+        raise SystemExit(
+            "md.config.yaml is missing common.barostat_frequency_steps, which explicit solvent "
+            "needs to construct the MonteCarloBarostat. Regenerate the project with "
+            "`md-openmm md-gen`, or add the key (25 is OpenMM's own default).")
+    return int(value)
+
+
+#: null under implicit solvent, where no barostat exists in the System at all.
+BAROSTAT_FREQUENCY_STEPS = _barostat_frequency_steps()
+
 N_REPLICAS = int(method["number_of_replicas"])
 SOLUTE_INDICES = list(range(int(SOLUTE["n_solute_atoms"])))
 
@@ -66,7 +86,8 @@ def build_replica_system(replica, tau, initial_positions):
     add_positional_restraint(system, initial_positions, SOLUTE_INDICES)
     if not implicit:
         add_barostat(system, common["pressure_bar"], TEMPERATURE,
-                     replica_seeds(replica)["barostat"])
+                     replica_seeds(replica)["barostat"],
+                     frequency=BAROSTAT_FREQUENCY_STEPS)
     barostats = count_barostats(system)
     if implicit and barostats:
         raise SystemExit(f"implicit solvent must have no barostat; replica {replica} has "

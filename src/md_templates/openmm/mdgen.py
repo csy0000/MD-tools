@@ -178,6 +178,10 @@ MD_PROVENANCE_FORMAT = "md-templates-md-provenance/v1"
 GENERATED_MANIFEST = "generated-files.sha256"
 
 
+def implicit_route(sys_resolved: dict) -> bool:
+    return sys_resolved.get("solvation") == "implicit"
+
+
 def _md_provenance(*, out: Path, inputs: Path, relative_inputs: str, resolved: dict,
                    sys_resolved: dict, plan: list, methods: list, seed: int) -> dict[str, Any]:
     """Which implementation generated this project, from which prepared system, with which seeds.
@@ -206,12 +210,45 @@ def _md_provenance(*, out: Path, inputs: Path, relative_inputs: str, resolved: d
                 name: _seed(seed, "REST2", replica, name)
                 for name in ("integrator", "velocities", "barostat")}
 
+    common = resolved.get("common") or {}
+    constraints = (sys_resolved.get("constraints") or {})
+    timestep_fs = float(common.get("timestep_fs", 2.0))
+    frequency = common.get("barostat_frequency_steps")
     return {
         "format": MD_PROVENANCE_FORMAT,
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "command": list(sys.argv),
         "implementation": implementation_identity(),
         "environment": environment_versions(),
+        # The protocol as RESOLVED, recorded here rather than left to be read back out of the
+        # configuration. `null` means "does not apply to this solvation route", which is why the
+        # implicit case writes null for pressure and barostat rather than omitting them.
+        "protocol": {
+            "thermostat": {
+                "integrator": "openmm.LangevinMiddleIntegrator",
+                "temperature_kelvin": common.get("temperature_kelvin"),
+                "friction_per_ps": common.get("friction_per_ps"),
+                "friction_note": ("OpenMM collision rate in ps^-1; 1.0 ps^-1 is a nominal 1 ps "
+                                  "damping time"),
+            },
+            "timestep_fs": timestep_fs,
+            "constraints": {
+                "type": constraints.get("type"),
+                "rigid_water": constraints.get("rigid_water"),
+                "hydrogen_mass_amu": constraints.get("hydrogen_mass_amu"),
+                "hydrogen_mass_repartitioning": constraints.get("hydrogen_mass_amu") is not None,
+            },
+            "pressure_coupling": None if implicit_route(sys_resolved) else {
+                "barostat": "openmm.MonteCarloBarostat",
+                "pressure_bar": common.get("pressure_bar"),
+                "frequency_steps": frequency,
+                "interval_ps": (round(float(frequency) * timestep_fs / 1000.0, 6)
+                                if frequency else None),
+                "active_in_stages": [s["path"] for s in plan if s.get("barostat_active")],
+                "present_but_inactive_in_stages": [s["path"] for s in plan
+                                                   if not s.get("barostat_active")],
+            },
+        },
         "parent_system": {
             "inputs_path": relative_inputs,
             "provenance_sha256": parent_hash("provenance.yaml"),

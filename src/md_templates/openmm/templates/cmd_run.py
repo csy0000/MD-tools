@@ -34,7 +34,7 @@ from openmm.app import CheckpointReporter, DCDReporter, PDBFile, StateDataReport
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
-from md_stages import (sha256_file, PRODUCTION_BAROSTAT_FREQUENCY, RECORD_FORMAT, active_barostat_count,
+from md_stages import (sha256_file, RECORD_FORMAT, active_barostat_count,
                        append_jsonl, build_stage_system, count_barostats, derive_seed,
                        file_record, make_simulation, next_invocation_index, project_identity,
                        require_parent_state, resolve_platform, restraint_strength,
@@ -56,6 +56,25 @@ TEMPERATURE = float(common["temperature_kelvin"]) * unit.kelvin
 TIMESTEP_FS = float(common["timestep_fs"])
 FRICTION = float(common["friction_per_ps"]) / unit.picosecond
 BASE_SEED = int(common["random_seed"]) if common.get("random_seed") is not None else 20260825
+def _barostat_frequency_steps():
+    """MonteCarloBarostat attempt interval, in steps, from md.config.yaml.
+
+    Required under explicit solvent, with no fallback: this is the interval the recorded provenance
+    names, so a script that supplied its own could integrate at an interval no record mentions.
+    """
+    if implicit:
+        return None
+    value = common.get("barostat_frequency_steps")
+    if value is None:
+        raise SystemExit(
+            "md.config.yaml is missing common.barostat_frequency_steps, which explicit solvent "
+            "needs to construct the MonteCarloBarostat. Regenerate the project with "
+            "`md-openmm md-gen`, or add the key (25 is OpenMM's own default).")
+    return int(value)
+
+
+#: null under implicit solvent, where no barostat exists in the System at all.
+BAROSTAT_FREQUENCY_STEPS = _barostat_frequency_steps()
 SOLUTE_INDICES = list(range(int(SOLUTE["n_solute_atoms"])))
 TAU = float(method.get("tau", 0.0) or 0.0)
 # Read from solute.yaml, which sys-gen wrote from the topology: the same list REST2 uses, so the
@@ -96,8 +115,9 @@ def main():
     system = build_stage_system(INPUTS, implicit=implicit, restrained=False,
                                 barostat_active=not implicit,
                                 pressure_bar=common.get("pressure_bar"), temperature=TEMPERATURE,
-                                barostat_seed=seeds["barostat"], solute_indices=SOLUTE_INDICES,
-                                scale_system=scale)
+                                barostat_seed=seeds["barostat"],
+                                barostat_frequency_steps=BAROSTAT_FREQUENCY_STEPS,
+                                solute_indices=SOLUTE_INDICES, scale_system=scale)
     if TAU:
         print(f"[cMD] fixed tau = {TAU:g}, s = {scale_factor_for_tau(TAU):.6f}, "
               f"sqrt(s) = {1.0 - TAU:.6f}, {len(OMEGA_EXCLUDED)} omega bond(s) unscaled")
@@ -129,7 +149,7 @@ def main():
         # The barostat frequency lives in the System, not the checkpoint, so the production layout
         # is set before loading. loadCheckpoint then restores the integrator RNG state.
         if not implicit:
-            set_barostat_frequency(simulation, PRODUCTION_BAROSTAT_FREQUENCY)
+            set_barostat_frequency(simulation, BAROSTAT_FREQUENCY_STEPS)
         simulation.loadCheckpoint(str(checkpoint))
         done = simulation.context.getStepCount()
         print(f"[cMD] resuming from production.chk at step {done:,}")
@@ -227,7 +247,22 @@ def main():
         "cuda_device": device if platform_name == "CUDA" else None,
         "seeds": seeds,
         "restraint_kj_mol_nm2": restraint_strength(simulation),
+        "barostats_in_system": count_barostats(simulation.context.getSystem()),
         "barostats_active": active_barostat_count(simulation),
+        # The integrator and pressure-coupling settings this invocation ran with, recorded where
+        # they were used rather than left to be read back out of md.config.yaml.
+        "integrator": {
+            "kind": "LangevinMiddleIntegrator",
+            "temperature_kelvin": float(common["temperature_kelvin"]),
+            "friction_per_ps": float(common["friction_per_ps"]),
+            "timestep_fs": TIMESTEP_FS,
+        },
+        "pressure_coupling": None if implicit else {
+            "barostat": "MonteCarloBarostat",
+            "pressure_bar": float(common["pressure_bar"]),
+            "frequency_steps": BAROSTAT_FREQUENCY_STEPS,
+            "interval_ps": round(BAROSTAT_FREQUENCY_STEPS * TIMESTEP_FS / 1000.0, 6),
+        },
         # Trajectories are sized and counted, never hashed at runtime: they grow across
         # invocations and MD-data computes the archival digests once.
         "trajectories": {

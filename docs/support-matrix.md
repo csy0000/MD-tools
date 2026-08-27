@@ -15,6 +15,8 @@ push — so "gated" here means gated at release, not continuously.
 | openmmforcefields | 0.16.0 locally | as above |
 | AmberTools | `sqm`, `antechamber`, `tleap` on PATH | presence and AM1-BCC readiness checked at install and in CI |
 | ParmEd / RDKit | 4.3.1 / 2026.03.1 locally | installed and import-checked |
+| OpenFF force fields | `openff-2.2.1` (Sage 2.2.1) | shipped by `openforcefields`; loaded and asserted by a non-GPU test |
+| OpenMM force fields | `amber14-all.xml` + `amber14/tip3p.xml` (default), `amber19-all.xml` + `amber19/opc.xml` | loaded and asserted by a non-GPU test, including the Na+/Cl- templates |
 | OS | ubuntu-latest (CI), Linux x86-64 (local) | no other OS is claimed |
 | Accelerator (CI) | **CPU only** | the runners have no GPU; `environment-ci.yml` omits the CUDA pin |
 | Accelerator (runs) | **CUDA by default** | generated scripts refuse a silent CPU fallback; locally verified on RTX A5000 + RTX 3080 |
@@ -52,11 +54,28 @@ to the workflow matrix and seeing it pass first.
 
 **Not claimed:** cross-machine bitwise reproducibility of dynamics, in any configuration.
 
+## Scientific scope of the defaults
+
+The evidence for every default, classified by strength, is in
+[`md-defaults-scientific-rationale.md`](md-defaults-scientific-rationale.md). In summary:
+
+| route | status | why |
+|---|---|---|
+| explicit, peptide or protein, ff14SB + TIP3P | supported | each pair is internally consistent; see §3 |
+| explicit, protein + Sage ligand, ff14SB + TIP3P | supported | §3.3 — the specific triple with Sage 2.2.1 is an extrapolation from the Sage 2.x benchmarks, and is labelled one |
+| explicit, ff19SB + OPC | supported alternative | §3.4 — no joint benchmark of ff19SB with Sage exists |
+| implicit, peptide or protein, ff14SB + GBn2/mbondi3 | supported; Amber `igb=8` parity claimed | §5 |
+| implicit, Sage small molecule | **experimental**, recorded as such in `forcefield.json` | §6 — mbondi3 reduces to mbondi2 for a one-residue ligand, and any element outside {H, C, N, O, S} gets GB-Neck2's unfitted fallback |
+| 2 fs, unmodified hydrogen masses | supported baseline | §11.1 |
+| 4 fs with HMR at 3.024 amu | supported for stability and equilibrium free energies; **not** for kinetics | §11.3 |
+
 ## Scientific status, which portability does not address
 
 Mechanical portability is not scientific validity. No ladder is validated by any of this, the
 2 fs / 4 fs hydrogen-mass-repartitioning equivalence gate is open, and every run in CI is
-picoseconds long and proves execution only.
+picoseconds long and proves execution only. Nothing in this repository has been validated against
+experiment; every benchmark cited in the rationale was run by someone else, on their systems, with
+their protocol.
 
 Deletion is not evidence either. Removing the code that described the old architecture says nothing
 about whether the current simulations are correct; that question is answered only by the tests and

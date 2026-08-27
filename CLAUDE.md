@@ -46,10 +46,29 @@ anything. See `docs/FAIR_HANDOFF.md`.
 
 - Never silently guess a molecular route, force field, charge model, water model, protonation
   state, ion definition, ensemble or enhanced-sampling method.
+- The protein force field and the water model are ONE selection, never two independent defaults.
+  `--solvent TIP3P` is ff14SB + TIP3P and is the default; `--solvent OPC` is ff19SB + OPC;
+  `--solvent GBn2` is ff14SB + GBn2/mbondi3 with no SASA term. The ligand force field is
+  OpenFF Sage 2.2.1 (`openff-2.2.1`) with standard AM1-BCC through AmberTools.
+- Every consequential default is argued in `docs/md-defaults-scientific-rationale.md`, with its
+  evidence classified. Do not change one without updating that document and its evidence label.
 - Reject unknown configuration keys and incompatible combinations, naming the full dotted path and
   the value.
 - Keep neutralising counterions separate from salt ion pairs.
 - Distinguish topology atom count from OpenMM particle count; virtual sites make them differ.
+- Keep the four box distances apart and record them under names that say which is which: requested
+  solute-to-box padding, solute-to-periodic-COPY clearance, shortest reduced-box height, and
+  `2*cutoff + margin`. The default padding is 1.5 nm and 2.0 nm is the conservative option; the
+  built-system cutoff gate is what is actually enforced.
+- The implicit route is supported for peptides and proteins. A Sage ligand is recorded as
+  `support_status: "experimental"` with the measured GB parameter coverage, and no Amber `igb=8`
+  parity is claimed for it.
+- The barostat attempt interval is the public `common.barostat_frequency_steps` (default 25, which
+  is OpenMM's own). It is declared once, in `defaults.py`, and reaches every NPT stage and every
+  REST2 replica. Presence of a barostat Force is not the same as it being active.
+- 2 fs with unmodified hydrogen masses is the baseline. HMR at 3.024 amu with 4 fs is an explicit
+  option, requires constrained hydrogen bonds and rigid water, and is never presented as validated
+  for kinetics.
 - Preserve periodic box vectors in structures and restart states.
 - Durations and intervals must convert to exact integer steps. Reject rather than round.
 - REST2 is parameterised by `tau`. `s = (1-tau)^2` and the solute–environment coupling is

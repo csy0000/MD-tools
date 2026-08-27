@@ -114,15 +114,28 @@ def test_explicit_peptide_records_the_qualified_water_resource_that_was_loaded()
     """
     record = _record_for("OPC", "peptide", reported={
         "xml": ["amber19-all.xml", "amber19/opc.xml"], "route": "peptide",
-        "protein_forcefield": "amber19-all.xml", "water": "amber19/opc.xml", "ligand": None})
+        "xml_includes": {"amber19-all.xml": ["amber19/protein.ff19SB.xml"],
+                         "amber19/opc.xml": []},
+        "protein_forcefield": "amber19-all.xml", "water": "amber19/opc.xml", "ligand": None,
+        "nonbonded": {"method": "PME", "cutoff_nm": 1.0, "switching": False,
+                      "switch_distance_nm": None, "dispersion_correction": True,
+                      "ewald_error_tolerance": 0.0005}})
 
     assert record["protein"]["openmm_resource"] == "amber19-all.xml"
+    # the wrapper is a manifest of includes; the record must name the file that carried ff19SB
+    assert record["protein"]["openmm_resource_includes"] == ["amber19/protein.ff19SB.xml"]
     assert record["protein"]["tleap_resource"] is None
     assert record["water"]["openmm_resource"] == "amber19/opc.xml"
     assert record["water"]["requested_label"] == "OPC"
     assert record["builder"]["openmm_xml_loaded"] == ["amber19-all.xml", "amber19/opc.xml"]
     assert record["builder"]["route"] == "openmm.app.ForceField.createSystem"
-    assert record["nonbonded"]["method"] == "PME"
+    # the whole nonbonded treatment, not just the method: each of these changes the energy
+    nonbonded = record["nonbonded"]
+    assert nonbonded["method"] == "PME"
+    assert nonbonded["cutoff_nm"] == 1.0
+    assert nonbonded["switching"] is False and nonbonded["switch_distance_nm"] is None
+    assert nonbonded["dispersion_correction"] is True
+    assert nonbonded["ewald_error_tolerance"] == 0.0005
 
 
 def test_the_ligand_only_route_records_no_protein_force_field():
@@ -130,15 +143,18 @@ def test_the_ligand_only_route_records_no_protein_force_field():
     record = _record_for("OPC", "ligand", reported={
         "xml": ["amber19/opc.xml"], "route": "ligand", "protein_forcefield": None,
         "water": "amber19/opc.xml",
-        "ligand": {"forcefield": "openff-2.2.0", "charge_method": "am1bcc"}})
+        "nonbonded": {"method": "PME", "cutoff_nm": 1.0, "switching": False,
+                      "switch_distance_nm": None, "dispersion_correction": True,
+                      "ewald_error_tolerance": 0.0005},
+        "ligand": {"forcefield": "openff-2.2.1", "charge_method": "am1bcc"}})
 
     assert record["protein"]["forcefield"] is None
     assert record["protein"]["openmm_resource"] is None
     assert "loads no protein force field" in record["protein"]["note"]
     assert "amber19-all.xml" not in (record["builder"]["openmm_xml_loaded"] or [])
     # the exact resource, kept distinct from the human-facing label the user typed
-    assert record["ligand"]["openff_resource"] == "openff-2.2.0"
-    assert record["ligand"]["requested_label"] == "sage-2.2.0"
+    assert record["ligand"]["openff_resource"] == "openff-2.2.1"
+    assert record["ligand"]["requested_label"] == "sage-2.2.1"
     assert record["ligand"]["charge_method"] == "am1bcc"
 
 
@@ -164,11 +180,11 @@ def test_implicit_ligand_records_the_openff_provenance_used_before_parmed():
     record = _record_for("GBn2", "ligand", implicit_report={
         "implicit_model": "GBn2", "radii": "mbondi3", "protein_forcefield": None,
         "forcefield_info": {"route": "ligand", "protein_forcefield": None, "water": None,
-                            "ligand": {"forcefield": "openff-2.2.0",
+                            "ligand": {"forcefield": "openff-2.2.1",
                                        "charge_method": "am1bcc"}}})
 
     assert record["protein"]["openmm_resource"] is None
-    assert record["ligand"]["openff_resource"] == "openff-2.2.0"
+    assert record["ligand"]["openff_resource"] == "openff-2.2.1"
     assert record["ligand"]["charge_method"] == "am1bcc"
     assert record["builder"]["route"] == "parmed.Structure.createSystem"
     assert record["implicit_solvent"]["radii"] == "mbondi3"
@@ -257,6 +273,62 @@ def _snapshot(root: Path):
     return {p.relative_to(root).as_posix(): (p.stat().st_mtime_ns, p.stat().st_size,
                                              hashlib.sha256(p.read_bytes()).hexdigest())
             for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_a_0_3_x_tree_keeps_its_own_ff19sb_opc_identity_and_2nm_box(tmp_path):
+    """0.4 changed the defaults. It did not change what 0.3.x ran, and must not say it did.
+
+    The retrofit reads; it never fills a gap from the current configuration. A 0.3.x bundle that
+    recorded ff19SB + OPC at 2.0 nm has to come back out saying exactly that -- and a bundle that
+    recorded nothing has to come back out saying `unknown`, not `ff14SB`.
+    """
+    _legacy_fixture(tmp_path)
+    out = tmp_path / "fair"
+    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
+                           "--output", out, "--original-input", tmp_path / "source_ALA.pdb")
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    text = "".join(p.read_text() for p in sorted(out.rglob("*"))
+                   if p.suffix in (".yaml", ".json", ".md"))
+    assert "amber19-all.xml" in text and "OPC" in text
+    # nothing from the 0.4 defaults may appear anywhere in a record about 0.3.x data
+    for value in ("amber14-all.xml", "amber14/tip3p.xml", "TIP3P", "sage-2.2.1", "openff-2.2.1"):
+        assert value not in text, f"{value} is a 0.4 default and cannot describe 0.3.x data"
+
+    system = yaml.safe_load((out / "system-record.yaml").read_text())
+    resolved = system["resolved_system_config"]
+    assert resolved["evidence"] == "recorded"
+    assert resolved["value"]["forcefield"]["protein"] == "amber19-all.xml"
+    assert resolved["value"]["solvent"]["model"] == "OPC"
+    assert resolved["value"]["solvent"]["padding_nm"] == 2.0
+
+    forcefield = json.loads((out / "forcefield.json").read_text())
+    assert forcefield["protein"]["openmm_resource"] == "amber19-all.xml"
+    assert forcefield["water"]["model"] == "OPC"
+    assert forcefield["explicit_solvent"]["padding_nm"] == 2.0
+    assert forcefield["package_versions"]["evidence"] == "unknown"
+
+
+def test_a_0_3_x_tree_with_no_recorded_force_field_stays_unknown(tmp_path):
+    """The dangerous case: a gap that the current default would fit neatly into."""
+    _legacy_fixture(tmp_path)
+    (tmp_path / "inputs" / "resolved_sys.config.yaml").unlink()
+    out = tmp_path / "fair"
+    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
+                           "--output", out)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    text = "".join(p.read_text() for p in sorted(out.rglob("*"))
+                   if p.suffix in (".yaml", ".json", ".md"))
+    for value in ("amber14-all.xml", "amber19-all.xml", "TIP3P", "OPC", "sage-2.2"):
+        assert value not in text, f"a missing record must stay unknown, not become {value}"
+
+    system = yaml.safe_load((out / "system-record.yaml").read_text())
+    assert system["resolved_system_config"]["evidence"] == "unknown"
+    assert system["resolved_system_config"]["value"] is None
+    forcefield = json.loads((out / "forcefield.json").read_text())
+    assert forcefield["evidence"] == "unknown"
+    assert "nothing can be stated" in forcefield["note"]
 
 
 def test_the_retrofit_never_modifies_the_source(tmp_path):

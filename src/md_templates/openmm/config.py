@@ -135,6 +135,9 @@ def resolve_md_config(document: dict[str, Any], *, implicit: bool) -> dict[str, 
         # A non-periodic system has no volume to control. Saying NPT here would name an ensemble
         # the run cannot sample.
         common["pressure_bar"] = None
+        # There is no barostat in an implicit System at all, so an attempt interval is not a
+        # setting that was left out -- it does not apply. Written explicitly as null.
+        common["barostat_frequency_steps"] = None
         for method in methods:
             block = resolved.get(method) or {}
             if str(block.get("ensemble", "")).upper() == "NPT":
@@ -145,10 +148,48 @@ def resolve_md_config(document: dict[str, Any], *, implicit: bool) -> dict[str, 
             raise ConfigError(
                 "explicit solvent needs common.pressure_bar for the barostat; it is null. "
                 "Set it (1.0 bar is the default) or switch the system config to GBn2.")
+        common["barostat_frequency_steps"] = _check_barostat_frequency(common)
 
     _check_timestep(resolved)
     _check_tau(resolved)
     return resolved
+
+
+def _check_barostat_frequency(common: dict[str, Any]) -> int:
+    """`MonteCarloBarostat`'s attempt interval, in steps, validated where it is declared.
+
+    It reaches every NPT stage, the cMD production barostat and each REST2 replica's barostat, so a
+    value that is not a positive whole number of steps is refused here rather than in three
+    generated scripts. Zero is refused deliberately: OpenMM reads frequency 0 as "never attempt a
+    move", which would turn a stage labelled NPT into a constant-volume run that still says NPT.
+    """
+    from .defaults import DEFAULT_BAROSTAT_FREQUENCY_STEPS
+
+    value = common.get("barostat_frequency_steps", DEFAULT_BAROSTAT_FREQUENCY_STEPS)
+    if value is None:
+        raise ConfigError(
+            "explicit solvent needs common.barostat_frequency_steps; it is null. It is the "
+            f"MonteCarloBarostat attempt interval in integration STEPS -- "
+            f"{DEFAULT_BAROSTAT_FREQUENCY_STEPS} is OpenMM's own default. null means 'does not "
+            "apply', which is true only under implicit solvent.")
+    if isinstance(value, bool):
+        # `true` would otherwise pass every check below as 1, which is a legal frequency and not
+        # remotely what was meant.
+        raise ConfigError(
+            f"common.barostat_frequency_steps must be a positive whole number of steps; got "
+            f"{value!r}, which is a boolean.")
+    try:
+        steps = int(value)
+    except (TypeError, ValueError):
+        raise ConfigError(
+            f"common.barostat_frequency_steps must be a positive whole number of steps; got "
+            f"{value!r}") from None
+    if steps != value or steps < 1:
+        raise ConfigError(
+            f"common.barostat_frequency_steps must be a positive whole number of steps; got "
+            f"{value!r}. It counts integration steps, not picoseconds, and 0 would leave a stage "
+            f"labelled NPT running at constant volume.")
+    return steps
 
 
 def _check_tau(resolved: dict[str, Any]) -> None:
@@ -192,11 +233,33 @@ def check_timestep_against_masses(md_resolved: dict[str, Any],
     This is the one cross-file check worth making: the two settings live in different files and are
     individually reasonable, so nothing else would catch the combination.
     """
+    from .defaults import HMR_HYDROGEN_MASS_AMU
+
     timestep = float((md_resolved.get("common") or {}).get("timestep_fs", 2.0))
-    mass = (sys_resolved.get("constraints") or {}).get("hydrogen_mass_amu")
-    if timestep > 3.0 and mass is None:
+    constraints = sys_resolved.get("constraints") or {}
+    mass = constraints.get("hydrogen_mass_amu")
+    if timestep <= 3.0:
+        return
+    if mass is None:
         raise ConfigError(
             f"md.config.yaml sets common.timestep_fs = {timestep} but sys.config.yaml leaves "
             "constraints.hydrogen_mass_amu null, so hydrogens keep their real mass. A timestep "
-            "above ~3 fs needs hydrogen mass repartitioning; set hydrogen_mass_amu to 3.024, or "
-            "lower the timestep to 2.0.")
+            f"above ~3 fs needs hydrogen mass repartitioning; set hydrogen_mass_amu to "
+            f"{HMR_HYDROGEN_MASS_AMU}, or lower the timestep to 2.0. "
+            "See docs/examples/hmr-4fs.yaml.")
+    # HMR lowers the frequency of the bond-ANGLE motions involving hydrogen. The bond STRETCHES are
+    # removed by the constraints, and they are the fastest motions in the system: repartitioning
+    # without constraining them buys nothing and integrates a 10 fs period with a 4 fs step.
+    if str(constraints.get("type")) not in ("HBonds", "AllBonds", "HAngles"):
+        raise ConfigError(
+            f"md.config.yaml sets common.timestep_fs = {timestep} and sys.config.yaml repartitions "
+            f"hydrogen mass to {mass} amu, but constraints.type is "
+            f"{constraints.get('type')!r}, so the bonds to hydrogen are not constrained. HMR "
+            "lowers the hydrogen ANGLE frequencies; the bond stretches it does not touch are the "
+            "fastest motions left. Set constraints.type to HBonds.")
+    if sys_resolved.get("solvation") != "implicit" and not constraints.get("rigid_water", True):
+        raise ConfigError(
+            f"md.config.yaml sets common.timestep_fs = {timestep} but sys.config.yaml sets "
+            "constraints.rigid_water false. Water is never repartitioned, so a flexible water "
+            "molecule keeps its ~10 fs O-H stretch and sets the stable timestep for the whole "
+            "box. Set rigid_water true.")

@@ -36,7 +36,7 @@ from openmm.app import CheckpointReporter, DCDReporter, PDBFile, StateDataReport
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
-from md_stages import (sha256_file, PRODUCTION_BAROSTAT_FREQUENCY, RECORD_FORMAT, active_barostat_count,
+from md_stages import (sha256_file, RECORD_FORMAT, active_barostat_count,
                        add_barostat, add_positional_restraint, append_jsonl, count_barostats,
                        derive_seed, device_groups, file_record, make_simulation,
                        next_invocation_index, project_identity, propagate_segment,
@@ -58,6 +58,26 @@ TEMPERATURE = float(common["temperature_kelvin"]) * unit.kelvin
 TIMESTEP_FS = float(common["timestep_fs"])
 FRICTION = float(common["friction_per_ps"]) / unit.picosecond
 BASE_SEED = int(common["random_seed"]) if common.get("random_seed") is not None else 20260101
+def _barostat_frequency_steps():
+    """MonteCarloBarostat attempt interval, in steps, from md.config.yaml.
+
+    Required under explicit solvent, with no fallback: this is the interval the recorded provenance
+    names, so a script that supplied its own could integrate at an interval no record mentions.
+    """
+    if implicit:
+        return None
+    value = common.get("barostat_frequency_steps")
+    if value is None:
+        raise SystemExit(
+            "md.config.yaml is missing common.barostat_frequency_steps, which explicit solvent "
+            "needs to construct the MonteCarloBarostat. Regenerate the project with "
+            "`md-openmm md-gen`, or add the key (25 is OpenMM's own default).")
+    return int(value)
+
+
+#: null under implicit solvent, where no barostat exists in the System at all.
+BAROSTAT_FREQUENCY_STEPS = _barostat_frequency_steps()
+
 KB_KJ = 0.008314462618            # kJ/mol/K
 BETA = 1.0 / (KB_KJ * float(common["temperature_kelvin"]))
 
@@ -105,7 +125,7 @@ def build_replica(replica, tau, base, topology, initial_positions, device, platf
              for name in ("integrator", "velocities", "barostat")}
     if not implicit:
         add_barostat(system, common["pressure_bar"], TEMPERATURE, seeds["barostat"],
-                     frequency=PRODUCTION_BAROSTAT_FREQUENCY)
+                     frequency=BAROSTAT_FREQUENCY_STEPS)
     barostats = count_barostats(system)
     if implicit and barostats:
         raise SystemExit(f"implicit solvent must have no barostat; replica {replica} has "
@@ -338,6 +358,11 @@ def main():
             "seeds": {name: derive_seed(BASE_SEED, "REST2", replica, name)
                       for name in ("integrator", "velocities", "barostat")},
             "cuda_device": device_of.get(replica),
+            # Measured on this replica's Context, not copied from the configuration: each rung
+            # constructs its own scaled System, so each one's barostat has to be checked.
+            "barostats_in_system": count_barostats(simulation.context.getSystem()),
+            "barostats_active": active_barostat_count(simulation),
+            "barostat_frequency_steps": BAROSTAT_FREQUENCY_STEPS,
             "started_at_step": started_steps[replica],
             "ended_at_step": int(simulation.context.getStepCount()),
             "equilibration_final_state": f"replica_{replica:02d}/equilibration/final_state.xml",
@@ -373,6 +398,20 @@ def main():
             "hamiltonian_scaling": "solute-solute (1-tau)^2, solute-environment (1-tau)",
             "common_beta_across_replicas": True,
             "positions_and_box_vectors_exchanged_together": True,
+        },
+        # The integrator and pressure-coupling settings this invocation ran with, recorded where
+        # they were used rather than left to be read back out of md.config.yaml.
+        "integrator": {
+            "kind": "LangevinMiddleIntegrator",
+            "temperature_kelvin": float(common["temperature_kelvin"]),
+            "friction_per_ps": float(common["friction_per_ps"]),
+            "timestep_fs": TIMESTEP_FS,
+        },
+        "pressure_coupling": None if implicit else {
+            "barostat": "MonteCarloBarostat",
+            "pressure_bar": float(common["pressure_bar"]),
+            "frequency_steps": BAROSTAT_FREQUENCY_STEPS,
+            "interval_ps": round(BAROSTAT_FREQUENCY_STEPS * TIMESTEP_FS / 1000.0, 6),
         },
         "exchange": {
             "rounds_this_invocation": n_exchanges,

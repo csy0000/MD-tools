@@ -5,10 +5,23 @@ keys from it. `sysgen.py` maps the user's two YAML files onto it -- see `sysgen.
 the chemistry is driven by the user's configuration without rewriting the builders' signatures,
 which would risk the science for a cosmetic gain.
 
-This is the BASE only. Every value a user can set is overwritten from their YAML before a build.
-Extracted verbatim from the previous configuration module; the rest of that module -- resolution,
-schema migration, manifest writing -- is gone.
+This is the BASE only. Every value a user can set is overwritten from their YAML before a build,
+and the public defaults live in `defaults.py`, which is the single place they are declared. The
+values here exist so a builder key is never missing; where one of them shadows a public default it
+is imported from `defaults.py` rather than spelled again.
+
+Extracted from the previous configuration module; the rest of that module -- resolution, schema
+migration, manifest writing -- is gone. So are its `integrator`, `equilibration` and `production`
+blocks: nothing read them after the stage chain replaced the old workflow manager, and a stale
+`barostat_interval: 50` sitting beside the live `barostat_frequency_steps: 25` is exactly the kind
+of second declaration this module is not allowed to keep.
 """
+from .defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT, EXPLICIT_COMBINATIONS
+
+#: Which combination the base carries is `defaults.DEFAULT_SOLVENT`, not a second spelling of it.
+#: Every key here is overwritten from the user's YAML before a build; this only decides what a
+#: builder sees if a configuration somehow omits the block entirely.
+_EXPLICIT = EXPLICIT_COMBINATIONS[DEFAULT_SOLVENT]
 
 DEFAULTS = {'run': {'name': None, 'root': None, 'seed': 20260814},
  'system': {'slug': None, 'solute_kind': 'auto', 'require_input_route': None},
@@ -26,14 +39,14 @@ DEFAULTS = {'run': {'name': None, 'root': None, 'seed': 20260814},
                  'delete_existing_hydrogens': True,
                  'variants': None,
                  'skip_for_ligand': True},
- 'forcefield': {'protein': 'amber19/protein.ff19SB.xml',
-                'water': 'amber19/opc.xml',
-                'ligand': 'openff-2.2.0',
+ 'forcefield': {'protein': _EXPLICIT['protein'],
+                'water': _EXPLICIT['water'],
+                'ligand': 'openff-2.2.1',
                 'ligand_charge_method': 'am1bcc',
                 'extra_xml': []},
- 'solvation': {'water_model': 'opc',
+ 'solvation': {'water_model': DEFAULT_SOLVENT.lower(),
                'box_shape': 'dodecahedron',
-               'padding_nm': 2.0,
+               'padding_nm': DEFAULT_PADDING_NM,
                'padding_semantics': 'openmm',
                'cutoff_fit_policy': 'grow',
                'ionic_strength_molar': 0.15,
@@ -51,50 +64,6 @@ DEFAULTS = {'run': {'name': None, 'root': None, 'seed': 20260814},
                   'hydrogen_mass_amu': None,
                   'hmr_scope': 'none',
                   'remove_cm_motion': True},
- 'integrator': {'kind': 'langevin-middle',
-                'timestep_fs': 2.0,
-                'friction_per_ps': 1.0,
-                'temperature_k': 300.0},
- 'equilibration': {'protocol': 'staged',
-                   'minimize_max_iterations': 0,
-                   'minimize_tolerance_kj_mol_nm': 10.0,
-                   'restraint_k_kj_mol_nm2': 4184.0,
-                   'restraint_selection': 'solute-heavy',
-                   'heat_from_k': 50.0,
-                   'heat_to_k': None,
-                   'heat_ps': 200.0,
-                   'heat_timestep_fs': 1.0,
-                   'heat_n_windows': 25,
-                   'npt_restrained_ps': 200.0,
-                   'release_schedule_kj_mol_nm2': [1046.0, 418.0, 0.0],
-                   'release_ps_each': 200.0,
-                   'npt_free_ps': 1000.0,
-                   'timestep_fs': 2.0,
-                   'nvt_ps': 250.0,
-                   'npt_ps': 250.0,
-                   'pressure_bar': 1.0,
-                   'barostat_interval': 50,
-                   'box_average_last_ps': 500.0,
-                   'seed': None},
- 'production': {'ensemble': None,
-                'platform': 'CUDA',
-                'precision': 'mixed',
-                'device_index': None,
-                'report': {'all_atom_ps': 10.0,
-                           'solute_ps': 2.0,
-                           'state_ps': 10.0,
-                           'checkpoint_ps': 100.0},
-                'md': {'scale_factor': 1.0,
-                       'n_chunks': 10,
-                       'chunk_ns': 100.0,
-                       'seed': None,
-                       'label': 'cold'},
-                'remd': {'n_chunks': 10,
-                         'chunk_ns': 100.0,
-                         'scale_factors': None,
-                         'exchange_interval_ps': 10.0,
-                         'equilibration_ps': 10.0,
-                         'seed': None}},
  'rest2': {'omega_exclusion': True,
            'proline_like_residues': ['PRO'],
            'max_proline_ring_size': 7,

@@ -8,7 +8,37 @@ import yaml
 from md_templates.openmm import defaults as D
 
 
+def test_the_explicit_default_is_ff14sb_sage_221_tip3p(md_openmm, tmp_path):
+    """No `--solvent`: what a user gets by typing the least.
+
+    The default explicit combination is ff14SB + Sage 2.2.1 + TIP3P, in a dodecahedral box with
+    1.5 nm of requested padding, PME at a 1.0 nm cutoff, 0.15 M NaCl, 2 fs and no HMR.
+    """
+    result = md_openmm("sys-config", "--method", "cMD", "REST2", "--peptide", "true")
+    assert result.returncode == 0, result.stderr
+
+    sys_doc = yaml.safe_load((tmp_path / "sys.config.yaml").read_text())
+    md_doc = yaml.safe_load((tmp_path / "md.config.yaml").read_text())
+
+    assert sys_doc["solvent"]["model"] == "TIP3P"
+    assert sys_doc["forcefield"]["protein"] == "amber14-all.xml"
+    assert sys_doc["forcefield"]["water"] == "amber14/tip3p.xml"
+    assert sys_doc["solute"]["ligand_forcefield"] == "sage-2.2.1"
+    assert sys_doc["solvent"]["padding_nm"] == 1.5
+    assert sys_doc["solvent"]["box_shape"] == "dodecahedron"
+    assert sys_doc["solvent"]["cutoff_nm"] == 1.0
+    assert sys_doc["constraints"]["hydrogen_mass_amu"] is None, "HMR is off by default"
+    assert md_doc["common"]["timestep_fs"] == 2.0
+    assert md_doc["common"]["friction_per_ps"] == 1.0
+    assert md_doc["common"]["barostat_frequency_steps"] == 25
+    # no ff19SB or OPC in any VALUE. The header comment names them as the alternative, which is
+    # the point; what must not happen is one of them being what actually gets built.
+    values = yaml.safe_dump(sys_doc).lower()
+    assert "ff19sb" not in values and "opc" not in values and "amber19" not in values
+
+
 def test_explicit_opc_configuration(md_openmm, tmp_path):
+    """`--solvent OPC` still selects ff19SB + OPC, unchanged as the alternative."""
     result = md_openmm("sys-config", "--method", "cMD", "REST2",
                        "--peptide", "true", "--solvent", "OPC")
     assert result.returncode == 0, result.stderr
@@ -18,7 +48,10 @@ def test_explicit_opc_configuration(md_openmm, tmp_path):
 
     assert sys_doc["solute"]["peptide"] is True
     assert sys_doc["solvent"]["model"] == "OPC"
-    assert sys_doc["solvent"]["padding_nm"] == 2.0
+    assert sys_doc["forcefield"]["protein"] == "amber19-all.xml"
+    assert sys_doc["forcefield"]["water"] == "amber19/opc.xml"
+    assert sys_doc["solute"]["ligand_forcefield"] == "sage-2.2.1"
+    assert sys_doc["solvent"]["padding_nm"] == 1.5
     assert sys_doc["solvent"]["box_shape"] == "dodecahedron"
     assert sys_doc["solvent"]["ionic_strength_molar"] == 0.15
     assert sys_doc["solvent"]["cutoff_nm"] == 1.0
@@ -30,6 +63,7 @@ def test_explicit_opc_configuration(md_openmm, tmp_path):
     assert md_doc["methods"] == ["cMD", "REST2"]
     assert md_doc["common"]["timestep_fs"] == 2.0
     assert md_doc["common"]["pressure_bar"] == 1.0
+    assert md_doc["common"]["barostat_frequency_steps"] == 25
     assert md_doc["cMD"]["ensemble"] == "NPT"
     assert md_doc["REST2"]["ensemble"] == "NPT"
     assert md_doc["REST2"]["number_of_replicas"] == 6
@@ -69,7 +103,7 @@ def test_names_are_accepted_case_insensitively_and_written_canonically(md_openmm
 
 def test_show_default_and_sys_config_use_the_same_definitions(md_openmm, tmp_path):
     """Two sources of the same defaults is how this repository drifted before."""
-    md_openmm("sys-config", "--method", "cMD", "REST2", "--solvent", "OPC")
+    md_openmm("sys-config", "--method", "cMD", "REST2")
     written = yaml.safe_load((tmp_path / "sys.config.yaml").read_text())
     shown = yaml.safe_load(md_openmm("show-default", "sys").stdout)
     assert shown == written
@@ -116,12 +150,170 @@ def test_implicit_gbn2_defaults_to_ff14sb_not_ff19sb():
 
 
 def test_explicit_opc_still_uses_ff19sb():
-    """The pairing ff19SB WAS parameterised for is unchanged."""
+    """The pairing ff19SB WAS parameterised for remains selectable, and unchanged."""
     from md_templates.openmm.defaults import sys_defaults
 
     explicit = sys_defaults(solvent="OPC")
     assert explicit["forcefield"]["protein"] == "amber19-all.xml"
-    assert explicit["forcefield"]["water"] == "opc.xml"
+    assert explicit["forcefield"]["water"] == "amber19/opc.xml"
+    assert explicit["solvent"]["model"] == "OPC"
+
+
+def test_the_implicit_file_documents_the_default_explicit_combination():
+    """An implicit config still shows what the explicit block would look like -- the DEFAULT one.
+
+    Showing the OPC alternative there would advertise it as the thing to switch back to.
+    """
+    from md_templates.openmm.defaults import DEFAULT_SOLVENT, sys_defaults
+
+    assert DEFAULT_SOLVENT == "TIP3P"
+    document = sys_defaults(solvent="GBn2")
+    # the explicit block is dropped for an implicit file, but the default it would have carried is
+    # the TIP3P one -- checked through the resolver, which is what decides what gets built
+    explicit = sys_defaults(solvent=DEFAULT_SOLVENT)
+    assert explicit["forcefield"]["water"] == "amber14/tip3p.xml"
+    assert document["forcefield"]["protein"] == "leaprc.protein.ff14SB"
+
+
+# --- the exact resources must actually load ----------------------------------
+
+def test_every_default_forcefield_resource_loads_in_this_environment():
+    """A resource whose STRING looks right and whose FILE is missing is the failure to catch.
+
+    No System is built here -- `ForceField()` only parses the XML -- so this is a non-GPU test.
+    """
+    from openmm.app import ForceField
+
+    from md_templates.openmm.defaults import EXPLICIT_COMBINATIONS
+
+    for name, combination in EXPLICIT_COMBINATIONS.items():
+        forcefield = ForceField(combination["protein"], combination["water"])
+        assert forcefield is not None, name
+        # the water resource must carry the ion templates addSolvent places
+        templates = {t.name.upper() for t in forcefield._templates.values()}
+        assert {"NA", "CL", "HOH"} <= templates, f"{name}: {combination['water']} lacks ions"
+
+
+def test_the_default_ligand_forcefield_resource_loads():
+    """`sage-2.2.1` must map onto a SMIRNOFF file this environment actually ships."""
+    from openff.toolkit.typing.engines.smirnoff import ForceField as OFFForceField
+
+    from md_templates.openmm.defaults import LIGAND_FORCEFIELD
+    from md_templates.openmm.sysgen import _openff_name
+
+    resource = _openff_name(LIGAND_FORCEFIELD)
+    assert resource == "openff-2.2.1"
+    assert OFFForceField(f"{resource}.offxml") is not None
+
+
+def test_an_unqualified_water_label_that_openmm_does_not_ship_is_refused():
+    """The old blanket `amber19/` prefix turned `tip3p.xml` into a file that does not exist."""
+    from md_templates.openmm.config import ConfigError
+    from md_templates.openmm.sysgen import _water_xml
+
+    assert _water_xml("tip3p.xml") == "amber14/tip3p.xml"
+    assert _water_xml("opc.xml") == "amber19/opc.xml"
+    assert _water_xml("amber14/tip3p.xml") == "amber14/tip3p.xml"
+    with pytest.raises(ConfigError) as error:
+        _water_xml("water.xml")
+    assert "amber14/tip3p.xml" in str(error.value)
+
+
+# --- the barostat attempt frequency is public, and reaches the stages ---------
+
+def test_the_barostat_frequency_is_declared_once_and_defaults_to_openmms_own():
+    from md_templates.openmm.defaults import DEFAULT_BAROSTAT_FREQUENCY_STEPS, md_defaults
+
+    assert DEFAULT_BAROSTAT_FREQUENCY_STEPS == 25
+    assert md_defaults()["common"]["barostat_frequency_steps"] == 25
+    assert md_defaults(solvent="GBn2")["common"]["barostat_frequency_steps"] is None
+
+
+def test_the_barostat_frequency_reaches_every_npt_stage_and_no_nvt_one():
+    """`barostat_active` decides whether it moves; this decides how often when it does."""
+    from md_templates.openmm.config import resolve_md_config
+    from md_templates.openmm.defaults import md_defaults
+    from md_templates.openmm.stages import stage_plan
+
+    resolved = resolve_md_config(md_defaults(), implicit=False)
+    resolved["common"]["barostat_frequency_steps"] = 40
+    plan = stage_plan(resolved, implicit=False)
+    by_kind = {stage["kind"]: stage for stage in plan}
+    assert by_kind["npt_restrained"]["barostat_frequency_steps"] == 40
+    assert by_kind["npt_free"]["barostat_frequency_steps"] == 40
+    # present in the System, inert: frequency 0 is what makes an NVT stage NVT here
+    assert by_kind["minimization"]["barostat_frequency_steps"] == 0
+    assert by_kind["nvt_restrained"]["barostat_frequency_steps"] == 0
+
+    implicit_plan = stage_plan(
+        resolve_md_config(md_defaults(solvent="GBn2"), implicit=True), implicit=True)
+    assert all(stage["barostat_frequency_steps"] is None for stage in implicit_plan), \
+        "implicit solvent has no barostat at all; 0 would claim there is an inert one"
+
+
+@pytest.mark.parametrize("value", [0, -1, 2.5, "25", None])
+def test_a_barostat_frequency_that_is_not_a_positive_whole_step_count_is_refused(value):
+    from md_templates.openmm.config import ConfigError, resolve_md_config
+    from md_templates.openmm.defaults import md_defaults
+
+    document = md_defaults()
+    document["common"]["barostat_frequency_steps"] = value
+    with pytest.raises(ConfigError) as error:
+        resolve_md_config(document, implicit=False)
+    assert "barostat_frequency_steps" in str(error.value)
+
+
+# --- 2 fs is the baseline; 4 fs needs HMR AND the constraints -----------------
+
+def test_the_default_protocol_is_2fs_without_hmr():
+    from md_templates.openmm.defaults import md_defaults, sys_defaults
+
+    assert md_defaults()["common"]["timestep_fs"] == 2.0
+    assert sys_defaults()["constraints"]["hydrogen_mass_amu"] is None
+    assert sys_defaults()["constraints"]["type"] == "HBonds"
+    assert sys_defaults()["constraints"]["rigid_water"] is True
+
+
+def test_the_hmr_example_is_a_complete_and_loadable_pair():
+    """The documented 4 fs option must resolve, not merely read well."""
+    from pathlib import Path
+
+    from md_templates.openmm.config import check_timestep_against_masses, resolve_md_config, \
+        resolve_sys_config
+    from md_templates.openmm.defaults import HMR_HYDROGEN_MASS_AMU, HMR_TIMESTEP_FS, \
+        md_defaults, sys_defaults
+
+    example = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / "docs/examples/hmr-4fs.yaml").read_text())
+    assert example["sys.config.yaml"]["constraints"]["hydrogen_mass_amu"] == HMR_HYDROGEN_MASS_AMU
+    assert example["md.config.yaml"]["common"]["timestep_fs"] == HMR_TIMESTEP_FS
+
+    system = sys_defaults()
+    system["constraints"].update(example["sys.config.yaml"]["constraints"])
+    protocol = md_defaults()
+    protocol["common"].update(example["md.config.yaml"]["common"])
+    check_timestep_against_masses(
+        resolve_md_config(protocol, implicit=False), resolve_sys_config(system))
+
+
+@pytest.mark.parametrize("patch, expected", [
+    ({}, "hydrogen_mass_amu"),                                  # 4 fs with real hydrogen masses
+    ({"hydrogen_mass_amu": 3.024, "type": "None"}, "not constrained"),
+    ({"hydrogen_mass_amu": 3.024, "rigid_water": False}, "rigid_water"),
+])
+def test_unsafe_4fs_configurations_are_refused_with_a_specific_message(patch, expected):
+    from md_templates.openmm.config import ConfigError, check_timestep_against_masses, \
+        resolve_md_config
+    from md_templates.openmm.defaults import md_defaults, sys_defaults
+
+    system = sys_defaults()
+    system["constraints"].update(patch)
+    system["solvation"] = "explicit"
+    protocol = md_defaults()
+    protocol["common"]["timestep_fs"] = 4.0
+    with pytest.raises(ConfigError) as error:
+        check_timestep_against_masses(resolve_md_config(protocol, implicit=False), system)
+    assert expected in str(error.value)
 
 
 def test_ff19sb_with_an_implicit_gb_model_is_refused():

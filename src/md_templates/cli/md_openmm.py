@@ -19,6 +19,15 @@ SYS_HEADER = """\
 #
 # Only the solvent block that applies is present: an explicit water box (solvent:) or an implicit
 # GB model (implicit_solvent:), never both.
+#
+# Defaults, and where to change them (docs/md-defaults-scientific-rationale.md gives the evidence):
+#   forcefield.protein/water   ff14SB + TIP3P is the default; ff19SB + OPC is `--solvent OPC`
+#   solute.ligand_forcefield   OpenFF Sage 2.2.1, standard AM1-BCC through AmberTools sqm
+#   solvent.padding_nm         1.5 nm requested solute-to-box clearance; use 2.0 for an unfolded
+#                              or unusually flexible solute, or when sampling should expand it
+#   solvent.cutoff_nm          1.0 nm real-space cutoff, with PME beyond it
+#   constraints                HBonds + rigid water, hydrogen masses unmodified (2 fs baseline).
+#                              For HMR at 4 fs see docs/examples/hmr-4fs.yaml.
 """
 
 MD_HEADER = """\
@@ -27,6 +36,13 @@ MD_HEADER = """\
 #
 # `common` applies to every method; each method block adds only what is specific to it.
 # Durations are in the units named by each key.
+#
+#   common.timestep_fs                2.0 with unmodified hydrogen masses -- the baseline. 4.0 is
+#                                     an explicit performance option and needs HMR in sys.config
+#                                     (docs/examples/hmr-4fs.yaml); md-gen refuses it otherwise.
+#   common.friction_per_ps            LangevinMiddleIntegrator collision rate, 1.0 ps^-1
+#   common.barostat_frequency_steps   MonteCarloBarostat attempt interval in STEPS (OpenMM's own
+#                                     default, 25); null under implicit solvent, which has none
 """
 
 
@@ -55,9 +71,21 @@ def cmd_sys_config(args) -> int:
 
     print(f"  methods      : {', '.join(methods)}")
     print(f"  solute       : {'peptide' if args.peptide else 'non-peptide'}")
-    print(f"  solvent      : {solvent}"
-          + ("  (implicit: no barostat, production ensembles are NVT)"
-             if D.is_implicit(solvent) else ""))
+    if D.is_implicit(solvent):
+        print(f"  solvent      : {solvent}  (implicit: no barostat, production ensembles are NVT)")
+        print(f"  forcefield   : {sys_doc['forcefield']['protein']} + "
+              f"{sys_doc['implicit_solvent']['model']}/{sys_doc['implicit_solvent']['radii']}, "
+              f"nonpolar_sasa={sys_doc['implicit_solvent']['nonpolar_sasa']}")
+    else:
+        print(f"  solvent      : {solvent}")
+        print(f"  forcefield   : {sys_doc['forcefield']['protein']} + "
+              f"{sys_doc['forcefield']['water']}")
+        print(f"  box          : {sys_doc['solvent']['box_shape']}, "
+              f"{sys_doc['solvent']['padding_nm']} nm padding, "
+              f"{sys_doc['solvent']['cutoff_nm']} nm cutoff (PME)")
+    if not args.peptide:
+        print(f"  ligand       : {sys_doc['solute']['ligand_forcefield']}, "
+              f"{sys_doc['solute']['ligand_charge_method']}")
     print(f"  wrote        : {sys_path}")
     print(f"                 {md_path}")
     print()
@@ -124,7 +152,10 @@ def build_parser() -> argparse.ArgumentParser:
     config.add_argument("--method", nargs="+", default=["cMD", "REST2"],
                         help="cMD and/or REST2 (case-insensitive)")
     config.add_argument("--peptide", type=_bool, default=True, help="true or false")
-    config.add_argument("--solvent", default="OPC", help="OPC or GBn2 (case-insensitive)")
+    config.add_argument(
+        "--solvent", default=D.DEFAULT_SOLVENT,
+        help="TIP3P (default: ff14SB + Sage 2.2.1 + TIP3P), OPC (ff19SB + Sage 2.2.1 + OPC) or "
+             "GBn2 (implicit: ff14SB + GBn2/mbondi3, no SASA). Case-insensitive.")
     config.add_argument("--output-dir", "--output_dir", dest="output_dir", default=".")
     config.set_defaults(func=cmd_sys_config)
 

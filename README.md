@@ -11,10 +11,18 @@ Currently OpenMM only. Amber and GROMACS are **not** supported and are not in pr
 | | |
 |---|---|
 | methods | conventional MD, REST2 (replica exchange with solute tempering) |
-| solutes | peptides (ff19SB) and non-peptides (Sage 2.2 + AM1-BCC) |
-| explicit solvent | OPC water, dodecahedral box, 2.0 nm padding, 0.15 M NaCl, 1.0 nm cutoff |
-| implicit solvent | GBn2 with mbondi3 radii |
-| defaults | 2 fs timestep, no hydrogen mass repartitioning |
+| solutes | peptides (ff14SB) and non-peptides (Sage 2.2.1 + AM1-BCC) |
+| explicit solvent | **TIP3P** water, dodecahedral box, **1.5 nm** padding, 0.15 M NaCl, PME at 1.0 nm |
+| explicit alternative | ff19SB + OPC, one flag away (`--solvent OPC`) |
+| implicit solvent | GBn2 with mbondi3 radii, no surface-area term — peptides and proteins |
+| dynamics | Langevin-middle at 300 K, friction 1.0 ps⁻¹, 2 fs, no hydrogen mass repartitioning |
+| pressure | Monte Carlo barostat at 1 bar, attempting a move every 25 steps |
+
+Every one of those values is argued, with its evidence classified and its limitations stated, in
+**[docs/md-defaults-scientific-rationale.md](docs/md-defaults-scientific-rationale.md)**
+([PDF](docs/md-defaults-scientific-rationale.pdf), references in
+[docs/md-defaults-references.bib](docs/md-defaults-references.bib)). Read section 12 —
+"What these citations do not establish" — before quoting any of it as support for a result.
 
 ---
 
@@ -91,8 +99,18 @@ right place with `python -c "import md_templates, openmm; print(md_templates.__f
 ### 2. Write the configuration
 
 ```bash
-md-openmm sys-config --method cMD REST2 --peptide true --solvent OPC
+md-openmm sys-config --method cMD REST2 --peptide true            # the default: TIP3P
+md-openmm sys-config --method cMD REST2 --peptide true --solvent OPC     # the alternative
 ```
+
+`--solvent` picks the whole explicit combination, because the protein force field and the water
+model are chosen together and not independently:
+
+| `--solvent` | protein | water | why they are paired |
+|---|---|---|---|
+| `TIP3P` *(default)* | ff14SB (`amber14-all.xml`) | `amber14/tip3p.xml` | ff14SB's backbone correction is an empirical fit made in TIP3P, and Sage's aqueous training data used TIP3P |
+| `OPC` | ff19SB (`amber19-all.xml`) | `amber19/opc.xml` | ff19SB's amino-acid-specific CMAPs were trained for a better water model, and its authors recommend OPC |
+| `GBn2` | ff14SB (`leaprc.protein.ff14SB`) | none | GBn2 was developed in the ff99SB/ff14SB lineage; see Example 2 |
 
 Two files, both meant to be edited:
 
@@ -186,7 +204,11 @@ tells you which file is missing and which command makes it.
 
 The solute is held by the configured `restraint_k_kcal_mol_a2` (`U = 1/2 k |r - r0|^2`,
 1 kcal mol⁻¹ Å⁻² = 418.4 kJ mol⁻¹ nm⁻²) through minimisation and the restrained stages, then
-released. There is no active barostat during minimisation or NVT and exactly one during NPT.
+released. There is no active barostat during minimisation or NVT and exactly one during NPT — the
+Force is present in every explicit stage so the checkpoint layout never changes, and it is its
+**frequency**, `common.barostat_frequency_steps`, that decides whether it attempts a move.
+25 steps is OpenMM's own default: 0.05 ps at 2 fs, 0.10 ps at the optional 4 fs. Each stage records
+both the step count and the interval in ps.
 Implicit systems have no box: the chain is `minimization -> eq/nvt_1kcal -> eq/nvt_free`, and no
 barostat exists in the System at all. If the restraint is not 1 kcal mol⁻¹ Å⁻², the directory is
 named `eq/nvt_restrained` rather than claiming a strength it does not have.
@@ -311,15 +333,30 @@ cd MD && ./run_all.sh
 ```
 
 The protein force field is chosen **with** the solvation model: implicit GBn2 uses
-`leaprc.protein.ff14SB`, the force field GBn2 was developed and validated against, while explicit
-OPC uses ff19SB. ff19SB's amino-acid-specific CMAPs were fit in explicit water and no GB model has
-been reparameterised against them, so `sys-gen` refuses that pair rather than running it.
+`leaprc.protein.ff14SB`, the force field lineage GBn2 was developed and validated against. ff19SB's
+amino-acid-specific CMAPs were fit in explicit OPC water and no GB model has been reparameterised
+against them, so `sys-gen` **refuses** that pair rather than running it — it would run, and produce
+plausible numbers, which is exactly the problem.
+
+**Scope, and the limit of it.** The implicit route is supported for **peptides and proteins**. For a
+Sage-parameterised small molecule it is marked `support_status: "experimental"` in
+`forcefield.json`, and no Amber `igb=8` parity is claimed, for two measured reasons:
+
+* `mbondi3`'s adjustments are keyed on GLU/ASP/ARG residue names and the `OXT` atom name, so for a
+  one-residue `UNL` ligand mbondi3 is exactly mbondi2;
+* GB-Neck2's α/β/γ were fit for H, C, N, O (S copies O). Any other element — a halogen, phosphorus,
+  selenium — silently receives ParmEd's generic `α = 1.0, β = 0.8, γ = 4.85, screen = 0.5`.
+
+`sys-gen` reads the built `CustomGBForce` back, counts the atoms outside the fit, prints a warning
+naming their atomic numbers, and records the whole audit under
+`implicit_solvent.parameter_coverage`. See §6 of the
+[scientific rationale](docs/md-defaults-scientific-rationale.md).
 
 The chain here is `minimization -> eq/nvt_1kcal -> eq/nvt_free -> cMD`: no NPT stage, and no
 barostat anywhere, because a non-periodic system has no box to control.
 
-The input is a file containing a SMILES string. The ligand is parameterised with Sage 2.2 and
-standard AM1-BCC charges (AmberTools `sqm`).
+The input is a file containing a SMILES string. The ligand is parameterised with Sage 2.2.1
+(`openff-2.2.1`) and standard AM1-BCC charges (AmberTools `sqm`).
 
 Implicit solvent has no periodic box, so:
 
@@ -375,11 +412,14 @@ purpose — the whole-system topology has a different atom count.
 ## Faster settings, if you want them
 
 The defaults are conservative: 2 fs with unmodified hydrogen masses. To trade that for speed, set
-both of these together:
+all of these together — the complete, editable example is
+[`docs/examples/hmr-4fs.yaml`](docs/examples/hmr-4fs.yaml):
 
 ```yaml
 # sys.config.yaml
 constraints:
+  type: HBonds          # bonds to hydrogen must be constrained
+  rigid_water: true     # water is never repartitioned, so it must stay rigid
   hydrogen_mass_amu: 3.024
 
 # md.config.yaml
@@ -387,8 +427,17 @@ common:
   timestep_fs: 4.0
 ```
 
-`md-gen` refuses 4 fs with unrepartitioned hydrogens and names both files, because the two settings
-live apart and each looks reasonable on its own.
+`md-gen` refuses 4 fs with unrepartitioned hydrogens, with unconstrained hydrogen bonds, or with
+flexible water, and names both files: the settings live apart and each looks reasonable on its own.
+`sys-gen` then verifies the repartitioning group by group against the same System built without it,
+and records the result under `constraints.hmr_group_conservation`.
+
+**What this buys and what it costs.** Roughly a factor of two in wall-clock. Equilibrium
+configurational averages are unaffected — the Boltzmann distribution in configuration space does not
+depend on masses — but the masses themselves are no longer physical, so **kinetics, time correlation
+functions, diffusion and every transport property are altered**. A short stable run is evidence of
+stability, not of kinetic validity. See §11 of the
+[scientific rationale](docs/md-defaults-scientific-rationale.md).
 
 NAGL charges (`ligand_charge_method: am1bcc_nagl`) are available but never a default. NAGL is a
 graph network *trained to predict* AM1-BCC ELF10 charges — close to them, but not that calculation,

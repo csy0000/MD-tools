@@ -18,7 +18,11 @@ ENGINE_VERSION = "8.6.0"
 
 #: Canonical spellings. Input is accepted case-insensitively and written back in these forms.
 METHODS = ("cMD", "REST2")
-SOLVENTS = ("OPC", "GBn2")
+SOLVENTS = ("TIP3P", "OPC", "GBn2")
+
+#: What `--solvent` selects when nothing is asked for. TIP3P is the method-development default:
+#: see `docs/md-defaults-scientific-rationale.md`.
+DEFAULT_SOLVENT = "TIP3P"
 
 
 def canonical_method(name: str) -> str:
@@ -39,16 +43,55 @@ def is_implicit(solvent: str) -> bool:
     return canonical_solvent(solvent) == "GBn2"
 
 
-#: Explicit solvent: ff19SB + OPC, the pairing ff19SB was parameterised for.
-EXPLICIT_PROTEIN_FORCEFIELD = "amber19-all.xml"
+#: The two explicit-solvent combinations this repository supports, named by the OpenMM resources
+#: that are actually loaded rather than by a family label.
+#:
+#: This is a two-entry lookup, not a profile registry: there is no inheritance, no versioning and
+#: no third layer. `--solvent` picks one row, the row is written into ordinary editable YAML, and
+#: everything after that is the user's file.
+#:
+#: TIP3P is the default. ff14SB was developed and benchmarked in TIP3P, OpenFF Sage's valence and
+#: vdW parameters were fit to condensed-phase and gas-phase physical-property data (not to protein
+#: binding affinities, and not exclusively against TIP3P), and the combination ff14SB + Sage + TIP3P
+#: is the one with published workflow-level protein-ligand use. ff19SB + OPC is the alternative:
+#: ff19SB's amino-acid-specific CMAPs were fit with OPC, so the pair is internally consistent, but
+#: it is a heavier and slower water model and the joint ff19SB/Sage/OPC combination has no
+#: published combination-level benchmark. See `docs/md-defaults-scientific-rationale.md`.
+EXPLICIT_COMBINATIONS = {
+    "TIP3P": {"protein": "amber14-all.xml", "water": "amber14/tip3p.xml"},
+    "OPC": {"protein": "amber19-all.xml", "water": "amber19/opc.xml"},
+}
+#: Kept for readers of older records: the resource the 0.3.x default named.
+EXPLICIT_PROTEIN_FORCEFIELD = EXPLICIT_COMBINATIONS["OPC"]["protein"]
 #: Implicit GBn2: ff14SB, the force field GBn2 was developed and validated against. A tleap
 #: resource, because the implicit route builds its topology with tleap rather than an OpenMM XML.
 IMPLICIT_PROTEIN_FORCEFIELD = "leaprc.protein.ff14SB"
 #: Protein force fields known to be mismatched with a GB implicit-solvent model.
 GB_INCOMPATIBLE_PROTEIN = ("ff19SB", "amber19")
 
+#: The small-molecule force field, by the label a user writes and the resource the toolkit loads.
+#: Sage 2.2.1 is the current Sage release in the pinned environment; `sysgen._openff_name` maps the
+#: label onto `openff-2.2.1`, and `openforcefields` ships `openff-2.2.1.offxml`.
+LIGAND_FORCEFIELD = "sage-2.2.1"
 
-def sys_defaults(*, peptide: bool = True, solvent: str = "OPC") -> dict[str, Any]:
+#: Solute-to-box clearance requested from `Modeller.addSolvent`. 1.5 nm is the default; 2.0 nm is
+#: the conservative option for unfolded or unusually flexible solutes and for enhanced sampling
+#: expected to expand the solute. Neither number is a guarantee about a future conformation -- the
+#: built-system cutoff/minimum-image gate in `solvation._resolve_box` is what is actually enforced.
+DEFAULT_PADDING_NM = 1.5
+CONSERVATIVE_PADDING_NM = 2.0
+
+#: `MonteCarloBarostat` volume-move attempt interval, in integration steps. OpenMM's own default.
+#: 25 steps is 0.05 ps at the 2 fs baseline and 0.10 ps with the optional 4 fs timestep.
+DEFAULT_BAROSTAT_FREQUENCY_STEPS = 25
+
+#: The hydrogen mass the optional performance setting repartitions to, with the timestep it is
+#: paired with. Never a default: `constraints.hydrogen_mass_amu` stays null and `timestep_fs` 2.0.
+HMR_HYDROGEN_MASS_AMU = 3.024
+HMR_TIMESTEP_FS = 4.0
+
+
+def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT) -> dict[str, Any]:
     """System preparation settings.
 
     Both the explicit and implicit blocks are written so the file documents what the other option
@@ -57,37 +100,48 @@ def sys_defaults(*, peptide: bool = True, solvent: str = "OPC") -> dict[str, Any
     """
     solvent = canonical_solvent(solvent)
     implicit = is_implicit(solvent)
+    # An implicit file still documents what the explicit block would look like, and it documents
+    # the DEFAULT explicit combination rather than whichever one happens to sort first.
+    combination = EXPLICIT_COMBINATIONS[DEFAULT_SOLVENT if implicit else solvent]
     document = {
         "schema_version": SCHEMA_VERSION,
         "engine": ENGINE,
         "engine_version": ENGINE_VERSION,
         "solute": {
             "peptide": bool(peptide),
-            # Sage 2.2 and standard AM1-BCC (AmberTools sqm). `am1bcc_nagl` is a graph network
+            # Sage 2.2.1 and standard AM1-BCC (AmberTools sqm). `am1bcc_nagl` is a graph network
             # TRAINED to predict AM1-BCC ELF10 charges -- close but not that calculation -- and is
             # selected explicitly or not at all.
-            "ligand_forcefield": "sage-2.2.0",
+            "ligand_forcefield": LIGAND_FORCEFIELD,
             "ligand_charge_method": "am1bcc",
         },
         "forcefield": {
             # The protein force field is chosen WITH the solvation model, not independently.
             #
-            # ff19SB's amino-acid-specific CMAP corrections were fit in explicit OPC water, and
-            # no GB model has been reparameterised against them. GBn2 was developed and validated
-            # in the ff99SB/ff14SB lineage (Nguyen, Roe & Simmerling, JCTC 2013), so pairing it
-            # with ff19SB combines a backbone trained in explicit solvent with a solvation model
-            # tuned for a different one. ff14SB is the force field GBn2 was actually matched to.
+            # Explicit: ff14SB with TIP3P is the default -- ff14SB's dihedral refit and its
+            # published benchmarks are TIP3P work -- and ff19SB with OPC is the alternative, the
+            # pairing ff19SB's amino-acid-specific CMAPs were fit alongside.
+            #
+            # Implicit: ff14SB again, because GBn2 was developed and validated in the
+            # ff99SB/ff14SB lineage (Nguyen, Roe & Simmerling, JCTC 2013) and no GB model has been
+            # reparameterised against ff19SB's CMAPs.
             #
             # The value is also in the namespace the builder for this route consumes: an OpenMM
             # XML for the explicit route, a tleap leaprc for the implicit one.
-            "protein": (IMPLICIT_PROTEIN_FORCEFIELD if implicit else EXPLICIT_PROTEIN_FORCEFIELD),
-            "water": None if implicit else "opc.xml",
+            "protein": (IMPLICIT_PROTEIN_FORCEFIELD if implicit else combination["protein"]),
+            # The QUALIFIED OpenMM resource, which is the file `ForceField()` is given. The
+            # amber14/amber19 copies carry the Na+/Cl- ion templates `addSolvent` needs; the
+            # top-level `tip3p.xml` does not.
+            "water": None if implicit else combination["water"],
         },
         "solvent": {
-            "model": solvent if not implicit else "OPC",
+            "model": solvent if not implicit else DEFAULT_SOLVENT,
             # OpenMM's padding semantics: width = max(2R + padding, 2 * padding), so this is a
-            # LOWER bound on the solute-to-periodic-image separation, not the box width.
-            "padding_nm": 2.0,
+            # requested solute-to-BOX clearance, not the box width and not the solute-to-periodic-
+            # copy distance. `sys-gen` records all four quantities; raise this to 2.0 for an
+            # unfolded or unusually flexible solute, or when enhanced sampling is expected to
+            # expand it.
+            "padding_nm": DEFAULT_PADDING_NM,
             "box_shape": "dodecahedron",
             "ionic_strength_molar": 0.15,
             "positive_ion": "Na+",
@@ -107,8 +161,9 @@ def sys_defaults(*, peptide: bool = True, solvent: str = "OPC") -> dict[str, Any
             "type": "HBonds",
             "rigid_water": True,
             # null: hydrogens keep the masses the force field gave them, and the timestep stays at
-            # 2 fs. Set to 3.024 for HMR, and raise timestep_fs to 4.0 with it -- 4 fs on
-            # unrepartitioned hydrogens is the unstable combination.
+            # 2 fs. This is the baseline, not a placeholder. Set to 3.024 for HMR, and raise
+            # timestep_fs to 4.0 with it -- 4 fs on unrepartitioned hydrogens is the unstable
+            # combination, and `md-gen` refuses it. See docs/examples/hmr-4fs.yaml.
             "hydrogen_mass_amu": None,
         },
     }
@@ -122,7 +177,7 @@ def sys_defaults(*, peptide: bool = True, solvent: str = "OPC") -> dict[str, Any
     return document
 
 
-def md_defaults(*, methods=("cMD", "REST2"), solvent: str = "OPC") -> dict[str, Any]:
+def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> dict[str, Any]:
     """Simulation protocol settings.
 
     Under implicit solvent there is no box, so there is no barostat and no pressure: the production
@@ -141,7 +196,16 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = "OPC") -> dict[str, 
         "common": {
             "temperature_kelvin": 300,
             "pressure_bar": None if implicit else 1.0,
+            # `MonteCarloBarostat` volume-move attempt interval, in STEPS -- OpenMM's own default,
+            # 0.05 ps at 2 fs and 0.10 ps at the optional 4 fs. null under implicit solvent, where
+            # there is no box and no barostat exists in the System at all.
+            "barostat_frequency_steps": (None if implicit
+                                         else DEFAULT_BAROSTAT_FREQUENCY_STEPS),
             "timestep_fs": 2.0,
+            # OpenMM's LangevinMiddleIntegrator collision rate, in ps^-1. 1.0 ps^-1 is a nominal
+            # 1 ps damping time: weak enough not to dominate the dynamics, strong enough to
+            # thermostat. It still affects real-time dynamical and transport observables -- see
+            # docs/md-defaults-scientific-rationale.md.
             "friction_per_ps": 1.0,
             "random_seed": None,
         },

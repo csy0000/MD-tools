@@ -26,8 +26,11 @@ KCAL_PER_MOL_ANGSTROM2 = 418.4          # kJ mol^-1 nm^-2
 RESTRAINT_PARAMETER = "restraint_k"
 #: OpenMM seeds are 32-bit signed; 0 means "pick one at random", which is not reproducible.
 MAX_SEED = 2 ** 31 - 1
-#: Barostat attempt interval during NPT equilibration and NPT production.
-PRODUCTION_BAROSTAT_FREQUENCY = 25
+
+# The barostat attempt interval is NOT declared here. It is `common.barostat_frequency_steps` in
+# md.config.yaml, copied into every stage.yaml by md-gen, and passed in by the caller. A constant
+# in this file would be a second declaration of a public default, and the one that silently wins
+# when the two disagree.
 
 
 def derive_seed(base, *purpose):
@@ -93,12 +96,17 @@ def add_positional_restraint(system, reference_positions, atom_indices):
     return force
 
 
-def add_barostat(system, pressure_bar, temperature, seed, frequency=PRODUCTION_BAROSTAT_FREQUENCY):
-    """One barostat, created inactive.
+def add_barostat(system, pressure_bar, temperature, seed, frequency):
+    """One barostat, at the attempt interval this stage was configured with.
 
     Frequency 0 means it never attempts a move, which is how the NVT stage runs without a barostat
-    while the System keeps a stable Force layout for the checkpoint.
+    while the System keeps a stable Force layout for the checkpoint. There is no default: the
+    interval is a recorded scientific setting, and a script that supplied its own would be able to
+    integrate at an interval no record mentions.
     """
+    frequency = int(frequency)
+    if frequency < 0:
+        raise SystemExit(f"barostat frequency must be >= 0 steps; got {frequency}")
     barostat = MonteCarloBarostat(float(pressure_bar) * unit.bar, temperature, frequency)
     barostat.setRandomNumberSeed(int(seed))
     system.addForce(barostat)
@@ -213,7 +221,8 @@ def require_parent_state(path, *, stage_name, command):
 
 
 def build_stage_system(inputs, *, implicit, restrained, barostat_active, pressure_bar,
-                       temperature, barostat_seed, solute_indices, scale_system=None):
+                       temperature, barostat_seed, barostat_frequency_steps, solute_indices,
+                       scale_system=None):
     """The System a stage integrates, with its Force layout fixed before any state is loaded.
 
     The restraint Force is always present, at zero strength when the stage is unrestrained, so a
@@ -236,7 +245,7 @@ def build_stage_system(inputs, *, implicit, restrained, barostat_active, pressur
     add_positional_restraint(system, initial.getPositions(), solute_indices)
     if not implicit:
         add_barostat(system, pressure_bar, temperature, barostat_seed,
-                     frequency=PRODUCTION_BAROSTAT_FREQUENCY if barostat_active else 0)
+                     frequency=int(barostat_frequency_steps) if barostat_active else 0)
     barostats = count_barostats(system)
     if implicit and barostats:
         raise SystemExit(f"implicit solvent must have no barostat in the System; found {barostats}")

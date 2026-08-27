@@ -147,6 +147,83 @@ def _implicit_hmr_record(system, structure, scope: str, target: Optional[float],
     return record
 
 
+#: The (alpha, beta, gamma) ParmEd installs when an element is NOT in the GB-Neck2 fit. Its own
+#: comment calls them "non-optimized values as defaults", and it pairs them with screen = 0.5.
+#: Read `parmed.structure.Structure._get_gb_parameters`: fitted values exist for H, C, N, O and S
+#: only. Everything else -- F, Cl, Br, I, P, Se, B, Si -- gets these.
+GBN2_UNFITTED_PARAMETERS = (1.0, 0.8, 4.85)
+#: The elements GB-Neck2 was actually parameterised for, as built by ParmEd.
+GBN2_FITTED_ELEMENTS = (1, 6, 7, 8, 16)
+
+
+def gb_parameter_coverage(system, structure) -> dict:
+    """Which atoms got FITTED GB-Neck2 parameters, measured on the built `CustomGBForce`.
+
+    Every atom receives a radius and a parameter set -- nothing is left unparameterised and nothing
+    crashes -- but that is not the same as every atom being covered by the fit. Two separate gaps
+    matter for a non-peptidic solute, and both are measured here rather than assumed:
+
+    1. **Elements outside the GB-Neck2 fit.** ParmEd assigns fitted (screen, alpha, beta, gamma)
+       for H, C, N, O and S. A halogen, a phosphorus in a non-nucleic residue, a selenium or a
+       boron silently receives `GBN2_UNFITTED_PARAMETERS` and `screen = 0.5`. The System is built,
+       the energy is finite, and no parameter in it came from the GB-Neck2 training set.
+
+    2. **mbondi3's corrections cannot reach a ligand.** `mbondi3` is `mbondi2` plus adjustments
+       keyed on residue name -- GLU/ASP/GL4/AS4 carboxylate oxygens, ARG HH/HE hydrogens -- and on
+       the atom name `OXT`. A Sage-parameterised ligand is one `UNL` residue, so no adjustment can
+       match and mbondi3 is exactly mbondi2 for it. Claiming "mbondi3 radii" for such a solute is
+       true about the call and misleading about the radii.
+
+    The returned record is what `forcefield.json` publishes, and it is what the experimental label
+    on the implicit ligand route is based on.
+    """
+    from openmm import CustomGBForce
+
+    force = None
+    for index in range(system.getNumForces()):
+        candidate = system.getForce(index)
+        if isinstance(candidate, CustomGBForce):
+            force = candidate
+            break
+    if force is None:
+        return {"measured": False, "reason": "the built System has no CustomGBForce"}
+
+    unfitted, elements_seen, unfitted_elements = [], set(), set()
+    for index in range(force.getNumParticles()):
+        parameters = list(force.getParticleParameters(index))
+        atom = structure.atoms[index] if index < len(structure.atoms) else None
+        number = int(getattr(atom, "atomic_number", 0) or 0)
+        elements_seen.add(number)
+        # [charge, offset radius, scaled offset radius, alpha, beta, gamma]
+        alpha, beta, gamma = (float(v) for v in parameters[3:6])
+        if all(abs(a - b) < 1e-9 for a, b in zip((alpha, beta, gamma),
+                                                 GBN2_UNFITTED_PARAMETERS)):
+            unfitted.append(index)
+            unfitted_elements.add(number)
+
+    residue_names = {r.name for r in structure.residues}
+    mbondi3_targets = {"GLU", "ASP", "GL4", "AS4", "ARG"}
+    return {
+        "measured": True,
+        "measured_on": "openmm.CustomGBForce per-particle parameters of the built System",
+        "n_particles": force.getNumParticles(),
+        "n_atoms_with_fitted_gbn2_parameters": force.getNumParticles() - len(unfitted),
+        "n_atoms_with_unfitted_gbn2_parameters": len(unfitted),
+        "atoms_with_unfitted_gbn2_parameters": [int(i) for i in unfitted[:64]],
+        "unfitted_atomic_numbers": sorted(int(z) for z in unfitted_elements),
+        "atomic_numbers_present": sorted(int(z) for z in elements_seen),
+        "fitted_atomic_numbers": list(GBN2_FITTED_ELEMENTS),
+        "unfitted_parameter_values": {"alpha": GBN2_UNFITTED_PARAMETERS[0],
+                                      "beta": GBN2_UNFITTED_PARAMETERS[1],
+                                      "gamma": GBN2_UNFITTED_PARAMETERS[2],
+                                      "screen": 0.5},
+        # Whether any mbondi3-specific adjustment could apply to this topology at all.
+        "mbondi3_adjustable_residues_present": sorted(residue_names & mbondi3_targets),
+        "mbondi3_reduces_to_mbondi2": not (residue_names & mbondi3_targets),
+        "all_atoms_covered_by_gbn2_fit": not unfitted,
+    }
+
+
 def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = None, *,
                           implicit_model: str = "GBn2", radii: str = "mbondi3",
                           remove_cm_motion: bool = True,
@@ -210,6 +287,7 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
 
     hmr_record = _implicit_hmr_record(system, structure, scope, hydrogen_mass_amu, mass_before)
 
+    coverage = gb_parameter_coverage(system, structure)
     max_change = max((abs(a - b) for a, b in zip(after, before)), default=0.0)
     info = {
         "construction": "parmed.Structure.createSystem",
@@ -229,8 +307,24 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
         "n_particles": system.getNumParticles(),
         "n_constraints": system.getNumConstraints(),
         "uses_periodic_boundary_conditions": system.usesPeriodicBoundaryConditions(),
+        # Which atoms the GB-Neck2 fit actually covers, read off the built CustomGBForce. This is
+        # what decides whether an "igb=8 / mbondi3" claim is true for this particular solute.
+        "parameter_coverage": coverage,
         "hmr": hmr_record,
     }
+    if coverage.get("measured") and not coverage.get("all_atoms_covered_by_gbn2_fit"):
+        print(
+            f"  [implicit] WARNING: {coverage['n_atoms_with_unfitted_gbn2_parameters']} of "
+            f"{coverage['n_particles']} atoms are outside the GB-Neck2 fit "
+            f"(atomic numbers {coverage['unfitted_atomic_numbers']}) and carry ParmEd's generic "
+            f"alpha/beta/gamma = {GBN2_UNFITTED_PARAMETERS} with screen = 0.5. "
+            f"This system is NOT Amber igb=8 parity; treat the implicit result as experimental.",
+            flush=True)
+    if coverage.get("measured") and coverage.get("mbondi3_reduces_to_mbondi2"):
+        print(
+            "  [implicit] note: no GLU/ASP/GL4/AS4/ARG residue is present, so mbondi3's "
+            "residue-specific adjustments cannot apply and the radii are exactly mbondi2.",
+            flush=True)
     if system.usesPeriodicBoundaryConditions():
         raise RuntimeError(
             "the implicit-solvent System reports periodic boundary conditions, which it must not "
