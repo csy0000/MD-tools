@@ -495,6 +495,9 @@ def _build_implicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
         route=("peptide" if route == "peptide" else "ligand"),
         cfg=cfg, staging=staging, pdb=pdb_input, smiles=smiles,
         implicit_model="GBn2", radii="mbondi3",
+        # An explicit, recorded choice rather than a library default: including the ACE
+        # surface-area term changes the energy by ~16 kJ/mol (~6 kT) on ACE-ALA-NME.
+        nonpolar_sasa=bool((cfg.get("implicit_solvent") or {}).get("nonpolar_sasa", False)),
         hydrogen_mass_amu=cfg["system_build"].get("hydrogen_mass_amu"),
         hmr_scope=str(cfg["system_build"].get("hmr_scope") or "none"))
     log("system       : GBn2 / mbondi3 via ParmEd.Structure.createSystem (NOT AmberPrmtopFile: "

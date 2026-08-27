@@ -11,23 +11,38 @@ The Hamiltonian-defining path is::
         removeCMMotion=True,
     )
 
-## Why not `AmberPrmtopFile.createSystem()`
+## The ~16 kJ/mol difference between construction routes is the NONPOLAR term
 
-Because it is a different Hamiltonian. The two routes look interchangeable and are not. Measured on
-this machine for ACE-ALA-NME, ff19SB, mbondi3 radii written by tleap:
+Three routes can build a GBn2 System, and they do not agree. Measured on this machine for
+ACE-ALA-NME with ff14SB and mbondi3 radii, at identical coordinates:
 
-    force                  ParmEd (reference)   AmberPrmtopFile        diff
-    CustomGBForce                   -63.9813          -47.9292     16.0521
-    NonbondedForce                  -97.7455          -97.7455     -0.0000
-    PeriodicTorsionForce             10.0010           10.0010     -0.0000
-    CMAPTorsionForce                 -1.6941           -1.6941      0.0000
-    TOTAL                          -151.8192         -135.7670     16.0521
+    route                                              TOTAL (kJ/mol)
+    parmed.Structure.createSystem(useSASA=False)            -119.7978   <- what this module builds
+    parmed.Structure.createSystem(useSASA=True)             -103.7448
+    app.ForceField("amber14/protein.ff14SB.xml",
+                   "implicit/gbn2.xml")                     -103.7465
 
-Every force agrees to 0.0000 kJ/mol except `CustomGBForce`, which differs by **16.05 kJ/mol** with
-identical per-particle GB parameters and identical radii. The discrepancy is not the radii -- it is
-the construction branch. Under REST2 that offset is several kT of spurious work, so every replica in
-a ladder must sit on the same branch. This reproduces the figure documented by the pinned reference
-(`csy0000/partitioned-REST2` at 537d5b6c), independently, here.
+Every force agrees to ~0 kJ/mol except `CustomGBForce`, and the GB radii and screening factors are
+identical for all 22 atoms. The cause is not a radius and not an opaque "construction branch": the
+ParmEd System has **two** GB energy terms and the OpenMM one has **three**. The extra term is
+
+    28.3919551*(radius+0.14)^2*(radius/B)^6
+
+the ACE surface-area **nonpolar** (cavity + dispersion) contribution. Set `useSASA=True` and ParmEd
+agrees with pure OpenMM to **0.0017 kJ/mol**.
+
+So this is a modelling choice, not an implementation accident:
+
+* Amber's `igb=8` with `gbsa=0` -- no nonpolar term -- is what this module builds, and matches the
+  context GBn2's parameters were fit in (GB-Neck2 was fit to reproduce PB *polar* solvation).
+* OpenMM's `implicit/gbn2.xml` includes ACE by default, which is why the two look inconsistent.
+
+It is recorded explicitly in `forcefield.json` as `implicit_solvent.nonpolar_sasa` rather than
+inherited from a library default nobody chose. Two consequences worth stating:
+
+* 16 kJ/mol is roughly 6 kT at 300 K -- not a rounding difference in any free-energy comparison.
+* REST2 scales `CustomGBForce` by `s`, so a nonpolar term placed inside that force is scaled with
+  the solute Hamiltonian too. Whatever the choice, every replica in a ladder must share it.
 
 ## Why `changeRadii` runs unconditionally
 
@@ -136,7 +151,8 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
                           implicit_model: str = "GBn2", radii: str = "mbondi3",
                           remove_cm_motion: bool = True,
                           hydrogen_mass_amu: Optional[float] = None,
-                          hmr_scope: str = "none"):
+                          hmr_scope: str = "none",
+                          nonpolar_sasa: bool = False):
     """Build the implicit-solvent System, and report what the radius change actually did.
 
     Returns `(system, info)`. `info` records the radii before and after `changeRadii`, so a bundle
@@ -181,6 +197,10 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
         nonbondedMethod=app.NoCutoff,
         constraints=app.HBonds,
         implicitSolvent=gb_object,
+        # The ACE surface-area nonpolar term. False matches Amber's igb=8/gbsa=0 and the context
+        # GBn2 was parameterised in; True matches OpenMM's implicit/gbn2.xml default. Stated here
+        # rather than inherited, because the two differ by ~16 kJ/mol (~6 kT).
+        useSASA=bool(nonpolar_sasa),
         removeCMMotion=remove_cm_motion,
         # ParmEd applies the repartitioning itself. Delegating avoids a THIRD implementation of
         # arithmetic that already exists twice in system.py, and keeps the masses inside the
@@ -194,10 +214,13 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
     info = {
         "construction": "parmed.Structure.createSystem",
         "construction_note": (
-            "NOT AmberPrmtopFile.createSystem: the two differ by ~16 kJ/mol in CustomGBForce on "
-            "ACE-ALA-NME with identical radii, so the branch is part of the Hamiltonian"),
+            "The ~16 kJ/mol CustomGBForce difference between construction routes is the ACE "
+            "surface-area nonpolar term, not the radii: with useSASA=True ParmEd agrees with "
+            "app.ForceField(+implicit/gbn2.xml) to 0.0017 kJ/mol on ACE-ALA-NME"),
         "implicit_model": implicit_model,
         "radii": radii,
+        "nonpolar_sasa": bool(nonpolar_sasa),
+        "nonpolar_model": ("ACE surface-area term" if nonpolar_sasa else None),
         "nonbonded_method": "NoCutoff",
         "constraints": "HBonds",
         "remove_cm_motion": bool(remove_cm_motion),
@@ -312,7 +335,8 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
                                  pdb: Optional[Path] = None, smiles: Optional[str] = None,
                                  implicit_model: str = "GBn2", radii: str = "mbondi3",
                                  hydrogen_mass_amu: Optional[float] = None,
-                                 hmr_scope: str = "none") -> dict:
+                                 hmr_scope: str = "none",
+                                 nonpolar_sasa: bool = False) -> dict:
     """Produce every Amber and OpenMM artefact an implicit bundle needs.
 
     Two routes reach the same ParmEd construction from different directions:

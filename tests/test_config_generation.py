@@ -45,7 +45,8 @@ def test_implicit_gbn2_configuration(md_openmm, tmp_path):
     md_doc = yaml.safe_load((tmp_path / "md.config.yaml").read_text())
 
     assert sys_doc["solute"]["peptide"] is False
-    assert sys_doc["implicit_solvent"] == {"model": "GBn2", "radii": "mbondi3"}
+    assert sys_doc["implicit_solvent"]["model"] == "GBn2"
+    assert sys_doc["implicit_solvent"]["radii"] == "mbondi3"
     assert "solvent" not in sys_doc, "an implicit system has no water box"
     assert sys_doc["forcefield"]["water"] is None
     assert sys_doc["constraints"]["rigid_water"] is False
@@ -145,7 +146,8 @@ def test_the_matched_implicit_pair_resolves():
 
     resolved = resolve_sys_config(sys_defaults(solvent="GBn2"))
     assert resolved["forcefield"]["protein"] == "leaprc.protein.ff14SB"
-    assert resolved["implicit_solvent"] == {"model": "GBn2", "radii": "mbondi3"}
+    assert resolved["implicit_solvent"]["model"] == "GBn2"
+    assert resolved["implicit_solvent"]["radii"] == "mbondi3"
 
 
 def test_the_configured_protein_force_field_reaches_tleap():
@@ -159,3 +161,50 @@ def test_the_configured_protein_force_field_reaches_tleap():
         "tleap must be given the configured force field, not a hardcoded default"
     signature = inspect.signature(implicit.build_amber_topology_via_tleap)
     assert signature.parameters["protein_forcefield"].default == "leaprc.protein.ff14SB"
+
+
+# --- the nonpolar (ACE surface-area) term is a stated choice ------------------
+
+def test_the_nonpolar_term_defaults_to_off_matching_amber_igb8_gbsa0():
+    """GBn2's parameters were fit to reproduce PB *polar* solvation; the nonpolar term is extra.
+
+    OpenMM's implicit/gbn2.xml turns it on by default and ParmEd leaves it off, so whichever this
+    repository picks must be stated rather than inherited.
+    """
+    from md_templates.openmm.defaults import sys_defaults
+
+    implicit = sys_defaults(solvent="GBn2")["implicit_solvent"]
+    assert implicit["nonpolar_sasa"] is False
+    assert implicit["model"] == "GBn2" and implicit["radii"] == "mbondi3"
+
+
+def test_the_choice_reaches_the_builder_and_is_not_a_library_default():
+    import inspect
+
+    from md_templates.openmm import implicit, sysgen
+
+    assert inspect.signature(implicit.build_implicit_system).parameters[
+        "nonpolar_sasa"].default is False
+    assert "useSASA=bool(nonpolar_sasa)" in inspect.getsource(implicit.build_implicit_system), \
+        "createSystem must be told explicitly, not left to ParmEd's default"
+    assert "nonpolar_sasa=bool(" in inspect.getsource(sysgen), \
+        "sys-gen must pass the configured value through"
+
+
+def test_the_forcefield_record_states_the_nonpolar_choice():
+    from md_templates.openmm.config import resolve_sys_config
+    from md_templates.openmm.defaults import sys_defaults
+    from md_templates.openmm.forcefield_record import build_forcefield_record
+    from pathlib import Path
+
+    resolved = resolve_sys_config(sys_defaults(solvent="GBn2"))
+    record = build_forcefield_record(
+        resolved=resolved, route="peptide",
+        record={"implicit_report": {"implicit_model": "GBn2", "radii": "mbondi3",
+                                    "nonpolar_sasa": False, "nonpolar_model": None,
+                                    "protein_forcefield": "leaprc.protein.ff14SB"}},
+        inputs_dir=Path("."), artifacts={})
+    entry = record["implicit_solvent"]
+    assert entry["nonpolar_sasa"] is False
+    assert entry["nonpolar_model"] is None
+    assert "igb=8" in entry["polar_reference"]

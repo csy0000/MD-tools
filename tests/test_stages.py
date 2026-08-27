@@ -325,3 +325,54 @@ def test_a_failing_replica_stops_equilibration_before_it_reports_success():
 
     with pytest.raises(RuntimeError, match="NaN"):
         stages.propagate_segment([[0, 1], [2, 3]], step)
+
+
+# --- the nonpolar term is worth knowing the size of --------------------------
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_the_ace_nonpolar_term_is_a_real_energy_difference(tmp_path):
+    """Pins the measurement the docstring quotes, so a silent default flip would fail here.
+
+    The ~16 kJ/mol between construction routes is NOT the radii and not an opaque branch: it is
+    the ACE surface-area term. With it enabled, ParmEd and pure OpenMM agree to ~0.002 kJ/mol.
+    """
+    from openmm import Context, Platform, VerletIntegrator, app, unit
+    import parmed as pmd
+
+    from .conftest import ALA_PDB, run_cli
+
+    work = tmp_path
+    import shutil as _shutil
+    _shutil.copy2(ALA_PDB, work / "ALA.pdb")
+    run_cli("md_openmm", "sys-config", "--method", "cMD", "--solvent", "GBn2", cwd=work)
+    built = run_cli("md_openmm", "sys-gen", "-i", "./ALA.pdb", "--config", "sys.config.yaml",
+                    "-of", "./inputs/", cwd=work)
+    assert built.returncode == 0, built.stdout + built.stderr
+
+    inputs = work / "inputs"
+    structure = pmd.load_file(str(inputs / "preparation" / "system.prmtop"),
+                              xyz=str(inputs / "preparation" / "system.rst7"))
+    pmd.tools.changeRadii(structure, "mbondi3").execute()
+    platform = Platform.getPlatformByName("CUDA")
+
+    def total(system):
+        context = Context(system, VerletIntegrator(0.001), platform)
+        context.setPositions(structure.positions)
+        value = context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
+            unit.kilojoule_per_mole)
+        del context
+        return value
+
+    common = dict(nonbondedMethod=app.NoCutoff, constraints=app.HBonds,
+                  implicitSolvent=app.GBn2, removeCMMotion=True)
+    without = total(structure.createSystem(**common, useSASA=False))
+    with_sasa = total(structure.createSystem(**common, useSASA=True))
+    native = total(app.ForceField("amber14/protein.ff14SB.xml", "implicit/gbn2.xml").createSystem(
+        app.PDBFile(str(inputs / "topology.pdb")).topology,
+        nonbondedMethod=app.NoCutoff, constraints=app.HBonds, removeCMMotion=True))
+
+    assert with_sasa - without == pytest.approx(16.05, abs=0.5), \
+        "the nonpolar term should be ~16 kJ/mol on ACE-ALA-NME"
+    # Once the nonpolar choice matches, ParmEd and pure OpenMM are the same Hamiltonian.
+    assert native == pytest.approx(with_sasa, abs=0.05), (native, with_sasa)

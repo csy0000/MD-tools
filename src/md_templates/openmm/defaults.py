@@ -97,6 +97,11 @@ def sys_defaults(*, peptide: bool = True, solvent: str = "OPC") -> dict[str, Any
         "implicit_solvent": {
             "model": "GBn2",
             "radii": "mbondi3",
+            # The ACE surface-area nonpolar term. False matches Amber's igb=8 with gbsa=0, which
+            # is the context GBn2's parameters were fit in; OpenMM's implicit/gbn2.xml turns it on
+            # by default. The two differ by ~16 kJ/mol (~6 kT) on ACE-ALA-NME, so this is a
+            # modelling choice and is stated rather than inherited.
+            "nonpolar_sasa": False,
         },
         "constraints": {
             "type": "HBonds",

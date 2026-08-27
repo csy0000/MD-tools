@@ -97,6 +97,13 @@ def build_forcefield_record(*, resolved: dict[str, Any], route: str, record: dic
             "radii": implicit_report.get("radii", implicit_solvent.get("radii")),
             "applied_by": implicit_report.get("radii_applied_by",
                                               "parmed.tools.changeRadii + tleap PBRadii"),
+            # Whether the ACE surface-area nonpolar term is in the Hamiltonian. Recorded because
+            # the two choices differ by ~16 kJ/mol and because ParmEd and OpenMM default
+            # differently: a bundle that does not say is a bundle nobody can reproduce.
+            "nonpolar_sasa": implicit_report.get(
+                "nonpolar_sasa", implicit_solvent.get("nonpolar_sasa", False)),
+            "nonpolar_model": implicit_report.get("nonpolar_model"),
+            "polar_reference": "GB-Neck2 (Nguyen, Roe & Simmerling, JCTC 2013); Amber igb=8",
         } if implicit else None,
 
         "nonbonded": _nonbonded_record(implicit=implicit, reported=reported, solvent=solvent,

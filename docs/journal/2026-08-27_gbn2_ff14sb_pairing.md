@@ -96,3 +96,66 @@ Explicit-solvent results are unaffected.
 * `mbondi3` with ff14SB/GBn2 follows the GBn2 recommendation and was not re-derived here.
 * No implicit trajectory was re-run for comparison; this change is to defaults, validation and
   provenance, not a revalidation of the implicit protocol.
+
+---
+
+# Addendum: the 16 kJ/mol was the nonpolar term, not "the construction branch"
+
+Prompted by the question "do we need tleap for OpenMM work, or can OpenMM do it all?".
+
+## Measurement
+
+ACE-ALA-NME, ff14SB + GBn2 + mbondi3, identical coordinates, three construction routes:
+
+| route | TOTAL (kJ/mol) |
+|---|---|
+| `parmed.Structure.createSystem(useSASA=False)` — what this repo builds | −119.7978 |
+| `parmed.Structure.createSystem(useSASA=True)` | −103.7448 |
+| `app.ForceField("amber14/protein.ff14SB.xml", "implicit/gbn2.xml")` | −103.7465 |
+
+Every force agreed to ~0 except `CustomGBForce`, and GB radii and screening factors were
+**identical for all 22 atoms**. The ParmEd System has **two** GB energy terms; the OpenMM one has
+**three**. The extra term is `28.3919551*(radius+0.14)^2*(radius/B)^6` — the ACE surface-area
+nonpolar contribution. With `useSASA=True`, ParmEd and pure OpenMM agree to **0.0017 kJ/mol**.
+
+The previous docstring called this "the construction branch", which reads as an opaque
+implementation difference. It is a named modelling choice controlled by one keyword, and that
+wording hid it.
+
+## What changed
+
+* The docstring now names the term, shows all three numbers, and states that ParmEd defaults the
+  nonpolar term off while OpenMM's `implicit/gbn2.xml` defaults it on.
+* `implicit_solvent.nonpolar_sasa` is now an explicit configuration field, defaulting to `false`,
+  passed to `createSystem` as `useSASA=` rather than left to a library default nobody chose.
+* `forcefield.json` records `nonpolar_sasa`, `nonpolar_model` and the polar reference.
+* A GPU test pins the ~16 kJ/mol size and the ParmEd/OpenMM agreement, so a silent default flip in
+  either library fails the suite.
+
+## Why the default stays off
+
+`false` matches Amber's `igb=8` with `gbsa=0`, which is the context GBn2's parameters were fit in —
+GB-Neck2 was parameterised to reproduce Poisson–Boltzmann **polar** solvation, and the surface-area
+term is a separate additive estimate of cavity formation and dispersion. It is also what every
+implicit run in this repository has used so far, so leaving it off keeps new results comparable
+with existing ones.
+
+Two facts that make this worth stating rather than defaulting silently:
+
+* 16 kJ/mol is roughly **6 kT** at 300 K. It is not a rounding difference in any free-energy or
+  conformational-population comparison.
+* REST2 scales `CustomGBForce` by `s`. A nonpolar term inside that force is therefore scaled with
+  the solute Hamiltonian, which is a further modelling decision rather than an obvious one.
+  Whatever the choice, every replica in a ladder must share it.
+
+## Does this mean tleap can be dropped?
+
+For the implicit **peptide** route, the numbers say the Hamiltonian is reproducible in pure OpenMM
+once the nonpolar choice is matched. tleap is used in exactly one place — `implicit.py`, the
+peptide topology. The explicit route never uses it, and the implicit ligand route goes
+OpenFF → ParmEd without it.
+
+Not done here, and deliberately: ACE-ALA-NME is not evidence that OpenMM's residue templates handle
+HIS protonation states, disulfides, non-standard residues or termini the way tleap does, and the
+prmtop currently doubles as independent provenance. AmberTools is still required regardless for
+`sqm`/`antechamber` AM1-BCC charges, which is unrelated to tleap.
