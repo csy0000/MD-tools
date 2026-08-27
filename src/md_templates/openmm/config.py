@@ -331,6 +331,24 @@ def _check_ais(resolved: dict[str, Any]) -> None:
                       "fixed-tau cMD run or one REST2 rung, at tau = "
                       f"{path['tau_start']}. Paths are resolved relative to the generated MD/ "
                       "project.")
+    declared_tau = source.get("source_tau")
+    if declared_tau is not None:
+        try:
+            declared_tau = float(declared_tau)
+        except (TypeError, ValueError):
+            raise ConfigError(
+                f"AIS.source.source_tau must be a number in [0, 1) or null; got "
+                f"{source.get('source_tau')!r}") from None
+        if not 0.0 <= declared_tau < 1.0:
+            raise ConfigError(
+                f"AIS.source.source_tau must be in [0, 1); got {declared_tau}")
+        if abs(declared_tau - path["tau_start"]) > 1e-9:
+            raise ConfigError(
+                f"AIS.source.source_tau is {declared_tau} but AIS.path.tau_start is "
+                f"{path['tau_start']}. The path must begin in the ensemble it anneals away from, "
+                f"so the source ensemble's tau and the path's start are the same number.")
+        source["source_tau"] = declared_tau
+
     if str(source.get("selection")) != A.SELECTION:
         raise ConfigError(
             f"AIS.source.selection must be {A.SELECTION!r} in this implementation; got "

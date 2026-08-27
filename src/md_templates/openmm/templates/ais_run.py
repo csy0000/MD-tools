@@ -62,6 +62,8 @@ from openmm.app import DCDFile, PDBFile
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))
+import preflight                                                     # noqa: E402
 from rest2_scaling import TauSwitcher, scale_factor_for_tau           # noqa: E402
 
 PROJECT = HERE.parent
@@ -259,27 +261,56 @@ def source_frame_timing(trajectory, n_frames):
 
 
 def source_tau(trajectory):
-    """The tau the source ensemble was generated at, and where that was established.
+    """The tau the source ensemble was generated at, where that came from, and by which route.
 
-    Refused rather than assumed. A path that starts from an ensemble equilibrated at a different
-    tau than `path.tau_start` is not an annealed importance sampling path at all -- the first
-    "work" value would silently absorb the mismatch.
+    Two routes, and they must not disagree:
+
+      1. the companion `resolved_run.yaml`, which records the tau the run actually used;
+      2. `AIS.source.source_tau`, stated by the user -- REQUIRED for an external trajectory that
+         has no such record.
+
+    Never assumed. A path that starts from an ensemble equilibrated at a different tau than
+    `path.tau_start` is not an annealed importance sampling path at all: the first work value
+    would silently absorb the mismatch. A CONFLICT between the two routes is refused rather than
+    resolved by preferring one, because whichever were preferred, the other would be wrong.
     """
+    declared = method["source"].get("source_tau")
+    recorded, evidence = None, None
     record, record_path = companion_record(trajectory)
     if record is not None:
         entry = _replica_entry(record, trajectory)
         if entry is not None and entry.get("tau") is not None:
-            return float(entry["tau"]), f"{record_path} replicas[{entry.get('replica')}].tau"
-        if record.get("tau") is not None:
-            return float(record["tau"]), f"{record_path} tau"
+            recorded = float(entry["tau"])
+            evidence = f"{record_path} replicas[{entry.get('replica')}].tau"
+        elif record.get("tau") is not None:
+            recorded = float(record["tau"])
+            evidence = f"{record_path} tau"
+
+    if declared is not None and recorded is not None:
+        if abs(float(declared) - recorded) > 1e-9:
+            raise SystemExit(
+                f"AIS.source.source_tau is {declared}, but the source trajectory's own runtime "
+                f"record says tau = {recorded} ({evidence}).\n"
+                f"  These must agree. Correct the configuration, or point "
+                f"AIS.source.trajectory at the run you meant.")
+        return recorded, f"{evidence}; confirmed by AIS.source.source_tau", "companion record"
+    if recorded is not None:
+        return recorded, evidence, "companion record"
+    if declared is not None:
+        return (float(declared), "AIS.source.source_tau (no companion runtime record)",
+                "explicit configuration")
+
     raise SystemExit(
         f"cannot establish the Hamiltonian tau of the source trajectory {trajectory.name}.\n"
-        f"  No companion resolved_run.yaml recording `tau` was found beside or above it.\n"
+        f"  No companion resolved_run.yaml recording `tau` was found beside or above it, and "
+        f"AIS.source.source_tau is not set.\n"
         f"  This is refused rather than assumed to be "
         f"{PATH_DEFINITION['path']['tau_start']}: an ensemble equilibrated at a different tau "
         f"makes the first work value absorb the mismatch, silently.\n"
-        f"  Point AIS.source.trajectory at a fixed-tau cMD run or a REST2 replica produced by this "
-        f"repository, whose runtime record names its tau.")
+        f"  Either point AIS.source.trajectory at a fixed-tau cMD run or a REST2 replica produced "
+        f"by this repository, whose runtime record names its tau, or state it yourself:\n"
+        f"      AIS:\n        source:\n          source_tau: "
+        f"{PATH_DEFINITION['path']['tau_start']}")
 
 
 def select_source_frames(times, evidence):
@@ -396,15 +427,43 @@ CSV_NAME = "observations.csv"
 COMPLETION_NAME = "completed.json"
 
 
-def path_is_complete(directory):
-    """A finished path, decided by its own completion record and its observation count.
+def dcd_frame_count(path):
+    """Frames in a DCD, from its header. Bounded: 100 bytes, never the coordinate blocks."""
+    import struct
 
-    An incomplete path is never treated as complete: the record has to exist, say `completed`, and
-    agree with the number of rows actually in the CSV.
+    with open(path, "rb") as handle:
+        if struct.unpack("<i", handle.read(4))[0] != 84:
+            raise ValueError(f"{path}: not a little-endian DCD")
+        control = handle.read(84)
+    return struct.unpack("<i", control[4:8])[0]
+
+
+def path_is_complete(directory, index=None):
+    """A finished path, or the exact reason it is not one.
+
+    EVERY artifact required to skip the run has to agree, because each of them alone is a way for
+    an unfinished path to look finished:
+
+      * `completed.json` says completed -- but a JSON file survives a killed worker;
+      * `observations.csv` has the expected rows -- but the CSV is written before the DCD is
+        closed on some failure paths;
+      * `observations.dcd` EXISTS -- a missing DCD with a healthy JSON and CSV is exactly the
+        case this must not skip;
+      * the DCD has exactly the expected frame count -- a truncated file is not a short one;
+      * every CSV coordinate index maps one-to-one onto a DCD frame;
+      * the recorded schedule and trajectory index are the ones being asked for now -- a path
+        completed against a different switching duration is not this path.
+
+    Bounded: the CSV is 21 small rows and only the DCD's 100-byte header is read. No coordinate
+    block is opened and nothing is hashed.
     """
-    marker = Path(directory) / COMPLETION_NAME
-    table = Path(directory) / CSV_NAME
-    if not marker.is_file() or not table.is_file():
+    directory = Path(directory)
+    marker = directory / COMPLETION_NAME
+    table = directory / CSV_NAME
+    dcd = directory / DCD_NAME
+    expected = int(SCHEDULE["number_of_observations"])
+
+    if not marker.is_file():
         return False, "no completion record"
     try:
         record = json.loads(marker.read_text())
@@ -412,11 +471,45 @@ def path_is_complete(directory):
         return False, f"{COMPLETION_NAME} is unreadable ({type(error).__name__})"
     if record.get("status") != "completed":
         return False, f"completion record says {record.get('status')!r}"
-    rows = sum(1 for _ in csv.DictReader(table.open()))
-    expected = int(SCHEDULE["number_of_observations"])
-    if rows != expected:
-        return False, f"{rows} observation row(s) on disk, {expected} expected"
-    return True, f"{rows} observations recorded"
+    if index is not None and record.get("ais_trajectory_index") not in (None, index):
+        return False, (f"completion record is for trajectory "
+                       f"{record.get('ais_trajectory_index')}, not {index}")
+    if record.get("observations") not in (None, expected):
+        return False, (f"completion record claims {record.get('observations')} observation(s), "
+                       f"{expected} expected")
+
+    if not table.is_file():
+        return False, f"{CSV_NAME} is missing"
+    rows = list(csv.DictReader(table.open()))
+    if len(rows) != expected:
+        return False, f"{len(rows)} observation row(s) on disk, {expected} expected"
+
+    # The DCD is the artifact most likely to be missing or short after an interrupted run, and the
+    # one whose absence a healthy JSON and CSV would otherwise hide completely.
+    if not dcd.is_file():
+        return False, f"{DCD_NAME} is missing, so the coordinates this record describes are gone"
+    try:
+        frames = dcd_frame_count(dcd)
+    except Exception as error:
+        return False, f"{DCD_NAME} is unreadable ({type(error).__name__}: {error})"
+    if frames != expected:
+        return False, (f"{DCD_NAME} holds {frames} frame(s), {expected} expected -- truncated, "
+                       f"not short")
+
+    mapping = [int(row["coordinate_frame_index"]) for row in rows]
+    if mapping != list(range(expected)):
+        return False, (f"{CSV_NAME} coordinate frame indices are not 0..{expected - 1}; the rows "
+                       f"do not map one-to-one onto the DCD")
+    if float(rows[0]["cumulative_work_kj_mol"]) != 0.0:
+        return False, "the first observation does not have zero cumulative work"
+    if abs(float(rows[0]["tau"]) - float(SCHEDULE["taus"][0])) > 1e-9:
+        return False, (f"the first observation is at tau {rows[0]['tau']}, but this path starts "
+                       f"at {SCHEDULE['taus'][0]}")
+    if abs(float(rows[-1]["tau"]) - float(SCHEDULE["taus"][-1])) > 1e-9:
+        return False, (f"the last observation is at tau {rows[-1]['tau']}, but this path ends at "
+                       f"{SCHEDULE['taus'][-1]}")
+    return True, (f"{len(rows)} observations, {frames} DCD frame(s), endpoints "
+                  f"{rows[0]['tau']} -> {rows[-1]['tau']}")
 
 
 def run_one_path(index, plan):
@@ -425,7 +518,7 @@ def run_one_path(index, plan):
     entry = plan["trajectories"][index]
     device = entry["gpu_device"]
 
-    done, why = path_is_complete(directory)
+    done, why = path_is_complete(directory, index)
     if done:
         print(f"[AIS {index:04d}] already complete: {why}. Nothing was run.", flush=True)
         return {"status": "skipped", "reason": why}
@@ -474,11 +567,16 @@ def run_one_path(index, plan):
 
     simulation = Simulation(topology, system, integrator, platform, properties)
 
-    positions = np.array(entry["positions_nm"])
+    # The selected frame, from the small side-file beside the plan. The plan JSON carries only
+    # the key: a JSON array of a solvated system's coordinates is enormous and every worker reads
+    # the plan.
+    with np.load(HERE / plan.get("frames_file", FRAMES_NAME)) as frames:
+        positions = np.array(frames[entry["frames_key"]], dtype=float)
+        box = None if implicit else np.array(frames[entry["box_key"]], dtype=float)
     if not implicit:
         # The source frame's own box, in the reduced form OpenMM requires. Fixed volume: nothing
         # changes it for the rest of the path.
-        simulation.context.setPeriodicBoxVectors(*reduced_box_vectors(entry["box_vectors_nm"]))
+        simulation.context.setPeriodicBoxVectors(*reduced_box_vectors(box.tolist()))
     simulation.context.setPositions(positions * unit.nanometer)
     # DCD carries no velocities, so the source frame supplies coordinates only and the momenta are
     # drawn fresh from the Maxwell-Boltzmann distribution at the common temperature. The seed is
@@ -592,24 +690,88 @@ def run_one_path(index, plan):
 PLAN_NAME = "_ais_plan.json"
 
 
-def build_plan():
-    """Everything decided before any dynamics: which frames, which seeds, which device.
+#: How many frames MDTraj holds in memory at a time while streaming the source trajectory.
+#: A source DCD can be far larger than memory, so it is never loaded whole -- peak usage is one
+#: chunk plus the handful of frames actually selected, not the length of the trajectory.
+SOURCE_CHUNK_FRAMES = 50
+#: The selected frames, written beside the plan as a small binary side-file. They are NOT put in
+#: `_ais_plan.json`: a JSON array of a solvated system's coordinates is enormous and the plan is
+#: read by every worker.
+FRAMES_NAME = "_ais_frames.npz"
 
-    Written to disk so each worker process reads the SAME plan the parent recorded, rather than
-    re-deriving it and possibly disagreeing.
+
+def _iterload(paths, chunk):
+    """`mdtraj.iterload` over the source trajectory, in bounded chunks.
+
+    `mdtraj.load` is deliberately not used and must not be reintroduced: it reads the entire
+    trajectory into memory, and an AIS source is an equilibrium production run that may be tens of
+    gigabytes. Everything this runtime needs -- the frame count, the atom count, the box vectors,
+    and a few selected frames -- is obtainable a chunk at a time.
     """
     import mdtraj
 
-    paths = resolve_source_paths()
-    platform_name = resolve_platform()
+    return mdtraj.iterload(str(paths["trajectory"]), top=str(paths["topology"]), chunk=chunk)
 
-    reference = PDBFile(str(paths["topology"]))
-    frames = mdtraj.load(str(paths["trajectory"]), top=str(paths["topology"]))
-    if frames.n_atoms != reference.topology.getNumAtoms():
+
+def survey_source(paths, *, chunk=SOURCE_CHUNK_FRAMES):
+    """Pass one: how many frames, how many atoms, and whether every frame carries a box.
+
+    Nothing is retained. This exists so the frame count and the atom check happen without the
+    trajectory ever being resident.
+    """
+    n_frames = 0
+    n_atoms = None
+    chunks = 0
+    boxes_present = True
+    for piece in _iterload(paths, chunk):
+        chunks += 1
+        n_frames += int(piece.n_frames)
+        n_atoms = int(piece.n_atoms)
+        if piece.unitcell_vectors is None:
+            boxes_present = False
+    if n_atoms is None:
+        raise SystemExit(f"{paths['trajectory'].name} contains no frames.")
+    return {"n_frames": n_frames, "n_atoms": n_atoms, "chunks_read": chunks,
+            "chunk_frames": int(chunk), "boxes_present": boxes_present,
+            "loader": "mdtraj.iterload"}
+
+
+def collect_frames(paths, wanted, *, chunk=SOURCE_CHUNK_FRAMES):
+    """Pass two: stream again and keep ONLY the deterministically selected frames.
+
+    Returns `{global_index: (positions_nm, box_vectors_nm or None)}`. Peak memory is one chunk plus
+    the selected frames, and the loop stops as soon as everything wanted has been seen.
+    """
+    wanted = set(int(i) for i in wanted)
+    kept = {}
+    offset = 0
+    chunks = 0
+    for piece in _iterload(paths, chunk):
+        chunks += 1
+        for local in range(int(piece.n_frames)):
+            index = offset + local
+            if index in wanted:
+                box = (None if piece.unitcell_vectors is None
+                       else np.array(piece.unitcell_vectors[local], dtype=float))
+                kept[index] = (np.array(piece.xyz[local], dtype=float), box)
+        offset += int(piece.n_frames)
+        if len(kept) == len(wanted):
+            break
+    missing = sorted(wanted - set(kept))
+    if missing:
         raise SystemExit(
-            f"the source trajectory has {frames.n_atoms} atoms but {paths['topology'].name} has "
-            f"{reference.topology.getNumAtoms()}. AIS switches the System built from "
-            f"inputs/topology.pdb, so the two must be the same system in the same order.")
+            f"the source trajectory ended before frame(s) {missing[:5]} could be read; it has "
+            f"{offset} frame(s).")
+    return kept, chunks
+
+
+def validate_topologies(paths):
+    """The source topology, the prepared topology, and the System are the same atoms in order.
+
+    Parameters are assigned per index, so a reordered trajectory would be scaled atom-by-atom
+    wrongly -- silently, because every count would still match.
+    """
+    reference = PDBFile(str(paths["topology"]))
     prepared = PDBFile(str(INPUTS / "topology.pdb"))
     if reference.topology.getNumAtoms() != prepared.topology.getNumAtoms():
         raise SystemExit(
@@ -620,11 +782,34 @@ def build_plan():
     if mismatched:
         raise SystemExit(
             f"the source topology and inputs/topology.pdb disagree on atom order: "
-            f"{len(mismatched)} atom name(s) differ, first {mismatched[0]}. The System's parameters "
-            f"are per index, so a reordered trajectory would be scaled atom-by-atom wrongly.")
+            f"{len(mismatched)} atom name(s) differ, first {mismatched[0]}. The System's "
+            f"parameters are per index, so a reordered trajectory would be scaled wrongly.")
+    return reference
 
-    times, timing = source_frame_timing(paths["trajectory"], frames.n_frames)
-    tau_source, tau_evidence = source_tau(paths["trajectory"])
+
+def resolve_source_ensemble():
+    """Everything about the source that can be decided without keeping a single frame.
+
+    Shared by the preflight and by `build_plan`, so the check and the run agree by construction
+    rather than by two implementations happening to match.
+    """
+    paths = resolve_source_paths()
+    reference = validate_topologies(paths)
+    survey = survey_source(paths)
+    if survey["n_atoms"] != reference.topology.getNumAtoms():
+        raise SystemExit(
+            f"the source trajectory has {survey['n_atoms']} atoms but "
+            f"{paths['topology'].name} has {reference.topology.getNumAtoms()}. AIS switches the "
+            f"System built from inputs/topology.pdb, so the two must be the same system in the "
+            f"same order.")
+    if not implicit and not survey["boxes_present"]:
+        raise SystemExit(
+            f"{paths['trajectory'].name} carries no periodic box vectors, but this is an "
+            f"explicit-solvent system and each path keeps the box of the frame it starts from. "
+            f"A DCD written by this repository's cMD or REST2 runtime has them.")
+
+    times, timing = source_frame_timing(paths["trajectory"], survey["n_frames"])
+    tau_source, tau_evidence, tau_route = source_tau(paths["trajectory"])
     tau_start = float(PATH_DEFINITION["path"]["tau_start"])
     if abs(tau_source - tau_start) > 1e-9:
         raise SystemExit(
@@ -634,18 +819,71 @@ def build_plan():
             f"{tau_source}, or point AIS.source.trajectory at an ensemble equilibrated at "
             f"{tau_start}.")
 
-    if not implicit and frames.unitcell_vectors is None:
-        raise SystemExit(
-            f"{paths['trajectory'].name} carries no periodic box vectors, but this is an "
-            f"explicit-solvent system and each path keeps the box of the frame it starts from. "
-            f"A DCD written by this repository's cMD or REST2 runtime has them.")
-
     selected, eligible = select_source_frames(times, timing)
+    return {"paths": paths, "survey": survey, "times": times, "timing": timing,
+            "tau": tau_source, "tau_evidence": tau_evidence, "tau_route": tau_route,
+            "selected": selected, "eligible": eligible}
+
+
+def check_ais_source(dynamics=True):
+    """The AIS-specific preflight rows, appended to the shared table.
+
+    Every one of these is a reason a run would have failed AFTER spawning workers and creating
+    trajectory files, which is exactly what the preflight exists to move earlier.
+    """
+    rows = []
+    try:
+        ensemble = resolve_source_ensemble()
+    except SystemExit as error:
+        return [preflight.Result("AIS source", preflight.FAIL, str(error).splitlines()[0])]
+
+    survey, timing = ensemble["survey"], ensemble["timing"]
+    rows.append(preflight.Result(
+        "AIS source", preflight.PASS,
+        f"{ensemble['paths']['trajectory'].name}: {survey['n_frames']} frame(s), "
+        f"{survey['n_atoms']} atoms, read with {survey['loader']} in {survey['chunks_read']} "
+        f"chunk(s) of {survey['chunk_frames']}"))
+    rows.append(preflight.Result(
+        "AIS frame timing", preflight.PASS,
+        f"{timing['route']}: {timing['first_frame_time_ps']} + k * "
+        f"{timing['frame_interval_ps']} ps"))
+    rows.append(preflight.Result(
+        "AIS source tau", preflight.PASS,
+        f"tau = {ensemble['tau']} from {ensemble['tau_route']}, matches path.tau_start"))
+    rows.append(preflight.Result(
+        "AIS selection", preflight.PASS,
+        f"{len(ensemble['selected'])} path(s) from {len(ensemble['eligible'])} eligible frame(s) "
+        f"in {method['source']['start_time_ps']}-{method['source']['end_time_ps']} ps inclusive; "
+        f"frames {ensemble['selected']}"))
+    seeds = {derive_seed(BASE_SEED, "AIS", i, kind)
+             for i in range(len(ensemble["selected"])) for kind in ("integrator", "velocities")}
+    expected = 2 * len(ensemble["selected"])
+    rows.append(preflight.Result(
+        "AIS seeds", preflight.PASS if len(seeds) == expected else preflight.FAIL,
+        f"{len(seeds)} distinct seed(s) for {len(ensemble['selected'])} path(s)"))
+    return rows
+
+
+def build_plan():
+    """Everything decided before any dynamics: which frames, which seeds, which device.
+
+    Written to disk so each worker process reads the SAME plan the parent recorded, rather than
+    re-deriving it and possibly disagreeing. The selected coordinates go beside it in a small
+    `.npz`, never into the JSON.
+    """
+    platform_name = resolve_platform()
+    ensemble = resolve_source_ensemble()
+    paths, survey, times = ensemble["paths"], ensemble["survey"], ensemble["times"]
+    selected, eligible = ensemble["selected"], ensemble["eligible"]
+
+    kept, chunks = collect_frames(paths, selected)
     devices, device_list = device_assignment(len(selected))
 
+    positions, boxes = {}, {}
     trajectories = []
     for index, frame in enumerate(selected):
-        trajectories.append({
+        coordinates, box = kept[frame]
+        entry = {
             "ais_trajectory_index": index,
             "directory": trajectory_directory(index).name,
             "source_frame_index": int(frame),
@@ -653,14 +891,17 @@ def build_plan():
             "integrator_seed": derive_seed(BASE_SEED, "AIS", index, "integrator"),
             "velocity_seed": derive_seed(BASE_SEED, "AIS", index, "velocities"),
             "gpu_device": devices[index],
-            "positions_nm": frames.xyz[frame].astype(float).tolist(),
-            "box_vectors_nm": (None if implicit
-                               else frames.unitcell_vectors[frame].astype(float).tolist()),
-        })
+            # The coordinates live in the side-file; the plan carries only the key.
+            "frames_key": f"positions_{index:04d}",
+        }
+        positions[entry["frames_key"]] = coordinates
         if not implicit:
-            source_box = frames.unitcell_vectors[frame].astype(float)
-            reduced = np.array(reduced_box_vectors(source_box.tolist()))
-            before = abs(float(np.linalg.det(source_box)))
+            if box is None:
+                raise SystemExit(
+                    f"source frame {frame} carries no periodic box vectors, but this is an "
+                    f"explicit-solvent system and the path keeps the box it starts from.")
+            reduced = np.array(reduced_box_vectors(box.tolist()))
+            before = abs(float(np.linalg.det(box)))
             after = abs(float(np.linalg.det(reduced)))
             if abs(before - after) > 1e-9 * max(1.0, before):
                 raise SystemExit(
@@ -668,20 +909,31 @@ def build_plan():
                     f"({before:.9f} -> {after:.9f} nm^3). Reduction renames the lattice vectors "
                     f"and must not change the lattice; refusing to propagate in a box that is not "
                     f"the one the source frame had.")
-            trajectories[-1]["box_volume_nm3"] = after
+            entry["box_key"] = f"box_{index:04d}"
+            boxes[entry["box_key"]] = box
+            entry["box_volume_nm3"] = after
+        trajectories.append(entry)
+
+    np.savez(HERE / FRAMES_NAME, **positions, **boxes)
 
     return {
         "platform": platform_name,
         "devices": device_list,
+        "frames_file": FRAMES_NAME,
         "source": {
             "trajectory": str(paths["trajectory"]),
             "trajectory_configured": paths["trajectory_configured"],
             "trajectory_sha256": sha256_file(paths["trajectory"]),
             "topology": str(paths["topology"]),
             "topology_choice": paths["topology_choice"],
-            "n_frames": int(frames.n_frames),
-            "n_atoms": int(frames.n_atoms),
-            "frame_timing": timing,
+            "n_frames": survey["n_frames"],
+            "n_atoms": survey["n_atoms"],
+            # How the source was read, so "we did not load it whole" is a recorded fact.
+            "loader": survey["loader"],
+            "chunk_frames": survey["chunk_frames"],
+            "chunks_read_survey": survey["chunks_read"],
+            "chunks_read_selection": chunks,
+            "frame_timing": ensemble["timing"],
             "first_time_ps": float(times[0]),
             "last_time_ps": float(times[-1]),
             "window_ps": [float(method["source"]["start_time_ps"]),
@@ -689,11 +941,13 @@ def build_plan():
             "window_is_inclusive": True,
             "eligible_frames": len(eligible),
             "eligible_frame_range": [int(eligible[0]), int(eligible[-1])],
+            "selected_frame_indices": [int(f) for f in selected],
             "selection": method["source"]["selection"],
             "with_replacement": bool(method["source"]["allow_sampling_with_replacement"]),
             "selection_seed": derive_seed(BASE_SEED, "AIS", "source-selection"),
-            "tau": tau_source,
-            "tau_evidence": tau_evidence,
+            "tau": ensemble["tau"],
+            "tau_evidence": ensemble["tau_evidence"],
+            "tau_route": ensemble["tau_route"],
         },
         "trajectories": trajectories,
     }
@@ -704,7 +958,7 @@ def write_selected_frames(plan):
     with (HERE / "selected_initial_frames.csv").open("w", newline="") as table:
         writer = csv.DictWriter(table, fieldnames=[
             "ais_trajectory_index", "source_frame_index", "source_time_ps", "source_tau",
-            "integrator_seed", "velocity_seed", "gpu_device", "directory",
+            "source_tau_route", "integrator_seed", "velocity_seed", "gpu_device", "directory",
             "source_trajectory", "selection", "selection_seed"])
         writer.writeheader()
         for entry in plan["trajectories"]:
@@ -713,6 +967,7 @@ def write_selected_frames(plan):
                 "source_frame_index": entry["source_frame_index"],
                 "source_time_ps": entry["source_time_ps"],
                 "source_tau": plan["source"]["tau"],
+            "source_tau_route": plan["source"]["tau_route"],
                 "integrator_seed": entry["integrator_seed"],
                 "velocity_seed": entry["velocity_seed"],
                 "gpu_device": "" if entry["gpu_device"] is None else entry["gpu_device"],
@@ -755,7 +1010,22 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--worker", type=int, default=None,
                         help="run exactly one AIS path in this process, by index")
+    parser.add_argument("--check", action="store_true",
+                        help="run the preflight and exit; no dynamics, nothing written")
     args = parser.parse_args(argv)
+
+    if args.worker is None:
+        # Before the plan is built and long before any worker process is spawned. The AIS-specific
+        # source checks are appended to the shared ones so one table covers everything.
+        preflight.require(
+            HERE, PROJECT, INPUTS, CONFIG,
+            label=f"AIS ({'check only' if args.check else 'switching paths'})",
+            dynamics=not args.check,
+            extra=[lambda: check_ais_source(dynamics=not args.check)])
+        if args.check:
+            print("[AIS] --check: preflight only. No dynamics ran, no worker was spawned, and "
+                  "no trajectory was created.", flush=True)
+            return 0
 
     if args.worker is not None:
         plan = json.loads((HERE / PLAN_NAME).read_text())
@@ -798,7 +1068,7 @@ def main(argv=None):
         for index in finished:
             code = running.pop(index).returncode
             directory = trajectory_directory(index)
-            complete, why = path_is_complete(directory)
+            complete, why = path_is_complete(directory, index)
             if code == 0 and complete:
                 results[index] = json.loads((directory / COMPLETION_NAME).read_text())
             else:
@@ -887,6 +1157,7 @@ def main(argv=None):
         yaml.safe_dump(provenance, sort_keys=False, default_flow_style=False), encoding="utf-8")
 
     (HERE / PLAN_NAME).unlink(missing_ok=True)
+    (HERE / FRAMES_NAME).unlink(missing_ok=True)
     if total_work:
         print(f"[AIS] {len(completed)}/{count} path(s) complete; total work "
               f"{min(total_work):.3f} to {max(total_work):.3f} kJ/mol", flush=True)

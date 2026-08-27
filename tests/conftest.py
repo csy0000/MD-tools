@@ -90,13 +90,18 @@ SMOKE_STAGE_PS = 0.02
 SMOKE_MIN_ITERATIONS = 25
 
 
-def tiny_project(work: Path, *, solvent: str = "OPC", methods=("cMD", "REST2"),
+def tiny_project(work: Path, *, solvent: str = "TIP3P", methods=("cMD", "REST2"),
                  replicas: int = 2, exchanges: int = 3, edit=None) -> Path:
     """Build inputs/ and MD/ for a project small enough to run through every stage on CUDA.
 
     Small means picoseconds and a box at the cutoff -- not a different platform. Shared by the
     layout, cMD and REST2 tests so they exercise one generator call each rather than three
     slightly different hand-written configurations.
+
+    TIP3P by default, because that is the method-development default: ff14SB + TIP3P for a peptide,
+    Sage 2.2.1 + TIP3P for a ligand. CUDA acceptance runs on the combination users get, not on the
+    optional ff19SB + OPC selection -- which stays available and is exercised by configuration
+    tests that build no System.
     """
     import shutil
 
@@ -107,7 +112,7 @@ def tiny_project(work: Path, *, solvent: str = "OPC", methods=("cMD", "REST2"),
 
     system_config = work / "sys.config.yaml"
     document = yaml.safe_load(system_config.read_text())
-    if solvent == "OPC":
+    if solvent in ("TIP3P", "OPC"):
         document["solvent"]["padding_nm"] = 0.5
         document["solvent"]["cutoff_nm"] = 0.5
     system_config.write_text(yaml.safe_dump(document, sort_keys=False))

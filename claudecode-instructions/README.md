@@ -5,11 +5,12 @@ root defines the durable rules that outlive any of them.
 
 ## Current
 
-- `20260827_md-data-contract-preflight-and-iterload.md` — **next task**; make generated projects
-  conform to the published MD-data dataset v1 layout, validate the selected dataset before any
-  OpenMM Context is created, stream AIS source trajectories with `mdtraj.iterload`, validate AIS
-  completion artifacts before skipping, and run focused CUDA acceptance only with the
-  ff14SB/Sage 2.2.1/TIP3P method-development default.
+- `20260827_md-data-contract-preflight-and-iterload.md` — **executed 2026-08-27**; see
+  `docs/journal/2026-08-27_md-data-contract-preflight-and-iterload.md`. Made generated projects
+  optionally conform to MD-data dataset v1 using MD-data's own imported validator, added a shared
+  automatic preflight that runs before any OpenMM Context (and `--check`, which runs it and stops),
+  switched AIS source loading to bounded `mdtraj.iterload`, made AIS source tau explicit evidence,
+  and made a truncated or missing path DCD refuse to count as complete.
 - `20260827_ais-method-and-release-gap-correction.md` — **executed 2026-08-27**; see
   `docs/journal/2026-08-27_ais-method-and-release-gaps.md`. Closed the explicit force-field/water
   pairing gap, established an exact stable OpenMM 8.6.0 acceptance environment (and corrected what

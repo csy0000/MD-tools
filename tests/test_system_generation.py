@@ -18,7 +18,7 @@ def explicit_inputs(tmp_path_factory):
 
     work = tmp_path_factory.mktemp("sysgen")
     shutil.copy2(ALA_PDB, work / "ALA.pdb")
-    run_cli("md_openmm", "sys-config", "--method", "cMD", "REST2", "--solvent", "OPC", cwd=work)
+    run_cli("md_openmm", "sys-config", "--method", "cMD", "REST2", cwd=work)
     config = work / "sys.config.yaml"
     document = yaml.safe_load(config.read_text())
     document["solvent"]["padding_nm"] = 0.9
@@ -111,14 +111,19 @@ def test_the_forcefield_record_is_written(explicit_inputs):
 
     record = json.loads((explicit_inputs / "forcefield.json").read_text())
     assert record["format"] == "md-templates-forcefield/v1"
-    assert record["protein"]["openmm_resource"] == "amber19-all.xml"
-    # The QUALIFIED resource `ForceField()` was actually given. The short `opc.xml` is the
+    # The fixture asked for no solvent, so this is the DEFAULT pairing: ff14SB with TIP3P. The
+    # protein force field and the water model are one selection, so this record is also the
+    # assertion that the default did not drift into a crossed combination.
+    assert record["protein"]["openmm_resource"] == "amber14-all.xml"
+    assert "amber14/protein.ff14SB.xml" in record["protein"]["openmm_resource_includes"]
+    # The QUALIFIED resource `ForceField()` was actually given. The short `tip3p.xml` is the
     # user-facing label and is a different file -- water only, no ion templates -- so recording it
     # would name a file that could not have solvated this box.
-    assert record["water"]["openmm_resource"] == "amber19/opc.xml"
-    assert record["water"]["requested_label"] == "OPC"
-    assert record["builder"]["openmm_xml_loaded"] == ["amber19-all.xml", "amber19/opc.xml"]
+    assert record["water"]["openmm_resource"] == "amber14/tip3p.xml"
+    assert record["water"]["requested_label"] == "TIP3P"
+    assert record["builder"]["openmm_xml_loaded"] == ["amber14-all.xml", "amber14/tip3p.xml"]
     assert record["package_versions"]["openmm"]
+    assert "amber19" not in json.dumps(record)
 
 
 def test_the_resolved_config_states_which_solvation_was_used(explicit_inputs):

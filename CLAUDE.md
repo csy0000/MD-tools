@@ -40,8 +40,62 @@ plain file with a documented format.
 | [MD-analysis](https://github.com/csy0000/MD-analysis) | analysis configuration, software identity, consumed dataset IDs, derived-result lineage |
 | project-template | project inputs, configs, workflows and component locks — **not yet available** |
 
-This repository never assigns a dataset ID, writes into `$MD_DATA`, uploads, deletes or registers
-anything. See `docs/FAIR_HANDOFF.md`.
+The boundary is not "MD-templates never touches `$MD_DATA`". It is narrower and more useful:
+
+- MD-templates **may** write simulation files and a contract-valid `dataset.yaml` into the ONE
+  active dataset directory the user explicitly selected, and nowhere else. It writes there because
+  that is where the run's own outputs go; writing them somewhere else first and moving them later
+  would break the stage chain's on-disk dependency.
+- MD-data owns everything about that directory as a dataset: the schema, the validator, the
+  permanent identity, the lifecycle (`active` -> `complete` -> `archived`), the catalogue, aliases,
+  extensions, archival checksums and retention. MD-templates imports MD-data's validator; it never
+  reimplements it, never invents a field, and never changes a lifecycle status.
+
+Concretely, this repository still never assigns a dataset ID, never walks or hashes `$MD_DATA`,
+never touches a dataset other than the selected one, never marks a dataset complete, and never
+uploads, deletes, aliases or registers anything. See `docs/FAIR_HANDOFF.md`.
+
+## The MD-data dataset contract
+
+Optional, off by default, and when on it is MD-data's contract v1 — not a schema of ours.
+
+- Import `md_data.validate_dataset` and `md_data.storage.check_dataset_tree`. Never vendor, copy
+  or reimplement them, and never add a field the contract does not define.
+- The canonical path is `{namespace}/{yyyy-mm}/{dataset_name}` relative to `$MD_DATA`. Components
+  are top level and a component's `path` equals its `name`. `eq/nvt_1kcal` is a STAGE inside the
+  `eq` component, never a component.
+- `MD_DATA_LOCAL` names the ONE dataset this invocation may write into. Refuse a symlink (aliases
+  are MD-data's), refuse a path escaping `MD_DATA`, refuse a status that is not `active`.
+- The identity is declared once, in `sys.config.yaml`. `md-gen` reads it back from
+  `common/resolved_sys.config.yaml`. Never ask for it twice.
+- `dataset_id`, `namespace`, `dataset_name`, `role`, `system`, `created_by.*`, `origin.*` and
+  `templates.commit` come from the user. Commits must match `^[0-9a-f]{40}$`. Never fabricate one,
+  never abbreviate one, never resolve `HEAD` on the user's behalf.
+- Never write `$MD_DATA`'s value into a generated file. The record must survive the tree moving.
+  `provenance.yaml` is the one exception, and only because it records the command line verbatim.
+
+## Preflight
+
+Every generated launcher runs one shared preflight before any Context, integrator, worker process,
+checkpoint or trajectory exists. `--check` runs the same gate and stops.
+
+- Bounded by construction: a fixed list of named files. Never walk `$MD_DATA`, never enumerate
+  datasets, never open or hash a trajectory. A test greps `preflight.py` for `rglob`, `os.walk`,
+  `glob.glob`, `iterdir` and `.dcd` and fails if any appear.
+- A CUDA platform with zero visible devices FAILS. Listing the platform is not having a device.
+- `--check` writes nothing at all, including the stage's `run.log`.
+- Missing parent output is `skip` under `--check` (it has not run yet) and `FAIL` for a real run.
+  An *inconsistent* parent fails in both.
+
+## AIS sources
+
+- Read source frames with `mdtraj.iterload` in bounded chunks. Never `mdtraj.load` — peak memory
+  must not depend on the length of the source trajectory.
+- Source tau is evidence: a companion record, or an explicit `AIS.source.source_tau`. Refuse when
+  it is absent, when the two conflict, and when it does not equal `path.tau_start`.
+- A path counts as complete only if the completion record, CSV rows, DCD existence, DCD frame
+  count, frame mapping and configuration identity all agree. A healthy JSON beside a truncated DCD
+  is the case this exists to catch.
 
 ## Scientific safety
 

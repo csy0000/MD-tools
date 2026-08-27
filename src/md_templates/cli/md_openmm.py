@@ -175,10 +175,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     show = sub.add_parser("show-default", help="print a default configuration block")
     show.add_argument("name",
-                      help="sys, cMD, REST2, AIS or all (case-insensitive). AIS prints the "
-                           "annealed-importance-sampling block: the tau path, the source-trajectory "
-                           "contract and the observation schedule. Its null fields are required "
-                           "user input, not defaults.")
+                      help="sys, dataset, cMD, REST2, AIS or all (case-insensitive). AIS prints "
+                           "the annealed-importance-sampling block: the tau path, the "
+                           "source-trajectory contract and the observation schedule. dataset "
+                           "prints the MD-data identity block on its own. In both, a null field "
+                           "is required user input, not a default -- an identity or a pinned "
+                           "commit this package invented would be a fabrication, not a "
+                           "convenience.")
     show.set_defaults(func=cmd_show_default)
 
     sysgen = sub.add_parser("sys-gen", help="build the OpenMM system")

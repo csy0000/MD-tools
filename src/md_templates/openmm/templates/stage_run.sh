@@ -17,4 +17,13 @@ fi
 export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 
 echo "== __STAGE__ =="
+
+# `--check` is a preflight and nothing else, so it does not append to this stage's run log: a
+# check that leaves a trace in the record of what ran is not the non-destructive thing it claims
+# to be. Everything else is teed as usual.
+for argument in "$@"; do
+    if [ "$argument" = "--check" ]; then
+        exec "$PYTHON" __SCRIPT__ "$@"
+    fi
+done
 "$PYTHON" __SCRIPT__ "$@" 2>&1 | tee -a __LOG__

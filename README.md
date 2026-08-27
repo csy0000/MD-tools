@@ -506,6 +506,136 @@ If the recorded interpreter is missing, `run.sh` falls back to whatever `python3
 
 ---
 
+## Contract-managed datasets
+
+By default the generators write wherever you point `-of`, and nothing about MD-data is involved.
+Opt in, and the same two commands additionally write a `dataset.yaml` that satisfies the
+[MD-data](https://github.com/csy0000/MD-data) **dataset contract v1** — validated by MD-data's own
+validator, imported, never reimplemented here.
+
+### The layout
+
+A dataset lives at a three-segment path relative to `$MD_DATA`:
+
+```text
+$MD_DATA/{namespace}/{yyyy-mm}/{dataset_name}/
+├── dataset.yaml            the manifest, and the only one in the tree
+├── common/                 what sys-gen built
+├── minimization/
+├── eq/                     one component; nvt_1kcal, npt_1kcal, npt_free are STAGES inside it
+├── cMD/  REST2/  AIS/      whichever methods you generated
+```
+
+`eq/nvt_1kcal` is a stage directory, not a component. Components are the top-level names in
+`dataset.yaml`, and a component's `path` always equals its `name`.
+
+### The two variables
+
+| variable | meaning |
+|---|---|
+| `MD_DATA` | the storage root. Datasets are addressed relative to it, and the value is never written into any generated file. |
+| `MD_DATA_LOCAL` | the one dataset directory this invocation may write into. Must sit under `MD_DATA`, must be a real directory (an alias symlink is refused), and must be `active`. |
+
+Because `MD_DATA` is never recorded, moving the whole tree and re-pointing the variable is enough.
+
+```bash
+export MD_DATA=/scratch/md-data
+export MD_DATA_LOCAL=$MD_DATA/adenosine/2026-08/a2a-apo-300k
+
+md-openmm sys-gen -i ./A2A.pdb --config sys.config.yaml -of "$MD_DATA_LOCAL/common/"
+md-openmm md-gen  -if "$MD_DATA_LOCAL/common/" --config md.config.yaml -of "$MD_DATA_LOCAL/"
+```
+
+`sys-gen` writes the manifest with the `common` component; `md-gen` reads the identity back out of
+`common/resolved_sys.config.yaml` and adds the method components. The identity is declared **once**,
+in `sys.config.yaml`, and never retyped.
+
+### What you must supply, and why it is not guessed
+
+`md-openmm show-default dataset` prints the block with every required field `null`:
+
+| field | why this repository cannot invent it |
+|---|---|
+| `dataset_id` | permanent and globally unique. MD-data mints it; a guess here would collide or lie. |
+| `namespace`, `dataset_name` | they place the dataset in someone's catalogue. |
+| `role`, `system` | what this data *is*. Only you know. |
+| `created_by.person_id`, `.name` | attribution. Never inferred from a git config or a shell user. |
+| `origin.repository`, `origin.commit` | the project this run belongs to. The commit must be an exact 40-hex SHA — never fabricated, never abbreviated, never `HEAD`. |
+| `templates.commit` | which MD-templates checkout generated this. Same rule. |
+
+Leave `enabled: false` and none of it applies. Set `enabled: true` and every field above must be
+present, or `sys-gen` stops **before building anything**.
+
+### Preflight, and `--check`
+
+Every generated launcher — `run.sh`, `run_all.sh`, the REST2 workers, the AIS paths — runs the same
+preflight before an OpenMM `Context`, an integrator, a worker process, a checkpoint or a trajectory
+exists. It is not opt-in and there is no flag to skip it.
+
+```bash
+./run_all.sh --check     # the whole preflight, zero integration steps, nothing written
+cd minimization && ./run.sh --check
+```
+
+`--check` runs the identical gate a real run runs and then stops. It creates no trajectory, no
+checkpoint, no `final_state.xml`, no `resolved_stage.yaml` — and unlike a real run it does not even
+append to the stage's `run.log`, because a check that leaves a trace in the record of what ran is
+not the non-destructive thing it claims to be.
+
+What preflight checks: the manifest validates against MD-data; the dataset is `active` and not
+read-only; this directory's component is declared, owned and not a link; `common/` is present and
+its `SHA256SUMS` still match; `forcefield.json` agrees with `resolved_sys.config.yaml`; the CUDA
+platform exists **and at least one device is visible**; the parent stage completed consistently; and
+this stage has not already completed.
+
+It is deliberately **bounded**. It reads a fixed list of named files. It never walks `$MD_DATA`,
+never enumerates other datasets, never opens a trajectory and never hashes one. A preflight whose
+cost grows with the size of the archive is a preflight people learn to disable.
+
+### Lifecycle stays with MD-data
+
+MD-templates writes `status: active` once, at creation. Moving a dataset to `complete` or
+`archived`, minting aliases, registering extensions and computing archival checksums are MD-data
+operations, performed deliberately. This repository refuses to write into a dataset that is already
+`complete` or `archived` rather than quietly reopening it.
+
+---
+
+## AIS: the source trajectory and its tau
+
+AIS starts from an equilibrium ensemble you already produced, so two things about that source have
+to be true and provable.
+
+**The tau is evidence, not an assumption.** A source produced by this repository carries a
+companion record, and its tau is read from there. A source from anywhere else must say so
+explicitly:
+
+```yaml
+AIS:
+  source:
+    trajectory: ../cMD/whole_system.dcd
+    source_tau: 0.5          # required when there is no companion record
+```
+
+Missing tau is refused. A `source_tau` that contradicts the companion record is refused, naming
+both values — it is never silently preferred. A `source_tau` that does not equal `path.tau_start`
+is refused: annealing from a state sampled at a different Hamiltonian is not the calculation the
+work values would be interpreted as.
+
+**The trajectory is streamed, never loaded.** Source frames are read with `mdtraj.iterload` in
+bounded chunks (50 frames), in two passes: one to count and locate the frames the time window
+selects, one to collect only those frames. Peak memory is set by the chunk size, not by the length
+of the trajectory, so a nanosecond source and a microsecond source cost the same. `mdtraj.load` is
+never called on a source trajectory, and a test enforces that by making it raise.
+
+**A path is complete only if everything agrees.** Six independent facts must line up before a
+finished path is skipped on a rerun: the completion record says so, its trajectory index matches,
+the observation count matches, the CSV exists with the right number of rows, `observations.dcd`
+exists, and its frame count equals the CSV row count one-to-one. A path whose DCD was truncated or
+deleted while its JSON and CSV stayed healthy is reported and rerun, not skipped.
+
+---
+
 ## Archiving finished results
 
 `inputs/` is not scratch. It is the statement of *what was simulated*, and it is the half of a
@@ -604,7 +734,10 @@ commit.
 ## Where this sits
 
 MD-templates is one of three repositories. It makes simulation data **FAIR-ready**; it does not
-make it FAIR, and it never assigns a dataset identifier or writes into `$MD_DATA`.
+make it FAIR. It never assigns a dataset identifier. It may write a run's own files and a
+contract-valid `dataset.yaml` into the one active dataset directory you explicitly select — see
+[Contract-managed datasets](#contract-managed-datasets) — and it never touches any other part of
+`$MD_DATA`.
 
 | repository | owns |
 |---|---|

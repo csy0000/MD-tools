@@ -42,6 +42,7 @@ def _project_root(start):
 
 PROJECT = _project_root(HERE)
 sys.path.insert(0, str(PROJECT))
+import preflight
 from md_stages import (STAGE_RUNTIME_OUTPUTS,
                        active_barostat_count, build_stage_system, count_barostats,
                        make_simulation, require_parent_state, resolve_platform,
@@ -121,8 +122,20 @@ def completion_state():
                         f"({STAGE_SIGNATURE[:16]}...)")
 
 
-def main():
+def main(argv=None):
     kind = STAGE["kind"]
+    check_only = "--check" in (sys.argv[1:] if argv is None else argv)
+
+    # BEFORE anything else. No System is deserialized, no Context is created, no reporter is
+    # opened and no checkpoint is written until every check below has passed.
+    preflight.require(HERE, PROJECT, INPUTS, CONFIG, stage=STAGE,
+                      label=f"{STAGE['name']} ({'check only' if check_only else 'run'})",
+                      dynamics=not check_only)
+    if check_only:
+        print(f"[{STAGE['name']}] --check: preflight only. No dynamics ran and nothing was "
+              f"written.", flush=True)
+        return 0
+
     started_utc = utc_now()
     log_lines = []
 

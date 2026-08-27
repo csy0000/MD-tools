@@ -34,6 +34,7 @@ from openmm.app import CheckpointReporter, DCDReporter, PDBFile, StateDataReport
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
+import preflight
 from md_stages import (sha256_file, RECORD_FORMAT, active_barostat_count,
                        append_jsonl, build_stage_system, count_barostats, derive_seed,
                        file_record, make_simulation, next_invocation_index, project_identity,
@@ -96,7 +97,16 @@ def _starting_artifact(path, *, role):
             "sha256": sha256_file(path)}
 
 
-def main():
+def main(argv=None):
+    check_only = "--check" in (sys.argv[1:] if argv is None else argv)
+    preflight.require(HERE, HERE.parent, INPUTS, CONFIG,
+                      label=f"cMD ({'check only' if check_only else 'run'})",
+                      dynamics=not check_only)
+    if check_only:
+        print("[cMD] --check: preflight only. No dynamics ran and nothing was written.",
+              flush=True)
+        return 0
+
     started_utc = utc_now()
     invocations = HERE / "invocations.jsonl"
     invocation_index = next_invocation_index(invocations)

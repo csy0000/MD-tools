@@ -17,7 +17,7 @@ def project(tmp_path_factory):
     """A complete inputs/ + MD/ project, tiny enough to run."""
     work = tmp_path_factory.mktemp("mdgen")
     shutil.copy2(ALA_PDB, work / "ALA.pdb")
-    run_cli("md_openmm", "sys-config", "--method", "cMD", "REST2", "--solvent", "OPC", cwd=work)
+    run_cli("md_openmm", "sys-config", "--method", "cMD", "REST2", cwd=work)
 
     sys_config = work / "sys.config.yaml"
     document = yaml.safe_load(sys_config.read_text())

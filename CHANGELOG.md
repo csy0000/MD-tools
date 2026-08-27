@@ -6,6 +6,75 @@ Entries below `0.2.0` predate the reduction to the six-command CLI in `ca29fcd` 
 registry/bundle/schema architecture that no longer exists. They are kept as history; they do not
 describe the current package.
 
+## Unreleased — the MD-data contract, preflight, and streamed AIS sources
+
+**Optional contract-managed datasets.** Set `dataset.enabled: true` in `sys.config.yaml` and
+`sys-gen` and `md-gen` additionally write a `dataset.yaml` satisfying MD-data's **dataset contract
+v1**. No new command: the same six commands do it.
+
+* The manifest is validated by `md_data.validate_dataset` and `md_data.storage.check_dataset_tree`
+  — MD-data's own validator, imported. Nothing about the contract is reimplemented here, so the two
+  repositories cannot drift into disagreeing about a schema they both claim to implement.
+* `MD_DATA` is the storage root; `MD_DATA_LOCAL` is the ONE dataset directory an invocation may
+  write into. A symlink is refused (aliases belong to MD-data), as is a path escaping `MD_DATA`, a
+  path that is not `{namespace}/{yyyy-mm}/{dataset_name}`, and a dataset that is not `active`.
+* Components are top level and a component's `path` equals its `name`. `eq/nvt_1kcal` is a stage
+  inside the `eq` component, not a component.
+* The identity is declared once, in `sys.config.yaml`; `md-gen` reads it back from
+  `common/resolved_sys.config.yaml`. `md-openmm show-default dataset` prints the block.
+* `dataset_id`, `namespace`, `dataset_name`, `role`, `system`, `created_by.*`, `origin.*` and
+  `templates.commit` must be supplied. Commits must match `^[0-9a-f]{40}$` — never fabricated,
+  abbreviated, or resolved from `HEAD` on the user's behalf. Missing fields stop `sys-gen`
+  **before** the system is built, not after.
+* `$MD_DATA`'s value is never written into a generated file, so moving the tree and re-pointing
+  the variable is enough. (`provenance.yaml` is the exception: it records the command line
+  verbatim, and rewriting that would falsify the record whose job is to say what happened.)
+
+**Correction to a documented rule.** Previous docs said this repository never writes into
+`$MD_DATA`. That was wrong in a way that mattered: a run's outputs must land where the next stage
+reads them. The accurate boundary — MD-templates may write generated files and a contract-valid
+manifest into the single selected active dataset, and MD-data owns schema, validation, identity,
+lifecycle, catalogue, aliases, extensions and archival policy — is now in `README.md`, `CLAUDE.md`
+and `docs/FAIR_HANDOFF.md`. MD-templates still never mints an ID, never walks or hashes `$MD_DATA`,
+never touches a second dataset, and refuses to write into a `complete` or `archived` one.
+
+**Automatic preflight, and `--check`.** Every generated launcher — `run.sh`, `run_all.sh`, the
+REST2 workers, the AIS paths — runs one shared preflight before any OpenMM `Context`, integrator,
+worker process, checkpoint or trajectory exists. There is no flag to skip it.
+
+* `./run_all.sh --check` and `./run.sh --check` run the identical gate and stop. Zero integration
+  steps, and nothing written — not even an append to the stage's `run.log`, because a check that
+  leaves a trace in the record of what ran is not non-destructive.
+* Checks: MD-data validation, dataset `active` and writable, this component declared/owned/not a
+  link, `common/` present with matching `SHA256SUMS`, `forcefield.json` agreeing with
+  `resolved_sys.config.yaml`, parent stage complete and consistent, this stage not already done.
+* **A CUDA platform with zero visible devices now FAILS.** `CUDA_VISIBLE_DEVICES=""` still leaves
+  the platform listed, and the previous check accepted that.
+* Bounded by construction: a fixed list of named files. It never walks `$MD_DATA`, never enumerates
+  datasets, never opens a trajectory and never hashes one. A test greps the shipped `preflight.py`
+  for `rglob`, `os.walk`, `glob.glob`, `iterdir` and `.dcd`.
+* Under `--check`, a parent that has not run yet is `skip`, not `FAIL`; an *inconsistent* parent
+  fails in both modes.
+
+**AIS sources are streamed, and their tau is evidence.**
+
+* Source frames are read with `mdtraj.iterload` in bounded 50-frame chunks, in two passes: survey,
+  then collect only the selected frames. Peak memory is set by the chunk, not by the length of the
+  source. `mdtraj.load` is never called on a source trajectory; a test replaces it with a raiser
+  and proves the guard installed before asserting the run succeeded.
+* `AIS.source.source_tau` is required when the source has no companion record. A value conflicting
+  with a companion record is refused naming both; a value that is not `path.tau_start` is refused,
+  because annealing from a state sampled at a different Hamiltonian is not the calculation the work
+  values would be read as.
+* A finished path is skipped on rerun only if the completion record, its trajectory index, the
+  observation count, the CSV row count, `observations.dcd`'s existence and its frame count all
+  agree one-to-one. **A truncated or deleted DCD beside a healthy JSON and CSV is now reported and
+  rerun instead of skipped.**
+
+**Migration.** None required. `dataset.enabled` defaults to `false`, and a project generated before
+this change keeps working unchanged. Existing AIS configurations reading a source produced by this
+repository keep working; one reading an external trajectory must now state `source_tau`.
+
 ## Unreleased — AIS, and two closed release gaps
 
 **New method: AIS, annealed importance sampling.** `md-openmm sys-config --method AIS` and

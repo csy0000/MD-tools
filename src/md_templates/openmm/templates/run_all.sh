@@ -12,14 +12,32 @@
 #
 # A stage that has already finished still re-runs here; each stage decides for itself whether to
 # resume from its checkpoint. Pass MD_PLATFORM through as usual: MD_PLATFORM=CPU ./run_all.sh
+#
+#   ./run_all.sh --check
+#
+# runs every stage's preflight and NOTHING else: no minimisation, no integration, no worker
+# process, no checkpoint, no trajectory. Each stage's own `./run.sh --check` does the same for one
+# stage. A normal ./run_all.sh runs the identical checks automatically before each stage's Context
+# is created, so --check is the same gate, run early and on its own.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
+CHECK_ONLY=0
+for argument in "$@"; do
+    if [ "$argument" = "--check" ]; then CHECK_ONLY=1; fi
+done
+
 for stage in __COMMON_STAGES__; do
     echo "== common stage: $stage =="
-    ( cd "$stage" && ./run.sh )
+    ( cd "$stage" && ./run.sh "$@" )
 done
+
+if [ "$CHECK_ONLY" = "1" ]; then
+__PRODUCTION_CHECK__
+    echo "== preflight only: no dynamics ran and nothing was written =="
+    exit 0
+fi
 
 __PRODUCTION__
 echo "== done =="

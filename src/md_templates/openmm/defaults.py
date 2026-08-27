@@ -160,6 +160,12 @@ def ais_defaults() -> dict[str, Any]:
             # null uses inputs/topology.pdb, the topology the System was built from. The resolved
             # choice is recorded either way.
             "topology": None,
+            # The tau the source ensemble was equilibrated at. null is fine when the trajectory
+            # has a companion resolved_run.yaml recording its own tau -- a fixed-tau cMD run or a
+            # REST2 rung from this repository does. REQUIRED for any other trajectory: it is
+            # refused rather than assumed, because a source at a different tau makes the first
+            # work value silently absorb the mismatch. Must equal path.tau_start.
+            "source_tau": None,
             # REQUIRED, and INCLUSIVE at both ends. Frames outside [start, end] are not eligible.
             "start_time_ps": None,
             "end_time_ps": None,
@@ -184,6 +190,70 @@ def ais_defaults() -> dict[str, Any]:
             # `auto` uses every visible CUDA device; a list pins particular ones.
             "gpu_devices": "auto",
         },
+    }
+
+
+#: The MD-data repository, named once. Its exact commit is NEVER filled in here: a commit this
+#: package could guess is not a pin, and MD-data's contract exists to prevent exactly that.
+MD_TEMPLATES_REPOSITORY = "https://github.com/csy0000/MD-templates"
+
+
+def dataset_defaults() -> dict[str, Any]:
+    """The MD-data dataset identity, as editable YAML with every unguessable field left null.
+
+    MD-data owns the dataset contract (`csy0000/MD-data`, `docs/contracts/dataset-v1.md`); this
+    block is the smallest input `sys-gen` needs to WRITE a manifest that its validator accepts. It
+    lives in `sys.config.yaml` rather than in both files because a dataset has one identity, and
+    `md-gen` reads it back from `common/resolved_sys.config.yaml`.
+
+    Every `null` is a required value that this package must not invent:
+
+    * a person is a scientific identity, not the account the job ran under;
+    * a repository without its exact 40-hex commit records where to look but not what ran, which
+      is the failure MD-data's contract exists to prevent -- so a version or an installed
+      fingerprint is useful generation provenance and does NOT satisfy `commit`;
+    * a dataset ID that this package derived from a path stops being stable the moment the path
+      changes.
+
+    Leave `enabled: false` for an unregistered local `inputs/ + MD/` generation. Such a tree is
+    NOT MD-data compliant and is labelled that way in its own provenance.
+
+    Derived rather than asked for, because they are facts about this generation rather than
+    choices: `schema_version`, `created_at`, `status`, `path` (from where the dataset actually is
+    under `MD_DATA`), the component list, and `templates.version`.
+    """
+    return {
+        # false: write a plain inputs/ + MD/ tree, unregistered and not contract-managed.
+        # true: write a contract-managed dataset, and refuse to generate until the fields below
+        # are filled in.
+        "enabled": False,
+        "dataset_id": None,
+        "namespace": None,
+        "dataset_name": None,
+        # `project` or `baseline`. The `baseline` namespace is reserved for `role: baseline`.
+        "role": None,
+        # Prose. What was actually simulated.
+        "system": None,
+        "created_by": {
+            "person_id": None,
+            "name": None,
+            "affiliation": None,
+            # Optional in the contract, and optional here.
+            "orcid": None,
+        },
+        # The project repository this dataset was produced for, pinned.
+        "origin": {
+            "repository": None,
+            "commit": None,
+        },
+        # This repository. The commit is required and is never filled in automatically: an
+        # installed wheel has no checkout to read one from, and inventing one would defeat the pin.
+        "templates": {
+            "repository": MD_TEMPLATES_REPOSITORY,
+            "commit": None,
+        },
+        "derived_from": [],
+        "notes": None,
     }
 
 
@@ -253,6 +323,9 @@ def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT) -> dic
             # modelling choice and is stated rather than inherited.
             "nonpolar_sasa": False,
         },
+        # The MD-data dataset identity. Disabled by default: a plain inputs/ + MD/ tree needs no
+        # manifest, and a manifest cannot be written from values this package would have to guess.
+        "dataset": dataset_defaults(),
         "constraints": {
             "type": "HBonds",
             "rigid_water": True,
@@ -382,6 +455,11 @@ def default_document(name: str) -> dict[str, Any]:
     if key == "ais":
         return {k: v for k, v in md_defaults(methods=["AIS"]).items()
                 if k not in ("cMD", "REST2")}
+    if key == "dataset":
+        # The MD-data identity block on its own, which is how you read it: `sys-config` buries it
+        # at the bottom of a long file, and every required field in it is null on purpose.
+        return {"dataset": sys_defaults()["dataset"]}
     if key == "all":
         return {"sys": sys_defaults(), "md": md_defaults(methods=METHODS)}
-    raise ValueError(f"unknown default {name!r}; expected sys, cMD, REST2, AIS or all")
+    raise ValueError(
+        f"unknown default {name!r}; expected sys, dataset, cMD, REST2, AIS or all")

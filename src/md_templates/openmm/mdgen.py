@@ -30,6 +30,7 @@ from typing import Any, Optional
 import yaml
 
 from . import ais as A
+from . import md_data_contract as MD
 from .config import ConfigError, check_timestep_against_masses, resolve_md_config, \
     sha256_of_document, write_yaml
 from .defaults import canonical_method
@@ -70,6 +71,10 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
     document = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     sys_resolved = yaml.safe_load((inputs / "resolved_sys.config.yaml").read_text())
     implicit = sys_resolved.get("solvation") == "implicit"
+    # The dataset identity has ONE declaration, in sys.config.yaml, and `sys-gen` recorded the
+    # resolved form beside the prepared system. Reading it back is what keeps md-gen from being a
+    # second place a user has to state who owns this data.
+    dataset_block = dict(sys_resolved.get("dataset") or {})
 
     resolved = resolve_md_config(document, implicit=implicit)
     check_timestep_against_masses(resolved, sys_resolved)
@@ -85,6 +90,9 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
         relative_inputs = str(inputs)
     resolved["paths"] = {"inputs_folder": relative_inputs}
 
+    # Contract check before any file is written, for the same reason sys-gen does it first.
+    dataset_plan = _plan_dataset(dataset_block, out, methods)
+
     plan = stage_plan(resolved, implicit=implicit)
     resolved["paths"]["common_stages"] = [stage["path"] for stage in plan]
     resolved["paths"]["common_final_stage"] = plan[-1]["path"]
@@ -97,6 +105,15 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
     # Carried INTO the project so runtime records can name the implementation that wrote them.
     # The scripts cannot import md_templates to ask, and a run months later should not have to
     # guess which version produced it.
+    # Whether this project belongs to a contract-managed dataset, recorded WITHOUT the absolute
+    # value of MD_DATA: the generated tree must survive being moved and the variable changing.
+    # `dataset.yaml` sits at the project root in contract mode, so nothing else is needed.
+    resolved["dataset"] = {
+        "contract_managed": bool(dataset_plan["contract_managed"]),
+        "manifest": MD.MANIFEST_NAME if dataset_plan["contract_managed"] else None,
+        "note": (None if dataset_plan["contract_managed"]
+                 else "unregistered local project: not MD-data compliant"),
+    }
     identity = implementation_identity()
     resolved["provenance"] = {
         "template_commit": identity["git_commit"],
@@ -110,6 +127,9 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
     # One copy for the whole project. Every script locates MD/ by looking for md.config.yaml above
     # itself, so stages at different depths all find the same helper.
     shutil.copy2(TEMPLATES / "md_stages.py", out / "md_stages.py")
+    # The preflight every launcher runs before a Context exists. One copy for the whole project,
+    # found the same way md_stages.py is.
+    shutil.copy2(TEMPLATES / "preflight.py", out / "preflight.py")
 
     seed = _base_seed(resolved)
     for index, stage in enumerate(plan):
@@ -175,15 +195,17 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
                                                                         exist_ok=True)
 
     _write_run_all(out, plan, methods)
+    dataset = _write_dataset_manifest(dataset_plan, echo=True)
 
     write_yaml(out / "provenance.yaml", _md_provenance(
+        dataset=dataset,
         out=out, inputs=inputs, relative_inputs=relative_inputs, resolved=resolved,
         sys_resolved=sys_resolved, plan=plan, methods=methods, seed=seed))
     manifest = write_generated_manifest(out)
     if manifest is not None:
         pass
     return {"output_folder": str(out), "methods": methods, "implicit": implicit,
-            "common_stages": [stage["path"] for stage in plan]}
+            "common_stages": [stage["path"] for stage in plan], "dataset": dataset}
 
 
 MD_PROVENANCE_FORMAT = "md-templates-md-provenance/v1"
@@ -197,7 +219,8 @@ def implicit_route(sys_resolved: dict) -> bool:
 
 
 def _md_provenance(*, out: Path, inputs: Path, relative_inputs: str, resolved: dict,
-                   sys_resolved: dict, plan: list, methods: list, seed: int) -> dict[str, Any]:
+                   sys_resolved: dict, plan: list, methods: list, seed: int,
+                   dataset: Optional[dict] = None) -> dict[str, Any]:
     """Which implementation generated this project, from which prepared system, with which seeds.
 
     The lineage fields -- the three hashes of the parent `inputs/` records -- are what let a reader
@@ -234,6 +257,9 @@ def _md_provenance(*, out: Path, inputs: Path, relative_inputs: str, resolved: d
         "command": list(sys.argv),
         "implementation": implementation_identity(),
         "environment": environment_versions(),
+        # Whether this project belongs to a contract-managed MD-data dataset, and which validator
+        # said so. An unregistered local tree says so rather than leaving it to be assumed.
+        "dataset": dataset,
         # The protocol as RESOLVED, recorded here rather than left to be read back out of the
         # configuration. `null` means "does not apply to this solvation route", which is why the
         # implicit case writes null for pressure and barostat rather than omitting them.
@@ -339,6 +365,76 @@ def _write_launcher(template: Path, path: Path, label: str, *, script: str = "ru
     _executable(path)
 
 
+#: Which MD-data component each generated directory belongs to. The equilibration STAGES are not
+#: components: `eq/nvt_1kcal` lives inside the `eq` component, and declaring one component per
+#: stage would turn one equilibration into four datasets.
+COMPONENT_OF_METHOD = {"cMD": "cMD", "REST2": "REST2", "AIS": "AIS"}
+COMMON_COMPONENTS = ("minimization", "eq")
+
+
+def _plan_dataset(dataset_block: dict[str, Any], out: Path,
+                  methods: list[str]) -> dict[str, Any]:
+    """The components this generation adds, validated against the dataset that already exists.
+
+    `sys-gen` created the dataset and declared `common`. This adds `minimization`, `eq`, and one
+    component per selected production method -- to the SAME manifest, not a second one.
+    """
+    if not dataset_block.get("enabled"):
+        return {"contract_managed": False,
+                "note": ("unregistered local generation: no dataset.yaml, and NOT MD-data "
+                         "compliant."),
+                "validator": MD.md_data_identity()}
+
+    MD.require_md_data()
+    # `out` IS the dataset root for md-gen, not a component inside it.
+    location = MD.resolve_roots(out, component=None)
+    manifest_path = Path(location["dataset_root"]) / MD.MANIFEST_NAME
+    if not manifest_path.is_file():
+        raise ConfigError(
+            f"dataset.enabled is true but {manifest_path} does not exist.\n"
+            f"  `md-openmm sys-gen -of \"$MD_DATA_LOCAL/{MD.COMMON_COMPONENT}/\"` creates the "
+            f"dataset and its manifest; md-gen adds method components to it.")
+    existing = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+
+    components = [
+        MD.component_entry("minimization", kind="simulation", method="minimization",
+                           description="Restrained energy minimisation of the prepared system."),
+        MD.component_entry("eq", kind="simulation", method="equilibration",
+                           description="The equilibration chain. Its stages are directories "
+                                       "inside this component, not components of their own."),
+    ]
+    for method in methods:
+        components.append(MD.component_entry(
+            COMPONENT_OF_METHOD[method], kind="simulation", method=method,
+            description=f"{method} production."))
+
+    manifest = dict(existing)
+    manifest["components"] = MD.merge_components(existing.get("components") or [], components)
+    MD.validate(manifest)                       # metadata only: the directories do not exist yet
+    return {"contract_managed": True, "manifest": manifest, "location": location,
+            "added": [entry["name"] for entry in components]}
+
+
+def _write_dataset_manifest(plan: dict[str, Any], *, echo: bool = True) -> dict[str, Any]:
+    """Update `dataset.yaml` with the new components, and validate the layout now it exists."""
+    if not plan["contract_managed"]:
+        return {"contract_managed": False, "note": plan["note"], "validator": plan["validator"]}
+
+    location = plan["location"]
+    path = MD.write_manifest(Path(location["dataset_root"]), plan["manifest"])
+    report = MD.validate(plan["manifest"], root=location["md_data"],
+                         dataset_root=location["dataset_root"])
+    if echo:
+        print(f"  dataset      : {report['dataset_id']} at {report['path']}, "
+              f"components {', '.join(report['components'])}")
+        print(f"  manifest     : {path.name} validated by md-data "
+              f"{report['validator']['version']} (contract v"
+              f"{report['validator']['contract_version']}), layout verified")
+    # `md_data` / `md_data_local` are deliberately absent: they are this machine's storage
+    # location, and the record must survive the tree being moved.
+    return {"contract_managed": True, "manifest": MD.MANIFEST_NAME, **report}
+
+
 def _ais_path_definition(resolved: dict[str, Any], *, implicit: bool) -> dict[str, Any]:
     """The full AIS path, resolved once here so the generated runtime never recomputes it.
 
@@ -401,16 +497,23 @@ def _write_run_all(out: Path, plan: list[dict[str, Any]], methods: list[str]) ->
     from an equilibrium trajectory the user already produced -- so running it "in order" with the
     rest would be running it before its own input exists.
     """
-    lines = []
+    lines, checks = [], []
     if "cMD" in methods:
         lines += ['echo "== cMD production =="', '( cd cMD && ./run.sh )']
+        checks += ['    ( cd cMD && ./run.sh --check )']
     if "REST2" in methods:
         lines += ['echo "== REST2 per-tau equilibration =="',
                   '( cd REST2 && ./equilibrate.sh )',
                   'echo "== REST2 exchange production =="',
                   '( cd REST2 && ./run.sh )']
+        checks += ['    ( cd REST2 && ./equilibrate.sh --check )',
+                   '    ( cd REST2 && ./run.sh --check )']
+    # AIS is absent from both: it starts from an equilibrium trajectory the user already produced,
+    # so running it "in order" would run it before its own input exists. `MD/AIS/run.sh --check`
+    # is how its preflight is run on its own.
     text = ((TEMPLATES / "run_all.sh").read_text()
             .replace("__COMMON_STAGES__", " ".join(stage["path"] for stage in plan))
+            .replace("__PRODUCTION_CHECK__", "\n".join(checks) or "    :")
             .replace("__PRODUCTION__", "\n".join(lines)))
     (out / "run_all.sh").write_text(text, encoding="utf-8")
     _executable(out / "run_all.sh")

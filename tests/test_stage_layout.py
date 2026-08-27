@@ -25,7 +25,7 @@ STAGE_FILES = {"stage.log", "stage.csv", "checkpoint.chk", "final_state.xml", "f
 
 @pytest.fixture(scope="module")
 def explicit(tmp_path_factory):
-    return tiny_project(tmp_path_factory.mktemp("explicit"), solvent="OPC")
+    return tiny_project(tmp_path_factory.mktemp("explicit"), solvent="TIP3P")
 
 
 @pytest.fixture(scope="module")
@@ -84,7 +84,7 @@ def test_the_folder_name_does_not_claim_1kcal_when_the_restraint_is_not_1(tmp_pa
     def stronger(protocol):
         protocol["equilibration"]["restraint_k_kcal_mol_a2"] = 5.0
 
-    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",), edit=stronger)
+    project = tiny_project(tmp_path, solvent="TIP3P", methods=("cMD",), edit=stronger)
     names = {p.name for p in (project / "eq").iterdir() if p.is_dir()}
     assert "nvt_restrained" in names, names
     assert not any("1kcal" in name for name in names), names
@@ -127,7 +127,7 @@ def test_a_missing_parent_state_names_the_file_and_the_command(tmp_path):
 
     Its own project, so this does not depend on whether another test has already run the chain.
     """
-    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    project = tiny_project(tmp_path, solvent="TIP3P", methods=("cMD",))
 
     result = run_stage(project / "cMD")                    # nothing has run yet
     combined = result.stdout + result.stderr
@@ -345,7 +345,7 @@ def test_the_recorded_signature_is_the_hash_of_the_current_stage_yaml(explicit_r
 ])
 def test_changing_any_run_defining_field_makes_a_completed_stage_refuse(tmp_path, field, value):
     """The old check kept a list of fields that mattered, and these were not on it."""
-    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    project = tiny_project(tmp_path, solvent="TIP3P", methods=("cMD",))
     assert run_stage(project / "minimization").returncode == 0
     stage = project / "eq/npt_1kcal"
     assert run_stage(project / "eq/nvt_1kcal").returncode == 0
@@ -369,7 +369,7 @@ def test_removing_the_runtime_outputs_starts_the_stage_fresh_from_its_parent(tmp
     The checkpoint is removed with the rest, so the stage cannot resume it: it loads the parent,
     resets its own step count, and integrates the configured number of steps.
     """
-    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    project = tiny_project(tmp_path, solvent="TIP3P", methods=("cMD",))
     assert run_stage(project / "minimization").returncode == 0
     stage = project / "eq/nvt_1kcal"
     assert run_stage(stage).returncode == 0
@@ -401,7 +401,7 @@ def test_an_interrupted_stage_resumes_and_runs_exactly_the_missing_steps(tmp_pat
     """
     import csv
 
-    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    project = tiny_project(tmp_path, solvent="TIP3P", methods=("cMD",))
     assert run_stage(project / "minimization").returncode == 0
     stage = project / "eq/nvt_1kcal"
     request = yaml.safe_load((stage / "stage.yaml").read_text())
@@ -442,7 +442,7 @@ def test_an_interrupted_stage_resumes_and_runs_exactly_the_missing_steps(tmp_pat
 
 def test_a_stage_with_only_half_its_completion_artifacts_refuses_to_run(tmp_path):
     """Neither reusing nor overwriting is safe when the two records disagree."""
-    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    project = tiny_project(tmp_path, solvent="TIP3P", methods=("cMD",))
     assert run_stage(project / "minimization").returncode == 0
     stage = project / "eq/nvt_1kcal"
     assert run_stage(stage).returncode == 0
@@ -451,8 +451,13 @@ def test_a_stage_with_only_half_its_completion_artifacts_refuses_to_run(tmp_path
     result = run_stage(stage)
     assert result.returncode != 0, result.stdout[-800:]
     combined = result.stdout + result.stderr
-    assert "refusing to run" in combined and "resolved_stage.yaml" in combined, combined[-800:]
-    assert "new output directory" in combined or "remove this stage" in combined
+    # The disagreement is now caught by the shared preflight, so the refusal happens before a
+    # Context exists rather than on the way into the stage. What matters is unchanged: it stops,
+    # it names the record that is missing, and it says nothing was run.
+    assert "[FAIL] completion record" in combined, combined[-800:]
+    assert "resolved_stage.yaml" in combined and "did not finish cleanly" in combined
+    assert "no Context was created" in combined
+    assert not (stage / "resolved_stage.yaml").exists(), "the refused run wrote a record anyway"
 
 
 def test_a_completion_record_from_a_different_request_refuses_to_run(tmp_path):
@@ -461,7 +466,7 @@ def test_a_completion_record_from_a_different_request_refuses_to_run(tmp_path):
     The record's other fields are output, not input; `stage_config_sha256` is the one value that
     says which request produced these files.
     """
-    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    project = tiny_project(tmp_path, solvent="TIP3P", methods=("cMD",))
     assert run_stage(project / "minimization").returncode == 0
     stage = project / "eq/nvt_1kcal"
     assert run_stage(stage).returncode == 0
@@ -477,7 +482,7 @@ def test_a_completion_record_from_a_different_request_refuses_to_run(tmp_path):
 
 def test_a_completion_record_with_no_signature_refuses_to_run(tmp_path):
     """A record written before signatures existed cannot vouch for what produced it."""
-    project = tiny_project(tmp_path, solvent="OPC", methods=("cMD",))
+    project = tiny_project(tmp_path, solvent="TIP3P", methods=("cMD",))
     assert run_stage(project / "minimization").returncode == 0
     stage = project / "eq/nvt_1kcal"
     assert run_stage(stage).returncode == 0

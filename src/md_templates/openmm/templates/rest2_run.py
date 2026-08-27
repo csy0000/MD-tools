@@ -36,6 +36,7 @@ from openmm.app import CheckpointReporter, DCDReporter, PDBFile, StateDataReport
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
+import preflight
 from md_stages import (sha256_file, RECORD_FORMAT, active_barostat_count,
                        add_barostat, add_positional_restraint, append_jsonl, count_barostats,
                        derive_seed, device_groups, file_record, make_simulation,
@@ -84,6 +85,14 @@ BETA = 1.0 / (KB_KJ * float(common["temperature_kelvin"]))
 N_REPLICAS = int(method["number_of_replicas"])
 SOLUTE_INDICES = list(range(int(SOLUTE["n_solute_atoms"])))
 EXCHANGE_LOG = HERE / "exchange_attempts.csv"
+
+
+def device_groups_devices():
+    """The CUDA devices this invocation would spread its replicas over, for the preflight."""
+    try:
+        return visible_devices()
+    except Exception:
+        return None
 
 
 def replica_dir(replica, phase):
@@ -169,7 +178,17 @@ def _starting_artifact(path, *, role):
             "sha256": sha256_file(path)}
 
 
-def main():
+def main(argv=None):
+    check_only = "--check" in (sys.argv[1:] if argv is None else argv)
+    preflight.require(HERE, HERE.parent, INPUTS, CONFIG,
+                      label=f"REST2 ({'check only' if check_only else 'exchange production'})",
+                      dynamics=not check_only,
+                      devices=(device_groups_devices() if not check_only else None))
+    if check_only:
+        print("[remd] --check: preflight only. No dynamics ran and nothing was written.",
+              flush=True)
+        return 0
+
     started_utc = utc_now()
     invocations_path = HERE / "invocations.jsonl"
     invocation_index = next_invocation_index(invocations_path)

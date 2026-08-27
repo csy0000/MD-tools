@@ -20,6 +20,7 @@ from typing import Any, Optional
 
 import yaml
 
+from . import md_data_contract as MD
 from .config import ConfigError, resolve_sys_config, sha256_of_document, write_yaml
 from .defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT
 from .forcefield_record import build_forcefield_record
@@ -191,7 +192,8 @@ CHECKSUM_MANIFEST = "SHA256SUMS"
 
 def _provenance(*, sys_config: dict, resolved: dict, out: Path, original_relative: str,
                 original_sha256: str, system, payload: dict[str, str],
-                command: list[str], forcefield: Optional[dict] = None) -> dict[str, Any]:
+                command: list[str], forcefield: Optional[dict] = None,
+                dataset: Optional[dict] = None) -> dict[str, Any]:
     """Everything needed to know what produced this bundle, and from what.
 
     Paths are relative to `inputs/`. An absolute path would say where the bundle happened to be
@@ -217,6 +219,9 @@ def _provenance(*, sys_config: dict, resolved: dict, out: Path, original_relativ
         "resolved_sys_config_hash": sha256_of_document(resolved),
         "forcefield_json_sha256": (sha256_file(out / "forcefield.json")
                                    if (out / "forcefield.json").is_file() else None),
+        # Whether this tree is a contract-managed MD-data dataset, and which validator said so.
+        # An unregistered local tree says so explicitly rather than leaving it to be assumed.
+        "dataset": dataset,
         "system": {
             "topology_atoms": payload.get("topology_atoms"),
             "openmm_particles": payload.get("openmm_particles"),
@@ -282,6 +287,81 @@ def _forcefield_summary(forcefield: dict[str, Any]) -> dict[str, Any]:
         "salt": explicit.get("salt") if forcefield.get("explicit_solvent") else None,
         "constraints": dict(constraints),
     }
+
+
+#: The header on a generated `dataset.yaml`, so a reader knows which repository owns the contract
+#: and which one merely wrote the file.
+DATASET_HEADER = """\
+# MD-data dataset manifest, schema v1.
+#
+# The CONTRACT is owned by csy0000/MD-data (docs/contracts/dataset-v1.md). This file was written
+# by MD-templates from the `dataset:` block of sys.config.yaml and validated with MD-data's own
+# validator; MD-templates carries no copy of that schema.
+#
+# Paths are relative: `path` to $MD_DATA, each component to this dataset root. Marking this
+# dataset complete or archived is a deliberate MD-data operation by its owner, not something any
+# generation does.
+"""
+
+
+def _plan_dataset(resolved: dict[str, Any], out: Path) -> dict[str, Any]:
+    """Everything the contract needs, resolved and validated BEFORE anything is built.
+
+    Every refusal a misconfigured `dataset:` block can produce happens here: the two roots, the
+    required fields, the identity/path agreement, and MD-data's own metadata validation. What is
+    deliberately not done here is the on-disk layout check -- the component directories do not
+    exist yet, because this generation is what creates them.
+    """
+    from .provenance_min import implementation_identity
+
+    block = dict(resolved.get("dataset") or {})
+    if not block.get("enabled"):
+        # An ordinary local inputs/ + MD/ tree. Labelled, so nothing downstream can mistake it for
+        # a registered dataset.
+        return {"contract_managed": False,
+                "note": ("unregistered local generation: no dataset.yaml, and NOT MD-data "
+                         "compliant. Set dataset.enabled true in sys.config.yaml for a "
+                         "contract-managed dataset."),
+                "validator": MD.md_data_identity()}
+
+    MD.require_md_data()
+    location = MD.resolve_roots(out, component=MD.COMMON_COMPONENT)
+    manifest = MD.build_manifest(
+        dataset_block=block, location=location,
+        components=[MD.component_entry(
+            MD.COMMON_COMPONENT, kind="shared-input",
+            description="Prepared system, force-field record and initial state, shared by every "
+                        "method component of this dataset.")],
+        templates_version=implementation_identity()["version"])
+    MD.validate(manifest)                       # metadata only: the tree does not exist yet
+    return {"contract_managed": True, "manifest": manifest, "location": location}
+
+
+def _write_dataset_manifest(plan: dict[str, Any], *, echo: bool = True) -> dict[str, Any]:
+    """Write `dataset.yaml`, then validate it again WITH the root now that the tree exists."""
+    if not plan["contract_managed"]:
+        return {"contract_managed": False, "note": plan["note"], "validator": plan["validator"]}
+
+    manifest = dict(plan["manifest"])
+    location = plan["location"]
+    root = Path(location["dataset_root"])
+    existing = root / MD.MANIFEST_NAME
+    if existing.is_file():
+        previous = yaml.safe_load(existing.read_text(encoding="utf-8")) or {}
+        manifest["components"] = MD.merge_components(previous.get("components") or [],
+                                                     manifest["components"])
+    path = MD.write_manifest(root, manifest, header=DATASET_HEADER)
+    report = MD.validate(manifest, root=location["md_data"],
+                         dataset_root=location["dataset_root"])
+    if echo:
+        print(f"  dataset      : {report['dataset_id']} ({report['role']}, {report['status']}) "
+              f"at {report['path']}")
+        print(f"  manifest     : {path.name} validated by md-data "
+              f"{report['validator']['version']} (contract v"
+              f"{report['validator']['contract_version']})")
+    # `md_data` / `md_data_local` are deliberately absent: they are this machine's storage
+    # location, and the record must survive the tree being moved.
+    return {"contract_managed": True, "manifest": MD.MANIFEST_NAME, **report}
 
 
 def _copy_original_input(input_path: Path, out: Path) -> str:
@@ -412,6 +492,13 @@ def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
     peptide = bool((resolved.get("solute") or {}).get("peptide", True))
     route = "peptide" if peptide else "ligand"
 
+    # The contract is checked BEFORE anything is built. A misconfigured dataset should cost a
+    # second, not a solvated system and a full parameterisation.
+    dataset_plan = _plan_dataset(resolved, out)
+    if dataset_plan["contract_managed"]:
+        log(f"dataset      : {dataset_plan['manifest']['dataset_id']} "
+            f"({dataset_plan['manifest']['role']}) at {dataset_plan['location']['path']}")
+
     log(f"input        : {input_path.name}")
     log(f"solvation    : {resolved['solvation']}"
         + (f" ({(resolved.get('implicit_solvent') or {}).get('model')}"
@@ -480,8 +567,9 @@ def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
            else f" + {(forcefield['implicit_solvent'] or {}).get('model')}"
                 f"/{(forcefield['implicit_solvent'] or {}).get('radii')}"))
 
+    dataset = _write_dataset_manifest(dataset_plan, echo=echo)
     write_yaml(out / "provenance.yaml", _provenance(
-        sys_config=document, resolved=resolved, out=out,
+        sys_config=document, resolved=resolved, out=out, dataset=dataset,
         original_relative=original_relative, original_sha256=sha256_file(input_path),
         system=system,
         payload={"topology_atoms": topology.getNumAtoms(),
@@ -511,7 +599,8 @@ def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
     if echo:
         print(f"  checksums    : {n} files in {CHECKSUM_MANIFEST}")
     return {"output_folder": str(out), "n_particles": system.getNumParticles(),
-            "n_solute_atoms": record["n_solute_atoms"], "implicit": implicit}
+            "n_solute_atoms": record["n_solute_atoms"], "implicit": implicit,
+            "dataset": dataset}
 
 
 def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, log: Log) -> dict:

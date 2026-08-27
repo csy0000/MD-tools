@@ -28,6 +28,7 @@ from openmm.app import CheckpointReporter, PDBFile, StateDataReporter
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
+import preflight
 from md_stages import (active_barostat_count, add_barostat, add_positional_restraint,
                        count_barostats, derive_seed, device_groups, make_simulation,
                        propagate_segment, require_parent_state, resolve_platform,
@@ -118,7 +119,17 @@ def visible_devices():
     return []
 
 
-def main():
+def main(argv=None):
+    check_only = "--check" in (sys.argv[1:] if argv is None else argv)
+    preflight.require(HERE, HERE.parent, INPUTS, CONFIG,
+                      label=f"REST2 per-tau equilibration "
+                            f"({'check only' if check_only else 'run'})",
+                      dynamics=not check_only)
+    if check_only:
+        print("[remd-eq] --check: preflight only. No dynamics ran and nothing was written.",
+              flush=True)
+        return 0
+
     platform_name = resolve_platform(os.environ.get("MD_PLATFORM") or None)
     taus = linear_tau_ladder(float(method["tau_min"]), float(method["tau_max"]), N_REPLICAS)
     steps = steps_for(float(method["equilibration_duration_ps"]), TIMESTEP_FS)
