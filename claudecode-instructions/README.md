@@ -5,6 +5,10 @@ root defines the durable rules that outlive any of them.
 
 ## Current
 
+- `20260827_final-md-data-integrity-correction.md` — **pending**; focused correction for
+  production-trajectory hashing, physical DCD truncation detection, route-aware force-field
+  preflight, current/parent stage fingerprints, template-commit provenance, AIS atom identity, and
+  a pinned public MD-data validator installation. No architecture redesign or long MD campaign.
 - `20260827_md-data-contract-preflight-and-iterload.md` — **executed 2026-08-27**; see
   `docs/journal/2026-08-27_md-data-contract-preflight-and-iterload.md`. Made generated projects
   optionally conform to MD-data dataset v1 using MD-data's own imported validator, added a shared
