@@ -487,11 +487,32 @@ def capability_summary(md_data: Optional[dict[str, Any]]) -> dict[str, Any]:
     `openmm_runtime_ready` is separate on purpose: a researcher doing unregistered local
     simulation has a working environment whether or not the contract validator is available, and
     collapsing the two would either block them or promise them something they did not get.
+
+    Readiness is passed through, NOT coerced. This used to read
+    `bool(md_data.get("contract_support_ready"))`, and `bool(None) is False` -- so a dry run, whose
+    canonical record correctly says `contract_support_ready: null`, produced a capability summary
+    saying contract support was unavailable. The record and the summary derived from it
+    contradicted each other. The CLI happened to look right because it tests `attempted is False`
+    before reading readiness, and a dry run is never persisted, so nothing downstream was wrong --
+    but a caller reading `result["capabilities"]` alone got the wrong answer.
+
+      True  -- ready
+      False -- evaluated, and unavailable
+      None  -- not evaluated
     """
     md_data = md_data or {}
+    readiness = md_data.get("contract_support_ready")
+    # Identity, not equality: `1 == True` in Python, so a membership test would let `1` and `0`
+    # through and store them as themselves. A record that says `1` instead of `true` is a record
+    # someone has to interpret.
+    if not any(readiness is state for state in (True, False, None)):
+        # Something wrote a value outside the contract. Refuse rather than guess: applying Python
+        # truthiness to it is exactly the mistake this function exists to have stopped making.
+        raise ValueError(
+            f"contract_support_ready must be True, False or None, not {readiness!r}")
     return {
         "openmm_runtime_ready": True,
-        "md_data_contract_support_ready": bool(md_data.get("contract_support_ready")),
+        "md_data_contract_support_ready": readiness,
         "md_data_unavailable_reasons": list(md_data.get("reasons") or []),
     }
 
@@ -886,7 +907,9 @@ def warnings_for(report: dict[str, Any]) -> list[str]:
     # the whole point: a researcher doing unregistered local simulation is unaffected, and one who
     # intended `dataset.enabled: true` needs to know now rather than at sys-gen.
     capabilities = report.get("capabilities") or {}
-    if capabilities and not capabilities.get("md_data_contract_support_ready"):
+    # Explicitly False, never None: "not evaluated" is not a failure, and warning about it would
+    # tell a user their dry run had a problem it never looked for.
+    if capabilities.get("md_data_contract_support_ready") is False:
         reasons = capabilities.get("md_data_unavailable_reasons") or ["no reason recorded"]
         notes.append(
             "MD-DATA CONTRACT SUPPORT UNAVAILABLE: the OpenMM runtime is ready and unregistered "

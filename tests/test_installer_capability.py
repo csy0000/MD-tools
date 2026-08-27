@@ -311,8 +311,10 @@ def test_the_dry_run_result_carries_the_structured_record(stack, monkeypatch):
     assert result["dry_run"] is True
     assert set(result["md_data"]) == set(installer._md_data_record(installer.md_data_pin()))
     assert result["md_data"]["attempted"] is False
+    # Both places, and both None. These two lines used to disagree with each other -- the record
+    # said None and the summary said False -- and this test asserted the contradiction.
     assert result["md_data"]["contract_support_ready"] is None
-    assert result["capabilities"]["md_data_contract_support_ready"] is False
+    assert result["capabilities"]["md_data_contract_support_ready"] is None
     assert "not evaluated" in result["md_data"]["reasons"][0]
 
 
@@ -376,3 +378,89 @@ def test_a_validation_record_round_trips_through_machine_yaml(stack, monkeypatch
     assert reloaded["capabilities"]["md_data_unavailable_reasons"] == md_data["reasons"]
     # The persisted record is what the reporter would speak from, and it is not a dry run.
     assert "not evaluated" not in _report(_environment(md_data, reloaded["capabilities"]))
+
+
+# --- 5. three states, and none of them collapsed ------------------------------------------------
+
+@pytest.mark.parametrize("readiness, expected_warning", [
+    (True, False),
+    (False, True),
+    (None, False),
+])
+def test_capability_summary_preserves_all_three_states(readiness, expected_warning):
+    """`bool(None) is False` turned "not evaluated" into "unavailable".
+
+    The summary is derived from the record, so a summary that disagrees with the record it came
+    from is wrong by construction -- whatever the CLI happens to print on top of it.
+    """
+    reasons = ["a reason"] if readiness is not True else []
+    summary = installer.capability_summary(
+        {"contract_support_ready": readiness, "reasons": reasons})
+
+    assert summary["md_data_contract_support_ready"] is readiness
+    assert summary["openmm_runtime_ready"] is True
+    assert summary["md_data_unavailable_reasons"] == reasons
+
+    notes = [note for note in installer.warnings_for(
+        {"cuda_available": True, "nvidia": {"present": True}, "capabilities": summary})
+        if "MD-DATA" in note]
+    assert bool(notes) is expected_warning, readiness
+    if expected_warning:
+        assert "a reason" in " ".join(notes)
+
+
+def test_an_unevaluated_readiness_is_not_warned_about():
+    """"Not evaluated" is not a failure. Warning about it reports a problem nobody looked for."""
+    summary = installer.capability_summary(
+        {"contract_support_ready": None,
+         "reasons": ["dry run: ... contract readiness was not evaluated"]})
+    notes = installer.warnings_for({"cuda_available": True, "nvidia": {"present": True},
+                                    "capabilities": summary})
+    assert not [note for note in notes if "MD-DATA" in note]
+    # The dry-run explanation is carried, but never relabelled as a reason it is unavailable.
+    assert summary["md_data_unavailable_reasons"] == [
+        "dry run: ... contract readiness was not evaluated"]
+    assert summary["md_data_contract_support_ready"] is not False
+
+
+def test_a_readiness_outside_the_contract_is_refused_not_coerced():
+    """Applying Python truthiness to an unexpected value is the mistake being corrected."""
+    with pytest.raises(ValueError, match="True, False or None"):
+        installer.capability_summary({"contract_support_ready": "maybe"})
+    with pytest.raises(ValueError):
+        installer.capability_summary({"contract_support_ready": 1})
+
+
+def test_the_dry_run_capability_agrees_with_its_own_record(stack, monkeypatch):
+    """End to end through the real command path: record and summary must say the same thing."""
+    monkeypatch.setattr(installer, "find_package_manager",
+                        lambda: ("micromamba", "/usr/bin/micromamba"))
+    monkeypatch.setattr(installer, "driver_cuda_ceiling", lambda: "13.0")
+    monkeypatch.setattr(installer.subprocess, "run",
+                        lambda *a, **k: pytest.fail("a dry run executed a subprocess"))
+
+    result = installer.install_openmm(stack, "8.6.0", dry_run=True)
+    assert (result["md_data"]["contract_support_ready"]
+            is result["capabilities"]["md_data_contract_support_ready"] is None)
+    # ...and nothing warns about it.
+    assert not [note for note in installer.warnings_for(result) if "MD-DATA" in note]
+
+
+def test_the_dry_run_cli_still_claims_neither_outcome(stack, monkeypatch):
+    code, text = _dry_run_cli(stack, monkeypatch)
+    assert code == 0
+    assert "md-data contract: not evaluated (dry run)" in text
+    assert "ready" not in text
+    assert "UNAVAILABLE" not in text
+
+
+@pytest.mark.parametrize("readiness, expected", [(True, "ready"), (False, "UNAVAILABLE")])
+def test_an_evaluated_result_still_reports_its_outcome(readiness, expected):
+    reasons = [] if readiness else ["md_data does not import"]
+    md_data = {"commit": MD.MD_DATA_COMMIT, "attempted": True,
+               "contract_support_ready": readiness, "reasons": reasons}
+    text = _report(_environment(md_data, installer.capability_summary(md_data)))
+    assert f"md-data contract: {expected}" in text
+    assert "not evaluated" not in text
+    for reason in reasons:
+        assert reason in text

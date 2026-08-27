@@ -5,9 +5,12 @@ root defines the durable rules that outlive any of them.
 
 ## Current
 
-- `20260827_preserve-unevaluated-capability-state.md` — **pending**; preserve `None` as the
-  unevaluated MD-data capability state instead of collapsing it to unavailable through `bool(None)`,
-  including the corresponding warning behavior. Unit-level correction only.
+- `20260827_preserve-unevaluated-capability-state.md` — **executed 2026-08-27**; see
+  `docs/journal/2026-08-27_preserve-unevaluated-capability-state.md`. Stopped
+  `capability_summary()` collapsing the three readiness states through `bool()` --
+  `bool(None) is False` made a dry run's "not evaluated" record produce an
+  "unavailable" summary that contradicted it -- and made `warnings_for()` warn only on
+  an explicit `False`, never on `None`.
 - `20260827_dry-run-and-validation-shape-finalization.md` — **executed 2026-08-27**; see
   `docs/journal/2026-08-27_dry-run-and-validation-shape-finalization.md`. Made the real
   `md-template install --dry-run` command reach the MD-data record it already knew how to
