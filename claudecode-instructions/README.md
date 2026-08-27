@@ -5,6 +5,9 @@ root defines the durable rules that outlive any of them.
 
 ## Current
 
+- `20260827_dry-run-and-validation-shape-finalization.md` — **pending**; make the real install
+  dry-run report MD-data readiness as not evaluated, and give installation and existing-environment
+  validation exactly the same canonical MD-data record shape. Unit-level correction only.
 - `20260827_installer-capability-and-hash-guard-correction.md` — **executed 2026-08-27**; see
   `docs/journal/2026-08-27_installer-capability-and-hash-guard-correction.md`. Gave every
   MD-data installation outcome one complete readiness record with nonempty reasons, made
