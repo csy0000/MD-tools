@@ -5,6 +5,9 @@ root defines the durable rules that outlive any of them.
 
 ## Current
 
+- `20260827_evidence-based-scientific-defaults.md` — change the method-development explicit
+  default to ff14SB/Sage 2.2.1/TIP3P, retain ff19SB/OPC as an option, document the implicit
+  scope, box/thermostat/barostat/HMR choices, and produce the cited scientific-rationale PDF.
 - `20260825_focused-scientific-runtime-correction.md` — the scientific and execution corrections to
   the generated scripts, the installer, CI and the working tree.
 - `20260825_eq-grouping-restart-gpu-correction.md` — equilibration grouped under `MD/eq/`, restart
