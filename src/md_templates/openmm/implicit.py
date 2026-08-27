@@ -254,7 +254,7 @@ def implicit_provenance(info: dict) -> dict:
 
 
 def build_amber_topology_via_tleap(pdb_path: Path, out_dir: Path, *, radii: str = "mbondi3",
-                                   protein_forcefield: str = "leaprc.protein.ff19SB") -> dict:
+                                   protein_forcefield: str = "leaprc.protein.ff14SB") -> dict:
     """Build prmtop/rst7 for a peptide or protein with tleap.
 
     `set default PBRadii mbondi3` is issued BEFORE `saveAmberParm`, which is what writes the radii
@@ -328,7 +328,12 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
     if route == "peptide":
         if pdb is None:
             raise ValueError("the peptide route needs a PDB input")
-        amber = build_amber_topology_via_tleap(pdb, staging, radii=radii)
+        # The configured force field, not a hardcoded default: this value is what pairs with the
+        # GB model, and it was previously ignored so every implicit peptide ran ff19SB regardless
+        # of what the configuration said.
+        protein_ff = (cfg.get("forcefield") or {}).get("protein") or "leaprc.protein.ff14SB"
+        amber = build_amber_topology_via_tleap(pdb, staging, radii=radii,
+                                               protein_forcefield=protein_ff)
         topology_source = amber["topology_pdb"]
     elif route == "ligand":
         amber = _amber_files_for_ligand(cfg, staging, smiles=smiles)

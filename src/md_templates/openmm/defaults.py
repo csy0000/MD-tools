@@ -39,6 +39,15 @@ def is_implicit(solvent: str) -> bool:
     return canonical_solvent(solvent) == "GBn2"
 
 
+#: Explicit solvent: ff19SB + OPC, the pairing ff19SB was parameterised for.
+EXPLICIT_PROTEIN_FORCEFIELD = "amber19-all.xml"
+#: Implicit GBn2: ff14SB, the force field GBn2 was developed and validated against. A tleap
+#: resource, because the implicit route builds its topology with tleap rather than an OpenMM XML.
+IMPLICIT_PROTEIN_FORCEFIELD = "leaprc.protein.ff14SB"
+#: Protein force fields known to be mismatched with a GB implicit-solvent model.
+GB_INCOMPATIBLE_PROTEIN = ("ff19SB", "amber19")
+
+
 def sys_defaults(*, peptide: bool = True, solvent: str = "OPC") -> dict[str, Any]:
     """System preparation settings.
 
@@ -61,8 +70,18 @@ def sys_defaults(*, peptide: bool = True, solvent: str = "OPC") -> dict[str, Any
             "ligand_charge_method": "am1bcc",
         },
         "forcefield": {
-            "protein": "amber19-all.xml",
-            "water": "opc.xml",
+            # The protein force field is chosen WITH the solvation model, not independently.
+            #
+            # ff19SB's amino-acid-specific CMAP corrections were fit in explicit OPC water, and
+            # no GB model has been reparameterised against them. GBn2 was developed and validated
+            # in the ff99SB/ff14SB lineage (Nguyen, Roe & Simmerling, JCTC 2013), so pairing it
+            # with ff19SB combines a backbone trained in explicit solvent with a solvation model
+            # tuned for a different one. ff14SB is the force field GBn2 was actually matched to.
+            #
+            # The value is also in the namespace the builder for this route consumes: an OpenMM
+            # XML for the explicit route, a tleap leaprc for the implicit one.
+            "protein": (IMPLICIT_PROTEIN_FORCEFIELD if implicit else EXPLICIT_PROTEIN_FORCEFIELD),
+            "water": None if implicit else "opc.xml",
         },
         "solvent": {
             "model": solvent if not implicit else "OPC",

@@ -1,6 +1,8 @@
 """Configuration files are generated correctly, and from ONE set of defaults."""
 from __future__ import annotations
 
+import pytest
+
 import yaml
 
 from md_templates.openmm import defaults as D
@@ -93,3 +95,67 @@ def test_output_dir_is_honoured(md_openmm, tmp_path):
     md_openmm("sys-config", "--output-dir", str(target))
     assert (target / "sys.config.yaml").is_file()
     assert (target / "md.config.yaml").is_file()
+
+
+# --- protein force field must match the solvation model ----------------------
+
+def test_implicit_gbn2_defaults_to_ff14sb_not_ff19sb():
+    """GBn2 was developed and validated against the ff99SB/ff14SB lineage.
+
+    ff19SB's amino-acid-specific CMAPs were fit in explicit OPC water and no GB model has been
+    reparameterised against them, so ff19SB + GBn2 mixes a backbone trained in explicit solvent
+    with a solvation model tuned for a different one.
+    """
+    from md_templates.openmm.defaults import sys_defaults
+
+    implicit = sys_defaults(solvent="GBn2")
+    assert implicit["forcefield"]["protein"] == "leaprc.protein.ff14SB"
+    assert implicit["forcefield"]["water"] is None, "implicit solvent has no water model"
+    assert "ff19SB" not in implicit["forcefield"]["protein"]
+
+
+def test_explicit_opc_still_uses_ff19sb():
+    """The pairing ff19SB WAS parameterised for is unchanged."""
+    from md_templates.openmm.defaults import sys_defaults
+
+    explicit = sys_defaults(solvent="OPC")
+    assert explicit["forcefield"]["protein"] == "amber19-all.xml"
+    assert explicit["forcefield"]["water"] == "opc.xml"
+
+
+def test_ff19sb_with_an_implicit_gb_model_is_refused():
+    """It would run and produce numbers, which is exactly why it must not be a warning."""
+    from md_templates.openmm.config import ConfigError, resolve_sys_config
+    from md_templates.openmm.defaults import sys_defaults
+
+    document = sys_defaults(solvent="GBn2")
+    document["forcefield"]["protein"] = "amber19-all.xml"
+    with pytest.raises(ConfigError) as error:
+        resolve_sys_config(document)
+
+    message = str(error.value)
+    assert "forcefield.protein" in message and "implicit_solvent.model" in message
+    assert "amber19-all.xml" in message and "GBn2" in message
+    assert "leaprc.protein.ff14SB" in message, "the message must name the matched pair"
+
+
+def test_the_matched_implicit_pair_resolves():
+    from md_templates.openmm.config import resolve_sys_config
+    from md_templates.openmm.defaults import sys_defaults
+
+    resolved = resolve_sys_config(sys_defaults(solvent="GBn2"))
+    assert resolved["forcefield"]["protein"] == "leaprc.protein.ff14SB"
+    assert resolved["implicit_solvent"] == {"model": "GBn2", "radii": "mbondi3"}
+
+
+def test_the_configured_protein_force_field_reaches_tleap():
+    """It was ignored: every implicit peptide ran ff19SB whatever the configuration said."""
+    import inspect
+
+    from md_templates.openmm import implicit
+
+    source = inspect.getsource(implicit.build_implicit_bundle_inputs)
+    assert "protein_forcefield=protein_ff" in source, \
+        "tleap must be given the configured force field, not a hardcoded default"
+    signature = inspect.signature(implicit.build_amber_topology_via_tleap)
+    assert signature.parameters["protein_forcefield"].default == "leaprc.protein.ff14SB"

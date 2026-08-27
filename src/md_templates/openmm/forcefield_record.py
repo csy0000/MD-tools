@@ -138,11 +138,10 @@ def _protein_record(*, implicit, is_ligand, reported, requested, implicit_report
                 "note": "the ligand-only route loads no protein force field"}
     if implicit:
         return {
-            "forcefield": implicit_report.get("protein_forcefield", "leaprc.protein.ff19SB"),
+            "forcefield": implicit_report.get("protein_forcefield"),
             # No OpenMM protein XML is loaded on this route; tleap writes the topology.
             "openmm_resource": None,
-            "tleap_resource": implicit_report.get("protein_forcefield",
-                                                  "leaprc.protein.ff19SB"),
+            "tleap_resource": implicit_report.get("protein_forcefield"),
         }
     loaded = reported.get("protein_forcefield")
     return {"forcefield": loaded or requested.get("protein"),

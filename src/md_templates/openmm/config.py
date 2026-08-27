@@ -75,7 +75,40 @@ def resolve_sys_config(document: dict[str, Any]) -> dict[str, Any]:
         resolved.pop("implicit_solvent", None)
 
     _check_constraints(resolved)
+    _check_protein_solvation_pairing(resolved)
     return resolved
+
+
+def _check_protein_solvation_pairing(resolved: dict[str, Any]) -> None:
+    """Refuse a protein force field that was not parameterised for this solvation model.
+
+    ff19SB's amino-acid-specific CMAPs were fit in explicit OPC water, and no GB model has been
+    reparameterised against them; GBn2 was developed and validated in the ff99SB/ff14SB lineage.
+    Running the pair produces numbers, which is exactly the problem -- nothing fails, and the
+    result silently describes a Hamiltonian nobody validated.
+
+    This is refused rather than warned about because a warning in a log is not read by whoever
+    reads the trajectory a year later.
+    """
+    from .defaults import GB_INCOMPATIBLE_PROTEIN, IMPLICIT_PROTEIN_FORCEFIELD
+
+    if resolved.get("solvation") != "implicit":
+        return
+    protein = str((resolved.get("forcefield") or {}).get("protein") or "")
+    model = (resolved.get("implicit_solvent") or {}).get("model")
+    if not protein:
+        return
+    if any(marker.lower() in protein.lower() for marker in GB_INCOMPATIBLE_PROTEIN):
+        raise ConfigError(
+            f"forcefield.protein = {protein!r} is not parameterised for implicit_solvent.model = "
+            f"{model!r}.\n"
+            f"  ff19SB's amino-acid-specific CMAP corrections were fit in explicit OPC water, and "
+            f"no GB model has been reparameterised against them. GBn2 was developed and validated "
+            f"with the ff99SB/ff14SB lineage, so this pair mixes a backbone trained in explicit "
+            f"solvent with a solvation model tuned for a different one.\n"
+            f"  Use the matched pair:\n"
+            f"      forcefield.protein: {IMPLICIT_PROTEIN_FORCEFIELD}\n"
+            f"  or switch to explicit solvent, where ff19SB belongs.")
 
 
 def _check_constraints(resolved: dict[str, Any]) -> None:

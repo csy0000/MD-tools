@@ -310,6 +310,11 @@ md-openmm md-gen -if ./inputs/ --config md.config.yaml -of ./MD/
 cd MD && ./run_all.sh
 ```
 
+The protein force field is chosen **with** the solvation model: implicit GBn2 uses
+`leaprc.protein.ff14SB`, the force field GBn2 was developed and validated against, while explicit
+OPC uses ff19SB. ff19SB's amino-acid-specific CMAPs were fit in explicit water and no GB model has
+been reparameterised against them, so `sys-gen` refuses that pair rather than running it.
+
 The chain here is `minimization -> eq/nvt_1kcal -> eq/nvt_free -> cMD`: no NPT stage, and no
 barostat anywhere, because a non-periodic system has no box to control.
 
