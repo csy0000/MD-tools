@@ -58,66 +58,125 @@ def test_the_source_record_carries_bounded_observations_not_a_digest(prepared_ai
     assert record["tau"] == 0.5 and record["tau_route"]
 
 
+#: The subprocess guard. Injected as a `sitecustomize` on PYTHONPATH so it is installed before the
+#: generated `run.py` imports anything.
+#:
+#: It wraps `pathlib.Path.open`, NOT `builtins.open`. The generated `sha256_file()` does
+#: `Path(path).open("rb")`, and `pathlib.Path.open` delegates to `io.open` -- which is a separate
+#: reference from `builtins.open`, so rebinding the builtin intercepts nothing. The earlier version
+#: of this test patched the builtin and therefore proved nothing at all: it would have passed with
+#: the production source hashed on every run.
+#:
+#: Path-specific and caller-specific: the forbidden trajectory may be opened freely by
+#: `mdtraj.iterload`, and is rejected only when the call comes from `sha256_file`. Named small
+#: files still hash normally.
+_HASH_GUARD = '''
+import pathlib
+import traceback
+
+FORBIDDEN = pathlib.Path(%r).resolve()
+MARK = pathlib.Path(__file__).with_name("_guard")
+MARK.write_text("installed")
+
+_real_open = pathlib.Path.open
+
+
+def _guarded_open(self, *args, **kwargs):
+    try:
+        same = self.resolve() == FORBIDDEN
+    except Exception:
+        same = False
+    if same:
+        # Only hashing is forbidden. iterload opens the same file and must keep working.
+        frames = traceback.extract_stack()
+        if any(frame.name == "sha256_file" for frame in frames):
+            MARK.write_text("TRIGGERED")
+            raise AssertionError("the production source was passed to sha256_file")
+    return _real_open(self, *args, **kwargs)
+
+
+pathlib.Path.open = _guarded_open
+'''
+
+
 @pytest.mark.gpu
 @pytest.mark.slow
 def test_the_production_source_is_never_passed_to_the_hashing_helper(tiny_ais_project):
-    """PATH-SPECIFIC, not size-based.
+    """PATH-SPECIFIC and CALLER-SPECIFIC, and it intercepts the route the code actually takes.
 
-    The previous version of this test raised only after 4 MB had been fed to SHA-256, while the
-    fixture's source trajectory is ~288 kB. It would have passed with the source being hashed on
-    every run, which makes it worse than no test: it reported a guarantee it never checked.
+    Two halves, with the SAME guard, because a guard that never fires is indistinguishable from a
+    guard that does not work:
 
-    This guard rejects the exact resolved source path and nothing else, so hashing it fails
-    regardless of how small it is, while the named small prepared-system files are still hashed
-    normally.
+      1. the generated `sha256_file` is applied to the production trajectory deliberately -- the
+         guard must fire and leave `TRIGGERED`;
+      2. a real AIS preparation runs -- the guard must NOT fire, `sources.dcd` must be produced,
+         and `trajectory_sha256` must stay null.
     """
     project, environment = tiny_ais_project
     source = (project / "cMD" / "whole_system.dcd").resolve()
     assert source.is_file()
-    shutil.rmtree(project / "AIS" / "inputs")     # force preparation to read the source again
 
-    guard = project / "AIS" / "sitecustomize.py"
-    guard.write_text(
-        "import pathlib\n"
-        "FORBIDDEN = pathlib.Path(%r)\n"
-        "MARK = pathlib.Path(__file__).with_name('_guard')\n"
-        "MARK.write_text('installed')\n"
-        "import builtins\n"
-        "_real_open = builtins.open\n"
-        "def open(file, *a, **k):\n"
-        "    try:\n"
-        "        same = pathlib.Path(file).resolve() == FORBIDDEN\n"
-        "    except Exception:\n"
-        "        same = False\n"
-        "    if same:\n"
-        "        import traceback\n"
-        "        stack = ''.join(traceback.format_stack())\n"
-        "        if 'sha256_file' in stack or 'hashlib' in stack:\n"
-        "            MARK.write_text('TRIGGERED')\n"
-        "            raise AssertionError('the production source was opened for hashing')\n"
-        "    return _real_open(file, *a, **k)\n"
-        "builtins.open = open\n" % str(source))
+    ais = project / "AIS"
+    guard = ais / "sitecustomize.py"
+    mark = ais / "_guard"
+    guard.write_text(_HASH_GUARD % str(source))
+    patched = dict(environment, PYTHONPATH=str(ais))
+
     try:
-        result = subprocess.run(
-            ["bash", "run.sh"], cwd=str(project / "AIS"), capture_output=True, text=True,
-            env=dict(environment, PYTHONPATH=str(project / "AIS")), timeout=1800)
-        mark = (project / "AIS" / "_guard")
-        assert mark.is_file(), "the guard never installed, so this test proved nothing"
-        assert mark.read_text() == "installed", "the production source was hashed"
-        assert result.returncode == 0, result.stdout + result.stderr
-        assert "opened for hashing" not in result.stdout + result.stderr
+        # 1. The guard fires on the real generated helper, reached the way the runtime reaches it.
+        probe = subprocess.run(
+            [sys.executable, "-c",
+             "import runpy, pathlib, sys\n"
+             "module = runpy.run_path('run.py', run_name='_probe')\n"
+             "try:\n"
+             "    module['sha256_file'](pathlib.Path(%r))\n"
+             "except AssertionError as error:\n"
+             "    print('GUARD:', error)\n"
+             "    sys.exit(0)\n"
+             "print('NOT GUARDED')\n"
+             "sys.exit(1)\n" % str(source)],
+            cwd=str(ais), capture_output=True, text=True, env=patched, timeout=600)
+        assert mark.is_file(), "the guard never installed"
+        assert probe.returncode == 0, probe.stdout + probe.stderr
+        assert "GUARD: the production source was passed to sha256_file" in probe.stdout
+        assert mark.read_text() == "TRIGGERED", "the guard did not intercept Path.open"
 
-        # ...and the selected frames were still prepared, through bounded iterload.
-        record = yaml.safe_load((project / "AIS" / "inputs" / "sources.yaml").read_text())
+        # 2. The same guard, and a real preparation that must not touch it.
+        mark.write_text("installed")
+        shutil.rmtree(ais / "inputs")
+        result = subprocess.run(["bash", "run.sh"], cwd=str(ais), capture_output=True, text=True,
+                                env=patched, timeout=1800)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert mark.read_text() == "installed", "AIS preparation hashed the production source"
+        assert "passed to sha256_file" not in result.stdout + result.stderr
+
+        record = yaml.safe_load((ais / "inputs" / "sources.yaml").read_text())
         assert record["n_paths"] == 2
         assert record["source"]["loader"] == "mdtraj.iterload"
         assert record["source"]["trajectory_sha256"] is None
-        assert struct.unpack("<i", (project / "AIS" / "inputs" / "sources.dcd")
-                             .read_bytes()[8:12])[0] == 2
+        assert (ais / "inputs" / "sources.dcd").is_file()
+        assert struct.unpack("<i", (ais / "inputs" / "sources.dcd").read_bytes()[8:12])[0] == 2
     finally:
         guard.unlink(missing_ok=True)
-        (project / "AIS" / "_guard").unlink(missing_ok=True)
-        shutil.rmtree(project / "AIS" / "__pycache__", ignore_errors=True)
+        mark.unlink(missing_ok=True)
+        shutil.rmtree(ais / "__pycache__", ignore_errors=True)
+
+
+def test_patching_builtins_open_would_not_have_intercepted_path_open():
+    """Why the previous guard proved nothing, kept as a regression against reintroducing it."""
+    import builtins
+    import io
+
+    real = builtins.open
+    seen = []
+    builtins.open = lambda *a, **k: (seen.append(1), real(*a, **k))[1]
+    try:
+        with Path(__file__).open("rb") as handle:
+            handle.read(1)
+        assert not seen, "Path.open went through builtins.open after all"
+        assert io.open is not builtins.open
+    finally:
+        builtins.open = real
 
 
 def test_the_hashing_guard_would_actually_fire(tmp_path):

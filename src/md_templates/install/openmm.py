@@ -84,31 +84,71 @@ def md_data_pin() -> dict[str, str]:
             "requirement": contract.md_data_requirement()}
 
 
+def _md_data_record(pin: dict[str, str], **fields: Any) -> dict[str, Any]:
+    """One shape for every MD-data outcome, so a caller never has to ask which keys exist.
+
+    The bug this closes: a failed pip install returned `{"installed": False, "error": ...}` with no
+    `reasons` and no `contract_support_ready`, while `warnings_for()` reads `reasons` to tell the
+    user what went wrong. The failure was recorded and then displayed as an empty list.
+    """
+    record = {
+        **pin,
+        "attempted": None,
+        "command": None,
+        "returncode": None,
+        "installed": None,
+        "installed_version": None,
+        "installed_commit": None,
+        "installed_source": None,
+        "source_kind": None,
+        "commit_verified": False,
+        "contract_support_ready": False,
+        "reasons": [],
+        "error": None,
+        "note": None,
+    }
+    record.update(fields)
+    return record
+
+
 def install_md_data(prefix: Path, *, dry_run: bool = False) -> dict[str, Any]:
     """Install the pinned MD-data validator into a created environment.
 
     Optional by design: `dataset.enabled` is off by default and an unregistered local project
     never needs it. But a user who follows the documented installation and then meets "md-data is
     not installed" at `sys-gen`, an hour into preparing a system, has been told the wrong thing
-    about what was installed. So it is attempted, its outcome is recorded either way, and a
-    failure is a WARNING rather than a failed installation.
+    about what was installed. So it is attempted, its outcome is recorded either way in ONE shape,
+    and a failure is a WARNING rather than a failed installation.
     """
     pin = md_data_pin()
     command = [str(Path(prefix) / "bin" / "pip"), "install", pin["requirement"]]
-    record = {**pin, "command": command, "attempted": not dry_run}
     if dry_run:
-        return {**record, "installed": None,
-                "note": "dry run: the specification was constructed but not executed"}
+        # Neither success nor failure: nothing was installed, so readiness is not a question that
+        # has an answer yet. Saying `contract_support_ready: false` here would read as a failure.
+        return _md_data_record(
+            pin, attempted=False, command=command, contract_support_ready=None,
+            reasons=["dry run: the pinned specification was constructed but not executed, so "
+                     "contract readiness was not evaluated"],
+            note="dry run: readiness not evaluated")
+
     result = subprocess.run(command, capture_output=True, text=True)
-    record["returncode"] = result.returncode
     if result.returncode != 0:
+        error = (result.stderr or result.stdout)[-800:].strip()
         # The repository may be private, or the machine offline. Neither makes the OpenMM
-        # environment unusable, and neither is something to paper over.
-        record.update({"installed": False,
-                       "error": (result.stderr or result.stdout)[-800:].strip()})
-        return record
-    record["installed"] = True
-    return {**record, **verify_md_data(prefix)}
+        # environment unusable, and neither is something to paper over -- so the reason lands in
+        # `reasons`, which is what the console and machine.yaml actually read.
+        return _md_data_record(
+            pin, attempted=True, command=command, returncode=result.returncode,
+            installed=False, commit_verified=False, contract_support_ready=False,
+            error=error,
+            reasons=[f"installing the pinned validator failed (pip exit {result.returncode}): "
+                     f"{error.splitlines()[-1] if error else 'no output'}",
+                     f"install it manually with: pip install '{pin['requirement']}'"])
+
+    verified = verify_md_data(prefix)
+    return _md_data_record(pin, attempted=True, command=command,
+                           returncode=result.returncode, installed=True,
+                           **{k: v for k, v in verified.items() if k not in pin})
 
 
 #: The probe, run inside the TARGET environment. It reports what is installed there, including
@@ -408,26 +448,50 @@ def install_openmm(stack: Path, version: str = "8.6.0", *,
 
     # The MD-data validator the contract-managed workflow needs. Attempted here so the documented
     # installation delivers what the documentation advertises, and recorded either way.
+    # `install_md_data` already verifies on success and carries its own reasons on failure, so
+    # there is nothing to re-run or patch up here.
     md_data = install_md_data(prefix)
-    if not md_data.get("contract_support_ready"):
-        # The install may have failed outright, or succeeded from a source that cannot be shown to
-        # be the pin. Either way the verification is re-run so the record says what is on disk.
-        md_data = {**md_data, **verify_md_data(prefix)} if md_data.get("installed") else md_data
-    lines += ["", "# md-data (pinned)", "$ " + " ".join(md_data.get("command", [])),
+    lines += ["", "# md-data (pinned)", "$ " + " ".join(md_data.get("command") or []),
               repr(md_data)]
     check["md_data"] = md_data
     # Three states, never collapsed into one. A researcher who only wants unregistered local
     # simulation has a working installation even when contract support is unavailable, and saying
     # otherwise would either block them or promise them something they did not get.
-    check["capabilities"] = {
-        "openmm_runtime_ready": True,
-        "md_data_contract_support_ready": bool(md_data.get("contract_support_ready")),
-        "md_data_unavailable_reasons": list(md_data.get("reasons") or []),
-    }
+    check["capabilities"] = capability_summary(md_data)
     log.write_text("\n".join(lines), encoding="utf-8")
 
     record = record_environment(stack, prefix, check, log=log, version=version)
     return {"prefix": str(prefix), "log": str(log), "record": record, **check}
+
+
+def capability_summary(md_data: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """The three states, in one place, so installation and validation cannot disagree.
+
+    `openmm_runtime_ready` is separate on purpose: a researcher doing unregistered local
+    simulation has a working environment whether or not the contract validator is available, and
+    collapsing the two would either block them or promise them something they did not get.
+    """
+    md_data = md_data or {}
+    return {
+        "openmm_runtime_ready": True,
+        "md_data_contract_support_ready": bool(md_data.get("contract_support_ready")),
+        "md_data_unavailable_reasons": list(md_data.get("reasons") or []),
+    }
+
+
+def _yaml_safe(value: Any) -> Any:
+    """Plain data only. A machine.yaml is read months later by something that is not this code.
+
+    Subprocess results and exceptions stringify into something unparseable and unstable, so
+    anything that is not a plain container, string, number, bool or None becomes its `str()`.
+    """
+    if isinstance(value, dict):
+        return {str(key): _yaml_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_yaml_safe(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
 
 
 def record_environment(stack: Path, prefix: Path, check: dict[str, Any], *,
@@ -455,6 +519,11 @@ def record_environment(stack: Path, prefix: Path, check: dict[str, Any], *,
         "plugin_load_failures": check.get("plugin_load_failures"),
         "problems": check.get("problems"),
         "warnings": check.get("warnings"),
+        # The whole MD-data result and the capability summary, not a selection of them. Dropping
+        # these meant the one durable record of what this environment can do said nothing about
+        # whether contract-managed generation would work.
+        "md_data": _yaml_safe(check.get("md_data")),
+        "capabilities": _yaml_safe(check.get("capabilities")),
         "validated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     if log is not None:
@@ -475,9 +544,17 @@ def validate_existing(stack: Path, prefix: Path, *, version: str = "") -> dict[s
     different OpenMM gets the facts reported, and nothing refused, which is what
     `--validate` is for.
     """
-    check = verify_environment(Path(prefix).resolve(), version=version)
-    record = record_environment(stack, Path(prefix).resolve(), check)
-    return {"prefix": str(Path(prefix).resolve()), "record": record, **check}
+    prefix = Path(prefix).resolve()
+    check = verify_environment(prefix, version=version)
+    # Validation answers the same question installation does, so it records the same shape. An
+    # environment validated later must not produce a machine.yaml a reader has to special-case.
+    md_data = verify_md_data(prefix)
+    check["md_data"] = md_data
+    check["capabilities"] = capability_summary(md_data)
+    check["warnings"] = list(check.get("warnings") or []) + [
+        note for note in warnings_for(check) if "MD-DATA" in note]
+    record = record_environment(stack, prefix, check)
+    return {"prefix": str(prefix), "record": record, **check}
 
 
 #: Runs INSIDE the environment being validated, so it must import nothing from this package and

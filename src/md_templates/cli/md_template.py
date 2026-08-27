@@ -84,10 +84,48 @@ def _report_environment(result: dict) -> None:
     print(f"  reference     : {result.get('reference_check')}")
     print(f"  cpu           : {result.get('cpu_check')}")
     print(f"  cuda          : {result.get('cuda_check')}")
+    _report_md_data(result)
     for note in result.get("warnings") or []:
+        if "MD-DATA CONTRACT SUPPORT UNAVAILABLE" in note:
+            continue                    # already stated above, in its own section
         print(f"  note          : {note}")
     print()
     print("Recorded in machine.yaml under `installed.openmm`.")
+
+
+def _report_md_data(result: dict) -> None:
+    """Whether contract-managed generation will work, said plainly and never buried.
+
+    "OpenMM installed successfully" and "MD-data contract generation is ready" are different
+    claims, and the console has to make them impossible to confuse: a user who reads the first and
+    assumes the second discovers the difference at `sys-gen`, after preparing a system.
+    """
+    md_data = result.get("md_data") or {}
+    capabilities = result.get("capabilities") or {}
+    if not md_data and not capabilities:
+        return
+
+    ready = capabilities.get("md_data_contract_support_ready")
+    if md_data.get("attempted") is False:
+        print("  md-data contract: not evaluated (dry run)")
+        return
+    print(f"  md-data contract: {'ready' if ready else 'UNAVAILABLE'}")
+
+    pinned = md_data.get("commit")
+    if pinned:
+        print(f"    pinned commit : {pinned}")
+    if md_data.get("installed_version"):
+        print(f"    installed     : md-data {md_data['installed_version']}"
+              + (f" from {md_data.get('source_kind')}" if md_data.get("source_kind") else ""))
+    if md_data.get("installed_commit"):
+        print(f"    source commit : {md_data['installed_commit']}")
+    if ready:
+        return
+    for reason in (capabilities.get("md_data_unavailable_reasons")
+                   or md_data.get("reasons") or ["no reason recorded"]):
+        print(f"    reason        : {reason}")
+    print("    consequence   : unregistered local simulation is unaffected; "
+          "`dataset.enabled: true` will fail before building a system.")
 
 
 def cmd_install(args) -> int:

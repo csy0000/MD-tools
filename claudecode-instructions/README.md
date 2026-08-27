@@ -5,9 +5,14 @@ root defines the durable rules that outlive any of them.
 
 ## Current
 
-- `20260827_installer-capability-and-hash-guard-correction.md` — **pending**; persist and display
-  MD-data contract readiness and its failure reasons, and make the subprocess AIS hashing guard
-  intercept the exact `Path.open` route used by the generated helper. No scientific-runtime change.
+- `20260827_installer-capability-and-hash-guard-correction.md` — **executed 2026-08-27**; see
+  `docs/journal/2026-08-27_installer-capability-and-hash-guard-correction.md`. Gave every
+  MD-data installation outcome one complete readiness record with nonempty reasons, made
+  `md-template install` print `md-data contract: ready` or `UNAVAILABLE` with its reasons,
+  persisted the `md_data` and `capabilities` records in `machine.yaml` (and made
+  `validate_existing` record the same shape), and corrected the AIS hashing guard, which
+  patched `builtins.open` while the generated `sha256_file` uses `Path.open` and so
+  intercepted nothing.
 - `20260827_provenance-and-contract-readiness-correction.md` — **executed 2026-08-27**; see
   `docs/journal/2026-08-27_provenance-and-contract-readiness-correction.md`. Made one canonical
   template identity propagate through every generated record, refused dirty contract-managed
