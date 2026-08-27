@@ -5,6 +5,9 @@ root defines the durable rules that outlive any of them.
 
 ## Current
 
+- `20260827_installer-capability-and-hash-guard-correction.md` — **pending**; persist and display
+  MD-data contract readiness and its failure reasons, and make the subprocess AIS hashing guard
+  intercept the exact `Path.open` route used by the generated helper. No scientific-runtime change.
 - `20260827_provenance-and-contract-readiness-correction.md` — **executed 2026-08-27**; see
   `docs/journal/2026-08-27_provenance-and-contract-readiness-correction.md`. Made one canonical
   template identity propagate through every generated record, refused dirty contract-managed
