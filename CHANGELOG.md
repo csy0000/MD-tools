@@ -71,8 +71,36 @@ worker process, checkpoint or trajectory exists. There is no flag to skip it.
   agree one-to-one. **A truncated or deleted DCD beside a healthy JSON and CSV is now reported and
   rerun instead of skipped.**
 
+**AIS starting configurations are a durable input.** Before any path runs, the selected frames are
+written to `AIS/inputs/sources.dcd` (one frame per path, box vectors already reduced) with an
+`AIS/inputs/sources.yaml` record saying where each came from. They are not deleted at the end.
+
+* After preparation **the source trajectory is never opened again**. A 200 GB production DCD can be
+  archived or deleted and a failed path still reruns — proved by a test that deletes the source and
+  reruns. The run consumes the prepared inputs, so what is archived is exactly what ran.
+* Prepared inputs that disagree with the configuration (window, seed, path count, `tau_start`,
+  trajectory, replacement) are **refused**, naming the changed field. They are never silently
+  re-prepared: that would delete the configurations a finished path was started from. A truncated
+  `sources.dcd` is refused the same way.
+* `sources.dcd` holds **positions and box vectors only** — no velocities, deliberately. `mdtraj`
+  cannot store them, and AIS does not want them: each path draws fresh Maxwell-Boltzmann momenta
+  from its own recorded `velocity_seed`, which the canonical distribution's factorisation makes
+  correct, which `setVelocitiesToTemperature` makes constraint-satisfying, and which reproduces
+  from four bytes rather than a coordinate-sized blob. `sources.yaml` records this in
+  `velocities.note`, because a directory of starting configurations is exactly where someone would
+  look for velocities and be quietly wrong about what they got. These are starting configurations;
+  a `final_state.xml` is a restart.
+* `sources.yaml` records `minimum_frame_gap` and `minimum_time_gap_ps`. Nothing enforces a spacing,
+  but two paths starting a few femtoseconds apart are not the independent realisations the work CSV
+  makes them look like, and now that is visible rather than inferred.
+* Box vectors are stored as exact reduced numbers in the YAML. The DCD also carries a cell for
+  viewers, but the propagation box is never recovered from its lengths and angles.
+* Path evidence — `tau_evidence` and the frame-timing record — is now written relative to the
+  project rather than absolutely, so an AIS record survives the tree being moved.
+
 **Migration.** None required. `dataset.enabled` defaults to `false`, and a project generated before
-this change keeps working unchanged. Existing AIS configurations reading a source produced by this
+this change keeps working unchanged. An AIS directory generated before this change re-prepares its
+inputs on the next run. Existing AIS configurations reading a source produced by this
 repository keep working; one reading an external trajectory must now state `source_tau`.
 
 ## Unreleased — AIS, and two closed release gaps

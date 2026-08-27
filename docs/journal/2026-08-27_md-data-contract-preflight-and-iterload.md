@@ -125,6 +125,66 @@ the right number of rows, `observations.dcd` exists, and its frame count equals 
 one-to-one. The DCD frame count comes from a 100-byte header read, not from a reader — OpenMM has
 no DCD reader and `openmm.app.DCDFile` is write-only.
 
+## 4. AIS starting configurations as a durable input
+
+Added after the first review pass, on the observation that mdtraj can write as well as read: the
+selected frames are materialised once, before any path runs, into `AIS/inputs/sources.dcd` plus an
+`AIS/inputs/sources.yaml` record, and are not deleted at the end.
+
+The gain is not memory — the two-pass `iterload` already bounded retention. It is **decoupling**.
+After preparation the source trajectory is never opened again, so a 200 GB production DCD can be
+archived or deleted and a failed path still reruns. And because the run reads the prepared inputs
+rather than the source, what gets archived is exactly what ran. That is the same argument as
+keeping `inputs/` beside the trajectories: a set of work values without the configurations they
+started from cannot say what it annealed away from.
+
+Disagreement is refused rather than papered over. If the record was prepared for a different
+window, seed, path count, `tau_start`, source trajectory or replacement setting, the run stops and
+names the changed field. Silently re-preparing would delete the configurations a finished path was
+started from; silently reusing would label the result with a configuration that did not produce it.
+A truncated `sources.dcd` is refused the same way.
+
+### Why no velocities
+
+The obvious next thought — "write restart files" — is the one thing that must not happen here, for
+three reasons in increasing order of importance.
+
+`mdtraj.Trajectory` has no velocity field at all, so no mdtraj writer could store them. That is a
+hard limit, but it is the least interesting one.
+
+Generated momenta satisfy the constraints. This system has 183 of them — every X–H bond plus rigid
+water. `Context.setVelocitiesToTemperature` draws Maxwell-Boltzmann *and applies the velocity
+constraints*; measured on a two-particle system with one rigid bond, the relative velocity along
+the constrained bond comes back exactly `0.0`. Velocities read from a file and set raw satisfy no
+constraints unless constrained again, and forgetting does not crash anything — the path just starts
+with energy in modes that are supposed to be frozen and bleeds it out through the thermostat,
+contaminating the beginning of the work accumulation. A silent failure.
+
+And AIS does not want them. Each path is meant to be an independent realisation. The canonical
+distribution factorises, so an equilibrium configuration plus an independent momentum draw is a
+proper sample of the full ensemble; drawing fresh momenta from a per-path recorded seed makes the
+paths independent *by construction* rather than by how far apart their source frames happened to
+land. It also makes the record self-contained: `velocity_seed: 1420193027` is four bytes that
+regenerate the draw exactly, where stored velocities are a coordinate-sized blob the record then
+depends on.
+
+`sources.yaml` states all of this in a `velocities.note`, because a directory of starting
+configurations is precisely where someone would look for velocities and be quietly wrong about what
+they found. A restart in this repository is a `final_state.xml` and does carry them; the two words
+are not interchangeable and the record says so.
+
+### Two smaller things this surfaced
+
+`sources.yaml` records `minimum_frame_gap` and `minimum_time_gap_ps` — how close the two closest
+starting frames came. Nothing enforces a spacing, and this change does not add one. But two paths
+beginning a few femtoseconds apart are two nearly identical configurations whose work values are
+not the independent samples the CSV makes them look like, and that is now visible rather than
+something a reader has to reconstruct.
+
+Box vectors are stored in the YAML as exact reduced numbers. The DCD also carries a cell so the
+file opens in a viewer, but DCD stores lengths and angles, and recovering a reduced triclinic cell
+from them is a precision question the propagation box does not need to have.
+
 ## Evidence
 
 Environment: `/path/to/software/md-stack/envs/openmm-8.6.0` — conda-forge `openmm
@@ -227,6 +287,38 @@ Rerun with everything intact:
 [AIS 0000] already complete: 21 observations, 21 DCD frame(s), endpoints 0.5 -> 0.0. Nothing was run.
 ```
 
+### Prepared inputs, and the source going away
+
+```text
+AIS/inputs/sources.dcd    7464 bytes, 3 frames, 193 atoms
+AIS/inputs/sources.yaml   n_paths: 3, velocities.stored: false,
+                          minimum_frame_gap: 33, minimum_time_gap_ps: 0.066
+```
+
+With `cMD/whole_system.dcd` **deleted** and `trajectory_0000` removed:
+
+```text
+[PASS] AIS inputs      3 prepared configuration(s) in inputs/sources.dcd, 193 atoms;
+                       the source trajectory is not needed
+[PASS] AIS source tau  tau = 0.5 from companion record, recorded when the inputs were
+                       prepared, matches path.tau_start
+[PASS] AIS velocities  not stored; drawn per path from a recorded seed at the common temperature
+[PASS] AIS selection   frames [89, 10, 43] from 120 eligible; closest pair 0.066 ps apart
+[AIS 0000] complete: 21 observations, 40 integration steps
+[AIS 0001] already complete: ... Nothing was run.
+```
+
+The rerun started from the same frame 89 the first run did. With the source gone *and* no prepared
+inputs, the run refuses instead — which is the correct remaining failure.
+
+Editing `selection.window_ps` in the record and rerunning:
+
+```text
+[FAIL] AIS inputs  inputs/sources.yaml was prepared for a different calculation: window_ps changed
+```
+
+`AIS/inputs/sources.yaml` and `AIS/resolved_run.yaml` contain **0** occurrences of the storage root.
+
 Rerun after rewriting path 0000's DCD header to claim 7 frames:
 
 ```text
@@ -255,6 +347,12 @@ Two pre-existing tests were corrected rather than worked around:
 
 ## Limitations
 
+* **AIS work is not bit-reproducible on CUDA.** Two consecutive reruns of the same path, with the
+  same seeds and the same starting configuration and nothing changed between them, differ in the
+  8th significant figure of the accumulated work (`-3.5196570547` vs `-3.5196633634` kJ/mol at
+  observation 1). That is CUDA mixed-precision accumulation order, not the prepared inputs — it was
+  measured as a control precisely because the prepared-input round trip could have been blamed for
+  it. It is a pre-existing property of the runtime, but it was not written down before.
 * **`iterload` bounds retention, not RSS.** The two-pass design guarantees that at most one chunk
   plus the selected frames is *held*, and the chunk size is fixed at 50. It does not measure peak
   process memory, and mdtraj's own buffering inside a chunk is not instrumented. The claim is

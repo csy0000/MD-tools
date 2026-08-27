@@ -95,6 +95,15 @@ def utc_now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def relative_to_project(path):
+    """A path as written into a record: relative to the generated project, never absolute."""
+    path = Path(path).resolve()
+    try:
+        return str(path.relative_to(PROJECT))
+    except ValueError:
+        return str(path)
+
+
 def derive_seed(base, *purpose):
     """The same derivation every other generated script uses, so seeds are comparable across runs.
 
@@ -244,7 +253,7 @@ def source_frame_timing(trajectory, n_frames):
             interval = float(mapping["frame_interval_ps"])
             times = [first + index * interval for index in range(n_frames)]
             return times, {"route": "companion_record",
-                           "record": str(record_path),
+                           "record": relative_to_project(record_path),
                            "first_frame_time_ps": first, "frame_interval_ps": interval,
                            "convention": mapping.get("convention"),
                            "source": f"{record_path.name} trajectories.whole_system.frame_time_map"}
@@ -281,10 +290,10 @@ def source_tau(trajectory):
         entry = _replica_entry(record, trajectory)
         if entry is not None and entry.get("tau") is not None:
             recorded = float(entry["tau"])
-            evidence = f"{record_path} replicas[{entry.get('replica')}].tau"
+            evidence = (f"{relative_to_project(record_path)} replicas[{entry.get('replica')}].tau")
         elif record.get("tau") is not None:
             recorded = float(record["tau"])
-            evidence = f"{record_path} tau"
+            evidence = f"{relative_to_project(record_path)} tau"
 
     if declared is not None and recorded is not None:
         if abs(float(declared) - recorded) > 1e-9:
@@ -567,20 +576,26 @@ def run_one_path(index, plan):
 
     simulation = Simulation(topology, system, integrator, platform, properties)
 
-    # The selected frame, from the small side-file beside the plan. The plan JSON carries only
-    # the key: a JSON array of a solvated system's coordinates is enormous and every worker reads
-    # the plan.
-    with np.load(HERE / plan.get("frames_file", FRAMES_NAME)) as frames:
-        positions = np.array(frames[entry["frames_key"]], dtype=float)
-        box = None if implicit else np.array(frames[entry["box_key"]], dtype=float)
+    # The starting configuration, from the prepared inputs. The plan JSON carries only the frame
+    # index: a JSON array of a solvated system's coordinates is enormous and every worker reads
+    # the plan. The source trajectory is not opened here and does not need to still exist.
+    record = read_prepared_sources()
+    if record is None:
+        raise SystemExit(
+            f"{SOURCES_DIR}/{SOURCES_RECORD} is missing; the starting configurations are prepared "
+            f"before any path runs and must be present.")
+    positions = load_prepared_frame(record, entry)
     if not implicit:
-        # The source frame's own box, in the reduced form OpenMM requires. Fixed volume: nothing
-        # changes it for the rest of the path.
-        simulation.context.setPeriodicBoxVectors(*reduced_box_vectors(box.tolist()))
+        # Already in the reduced form OpenMM requires, and stored as exact numbers rather than
+        # recovered from the DCD's cell lengths and angles. Fixed volume: nothing changes it for
+        # the rest of the path.
+        box = [[float(v) for v in row] for row in entry["box_vectors_nm"]]
+        simulation.context.setPeriodicBoxVectors(*reduced_box_vectors(box))
     simulation.context.setPositions(positions * unit.nanometer)
-    # DCD carries no velocities, so the source frame supplies coordinates only and the momenta are
-    # drawn fresh from the Maxwell-Boltzmann distribution at the common temperature. The seed is
-    # this path's own, recorded, and different from every other path's.
+    # The prepared inputs hold positions and box vectors only, so the momenta are drawn fresh from
+    # the Maxwell-Boltzmann distribution at the one common temperature -- which is what AIS wants,
+    # and which also gives constraint-satisfying velocities. The seed is this path's own,
+    # recorded, and different from every other path's.
     simulation.context.setVelocitiesToTemperature(TEMPERATURE, int(entry["velocity_seed"]))
     say(f"source frame {entry['source_frame_index']} at {entry['source_time_ps']:g} ps, "
         f"tau {taus[0]:g}, seeds integrator={entry['integrator_seed']} "
@@ -694,10 +709,251 @@ PLAN_NAME = "_ais_plan.json"
 #: A source DCD can be far larger than memory, so it is never loaded whole -- peak usage is one
 #: chunk plus the handful of frames actually selected, not the length of the trajectory.
 SOURCE_CHUNK_FRAMES = 50
-#: The selected frames, written beside the plan as a small binary side-file. They are NOT put in
-#: `_ais_plan.json`: a JSON array of a solvated system's coordinates is enormous and the plan is
-#: read by every worker.
-FRAMES_NAME = "_ais_frames.npz"
+#: The prepared starting configurations, and the record that describes them. Durable, archived
+#: with the results, and NOT deleted at the end of a run: they are the AIS equivalent of
+#: `common/original_inputs/`. Coordinates never go into `_ais_plan.json` -- a JSON array of a
+#: solvated system's coordinates is enormous, and every worker reads the plan.
+SOURCES_DIR = "inputs"
+SOURCES_DCD = "sources.dcd"
+SOURCES_RECORD = "sources.yaml"
+SOURCES_FORMAT = "md-templates-ais-sources/v1"
+
+#: Why the prepared inputs hold coordinates and no momenta. Recorded in `sources.yaml`, because a
+#: directory of starting configurations is exactly where someone would expect to find velocities
+#: and be quietly wrong about what they got.
+VELOCITY_NOTE = (
+    "Positions and box vectors only. DCD carries no velocities, and AIS does not want them: each "
+    "path draws fresh Maxwell-Boltzmann momenta at the one common temperature from its own "
+    "recorded velocity_seed. The canonical distribution factorises into configurational and "
+    "momentum parts, so an equilibrium configuration plus an independent momentum draw is a "
+    "proper sample of the full ensemble -- and OpenMM's setVelocitiesToTemperature applies the "
+    "velocity constraints, which momenta restored from a file would not satisfy unless "
+    "constrained again. These are starting configurations, NOT restart states: a restart in this "
+    "repository is a final_state.xml and does carry velocities."
+)
+
+
+def sources_dir():
+    return HERE / SOURCES_DIR
+
+
+def selection_identity():
+    """What the prepared inputs must still agree with for a rerun to reuse them.
+
+    Everything here changes WHICH frames a run would start from. If any of it has moved, the
+    prepared inputs describe a different calculation and reusing them silently would produce work
+    values labelled with a configuration that did not produce them.
+    """
+    source = method["source"]
+    return {
+        "trajectory_configured": str(source["trajectory"]),
+        "number_of_trajectories": int(source["number_of_trajectories"]),
+        "window_ps": [float(source["start_time_ps"]), float(source["end_time_ps"])],
+        "selection": source["selection"],
+        "with_replacement": bool(source["allow_sampling_with_replacement"]),
+        "selection_seed": derive_seed(BASE_SEED, "AIS", "source-selection"),
+        "tau_start": float(PATH_DEFINITION["path"]["tau_start"]),
+        "implicit_solvent": bool(implicit),
+    }
+
+
+def write_prepared_sources(ensemble, kept, chunks):
+    """Materialise the selected frames as a durable input, before any dynamics.
+
+    One DCD holding one frame per path, plus a YAML record that says where each frame came from.
+    After this, the source trajectory is no longer needed: it can be archived or deleted and the
+    paths still rerun. That is the point -- an AIS result archived without the configurations it
+    started from cannot say what it annealed away from.
+    """
+    import mdtraj
+
+    directory = sources_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    times, selected = ensemble["times"], ensemble["selected"]
+
+    xyz = np.empty((len(selected), ensemble["survey"]["n_atoms"], 3), dtype=np.float32)
+    entries, boxes = [], []
+    for index, frame in enumerate(selected):
+        coordinates, box = kept[frame]
+        xyz[index] = coordinates
+        entry = {
+            "ais_trajectory_index": index,
+            # Written in path order, so this is the index into sources.dcd. With replacement two
+            # paths may share a source frame; the frame is written twice so the mapping stays 1:1.
+            "dcd_frame_index": index,
+            "source_frame_index": int(frame),
+            "source_time_ps": float(times[frame]),
+            "integrator_seed": derive_seed(BASE_SEED, "AIS", index, "integrator"),
+            # Recorded here, in the inputs, because the momenta are GENERATED from it rather than
+            # restored from a file. The seed IS the momentum record.
+            "velocity_seed": derive_seed(BASE_SEED, "AIS", index, "velocities"),
+        }
+        if implicit:
+            entry["box_vectors_nm"] = None
+            entry["box_volume_nm3"] = None
+            boxes.append(None)
+        else:
+            if box is None:
+                raise SystemExit(
+                    f"source frame {frame} carries no periodic box vectors, but this is an "
+                    f"explicit-solvent system and the path keeps the box it starts from.")
+            reduced = np.array(reduced_box_vectors(box.tolist()))
+            before = abs(float(np.linalg.det(box)))
+            after = abs(float(np.linalg.det(reduced)))
+            if abs(before - after) > 1e-9 * max(1.0, before):
+                raise SystemExit(
+                    f"reducing the box vectors of source frame {frame} changed the cell volume "
+                    f"({before:.9f} -> {after:.9f} nm^3). Reduction renames the lattice vectors "
+                    f"and must not change the lattice; refusing to propagate in a box that is not "
+                    f"the one the source frame had.")
+            # The AUTHORITATIVE box vectors, as exact numbers. The DCD also carries a cell, but
+            # DCD stores lengths and angles, and round-tripping a reduced triclinic cell through
+            # them is a precision question this does not need to have.
+            entry["box_vectors_nm"] = [[float(v) for v in row] for row in reduced]
+            entry["box_volume_nm3"] = after
+            boxes.append(reduced)
+        entries.append(entry)
+
+    # DCDTrajectoryFile writes coordinates without needing an mdtraj topology, in Angstroms.
+    with mdtraj.formats.DCDTrajectoryFile(str(directory / SOURCES_DCD), "w") as handle:
+        if implicit:
+            handle.write(xyz * 10.0)
+        else:
+            lengths, angles = [], []
+            for reduced in boxes:
+                a, b, c, alpha, beta, gamma = (
+                    mdtraj.utils.box_vectors_to_lengths_and_angles(*reduced))
+                lengths.append([a, b, c])
+                angles.append([alpha, beta, gamma])
+            handle.write(xyz * 10.0,
+                         cell_lengths=np.array(lengths, dtype=np.float32) * 10.0,
+                         cell_angles=np.array(angles, dtype=np.float32))
+
+    pairs = [(int(a), int(b)) for i, a in enumerate(selected) for b in selected[i + 1:]]
+    frame_gaps = sorted(abs(a - b) for a, b in pairs)
+    time_gaps = sorted(abs(float(times[a]) - float(times[b])) for a, b in pairs)
+    survey = ensemble["survey"]
+    record = {
+        "format": SOURCES_FORMAT,
+        "description": "AIS starting configurations, prepared from an equilibrium trajectory.",
+        "trajectory_file": SOURCES_DCD,
+        "topology": relative_to_project(ensemble["paths"]["topology"]),
+        "n_paths": len(selected),
+        "n_atoms": int(survey["n_atoms"]),
+        "velocities": {"stored": False, "drawn_at_run_time": True, "note": VELOCITY_NOTE},
+        "source": {
+            "trajectory": relative_to_project(ensemble["paths"]["trajectory"]),
+            "trajectory_configured": str(method["source"]["trajectory"]),
+            "trajectory_sha256": sha256_file(ensemble["paths"]["trajectory"]),
+            "n_frames": int(survey["n_frames"]),
+            "loader": survey["loader"],
+            "chunk_frames": int(survey["chunk_frames"]),
+            "chunks_read_survey": int(survey["chunks_read"]),
+            "chunks_read_selection": int(chunks),
+            "frame_timing": ensemble["timing"],
+            "first_time_ps": float(times[0]),
+            "last_time_ps": float(times[-1]),
+            "eligible_frames": len(ensemble["eligible"]),
+            "eligible_frame_range": [int(ensemble["eligible"][0]),
+                                     int(ensemble["eligible"][-1])],
+            "tau": ensemble["tau"],
+            "tau_evidence": ensemble["tau_evidence"],
+            "tau_route": ensemble["tau_route"],
+        },
+        "selection": dict(selection_identity(),
+                          window_is_inclusive=True,
+                          # Visible on purpose: two paths starting from frames a few femtoseconds
+                          # apart are two nearly identical configurations, and their work values
+                          # are not the independent samples the CSV makes them look like.
+                          minimum_frame_gap=(frame_gaps[0] if frame_gaps else None),
+                          minimum_time_gap_ps=(time_gaps[0] if time_gaps else None)),
+        "paths": entries,
+    }
+    (directory / SOURCES_RECORD).write_text(
+        yaml.safe_dump(record, sort_keys=False, default_flow_style=False), encoding="utf-8")
+    return record
+
+
+def read_prepared_sources():
+    """The prepared inputs, if they are present AND still describe this configuration.
+
+    Returns None when there are none. Raises when there are some and they disagree: silently
+    re-preparing would delete the very artifact a finished path was started from, and silently
+    reusing them would mislabel the result.
+    """
+    directory = sources_dir()
+    record_path = directory / SOURCES_RECORD
+    if not record_path.is_file():
+        return None
+    record = yaml.safe_load(record_path.read_text(encoding="utf-8")) or {}
+    where = f"{SOURCES_DIR}/{SOURCES_RECORD}"
+
+    if record.get("format") != SOURCES_FORMAT:
+        raise SystemExit(f"{where} is {record.get('format')!r}, not {SOURCES_FORMAT!r}.")
+    trajectory = directory / record.get("trajectory_file", SOURCES_DCD)
+    if not trajectory.is_file():
+        raise SystemExit(
+            f"{where} describes {record.get('n_paths')} prepared configuration(s) but "
+            f"{SOURCES_DIR}/{trajectory.name} is missing. Remove {SOURCES_DIR}/ to prepare them "
+            f"again from the source trajectory.")
+    frames = dcd_frame_count(trajectory)
+    if frames != int(record.get("n_paths", -1)):
+        raise SystemExit(
+            f"{SOURCES_DIR}/{trajectory.name} holds {frames} frame(s) but {where} describes "
+            f"{record.get('n_paths')} path(s). The prepared inputs are truncated or were "
+            f"replaced; remove {SOURCES_DIR}/ to prepare them again.")
+
+    wanted, have = selection_identity(), record.get("selection") or {}
+    differing = {key: (have.get(key), value) for key, value in wanted.items()
+                 if have.get(key) != value}
+    if differing:
+        lines = "\n".join(f"    {key}: prepared with {was!r}, configured {now!r}"
+                           for key, (was, now) in sorted(differing.items()))
+        # The first line names the fields, because a preflight row shows only the first line and
+        # "a different calculation" without saying which field moved is not a usable message.
+        raise SystemExit(
+            f"{where} was prepared for a different calculation: "
+            f"{', '.join(sorted(differing))} changed\n{lines}\n"
+            f"  These decide WHICH frames each path starts from, so reusing the prepared inputs "
+            f"would label this run with a configuration that did not produce it.\n"
+            f"  Restore the configuration, or remove {SOURCES_DIR}/ (and any finished path "
+            f"directories) to prepare fresh starting configurations.")
+    return record
+
+
+def load_prepared_frame(record, entry):
+    """One starting configuration, read from the prepared inputs by frame index.
+
+    Streamed, like everything else that reads a trajectory here -- the file is small by
+    construction, but there is one rule about how trajectories are read and it has no exceptions.
+    """
+    directory = sources_dir()
+    wanted = int(entry["dcd_frame_index"])
+    paths = {"trajectory": directory / record.get("trajectory_file", SOURCES_DCD),
+             "topology": (PROJECT / record["topology"]).resolve()}
+    offset = 0
+    for piece in _iterload(paths, SOURCE_CHUNK_FRAMES):
+        if offset <= wanted < offset + int(piece.n_frames):
+            return np.array(piece.xyz[wanted - offset], dtype=float)
+        offset += int(piece.n_frames)
+    raise SystemExit(
+        f"{SOURCES_DIR}/{paths['trajectory'].name} ended before frame {wanted} could be read.")
+
+
+def resolve_ais_inputs(*, prepare=True):
+    """The starting configurations, prepared if they are not already.
+
+    Once prepared, the source trajectory is never opened again -- so a rerun works after the
+    source has been archived or deleted, and what the run consumes is exactly what was archived.
+    """
+    record = read_prepared_sources()
+    if record is not None:
+        return record, "prepared inputs"
+    if not prepare:
+        return None, "source trajectory"
+    ensemble = resolve_source_ensemble()
+    kept, chunks = collect_frames(ensemble["paths"], ensemble["selected"])
+    return write_prepared_sources(ensemble, kept, chunks), "source trajectory"
 
 
 def _iterload(paths, chunk):
@@ -829,9 +1085,39 @@ def check_ais_source(dynamics=True):
     """The AIS-specific preflight rows, appended to the shared table.
 
     Every one of these is a reason a run would have failed AFTER spawning workers and creating
-    trajectory files, which is exactly what the preflight exists to move earlier.
+    trajectory files, which is exactly what the preflight exists to move earlier. It never
+    prepares anything: `--check` writes nothing, so a project whose inputs are not prepared yet is
+    checked against the source trajectory instead.
     """
     rows = []
+    try:
+        record, _ = resolve_ais_inputs(prepare=False)
+    except SystemExit as error:
+        return [preflight.Result("AIS inputs", preflight.FAIL, str(error).splitlines()[0])]
+
+    if record is not None:
+        # Prepared already. The source trajectory is deliberately NOT opened: it may have been
+        # archived or deleted, and a rerun must not depend on it still being there.
+        source = record["source"]
+        rows.append(preflight.Result(
+            "AIS inputs", preflight.PASS,
+            f"{record['n_paths']} prepared configuration(s) in {SOURCES_DIR}/"
+            f"{record.get('trajectory_file', SOURCES_DCD)}, {record['n_atoms']} atoms; the source "
+            f"trajectory is not needed"))
+        rows.append(preflight.Result(
+            "AIS source tau", preflight.PASS,
+            f"tau = {source['tau']} from {source['tau_route']}, recorded when the inputs were "
+            f"prepared, matches path.tau_start"))
+        rows.append(preflight.Result(
+            "AIS velocities", preflight.PASS,
+            "not stored; drawn per path from a recorded seed at the common temperature"))
+        rows.append(preflight.Result(
+            "AIS selection", preflight.PASS,
+            f"frames {[int(e['source_frame_index']) for e in record['paths']]} from "
+            f"{source['eligible_frames']} eligible; closest pair "
+            f"{record['selection'].get('minimum_time_gap_ps')} ps apart"))
+        return rows
+
     try:
         ensemble = resolve_source_ensemble()
     except SystemExit as error:
@@ -855,6 +1141,10 @@ def check_ais_source(dynamics=True):
         f"{len(ensemble['selected'])} path(s) from {len(ensemble['eligible'])} eligible frame(s) "
         f"in {method['source']['start_time_ps']}-{method['source']['end_time_ps']} ps inclusive; "
         f"frames {ensemble['selected']}"))
+    rows.append(preflight.Result(
+        "AIS inputs", preflight.SKIP if not dynamics else preflight.PASS,
+        f"will be prepared into {SOURCES_DIR}/{SOURCES_DCD} before any path runs"
+        + ("" if dynamics else "; --check prepares nothing")))
     seeds = {derive_seed(BASE_SEED, "AIS", i, kind)
              for i in range(len(ensemble["selected"])) for kind in ("integrator", "velocities")}
     expected = 2 * len(ensemble["selected"])
@@ -868,87 +1158,58 @@ def build_plan():
     """Everything decided before any dynamics: which frames, which seeds, which device.
 
     Written to disk so each worker process reads the SAME plan the parent recorded, rather than
-    re-deriving it and possibly disagreeing. The selected coordinates go beside it in a small
-    `.npz`, never into the JSON.
+    re-deriving it and possibly disagreeing. Coordinates are never in the JSON: they live in the
+    prepared inputs, and the plan carries only the frame index into them.
     """
     platform_name = resolve_platform()
-    ensemble = resolve_source_ensemble()
-    paths, survey, times = ensemble["paths"], ensemble["survey"], ensemble["times"]
-    selected, eligible = ensemble["selected"], ensemble["eligible"]
+    record, route = resolve_ais_inputs()
+    source = dict(record["source"])
+    devices, device_list = device_assignment(record["n_paths"])
 
-    kept, chunks = collect_frames(paths, selected)
-    devices, device_list = device_assignment(len(selected))
-
-    positions, boxes = {}, {}
     trajectories = []
-    for index, frame in enumerate(selected):
-        coordinates, box = kept[frame]
-        entry = {
+    for entry in record["paths"]:
+        index = int(entry["ais_trajectory_index"])
+        plan_entry = {
             "ais_trajectory_index": index,
             "directory": trajectory_directory(index).name,
-            "source_frame_index": int(frame),
-            "source_time_ps": float(times[frame]),
-            "integrator_seed": derive_seed(BASE_SEED, "AIS", index, "integrator"),
-            "velocity_seed": derive_seed(BASE_SEED, "AIS", index, "velocities"),
+            "source_frame_index": int(entry["source_frame_index"]),
+            "source_time_ps": float(entry["source_time_ps"]),
+            "integrator_seed": int(entry["integrator_seed"]),
+            "velocity_seed": int(entry["velocity_seed"]),
             "gpu_device": devices[index],
-            # The coordinates live in the side-file; the plan carries only the key.
-            "frames_key": f"positions_{index:04d}",
+            # The coordinates live in the prepared inputs; the plan carries only the index.
+            "dcd_frame_index": int(entry["dcd_frame_index"]),
         }
-        positions[entry["frames_key"]] = coordinates
         if not implicit:
-            if box is None:
-                raise SystemExit(
-                    f"source frame {frame} carries no periodic box vectors, but this is an "
-                    f"explicit-solvent system and the path keeps the box it starts from.")
-            reduced = np.array(reduced_box_vectors(box.tolist()))
-            before = abs(float(np.linalg.det(box)))
-            after = abs(float(np.linalg.det(reduced)))
-            if abs(before - after) > 1e-9 * max(1.0, before):
-                raise SystemExit(
-                    f"reducing the box vectors of source frame {frame} changed the cell volume "
-                    f"({before:.9f} -> {after:.9f} nm^3). Reduction renames the lattice vectors "
-                    f"and must not change the lattice; refusing to propagate in a box that is not "
-                    f"the one the source frame had.")
-            entry["box_key"] = f"box_{index:04d}"
-            boxes[entry["box_key"]] = box
-            entry["box_volume_nm3"] = after
-        trajectories.append(entry)
+            plan_entry["box_vectors_nm"] = entry["box_vectors_nm"]
+            plan_entry["box_volume_nm3"] = entry["box_volume_nm3"]
+        trajectories.append(plan_entry)
 
-    np.savez(HERE / FRAMES_NAME, **positions, **boxes)
-
+    selection = record["selection"]
+    source.update({
+        "prepared_from": route,
+        "prepared_inputs": f"{SOURCES_DIR}/{record.get('trajectory_file', SOURCES_DCD)}",
+        "prepared_inputs_record": f"{SOURCES_DIR}/{SOURCES_RECORD}",
+        # Resolved for the worker to open, relative for the record. The two are separated
+        # below, where the plan's source block is copied into resolved_run.yaml.
+        "topology": str((PROJECT / record["topology"]).resolve()),
+        "topology_relative": record["topology"],
+        "n_atoms": int(record["n_atoms"]),
+        "window_ps": selection["window_ps"],
+        "window_is_inclusive": True,
+        "selected_frame_indices": [int(e["source_frame_index"]) for e in record["paths"]],
+        "selection": selection["selection"],
+        "with_replacement": selection["with_replacement"],
+        "selection_seed": selection["selection_seed"],
+        "minimum_frame_gap": selection.get("minimum_frame_gap"),
+        "minimum_time_gap_ps": selection.get("minimum_time_gap_ps"),
+        "velocities_stored": False,
+    })
     return {
         "platform": platform_name,
         "devices": device_list,
-        "frames_file": FRAMES_NAME,
-        "source": {
-            "trajectory": str(paths["trajectory"]),
-            "trajectory_configured": paths["trajectory_configured"],
-            "trajectory_sha256": sha256_file(paths["trajectory"]),
-            "topology": str(paths["topology"]),
-            "topology_choice": paths["topology_choice"],
-            "n_frames": survey["n_frames"],
-            "n_atoms": survey["n_atoms"],
-            # How the source was read, so "we did not load it whole" is a recorded fact.
-            "loader": survey["loader"],
-            "chunk_frames": survey["chunk_frames"],
-            "chunks_read_survey": survey["chunks_read"],
-            "chunks_read_selection": chunks,
-            "frame_timing": ensemble["timing"],
-            "first_time_ps": float(times[0]),
-            "last_time_ps": float(times[-1]),
-            "window_ps": [float(method["source"]["start_time_ps"]),
-                          float(method["source"]["end_time_ps"])],
-            "window_is_inclusive": True,
-            "eligible_frames": len(eligible),
-            "eligible_frame_range": [int(eligible[0]), int(eligible[-1])],
-            "selected_frame_indices": [int(f) for f in selected],
-            "selection": method["source"]["selection"],
-            "with_replacement": bool(method["source"]["allow_sampling_with_replacement"]),
-            "selection_seed": derive_seed(BASE_SEED, "AIS", "source-selection"),
-            "tau": ensemble["tau"],
-            "tau_evidence": ensemble["tau_evidence"],
-            "tau_route": ensemble["tau_route"],
-        },
+        "sources_record": f"{SOURCES_DIR}/{SOURCES_RECORD}",
+        "source": source,
         "trajectories": trajectories,
     }
 
@@ -1102,7 +1363,12 @@ def main(argv=None):
             "constant_along_path": True,
             "note": "Hamiltonian switching at constant temperature, not temperature annealing",
         },
-        "source": plan["source"],
+        # Relative, so the record survives the tree being moved. The plan's absolute copy is
+        # for opening the file during the run and is not part of the record.
+        "source": dict(plan["source"],
+                       topology=plan["source"].get("topology_relative",
+                                                   plan["source"]["topology"]),
+                       topology_relative=None),
         "trajectories": [
             {**{key: entry[key] for key in
                 ("ais_trajectory_index", "directory", "source_frame_index", "source_time_ps",
@@ -1156,8 +1422,9 @@ def main(argv=None):
     (HERE / "provenance.yaml").write_text(
         yaml.safe_dump(provenance, sort_keys=False, default_flow_style=False), encoding="utf-8")
 
+    # The plan is scratch and goes. The prepared inputs STAY: they are what the paths started
+    # from, and a result archived without them cannot say what it annealed away from.
     (HERE / PLAN_NAME).unlink(missing_ok=True)
-    (HERE / FRAMES_NAME).unlink(missing_ok=True)
     if total_work:
         print(f"[AIS] {len(completed)}/{count} path(s) complete; total work "
               f"{min(total_work):.3f} to {max(total_work):.3f} kJ/mol", flush=True)

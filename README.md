@@ -395,8 +395,12 @@ md-openmm sys-gen -i ./ALA.pdb --config sys.config.yaml -of ./inputs/
 md-openmm md-gen  -if ./inputs/ --config md.config.yaml   -of ./MD/
 
 cd MD && ./run_all.sh                      # equilibration and the cMD source run
-cd MD/AIS && ./run.sh                      # the switching paths
+cd MD/AIS && ./run.sh                      # prepares AIS/inputs/, then the switching paths
 ```
+
+The first `AIS/run.sh` writes `AIS/inputs/sources.dcd` — the starting configurations — before any
+path runs. After that the source trajectory is not needed again; see
+[the source trajectory and its tau](#ais-the-source-trajectory-and-its-tau).
 
 **AIS is not in `run_all.sh`, on purpose.** It starts from an equilibrium trajectory you have
 already produced, so running it "in order" with everything else would run it before its own input
@@ -627,6 +631,50 @@ bounded chunks (50 frames), in two passes: one to count and locate the frames th
 selects, one to collect only those frames. Peak memory is set by the chunk size, not by the length
 of the trajectory, so a nanosecond source and a microsecond source cost the same. `mdtraj.load` is
 never called on a source trajectory, and a test enforces that by making it raise.
+
+**The selected frames become a durable input.** Before any path runs, they are written to
+`AIS/inputs/`:
+
+```text
+AIS/inputs/sources.dcd     one frame per path, box vectors already reduced
+AIS/inputs/sources.yaml    where each frame came from, and what happens to the momenta
+```
+
+After that the source trajectory is **never opened again**. You can archive or delete a
+200 GB production DCD and still rerun a failed path — the run consumes the prepared inputs, so
+what was archived is exactly what ran. This is the AIS counterpart of keeping `inputs/` beside the
+trajectories: a set of work values without the configurations they started from cannot say what it
+annealed away from.
+
+If the prepared inputs disagree with the configuration — a different window, seed, path count or
+`tau_start` — the run **refuses** and names the field. It does not silently re-prepare, because
+that would delete the configurations a finished path was started from.
+
+### These are starting configurations, not restart files
+
+`sources.dcd` holds **positions and box vectors only**. There are no velocities in it, and that is
+deliberate:
+
+* **DCD cannot carry them.** `mdtraj.Trajectory` has no velocity field at all, so no mdtraj writer
+  could store them regardless.
+* **AIS does not want them.** Each path draws fresh Maxwell-Boltzmann momenta at the one common
+  temperature from its own recorded `velocity_seed`. The canonical distribution factorises,
+  `π(x,p) ∝ e^{-βU(x)}·e^{-βK(p)}`, so an equilibrium configuration plus an independent momentum
+  draw is a proper sample of the full ensemble — and it makes each path independent by
+  construction rather than by how far apart its source frame happened to land.
+* **Generated momenta satisfy the constraints.** `setVelocitiesToTemperature` applies the velocity
+  constraints. Velocities restored from a file and set raw would not, and the run would not fail —
+  it would quietly start with energy in modes that are supposed to be frozen.
+* **A seed is better provenance than the data.** Four bytes in the record regenerate the draw
+  exactly, so a path can be reproduced without carrying a coordinate-sized blob beside it.
+
+A *restart* in this repository means `final_state.xml`, which does carry velocities. The two are
+different things and `sources.yaml` says so in its own `velocities.note`.
+
+`sources.yaml` also records `minimum_frame_gap` and `minimum_time_gap_ps` — how close the two
+closest starting frames were. Two paths beginning a few femtoseconds apart are two nearly identical
+configurations, and their work values are not the independent samples the CSV makes them look
+like. Nothing enforces a spacing; the number is recorded so you can see it.
 
 **A path is complete only if everything agrees.** Six independent facts must line up before a
 finished path is skipped on a rerun: the completion record says so, its trajectory index matches,

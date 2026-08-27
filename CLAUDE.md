@@ -96,6 +96,17 @@ checkpoint or trajectory exists. `--check` runs the same gate and stops.
 - A path counts as complete only if the completion record, CSV rows, DCD existence, DCD frame
   count, frame mapping and configuration identity all agree. A healthy JSON beside a truncated DCD
   is the case this exists to catch.
+- The selected frames are materialised once into `AIS/inputs/sources.dcd` + `sources.yaml`, before
+  any path runs, and are NOT deleted afterwards. After preparation the source trajectory is never
+  opened again: a rerun must survive the source being archived or deleted.
+- Prepared inputs that disagree with the configuration are REFUSED, naming the field. Never
+  silently re-prepare — that deletes the configurations a finished path started from.
+- `sources.dcd` holds positions and box vectors only. Velocities are NOT stored and must not be:
+  DCD cannot carry them, `setVelocitiesToTemperature` gives constraint-satisfying momenta from a
+  recorded per-path seed, and the canonical distribution factorises so a fresh momentum draw is
+  correct. These are starting configurations; a `final_state.xml` is a restart. Do not blur them.
+- Box vectors are stored in `sources.yaml` as exact reduced numbers. The DCD's cell is a
+  convenience for viewers; never recover the propagation box from its lengths and angles.
 
 ## Scientific safety
 

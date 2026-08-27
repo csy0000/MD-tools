@@ -361,7 +361,18 @@ def test_the_plan_json_carries_no_coordinates():
     source = (REPO_ROOT / "src" / "md_templates" / "openmm" / "templates"
               / "ais_run.py").read_text()
     assert '"positions_nm"' not in source
-    assert '"frames_key"' in source and "np.savez" in source
+    # Coordinates live in the prepared inputs; the plan carries only the index into them.
+    assert '"dcd_frame_index"' in source and "SOURCES_DCD" in source
+
+
+def test_the_prepared_inputs_never_claim_to_hold_velocities():
+    """A directory of starting configurations is where someone would look for velocities."""
+    source = (REPO_ROOT / "src" / "md_templates" / "openmm" / "templates"
+              / "ais_run.py").read_text()
+    assert '"stored": False' in source
+    assert "NOT restart states" in source
+    # The momenta are generated from a recorded seed, and that is what the record says.
+    assert "setVelocitiesToTemperature(TEMPERATURE, int(entry[\"velocity_seed\"]))" in source
 
 
 # --- the default force-field selection ----------------------------------------------------------
@@ -699,9 +710,16 @@ def test_the_ais_source_is_streamed_across_several_chunks(managed):
     assert len(record["selected_frame_indices"]) == 2
     assert record["tau"] == 0.5 and record["tau_route"] == "companion record"
 
-    # The plan and its coordinate side-file are cleaned up, and neither is left behind.
+    # The plan is scratch and is cleaned up; the prepared inputs are not -- they are what the
+    # paths started from.
     assert not (local / "AIS" / "_ais_plan.json").exists()
     assert not (local / "AIS" / "_ais_frames.npz").exists()
+    assert (local / "AIS" / "inputs" / "sources.dcd").is_file()
+    prepared = yaml.safe_load((local / "AIS" / "inputs" / "sources.yaml").read_text())
+    assert prepared["n_paths"] == 2
+    assert prepared["velocities"]["stored"] is False
+    assert struct.unpack("<i", (local / "AIS" / "inputs" / "sources.dcd")
+                         .read_bytes()[8:12])[0] == 2
 
 
 @pytest.mark.gpu
@@ -747,3 +765,90 @@ def test_a_truncated_or_missing_dcd_is_never_skipped_as_complete(managed):
     raw = (directory / "observations.dcd").read_bytes()[:12]
     assert struct.unpack("<i", raw[8:12])[0] == 21, "the rerun did not restore 21 frames"
     assert len(original) == len(dcd.read_bytes()), "a second path was appended to the old DCD"
+
+
+# --- prepared AIS starting configurations -------------------------------------------------------
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_ais_reruns_after_the_source_trajectory_is_gone(managed):
+    """The point of preparing the inputs: an archived source is not a lost calculation."""
+    local, environment = managed["local"], managed["env"]
+    record = yaml.safe_load((local / "AIS" / "inputs" / "sources.yaml").read_text())
+    frames = [int(p["source_frame_index"]) for p in record["paths"]]
+
+    source = local / "cMD" / "whole_system.dcd"
+    kept = source.read_bytes()
+    shutil.rmtree(local / "AIS" / "trajectory_0000")
+    source.unlink()                                    # the source is archived, or simply gone
+    try:
+        result = _launch(local / "AIS", "run.sh", environment)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "the source trajectory is not needed" in result.stdout
+        assert "complete: 21 observations" in result.stdout
+        # It started from the SAME configuration, not a re-drawn one.
+        rerun = yaml.safe_load((local / "AIS" / "inputs" / "sources.yaml").read_text())
+        assert [int(p["source_frame_index"]) for p in rerun["paths"]] == frames
+        rows = list(csv.DictReader(
+            (local / "AIS" / "trajectory_0000" / "observations.csv").open()))
+        assert len(rows) == 21
+        assert int(rows[0]["source_frame_index"]) == frames[0]
+    finally:
+        source.write_bytes(kept)
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_prepared_inputs_are_refused_when_they_describe_another_calculation(managed):
+    """Silently reusing them would label this run with a configuration that did not produce it."""
+    local, environment = managed["local"], managed["env"]
+    path = local / "AIS" / "inputs" / "sources.yaml"
+    original = path.read_text()
+    record = yaml.safe_load(original)
+    record["selection"]["window_ps"] = [0.1, 0.2]        # a different time window
+    path.write_text(yaml.safe_dump(record, sort_keys=False))
+    try:
+        result = _launch(local / "AIS", "run.sh", environment, "--check")
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "[FAIL] AIS inputs" in combined
+        assert "prepared for a different calculation" in combined
+        assert "window_ps" in combined
+        assert "no Context was created" in combined
+    finally:
+        path.write_text(original)
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_a_truncated_prepared_input_is_refused_rather_than_used(managed):
+    local, environment = managed["local"], managed["env"]
+    dcd = local / "AIS" / "inputs" / "sources.dcd"
+    original = dcd.read_bytes()
+    raw = bytearray(original)
+    struct.pack_into("<i", raw, 8, 1)                    # the header claims one configuration
+    dcd.write_bytes(bytes(raw))
+    try:
+        result = _launch(local / "AIS", "run.sh", environment, "--check")
+        assert result.returncode != 0
+        combined = result.stdout + result.stderr
+        assert "[FAIL] AIS inputs" in combined
+        assert "holds 1 frame(s)" in combined and "describes 2 path(s)" in combined
+    finally:
+        dcd.write_bytes(original)
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_the_prepared_record_is_relative_and_states_the_frame_spacing(managed):
+    local = managed["local"]
+    text = (local / "AIS" / "inputs" / "sources.yaml").read_text()
+    assert str(managed["root"]) not in text, "the prepared record names this machine's storage"
+    record = yaml.safe_load(text)
+    assert record["topology"] == "common/topology.pdb"
+    assert record["source"]["trajectory"] == "cMD/whole_system.dcd"
+    assert not record["source"]["tau_evidence"].startswith("/")
+    # Two paths starting a few femtoseconds apart are not two independent realisations, so how
+    # close the closest pair came is recorded rather than left to be inferred.
+    assert record["selection"]["minimum_frame_gap"] >= 1
+    assert record["selection"]["minimum_time_gap_ps"] > 0
