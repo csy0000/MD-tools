@@ -371,10 +371,16 @@ def main():
                                           digest=name in ("final_state.xml", "production.chk"))
                         for name in ("replica.csv", "production.chk", "final_state.xml")},
             "trajectories": {
+                # As in cMD: the frame-to-time map is recorded where the interval is known, so an
+                # AIS path seeded from one rung can place its source frame on a physical clock.
                 "whole_system": trajectory_record(directory / "whole_system.dcd",
-                                                  atom_scope="all_atoms"),
+                                                  atom_scope="all_atoms",
+                                                  reporter_interval_steps=whole_every,
+                                                  timestep_fs=TIMESTEP_FS),
                 "solute": trajectory_record(directory / "solute.dcd",
-                                            atom_scope=f"solute:{len(SOLUTE_INDICES)}_atoms")},
+                                            atom_scope=f"solute:{len(SOLUTE_INDICES)}_atoms",
+                                            reporter_interval_steps=solute_every,
+                                            timestep_fs=TIMESTEP_FS)},
         })
 
     lifetime_rounds = attempt_index

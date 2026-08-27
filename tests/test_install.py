@@ -182,3 +182,102 @@ def test_a_prefix_with_no_environment_fails_with_a_clear_message(tmp_path):
 
     with pytest.raises(InstallError, match="no environment"):
         verify_environment(tmp_path / "nothing")
+
+
+# --- the exact stable OpenMM release, distinguished from a build on the way to it ------------
+
+def test_the_short_version_alone_cannot_identify_a_release():
+    """The premise the exact-version check has to be built around, stated as a test.
+
+    conda-forge's RELEASE package `openmm 8.6.0` reports `openmm.version.version` as
+    "8.6.0.dev-c6173db" -- upstream stamps the build commit into the string -- while
+    `short_version` is "8.6.0" for the release, for that build, and for any release candidate of
+    the same triple. So neither Python-level string decides the question and the installed PACKAGE
+    identity does.
+    """
+    from md_templates.install.openmm import release_status
+
+    conda_release = release_status(
+        package={"version": "8.6.0", "build": "py312hdfcc665_0", "channel": "conda-forge"},
+        python_version="8.6.0.dev-c6173db", short_version="8.6.0", requested="8.6.0")
+    assert conda_release["is_exact_release"] is True
+    assert conda_release["build_kind"] == "release"
+    assert conda_release["authority"] == "conda package metadata"
+    # ...and the confusing runtime string is recorded rather than hidden.
+    assert conda_release["runtime_version"] == "8.6.0.dev-c6173db"
+    assert conda_release["runtime_string_carries_build_marker"] is True
+
+
+@pytest.mark.parametrize("version, kind", [
+    ("8.6.0rc1", "prerelease"),
+    ("8.6.0.dev0", "development"),
+    ("8.5.2", "release"),
+])
+def test_a_prerelease_or_a_different_release_is_not_the_requested_one(version, kind):
+    from md_templates.install.openmm import release_status
+
+    status = release_status(package={"version": version, "build": "py312_0",
+                                     "channel": "conda-forge"},
+                            python_version=version, short_version="8.6.0", requested="8.6.0")
+    assert status["build_kind"] == kind
+    assert status["is_exact_release"] is False
+    assert status["exact_release_required"] is True
+
+
+def test_without_package_metadata_the_runtime_string_is_all_there_is():
+    """A pip or source install has no conda-meta record, and the check says which evidence it used."""
+    from md_templates.install.openmm import release_status
+
+    status = release_status(package=None, python_version="8.6.0.dev-abc",
+                            short_version="8.6.0", requested="8.6.0")
+    assert status["is_exact_release"] is False
+    assert "no package metadata" in status["authority"]
+
+    exact = release_status(package=None, python_version="8.6.0", short_version="8.6.0",
+                           requested="8.6.0")
+    assert exact["is_exact_release"] is True
+
+
+def test_validating_a_deliberately_different_version_refuses_nothing():
+    """`--validate` on an environment a user built around another OpenMM reports, it does not judge.
+
+    The exact-release rule applies to the versions this repository advertises, and only when one of
+    them was asked for.
+    """
+    from md_templates.install.openmm import _problems, release_status
+
+    status = release_status(package={"version": "8.5.2", "build": "py312_0",
+                                     "channel": "conda-forge"},
+                            python_version="8.5.2", short_version="8.5.2", requested="")
+    assert status["exact_release_required"] is False
+    report = {"release": status, "import_errors": {}, "executables":
+              {name: "/usr/bin/" + name for name in ("sqm", "antechamber", "tleap")},
+              "am1bcc_ready": True, "cpu_check": "ok", "reference_check": "ok",
+              "nvidia": {"present": False}}
+    assert not [p for p in _problems(report) if "OpenMM" in p]
+
+
+def test_the_environment_probe_exercises_a_system_with_real_forces():
+    """A two-free-particle context is not enough to find a CUDA build the driver cannot load.
+
+    Observed: a build compiled for CUDA 13.3 on a driver whose ceiling is 13.0 created a context
+    for free particles happily and then failed with CUDA_ERROR_UNSUPPORTED_PTX_VERSION on the first
+    molecular System. The probe now compiles the kernels a real run compiles.
+    """
+    from md_templates.install.openmm import ENVIRONMENT_PROBE
+
+    assert "NonbondedForce" in ENVIRONMENT_PROBE
+    assert "HarmonicBondForce" in ENVIRONMENT_PROBE
+    assert "LangevinMiddleIntegrator" in ENVIRONMENT_PROBE
+
+
+def test_the_cuda_solve_is_bounded_above_by_the_driver():
+    """Unbounded, the solver takes the newest CUDA, which the driver may not be able to load."""
+    import inspect
+
+    from md_templates.install import openmm as installer
+
+    source = inspect.getsource(installer.install_openmm)
+    assert "cuda-version>=11.8" in source
+    assert "cuda-version<=" in source, "the solve must be bounded above by the driver ceiling"
+    assert "driver_cuda_ceiling" in source

@@ -58,8 +58,22 @@ def _report_environment(result: dict) -> None:
     executables = result.get("executables") or {}
     print(f"  openmm        : {result.get('openmm_version')} "
           f"(python {result.get('python_version')})")
+    release = result.get("release") or {}
+    package = release.get("package") or {}
+    if package.get("version"):
+        print(f"  openmm package: {package['version']} build {package.get('build')} "
+              f"from {package.get('channel')}  -> {release.get('build_kind')}")
+    if release.get("runtime_string_carries_build_marker"):
+        # The ordinary conda-forge case, and confusing enough to name every time: the RELEASE
+        # package reports a version string that looks like a development build.
+        print(f"  version note  : OpenMM reports {release.get('runtime_version')!r} at runtime "
+              f"(short_version {release.get('runtime_short_version')!r}); the release identity "
+              f"comes from {release.get('authority')}")
+    if release.get("exact_release_required"):
+        verdict = "exact stable release" if release.get("is_exact_release") else "NOT the release"
+        print(f"  release check : {release.get('requested_version')} -> {verdict}")
     for module in ("yaml", "numpy", "openff.toolkit", "openff.nagl_models",
-                   "openmmforcefields", "parmed", "rdkit"):
+                   "openmmforcefields", "parmed", "rdkit", "mdtraj"):
         if module in versions:
             print(f"  {module:<14}: {versions[module]}")
     print(f"  ambertools    : " + ", ".join(
@@ -87,8 +101,12 @@ def cmd_install(args) -> int:
     if args.validate:
         # Validate an environment that already exists instead of building one. The check is
         # identical; only its subject differs.
+        # `--expect-version` is what turns validation of a stack environment into a release
+        # check. Without it a user validating an environment built around a different OpenMM gets
+        # the facts and no refusal, which is what this flag exists to keep true.
         try:
-            result = validate_existing(stack, args.validate)
+            result = validate_existing(stack, args.validate,
+                                       version=(args.expect_version or ""))
         except (InstallError, FileNotFoundError) as error:
             raise SystemExit(str(error))
         print(f"  environment   : {result['prefix']}  (validated, not created)")
@@ -131,6 +149,11 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--validate", metavar="PREFIX", default=None,
                          help="validate an environment that already exists instead of creating "
                               "one, and record the result in machine.yaml")
+    install.add_argument("--expect-version", "--expect_version", dest="expect_version",
+                         default=None, metavar="VERSION",
+                         help="with --validate: require this exact OpenMM release. 8.6.0 is held "
+                              "to the stable release, so a development build reporting the same "
+                              "short_version (8.6.0.dev-*) is refused rather than accepted.")
     install.set_defaults(func=cmd_install)
     return parser
 

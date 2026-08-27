@@ -422,12 +422,34 @@ def dcd_frame_count(path):
         return None
 
 
-def trajectory_record(path, *, atom_scope):
+def trajectory_record(path, *, atom_scope, reporter_interval_steps=None, timestep_fs=None):
+    """Path, size, frame count -- and the frame-to-time map, recorded where it is known.
+
+    The time map is the part a later analysis cannot reconstruct safely on its own. A DCD frame
+    index is not a time, and a DCD header's own step fields describe how the file was written
+    rather than which production clock the frames belong to. What IS known here is the reporter
+    interval and the timestep, and OpenMM's DCDReporter writes its first frame at step `interval`
+    (not at step 0), so frame k sits at step (k+1)*interval. Writing that down once, at the point
+    it is decided, is what lets `MD/AIS/run.py` map a source frame to a physical time without
+    inferring anything.
+    """
     path = Path(path)
     if not path.is_file():
         return None
-    return {"path": path.name, "atom_scope": atom_scope, "bytes": path.stat().st_size,
-            "frames": dcd_frame_count(path)}
+    record = {"path": path.name, "atom_scope": atom_scope, "bytes": path.stat().st_size,
+              "frames": dcd_frame_count(path)}
+    if reporter_interval_steps and timestep_fs:
+        interval_ps = float(reporter_interval_steps) * float(timestep_fs) / 1000.0
+        record["frame_time_map"] = {
+            "reporter_interval_steps": int(reporter_interval_steps),
+            "timestep_fs": float(timestep_fs),
+            # The first frame lands at step `interval`, so it is one interval into the run.
+            "first_frame_time_ps": round(interval_ps, 9),
+            "frame_interval_ps": round(interval_ps, 9),
+            "convention": ("frame k (0-based) is at step (k+1)*reporter_interval_steps; "
+                           "time_ps = first_frame_time_ps + k * frame_interval_ps"),
+        }
+    return record
 
 
 def append_jsonl(path, entry):

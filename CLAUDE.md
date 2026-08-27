@@ -3,8 +3,9 @@
 ## Repository purpose
 
 Project-independent, reusable OpenMM workflows for explicit-water and implicit-solvent molecular
-simulation. Two supported public methods: conventional MD, and REST2 replica exchange with omega
-exclusion enabled by default.
+simulation. Three supported public methods: conventional MD, REST2 replica exchange with omega
+exclusion enabled by default, and AIS -- annealed importance sampling along the same REST2 tau
+path.
 
 The repository must stay usable from unrelated consuming projects. Do not introduce assumptions,
 paths, terminology, datasets or scientific conclusions belonging to one research project.
@@ -13,7 +14,7 @@ Reliability, reproducibility and explicit failure matter more than convenience.
 
 ## The architecture, and what not to rebuild
 
-Six public commands, and no seventh:
+Six public commands, and no seventh. AIS is a `--method`, not a command:
 
 ```
 md-template init      md-template install
@@ -49,7 +50,9 @@ anything. See `docs/FAIR_HANDOFF.md`.
 - The protein force field and the water model are ONE selection, never two independent defaults.
   `--solvent TIP3P` is ff14SB + TIP3P and is the default; `--solvent OPC` is ff19SB + OPC;
   `--solvent GBn2` is ff14SB + GBn2/mbondi3 with no SASA term. The ligand force field is
-  OpenFF Sage 2.2.1 (`openff-2.2.1`) with standard AM1-BCC through AmberTools.
+  OpenFF Sage 2.2.1 (`openff-2.2.1`) with standard AM1-BCC through AmberTools. `resolve_sys_config`
+  refuses a hand-edited crossing (ff19SB with TIP3P, ff14SB with OPC) before a System exists --
+  generating the pair correctly is not the same as building it correctly.
 - Every consequential default is argued in `docs/md-defaults-scientific-rationale.md`, with its
   evidence classified. Do not change one without updating that document and its evidence label.
 - Reject unknown configuration keys and incompatible combinations, naming the full dotted path and
@@ -77,6 +80,20 @@ anything. See `docs/FAIR_HANDOFF.md`.
 - Every REST2 replica shares one thermostat temperature and one beta and differs only by
   Hamiltonian, so the pV terms cancel in the NPT exchange criterion. Positions and box vectors are
   one configuration and travel together.
+- AIS switches the SAME Hamiltonian along a tau path. There is one source of truth for the scaling
+  rules -- `templates/rest2_scaling.py` -- and `TauSwitcher` restores the unscaled parameters from
+  a private base System before every change, so a switched Context at tau equals a separately built
+  `build_scaled_system(..., tau)` exactly. Never implement endpoint energy interpolation.
+- AIS work is `delta_W_j = U(tau_{j+1}, x_j) - U(tau_j, x_j)`: parameters first at frozen
+  coordinates, then propagate. Physical work in kJ/mol, reduced work `beta*W` at the one common
+  beta. Switching is FIXED VOLUME with no barostat, and pV work is not included.
+- AIS observations are coordinate frames, not integration steps. The update count must divide
+  exactly by `number_of_observations - 1`; reject rather than round.
+- AIS never starts from the common equilibration chain and is never in `run_all.sh`. Its source is
+  an equilibrium trajectory whose tau must equal `tau_start`, established from that run's own
+  record and refused if it cannot be. A frame index is never a time.
+- Each AIS path is an independent realisation: its own directory, its own DCD, its own seeds. Never
+  concatenate them, and never append a second path to an existing `observations.dcd`.
 - Scientific configuration states the length of ONE segment, never a segment count.
 - Do not change a scientific default without an explicit task requirement, documentation and tests.
 - Never call a smoke test validation, convergence or proof of production suitability.
@@ -133,6 +150,10 @@ Rules:
 - Smoke sizes are picoseconds. Do not add nanosecond runs to the suite.
 - The GitHub workflow runs on a GPU-less runner and validates **packaging only**; it must never
   claim scientific runtime validation. GPU acceptance comes from the local GPU machine.
+- OpenMM 8.6.0 means the exact stable release, decided from the INSTALLED PACKAGE identity
+  (`conda-meta/openmm-*.json`). `openmm.version.version` is not a release marker: conda-forge's
+  8.6.0 release reports `8.6.0.dev-c6173db`, and `short_version` is `8.6.0` for a release and any
+  prerelease of it. Record all of them; judge on the package.
 
 ## Git and reporting
 

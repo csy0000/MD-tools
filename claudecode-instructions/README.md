@@ -5,6 +5,11 @@ root defines the durable rules that outlive any of them.
 
 ## Current
 
+- `20260827_ais-method-and-release-gap-correction.md` — **executed 2026-08-27**; see
+  `docs/journal/2026-08-27_ais-method-and-release-gaps.md`. Closed the explicit force-field/water
+  pairing gap, established an exact stable OpenMM 8.6.0 acceptance environment (and corrected what
+  "exact" has to be decided from), and added AIS as a third method through the existing six
+  commands.
 - `20260827_ais-method-and-release-gap-correction.md` — **next task**; close edited explicit-pair
   validation and exact OpenMM 8.6.0 acceptance gaps, then add standalone forward AIS using the
   existing REST2 tau scaling, trajectory/time-window source selection, 21 endpoint-inclusive

@@ -17,7 +17,10 @@ peptide topologies) — not as a simulation engine.
   script that installs a driver behind your back is worse than one that stops and says what is
   missing.
 - For GPU runs, an NVIDIA driver new enough for the CUDA build conda-forge resolves. The generated
-  run scripts default to CUDA and refuse to fall back to the CPU silently.
+  run scripts default to CUDA and refuse to fall back to the CPU silently. `md-template install`
+  now **bounds the solve above** by the CUDA version `nvidia-smi` reports the driver supports:
+  unbounded, the solver takes the newest available, and a build newer than the driver installs
+  cleanly and then fails every real System with `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`.
 
 ## 1. Create the stack and install
 
@@ -47,6 +50,7 @@ holding only `openmm` fails part-way through `md-openmm sys-gen`:
 | `ambertools` | `sqm`/`antechamber` for AM1-BCC, `tleap` for implicit peptide topologies |
 | `parmed` | prmtop/rst7 ⇄ OpenMM |
 | `rdkit` | SMILES → 3D conformer |
+| `mdtraj` | reads the AIS source trajectory and its periodic box vectors |
 
 `cuda-version>=11.8` is added when `machine.yaml` records a GPU, so conda-forge picks an OpenMM
 build matching the driver rather than a version pinned here.
@@ -122,3 +126,47 @@ md-openmm sys-config --method cMD REST2 --solvent OPC
 ```
 
 and follow the root `README.md`.
+
+
+## Checking that an environment is the exact release
+
+```bash
+md-template install --validate /path/to/env --expect-version 8.6.0
+```
+
+`--expect-version` is what turns validation into a **release** check. Without it nothing is
+refused: an environment you built around a different OpenMM is reported, not judged.
+
+**The obvious check is the wrong one.** OpenMM's own version string does not identify a release:
+
+```text
+conda package                : openmm 8.6.0 py312hdfcc665_0 from conda-forge   <- the release
+openmm.version.version       : 8.6.0.dev-c6173db
+openmm.version.short_version : 8.6.0
+```
+
+Upstream stamps the build commit into `version.version`, so `.dev` there does **not** mean a
+development build — and `short_version` is `8.6.0` for the release and for any release candidate of
+it. The check therefore judges on the **installed package identity** in `conda-meta/openmm-*.json`,
+where a prerelease is a different package version. Both Python strings are still reported, and so
+is their disagreement:
+
+```text
+  openmm        : 8.6.0.dev-c6173db (python 3.12.14)
+  openmm package: 8.6.0 build py312hdfcc665_0 from conda-forge  -> release
+  version note  : OpenMM reports '8.6.0.dev-c6173db' at runtime (short_version '8.6.0'); the
+                  release identity comes from conda package metadata
+  release check : 8.6.0 -> exact stable release
+```
+
+## What validation actually exercises
+
+The probe imports every package the six commands need, checks that `sqm`, `antechamber` and `tleap`
+are on `PATH`, confirms OpenFF has a registered AmberTools toolkit so standard AM1-BCC resolves,
+lists the platforms, and takes integration steps on Reference, CPU and — where there is a GPU —
+CUDA.
+
+Those steps are taken on a System **with real forces** (a `NonbondedForce` and a
+`HarmonicBondForce`, integrated with `LangevinMiddleIntegrator`), not on two free particles. A
+mismatched CUDA build creates a context for free particles happily and only fails when a real force
+kernel is loaded, which would otherwise be the first molecular system you build.

@@ -29,6 +29,7 @@ from typing import Any, Optional
 
 import yaml
 
+from . import ais as A
 from .config import ConfigError, check_timestep_against_masses, resolve_md_config, \
     sha256_of_document, write_yaml
 from .defaults import canonical_method
@@ -145,6 +146,19 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
             # REST2 gets, so a fixed-tau walker cannot drift from the ladder it is meant to match.
             shutil.copy2(TEMPLATES / "rest2_scaling.py", directory / "rest2_scaling.py")
             _write_launcher(TEMPLATES / "stage_run.sh", directory / "run.sh", "cMD production")
+        elif method == "AIS":
+            # AIS starts from an existing equilibrium trajectory, not from the common chain, so it
+            # gets the same scaling module and nothing else. Only the four files below exist after
+            # md-gen; the trajectory directories and every runtime record are written by the run.
+            shutil.copy2(TEMPLATES / "ais_run.py", directory / "run.py")
+            shutil.copy2(TEMPLATES / "rest2_scaling.py", directory / "rest2_scaling.py")
+            write_yaml(directory / "path_definition.yaml",
+                       _ais_path_definition(resolved, implicit=implicit),
+                       header="# The AIS path, its schedule and its work convention, resolved\n"
+                              "# once by md-gen. run.py beside this file reads it; it does not\n"
+                              "# recompute it.\n")
+            _write_launcher(TEMPLATES / "stage_run.sh", directory / "run.sh",
+                            "AIS switching paths")
         else:
             shutil.copy2(TEMPLATES / "rest2_run.py", directory / "run.py")
             shutil.copy2(TEMPLATES / "rest2_equilibrate.py", directory / "equilibrate.py")
@@ -325,8 +339,68 @@ def _write_launcher(template: Path, path: Path, label: str, *, script: str = "ru
     _executable(path)
 
 
+def _ais_path_definition(resolved: dict[str, Any], *, implicit: bool) -> dict[str, Any]:
+    """The full AIS path, resolved once here so the generated runtime never recomputes it.
+
+    The schedule is derived arithmetic -- which taus the path visits, which of them are observed --
+    and deriving it in two places is how a project ends up observing a schedule its own record does
+    not describe. `md-gen` computes it; `AIS/run.py` reads it.
+    """
+    block = resolved["AIS"]
+    path = dict(block["path"])
+    common = resolved["common"]
+    schedule = A.switching_schedule(
+        tau_start=float(path["tau_start"]), tau_end=float(path["tau_end"]),
+        switching_duration_ps=float(path["switching_duration_ps"]),
+        parameter_update_interval_steps=int(path["parameter_update_interval_steps"]),
+        number_of_observations=int(block["output"]["number_of_observations"]),
+        timestep_fs=float(common["timestep_fs"]))
+    identity = implementation_identity()
+    return {
+        "format": "md-templates-ais-path/v1",
+        "path": path,
+        "scaling": {
+            # tau is the SOURCE parameter; the other two are labelled derived and are never read
+            # back in as input.
+            "source_parameter": "tau",
+            "derived_s": "s = (1 - tau)^2, scaling solute-solute terms",
+            "derived_sqrt_s": "sqrt(s) = 1 - tau, scaling solute-environment terms",
+            "implementation": "rest2_scaling.TauSwitcher, the same decomposition a static REST2 "
+                              "rung is built with",
+            "enhanced_region": path["enhanced_region"],
+            "omega_exclusion": bool(path["omega_exclusion"]),
+            "omega_source": "inputs/solute.yaml rest2.omega_excluded_bonds",
+        },
+        "schedule": schedule,
+        "output": dict(block["output"]),
+        "execution": dict(block["execution"]),
+        "work_convention": A.WORK_CONVENTION,
+        "observation_convention": (
+            "observation 0 is the source configuration at tau_start with zero cumulative work; "
+            "observations 1..N-1 are the coordinates after propagating at their scheduled tau, "
+            "paired with the cumulative work through the parameter change that reached it. One "
+            "DCD frame per row, in the same order."),
+        "ensemble": {
+            "implicit_solvent": bool(implicit),
+            "constant_volume": True,
+            "barostat": None,
+            "temperature_kelvin": common["temperature_kelvin"],
+            "note": ("switching is at fixed volume: no barostat is added and an explicit source "
+                     "frame keeps its own box. An NPT source ensemble may seed these paths, but "
+                     "pressure-volume work is not part of this implementation."),
+        },
+        "template_commit": identity["git_commit"],
+        "md_templates_version": identity["version"],
+    }
+
+
 def _write_run_all(out: Path, plan: list[dict[str, Any]], methods: list[str]) -> None:
-    """The convenience wrapper. It calls the stage scripts; it does not reimplement them."""
+    """The convenience wrapper. It calls the stage scripts; it does not reimplement them.
+
+    AIS is deliberately absent. It does not start from the common equilibration chain -- it starts
+    from an equilibrium trajectory the user already produced -- so running it "in order" with the
+    rest would be running it before its own input exists.
+    """
     lines = []
     if "cMD" in methods:
         lines += ['echo "== cMD production =="', '( cd cMD && ./run.sh )']

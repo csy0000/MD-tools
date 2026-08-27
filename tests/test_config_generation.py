@@ -316,6 +316,100 @@ def test_unsafe_4fs_configurations_are_refused_with_a_specific_message(patch, ex
     assert expected in str(error.value)
 
 
+# --- a hand-edited explicit configuration cannot cross the two supported pairs ---------------
+
+@pytest.mark.parametrize("solvent, field, value", [
+    ("TIP3P", "protein", "amber19-all.xml"),
+    ("TIP3P", "protein", "amber19/protein.ff19SB.xml"),
+    ("TIP3P", "water", "amber19/opc.xml"),
+    ("OPC", "protein", "amber14-all.xml"),
+    ("OPC", "protein", "amber14/protein.ff14SB.xml"),
+    ("OPC", "water", "amber14/tip3p.xml"),
+])
+def test_a_crossed_explicit_pair_is_refused_however_it_was_spelled(solvent, field, value):
+    """`sys-config` writes a coupled selection; the file it writes is editable YAML.
+
+    Generating the pair correctly is not the same as building it correctly. Changing one half by
+    hand produces a System, runs to completion, and reports a Hamiltonian nobody validated -- so
+    the crossing is refused before a System exists, and refused on the FAMILY of the resource name
+    rather than on an exact string, because there is more than one way to spell each force field.
+    """
+    from md_templates.openmm.config import ConfigError, resolve_sys_config
+    from md_templates.openmm.defaults import sys_defaults
+
+    document = sys_defaults(solvent=solvent)
+    document["forcefield"][field] = value
+    with pytest.raises(ConfigError) as error:
+        resolve_sys_config(document)
+
+    message = str(error.value)
+    assert f"forcefield.{field}" in message, "the mismatched field must be named"
+    assert value in message and solvent in message
+    # ...and the message must say what the supported pair actually is.
+    assert "amber14-all.xml" in message and "amber19-all.xml" in message
+    assert "ONE selection" in message
+
+
+@pytest.mark.parametrize("solvent", ["TIP3P", "OPC", "GBn2"])
+def test_every_configuration_sys_config_writes_still_resolves(solvent):
+    """The validation must refuse crossings without refusing the pairs the tool itself writes."""
+    from md_templates.openmm.config import resolve_sys_config
+    from md_templates.openmm.defaults import EXPLICIT_COMBINATIONS, sys_defaults
+
+    resolved = resolve_sys_config(sys_defaults(solvent=solvent))
+    if solvent == "GBn2":
+        assert resolved["solvation"] == "implicit"
+        assert resolved["forcefield"]["protein"] == "leaprc.protein.ff14SB"
+        assert resolved["forcefield"]["water"] is None
+    else:
+        expected = EXPLICIT_COMBINATIONS[solvent]
+        assert resolved["forcefield"]["protein"] == expected["protein"]
+        assert resolved["forcefield"]["water"] == expected["water"]
+
+
+def test_a_force_field_this_repository_does_not_ship_is_left_alone():
+    """The pairing table has no opinion about a resource outside both supported families.
+
+    Refusing it would be refusing a deliberate choice this table cannot judge; the check exists to
+    catch a CROSSING between the two pairs it does know, not to police the field.
+    """
+    from md_templates.openmm.config import resolve_sys_config
+    from md_templates.openmm.defaults import sys_defaults
+
+    document = sys_defaults(solvent="TIP3P")
+    document["forcefield"]["protein"] = "charmm36_2024.xml"
+    resolved = resolve_sys_config(document)
+    assert resolved["forcefield"]["protein"] == "charmm36_2024.xml"
+
+
+def test_the_ligand_only_route_still_records_no_protein_force_field():
+    """Validation asks the FILE to name a complete selection; the RECORD still says what loaded.
+
+    A ligand-only build loads no protein XML, and naming one in `forcefield.json` would attribute
+    parameters to a file that contributed none. Both facts hold at once.
+    """
+    from pathlib import Path
+
+    from md_templates.openmm.config import resolve_sys_config
+    from md_templates.openmm.defaults import sys_defaults
+    from md_templates.openmm.forcefield_record import build_forcefield_record
+
+    resolved = resolve_sys_config(sys_defaults(solvent="TIP3P", peptide=False))
+    record = build_forcefield_record(
+        resolved=resolved, route="ligand",
+        record={"forcefield": {"xml": ["amber14/tip3p.xml"], "route": "ligand",
+                               "protein_forcefield": None, "water": "amber14/tip3p.xml",
+                               "nonbonded": {"method": "PME", "cutoff_nm": 1.0,
+                                             "switching": False, "switch_distance_nm": None,
+                                             "dispersion_correction": True,
+                                             "ewald_error_tolerance": 0.0005},
+                               "ligand": {"forcefield": "openff-2.2.1",
+                                          "charge_method": "am1bcc"}}},
+        inputs_dir=Path("."), artifacts={})
+    assert record["protein"]["openmm_resource"] is None
+    assert "loads no protein force field" in record["protein"]["note"]
+
+
 def test_ff19sb_with_an_implicit_gb_model_is_refused():
     """It would run and produce numbers, which is exactly why it must not be a warning."""
     from md_templates.openmm.config import ConfigError, resolve_sys_config

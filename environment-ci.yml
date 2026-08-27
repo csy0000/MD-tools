@@ -38,6 +38,7 @@ dependencies:
   - ambertools                # sqm/antechamber for AM1-BCC, tleap for implicit peptide topologies
   - parmed                    # prmtop/rst7 <-> OpenMM
   - rdkit                     # SMILES -> 3D conformer
+  - mdtraj                    # reads the AIS source DCD and its box vectors
 
   # cuda-version is deliberately ABSENT: the runners are CPU-only. OpenMM still provides the
   # Reference and CPU platforms, which is what the smoke tests use.

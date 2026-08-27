@@ -33,6 +33,7 @@ CONDA_PACKAGES = (
     "ambertools",             # sqm/antechamber for AM1-BCC, tleap for implicit peptide topologies
     "parmed",                 # prmtop/rst7 <-> OpenMM, used by the implicit route
     "rdkit",                  # SMILES -> 3D conformer for the ligand route
+    "mdtraj",                 # reads the source DCD and its box vectors for the AIS method
 )
 
 #: Imports that must succeed, and the package that provides each. A missing one is named rather
@@ -45,14 +46,94 @@ REQUIRED_IMPORTS = (
     ("openmmforcefields", "openmmforcefields"),
     ("parmed", "parmed"),
     ("rdkit", "rdkit"),
+    # AIS starts from an existing equilibrium trajectory. `md-openmm md-gen --method AIS` writes a
+    # runtime that reads a whole-system DCD and its periodic box vectors, so an environment without
+    # mdtraj can generate an AIS project it cannot run.
+    ("mdtraj", "mdtraj"),
 )
 
 #: AmberTools executables the two routes shell out to.
 REQUIRED_EXECUTABLES = ("sqm", "antechamber", "tleap")
 
 
+#: Versions this repository advertises and therefore holds to the exact stable release.
+EXACT_RELEASE_VERSIONS = ("8.6.0",)
+
+
 class InstallError(RuntimeError):
     """Installation cannot proceed, with an actionable reason."""
+
+
+def _kind_of(version_string: str) -> str:
+    """`release`, `development`, `prerelease` or `unknown`, from a version string alone."""
+    text = str(version_string or "").strip()
+    if not text:
+        return "unknown"
+    lowered = text.lower()
+    if ".dev" in lowered or "dev-" in lowered:
+        return "development"
+    tail = lowered.split(".")[-1]
+    if any(marker in tail for marker in ("rc", "alpha", "beta")) or "+" in lowered:
+        return "prerelease"
+    return "release"
+
+
+def release_status(*, package: Optional[dict], python_version: str, short_version: str,
+                   requested: str) -> dict[str, Any]:
+    """Whether the OpenMM in an environment is the exact stable release that was asked for.
+
+    **The obvious check is the wrong one, and this is why.** OpenMM's own
+    `openmm.version.version` is not a reliable release marker. conda-forge's *release* package
+    `openmm 8.6.0 py312hdfcc665_0` reports
+
+        openmm.version.version       = "8.6.0.dev-c6173db"
+        openmm.version.short_version = "8.6.0"
+        openmm.version.git_revision  = "c6173db6e8edd705eb59172bd21e9ce69c572405"
+
+    because upstream stamps the build commit into the string and conda-forge builds the release
+    from that commit. So `.dev` in the Python string does NOT mean a development build, and
+    `short_version` cannot separate a release from a prerelease either -- it is the same triple for
+    both. Judging on either one alone gets the answer wrong in one direction or the other.
+
+    The authoritative fact is the INSTALLED PACKAGE identity: `conda-meta/openmm-*.json` records
+    the version, build string and channel that the solver actually resolved, and a prerelease is a
+    different package version there (`8.6.0rc1`, not `8.6.0`). That is what decides. The Python
+    strings are still reported, and the disagreement between them is recorded rather than hidden,
+    because a reader comparing a provenance file against `openmm.version.version` will otherwise
+    conclude something is wrong.
+
+    Falls back to the Python string when no package record exists -- a pip or source install, where
+    there is no package metadata to consult and the string is all there is.
+    """
+    requested = str(requested or "").strip()
+    python_version = str(python_version or "").strip()
+    package = package or None
+
+    if package and package.get("version"):
+        authority = "conda package metadata"
+        authoritative = str(package["version"]).strip()
+    else:
+        authority = "openmm.version.version (no package metadata found)"
+        authoritative = python_version
+
+    kind = _kind_of(authoritative)
+    return {
+        "requested_version": requested,
+        # What the environment is, decided by the package that was installed.
+        "authoritative_version": authoritative,
+        "authority": authority,
+        "build_kind": kind,
+        "is_exact_release": bool(requested) and authoritative == requested and kind == "release",
+        "exact_release_required": requested in EXACT_RELEASE_VERSIONS,
+        # What OpenMM itself reports at runtime, which is what a provenance record carries.
+        "runtime_version": python_version,
+        "runtime_short_version": str(short_version or "").strip(),
+        "package": package,
+        # True in the ordinary conda-forge case above. Recorded so the difference is a documented
+        # fact rather than a discrepancy somebody has to rediscover.
+        "runtime_string_carries_build_marker": (
+            bool(python_version) and _kind_of(python_version) != "release"),
+    }
 
 
 def find_package_manager() -> tuple[str, str]:
@@ -79,6 +160,36 @@ def _cuda_wanted(machine: dict[str, Any]) -> bool:
     return bool((machine.get("gpu") or {}).get("available"))
 
 
+def driver_cuda_ceiling() -> Optional[str]:
+    """The highest CUDA runtime this machine's DRIVER can load, from `nvidia-smi`.
+
+    `nvidia-smi`'s header reports `CUDA Version: X.Y`, which is the driver's ceiling and not the
+    toolkit that happens to be installed. It has to be an upper bound on the conda solve because
+    the solver otherwise takes the newest `cuda-version` available, and a build compiled for a
+    newer toolkit than the driver supports fails at the point a real kernel is loaded:
+
+        openmm.OpenMMException: Error loading CUDA module: CUDA_ERROR_UNSUPPORTED_PTX_VERSION
+
+    which is a run-time failure in the middle of a simulation, not an install-time one. Observed on
+    driver 580.173.02 (ceiling 13.0) with a solve that chose cuda-version 13.3.
+
+    Returns None when nvidia-smi is absent or unparseable, in which case no ceiling is applied and
+    the solver behaves as before.
+    """
+    import re
+
+    if not shutil.which("nvidia-smi"):
+        return None
+    try:
+        result = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=60)
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    found = re.search(r"CUDA Version:\s*([0-9]+\.[0-9]+)", result.stdout)
+    return found.group(1) if found else None
+
+
 def install_openmm(stack: Path, version: str = "8.6.0", *,
                    dry_run: bool = False) -> dict[str, Any]:
     """Create the environment, install OpenMM, verify its platforms, and record all of it."""
@@ -92,14 +203,20 @@ def install_openmm(stack: Path, version: str = "8.6.0", *,
 
     command = [executable, "create", "--yes", "--prefix", str(prefix),
                "-c", "conda-forge", f"openmm={version}", *CONDA_PACKAGES]
+    ceiling = driver_cuda_ceiling() if cuda else None
     if cuda:
-        # conda-forge builds OpenMM against a CUDA version; letting the solver pick the build that
-        # matches the driver is more reliable than pinning a toolkit here.
+        # conda-forge builds OpenMM against a CUDA version, and the solver takes the newest one it
+        # can unless it is bounded. Bounded ABOVE by what the DRIVER supports, because a build
+        # newer than the driver installs cleanly, passes a trivial context check, and then fails
+        # with CUDA_ERROR_UNSUPPORTED_PTX_VERSION the first time a real force kernel is loaded.
         command.append("cuda-version>=11.8")
+        if ceiling:
+            command.append(f"cuda-version<={ceiling}")
 
     lines = [f"# {datetime.now(timezone.utc).isoformat()}",
              f"# package manager: {manager} ({executable})",
              f"# cuda requested: {cuda}",
+             f"# driver cuda ceiling: {ceiling or 'unknown (no bound applied)'}",
              "$ " + " ".join(command), ""]
 
     if dry_run:
@@ -115,7 +232,9 @@ def install_openmm(stack: Path, version: str = "8.6.0", *,
             + (result.stderr or result.stdout)[-1500:])
 
     try:
-        check = verify_environment(prefix)
+        # The version that was asked for is what the exact-release rule is applied against: an
+        # install of 8.6.0 that lands a development build has not installed what it advertised.
+        check = verify_environment(prefix, version=version)
     except InstallError as error:
         lines += ["", "# validation failed", str(error)]
         log.write_text("\n".join(lines), encoding="utf-8")
@@ -161,13 +280,18 @@ def record_environment(stack: Path, prefix: Path, check: dict[str, Any], *,
     return record
 
 
-def validate_existing(stack: Path, prefix: Path) -> dict[str, Any]:
+def validate_existing(stack: Path, prefix: Path, *, version: str = "") -> dict[str, Any]:
     """Validate an environment somebody else built, and record it the same way.
 
     The check is the same either way. An environment this command did not create is not less
     obliged to be able to run the commands this package advertises.
+
+    `version` is empty unless the caller says which release this environment is supposed to be. It
+    stays empty by default deliberately: a user validating an environment they built around a
+    different OpenMM gets the facts reported, and nothing refused, which is what
+    `--validate` is for.
     """
-    check = verify_environment(Path(prefix).resolve())
+    check = verify_environment(Path(prefix).resolve(), version=version)
     record = record_environment(stack, Path(prefix).resolve(), check)
     return {"prefix": str(Path(prefix).resolve()), "record": record, **check}
 
@@ -176,7 +300,7 @@ def validate_existing(stack: Path, prefix: Path) -> dict[str, Any]:
 #: must print exactly one line of JSON. It reports rather than judges; `verify_environment` below
 #: decides what counts as a failure.
 ENVIRONMENT_PROBE = r"""
-import importlib, json, shutil, sys
+import importlib, json, os, shutil, sys
 
 out = {"python_version": sys.version.split()[0], "python": sys.executable,
        "versions": {}, "import_errors": {}, "executables": {}}
@@ -217,12 +341,15 @@ def detect_nvidia():
 out["nvidia"] = detect_nvidia()
 
 for module in ("openmm", "yaml", "numpy", "openff.toolkit", "openff.nagl_models",
-               "openmmforcefields", "parmed", "rdkit"):
+               "openmmforcefields", "parmed", "rdkit", "mdtraj"):
     try:
         loaded = importlib.import_module(module)
         version = getattr(loaded, "__version__", None)
         if module == "openmm":
-            version = loaded.version.short_version
+            # The FULL string. `short_version` is "8.6.0" for the stable release AND for
+            # 8.6.0.dev-c6173db, so reporting only the short form cannot distinguish a release
+            # from a development build -- which is exactly the gap this records.
+            version = loaded.version.version
         elif module == "rdkit":
             version = importlib.import_module("rdkit.rdBase").rdkitVersion
         out["versions"][module] = str(version) if version else "unknown"
@@ -256,22 +383,69 @@ out["platforms"] = [openmm.Platform.getPlatform(i).getName()
                     for i in range(openmm.Platform.getNumPlatforms())]
 out["cuda_available"] = "CUDA" in out["platforms"]
 out["plugin_load_failures"] = list(openmm.Platform.getPluginLoadFailures())
-out["openmm_version"] = openmm.version.short_version
+# Three separate facts, because they answer different questions. `openmm_version` is the full
+# string OpenMM reports and is what a run is actually using; `openmm_short_version` is the
+# marketing triple, which a development build shares with the release it precedes; the git
+# revision is empty for a release build and set for a development one.
+# Four separate facts, because they answer different questions and the first two disagree in the
+# ordinary case. `openmm_version` is what OpenMM reports at runtime and is what lands in a
+# provenance record; `openmm_short_version` is the marketing triple, shared by a release and any
+# prerelease of it; the git revision is the commit the binary was built from; and the PACKAGE is
+# what the solver actually installed, which is the only one of the four that separates a release
+# from a release candidate. See `release_status`.
+out["openmm_version"] = openmm.version.version
+out["openmm_short_version"] = openmm.version.short_version
+out["openmm_git_revision"] = getattr(openmm.version, "git_revision", "") or ""
+
+
+def conda_package(name):
+    # The conda-meta record for `name` in this prefix, or None if it was not conda-installed.
+    # (A comment, not a docstring: this whole probe lives inside a triple-quoted string.)
+    import glob
+
+    records = sorted(glob.glob(os.path.join(sys.prefix, "conda-meta", name + "-*.json")))
+    for path in records:
+        try:
+            with open(path) as handle:
+                data = json.load(handle)
+        except Exception:
+            continue
+        if data.get("name") == name:
+            return {"version": data.get("version"), "build": data.get("build"),
+                    "channel": data.get("channel"), "url": data.get("url"),
+                    "record": os.path.basename(path)}
+    return None
+
+
+out["openmm_package"] = conda_package("openmm")
+out["mdtraj_package"] = conda_package("mdtraj")
 
 
 def one_step(platform_name):
-    # Build a two-particle System and take a step. A platform that is listed but cannot allocate
-    # a context is worse than one that is absent, because it fails at run time instead of here.
+    # Build a small System WITH FORCES and take a step. A platform that is listed but cannot
+    # allocate a context is worse than one that is absent, because it fails at run time instead of
+    # here -- and a System of two free particles is not enough to find that out. A CUDA build
+    # compiled for a newer toolkit than the driver supports creates a context for free particles
+    # happily and then fails with CUDA_ERROR_UNSUPPORTED_PTX_VERSION the moment a real force
+    # kernel is loaded, which is the first molecular System a user builds. So the probe carries a
+    # NonbondedForce and a HarmonicBondForce: the kernels an actual run compiles.
     try:
         system = openmm.System()
         system.addParticle(1.0)
         system.addParticle(1.0)
-        integrator = openmm.VerletIntegrator(0.001)
+        nonbonded = openmm.NonbondedForce()
+        nonbonded.addParticle(0.1, 0.3, 0.5)
+        nonbonded.addParticle(-0.1, 0.3, 0.5)
+        system.addForce(nonbonded)
+        bonds = openmm.HarmonicBondForce()
+        bonds.addBond(0, 1, 0.1, 1000.0)
+        system.addForce(bonds)
+        integrator = openmm.LangevinMiddleIntegrator(300.0, 1.0, 0.002)
         context = openmm.Context(system, integrator,
                                  openmm.Platform.getPlatformByName(platform_name))
         context.setPositions([(0, 0, 0), (0, 0, 0.1)])
-        context.getState(getEnergy=True)
-        integrator.step(1)
+        context.getState(getEnergy=True, getForces=True)
+        integrator.step(2)
         del context, integrator
         return "ok"
     except Exception as exc:
@@ -288,12 +462,19 @@ print(json.dumps(out))
 """
 
 
-def verify_environment(prefix: Path, *, strict: bool = True) -> dict[str, Any]:
+def verify_environment(prefix: Path, *, strict: bool = True,
+                       version: str = "") -> dict[str, Any]:
     """Run every advertised workflow's dependencies in `prefix` and report what actually works.
 
     `strict` raises when the environment cannot run the commands this package advertises. That is
     the point of the check: an environment holding only `openmm` imports fine and then fails
     halfway through `sys-gen`, which is a worse place to discover it.
+
+    `version` is the version that was ASKED for. When it is one this repository advertises as an
+    exact stable release (see `EXACT_RELEASE_VERSIONS`), an environment carrying a development or
+    prerelease build of the same triple is a problem rather than a note. Validating some other
+    version deliberately -- `--validate` on an environment a user built themselves -- is untouched:
+    the facts are still reported, and nothing is refused.
     """
     import json
 
@@ -310,6 +491,10 @@ def verify_environment(prefix: Path, *, strict: bool = True) -> dict[str, Any]:
     except (json.JSONDecodeError, IndexError):
         raise InstallError(f"unreadable validation output:\n{result.stdout[-800:]}")
 
+    report["release"] = release_status(package=report.get("openmm_package"),
+                                       python_version=report.get("openmm_version", ""),
+                                       short_version=report.get("openmm_short_version", ""),
+                                       requested=version)
     report["problems"] = _problems(report)
     report["warnings"] = warnings_for(report)
     if strict and report["problems"]:
@@ -326,6 +511,18 @@ def _problems(report: dict[str, Any]) -> list[str]:
     that is present but cannot take a step IS a problem, because that one fails at run time.
     """
     problems = []
+    release = report.get("release") or {}
+    if release.get("exact_release_required") and not release.get("is_exact_release"):
+        package = release.get("package") or {}
+        installed = (f"{package.get('version')} (build {package.get('build')}, "
+                     f"channel {package.get('channel')})" if package.get("version")
+                     else f"{release.get('authoritative_version') or 'no version'}")
+        problems.append(
+            f"OpenMM {release['requested_version']} was requested, but this environment has "
+            f"{installed} -- a {release['build_kind']} build, decided from "
+            f"{release.get('authority')}. Install the release: "
+            f"`conda install -c conda-forge openmm={release['requested_version']}`.")
+
     errors = report.get("import_errors") or {}
     for module, package in REQUIRED_IMPORTS:
         if module in errors:

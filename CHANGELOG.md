@@ -6,6 +6,65 @@ Entries below `0.2.0` predate the reduction to the six-command CLI in `ca29fcd` 
 registry/bundle/schema architecture that no longer exists. They are kept as history; they do not
 describe the current package.
 
+## Unreleased — AIS, and two closed release gaps
+
+**New method: AIS, annealed importance sampling.** `md-openmm sys-config --method AIS` and
+`md-openmm show-default AIS`. No new command: AIS is a `--method`, selected through the same six
+commands. It anneals the REST2 Hamiltonian from `tau = 0.5` to `tau = 0` while the coordinates
+propagate, and records the nonequilibrium work.
+
+* The Hamiltonian **actually changes** through force parameters, using the same decomposition
+  `build_scaled_system` builds a static REST2 rung with — `s = (1 - tau)^2`,
+  `sqrt(s) = 1 - tau`, omega torsions unscaled. `rest2_scaling.TauSwitcher` restores the unscaled
+  parameters from a private base System before each change, so a switched Context and a separately
+  built rung agree exactly (measured: 0.000e+00 kJ/mol and 0.000e+00 kJ/mol/nm at tau 0, 0.25 and
+  0.5). There is no endpoint energy interpolation anywhere.
+* Work convention: `delta_W_j = U(tau_{j+1}, x_j) - U(tau_j, x_j)` — parameters first at frozen
+  coordinates, then propagate. kJ/mol, and `beta*W` at the one common beta.
+* 21 endpoint-inclusive observations by default, one DCD frame per work row. The update count must
+  divide exactly by 20; a duration that would round the observation points onto the update grid is
+  refused, naming the multiple that would fit.
+* The source is an existing equilibrium trajectory at `tau_start`, not the common chain — so **AIS
+  is deliberately absent from `run_all.sh`**. Its tau is read from that run's own record and the
+  path is refused if it cannot be established. Frame times come from a recorded `frame_time_map`,
+  or from `first_frame_time_ps` + `frame_interval_ps`; a frame index is never treated as a time.
+* Independent paths: one directory, one DCD and distinct seeds each; never concatenated, never
+  appended to. CUDA by default with no silent fallback, deterministic round-robin device
+  assignment, isolated worker processes.
+* Fixed volume: no barostat during switching, and **no pressure-volume work**. Forward only, no
+  mid-path restart, and **no free-energy estimator** — the work columns are the input a
+  Hummer-Szabo or Jarzynski analysis would consume.
+
+**cMD and REST2 runtime records now carry a frame-to-time map.** `trajectories.*.frame_time_map`
+records the reporter interval, the timestep and the resulting first-frame time, at the point they
+are known. **Migration:** a trajectory produced before this change has no map, so an AIS run
+seeded from it needs `AIS.source.first_frame_time_ps` and `frame_interval_ps` set explicitly.
+
+**A hand-edited explicit configuration can no longer cross the two supported pairs.**
+`resolve_sys_config` refuses ff19SB with TIP3P and ff14SB with OPC — in either direction, matched
+on the force-field family rather than an exact string — naming the mismatched dotted fields and the
+supported pair. Generating a coupled selection through `sys-config` was never the same as building
+one, because the file it writes is editable YAML. A resource outside both supported families is
+left alone.
+
+**`md-template install` now bounds the CUDA solve by the driver, and probes with real forces.**
+The solver was free to take the newest `cuda-version`, which on a driver whose ceiling is 13.0
+produced a CUDA 13.3 build that installed cleanly, passed the old two-free-particle context check,
+and then failed every real System with `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`. The solve is now
+capped at the ceiling `nvidia-smi` reports, and the probe builds a System with a `NonbondedForce`
+and a `HarmonicBondForce` so it compiles the kernels a run compiles.
+
+**Exact-release validation, and a correction.** `md-template install --validate PREFIX
+--expect-version 8.6.0` refuses a build that is not the exact stable release. The evidence is the
+installed conda package identity, **not** `openmm.version.version`: conda-forge's 8.6.0 *release*
+package reports `8.6.0.dev-c6173db`, and `short_version` is `8.6.0` for a release and for any
+prerelease of it. Both strings are still recorded, and the disagreement is recorded as a fact.
+Correcting the earlier report: the 0.4 defaults acceptance run *was* on the exact conda-forge
+8.6.0 release; only its version string looked like a development build.
+
+**`mdtraj` is now part of the installed environment** and of `environment-ci.yml`, because the
+advertised AIS command reads its source trajectory with it.
+
 ## Unreleased — evidence-based scientific defaults
 
 **The default explicit combination is now ff14SB + Sage 2.2.1 + TIP3P.** `md-openmm sys-config`

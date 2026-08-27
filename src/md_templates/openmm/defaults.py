@@ -17,7 +17,7 @@ ENGINE = "openmm"
 ENGINE_VERSION = "8.6.0"
 
 #: Canonical spellings. Input is accepted case-insensitively and written back in these forms.
-METHODS = ("cMD", "REST2")
+METHODS = ("cMD", "REST2", "AIS")
 SOLVENTS = ("TIP3P", "OPC", "GBn2")
 
 #: What `--solvent` selects when nothing is asked for. TIP3P is the method-development default:
@@ -43,6 +43,12 @@ def is_implicit(solvent: str) -> bool:
     return canonical_solvent(solvent) == "GBn2"
 
 
+#: The forward AIS path, and how many points along it are observed. tau = 0.5 is the scaled end
+#: (s = 0.25) and tau = 0 is the physical Hamiltonian; 21 observations are endpoint-inclusive.
+AIS_TAU_START = 0.5
+AIS_TAU_END = 0.0
+AIS_OBSERVATIONS = 21
+
 #: The two explicit-solvent combinations this repository supports, named by the OpenMM resources
 #: that are actually loaded rather than by a family label.
 #:
@@ -63,6 +69,23 @@ EXPLICIT_COMBINATIONS = {
 }
 #: Kept for readers of older records: the resource the 0.3.x default named.
 EXPLICIT_PROTEIN_FORCEFIELD = EXPLICIT_COMBINATIONS["OPC"]["protein"]
+
+#: Substrings that identify which supported family a hand-written resource name belongs to.
+#:
+#: `sys-config` writes the qualified resource, but the file is editable YAML and a user may write
+#: `amber14/protein.ff14SB.xml`, `ff14SB.xml` or `amber/ff14SB.xml` instead. Matching on family
+#: markers rather than on an exact string means `config._check_explicit_pairing` catches a crossed
+#: pair however it was spelled, while a name belonging to NEITHER family is left alone -- somebody
+#: loading a force field this repository does not ship is doing something deliberate, and refusing
+#: it here would be refusing a choice this table has no opinion about.
+PROTEIN_FAMILY_MARKERS = {
+    "TIP3P": ("ff14sb", "amber14"),
+    "OPC": ("ff19sb", "amber19"),
+}
+WATER_FAMILY_MARKERS = {
+    "TIP3P": ("tip3p",),
+    "OPC": ("opc",),
+}
 #: Implicit GBn2: ff14SB, the force field GBn2 was developed and validated against. A tleap
 #: resource, because the implicit route builds its topology with tleap rather than an OpenMM XML.
 IMPLICIT_PROTEIN_FORCEFIELD = "leaprc.protein.ff14SB"
@@ -89,6 +112,79 @@ DEFAULT_BAROSTAT_FREQUENCY_STEPS = 25
 #: paired with. Never a default: `constraints.hydrogen_mass_amu` stays null and `timestep_fs` 2.0.
 HMR_HYDROGEN_MASS_AMU = 3.024
 HMR_TIMESTEP_FS = 4.0
+
+
+def ais_defaults() -> dict[str, Any]:
+    """The AIS block: a switching path, where its configurations come from, and what is observed.
+
+    AIS anneals the REST2 Hamiltonian from `tau_start` to `tau_end` while the coordinates propagate,
+    and records the nonequilibrium work. The scaling is the SAME decomposition REST2 uses, so a
+    fixed-tau cMD walker, a REST2 rung and an AIS path at the same tau are the same Hamiltonian:
+    `s = (1 - tau)^2` for solute-solute terms and `sqrt(s) = 1 - tau` for solute-environment terms,
+    with torsions about an omega bond left unscaled. Temperature and beta come from
+    `common.temperature_kelvin` and do not change along the path -- this is Hamiltonian switching,
+    not temperature annealing.
+
+    The `null` fields are REQUIRED USER INPUT, not silent defaults. AIS starts from an existing
+    equilibrium trajectory, and there is no defensible guess for which one, which part of it, or how
+    long the switch should take. `md-gen` names the missing field rather than choosing.
+    """
+    return {
+        "path": {
+            # The only path type implemented. Named so a configuration asking for something else is
+            # refused rather than quietly getting this one.
+            "type": "rest2_tau",
+            # Linear in tau, so sqrt(s) is linear and s is quadratic along the path.
+            "tau_start": AIS_TAU_START,
+            "tau_end": AIS_TAU_END,
+            "interpolation": "linear",
+            # The same omega bonds and the same enhanced region cMD and REST2 use, read from
+            # inputs/solute.yaml. Changing either makes the path a different Hamiltonian from the
+            # equilibrium ensemble that seeded it.
+            "omega_exclusion": True,
+            "enhanced_region": "solute",
+            # REQUIRED. How long the switch takes. Work is path-length dependent, so there is no
+            # default that is not a scientific choice. Its step count must divide exactly by
+            # parameter_update_interval_steps, and the resulting update count by
+            # output.number_of_observations - 1.
+            "switching_duration_ps": None,
+            # How often the Hamiltonian changes, in integration STEPS. 1 is the finest schedule
+            # this can express.
+            "parameter_update_interval_steps": 1,
+        },
+        "source": {
+            # REQUIRED. An existing equilibrium trajectory at tau_start: a fixed-tau cMD run or one
+            # REST2 rung. Resolved relative to the generated MD/ project, and the resolved path is
+            # recorded.
+            "trajectory": None,
+            # null uses inputs/topology.pdb, the topology the System was built from. The resolved
+            # choice is recorded either way.
+            "topology": None,
+            # REQUIRED, and INCLUSIVE at both ends. Frames outside [start, end] are not eligible.
+            "start_time_ps": None,
+            "end_time_ps": None,
+            # Only needed when the trajectory has no companion runtime record to take frame times
+            # from. A frame INDEX is never treated as a time.
+            "first_frame_time_ps": None,
+            "frame_interval_ps": None,
+            # REQUIRED. Each is one independent switching path with its own directory and DCD.
+            "number_of_trajectories": None,
+            "selection": "uniform_random",
+            "allow_sampling_with_replacement": False,
+        },
+        "output": {
+            # 21 points = 20 equal intervals plus the starting configuration.
+            "number_of_observations": AIS_OBSERVATIONS,
+            "include_start": True,
+            "include_end": True,
+            "coordinates": "whole_system",
+        },
+        "execution": {
+            "platform": "CUDA",
+            # `auto` uses every visible CUDA device; a list pins particular ones.
+            "gpu_devices": "auto",
+        },
+    }
 
 
 def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT) -> dict[str, Any]:
@@ -247,6 +343,8 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> 
             "whole_system_interval_ps": 100,
             "solute_interval_ps": 10,
         }
+    if "AIS" in methods:
+        document["AIS"] = ais_defaults()
     if "REST2" in methods:
         document["REST2"] = {
             "ensemble": ensemble,
@@ -281,6 +379,9 @@ def default_document(name: str) -> dict[str, Any]:
         return {k: v for k, v in md_defaults(methods=["cMD"]).items() if k != "REST2"}
     if key == "rest2":
         return {k: v for k, v in md_defaults(methods=["REST2"]).items() if k != "cMD"}
+    if key == "ais":
+        return {k: v for k, v in md_defaults(methods=["AIS"]).items()
+                if k not in ("cMD", "REST2")}
     if key == "all":
-        return {"sys": sys_defaults(), "md": md_defaults()}
-    raise ValueError(f"unknown default {name!r}; expected sys, cMD, REST2 or all")
+        return {"sys": sys_defaults(), "md": md_defaults(methods=METHODS)}
+    raise ValueError(f"unknown default {name!r}; expected sys, cMD, REST2, AIS or all")

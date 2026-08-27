@@ -1,0 +1,127 @@
+# Annealed importance sampling on the ALA peptide -- the smallest complete AIS example.
+#
+# This file is not a configuration on its own. It lists the exact keys to change in `md.config.yaml`
+# after `md-openmm sys-config`, so the whole change is visible in one place.
+#
+#   md-openmm sys-config --method cMD AIS --peptide true --solvent TIP3P
+#   # ...apply the edits below to md.config.yaml...
+#   md-openmm sys-gen -i ./ALA.pdb --config sys.config.yaml -of ./inputs/
+#   md-openmm md-gen  -if ./inputs/ --config md.config.yaml   -of ./MD/
+#
+#   cd MD && ./run_all.sh          # minimisation, equilibration, and the cMD source run
+#   cd MD/AIS && ./run.sh          # the switching paths -- NOT part of run_all.sh
+#
+# AIS is deliberately absent from `run_all.sh`: it starts from an equilibrium trajectory you have
+# already produced, so running it "in order" with everything else would run it before its own input
+# exists.
+#
+# WHAT THE PATH IS
+#
+# The Hamiltonian is annealed from tau = 0.5 to tau = 0.0 while the coordinates propagate. It is the
+# same REST2 decomposition a fixed-tau cMD walker or a REST2 rung uses:
+#
+#     s        = (1 - tau)^2      scales solute-solute terms      -> quadratic along a linear path
+#     sqrt(s)  = 1 - tau          scales solute-environment terms -> linear along a linear path
+#
+# with torsions about an omega bond left unscaled, from the same `inputs/solute.yaml` list. The
+# temperature and beta do not change: this is Hamiltonian switching, not temperature annealing.
+#
+# 21 OBSERVATIONS ARE NOT 21 STEPS. The path below is 100 ps = 50,000 steps at 2 fs, with the
+# Hamiltonian changing every step -- 50,000 parameter changes. 21 of those points are OBSERVED:
+# both endpoints plus 19 evenly spaced interior points, one coordinate frame each. 50,000 / 20 =
+# 2,500 updates per observation, which divides exactly; a duration that did not divide exactly is
+# refused rather than rounded onto the grid.
+
+md.config.yaml:
+  methods:
+    - cMD
+    - AIS
+
+  cMD:
+    # THE SOURCE ENSEMBLE. A fixed-tau walker at tau = 0.5 is an equilibrium ensemble of exactly
+    # the Hamiltonian the AIS path starts from. AIS reads this run's `resolved_run.yaml` to confirm
+    # the tau matches, and refuses rather than assuming it.
+    tau: 0.5
+    ensemble: NPT
+    duration_ns: 20
+    whole_system_interval_ps: 10        # -> a frame every 10 ps, 2000 frames over 20 ns
+    solute_interval_ps: 2
+    checkpoint_interval_ps: 100
+
+  AIS:
+    path:
+      type: rest2_tau
+      tau_start: 0.5                    # must equal the source ensemble's tau
+      tau_end: 0.0
+      interpolation: linear
+      omega_exclusion: true
+      enhanced_region: solute
+      # 100 ps at 2 fs = 50,000 steps = 50,000 updates = 2,500 per observation interval.
+      # Work is path-length dependent: a faster switch does more dissipative work.
+      switching_duration_ps: 100.0
+      parameter_update_interval_steps: 1
+
+    source:
+      # Resolved relative to the generated MD/ project, so moving inputs/ and MD/ together is
+      # enough. The absolute path used at run time is recorded separately.
+      trajectory: cMD/whole_system.dcd
+      # null uses inputs/topology.pdb, the topology the System was built from. The resolved choice
+      # is recorded either way.
+      topology: null
+      # INCLUSIVE at both ends, on the source trajectory's own clock. Here: discard the first 5 ns
+      # as equilibration and draw from the remaining 15 ns.
+      start_time_ps: 5000.0
+      end_time_ps: 20000.0
+      # Leave null when the trajectory was written by this repository's cMD or REST2 runtime: the
+      # frame-to-time map is in its `resolved_run.yaml`, recorded where the interval was decided.
+      # Set BOTH for any other trajectory. A frame index is never treated as a time.
+      first_frame_time_ps: null
+      frame_interval_ps: null
+      # Each is one independent switching path with its own directory, DCD and seeds.
+      number_of_trajectories: 100
+      selection: uniform_random
+      # Two paths from the same configuration are not two independent realisations.
+      allow_sampling_with_replacement: false
+
+    output:
+      number_of_observations: 21        # 20 equal intervals plus the starting configuration
+      include_start: true
+      include_end: true
+      coordinates: whole_system
+
+    execution:
+      platform: CUDA                    # no silent CPU fallback
+      gpu_devices: auto                 # every visible device; or a list, e.g. [0, 2, 3]
+
+# WHAT YOU GET
+#
+#   MD/AIS/selected_initial_frames.csv    which frame each path started from, and its seeds,
+#                                         written BEFORE any dynamics
+#   MD/AIS/trajectory_0000/
+#       observations.dcd                  21 whole-system frames
+#       observations.csv                  21 rows, one per frame, with tau, s, sqrt(s), the
+#                                         incremental and cumulative work in kJ/mol, and the
+#                                         cumulative reduced work beta*W
+#       final_state.xml, stdout.log, completed.json
+#   MD/AIS/resolved_run.yaml, provenance.yaml
+#
+# Row 0 is the source configuration at tau = 0.5 with zero cumulative work. Row 20 is tau = 0.0
+# with the total work of that path. The work convention is
+#
+#     delta_W_j = U(tau_{j+1}, x_j) - U(tau_j, x_j)
+#
+# -- the parameters change first at frozen coordinates, and the configuration then propagates under
+# the new Hamiltonian.
+#
+# WHAT THIS DOES NOT DO
+#
+# * Forward only. There is no reverse path and no bidirectional workflow.
+# * No mid-path restart. An interrupted path is rerun from its source frame; a completed one is
+#   skipped and is never appended to.
+# * FIXED VOLUME. No barostat is active during switching and no pressure-volume term is in the
+#   work, even though the source ensemble above is NPT. Each path keeps the box of the frame it
+#   started from.
+# * DCD carries no velocities, so each path draws fresh Maxwell-Boltzmann momenta at the common
+#   temperature with its own recorded seed.
+# * NO FREE-ENERGY ESTIMATOR. The work columns are the input a Hummer-Szabo or Jarzynski analysis
+#   would consume. Computing one is not part of this repository.

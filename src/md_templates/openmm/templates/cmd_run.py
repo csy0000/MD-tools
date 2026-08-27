@@ -266,9 +266,15 @@ def main():
         # Trajectories are sized and counted, never hashed at runtime: they grow across
         # invocations and MD-data computes the archival digests once.
         "trajectories": {
-            "whole_system": trajectory_record(whole, atom_scope="all_atoms"),
+            # The reporter interval and timestep travel with the record so a downstream AIS run can
+            # map a frame to a physical time instead of guessing one from the index.
+            "whole_system": trajectory_record(whole, atom_scope="all_atoms",
+                                              reporter_interval_steps=whole_every,
+                                              timestep_fs=TIMESTEP_FS),
             "solute": trajectory_record(solute,
-                                        atom_scope=f"solute:{len(SOLUTE_INDICES)}_atoms")},
+                                        atom_scope=f"solute:{len(SOLUTE_INDICES)}_atoms",
+                                        reporter_interval_steps=solute_every,
+                                        timestep_fs=TIMESTEP_FS)},
         "outputs": {name: file_record(HERE / name,
                                       digest=name in ("final_state.xml", "production.chk"))
                     for name in ("production.csv", "production.chk", "final_state.xml")},

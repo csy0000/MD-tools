@@ -10,7 +10,8 @@ push — so "gated" here means gated at release, not continuously.
 | | version | status |
 |---|---|---|
 | Python | 3.12 | pinned by `environment-ci.yml`; gated by `release-validation`; locally verified on 3.12.13 |
-| OpenMM | 8.6.0 | pinned by `environment-ci.yml`; gated by `release-validation`; locally verified on 8.6.0 |
+| OpenMM | 8.6.0 | pinned by `environment-ci.yml`; gated by `release-validation`; acceptance run on the conda-forge **release** package `openmm 8.6.0 py312hdfcc665_0`, which reports `openmm.version.version` as `8.6.0.dev-c6173db` — the release identity comes from the package, not that string |
+| MDTraj | 1.11.1 locally | reads the AIS source DCD and its box vectors; installed and import-checked |
 | OpenFF toolkit | 0.19.0 locally | installed and import-checked by `md-template install`; unpinned in the solve |
 | openmmforcefields | 0.16.0 locally | as above |
 | AmberTools | `sqm`, `antechamber`, `tleap` on PATH | presence and AM1-BCC readiness checked at install and in CI |
@@ -68,6 +69,7 @@ The evidence for every default, classified by strength, is in
 | implicit, Sage small molecule | **experimental**, recorded as such in `forcefield.json` | §6 — mbondi3 reduces to mbondi2 for a one-residue ligand, and any element outside {H, C, N, O, S} gets GB-Neck2's unfitted fallback |
 | 2 fs, unmodified hydrogen masses | supported baseline | §11.1 |
 | 4 fs with HMR at 3.024 amu | supported for stability and equilibrium free energies; **not** for kinetics | §11.3 |
+| AIS switching along the REST2 tau path | implemented and tested against a static REST2 rung to 0 kJ/mol and 0 kJ/mol/nm; **no free-energy estimator, forward only, fixed volume, no pV work** | `docs/journal/2026-08-27_ais-method-and-release-gaps.md` |
 
 ## Scientific status, which portability does not address
 

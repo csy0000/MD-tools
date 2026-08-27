@@ -183,15 +183,24 @@ def audit_force_classes(system, where="tau scaling"):
     return {"scaled": scaled, "unscaled_by_convention": by_convention, "energy_free": energy_free}
 
 
-def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=()):
-    """A copy of `base_system` with the solute Hamiltonian scaled for this rung."""
+def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=(),
+                        prepare_for_switching=False):
+    """A copy of `base_system` with the solute Hamiltonian scaled for this rung.
+
+    `prepare_for_switching` matters only at tau = 0, where s = 1 and the scaling arithmetic is a
+    no-op. A REST2 rung there wants the untouched System and gets it. An AIS path there needs the
+    System to already carry the CustomGBForce global scale parameter, because the energy
+    expressions that reference it are compiled when the Context is created and cannot be rewritten
+    afterwards -- so a path that starts at tau = 0 and moves away from it would have no way to
+    scale the generalised-Born energy at all.
+    """
     s = scale_factor_for_tau(tau)
     # Before touching anything: refuse a System carrying an energy term that cannot be placed.
     # Doing this first means the failure is "this System has a force I do not understand", not a
     # half-scaled System that looks finished.
     audit_force_classes(base_system)
     system = clone_system(base_system)
-    if s == 1.0:
+    if s == 1.0 and not prepare_for_switching:
         return system                              # the cold replica is the unmodified system
     solute = set(int(i) for i in solute_indices)
     excluded = {frozenset((int(a), int(b))) for a, b in excluded_bonds}
@@ -237,3 +246,83 @@ def exchange_log_acceptance(u_ii, u_jj, u_ij, u_ji):
 def exchange_pairs(n_replicas, phase):
     """Alternating nearest-neighbour pairs: phase 0 gives (0,1),(2,3)…; phase 1 gives (1,2),(3,4)…"""
     return [(i, i + 1) for i in range(phase % 2, n_replicas - 1, 2)]
+
+
+# ---------------------------------------------------------------------------------------------
+# Switching one live Context along a tau path (AIS)
+#
+# The rules are the ones above. This class does not restate them: it restores the UNSCALED
+# parameters from a reference copy of the base System and then calls the same `_scale_*` functions
+# a static rung is built with, so a dynamically switched Context at tau and a separately built
+# `build_scaled_system(..., tau)` are the same Hamiltonian by construction rather than by
+# agreement between two implementations.
+#
+# Rebuilding the whole System per update was the obvious alternative and is not viable: a switching
+# path updates every `parameter_update_interval_steps`, which is every step by default, and
+# serialising a solvated System tens of thousands of times would dominate the run.
+# ---------------------------------------------------------------------------------------------
+
+
+class TauSwitcher:
+    """Sets tau on a live Context, using the same scaling rules as a static REST2 rung."""
+
+    def __init__(self, base_system, solute_indices, excluded_bonds=()):
+        audit_force_classes(base_system, where="AIS tau switching")
+        # A private, never-modified copy. Every `set_tau` starts from these parameters, so the
+        # scaling is always applied to the UNSCALED Hamiltonian and never composed on top of the
+        # previous tau -- which would compound s and drift the path away from its own definition.
+        self.base = clone_system(base_system)
+        self.solute = set(int(i) for i in solute_indices)
+        self.excluded = {frozenset((int(a), int(b))) for a, b in excluded_bonds}
+
+    def prepared_system(self, tau):
+        """The System to create the Context from: scaled to `tau` and ready to be switched."""
+        return build_scaled_system(self.base, self.solute, tau, self.excluded,
+                                   prepare_for_switching=True)
+
+    def set_tau(self, context, system, tau):
+        """Change `system`'s Hamiltonian to `tau` and push it into `context`. Returns s.
+
+        `system` must be the System the Context was created from -- the one `prepared_system`
+        returned -- because `updateParametersInContext` writes through the Force objects the
+        Context already holds.
+        """
+        s = scale_factor_for_tau(tau)
+        for index in range(system.getNumForces()):
+            force = system.getForce(index)
+            reference = self.base.getForce(index)
+            if isinstance(force, NonbondedForce):
+                _restore_nonbonded(force, reference)
+                _scale_nonbonded(force, self.solute, s)
+                force.updateParametersInContext(context)
+            elif isinstance(force, PeriodicTorsionForce):
+                _restore_torsions(force, reference)
+                _scale_torsions(force, self.solute, s, self.excluded)
+                force.updateParametersInContext(context)
+            elif isinstance(force, CMAPTorsionForce):
+                _restore_cmap(force, reference)
+                _scale_cmap(force, self.solute, s)
+                force.updateParametersInContext(context)
+            elif isinstance(force, CustomGBForce):
+                # The expressions already carry the global parameter; only its value changes, and
+                # a global parameter is set on the Context rather than pushed through the Force.
+                context.setParameter(REST2_GB_SCALE_PARAMETER, float(s))
+        return s
+
+
+def _restore_nonbonded(force, reference):
+    for index in range(force.getNumParticles()):
+        force.setParticleParameters(index, *reference.getParticleParameters(index))
+    for index in range(force.getNumExceptions()):
+        force.setExceptionParameters(index, *reference.getExceptionParameters(index))
+
+
+def _restore_torsions(force, reference):
+    for index in range(force.getNumTorsions()):
+        force.setTorsionParameters(index, *reference.getTorsionParameters(index))
+
+
+def _restore_cmap(force, reference):
+    for index in range(force.getNumMaps()):
+        size, energy = reference.getMapParameters(index)
+        force.setMapParameters(index, size, list(energy))

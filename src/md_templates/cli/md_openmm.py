@@ -43,6 +43,10 @@ MD_HEADER = """\
 #   common.friction_per_ps            LangevinMiddleIntegrator collision rate, 1.0 ps^-1
 #   common.barostat_frequency_steps   MonteCarloBarostat attempt interval in STEPS (OpenMM's own
 #                                     default, 25); null under implicit solvent, which has none
+#
+# An AIS block, if present, carries null fields that are REQUIRED USER INPUT, not defaults:
+# the switching duration, the source trajectory, its inclusive time window, and how many
+# independent paths to run. `md-gen` names any that are still null. See docs/examples/ais-ala.yaml.
 """
 
 
@@ -86,6 +90,13 @@ def cmd_sys_config(args) -> int:
     if not args.peptide:
         print(f"  ligand       : {sys_doc['solute']['ligand_forcefield']}, "
               f"{sys_doc['solute']['ligand_charge_method']}")
+    if "AIS" in methods:
+        path = md_doc["AIS"]["path"]
+        print(f"  AIS          : tau {path['tau_start']} -> {path['tau_end']}, "
+              f"{path['interpolation']}, "
+              f"{md_doc['AIS']['output']['number_of_observations']} observations")
+        print("                 fill in AIS.path.switching_duration_ps and the AIS.source block; "
+              "AIS is not in MD/run_all.sh")
     print(f"  wrote        : {sys_path}")
     print(f"                 {md_path}")
     print()
@@ -150,7 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     config = sub.add_parser("sys-config", help="write sys.config.yaml and md.config.yaml")
     config.add_argument("--method", nargs="+", default=["cMD", "REST2"],
-                        help="cMD and/or REST2 (case-insensitive)")
+                        help="any of cMD, REST2, AIS (case-insensitive). AIS anneals the REST2 "
+                             "Hamiltonian from tau=0.5 to tau=0 and records the nonequilibrium "
+                             "work; it starts from an equilibrium trajectory you already ran, so "
+                             "it is not part of MD/run_all.sh.")
     config.add_argument("--peptide", type=_bool, default=True, help="true or false")
     config.add_argument(
         "--solvent", default=D.DEFAULT_SOLVENT,
@@ -160,7 +174,11 @@ def build_parser() -> argparse.ArgumentParser:
     config.set_defaults(func=cmd_sys_config)
 
     show = sub.add_parser("show-default", help="print a default configuration block")
-    show.add_argument("name", help="sys, cMD, REST2 or all (case-insensitive)")
+    show.add_argument("name",
+                      help="sys, cMD, REST2, AIS or all (case-insensitive). AIS prints the "
+                           "annealed-importance-sampling block: the tau path, the source-trajectory "
+                           "contract and the observation schedule. Its null fields are required "
+                           "user input, not defaults.")
     show.set_defaults(func=cmd_show_default)
 
     sysgen = sub.add_parser("sys-gen", help="build the OpenMM system")

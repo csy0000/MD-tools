@@ -10,7 +10,7 @@ Currently OpenMM only. Amber and GROMACS are **not** supported and are not in pr
 
 | | |
 |---|---|
-| methods | conventional MD, REST2 (replica exchange with solute tempering) |
+| methods | conventional MD, REST2 (replica exchange with solute tempering), AIS (annealed importance sampling) |
 | solutes | peptides (ff14SB) and non-peptides (Sage 2.2.1 + AM1-BCC) |
 | explicit solvent | **TIP3P** water, dodecahedral box, **1.5 nm** padding, 0.15 M NaCl, PME at 1.0 nm |
 | explicit alternative | ff19SB + OPC, one flag away (`--solvent OPC`) |
@@ -35,6 +35,13 @@ md-openmm    sys-config     # write sys.config.yaml and md.config.yaml
 md-openmm    show-default   # print the defaults those files start from
 md-openmm    sys-gen        # build the OpenMM system
 md-openmm    md-gen         # generate the run scripts
+```
+
+There is no seventh. AIS is a `--method`, not a command:
+
+```bash
+md-openmm sys-config --method cMD AIS --peptide true --solvent TIP3P
+md-openmm show-default AIS
 ```
 
 ---
@@ -111,6 +118,11 @@ model are chosen together and not independently:
 | `TIP3P` *(default)* | ff14SB (`amber14-all.xml`) | `amber14/tip3p.xml` | ff14SB's backbone correction is an empirical fit made in TIP3P, and Sage's aqueous training data used TIP3P |
 | `OPC` | ff19SB (`amber19-all.xml`) | `amber19/opc.xml` | ff19SB's amino-acid-specific CMAPs were trained for a better water model, and its authors recommend OPC |
 | `GBn2` | ff14SB (`leaprc.protein.ff14SB`) | none | GBn2 was developed in the ff99SB/ff14SB lineage; see Example 2 |
+
+The two explicit rows are **coupled selections, not two independent keys**, and `sys-gen` enforces
+that on the file rather than only on what `sys-config` wrote. Editing `solvent.model` to `OPC` and
+leaving `forcefield.protein` at ff14SB is refused before a System exists, naming both fields —
+crossing them would run to completion and report a Hamiltonian nobody validated.
 
 Two files, both meant to be edited:
 
@@ -366,6 +378,120 @@ Implicit solvent has no periodic box, so:
 
 GBn2 is built through ParmEd rather than `AmberPrmtopFile` — the two differ by about 16 kJ/mol in
 `CustomGBForce` for identical radii, so the construction path is part of the Hamiltonian.
+
+---
+
+## Example 3 — AIS, annealed importance sampling
+
+AIS anneals the REST2 Hamiltonian from `tau = 0.5` to `tau = 0` while the coordinates propagate,
+and records the nonequilibrium work that switching costs. The complete editable example is
+[`docs/examples/ais-ala.yaml`](docs/examples/ais-ala.yaml).
+
+```bash
+md-openmm sys-config --method cMD AIS --peptide true --solvent TIP3P
+md-openmm show-default AIS                 # the block, with every required field marked null
+# ...edit md.config.yaml: the switching duration, the source trajectory, the time window...
+md-openmm sys-gen -i ./ALA.pdb --config sys.config.yaml -of ./inputs/
+md-openmm md-gen  -if ./inputs/ --config md.config.yaml   -of ./MD/
+
+cd MD && ./run_all.sh                      # equilibration and the cMD source run
+cd MD/AIS && ./run.sh                      # the switching paths
+```
+
+**AIS is not in `run_all.sh`, on purpose.** It starts from an equilibrium trajectory you have
+already produced, so running it "in order" with everything else would run it before its own input
+exists.
+
+### The path
+
+The Hamiltonian actually changes, through the same REST2 decomposition a fixed-tau cMD walker or a
+REST2 rung uses — it is not interpolated between two endpoint energies:
+
+```text
+s        = (1 - tau)^2      solute-solute terms        quadratic along a linear path in tau
+sqrt(s)  = 1 - tau          solute-environment terms   linear along a linear path in tau
+```
+
+Torsions about an omega bond are left unscaled, from the same `inputs/solute.yaml` list cMD and
+REST2 read. Temperature and beta are constant throughout: **this is Hamiltonian switching, not
+temperature annealing.** The enhanced region is the solute, as everywhere else.
+
+### Where the configurations come from
+
+AIS does not start from the common equilibration chain. It draws from an existing equilibrium
+ensemble **at `tau_start`**:
+
+* point `AIS.source.trajectory` at a **fixed-tau cMD run** (`cMD.tau: 0.5`) or at one **REST2
+  rung** (`REST2/replica_NN/production/whole_system.dcd`);
+* `start_time_ps` and `end_time_ps` are **inclusive** and select the eligible frames — use them to
+  discard the equilibration part of the source run;
+* the tau of the source is read from its own `resolved_run.yaml` and must equal `tau_start`. If it
+  cannot be established the run **fails** rather than assuming 0.5;
+* frame times come from the same record's `frame_time_map`, written where the reporter interval was
+  decided. For any other trajectory set both `first_frame_time_ps` and `frame_interval_ps` —
+  **a frame index is never treated as a time**, and a DCD header is not the production clock;
+* selection is uniform over eligible frames, without replacement, seeded from the recorded master
+  seed, and written to `selected_initial_frames.csv` *before* anything is propagated;
+* a DCD carries no velocities, so each path draws fresh Maxwell–Boltzmann momenta at the common
+  temperature with its own recorded seed.
+
+### 21 observations are not 21 steps
+
+A 100 ps switch at 2 fs is 50,000 integration steps and, at the default
+`parameter_update_interval_steps: 1`, 50,000 parameter changes. **21** of those points are
+*observed*: both endpoints plus 19 evenly spaced interior points, one coordinate frame each. The
+update count must divide exactly by 20, or the 21 points would be rounded onto the update grid
+instead of evenly spaced in tau — `md-gen` refuses a duration that does not divide, and says which
+multiple would.
+
+### The work convention
+
+```text
+delta_W_j = U(tau_{j+1}, x_j) - U(tau_j, x_j)
+```
+
+The parameters change first, at frozen coordinates; the configuration then propagates under the new
+Hamiltonian. `incremental_work_kj_mol` and `cumulative_work_kj_mol` are in **kJ/mol**;
+`cumulative_reduced_work` is `beta * W` with the single common beta of `common.temperature_kelvin`.
+Row 0 is the source configuration at `tau_start` with zero work; row 20 is `tau_end` with the total.
+
+### What you get
+
+```text
+MD/AIS/
+├── run.py  run.sh  rest2_scaling.py  path_definition.yaml   # written by md-gen
+├── selected_initial_frames.csv        # the deterministic selection, before any dynamics
+├── resolved_run.yaml  provenance.yaml # written by the run
+├── trajectory_0000/
+│   ├── observations.dcd               # exactly 21 whole-system frames
+│   ├── observations.csv               # 21 rows, one per frame, with tau/s/sqrt(s) and the work
+│   ├── final_state.xml  stdout.log  completed.json
+└── trajectory_0001/ ...
+```
+
+**One DCD per path, never a shared one.** Each path is an independent realisation; concatenating
+them would produce a file that looks like one continuous trajectory and is not.
+
+### Execution
+
+CUDA by default, with no silent CPU fallback. `gpu_devices: auto` uses every visible device;
+at most `min(number_of_trajectories, visible GPUs)` paths run at a time, assigned round-robin and
+deterministically, each in its own worker **process** — never one multithreaded Context across
+devices. Paths sharing a device run in turn. Every path has distinct integrator and velocity seeds.
+
+A completed path is skipped on a rerun, identified by its own completion record and its observation
+count. An incomplete one is **replaced**, never appended to.
+
+### What AIS here does not do
+
+* **Forward only.** No reverse path, no bidirectional workflow.
+* **No mid-path restart.** An interrupted path reruns from its source frame.
+* **Fixed volume.** No barostat is active during switching and **no pressure–volume term is in the
+  work**, even when the source ensemble was NPT. Each path keeps the box of the frame it started
+  from.
+* **No free-energy estimator.** The work columns are the input a Hummer–Szabo or Jarzynski analysis
+  would consume. Computing one is not part of this repository, and nothing here claims a free
+  energy.
 
 ---
 
