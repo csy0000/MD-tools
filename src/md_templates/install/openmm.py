@@ -7,6 +7,7 @@ missing.
 """
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -58,6 +59,87 @@ REQUIRED_EXECUTABLES = ("sqm", "antechamber", "tleap")
 
 #: Versions this repository advertises and therefore holds to the exact stable release.
 EXACT_RELEASE_VERSIONS = ("8.6.0",)
+
+
+def md_data_requirement() -> str:
+    """The pinned MD-data validator this repository is compatible with.
+
+    Read from `md_data_contract`, which is the ONE place that identity is maintained. A second
+    copy of a URL and a commit here is a second thing to forget to update, and the failure it
+    produces -- an environment validated against a contract the package does not target -- is
+    silent.
+    """
+    from ..openmm.md_data_contract import md_data_requirement as spec
+
+    return spec()
+
+
+def md_data_pin() -> dict[str, str]:
+    """Repository, commit and contract version of the pinned validator, for the record."""
+    from ..openmm import md_data_contract as contract
+
+    return {"repository": contract.MD_DATA_REPOSITORY,
+            "commit": contract.MD_DATA_COMMIT,
+            "contract_version": contract.MD_DATA_CONTRACT_VERSION,
+            "requirement": contract.md_data_requirement()}
+
+
+def install_md_data(prefix: Path, *, dry_run: bool = False) -> dict[str, Any]:
+    """Install the pinned MD-data validator into a created environment.
+
+    Optional by design: `dataset.enabled` is off by default and an unregistered local project
+    never needs it. But a user who follows the documented installation and then meets "md-data is
+    not installed" at `sys-gen`, an hour into preparing a system, has been told the wrong thing
+    about what was installed. So it is attempted, its outcome is recorded either way, and a
+    failure is a WARNING rather than a failed installation.
+    """
+    pin = md_data_pin()
+    command = [str(Path(prefix) / "bin" / "pip"), "install", pin["requirement"]]
+    record = {**pin, "command": command, "attempted": not dry_run}
+    if dry_run:
+        return {**record, "installed": None,
+                "note": "dry run: the specification was constructed but not executed"}
+    result = subprocess.run(command, capture_output=True, text=True)
+    record["returncode"] = result.returncode
+    if result.returncode != 0:
+        # The repository may be private, or the machine offline. Neither makes the OpenMM
+        # environment unusable, and neither is something to paper over.
+        record.update({"installed": False,
+                       "error": (result.stderr or result.stdout)[-800:].strip()})
+        return record
+    record["installed"] = True
+    return {**record, **probe_md_data(prefix)}
+
+
+def probe_md_data(prefix: Path) -> dict[str, Any]:
+    """Whether the installed validator imports, and what it says it is."""
+    script = ("import json\n"
+              "out = {}\n"
+              "try:\n"
+              "    import md_data\n"
+              "    out['import_ok'] = True\n"
+              "    out['version'] = getattr(md_data, '__version__', 'unknown')\n"
+              "    out['contract_version'] = getattr(md_data, 'CONTRACT_VERSION', 'unknown')\n"
+              "    out['validator_available'] = all(\n"
+              "        hasattr(md_data, name) for name in ('validate_dataset',))\n"
+              "    import md_data.storage as storage\n"
+              "    out['validator_available'] = (out['validator_available']\n"
+              "                                  and hasattr(storage, 'check_dataset_tree'))\n"
+              "except Exception as error:\n"
+              "    out['import_ok'] = False\n"
+              "    out['validator_available'] = False\n"
+              "    out['error'] = f'{type(error).__name__}: {error}'\n"
+              "print(json.dumps(out))\n")
+    result = subprocess.run([str(Path(prefix) / "bin" / "python"), "-c", script],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        return {"import_ok": False, "validator_available": False,
+                "error": (result.stderr or result.stdout)[-500:].strip()}
+    try:
+        return json.loads(result.stdout.strip().splitlines()[-1])
+    except Exception as error:
+        return {"import_ok": False, "validator_available": False,
+                "error": f"unreadable probe output ({type(error).__name__}: {error})"}
 
 
 class InstallError(RuntimeError):
@@ -240,6 +322,13 @@ def install_openmm(stack: Path, version: str = "8.6.0", *,
         log.write_text("\n".join(lines), encoding="utf-8")
         raise
     lines += ["", "# validation", repr(check)]
+
+    # The MD-data validator the contract-managed workflow needs. Attempted here so the documented
+    # installation delivers what the documentation advertises, and recorded either way.
+    md_data = install_md_data(prefix)
+    lines += ["", "# md-data (pinned)", "$ " + " ".join(md_data.get("command", [])),
+              repr(md_data)]
+    check["md_data"] = md_data
     log.write_text("\n".join(lines), encoding="utf-8")
 
     record = record_environment(stack, prefix, check, log=log, version=version)

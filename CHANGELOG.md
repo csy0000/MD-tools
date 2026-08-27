@@ -6,6 +6,47 @@ Entries below `0.2.0` predate the reduction to the six-command CLI in `ca29fcd` 
 registry/bundle/schema architecture that no longer exists. They are kept as history; they do not
 describe the current package.
 
+## Unreleased — integrity corrections
+
+Seven corrections that share one shape: a record that LOOKS complete.
+
+* **The production AIS source is never hashed** — not at generation, preflight, preparation or run
+  time. A full-file digest puts back exactly the cost the bounded `iterload` survey exists to
+  avoid. `sources.yaml` records bounded observations instead, with `trajectory_sha256: null` and a
+  note saying why. `AIS/inputs/sources.dcd` is a small generated input and remains digestible.
+* **A DCD header is no longer treated as evidence.** `NSET` survives an interrupted write intact,
+  so a file can claim 21 frames and hold 15. The small generated DCDs are now validated by READING
+  every frame with bounded `iterload`: exact count, readable final frame, finite coordinates, and a
+  non-degenerate periodic box under explicit solvent. Genuine byte truncation with an untouched
+  header is now caught and tested; replace-not-append is unchanged.
+* **Force-field preflight is route-aware and exact.** An absent expected field now FAILS. A peptide
+  system must claim no ligand force field, a ligand system no protein one, and an implicit system
+  neither a water model nor a barostat. The resolved configuration now records the OpenFF
+  *resource* (`openff-2.2.1`) rather than the label, so preflight compares exactly without a second
+  copy of the mapping; and a ligand build records `forcefield.protein: null`, because no protein XML
+  is loaded for one.
+* **`--check` recomputes stage identity** instead of accepting any nonempty hash. One canonical
+  fingerprint, `md_stages.stage_config_sha256`, imported by preflight rather than reimplemented.
+  The current stage's `stage.yaml`, the parent's, and the parent's `final_state.xml` digest are all
+  recompared, and a changed request or handoff fails before a Context exists.
+* **`dataset.templates.commit` is checked against established generator provenance** — a Git
+  checkout or PEP 610 `direct_url.json` — rather than only against `^[0-9a-f]{40}$`. Nothing is
+  derived from a version, branch or date, and an install that cannot establish an exact commit
+  refuses contract-managed generation. A dirty checkout pins HEAD, warns loudly, and is recorded as
+  `git_dirty`. Preflight compares every record that names a generator commit.
+* **AIS compares full atom identity and bonds.** Atom names repeat throughout a protein, so names
+  and counts could not tell a reassigned topology from the original. Chain, residue index and id,
+  residue name, atom name, element and bond connectivity are compared per index, and the first
+  difference is named. Coordinates are deliberately not compared.
+* **The MD-data validator is pinned to an exact commit over HTTPS**, in one maintained place, and
+  `md-template install` installs and probes it, recording version, commit, import success and
+  validator availability. The previous `git+ssh://.../dev` recommendation is gone: an unpinned
+  branch over SSH is how two people end up validating against different contracts.
+
+**Migration.** None for configuration. An AIS directory generated before this change re-prepares
+its inputs. Contract-managed generation now requires `dataset.templates.commit` to be the actual
+generating commit — a placeholder that was previously accepted will now be refused.
+
 ## Unreleased — the MD-data contract, preflight, and streamed AIS sources
 
 **Optional contract-managed datasets.** Set `dataset.enabled: true` in `sys.config.yaml` and

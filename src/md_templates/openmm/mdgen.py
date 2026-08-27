@@ -395,6 +395,11 @@ def _plan_dataset(dataset_block: dict[str, Any], out: Path,
             f"  `md-openmm sys-gen -of \"$MD_DATA_LOCAL/{MD.COMMON_COMPONENT}/\"` creates the "
             f"dataset and its manifest; md-gen adds method components to it.")
     existing = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    # md-gen does not re-ask for the identity, so the commit it checks is the one sys-gen already
+    # recorded in the manifest. It must still be the generator that is running NOW: generating a
+    # dataset's system with one checkout and its scripts with another produces a tree whose single
+    # recorded provenance is true of only half of it.
+    established = MD.check_templates_commit((existing.get("templates") or {}).get("commit"))
 
     components = [
         MD.component_entry("minimization", kind="simulation", method="minimization",
@@ -412,6 +417,7 @@ def _plan_dataset(dataset_block: dict[str, Any], out: Path,
     manifest["components"] = MD.merge_components(existing.get("components") or [], components)
     MD.validate(manifest)                       # metadata only: the directories do not exist yet
     return {"contract_managed": True, "manifest": manifest, "location": location,
+            "generator": established,
             "added": [entry["name"] for entry in components]}
 
 
@@ -430,6 +436,11 @@ def _write_dataset_manifest(plan: dict[str, Any], *, echo: bool = True) -> dict[
         print(f"  manifest     : {path.name} validated by md-data "
               f"{report['validator']['version']} (contract v"
               f"{report['validator']['contract_version']}), layout verified")
+    established = plan.get("generator") or {}
+    if echo and established.get("dirty"):
+        print(f"  WARNING      : templates.commit {established['commit'][:12]} is this "
+              f"checkout's HEAD, but the working tree has uncommitted changes, so the recorded "
+              f"pin does not fully describe what ran. provenance.yaml records git_dirty: true.")
     # `md_data` / `md_data_local` are deliberately absent: they are this machine's storage
     # location, and the record must survive the tree being moved.
     return {"contract_managed": True, "manifest": MD.MANIFEST_NAME, **report}

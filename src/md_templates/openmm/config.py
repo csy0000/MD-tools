@@ -74,10 +74,39 @@ def resolve_sys_config(document: dict[str, Any]) -> dict[str, Any]:
     else:
         resolved.pop("implicit_solvent", None)
 
+    # The ligand force field is recorded as the resource that will actually be loaded, decided
+    # here rather than left as a label for a reader to map later. `sage-2.2.1` is what a user
+    # writes; `openff-2.2.1` is what the toolkit resolves, and preflight compares the record
+    # against this without needing a second copy of the mapping.
+    solute = resolved.get("solute") or {}
+    if not bool(solute.get("peptide", True)):
+        resolved["forcefield"] = dict(resolved.get("forcefield") or {})
+        resolved["forcefield"]["ligand"] = openff_resource(solute.get("ligand_forcefield"))
+        resolved["forcefield"]["ligand_charge_method"] = solute.get("ligand_charge_method")
+        # No protein force field participates in a ligand build -- the ligand route loads only
+        # the water XML and the SMIRNOFF template generator -- and recording one would name a
+        # force field that never loaded. Same rule as water under implicit solvent.
+        resolved["forcefield"]["protein"] = None
+
     _check_constraints(resolved)
     _check_protein_solvation_pairing(resolved)
     _check_explicit_pairing(resolved)
     return resolved
+
+
+def openff_resource(name):
+    """`sage-2.2.1` is what a user writes; `openff-2.2.1` is what the toolkit loads.
+
+    The installed `openforcefields` package ships the file as `openff-2.2.1.offxml`, and
+    `SMIRNOFFTemplateGenerator` resolves the name with or without the suffix. A name that does not
+    resolve raises there, at the point the parameters would have been assigned.
+    """
+    if not name:
+        return None
+    text = str(name).strip().lower()
+    if text.startswith("sage-"):
+        return "openff-" + text[len("sage-"):]
+    return text
 
 
 def _check_explicit_pairing(resolved: dict[str, Any]) -> None:

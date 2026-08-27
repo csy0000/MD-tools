@@ -199,9 +199,9 @@ def test_the_default_ligand_forcefield_resource_loads():
     from openff.toolkit.typing.engines.smirnoff import ForceField as OFFForceField
 
     from md_templates.openmm.defaults import LIGAND_FORCEFIELD
-    from md_templates.openmm.sysgen import _openff_name
+    from md_templates.openmm.config import openff_resource
 
-    resource = _openff_name(LIGAND_FORCEFIELD)
+    resource = openff_resource(LIGAND_FORCEFIELD)
     assert resource == "openff-2.2.1"
     assert OFFForceField(f"{resource}.offxml") is not None
 

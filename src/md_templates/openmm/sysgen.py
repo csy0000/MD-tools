@@ -21,7 +21,8 @@ from typing import Any, Optional
 import yaml
 
 from . import md_data_contract as MD
-from .config import ConfigError, resolve_sys_config, sha256_of_document, write_yaml
+from .config import (ConfigError, openff_resource, resolve_sys_config, sha256_of_document,
+                     write_yaml)
 from .defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT
 from .forcefield_record import build_forcefield_record
 
@@ -75,7 +76,7 @@ def _legacy_cfg(resolved: dict[str, Any]) -> dict[str, Any]:
 
     cfg["forcefield"]["protein"] = forcefield.get("protein")
     cfg["forcefield"]["water"] = _water_xml(forcefield.get("water"))
-    cfg["forcefield"]["ligand"] = _openff_name(solute.get("ligand_forcefield"))
+    cfg["forcefield"]["ligand"] = openff_resource(solute.get("ligand_forcefield"))
     cfg["forcefield"]["ligand_charge_method"] = solute.get("ligand_charge_method")
 
     cfg["system_build"]["constraints"] = constraints.get("type", "HBonds")
@@ -137,21 +138,6 @@ def _water_xml(name: Optional[str]) -> Optional[str]:
             f"(for example {', '.join(sorted(set(_QUALIFIED_WATER.values())))}). Known short "
             f"labels: {', '.join(sorted(_QUALIFIED_WATER))}.")
     return qualified
-
-
-def _openff_name(name: Optional[str]) -> Optional[str]:
-    """`sage-2.2.1` is what a user writes; `openff-2.2.1` is what the toolkit loads.
-
-    The installed `openforcefields` package ships the file as `openff-2.2.1.offxml`, and
-    `SMIRNOFFTemplateGenerator` resolves the name with or without the suffix. A name that does not
-    resolve raises there, at the point the parameters would have been assigned.
-    """
-    if not name:
-        return None
-    text = str(name).strip().lower()
-    if text.startswith("sage-"):
-        return "openff-" + text[len("sage-"):]
-    return text
 
 
 def _solute_document(topology, solute_indices, omega, *, route: str) -> dict[str, Any]:
@@ -325,6 +311,10 @@ def _plan_dataset(resolved: dict[str, Any], out: Path) -> dict[str, Any]:
                 "validator": MD.md_data_identity()}
 
     MD.require_md_data()
+    # The claimed templates.commit must be the commit that is actually generating this. Checked
+    # here, before the System is built, because a provenance that cannot be verified is a reason
+    # not to start rather than something to discover after an hour of solvation.
+    established = MD.check_templates_commit((block.get("templates") or {}).get("commit"))
     location = MD.resolve_roots(out, component=MD.COMMON_COMPONENT)
     manifest = MD.build_manifest(
         dataset_block=block, location=location,
@@ -334,7 +324,8 @@ def _plan_dataset(resolved: dict[str, Any], out: Path) -> dict[str, Any]:
                         "method component of this dataset.")],
         templates_version=implementation_identity()["version"])
     MD.validate(manifest)                       # metadata only: the tree does not exist yet
-    return {"contract_managed": True, "manifest": manifest, "location": location}
+    return {"contract_managed": True, "manifest": manifest, "location": location,
+            "generator": established}
 
 
 def _write_dataset_manifest(plan: dict[str, Any], *, echo: bool = True) -> dict[str, Any]:
@@ -359,6 +350,11 @@ def _write_dataset_manifest(plan: dict[str, Any], *, echo: bool = True) -> dict[
         print(f"  manifest     : {path.name} validated by md-data "
               f"{report['validator']['version']} (contract v"
               f"{report['validator']['contract_version']})")
+    established = plan.get("generator") or {}
+    if echo and established.get("dirty"):
+        print(f"  WARNING      : templates.commit {established['commit'][:12]} is this "
+              f"checkout's HEAD, but the working tree has uncommitted changes, so the recorded "
+              f"pin does not fully describe what ran. provenance.yaml records git_dirty: true.")
     # `md_data` / `md_data_local` are deliberately absent: they are this machine's storage
     # location, and the record must survive the tree being moved.
     return {"contract_managed": True, "manifest": MD.MANIFEST_NAME, **report}

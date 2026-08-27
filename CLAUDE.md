@@ -96,6 +96,16 @@ checkpoint or trajectory exists. `--check` runs the same gate and stops.
 - A path counts as complete only if the completion record, CSV rows, DCD existence, DCD frame
   count, frame mapping and configuration identity all agree. A healthy JSON beside a truncated DCD
   is the case this exists to catch.
+- NEVER hash the production source trajectory — not at generation, preflight, preparation or run
+  time. Record bounded observations instead: path, byte size, frame count from the `iterload`
+  survey, frame timing, selected indices, chunk size and chunks read. MD-data hashes it once at
+  archival. `AIS/inputs/sources.dcd` is a small generated input and may be digested; the two files
+  are named and recorded differently on purpose.
+- A DCD header is not evidence of completeness. `NSET` survives an interrupted write intact, so
+  the SMALL GENERATED files — `AIS/inputs/sources.dcd` and every `observations.dcd` — are
+  validated by READING every frame with bounded `iterload`: exact count, final frame readable,
+  finite coordinates, and a non-degenerate box under explicit solvent. Never point that at a
+  production trajectory.
 - The selected frames are materialised once into `AIS/inputs/sources.dcd` + `sources.yaml`, before
   any path runs, and are NOT deleted afterwards. After preparation the source trajectory is never
   opened again: a rerun must survive the source being archived or deleted.
@@ -107,6 +117,29 @@ checkpoint or trajectory exists. `--check` runs the same gate and stops.
   correct. These are starting configurations; a `final_state.xml` is a restart. Do not blur them.
 - Box vectors are stored in `sources.yaml` as exact reduced numbers. The DCD's cell is a
   convenience for viewers; never recover the propagation box from its lengths and angles.
+
+## Identity checks that must recompute
+
+A stored hash that is merely PRESENT proves nothing. Every one of these recomputes and compares.
+
+- One canonical stage fingerprint, `md_stages.stage_config_sha256`, imported by preflight rather
+  than reimplemented. Two subtly different hashes over "the stage request" means the run writes one
+  and the check compares another.
+- `--check` recomputes the current stage's fingerprint from its `stage.yaml` and the PARENT's from
+  the parent's, and compares the parent's `final_state.xml` against the digest recorded for it.
+  A changed request or a changed handoff fails before a Context exists.
+- Force-field preflight is route-aware and exact. An ABSENT expected field FAILS — that is the case
+  where what was built is least knowable. A peptide system must claim no ligand force field, a
+  ligand system no protein one, and an implicit system neither a water model nor a barostat.
+- `dataset.templates.commit` must equal the commit that is actually generating the dataset,
+  established from a Git checkout or PEP 610 `direct_url.json`. Never derive one from a version, a
+  branch or a date. When no exact commit can be established, REFUSE contract-managed generation.
+  A dirty checkout pins HEAD and says so loudly; `provenance.yaml` carries `git_dirty`.
+- AIS compares full per-index atom identity — chain, residue index and id, residue name, atom name,
+  element — plus bond connectivity. Atom names repeat within a protein, so names and counts cannot
+  tell two topologies apart.
+- The MD-data pin lives in ONE place, `md_data_contract.MD_DATA_REPOSITORY` / `MD_DATA_COMMIT`, as
+  HTTPS and an exact 40-hex commit. Never SSH, never a branch, never a second copy of the URL.
 
 ## Scientific safety
 

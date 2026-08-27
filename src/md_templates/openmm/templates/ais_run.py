@@ -436,8 +436,13 @@ CSV_NAME = "observations.csv"
 COMPLETION_NAME = "completed.json"
 
 
-def dcd_frame_count(path):
-    """Frames in a DCD, from its header. Bounded: 100 bytes, never the coordinate blocks."""
+def dcd_header_frames(path):
+    """What a DCD's header CLAIMS. Bounded: 100 bytes, never the coordinate blocks.
+
+    A first signal only. The header survives an interrupted write intact, so a file can claim the
+    right count while its last coordinate record is short or missing. Never treat this as proof of
+    completeness -- `validate_generated_dcd` is what establishes that.
+    """
     import struct
 
     with open(path, "rb") as handle:
@@ -445,6 +450,62 @@ def dcd_frame_count(path):
             raise ValueError(f"{path}: not a little-endian DCD")
         control = handle.read(84)
     return struct.unpack("<i", control[4:8])[0]
+
+
+def validate_generated_dcd(path, expected, *, topology, need_box, what):
+    """Physically validate a SMALL GENERATED DCD by reading every frame out of it.
+
+    Returns `(True, detail)` or `(False, reason)`.
+
+    The header is not evidence. An interrupted write leaves `NSET` at the value the writer intended
+    and the final coordinate record short, so a file that claims 21 frames can hold 20 and a bit.
+    The only way to know is to read them, which is affordable here and ONLY here: these files hold
+    one frame per path, or the configured observations. Never point this at a production
+    trajectory -- that is what the bounded `iterload` survey is for.
+    """
+    import mdtraj
+
+    path = Path(path)
+    if not path.is_file():
+        return False, f"{what} is missing"
+    try:
+        claimed = dcd_header_frames(path)
+    except Exception as error:
+        return False, f"{what} is not a readable DCD ({type(error).__name__}: {error})"
+
+    frames = 0
+    last = None
+    try:
+        for piece in mdtraj.iterload(str(path), top=str(topology), chunk=SOURCE_CHUNK_FRAMES):
+            if not np.all(np.isfinite(piece.xyz)):
+                return False, f"{what} frame {frames} holds non-finite coordinates"
+            if need_box:
+                boxes = piece.unitcell_vectors
+                if boxes is None:
+                    return False, (f"{what} carries no periodic box vectors, and this is an "
+                                   f"explicit-solvent system")
+                if not np.all(np.isfinite(boxes)):
+                    return False, f"{what} frame {frames} holds non-finite box vectors"
+                volumes = np.abs(np.linalg.det(boxes))
+                if not np.all(volumes > 0):
+                    return False, f"{what} frame {frames} has a degenerate periodic box"
+            frames += int(piece.n_frames)
+            last = piece
+    except Exception as error:
+        # The characteristic signature of a physically truncated file: the header promised more
+        # than the bytes deliver, and the reader runs off the end of the last record.
+        return False, (f"{what} claims {claimed} frame(s) but only {frames} could be read "
+                       f"before {type(error).__name__}: {error} -- truncated, not short")
+
+    if frames != expected:
+        kind = ("truncated, not short" if frames < expected else "longer than the schedule")
+        return False, (f"{what} holds {frames} readable frame(s), {expected} expected "
+                       f"(header claims {claimed}) -- {kind}")
+    if claimed != expected:
+        return False, (f"{what} reads {frames} frame(s) but its header claims {claimed}")
+    if last is None or int(last.n_frames) == 0:
+        return False, f"{what} ended before its final frame could be read"
+    return True, f"{frames} frame(s), every one read"
 
 
 def path_is_complete(directory, index=None):
@@ -494,16 +555,16 @@ def path_is_complete(directory, index=None):
         return False, f"{len(rows)} observation row(s) on disk, {expected} expected"
 
     # The DCD is the artifact most likely to be missing or short after an interrupted run, and the
-    # one whose absence a healthy JSON and CSV would otherwise hide completely.
+    # one whose absence a healthy JSON and CSV would otherwise hide completely. Every frame is
+    # READ, not counted from the header: an interrupted write leaves the header claiming the count
+    # the writer intended and the last coordinate record short.
     if not dcd.is_file():
         return False, f"{DCD_NAME} is missing, so the coordinates this record describes are gone"
-    try:
-        frames = dcd_frame_count(dcd)
-    except Exception as error:
-        return False, f"{DCD_NAME} is unreadable ({type(error).__name__}: {error})"
-    if frames != expected:
-        return False, (f"{DCD_NAME} holds {frames} frame(s), {expected} expected -- truncated, "
-                       f"not short")
+    intact, detail = validate_generated_dcd(
+        dcd, expected, topology=INPUTS / "topology.pdb", need_box=not implicit, what=DCD_NAME)
+    if not intact:
+        return False, detail
+    frames = expected
 
     mapping = [int(row["coordinate_frame_index"]) for row in rows]
     if mapping != list(range(expected)):
@@ -844,7 +905,15 @@ def write_prepared_sources(ensemble, kept, chunks):
         "source": {
             "trajectory": relative_to_project(ensemble["paths"]["trajectory"]),
             "trajectory_configured": str(method["source"]["trajectory"]),
-            "trajectory_sha256": sha256_file(ensemble["paths"]["trajectory"]),
+            # DELIBERATELY NOT HASHED. A production source can be hundreds of gigabytes, and a
+            # full-file digest at generation, preflight or run time costs more than it proves --
+            # the whole point of the bounded iterload survey is that cost must not scale with the
+            # length of the source. These are bounded, non-authoritative observations instead.
+            "trajectory_sha256": None,
+            "trajectory_not_hashed": (
+                "the production source is never hashed at runtime; MD-data hashes it once at "
+                "archival"),
+            "trajectory_bytes": int(Path(ensemble["paths"]["trajectory"]).stat().st_size),
             "n_frames": int(survey["n_frames"]),
             "loader": survey["loader"],
             "chunk_frames": int(survey["chunk_frames"]),
@@ -896,12 +965,17 @@ def read_prepared_sources():
             f"{where} describes {record.get('n_paths')} prepared configuration(s) but "
             f"{SOURCES_DIR}/{trajectory.name} is missing. Remove {SOURCES_DIR}/ to prepare them "
             f"again from the source trajectory.")
-    frames = dcd_frame_count(trajectory)
-    if frames != int(record.get("n_paths", -1)):
+    # Physically validated: every prepared configuration is read back. These are the coordinates
+    # the paths start from, so "the header says three" is not good enough.
+    intact, detail = validate_generated_dcd(
+        trajectory, int(record.get("n_paths", -1)),
+        topology=(PROJECT / record["topology"]).resolve(), need_box=not implicit,
+        what=f"{SOURCES_DIR}/{trajectory.name}")
+    if not intact:
         raise SystemExit(
-            f"{SOURCES_DIR}/{trajectory.name} holds {frames} frame(s) but {where} describes "
-            f"{record.get('n_paths')} path(s). The prepared inputs are truncated or were "
-            f"replaced; remove {SOURCES_DIR}/ to prepare them again.")
+            f"{detail}, against the {record.get('n_paths')} path(s) {where} describes. The "
+            f"prepared inputs are incomplete; remove {SOURCES_DIR}/ to prepare them again from "
+            f"the source trajectory.")
 
     wanted, have = selection_identity(), record.get("selection") or {}
     differing = {key: (have.get(key), value) for key, value in wanted.items()
@@ -1021,25 +1095,79 @@ def collect_frames(paths, wanted, *, chunk=SOURCE_CHUNK_FRAMES):
     return kept, chunks
 
 
-def validate_topologies(paths):
-    """The source topology, the prepared topology, and the System are the same atoms in order.
+def atom_identity(topology):
+    """A per-index identity tuple for every atom, and the bond set as index pairs.
 
-    Parameters are assigned per index, so a reordered trajectory would be scaled atom-by-atom
-    wrongly -- silently, because every count would still match.
+    Atom NAME alone is not identity. A protein is full of repeated names -- every residue has an
+    N, a CA, a C, an O -- so a topology whose residues were reassigned, whose chains were split
+    differently, or whose atoms were renumbered within a residue compares equal on names while
+    describing a different molecule. The System's parameters are assigned per index, so that
+    mismatch would scale the wrong atoms, silently, with every count still agreeing.
+    """
+    atoms = []
+    for atom in topology.atoms():
+        residue = atom.residue
+        chain = residue.chain
+        atoms.append((
+            str(getattr(chain, "id", "") or ""),
+            int(chain.index),
+            int(residue.index),
+            str(getattr(residue, "id", "") or ""),
+            str(residue.name),
+            str(atom.name),
+            (atom.element.symbol if atom.element is not None else ""),
+        ))
+    # Sorted within each pair and then overall, so the same connectivity written in a different
+    # order is the same connectivity. Bond ORDER between different atoms is a real difference.
+    bonds = sorted(tuple(sorted((int(a.index), int(b.index)))) for a, b in topology.bonds())
+    return atoms, bonds
+
+
+ATOM_FIELDS = ("chain id", "chain index", "residue index", "residue id", "residue name",
+               "atom name", "element")
+
+
+def validate_topologies(paths):
+    """The source topology and the prepared topology are the same atoms, in the same order.
+
+    Compared on full per-index identity and on bond connectivity, not on names and counts.
+    Coordinates are deliberately NOT compared: the source ensemble is expected to hold different
+    configurations, which is the entire point of sampling from it.
     """
     reference = PDBFile(str(paths["topology"]))
     prepared = PDBFile(str(INPUTS / "topology.pdb"))
-    if reference.topology.getNumAtoms() != prepared.topology.getNumAtoms():
+    source_atoms, source_bonds = atom_identity(reference.topology)
+    prepared_atoms, prepared_bonds = atom_identity(prepared.topology)
+
+    if len(source_atoms) != len(prepared_atoms):
         raise SystemExit(
-            f"{paths['topology']} has {reference.topology.getNumAtoms()} atoms but the prepared "
-            f"inputs/topology.pdb has {prepared.topology.getNumAtoms()}.")
-    mismatched = [(a.name, b.name) for a, b in
-                  zip(reference.topology.atoms(), prepared.topology.atoms()) if a.name != b.name]
-    if mismatched:
+            f"{paths['topology']} has {len(source_atoms)} atoms but the prepared "
+            f"inputs/topology.pdb has {len(prepared_atoms)}.")
+
+    for index, (mine, theirs) in enumerate(zip(source_atoms, prepared_atoms)):
+        if mine == theirs:
+            continue
+        differing = ", ".join(f"{ATOM_FIELDS[i]} {a!r} vs {b!r}"
+                              for i, (a, b) in enumerate(zip(mine, theirs)) if a != b)
         raise SystemExit(
-            f"the source topology and inputs/topology.pdb disagree on atom order: "
-            f"{len(mismatched)} atom name(s) differ, first {mismatched[0]}. The System's "
-            f"parameters are per index, so a reordered trajectory would be scaled wrongly.")
+            f"the source topology and inputs/topology.pdb disagree at atom index {index}: "
+            f"{differing}.\n"
+            f"  source:   {mine}\n"
+            f"  prepared: {theirs}\n"
+            f"  The System's parameters are assigned per index, so a topology that differs here "
+            f"would scale the wrong atoms while every count still matched.")
+
+    if source_bonds != prepared_bonds:
+        only_source = [b for b in source_bonds if b not in set(prepared_bonds)]
+        only_prepared = [b for b in prepared_bonds if b not in set(source_bonds)]
+        first = (only_source or only_prepared or [None])[0]
+        raise SystemExit(
+            f"the source topology and inputs/topology.pdb have {len(source_bonds)} and "
+            f"{len(prepared_bonds)} bond(s) and they are not the same bonds; first difference "
+            f"{first} ({len(only_source)} only in the source, {len(only_prepared)} only in the "
+            f"prepared inputs).\n"
+            f"  Same atoms in the same order is not enough: different connectivity is a different "
+            f"molecule, and REST2 scaling is decided from bonded terms.")
     return reference
 
 

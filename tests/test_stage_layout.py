@@ -360,7 +360,11 @@ def test_changing_any_run_defining_field_makes_a_completed_stage_refuse(tmp_path
     result = run_stage(stage)
     combined = result.stdout + result.stderr
     assert result.returncode != 0, f"a changed {field} was accepted as complete"
-    assert "different stage request" in combined, combined[-800:]
+    # The refusal now comes from the shared preflight, which RECOMPUTES the signature rather than
+    # checking that one was recorded -- so it happens before a Context exists. Same invariant.
+    assert "[FAIL] completion record" in combined, combined[-800:]
+    assert "stage.yaml has changed since this stage ran" in combined, combined[-800:]
+    assert "no Context was created" in combined
 
 
 def test_removing_the_runtime_outputs_starts_the_stage_fresh_from_its_parent(tmp_path):
@@ -477,7 +481,8 @@ def test_a_completion_record_from_a_different_request_refuses_to_run(tmp_path):
     result = run_stage(stage)
     combined = result.stdout + result.stderr
     assert result.returncode != 0, combined[-800:]
-    assert "different stage request" in combined, combined[-800:]
+    assert "[FAIL] completion record" in combined, combined[-800:]
+    assert "stage.yaml has changed since this stage ran" in combined, combined[-800:]
 
 
 def test_a_completion_record_with_no_signature_refuses_to_run(tmp_path):

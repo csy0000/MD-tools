@@ -533,6 +533,27 @@ $MD_DATA/{namespace}/{yyyy-mm}/{dataset_name}/
 `eq/nvt_1kcal` is a stage directory, not a component. Components are the top-level names in
 `dataset.yaml`, and a component's `path` always equals its `name`.
 
+### Installing the validator
+
+MD-templates never carries a copy of MD-data's schema, so contract-managed generation needs the
+validator itself. It is pinned to an exact commit over **HTTPS**, in one maintained place
+(`md_data_contract.MD_DATA_REPOSITORY` / `MD_DATA_COMMIT`):
+
+```bash
+pip install 'md-data @ git+https://github.com/csy0000/MD-data.git@48628f9a5d3ace6c6398a63bc3905cd58d542de3'
+```
+
+`md-template install` does this for you as part of creating the OpenMM environment, and records the
+package version, the pinned commit, whether the import succeeded and whether the validator
+functions are present. It is not fatal if it fails — `dataset.enabled` is off by default and an
+unregistered project never needs it — but the outcome is recorded either way, so a user who follows
+the documented installation is not told one thing and given another.
+
+A branch over SSH is deliberately *not* what is documented. `git+ssh://.../dev` needs a key agent
+and moves under your feet: two people running the same documented command on the same day can end
+up validating against different contracts, which is the exact drift this arrangement exists to
+prevent.
+
 ### The two variables
 
 | variable | meaning |
@@ -557,6 +578,12 @@ in `sys.config.yaml`, and never retyped.
 ### What you must supply, and why it is not guessed
 
 `md-openmm show-default dataset` prints the block with every required field `null`:
+
+`templates.commit` is additionally **checked against the MD-templates that is actually running**,
+established from a Git checkout or a PEP 610 `direct_url.json`. A syntactically valid 40-hex string
+that names a different commit is refused, and so is generation from an install where no exact commit
+can be established — a pin that points at nothing is worse than none. A dirty checkout pins its HEAD
+and says so loudly; `provenance.yaml` records `git_dirty`.
 
 | field | why this repository cannot invent it |
 |---|---|
@@ -587,10 +614,32 @@ append to the stage's `run.log`, because a check that leaves a trace in the reco
 not the non-destructive thing it claims to be.
 
 What preflight checks: the manifest validates against MD-data; the dataset is `active` and not
-read-only; this directory's component is declared, owned and not a link; `common/` is present and
-its `SHA256SUMS` still match; `forcefield.json` agrees with `resolved_sys.config.yaml`; the CUDA
-platform exists **and at least one device is visible**; the parent stage completed consistently; and
-this stage has not already completed.
+read-only; this directory's component is declared, owned and not a link; every record naming a
+generator commit agrees; `common/` is present and its `SHA256SUMS` still match; `forcefield.json`
+agrees with `resolved_sys.config.yaml`; the CUDA platform exists **and at least one device is
+visible**; the parent stage completed the request it still asks for; and this stage has not already
+completed a different one.
+
+Two of those recompute rather than look:
+
+**Stage identity.** A stored `stage_config_sha256` being present says only that something was
+recorded. `--check` recomputes the fingerprint from the current `stage.yaml`, and the parent's from
+the parent's, using the generated project's own `md_stages.stage_config_sha256` — one
+implementation, imported, because two subtly different hashes over "the stage request" would have
+the run write one and the check compare another. It also compares the parent's `final_state.xml`
+against the digest recorded for it, so a handoff edited after the fact is caught.
+
+```text
+[FAIL] parent stage  nvt_1kcal/stage.yaml has changed since it ran: it now hashes to
+                     91c027debaef but its completion record was written for 07f49acc0587.
+```
+
+**Force fields, exactly and by route.** An *absent* expected field fails — that is the case where
+what was built is least knowable. A peptide system must claim no ligand force field, a ligand system
+no protein one, and an implicit system neither a water model nor a barostat. The two acceptance
+routes are ff14SB + TIP3P for a peptide and Sage 2.2.1 with its configured charge method + TIP3P
+for a ligand; the generator does not build a combined protein-ligand complex, so no single test
+system loads all three.
 
 It is deliberately **bounded**. It reads a fixed list of named files. It never walks `$MD_DATA`,
 never enumerates other datasets, never opens a trajectory and never hashes one. A preflight whose
@@ -625,6 +674,14 @@ Missing tau is refused. A `source_tau` that contradicts the companion record is 
 both values — it is never silently preferred. A `source_tau` that does not equal `path.tau_start`
 is refused: annealing from a state sampled at a different Hamiltonian is not the calculation the
 work values would be interpreted as.
+
+**The production source is never hashed.** Not at generation, preflight, preparation or run time.
+A full-file digest of a trajectory that may be hundreds of gigabytes costs more than it proves, and
+it puts back exactly the cost the bounded survey exists to avoid. `sources.yaml` records bounded
+observations instead — path, byte size, frame count, frame timing, selected indices, chunk size and
+chunks read — and `trajectory_sha256` is explicitly `null` with a note saying why. MD-data hashes
+the trajectory once, at archival. `AIS/inputs/sources.dcd` is a small generated input and is a
+different file with a different name.
 
 **The trajectory is streamed, never loaded.** Source frames are read with `mdtraj.iterload` in
 bounded chunks (50 frames), in two passes: one to count and locate the frames the time window
@@ -676,11 +733,18 @@ closest starting frames were. Two paths beginning a few femtoseconds apart are t
 configurations, and their work values are not the independent samples the CSV makes them look
 like. Nothing enforces a spacing; the number is recorded so you can see it.
 
-**A path is complete only if everything agrees.** Six independent facts must line up before a
-finished path is skipped on a rerun: the completion record says so, its trajectory index matches,
-the observation count matches, the CSV exists with the right number of rows, `observations.dcd`
-exists, and its frame count equals the CSV row count one-to-one. A path whose DCD was truncated or
-deleted while its JSON and CSV stayed healthy is reported and rerun, not skipped.
+**A path is complete only if everything agrees**, and the frames are READ to establish it. A DCD
+header is not evidence: `NSET` survives an interrupted write intact, so a file can claim 21 frames
+and hold 15 and a bit. The small generated files — `AIS/inputs/sources.dcd` and every
+`observations.dcd` — are validated by reading every frame with bounded `iterload`, requiring the
+exact count, a readable final frame, finite coordinates and a non-degenerate box under explicit
+solvent. That is affordable because these files hold one frame per path or the configured
+observations; it is never pointed at a production trajectory.
+
+On top of that, the completion record must say so, its trajectory index must match, the CSV must
+exist with the right number of rows, and the rows must map one-to-one onto the frames. A path whose
+DCD was byte-truncated, or deleted, while its JSON and CSV stayed healthy is reported and rerun,
+never skipped — and it is replaced, never appended to.
 
 ---
 

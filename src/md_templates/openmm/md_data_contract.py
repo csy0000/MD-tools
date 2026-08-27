@@ -58,6 +58,27 @@ def md_data_identity() -> dict[str, Any]:
     }
 
 
+#: The ONE place the MD-data compatibility identity is maintained. Everything that installs,
+#: documents or reports the dependency reads it from here rather than repeating a URL.
+#:
+#: HTTPS and an exact 40-hex commit, never SSH and never a branch. `git+ssh://.../dev` needs a key
+#: agent and moves under the user's feet: two people following the same documented command on the
+#: same day can end up validating against different contracts, which is precisely the drift this
+#: whole arrangement exists to prevent.
+MD_DATA_REPOSITORY = "https://github.com/csy0000/MD-data"
+MD_DATA_COMMIT = "48628f9a5d3ace6c6398a63bc3905cd58d542de3"
+MD_DATA_CONTRACT_VERSION = "1.0"
+
+
+def md_data_requirement() -> str:
+    """The pip requirement specifier for the compatible validator."""
+    return f"md-data @ git+{MD_DATA_REPOSITORY}.git@{MD_DATA_COMMIT}"
+
+
+def md_data_install_hint() -> str:
+    return f"      pip install '{md_data_requirement()}'"
+
+
 def require_md_data():
     """The published validator, or a refusal that says how to install it."""
     try:
@@ -67,11 +88,80 @@ def require_md_data():
             "dataset.enabled is true, but the `md-data` package is not installed, so this "
             "manifest cannot be validated against the contract that owns it.\n"
             f"  ({type(error).__name__}: {error})\n"
-            "  Install it into this environment:\n"
-            "      pip install git+ssh://git@github.com/csy0000/MD-data.git\n"
+            "  Install the pinned compatible validator into this environment:\n"
+            f"{md_data_install_hint()}\n"
             "  This package deliberately carries no copy of MD-data's schema: a second "
             "implementation of a contract is one that drifts, silently.") from None
     return md_data
+
+
+# ---------------------------------------------------------------------------------------------
+# Which MD-templates generated this
+# ---------------------------------------------------------------------------------------------
+
+def generator_commit() -> dict[str, Any]:
+    """The commit of the MD-templates that is ACTUALLY RUNNING, and how it was established.
+
+    Returns `{"commit": <40-hex or None>, "route": ..., "detail": ...}`.
+
+    A user-supplied `templates.commit` is a claim. This is the evidence it gets checked against,
+    because a syntactically valid 40-hex string is not identity -- it can name a commit that never
+    generated anything. Two routes are accepted and neither is invented:
+
+    * a real Git checkout (`git rev-parse HEAD`), refused when the tree is dirty, because a dirty
+      checkout is not the commit it names;
+    * PEP 610 `direct_url.json`, which pip writes when a package is installed from a VCS URL.
+
+    An installed wheel built from a tarball has neither, and this returns `None` rather than
+    guessing. Deriving a commit from a version string, a branch name or the date would produce a
+    pin that points at nothing.
+    """
+    from .provenance_min import implementation_identity
+
+    identity = implementation_identity()
+    commit = (identity.get("git_commit") or "").strip()
+    if commit and COMMIT.match(commit):
+        # A dirty checkout still HAS an exact HEAD, and that is the pin. What it does not have is
+        # a faithful description of itself, so the deviation is recorded and reported rather than
+        # either hidden or treated as no identity at all. `provenance.yaml` carries `git_dirty`.
+        return {"commit": commit, "route": "git checkout",
+                "dirty": bool(identity.get("git_dirty")),
+                "detail": ("git rev-parse HEAD, with uncommitted changes in the working tree"
+                           if identity.get("git_dirty") else "git rev-parse HEAD")}
+
+    direct = identity.get("direct_url") or {}
+    vcs = (direct.get("vcs_info") or {})
+    resolved = (vcs.get("commit_id") or "").strip()
+    if resolved and COMMIT.match(resolved):
+        return {"commit": resolved, "route": "direct_url.json", "dirty": False,
+                "detail": f"installed from {direct.get('url')} at {resolved[:12]}"}
+    return {"commit": None, "route": "unavailable", "dirty": None,
+            "detail": ("this MD-templates was installed without an exact commit: there is no Git "
+                       "checkout and no PEP 610 direct_url.json recording one")}
+
+
+def check_templates_commit(claimed: str) -> dict[str, Any]:
+    """`dataset.templates.commit` must be the commit that is actually generating this dataset."""
+    from .defaults import MD_TEMPLATES_REPOSITORY
+
+    established = generator_commit()
+    if established["commit"] is None:
+        raise ContractError(
+            f"dataset.templates.commit is {claimed!r}, but this MD-templates cannot establish its "
+            f"own exact commit, so the claim cannot be verified.\n"
+            f"  {established['detail']}.\n"
+            f"  Contract-managed generation refuses rather than record an unverified pin. Run "
+            f"from a clean Git checkout, or install with "
+            f"`pip install 'md-templates @ git+{MD_TEMPLATES_REPOSITORY}.git@<commit>'`, or set "
+            f"dataset.enabled false for an unregistered local project.")
+    if str(claimed).strip().lower() != established["commit"].lower():
+        raise ContractError(
+            f"dataset.templates.commit is {claimed!r}, but the MD-templates actually generating "
+            f"this dataset is at {established['commit']!r} ({established['route']}: "
+            f"{established['detail']}).\n"
+            f"  A 40-hex string that is not the generating commit is worse than none: it records "
+            f"a provenance that can be checked out and will not reproduce this run.")
+    return established
 
 
 # ---------------------------------------------------------------------------------------------

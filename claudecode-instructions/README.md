@@ -15,6 +15,13 @@ root defines the durable rules that outlive any of them.
   automatic preflight that runs before any OpenMM Context (and `--check`, which runs it and stops),
   switched AIS source loading to bounded `mdtraj.iterload`, made AIS source tau explicit evidence,
   and made a truncated or missing path DCD refuse to count as complete.
+- `20260827_final-md-data-integrity-correction.md` — **executed 2026-08-27**; see
+  `docs/journal/2026-08-27_final-md-data-integrity-correction.md`. Stopped hashing the production
+  AIS source, replaced the DCD header count with physical frame reading, made force-field preflight
+  route-aware and exact, made `--check` recompute current and parent stage fingerprints, made
+  `dataset.templates.commit` be checked against established generator provenance, strengthened AIS
+  topology comparison to full atom identity and bond connectivity, and pinned the MD-data validator
+  to an exact commit over HTTPS.
 - `20260827_ais-method-and-release-gap-correction.md` — **executed 2026-08-27**; see
   `docs/journal/2026-08-27_ais-method-and-release-gaps.md`. Closed the explicit force-field/water
   pairing gap, established an exact stable OpenMM 8.6.0 acceptance environment (and corrected what

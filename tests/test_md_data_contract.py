@@ -22,6 +22,8 @@ import sys
 import pytest
 import yaml
 
+from md_templates.openmm import md_data_contract as MD
+
 from .conftest import ALA_PDB, REPO_ROOT, run_cli
 
 md_data = pytest.importorskip("md_data", reason="the authoritative MD-data validator")
@@ -29,6 +31,12 @@ md_data = pytest.importorskip("md_data", reason="the authoritative MD-data valid
 #: A pinned 40-hex commit for the synthetic fixtures. Not a real commit, and never derived from
 #: one: the point of the field is that a caller supplies it.
 FAKE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+#: The commit this MD-templates can actually establish for itself. A fixture that claimed an
+#: arbitrary 40-hex value would be refused now, and rightly: `templates.commit` must be the commit
+#: that generated the dataset, not a syntactically valid string.
+GENERATOR_COMMIT = MD.generator_commit()["commit"]
 
 
 def _dataset_block(namespace="my-project", name="ALA-explicit", role="project"):
@@ -44,7 +52,7 @@ def _dataset_block(namespace="my-project", name="ALA-explicit", role="project"):
         "origin": {"repository": "https://github.com/csy0000/example-project",
                    "commit": FAKE_COMMIT},
         "templates": {"repository": "https://github.com/csy0000/MD-templates",
-                      "commit": FAKE_COMMIT},
+                      "commit": GENERATOR_COMMIT or FAKE_COMMIT},
         "derived_from": [],
         "notes": None,
     }
@@ -755,13 +763,17 @@ def test_a_truncated_or_missing_dcd_is_never_skipped_as_complete(managed):
     assert "replacing an incomplete directory" in result.stdout
     assert dcd.is_file()
 
-    # 2. truncated: the header claims fewer frames than the schedule requires
+    # 2. the header and the content disagree. This is NOT the truncation case -- the bytes are
+    # all there and only NSET was edited -- and it is caught because the frames are read rather
+    # than counted from the header. Genuine byte truncation, where the header is left intact and
+    # the coordinates are missing, is in tests/test_integrity_corrections.py.
     raw = bytearray(dcd.read_bytes())
     struct.pack_into("<i", raw, 8, 7)
     dcd.write_bytes(bytes(raw))
     result = _launch(local / "AIS", "run.sh", environment)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "truncated, not short" in result.stdout
+    assert "replacing an incomplete directory" in result.stdout
+    assert "header claims 7" in result.stdout or "claims 7" in result.stdout
     raw = (directory / "observations.dcd").read_bytes()[:12]
     assert struct.unpack("<i", raw[8:12])[0] == 21, "the rerun did not restore 21 frames"
     assert len(original) == len(dcd.read_bytes()), "a second path was appended to the old DCD"
@@ -833,7 +845,8 @@ def test_a_truncated_prepared_input_is_refused_rather_than_used(managed):
         assert result.returncode != 0
         combined = result.stdout + result.stderr
         assert "[FAIL] AIS inputs" in combined
-        assert "holds 1 frame(s)" in combined and "describes 2 path(s)" in combined
+        # Read, not counted: the two frames are still there and the header is the thing lying.
+        assert "reads 2 frame(s)" in combined and "claims 1" in combined
     finally:
         dcd.write_bytes(original)
 
