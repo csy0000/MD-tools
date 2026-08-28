@@ -48,7 +48,58 @@ def explicit_run(explicit):
     return explicit
 
 
-# --- 0. the completion record REST2 production must leave behind ---------------
+# --- 1. the exact trees ------------------------------------------------------
+
+def test_the_explicit_tree_is_the_documented_one(explicit):
+    top = {p.name for p in explicit.iterdir() if p.is_dir()}
+    assert top == {"minimization", "eq", "cMD", "REST2"}, top
+    assert {p.name for p in (explicit / "eq").iterdir() if p.is_dir()} == {
+        "nvt_1kcal", "npt_1kcal", "npt_free"}
+    for name in EXPLICIT_STAGES:
+        assert {p.name for p in (explicit / name).iterdir()} >= {"run.py", "run.sh", "stage.yaml"}
+    assert (explicit / "run_all.sh").is_file()
+    # cMD carries the scaling module because it may run at tau > 0: a fixed-tau single walker on
+    # one rung of the ladder. It is the SAME file REST2 gets, so the walker cannot drift from the
+    # rung it is meant to match.
+    #
+    # `stage.yaml` is the resolved production request. Production had no such file before the
+    # contract-gate fixes, which is exactly why an edited runtime configuration could not be
+    # refused; `preflight.check_runtime_request` recomputes against it. The set stays EXACT, so any
+    # other new file still fails here.
+    assert {p.name for p in (explicit / "cMD").iterdir()} == {
+        "run.py", "run.sh", "rest2_scaling.py", "stage.yaml"}
+    assert {p.name for p in (explicit / "REST2").iterdir()} >= {
+        "equilibrate.py", "equilibrate.sh", "run.py", "run.sh", "extend.sh", "rest2_scaling.py",
+        "replica_00", "replica_01"}
+    for replica in ("replica_00", "replica_01"):
+        assert {p.name for p in (explicit / "REST2" / replica).iterdir()} == {
+            "equilibration", "production"}
+
+
+def test_the_implicit_tree_has_no_npt_stage(implicit):
+    top = {p.name for p in implicit.iterdir() if p.is_dir()}
+    assert top == {"minimization", "eq", "cMD", "REST2"}, top
+    grouped = {p.name for p in (implicit / "eq").iterdir() if p.is_dir()}
+    assert grouped == {"nvt_1kcal", "nvt_free"}, grouped
+    assert not any("npt" in name for name in grouped), "implicit solvent has no box to control"
+
+
+def test_the_folder_name_does_not_claim_1kcal_when_the_restraint_is_not_1(tmp_path):
+    """A directory called eq1_nvt_1kcal holding a 5 kcal/mol/A^2 run is a lie told by a filename."""
+    def stronger(protocol):
+        protocol["equilibration"]["restraint_k_kcal_mol_a2"] = 5.0
+
+    project = tiny_project(tmp_path, solvent="TIP3P", methods=("cMD",), edit=stronger)
+    names = {p.name for p in (project / "eq").iterdir() if p.is_dir()}
+    assert "nvt_restrained" in names, names
+    assert not any("1kcal" in name for name in names), names
+
+
+# --- 1b. the completion record REST2 production must leave behind --------------
+#
+# These RUN the stages, and running one imports md_stages.py from the project directory,
+# which leaves a __pycache__ behind. Anything asserting the exact generated tree must
+# therefore come BEFORE them -- which is why they sit here and not at the top of the file.
 
 def test_rest2_production_writes_the_stage_record_preflight_reads(explicit_run):
     """A completed REST2 production must be visible to its own preflight.
@@ -103,48 +154,6 @@ def test_a_longer_rest2_run_is_still_allowed(explicit_run):
     assert md_stages.stage_invariant_sha256(longer) == written["stage_invariant_sha256"], (
         "more exchange rounds changed the INVARIANT fingerprint, which would refuse a legitimate "
         "continuation")
-
-
-# --- 1. the exact trees ------------------------------------------------------
-
-def test_the_explicit_tree_is_the_documented_one(explicit):
-    top = {p.name for p in explicit.iterdir() if p.is_dir()}
-    assert top == {"minimization", "eq", "cMD", "REST2"}, top
-    assert {p.name for p in (explicit / "eq").iterdir() if p.is_dir()} == {
-        "nvt_1kcal", "npt_1kcal", "npt_free"}
-    for name in EXPLICIT_STAGES:
-        assert {p.name for p in (explicit / name).iterdir()} >= {"run.py", "run.sh", "stage.yaml"}
-    assert (explicit / "run_all.sh").is_file()
-    # cMD carries the scaling module because it may run at tau > 0: a fixed-tau single walker on
-    # one rung of the ladder. It is the SAME file REST2 gets, so the walker cannot drift from the
-    # rung it is meant to match.
-    assert {p.name for p in (explicit / "cMD").iterdir()} == {
-        "run.py", "run.sh", "rest2_scaling.py"}
-    assert {p.name for p in (explicit / "REST2").iterdir()} >= {
-        "equilibrate.py", "equilibrate.sh", "run.py", "run.sh", "extend.sh", "rest2_scaling.py",
-        "replica_00", "replica_01"}
-    for replica in ("replica_00", "replica_01"):
-        assert {p.name for p in (explicit / "REST2" / replica).iterdir()} == {
-            "equilibration", "production"}
-
-
-def test_the_implicit_tree_has_no_npt_stage(implicit):
-    top = {p.name for p in implicit.iterdir() if p.is_dir()}
-    assert top == {"minimization", "eq", "cMD", "REST2"}, top
-    grouped = {p.name for p in (implicit / "eq").iterdir() if p.is_dir()}
-    assert grouped == {"nvt_1kcal", "nvt_free"}, grouped
-    assert not any("npt" in name for name in grouped), "implicit solvent has no box to control"
-
-
-def test_the_folder_name_does_not_claim_1kcal_when_the_restraint_is_not_1(tmp_path):
-    """A directory called eq1_nvt_1kcal holding a 5 kcal/mol/A^2 run is a lie told by a filename."""
-    def stronger(protocol):
-        protocol["equilibration"]["restraint_k_kcal_mol_a2"] = 5.0
-
-    project = tiny_project(tmp_path, solvent="TIP3P", methods=("cMD",), edit=stronger)
-    names = {p.name for p in (project / "eq").iterdir() if p.is_dir()}
-    assert "nvt_restrained" in names, names
-    assert not any("1kcal" in name for name in names), names
 
 
 # --- 2. the dependency chain -------------------------------------------------
