@@ -64,11 +64,18 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 import preflight                                                     # noqa: E402
+from md_stages import stage_config_sha256, stage_invariant_sha256    # noqa: E402
 from rest2_scaling import TauSwitcher, scale_factor_for_tau           # noqa: E402
 
 PROJECT = HERE.parent
 CONFIG = yaml.safe_load((PROJECT / "md.config.yaml").read_text())
 PATH_DEFINITION = yaml.safe_load((HERE / "path_definition.yaml").read_text())
+#: The resolved production request, written by `md-gen`. The shared preflight recomputes it from
+#: the current configuration and refuses a changed one before any Context exists. Absent in a
+#: project generated before AIS carried a stage document, and the preflight skips rather than
+#: guessing in that case.
+STAGE = (yaml.safe_load((HERE / "stage.yaml").read_text())
+         if (HERE / "stage.yaml").is_file() else None)
 INPUTS = (PROJECT / CONFIG["paths"]["inputs_folder"]).resolve()
 SOLUTE = yaml.safe_load((INPUTS / "solute.yaml").read_text())
 
@@ -1412,7 +1419,7 @@ def main(argv=None):
         # Before the plan is built and long before any worker process is spawned. The AIS-specific
         # source checks are appended to the shared ones so one table covers everything.
         preflight.require(
-            HERE, PROJECT, INPUTS, CONFIG,
+            HERE, PROJECT, INPUTS, CONFIG, stage=STAGE,
             label=f"AIS ({'check only' if args.check else 'switching paths'})",
             dynamics=not args.check,
             extra=[lambda: check_ais_source(dynamics=not args.check)])
@@ -1520,6 +1527,25 @@ def main(argv=None):
     }
     (HERE / "resolved_run.yaml").write_text(
         yaml.safe_dump(record, sort_keys=False, default_flow_style=False), encoding="utf-8")
+
+    # The stage record `preflight.check_own_completion` reads. `resolved_run.yaml` above is the
+    # FAIR account of the invocation; this is the scientific account of the request that ran, and
+    # it is what a continuation is compared against. Written only now, after every path that was
+    # going to finish has finished.
+    #
+    # Two fingerprints, as cMD and REST2 write: the full one identifies this exact request, the
+    # invariant one excludes the extendable fields -- `number_of_paths` among them -- so running
+    # more paths stays legitimate while changing the switch itself does not.
+    if STAGE:
+        stage_record = dict(STAGE)
+        stage_record.update({
+            "number_of_paths": len(completed),
+            "stage_config_sha256": stage_config_sha256(STAGE),
+            "stage_invariant_sha256": stage_invariant_sha256(STAGE),
+        })
+        (HERE / "resolved_stage.yaml").write_text(
+            yaml.safe_dump(stage_record, sort_keys=False, default_flow_style=False),
+            encoding="utf-8")
 
     provenance = {
         "format": "md-templates-ais-provenance/v1",

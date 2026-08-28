@@ -371,6 +371,104 @@ def stage_config_sha256(document):
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+#: The fields of a PRODUCTION stage request that a legitimate extension may change.
+#:
+#: A common stage is fixed at generation and refuses to rerun at all, so hashing its whole
+#: document is exactly right. Production is different: running longer is the documented way to
+#: extend an active dataset, and it changes the requested length and nothing else. Hashing the
+#: whole document there would forbid every extension in order to catch an unsafe edit.
+#:
+#: So production carries two fingerprints. The full one identifies the exact request that
+#: produced a completion record; the INVARIANT one covers everything an extension may not
+#: touch -- timestep, temperature, ensemble, tau, seeds, solvent mode, the parent handoff. A
+#: changed invariant means the checkpoint on disk was produced under different physics, and
+#: continuing from it would silently splice two Hamiltonians into one trajectory.
+PRODUCTION_EXTENDABLE_FIELDS = ("duration_ns", "duration_ps", "total_steps",
+                                "number_of_exchanges", "number_of_paths")
+
+
+def stage_invariant_sha256(document):
+    """Fingerprint over everything a legitimate extension may NOT change.
+
+    Same canonicalisation as :func:`stage_config_sha256`, over the document with the extendable
+    fields removed. Deriving it from the same function is deliberate: two independent hashes over
+    "the stage request" is how a run comes to write one and a check to compare another.
+    """
+    return stage_config_sha256(
+        {k: v for k, v in dict(document).items() if k not in PRODUCTION_EXTENDABLE_FIELDS})
+
+
+def production_stage_document(config, method_name, *, parent_stage, parent_path, implicit,
+                              seeds, template_commit, omega_excluded=()):
+    """The resolved request for one production stage.
+
+    ONE derivation, used by `md-gen` when it writes `stage.yaml` and by the generated launcher
+    when it recomputes the current request. If the two derived it separately they would drift,
+    and the check would compare a hash of one thing against a hash of another.
+    """
+    common = config["common"]
+    method = config[method_name]
+    tau = float(method.get("tau", 0.0) or 0.0)
+    document = {
+        "name": method_name,
+        "group": None,
+        "kind": "fixed_tau_md" if (method_name == "cMD" and tau) else {
+            "cMD": "conventional_md", "REST2": "rest2_exchange", "AIS": "ais_switching",
+        }.get(method_name, method_name.lower()),
+        "production": True,
+        "ensemble": method.get("ensemble"),
+        "tau": tau,
+        "omega_exclusion": bool(method.get("omega_exclusion", True)) and bool(tau),
+        "omega_excluded_bonds": [list(map(int, b)) for b in omega_excluded] if tau else [],
+        "temperature_kelvin": float(common["temperature_kelvin"]),
+        "timestep_fs": float(common["timestep_fs"]),
+        "friction_per_ps": float(common["friction_per_ps"]),
+        "implicit": bool(implicit),
+        "pressure_bar": None if implicit else float(common["pressure_bar"]),
+        "barostat_frequency_steps": (0 if implicit
+                                     else int(common["barostat_frequency_steps"])),
+        "hydrogen_mass_amu": (config.get("constraints") or {}).get("hydrogen_mass_amu"),
+        "parent": parent_stage,
+        "parent_path": parent_path,
+        "input_state": f"../{parent_stage}/final_state.xml" if parent_stage else None,
+        # cMD hands one final state on. REST2 keeps a state per replica and has no single
+        # top-level handoff, so it declares none rather than naming a file that never appears.
+        "output_state": "final_state.xml" if method_name == "cMD" else None,
+        "integrator_seed": seeds.get("integrator"),
+        "velocity_seed": seeds.get("velocities"),
+        "barostat_seed": seeds.get("barostat"),
+        "template_commit": template_commit,
+    }
+    # The extendable part, kept in the document because a reader wants to see the request, and
+    # excluded from the invariant fingerprint because extending is legitimate.
+    if "duration_ns" in method:
+        document["duration_ns"] = float(method["duration_ns"])
+    if "number_of_exchanges" in method:
+        document["number_of_exchanges"] = int(method["number_of_exchanges"])
+
+    # AIS states its request in nested blocks rather than flat keys, and it has no parent stage:
+    # it starts from an equilibrium ensemble prepared into inputs/, not from the common chain. The
+    # fields below ARE the physics of a switching path -- where it starts, where it ends, how long
+    # the switch takes and how finely the Hamiltonian moves -- so they belong in the invariant.
+    # `number_of_paths` is the one extendable quantity: running more paths is legitimate.
+    if method_name == "AIS":
+        path = method["path"]
+        document["kind"] = "ais_switching"
+        document["ensemble"] = "NVT" if implicit else "NPT"
+        document["tau"] = float(path["tau_start"])
+        document["tau_start"] = float(path["tau_start"])
+        document["tau_end"] = float(path["tau_end"])
+        document["interpolation"] = path.get("interpolation")
+        document["enhanced_region"] = path.get("enhanced_region")
+        document["omega_exclusion"] = bool(path.get("omega_exclusion", True))
+        document["switching_duration_ps"] = float(path["switching_duration_ps"])
+        document["parameter_update_interval_steps"] = int(
+            path["parameter_update_interval_steps"])
+        document["number_of_observations"] = int(method["output"]["number_of_observations"])
+        document["number_of_paths"] = int(method["source"]["number_of_trajectories"])
+    return document
+
+
 RECORD_FORMAT = "md-templates-runtime-record/v1"
 
 

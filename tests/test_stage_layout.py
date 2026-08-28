@@ -61,8 +61,13 @@ def test_the_explicit_tree_is_the_documented_one(explicit):
     # cMD carries the scaling module because it may run at tau > 0: a fixed-tau single walker on
     # one rung of the ladder. It is the SAME file REST2 gets, so the walker cannot drift from the
     # rung it is meant to match.
+    #
+    # `stage.yaml` is the resolved production request. Production had no such file before the
+    # contract-gate fixes, which is exactly why an edited runtime configuration could not be
+    # refused; `preflight.check_runtime_request` recomputes against it. The set stays EXACT, so any
+    # other new file still fails here.
     assert {p.name for p in (explicit / "cMD").iterdir()} == {
-        "run.py", "run.sh", "rest2_scaling.py"}
+        "run.py", "run.sh", "rest2_scaling.py", "stage.yaml"}
     assert {p.name for p in (explicit / "REST2").iterdir()} >= {
         "equilibrate.py", "equilibrate.sh", "run.py", "run.sh", "extend.sh", "rest2_scaling.py",
         "replica_00", "replica_01"}
@@ -88,6 +93,67 @@ def test_the_folder_name_does_not_claim_1kcal_when_the_restraint_is_not_1(tmp_pa
     names = {p.name for p in (project / "eq").iterdir() if p.is_dir()}
     assert "nvt_restrained" in names, names
     assert not any("1kcal" in name for name in names), names
+
+
+# --- 1b. the completion record REST2 production must leave behind --------------
+#
+# These RUN the stages, and running one imports md_stages.py from the project directory,
+# which leaves a __pycache__ behind. Anything asserting the exact generated tree must
+# therefore come BEFORE them -- which is why they sit here and not at the top of the file.
+
+def test_rest2_production_writes_the_stage_record_preflight_reads(explicit_run):
+    """A completed REST2 production must be visible to its own preflight.
+
+    `preflight.check_own_completion` reads `resolved_stage.yaml`. cMD writes one; REST2 wrote only
+    `resolved_run.yaml`, so preflight reported "completion record absent; this stage has not run"
+    for a stage that had just run 1 ns per replica. Rerunning would restart production from the
+    per-tau equilibration states and overwrite a finished trajectory, which is precisely the
+    accident the shared preflight exists to prevent.
+
+    Asserted through the file the run leaves behind, not by grepping the template: the property is
+    "a completed REST2 production is recognisable as completed", and only running one shows that.
+    """
+    record = explicit_run / "REST2" / "resolved_stage.yaml"
+    assert record.is_file(), "REST2 production left no resolved_stage.yaml"
+    written = yaml.safe_load(record.read_text())
+    assert written["kind"] == "rest2_exchange"
+    for field in ("timestep_fs", "temperature_kelvin", "ensemble", "tau_min", "tau_max",
+                  "number_of_replicas", "number_of_exchanges", "total_steps"):
+        assert field in written, f"resolved_stage.yaml omits {field!r}"
+    for field in ("stage_config_sha256", "stage_invariant_sha256"):
+        assert written.get(field), f"resolved_stage.yaml carries no {field}"
+    assert written["stage_config_sha256"] != written["stage_invariant_sha256"], (
+        "the two fingerprints must differ: the invariant one excludes the extendable fields, and "
+        "number_of_exchanges is one of them")
+
+
+def test_preflight_sees_a_completed_rest2_production(explicit_run):
+    """The consequence of the record above, stated as the behaviour a user would hit."""
+    import subprocess
+    import sys as _sys
+    result = subprocess.run([_sys.executable, "run.py", "--check"],
+                            cwd=str(explicit_run / "REST2"), capture_output=True, text=True,
+                            timeout=600)
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+    assert "this stage has not run" not in result.stdout, (
+        "preflight still reports a completed REST2 production as never having run:\n"
+        + result.stdout[-1500:])
+
+
+def test_a_longer_rest2_run_is_still_allowed(explicit_run):
+    """The extension must survive the new record.
+
+    `number_of_exchanges` is an extendable field, so asking for more exchange rounds changes the
+    full fingerprint and not the invariant one. If this ever fails, the fix above has forbidden
+    the documented way to continue a REST2 dataset in order to catch an unsafe edit.
+    """
+    written = yaml.safe_load((explicit_run / "REST2" / "resolved_stage.yaml").read_text())
+    from md_templates.openmm.templates import md_stages  # the shared derivation
+    stage = yaml.safe_load((explicit_run / "REST2" / "stage.yaml").read_text())
+    longer = dict(stage, number_of_exchanges=int(stage["number_of_exchanges"]) + 5)
+    assert md_stages.stage_invariant_sha256(longer) == written["stage_invariant_sha256"], (
+        "more exchange rounds changed the INVARIANT fingerprint, which would refuse a legitimate "
+        "continuation")
 
 
 # --- 2. the dependency chain -------------------------------------------------

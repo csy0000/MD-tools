@@ -35,7 +35,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
 import preflight
-from md_stages import (sha256_file, RECORD_FORMAT, active_barostat_count,
+from md_stages import (stage_config_sha256, stage_invariant_sha256, sha256_file, RECORD_FORMAT, active_barostat_count,
                        append_jsonl, build_stage_system, count_barostats, derive_seed,
                        file_record, make_simulation, next_invocation_index, project_identity,
                        require_parent_state, resolve_platform, restraint_strength,
@@ -48,6 +48,14 @@ INPUTS = (HERE.parent / CONFIG["paths"]["inputs_folder"]).resolve()
 SOLUTE = yaml.safe_load((INPUTS / "solute.yaml").read_text())
 BRANCH = CONFIG["paths"]["common_final_state"]        # e.g. ../eq3_npt_free/final_state.xml
 PARENT_STAGE = CONFIG["paths"]["common_final_stage"]
+
+# The resolved production request this directory was generated for. The shared preflight needs
+# it: without a stage dict `check_parent` and `check_own_completion` short-circuit, which is how
+# production ran with neither. Absent only in a project generated before stage.yaml existed for
+# production, and preflight says so rather than silently skipping.
+STAGE = (yaml.safe_load((HERE / "stage.yaml").read_text())
+         if (HERE / "stage.yaml").is_file() else None)
+
 
 common = CONFIG["common"]
 method = CONFIG["cMD"]
@@ -99,7 +107,7 @@ def _starting_artifact(path, *, role):
 
 def main(argv=None):
     check_only = "--check" in (sys.argv[1:] if argv is None else argv)
-    preflight.require(HERE, HERE.parent, INPUTS, CONFIG,
+    preflight.require(HERE, HERE.parent, INPUTS, CONFIG, stage=STAGE,
                       label=f"cMD ({'check only' if check_only else 'run'})",
                       dynamics=not check_only)
     if check_only:
@@ -229,6 +237,17 @@ def main(argv=None):
         "seeds": seeds,
         "input_state": f"../{PARENT_STAGE}/final_state.xml",
         "output_state": "final_state.xml",
+        # The invariants of the request this run actually executed. A continuation compares
+        # against THIS, not against the whole document: asking for a longer run is legitimate and
+        # changes the full hash, while a changed timestep or ensemble must stop the run before a
+        # Context exists. Absent for a project generated before production carried a stage.yaml,
+        # and preflight refuses rather than guessing.
+        # Two fingerprints, and they answer different questions. The full one identifies the
+        # EXACT request that produced these outputs. The invariant one is what a continuation is
+        # checked against, because asking for a longer run is legitimate and changes the full
+        # hash while changing no physics.
+        "stage_config_sha256": (stage_config_sha256(STAGE) if STAGE else None),
+        "stage_invariant_sha256": (stage_invariant_sha256(STAGE) if STAGE else None),
     })
 
     # FAIR runtime record, beside the scientific one above. Written only now, because it says

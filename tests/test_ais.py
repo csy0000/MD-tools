@@ -17,6 +17,8 @@ from __future__ import annotations
 import csv
 import importlib.util
 import shutil
+import subprocess
+import sys
 
 import pytest
 import yaml
@@ -186,10 +188,15 @@ def ais_project(tmp_path_factory):
 def test_md_gen_writes_the_standalone_ais_layout(ais_project):
     directory = ais_project / "MD" / "AIS"
     present = sorted(p.name for p in directory.iterdir())
-    assert present == ["path_definition.yaml", "rest2_scaling.py", "run.py", "run.sh"], present
+    # `stage.yaml` is the resolved production request, the same contract cMD and REST2 state. AIS
+    # is the last method to carry one; `path_definition.yaml` still records the resolved path the
+    # run itself reads. The set stays EXACT, so any other new file still fails here.
+    assert present == ["path_definition.yaml", "rest2_scaling.py", "run.py", "run.sh",
+                       "stage.yaml"], present
     # Trajectory directories and every runtime record are written by the run, not by md-gen.
     assert not list(directory.glob("trajectory_*"))
     assert not (directory / "resolved_run.yaml").exists()
+    assert not (directory / "resolved_stage.yaml").exists()
 
 
 @pytest.mark.slow
@@ -650,3 +657,94 @@ def test_a_completed_path_is_skipped_and_not_appended_to(ais_run):
     assert "already complete" in (again.stdout + again.stderr)
     after = dcd_header(ais_run / "trajectory_0000" / "observations.dcd")["frames"]
     assert after == before == 21
+
+
+# --- the shared production stage contract -------------------------------------
+#
+# AIS was the last production method without one. It froze its schedule in
+# `path_definition.yaml` and refused a definition that disagreed with the ensemble its inputs were
+# prepared from, which covered the source. What it could not do was recognise its own completed run
+# or notice a coordinated edit -- one that moves `md.config.yaml` and `stage.yaml` together, so the
+# runtime-request check finds them consistent and passes.
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_a_completed_ais_run_is_recognised_by_its_own_preflight(ais_run):
+    """`check_own_completion` reads resolved_stage.yaml. Without one, a finished stage reported
+    "absent; this stage has not run" and the consistency check never ran at all."""
+    record = ais_run / "resolved_stage.yaml"
+    assert record.is_file(), "AIS production left no resolved_stage.yaml"
+    written = yaml.safe_load(record.read_text())
+    assert written["production"] is True and written["kind"] == "ais_switching"
+    for field in ("stage_config_sha256", "stage_invariant_sha256"):
+        assert written.get(field), f"resolved_stage.yaml carries no {field}"
+    assert written["stage_config_sha256"] != written["stage_invariant_sha256"], (
+        "the invariant fingerprint must exclude the extendable fields, number_of_paths among them")
+
+    result = subprocess.run([sys.executable, "run.py", "--check"], cwd=str(ais_run),
+                            capture_output=True, text=True, timeout=900)
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+    assert "this stage has not run" not in result.stdout, (
+        "preflight still reports a completed AIS run as never having run:\n" + result.stdout[-1500:])
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_a_coordinated_invariant_edit_is_refused_before_a_context_exists(ais_run):
+    """Move the switch length in BOTH md.config.yaml and stage.yaml, so they agree with each other.
+
+    `check_runtime_request` compares the configuration against `stage.yaml` and passes -- they were
+    edited together. Only the fingerprint recorded by the run that finished still remembers what
+    was actually executed, which is the whole reason the completion record exists.
+
+    Refused under `--check`, so no Context is created and nothing is written.
+    """
+    project = ais_run.parent
+    config_path, stage_path = project / "md.config.yaml", ais_run / "stage.yaml"
+    original_config, original_stage = config_path.read_text(), stage_path.read_text()
+    before = {p: (p.stat().st_size, p.stat().st_mtime_ns)
+              for p in sorted(ais_run.rglob("*")) if p.is_file() and p.name not in
+              ("md.config.yaml", "stage.yaml")}
+    try:
+        config = yaml.safe_load(original_config)
+        config["AIS"]["path"]["switching_duration_ps"] = float(
+            config["AIS"]["path"]["switching_duration_ps"]) * 2
+        config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+        stage = yaml.safe_load(original_stage)
+        stage["switching_duration_ps"] = float(stage["switching_duration_ps"]) * 2
+        stage_path.write_text(yaml.safe_dump(stage, sort_keys=False))
+
+        result = subprocess.run([sys.executable, "run.py", "--check"], cwd=str(ais_run),
+                                capture_output=True, text=True, timeout=900)
+        assert result.returncode != 0, (
+            "a doubled switching duration was accepted:\n" + result.stdout[-2000:])
+        assert "completion record" in (result.stdout + result.stderr)
+    finally:
+        config_path.write_text(original_config)
+        stage_path.write_text(original_stage)
+
+    after = {p: (p.stat().st_size, p.stat().st_mtime_ns)
+             for p in sorted(ais_run.rglob("*")) if p.is_file() and p.name not in
+             ("md.config.yaml", "stage.yaml")}
+    assert after == before, "the refusal wrote or changed something"
+
+
+@pytest.mark.gpu
+@pytest.mark.slow
+def test_running_more_paths_is_still_allowed(ais_run):
+    """The extension must survive the new record.
+
+    `number_of_paths` is in PRODUCTION_EXTENDABLE_FIELDS, so asking for more paths changes the full
+    fingerprint and not the invariant one. If this fails, the contract above has forbidden the
+    legitimate way to add sampling in order to catch an illegitimate edit.
+    """
+    from md_templates.openmm.templates import md_stages
+
+    stage = yaml.safe_load((ais_run / "stage.yaml").read_text())
+    written = yaml.safe_load((ais_run / "resolved_stage.yaml").read_text())
+    more = dict(stage, number_of_paths=int(stage["number_of_paths"]) + 8)
+    assert md_stages.stage_invariant_sha256(more) == written["stage_invariant_sha256"], (
+        "more paths changed the INVARIANT fingerprint, which would refuse a legitimate extension")
+    assert md_stages.stage_config_sha256(more) != written["stage_config_sha256"], (
+        "the full fingerprint must still notice the change")

@@ -1,6 +1,8 @@
 """Shared fixtures. Deliberately few: these tests check user-visible behaviour, not internals."""
 from __future__ import annotations
 
+import importlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -29,8 +31,47 @@ def pytest_runtest_makereport(item, call):
                            f"{report.longrepr}")
 
 
+#: The `src/` of the checkout these tests belong to. Both this process and every subprocess it
+#: spawns are pinned to it.
+CHECKOUT_SRC = REPO_ROOT / "src"
+
+
+def _pin_this_process_to_the_checkout() -> None:
+    """Make `md_templates` resolve to THIS checkout, in this process and in everything it spawns.
+
+    conftest is imported before any test module, so this runs before the suite's first
+    `from md_templates...`. Two halves, and both are needed:
+
+      * `sys.path`, for in-process imports. Without it, a machine carrying an editable install of
+        another checkout runs every in-process test against that other code -- which surfaces as
+        the BASE commit's defects failing tests the branch under test has already fixed.
+      * `os.environ["PYTHONPATH"]`, for subprocesses. Tests spawn `python -m
+        md_templates.cli.md_openmm` to generate projects, and a subprocess resolves the INSTALLED
+        package regardless of what this process imported. Setting the variable here rather than
+        passing `env=` per call means every call site is covered, including ones written later --
+        several tests spawn their own subprocesses without going through `run_cli`.
+
+    This is not hypothetical. A full GPU suite once came back green having generated every project
+    with a different clone's code, and that result was reported as evidence on a pull request.
+    """
+    entry = str(CHECKOUT_SRC)
+    while entry in sys.path:
+        sys.path.remove(entry)
+    sys.path.insert(0, entry)
+    for name in [n for n in sys.modules if n == "md_templates" or n.startswith("md_templates.")]:
+        del sys.modules[name]
+    importlib.invalidate_caches()
+
+    inherited = os.environ.get("PYTHONPATH")
+    parts = [q for q in (inherited or "").split(os.pathsep) if q and q != entry]
+    os.environ["PYTHONPATH"] = os.pathsep.join([entry, *parts])
+
+
+_pin_this_process_to_the_checkout()
+
+
 def run_cli(module: str, *args, cwd: Path | None = None):
-    """Invoke an entry point the way a user does."""
+    """Invoke an entry point the way a user does. Pinned via os.environ, see above."""
     return subprocess.run([sys.executable, "-m", f"md_templates.cli.{module}", *args],
                           capture_output=True, text=True, cwd=str(cwd or REPO_ROOT))
 
