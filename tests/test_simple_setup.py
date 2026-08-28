@@ -302,3 +302,42 @@ def test_the_ligand_route_generates_from_a_smiles_file(tmp_path):
     assert not (forcefield.get("forcefield") or {}).get("protein")
     for script in _stage_scripts(system_dir):
         assert "md_templates" not in script.read_text()
+
+
+@pytest.mark.slow
+def test_the_trajectory_and_restart_output_are_readable(generated, without_md_templates):
+    """A stage that writes an unreadable DCD or an unloadable state has not produced a result.
+
+    Checked by loading them the way a consumer would -- mdtraj for the trajectory, OpenMM's own
+    deserializer for the state -- rather than by looking at file sizes.
+    """
+    stage = generated / "eq" / "nvt_1kcal"
+    minimisation = _run(generated / "min" / "min.py", block_md_templates=without_md_templates)
+    assert minimisation.returncode == 0, minimisation.stderr[-1500:]
+    result = _run(stage / "nvt_1kcal.py", block_md_templates=without_md_templates)
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+
+    from openmm import XmlSerializer
+
+    state = XmlSerializer.deserialize((stage / "nvt_1kcal.state.xml").read_text())
+    positions = state.getPositions(asNumpy=True)
+    assert len(positions) > 0
+    assert state.getPeriodicBoxVectors() is not None      # explicit solvent keeps its box
+
+    mdtraj = pytest.importorskip("mdtraj", reason="reading the DCD back needs MDTraj")
+    trajectory = mdtraj.load(str(stage / "nvt_1kcal.dcd"),
+                             top=str(generated / "common" / "topology.pdb"))
+    assert trajectory.n_frames >= 1
+    assert trajectory.n_atoms == len(positions), "the DCD and the state disagree on atom count"
+
+    # The header said how many frames to expect; the file must agree.
+    header = {}
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            break
+        key, _, value = line.partition(": ")
+        header[key] = value
+    expected = int(header["steps"]) // int(
+        (generated / "eq" / "nvt_1kcal" / "nvt_1kcal.py").read_text()
+        .split('DCDReporter("nvt_1kcal.dcd", ')[1].split(")")[0])
+    assert trajectory.n_frames == expected, (trajectory.n_frames, expected)
