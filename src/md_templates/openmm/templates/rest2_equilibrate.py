@@ -42,6 +42,14 @@ SOLUTE = yaml.safe_load((INPUTS / "solute.yaml").read_text())
 BRANCH = CONFIG["paths"]["common_final_state"]
 PARENT_STAGE = CONFIG["paths"]["common_final_stage"]
 
+# The resolved production request this directory was generated for. The shared preflight needs
+# it: without a stage dict `check_parent` and `check_own_completion` short-circuit, which is how
+# production ran with neither. Absent only in a project generated before stage.yaml existed for
+# production, and preflight says so rather than silently skipping.
+STAGE = (yaml.safe_load((HERE / "stage.yaml").read_text())
+         if (HERE / "stage.yaml").is_file() else None)
+
+
 common = CONFIG["common"]
 method = CONFIG["REST2"]
 implicit = common.get("pressure_bar") is None
@@ -121,7 +129,7 @@ def visible_devices():
 
 def main(argv=None):
     check_only = "--check" in (sys.argv[1:] if argv is None else argv)
-    preflight.require(HERE, HERE.parent, INPUTS, CONFIG,
+    preflight.require(HERE, HERE.parent, INPUTS, CONFIG, stage=STAGE,
                       label=f"REST2 per-tau equilibration "
                             f"({'check only' if check_only else 'run'})",
                       dynamics=not check_only)

@@ -48,6 +48,14 @@ from rest2_scaling import (build_scaled_system, exchange_log_acceptance, exchang
                            linear_tau_ladder, reduced_potential, scale_factor_for_tau)
 
 CONFIG = yaml.safe_load((HERE.parent / "md.config.yaml").read_text())
+
+# The resolved production request this directory was generated for. The shared preflight needs
+# it: without a stage dict `check_parent` and `check_own_completion` short-circuit, which is how
+# production ran with neither. Absent only in a project generated before stage.yaml existed for
+# production, and preflight says so rather than silently skipping.
+STAGE = (yaml.safe_load((HERE / "stage.yaml").read_text())
+         if (HERE / "stage.yaml").is_file() else None)
+
 INPUTS = (HERE.parent / CONFIG["paths"]["inputs_folder"]).resolve()
 SOLUTE = yaml.safe_load((INPUTS / "solute.yaml").read_text())
 
@@ -180,7 +188,7 @@ def _starting_artifact(path, *, role):
 
 def main(argv=None):
     check_only = "--check" in (sys.argv[1:] if argv is None else argv)
-    preflight.require(HERE, HERE.parent, INPUTS, CONFIG,
+    preflight.require(HERE, HERE.parent, INPUTS, CONFIG, stage=STAGE,
                       label=f"REST2 ({'check only' if check_only else 'exchange production'})",
                       dynamics=not check_only,
                       devices=(device_groups_devices() if not check_only else None))

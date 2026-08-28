@@ -641,6 +641,40 @@ def check_parent(here, stage, *, dynamics=True):
                 f"unchanged, {identity}")]
 
 
+def _check_production_consistency(here, stage):
+    """A production stage's recorded request still matches the one being asked for.
+
+    Consistency ONLY. Whether the stage finished, and whether it should run again, is the
+    launcher's own business against `resolved_run.yaml`: a common stage is fixed at generation and
+    refuses to rerun, but production may legitimately be asked to run longer from its own
+    checkpoint, and refusing that here would break the documented extension path in order to catch
+    an unsafe edit. The unsafe edit is caught by the invariant comparison below and by
+    `check_runtime_request`.
+    """
+    record = here / "resolved_stage.yaml"
+    if not record.is_file():
+        return [_ok("completion record", "absent; this stage has not run")]
+    written = _read_yaml(record)
+    if written is None:
+        return [_no("completion record", "unreadable")]
+    recorded = written.get("stage_invariant_sha256")
+    if not recorded:
+        return [_no("completion record",
+                    "a production stage's record must carry stage_invariant_sha256, so that a "
+                    "continuation can be checked against the physics that produced its outputs; "
+                    "this one does not. It was written by an older generator -- regenerate the "
+                    "stage rather than continuing into it")]
+    current = _md_stages().stage_invariant_sha256(stage or {})
+    if current != recorded:
+        return [_no("completion record",
+                    f"the stage request has changed since this stage last ran: its invariants now "
+                    f"hash to {current[:12]} but the record was written for {recorded[:12]}. "
+                    f"Continuing would apply new physics to output produced under the old "
+                    f"request. Asking for a longer run alone is allowed and does not change this "
+                    f"hash")]
+    return [_ok("completion record", f"consistent with the recorded request ({recorded[:12]})")]
+
+
 def check_own_completion(here, stage):
     """An existing completion record is consistent with the request it claims AND with this one.
 
@@ -649,7 +683,15 @@ def check_own_completion(here, stage):
     catches -- including a completed stage whose stage.yaml has since been edited, which a
     nonempty hash string alone would happily accept.
     """
-    final = here / (stage or {}).get("output_state", "final_state.xml")
+    if (stage or {}).get("production"):
+        return _check_production_consistency(here, stage)
+
+    output_state = (stage or {}).get("output_state", "final_state.xml")
+    if output_state is None:
+        # A stage that declares no single handoff state -- REST2 keeps one per replica. There is
+        # nothing here to compare, and pretending otherwise would report it as never having run.
+        return [_skip("completion record", "this stage has no single handoff state")]
+    final = here / output_state
     record = here / "resolved_stage.yaml"
     if not final.is_file() and not record.is_file():
         return [_ok("completion record", "absent; this stage has not run")]
@@ -671,14 +713,33 @@ def check_own_completion(here, stage):
                     f"a final state exists but the record says status "
                     f"{written.get('status')!r}, so this stage did not finish")]
 
-    current = _fingerprint(stage or {})
-    if current != recorded:
-        return [_no("completion record",
-                    f"stage.yaml has changed since this stage ran: it now hashes to "
-                    f"{current[:12]} but the completion record was written for "
-                    f"{recorded[:12]}. Neither reusing these outputs nor overwriting them is "
-                    f"safe -- generate into a new output directory, or remove this stage's "
-                    f"outputs deliberately")]
+    # A PRODUCTION stage may legitimately be asked to run longer, and running longer changes the
+    # whole-document hash. Compare its invariants instead, which is exactly the set an extension
+    # may not touch. A common stage is fixed at generation, so its whole document still counts.
+    if (stage or {}).get("production"):
+        recorded_invariant = written.get("stage_invariant_sha256")
+        if not recorded_invariant:
+            return [_no("completion record",
+                        "a production completion record must carry stage_invariant_sha256, so "
+                        "that a continuation can be checked against the physics that produced "
+                        "these outputs; this one does not")]
+        current = _md_stages().stage_invariant_sha256(stage or {})
+        if current != recorded_invariant:
+            return [_no("completion record",
+                        f"the stage request has changed since this stage ran: its invariants now "
+                        f"hash to {current[:12]} but the completion record was written for "
+                        f"{recorded_invariant[:12]}. Continuing would apply new physics to output "
+                        f"produced under the old request -- generate into a new output directory, "
+                        f"or restore the request. Asking for a longer run alone is allowed")]
+    else:
+        current = _fingerprint(stage or {})
+        if current != recorded:
+            return [_no("completion record",
+                        f"stage.yaml has changed since this stage ran: it now hashes to "
+                        f"{current[:12]} but the completion record was written for "
+                        f"{recorded[:12]}. Neither reusing these outputs nor overwriting them is "
+                        f"safe -- generate into a new output directory, or remove this stage's "
+                        f"outputs deliberately")]
 
     outputs = written.get("outputs") or {}
     expected = (outputs.get(final.name) or {}).get("sha256")
@@ -697,6 +758,74 @@ def check_own_completion(here, stage):
 # Running the whole thing
 # ---------------------------------------------------------------------------------------------
 
+def check_runtime_request(here, stage, config):
+    """The configuration on disk NOW still describes the stage this directory was generated for.
+
+    Generated launchers reread `md.config.yaml` at run time, which is what makes extension work:
+    raise the requested length and the stage runs longer from its own checkpoint. The same
+    reread is what let an edited timestep through -- `md-gen` refuses 4 fs without hydrogen mass
+    repartitioning, but nothing re-applied that at run time, so editing the file after generation
+    and rerunning appended dynamics at the new timestep to a trajectory produced at the old one.
+
+    So the comparison is by INVARIANT fingerprint, not by whole document: recompute the request
+    from the current configuration and compare it against the one `stage.yaml` recorded. The
+    extendable fields are excluded, so a longer run still passes; everything else -- timestep,
+    temperature, ensemble, tau, barostat, solvent mode, hydrogen mass, the parent handoff -- fails
+    the moment it differs, before a Context exists.
+    """
+    if not stage or not stage.get("production"):
+        return []                                   # common stages are fixed at generation
+    method = stage.get("name")
+    if not method or method not in (config or {}):
+        return [_no("runtime request",
+                    f"stage.yaml names method {method!r}, which the current md.config.yaml does "
+                    f"not define, so what would run cannot be compared with what was generated")]
+    try:
+        helpers = _md_stages()
+        current = helpers.production_stage_document(
+            config, method,
+            parent_stage=stage.get("parent"), parent_path=stage.get("parent_path"),
+            implicit=bool(stage.get("implicit")),
+            seeds={"integrator": stage.get("integrator_seed"),
+                   "velocities": stage.get("velocity_seed"),
+                   "barostat": stage.get("barostat_seed")},
+            template_commit=stage.get("template_commit"),
+            omega_excluded=stage.get("omega_excluded_bonds") or (),
+        )
+        recorded = helpers.stage_invariant_sha256(stage)
+        now = helpers.stage_invariant_sha256(current)
+    except Exception as error:
+        return [_no("runtime request", f"{type(error).__name__}: {error}")]
+    if recorded == now:
+        return [_ok("runtime request", "the configuration still describes this stage")]
+
+    changed = sorted(
+        key for key in set(stage) | set(current)
+        if key not in helpers.PRODUCTION_EXTENDABLE_FIELDS and stage.get(key) != current.get(key))
+    detail = ", ".join(f"{k}: {stage.get(k)!r} -> {current.get(k)!r}" for k in changed) or \
+        "the resolved request differs"
+    return [_no("runtime request",
+                f"md.config.yaml no longer describes the stage this directory was generated for "
+                f"({detail}). Continuing would apply the new setting to output produced under the "
+                f"old one. Regenerate into a new stage, or restore the configuration; raising the "
+                f"requested length alone is a legitimate extension and is allowed.")]
+
+
+def _md_stages():
+    """The project's own copy of md_stages, beside md.config.yaml above this stage."""
+    import importlib.util
+
+    here = Path(__file__).resolve().parent
+    for candidate in (here, *here.parents):
+        module_path = candidate / "md_stages.py"
+        if module_path.is_file():
+            spec = importlib.util.spec_from_file_location("_preflight_md_stages", module_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise FileNotFoundError("md_stages.py was not found beside or above preflight.py")
+
+
 def run(here, project, inputs, config, *, stage=None, dynamics=True, devices=None, extra=None):
     """Every check, in order, as a list of rows. Nothing is written and nothing is integrated."""
     here, project, inputs = Path(here), Path(project), Path(inputs)
@@ -708,6 +837,7 @@ def run(here, project, inputs, config, *, stage=None, dynamics=True, devices=Non
     if stage is not None:
         results += check_parent(here, stage, dynamics=dynamics)
         results += check_own_completion(here, stage)
+        results += check_runtime_request(here, stage, config)
     for check in (extra or []):
         try:
             results += list(check())
