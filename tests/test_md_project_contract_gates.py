@@ -158,10 +158,33 @@ def test_an_unsupported_charge_method_fails_rather_than_being_recorded():
     assert "unsupported ligand_charge_method" in source
 
 
+def test_the_charged_molecule_itself_reaches_the_record():
+    """Which method ran is not the same as what it produced.
+
+    net_charge_e, formal_charge and n_atoms are computed from the actually-charged molecule and
+    were dropped with the scheme. They are what lets a reader check that two builds of the same
+    input got the same charges -- the question a charge cache would eventually have to answer.
+    """
+    from md_templates.openmm.forcefield_record import _ligand_record
+
+    record = _ligand_record(
+        is_ligand=True,
+        reported={"ligand": {"forcefield": "openff-2.2.1", "charge_method": "am1bcc",
+                             "charge_scheme": "am1bcc", "net_charge_e": -1.1e-16,
+                             "formal_charge": 0, "n_atoms": 79}},
+        requested={"ligand_forcefield": "sage-2.2.1", "ligand_charge_method": "am1bcc"},
+        checksums={},
+    )
+    assert record["formal_charge"] == 0
+    assert record["n_atoms"] == 79
+    assert record["net_charge_e"] is not None
+
+
 def test_the_null_ligand_record_declares_every_charge_key():
     from md_templates.openmm.forcefield_record import _null_ligand
 
-    for key in ("charge_method", "charge_scheme", "charge_model", "charge_model_sha256"):
+    for key in ("charge_method", "charge_scheme", "charge_model", "charge_model_sha256",
+                "net_charge_e", "formal_charge", "n_atoms"):
         assert key in _null_ligand(), f"{key} must be present and null, so a reader can tell"
 
 

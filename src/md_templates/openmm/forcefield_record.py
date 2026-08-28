@@ -235,6 +235,13 @@ def _ligand_record(*, is_ligand, reported, requested, checksums):
         "charge_model": ligand.get("nagl_model_file") or ligand.get("charge_model"),
         "charge_model_sha256": ligand.get("nagl_model_sha256"),
         "toolkit_registry": ligand.get("toolkit_registry"),
+        # What the charged molecule actually was. The builder computes these from the assigned
+        # charges and the parsed molecule, and they were being dropped alongside the scheme. They
+        # are what lets a reader check that two builds of the same input produced the same
+        # charges -- without them the record says which METHOD ran and nothing about its result.
+        "net_charge_e": ligand.get("net_charge_e"),
+        "formal_charge": ligand.get("formal_charge"),
+        "n_atoms": ligand.get("n_atoms"),
         "prepared_artifact": prepared.get("path"),
         "prepared_artifact_sha256": prepared.get("sha256"),
     }
@@ -380,4 +387,5 @@ def _null_ligand() -> dict[str, Optional[str]]:
     return {"forcefield": None, "openff_resource": None, "requested_label": None,
             "charge_method": None, "charge_scheme": None, "charge_model": None,
             "charge_model_sha256": None, "toolkit_registry": None,
+            "net_charge_e": None, "formal_charge": None, "n_atoms": None,
             "prepared_artifact": None, "prepared_artifact_sha256": None}
