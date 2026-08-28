@@ -106,3 +106,106 @@ is the tree of `dev` at `bdd3493`.
 
 Examples live under `configs/{systems,simulations}`, data under `$MD_DATA` outside every worktree,
 with `components/**` and `components-dev/**` ignored. There is no `md/` symlink convention yet.
+
+---
+
+## Phases 2-5 — what was built
+
+`md-openmm setup`, two new modules, and nothing removed. `simple.py` turns a request into a
+resolved preset and writes the directory; `emit.py` writes the scripts. **System building still
+goes through `sysgen.generate_system` unchanged**, so force fields, solvation and AM1-BCC are the
+validated code paths this repository already had. This milestone changes the interface and the
+generated scripts, not the science.
+
+### The measurement that matters
+
+| | old cMD project | `setup` |
+|---|---|---|
+| Python a user must trust | **2,084 lines** | **251 lines** |
+| production script | 286 lines | 60 |
+| where `Simulation` is built | `md_stages.py:192`, not in the script | in the script |
+| `md_templates` import | yes | **no** |
+| YAML read at run time | yes | **no** |
+
+Per script, against the milestone's targets:
+
+```text
+min/min.py                 39 / 40
+eq/nvt_1kcal/nvt_1kcal.py  57 / 60
+eq/npt_1kcal/npt_1kcal.py  60 / 60
+eq/npt_free/npt_free.py    51 / 60
+cMD/cmd.py                 60 / 60
+```
+
+No script exceeds its target, so nothing needs justifying under Phase 4.
+
+### Two design decisions
+
+**The `.out` header is one f-string, not a helper module.** The milestone permits a small shared
+utility for mechanical output formatting. Using one would have saved about a dozen lines per script
+and cost the reader an indirection to answer "what does this header contain". The f-string form
+means the text in the script reads exactly like the text in the file it produces.
+
+**Restrained stages take the solute as a literal `range`.** That removed the only YAML read at run
+time. The range is resolved at generation from `solute.yaml`, which records
+`solute_atom_indices_are_contiguous`; if it is ever false, generation refuses rather than emitting
+a range that would restrain the wrong atoms.
+
+### Three bugs the first real runs found
+
+None was visible from reading the generator; each needed the script to be executed.
+
+1. **The first equilibration stage looked one directory too high.** `eq/nvt_1kcal/` reaches
+   minimisation through `../../min`, not `../min`. Immediate `FileNotFoundError`.
+2. **`run.sh` aborted silently.** `set -e` fired on the failing subshell before the diagnostic
+   could run, so the operator saw a stopped script and no reason. It now reports the stage by name
+   with the tail of its `.out`.
+3. **The step counter climbed across stages**, so a 10,000-step production printed steps
+   16,000-25,000 and a "time remaining" of 23:58:26. Each stage now resets its own clock; lineage
+   is stated by `input_state` in the header.
+
+### Detachment, tested rather than asserted
+
+A stub on `PYTHONPATH` whose `md_templates` raises `ImportError`, then the full chain:
+
+```console
+$ python -c "import md_templates"
+ImportError: md_templates is deliberately unavailable
+
+$ cd $MD_DATA/.../ALA && ./run.sh
+== min ==  == nvt_1kcal ==  == npt_1kcal ==  == npt_free ==  == cmd ==  == done ==
+```
+
+| run | platform | wall clock | stages completed |
+|---|---|---|---|
+| ALA, peptide route | CPU | 3m26s | 5/5 |
+| phenol/IPH, ligand route | CPU | 3m32s | 5/5 |
+| ALA, **CUDA smoke** | CUDA | **13.3s** | 5/5, every `.out` says `platform: CUDA` |
+
+### Safety, all enforced at generation
+
+```text
+output root inside a Git worktree   refused, naming the toplevel
+non-empty system directory          refused, unless --overwrite
+4 fs without HMR                    refused; accepted with hydrogen_mass_amu: 4.0
+0.003 ps interval at 2 fs           refused: "1.5 steps ... 0.004 ps would"
+unknown `advanced:` key             refused rather than silently ignored
+```
+
+### Tests
+
+```console
+$ pytest tests/test_simple_setup.py -q     32 passed
+$ pytest -m "not gpu" -q                  386 passed, 77 deselected     154.3s
+$ pytest -m gpu -q                         77 passed, 386 deselected    182.2s
+```
+
+Non-GPU rose from 354 to 386: the 32 new tests. **REST2, AIS, continuation-safety, NAGL and
+charge-provenance coverage is unchanged and green.** The suite asserts the scientific defaults, so
+a change to force fields or the equilibration schedule fails here rather than reaching a generated
+system.
+
+### Not done in this milestone, deliberately
+
+REST2 and AIS keep their existing generation and their longer launchers. They can adopt the stage
+file convention later, once the cMD design has been reviewed. Nothing in this branch modifies them.

@@ -26,6 +26,200 @@ Every one of those values is argued, with its evidence classified and its limita
 
 ---
 
+## Conventional MD: `md-openmm setup`
+
+For ordinary cMD this is the whole interface. One small request in, a directory that runs like an
+Amber or GROMACS job out:
+
+```bash
+md-openmm setup --config examples/ALA/setup.yaml
+```
+
+```yaml
+# examples/ALA/setup.yaml -- the entire request
+system: ALA
+input: inputs/structures/example_ace_ala_nme.pdb
+type: peptide            # or: ligand
+solvent: explicit        # or: implicit
+protocol: cMD
+production: 1 ns
+output_interval: 5 ps
+platform: CUDA
+```
+
+Force field, water model, box, ionic strength, integrator, thermostat, barostat and the
+equilibration schedule all come from the preset. `setup` prints the resolved values and asks before
+writing anything. Interactively, `md-openmm setup` with no arguments asks the same seven questions.
+
+Anything else is reachable without cluttering the request:
+
+```yaml
+advanced:
+  forcefield.water: amber19/opc.xml       # ff19SB/OPC instead of the ff14SB/TIP3P default
+  solvent.padding_nm: 1.2
+  common.timestep_fs: 4.0
+  constraints.hydrogen_mass_amu: 4.0      # 4 fs is refused without this
+  common.temperature_kelvin: 310
+```
+
+An `advanced:` key that matches no field is an error, not a silent default.
+
+### What it generates
+
+```text
+ALA/
+├── config.yaml                      small: identity and origin, not a copy of every parameter
+├── common/                          topology.pdb, system.xml, initial state, force-field record
+├── min/min.py
+├── eq/nvt_1kcal/nvt_1kcal.py
+├── eq/npt_1kcal/npt_1kcal.py
+├── eq/npt_free/npt_free.py
+├── cMD/cmd.py
+└── run.sh
+```
+
+Each script is ordinary OpenMM application code with every parameter as a literal — 39 to 60
+non-blank lines, no `md_templates` import, no YAML parsing, no Git, no absolute paths. **The
+directory is detached**: delete this package and every stage still runs.
+
+```bash
+cd "$MD_DATA/md-project-examples/2026-08/ALA/eq/nvt_1kcal"
+python nvt_1kcal.py > nvt_1kcal.out 2>&1
+```
+
+or all of it, in order:
+
+```bash
+cd "$MD_DATA/md-project-examples/2026-08/ALA" && ./run.sh
+```
+
+### How this compares with Amber and GROMACS
+
+| Purpose | Amber | GROMACS | MD-OpenMM |
+|---|---|---|---|
+| Stage input | `.in` | `.mdp` and compiled `.tpr` | readable `.py` |
+| Parameterized system | `.prmtop` | `.top`/`.tpr` | `system.xml` and `topology.pdb` |
+| Starting coordinates/state | `.rst7`/`.rst` | `.gro`/`.cpt` | `.state.xml` or prepared coordinates |
+| Text output | `.out` | `.log` | `.out` |
+| Trajectory | `.nc` | `.xtc`/`.trr` | `.dcd` |
+| Restart/checkpoint | `.rst` | `.cpt` | `.state.xml` and `.chk` |
+| Execution | `pmemd.cuda ...` | `gmx mdrun ...` | `python stage.py > stage.out 2>&1` |
+
+This is about the **user-facing file and execution model**, not a claim of feature equivalence
+among the engines. OpenMM's input is executable Python rather than a keyword file, which is a real
+difference: a `.py` can do anything. The generated scripts are deliberately kept close to the
+concise examples in the OpenMM user guide's
+[Running Simulations](https://docs.openmm.org/latest/userguide/application/02_running_sims.html)
+page, so what is on the page is what is in the file.
+
+The same equilibration stage, three ways:
+
+```bash
+# Amber
+pmemd.cuda \
+  -i eq/nvt_1kcal/nvt_1kcal.in \
+  -o eq/nvt_1kcal/nvt_1kcal.out \
+  -p common/topology.prmtop \
+  -c min/min.rst \
+  -x eq/nvt_1kcal/nvt_1kcal.nc \
+  -r eq/nvt_1kcal/nvt_1kcal.rst
+```
+
+```bash
+# GROMACS
+gmx grompp \
+  -f eq/nvt_1kcal/nvt_1kcal.mdp \
+  -c min/min.gro \
+  -p common/topology.top \
+  -o eq/nvt_1kcal/nvt_1kcal.tpr
+
+gmx mdrun -deffnm eq/nvt_1kcal/nvt_1kcal
+```
+
+```bash
+# MD-OpenMM
+cd eq/nvt_1kcal
+python nvt_1kcal.py > nvt_1kcal.out 2>&1
+```
+
+### The `.out` file
+
+A versioned header a person and a parser can both read, then ordinary `StateDataReporter` output,
+then a completion marker written last — after the state and checkpoint exist, so a crash cannot
+print it:
+
+```text
+MD-OPENMM OUTPUT VERSION: 1
+stage: cMD
+system: ALA
+openmm_version: 8.6.0
+platform: CUDA
+integrator: LangevinMiddleIntegrator
+ensemble: NPT
+temperature_K: 300.0
+timestep_fs: 2.0
+steps: 500000
+duration_ps: 1000.0
+output_interval_ps: 5.0
+frames: 200
+input_state: ../eq/npt_free/npt_free.state.xml
+trajectory: cmd.dcd
+final_state: cmd.state.xml
+checkpoint: cmd.chk
+
+#"Step","Time (ps)","Potential Energy (kJ/mole)",...
+2500,5.0,-25376.1,...
+...
+run_status: completed
+```
+
+Every value is what the script executed, not what a configuration said it should. Each stage resets
+its own clock, so a stage's `.out` describes that stage; lineage is `input_state`.
+
+### Example 2 — phenol, the ligand route
+
+```bash
+md-openmm setup --config examples/phenol-IPH/setup.yaml
+```
+
+```yaml
+system: phenol-IPH
+input: inputs/ligands/phenol_IPH.smi     # Oc1ccccc1
+type: ligand                             # <- the only meaningful difference from ALA
+solvent: explicit
+protocol: cMD
+production: 1 ns
+output_interval: 5 ps
+```
+
+`type: ligand` selects OpenFF Sage 2.2.1 with AM1-BCC charges assigned through AmberTools. No
+partial charge is written by hand and no generated force-field artefact is edited.
+
+**`IPH` is an RCSB Chemical Component Dictionary identifier** — the code for phenol as a ligand
+component ([rcsb.org/ligand/IPH](https://www.rcsb.org/ligand/IPH)) — **not a four-character PDB
+entry accession.** The SMILES is committed rather than downloaded: the CCD is revised, and a build
+that reaches the network cannot say which revision it used.
+
+### Registration comes later
+
+A generated system is not a registered dataset. Registration is a separate, future operation:
+
+```bash
+md-data register-system md/ALA --config md/ALA/config.yaml --root "$MD_DATA"
+```
+
+The registrar reads `config.yaml`, the stage scripts, the `.out` files and the artefacts they name,
+computes checksums and writes authoritative registry metadata. None of that belongs in a stage
+script, which is why none of it is there.
+
+---
+
+## The older commands
+
+`sys-config`, `sys-gen` and `md-gen` remain, and REST2 and AIS still go through them. For
+conventional MD, `setup` is the entry point and these are the advanced path — `setup` calls the
+same `sys-gen` system builder, so the science is identical.
+
 ## The six commands
 
 ```bash
