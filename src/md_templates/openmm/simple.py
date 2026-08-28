@@ -17,7 +17,10 @@ stage script is what made the previous generation 286 lines to say twelve lines 
 
 from __future__ import annotations
 
+import os
 import datetime as _dt
+import random
+import hashlib
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -28,6 +31,9 @@ import yaml
 
 from . import defaults as D
 from .config import ConfigError
+
+#: Where the copied runner and helpers live.
+TEMPLATES = Path(__file__).resolve().parent / "templates"
 
 #: Bumped when the `.out` header grammar changes. Parsers key off it.
 OUTPUT_VERSION = 1
@@ -181,7 +187,14 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
                                if name.endswith("1kcal") else 0.0),
         })
 
+    stage_names = [s["name"] for s in stages] + ["cMD", "min"]
+    # `advanced.common.random_seed` is honoured rather than accepted and ignored: it becomes the
+    # base every stage seed is derived from, and each derived value is printed in the preset and
+    # written as a literal into the protocol file.
+    seeds = derive_seeds(common.get("random_seed"), stage_names)
+
     return {
+        "seeds": seeds,
         "system_id": request.system,
         "title": advanced.get("title") or request.system,
         "type": request.type,
@@ -244,6 +257,9 @@ def format_preset(resolved: dict[str, Any]) -> str:
         f"{resolved['output_interval_steps']:,d} steps  "
         f"({resolved['production_steps'] // resolved['output_interval_steps']:,d} frames)",
         f"platform      {resolved['platform']}",
+        f"base seed     {resolved['seeds']['base']['seed']}  "
+        f"(cMD integrator {resolved['seeds']['cMD']['integrator']}, "
+        f"barostat {resolved['seeds']['cMD']['barostat']})",
     ]
     return "\n".join("  " + line for line in lines)
 
@@ -262,153 +278,272 @@ def origin_commit() -> Optional[str]:
     return result.stdout.strip() or None if result.returncode == 0 else None
 
 
-def refuse_unsafe_output(root: Path) -> None:
-    """A data root inside a Git worktree will eventually be committed by accident."""
-    root = Path(root).resolve()
-    probe = subprocess.run(["git", "-C", str(root if root.is_dir() else root.parent),
-                            "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-    if probe.returncode == 0:
+def _nearest_existing(path: Path) -> Path:
+    """The closest ancestor that exists. Git cannot be asked about a directory that is not there.
+
+    The previous check looked only at the immediate parent, so `$REPO/a/b/c` with none of `a/b/c`
+    created reported "not a repository" and was accepted -- inside a worktree.
+    """
+    path = path.resolve()
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return path
+
+
+def _inside_git_worktree(path: Path) -> str | None:
+    """The worktree containing `path`, or None. Asked of Git, walking up to something that exists."""
+    probe = subprocess.run(["git", "-C", str(_nearest_existing(path)), "rev-parse",
+                            "--show-toplevel"], capture_output=True, text=True)
+    return probe.stdout.strip() if probe.returncode == 0 else None
+
+
+def resolve_output_root(output: Optional[str]) -> tuple[Path, str]:
+    """Where the system goes, and the portable project path relative to `$MD_DATA`.
+
+    A generated system is addressed as `$MD_DATA/<relative project>/<system>` so `paths.sh` can
+    contain no machine path. That only works if the output really is beneath `$MD_DATA`, so this
+    refuses anything else rather than emitting a map that silently does not apply.
+    """
+    managed = os.environ.get("MD_DATA")
+    if not managed:
         raise ConfigError(
-            f"{root} is inside the Git working tree at {probe.stdout.strip()}. Generated systems, "
+            "MD_DATA is not set. A generated system is addressed relative to the managed storage "
+            "root so that paths.sh carries no machine path; without it there is nothing to be "
+            "relative to. Export MD_DATA to the storage root and pass --output beneath it.")
+    managed_path = Path(managed).expanduser()
+    if not managed_path.is_dir():
+        raise ConfigError(f"MD_DATA={managed} is not an existing directory")
+    managed_path = managed_path.resolve()
+
+    root = Path(output).expanduser().resolve() if output else managed_path
+    try:
+        relative = root.relative_to(managed_path)
+    except ValueError:
+        raise ConfigError(
+            f"--output {root} is not beneath MD_DATA={managed_path}. The generated paths.sh "
+            f"resolves the system from $MD_DATA, so an output elsewhere could not be described "
+            f"portably.") from None
+    if any(part == ".." for part in relative.parts):
+        raise ConfigError(f"--output {root} traverses outside {managed_path}")
+
+    worktree = _inside_git_worktree(root)
+    if worktree:
+        raise ConfigError(
+            f"{root} is inside the Git working tree at {worktree}. Generated systems, "
             f"trajectories and checkpoints must live outside every repository -- an ignore rule is "
-            f"not protection, because it is one `git add -f` from being wrong. Point --output at a "
-            f"managed storage root instead.")
+            f"not protection, because it is one `git add -f` from being wrong.")
+
+    return root, relative.as_posix()
+
+
+def refuse_unsafe_output(root: Path) -> None:
+    """Kept for callers that only need the worktree question."""
+    worktree = _inside_git_worktree(Path(root))
+    if worktree:
+        raise ConfigError(
+            f"{Path(root).resolve()} is inside the Git working tree at {worktree}. Generated "
+            f"systems must live outside every repository.")
+
+
+def resolve_contributor(document: dict, *, interactive: bool) -> dict:
+    """Who generated this. Explicit field, then $MD_CONTRIBUTOR, then a prompt, then an error.
+
+    Never invented. An attributed record naming someone who did not do the work is worse than one
+    that admits it does not know.
+    """
+    contributor = document.get("contributor")
+    if not contributor:
+        contributor = os.environ.get("MD_CONTRIBUTOR")
+    if not contributor and interactive:
+        contributor = input("  contributor (name, or name <email>): ").strip() or None
+    if not contributor:
+        raise ConfigError(
+            "no contributor. Set `contributor:` in the request, export MD_CONTRIBUTOR, or run "
+            "interactively. This is recorded in config.yaml as who generated the system, and it "
+            "is not something to guess at.")
+    text = str(contributor).strip()
+    if "<" in text and text.endswith(">"):
+        name, _, email = text.partition("<")
+        return {"name": name.strip(), "email": email.rstrip(">").strip()}
+    return {"name": text, "email": None}
+
+
+def derive_seeds(base: Optional[int], stages: list[str]) -> dict[str, dict[str, int]]:
+    """One base seed, then a distinct literal seed per stage and per use.
+
+    Resolved here so the seed appears as a number in the protocol file and in the `.out`. A run
+    whose seed was chosen at run time cannot be repeated from its own record.
+    """
+    if base is None:
+        base = random.SystemRandom().randrange(1, 2**31 - 1)
+    base = int(base)
+    seeds: dict[str, dict[str, int]] = {}
+    for stage in stages:
+        digest = hashlib.sha256(f"{base}:{stage}".encode()).digest()
+        seeds[stage] = {
+            "integrator": int.from_bytes(digest[0:4], "big") % (2**31 - 1) or 1,
+            "barostat": int.from_bytes(digest[4:8], "big") % (2**31 - 1) or 1,
+        }
+    seeds["base"] = {"seed": base}
+    return seeds
+
+
+def package_version() -> Optional[str]:
+    """The installed distribution version, which exists even when there is no Git checkout."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+    except ImportError:                                            # pragma: no cover
+        return None
+    for name in ("md-templates", "md_templates"):
+        try:
+            return version(name)
+        except PackageNotFoundError:
+            continue
+    try:
+        from .. import __version__            # type: ignore[attr-defined]
+        return str(__version__)
+    except Exception:
+        return None
 
 
 def generate(resolved: dict[str, Any], *, input_path: Path, output_root: Path,
-             overwrite: bool = False, echo: bool = True) -> dict[str, Any]:
-    """Build the system, then write the stage scripts beside it.
+             relative_project: str, contributor: dict, overwrite: bool = False,
+             echo: bool = True) -> dict[str, Any]:
+    """Build the system, then write the protocol files, launchers, path map and runner.
 
-    The system is built by `sysgen.generate_system`, unchanged: force fields, solvation, ligand
-    parameterisation and charges are the validated code paths this repository already has, and this
-    milestone is not the place to reimplement them. What changes is everything after -- the scripts.
+    `sysgen.generate_system` still builds every system, unchanged: force fields, solvation and
+    ligand charges are the validated code paths. What this writes is the interface around them.
     """
     from . import emit
     from .sysgen import generate_system
 
     output_root = Path(output_root).resolve()
-    refuse_unsafe_output(output_root)
     system_dir = output_root / resolved["system_id"]
 
     if system_dir.exists() and any(system_dir.iterdir()) and not overwrite:
         raise ConfigError(
-            f"{system_dir} already exists and is not empty. Generating again would overwrite stage "
-            f"scripts beside trajectories produced by the previous ones, leaving a directory whose "
-            f"`.out` files describe a run its scripts no longer perform. Choose another system name, "
-            f"or pass --overwrite if the directory is genuinely scratch.")
+            f"{system_dir} already exists and is not empty. Generating again would put new stage "
+            f"files beside outputs produced by the old ones, leaving a directory whose .out files "
+            f"describe runs its scripts no longer perform. Choose another system name, or pass "
+            f"--overwrite if the directory is genuinely scratch.")
 
-    common = system_dir / "common"
-    common.mkdir(parents=True, exist_ok=True)
+    inputs = system_dir / "input"
+    inputs.mkdir(parents=True, exist_ok=True)
 
-    # The system configuration sysgen consumes. Written into the generated directory so the build
-    # is reproducible from what is on disk, then never read again by anything at run time.
-    sys_config_path = system_dir / "common" / "sys.config.yaml"
+    sys_config_path = inputs / "sys.config.yaml"
     document = dict(resolved["sys_config"])
     document["dataset"] = {"enabled": False}
     sys_config_path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
 
     generate_system(input_path=Path(input_path), config_path=sys_config_path,
-                    output_folder=common, echo=echo)
+                    output_folder=inputs, echo=echo)
 
-    # The solute atom range, read ONCE here so the restrained stages can name it as a literal
-    # instead of parsing YAML at run time. sysgen states whether the indices are contiguous; if
-    # they ever are not, refusing is better than emitting a range that silently restrains the
-    # wrong atoms.
-    solute = yaml.safe_load((common / "solute.yaml").read_text(encoding="utf-8"))
+    solute = yaml.safe_load((inputs / "solute.yaml").read_text(encoding="utf-8"))
     if not solute.get("solute_atom_indices_are_contiguous", False):
         raise ConfigError(
-            f"{common / 'solute.yaml'} reports non-contiguous solute indices, which this "
-            f"generator cannot express as a literal range in a restrained stage script.")
-    resolved = dict(resolved, solute_range=tuple(solute["solute_atom_range"]))
+            f"{inputs / 'solute.yaml'} reports non-contiguous solute indices, which cannot be "
+            f"expressed as a literal range in a restrained stage.")
+    resolved = dict(resolved, solute_range=tuple(solute["solute_atom_range"]),
+                    provenance_hint="input/provenance.yaml")
 
     written: list[str] = []
 
+    # The runner. Copied in, so the system needs no installed command.
+    binaries = system_dir / "bin"
+    binaries.mkdir(exist_ok=True)
+    runner = binaries / "openmm-md"
+    shutil.copy2(TEMPLATES / "openmm_md.py", runner)
+    runner.chmod(0o755)
+    written.append("bin/openmm-md")
+
+    stage_names = [s["name"] for s in resolved["equilibration_stages"]] + ["cMD"]
+    (system_dir / "paths.sh").write_text(
+        emit.paths_sh(relative_project, resolved["system_id"], stage_names), encoding="utf-8")
+    (system_dir / "paths.sh").chmod(0o755)
+    written.append("paths.sh")
+
+    launchers: list[str] = []
+
     (system_dir / "min").mkdir(exist_ok=True)
-    (system_dir / "min" / "min.py").write_text(emit.minimization_script(resolved), encoding="utf-8")
-    written.append("min/min.py")
+    (system_dir / "min" / "min.py").write_text(emit.minimization_protocol(resolved),
+                                               encoding="utf-8")
+    minimisation = emit.launcher("min", directory_var="MIN_DIR", depth=1,
+                                 parent_restart="${INPUT_DIR}/initial_state.xml",
+                                 trajectory=False, checkpoint=False)
+    (system_dir / "min" / "min.sh").write_text(minimisation, encoding="utf-8")
+    (system_dir / "min" / "min.sh").chmod(0o755)
+    written += ["min/min.py", "min/min.sh"]
+    launchers.append("min/min.sh")
 
-    # The first equilibration stage runs from eq/<name>/, two levels below the system root,
-    # so it reaches minimisation through `../../min`. Later stages are siblings in eq/.
-    parent = "../../min/min.state.xml"
+    directory_variable = {"nvt_1kcal": "NVT_DIR", "npt_1kcal": "NPT_RESTRAINED_DIR",
+                          "npt_free": "NPT_FREE_DIR", "nvt_free": "NVT_FREE_DIR"}
+    parent = "${MIN_DIR}/min.state.xml"
     for stage in resolved["equilibration_stages"]:
-        directory = system_dir / "eq" / stage["name"]
+        name = stage["name"]
+        directory = system_dir / "eq" / name
         directory.mkdir(parents=True, exist_ok=True)
-        script = emit.equilibration_script(resolved, stage, parent)
-        (directory / f"{stage['name']}.py").write_text(script, encoding="utf-8")
-        written.append(f"eq/{stage['name']}/{stage['name']}.py")
-        parent = f"../{stage['name']}/{stage['name']}.state.xml"
+        (directory / f"{name}.py").write_text(emit.equilibration_protocol(resolved, stage),
+                                              encoding="utf-8")
+        script = emit.launcher(name, directory_var=directory_variable[name], depth=2,
+                               parent_restart=parent, trajectory=True, checkpoint=True)
+        (directory / f"{name}.sh").write_text(script, encoding="utf-8")
+        (directory / f"{name}.sh").chmod(0o755)
+        written += [f"eq/{name}/{name}.py", f"eq/{name}/{name}.sh"]
+        launchers.append(f"eq/{name}/{name}.sh")
+        parent = f"${{{directory_variable[name]}}}/{name}.state.xml"
 
-    # The production stage sits one level up from the eq/ stages, so its parent path differs.
-    last = resolved["equilibration_stages"][-1]["name"]
     (system_dir / "cMD").mkdir(exist_ok=True)
-    (system_dir / "cMD" / "cmd.py").write_text(
-        emit.production_script(resolved, f"../eq/{last}/{last}.state.xml"), encoding="utf-8")
-    written.append("cMD/cmd.py")
+    (system_dir / "cMD" / "cmd.py").write_text(emit.production_protocol(resolved), encoding="utf-8")
+    production = emit.launcher("cmd", directory_var="CMD_DIR", depth=1, parent_restart=parent,
+                               trajectory=True, checkpoint=True)
+    (system_dir / "cMD" / "cmd.sh").write_text(production, encoding="utf-8")
+    (system_dir / "cMD" / "cmd.sh").chmod(0o755)
+    written += ["cMD/cmd.py", "cMD/cmd.sh"]
+    launchers.append("cMD/cmd.sh")
 
-    (system_dir / "run.sh").write_text(_run_script(resolved), encoding="utf-8")
+    (system_dir / "run.sh").write_text(emit.run_all_sh(launchers), encoding="utf-8")
     (system_dir / "run.sh").chmod(0o755)
     written.append("run.sh")
 
-    (system_dir / "config.yaml").write_text(_system_config(resolved, input_path), encoding="utf-8")
+    (system_dir / "config.yaml").write_text(
+        _system_config(resolved, input_path, contributor), encoding="utf-8")
     written.append("config.yaml")
 
     return {"system_dir": system_dir, "written": written}
 
 
-def _run_script(resolved: dict[str, Any]) -> str:
-    """Every stage in order. Short enough to read before trusting it."""
-    lines = ["min/min.py"]
-    lines += [f"eq/{s['name']}/{s['name']}.py" for s in resolved["equilibration_stages"]]
-    lines.append("cMD/cmd.py")
-    body = "\n".join(f"run {path}" for path in lines)
-    return f'''#!/usr/bin/env bash
-# Every stage of {resolved["system_id"]}, in order. Each writes its own .out beside its script.
-#
-# Runs any stage on its own just as well:
-#     cd eq/nvt_1kcal && python nvt_1kcal.py > nvt_1kcal.out 2>&1
-set -euo pipefail
-cd "$(dirname "${{BASH_SOURCE[0]}}")"
-
-run () {{
-    local script="$1"
-    local directory; directory="$(dirname "$script")"
-    local name; name="$(basename "$script" .py)"
-    echo "== $name =="
-    # `|| true` so a failing stage reaches the check below and is named, rather than
-    # `set -e` aborting with nothing said about which stage stopped it.
-    ( cd "$directory" && python "$name.py" > "$name.out" 2>&1 ) || true
-    grep -q '^run_status: completed$' "$directory/$name.out" || {{
-        echo "$name did not complete -- see $directory/$name.out" >&2
-        tail -n 5 "$directory/$name.out" >&2
-        exit 1
-    }}
-}}
-
-{body}
-echo "== done =="
-'''
-
-
-def _system_config(resolved: dict[str, Any], input_path: Path) -> str:
-    """System-level metadata. Deliberately small: the parameters live in the scripts and the .out."""
+def _system_config(resolved: dict[str, Any], input_path: Path, contributor: dict) -> str:
+    """System-level metadata. Small on purpose: parameters live in the protocols and the .out."""
+    commit = origin_commit()
+    version = package_version()
+    if not commit and not version:
+        raise ConfigError(
+            "neither an MD-templates commit nor an installed package version could be determined, "
+            "so the generated system could not say what produced it.")
     document = {
         "schema_version": 1,
         "system_id": resolved["system_id"],
         "title": resolved["title"],
         "created": _dt.date.today().isoformat(),
+        "contributor": contributor,
         "source": {
             "kind": "structure" if resolved["type"] == "peptide" else "ligand",
             "identity": Path(input_path).name,
         },
-        "generated_by": {
-            "tool": "md-openmm setup",
-            "md_templates_commit": origin_commit(),
-        },
-        "protocol": resolved["protocol"],
         "route": resolved["type"],
         "solvent": resolved["solvent"],
+        "protocol": resolved["protocol"],
+        "generated_by": {
+            "tool": "md-openmm setup",
+            "md_templates_version": version,
+            # null only when the package version is present: a wheel install legitimately has no
+            # checkout, but something concrete must identify the generator.
+            "md_templates_commit": commit,
+        },
+        "random_seed_base": resolved["seeds"]["base"]["seed"],
     }
-    header = ("# System-level metadata. Small on purpose: every simulation parameter is a literal\n"
-              "# in the stage scripts and is echoed into each .out, so duplicating them here would\n"
-              "# create a second copy to drift.\n")
+    header = ("# System metadata. Small on purpose: every simulation parameter is a literal in the\n"
+              "# stage protocol files and is echoed into each .out, so duplicating them here would\n"
+              "# create a second copy to drift. Force-field detail lives in input/provenance.yaml\n"
+              "# and input/resolved_sys.config.yaml.\n")
     return header + yaml.safe_dump(document, sort_keys=False)

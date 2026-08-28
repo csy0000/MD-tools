@@ -209,3 +209,106 @@ system.
 
 REST2 and AIS keep their existing generation and their longer launchers. They can adopt the stage
 file convention later, once the cMD design has been reviewed. Nothing in this branch modifies them.
+
+---
+
+## The file interface pass
+
+Turned the short generated scripts into reusable **protocol** files whose paths arrive from
+generated launchers through an Amber-like command line. Four pieces, deliberately separate:
+
+| piece | holds |
+|---|---|
+| `<stage>.py` | the science: integrator, ensemble, restraint, steps, reporters, `simulation.step()` |
+| `paths.sh` | the directory map, resolved from `$MD_DATA`; no machine path |
+| `<stage>.sh` | every concrete input and output, passed explicitly |
+| `bin/openmm-md` | generic file handling; no scientific opinion at all |
+
+### `openmm-md`
+
+156 lines, standard library and OpenMM only -- asserted on **parsed imports**, not on a substring
+search, because the docstring says the word `md_templates` while explaining that it does not use it,
+and a test that cannot tell prose from a dependency would force the explanation out of the file.
+
+```text
+-i --input  -p --topology  -s --system  -c --coordinates
+-o --output  -x --trajectory  -r --restart  --checkpoint  --solute-x  --force
+```
+
+Precedence is flag, then `OPENMM_*`, then a clear error. Everything is validated before any Context
+exists or any byte is written: required paths resolved, inputs verified present, outputs proved
+distinct from inputs and from each other, existing outputs refused unless `--force`. Output
+directories are created only after validation passes -- a test asserts that an invalid invocation
+leaves no directory behind.
+
+**It never writes the completion marker.** The protocol prints it, and only after the outputs it
+names exist. `openmm-md` additionally refuses a marker standing over missing outputs, which would
+be a completed run with nothing to show for it.
+
+### Line counts, measured rather than claimed
+
+The instruction asks for the measured count and a justification of the unavoidable increase.
+
+| file | total | `.out` header | protocol body | old target |
+|---|---|---|---|---|
+| `min.py` | 44 | 16 | **28** | 40 |
+| `nvt_1kcal.py` | 65 | 23 | **42** | 60 |
+| `npt_1kcal.py` | 72 | 25 | **47** | 60 |
+| `npt_free.py` | 62 | 25 | **37** | 60 |
+| `cmd.py` | 69 | 26 | **43** | 60 |
+
+The growth is the header, and the header is what the output contract in this same instruction
+requires: resolved topology, System, starting state, trajectory, restart and checkpoint paths, plus
+explicit integrator and barostat seeds, plus the provenance reference. That is roughly ten lines per
+stage of output formatting, not protocol.
+
+Excluding it, the bodies are 28-47 lines -- within about two of the previous figures, and those two
+are `def run(files):` and the explicit `setRandomNumberSeed`. Counting mandated output formatting
+against a limit on scientific code would push the science into a helper, which is the one outcome
+the design forbids. The test measures the header and excludes it, and says why.
+
+One piece of real fat was found and removed: `pressure_bar: n/a` and `barostat_seed: n/a` printed on
+NVT stages. A field that does not apply is not printed.
+
+### Corrections in this pass
+
+| | |
+|---|---|
+| contributor | request field → `$MD_CONTRIBUTOR` → prompt → error. Never invented |
+| package version | recorded, so `md_templates_commit: null` is acceptable only beside a concrete version |
+| seeds | `advanced.common.random_seed` honoured rather than accepted and dropped; derived per stage, written as literals, printed in preset and `.out` |
+| confirmation | `--yes` is what makes a run unattended; both modes otherwise show the full preset and ask |
+| question count | the interactive mode asks **nine** questions, not the seven the README claimed |
+| OPC | documented as the **coupled** ff19SB/OPC selection. The old one-field example would have paired ff14SB with OPC -- a combination nobody validated |
+| output collisions | refused by `openmm-md` with `--force` to override, replacing the old "directory not empty" check alone |
+| nested worktrees | `$REPO/a/b/c` with none of `a/b/c` existing was accepted, because Git was asked about a directory that did not exist. It now walks up to the nearest existing ancestor |
+| `$MD_DATA` containment | the output must resolve beneath it, and the portable relative project path is derived from it |
+
+### Evidence
+
+Both routes, full chain, with a stub making `import md_templates` raise `ImportError`:
+
+| run | platform | wall clock | stages |
+|---|---|---|---|
+| ALA, peptide | CPU | 2m27s | 5/5 `run_status: completed` |
+| phenol/IPH, ligand | CPU | 2m10s | 5/5 `run_status: completed` |
+
+```console
+$ pytest tests/test_openmm_md_interface.py -q     21 passed
+$ pytest tests/test_simple_setup.py -q            38 passed
+$ pytest -m "not gpu" -q                         425 passed, 77 deselected   238.1s
+$ pytest -m gpu -q                                77 passed, 425 deselected  182.0s
+```
+
+Non-GPU rose from 387 to 425. REST2, AIS, continuation-safety, NAGL and charge-provenance coverage
+is unchanged and green; no REST2 or AIS file was modified in this pass.
+
+`paths.sh` portability and protocol reuse are both tested by execution rather than by inspection:
+the managed root is copied elsewhere, `$MD_DATA` re-exported, and the same launcher runs untouched;
+and one `min.py` is run against a second, unrelated set of paths through `openmm-md` directly.
+
+### Not done here
+
+REST2 and AIS keep their existing generation and their `sys-gen`/`md-gen` path. OpenMMTools is not
+adopted, registration is not implemented, trajectory format is unchanged, and component management
+is untouched. Those are the next task's, not this one's.

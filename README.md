@@ -49,43 +49,90 @@ platform: CUDA
 
 Force field, water model, box, ionic strength, integrator, thermostat, barostat and the
 equilibration schedule all come from the preset. `setup` prints the resolved values and asks before
-writing anything. Interactively, `md-openmm setup` with no arguments asks the same seven questions.
+writing anything. Interactively, `md-openmm setup` with no arguments asks nine questions — the eight fields above
+plus the output location. Both modes show the complete resolved preset and ask before writing;
+`--yes` is what makes a run unattended, and the automated examples pass it.
 
 Anything else is reachable without cluttering the request:
 
 ```yaml
 advanced:
-  forcefield.water: amber19/opc.xml       # ff19SB/OPC instead of the ff14SB/TIP3P default
   solvent.padding_nm: 1.2
   common.timestep_fs: 4.0
   constraints.hydrogen_mass_amu: 4.0      # 4 fs is refused without this
   common.temperature_kelvin: 310
+  common.random_seed: 20260828            # honoured: every stage seed derives from it
 ```
 
 An `advanced:` key that matches no field is an error, not a silent default.
+
+**ff19SB/OPC is a coupled selection.** The protein and water force fields were parameterised
+together, so both must move:
+
+```yaml
+advanced:
+  forcefield.protein: amber19-all.xml
+  forcefield.water: amber19/opc.xml
+```
+
+Setting only the water XML would pair ff14SB with OPC — a combination nobody validated. The
+default remains ff14SB + TIP3P.
+
+Seeds are resolved at generation, not at run time: a base seed (given or generated once) derives a
+distinct integrator and barostat seed per stage, each written as a literal into the protocol and
+printed in the `.out`. A run whose seed was chosen at run time cannot be repeated from its record.
 
 ### What it generates
 
 ```text
 ALA/
-├── config.yaml                      small: identity and origin, not a copy of every parameter
-├── common/                          topology.pdb, system.xml, initial state, force-field record
-├── min/min.py
-├── eq/nvt_1kcal/nvt_1kcal.py
-├── eq/npt_1kcal/npt_1kcal.py
-├── eq/npt_free/npt_free.py
-├── cMD/cmd.py
-└── run.sh
+├── config.yaml            identity, contributor, date, generator version -- not the parameters
+├── paths.sh               the directory map, resolved from $MD_DATA; no machine path
+├── bin/openmm-md          the file interface: stdlib + OpenMM, no scientific opinion
+├── input/                 topology.pdb, system.xml, initial_state.xml, provenance, force field
+├── min/{min.py,min.sh}
+├── eq/nvt_1kcal/{nvt_1kcal.py,nvt_1kcal.sh}
+├── eq/npt_1kcal/{npt_1kcal.py,npt_1kcal.sh}
+├── eq/npt_free/{npt_free.py,npt_free.sh}
+├── cMD/{cmd.py,cmd.sh}
+└── run.sh                 calls the launchers in order; holds no setting of its own
 ```
+
+Four pieces, deliberately separate: the `.py` holds the science, `paths.sh` the portable map, the
+`.sh` every concrete path, and `bin/openmm-md` the generic file handling.
 
 Each script is ordinary OpenMM application code with every parameter as a literal — 39 to 60
 non-blank lines, no `md_templates` import, no YAML parsing, no Git, no absolute paths. **The
 directory is detached**: delete this package and every stage still runs.
 
 ```bash
-cd "$MD_DATA/md-project-examples/2026-08/ALA/eq/nvt_1kcal"
-python nvt_1kcal.py > nvt_1kcal.out 2>&1
+"$MD_DATA/md-project-examples/2026-08/ALA/eq/nvt_1kcal/nvt_1kcal.sh"
 ```
+
+Each launcher sources the system's `paths.sh` — which resolves everything from `$MD_DATA` and
+contains no machine path — and passes every concrete file to `openmm-md`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+STAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${STAGE_DIR}/../../paths.sh"
+
+"${OPENMM_MD}" \
+  -i "${NVT_DIR}/nvt_1kcal.py" \
+  -p "${INPUT_DIR}/topology.pdb" \
+  -s "${INPUT_DIR}/system.xml" \
+  -c "${MIN_DIR}/min.state.xml" \
+  -o "${NVT_DIR}/nvt_1kcal.out" \
+  -x "${NVT_DIR}/nvt_1kcal.dcd" \
+  -r "${NVT_DIR}/nvt_1kcal.state.xml" \
+  --checkpoint "${NVT_DIR}/nvt_1kcal.chk" \
+  "$@"
+```
+
+Because the protocol takes its paths as an argument, the same `nvt_1kcal.py` runs against another
+system by changing only the invocation. Move the managed root, export the new `$MD_DATA`, and every
+launcher follows.
 
 or all of it, in order:
 
@@ -97,13 +144,13 @@ cd "$MD_DATA/md-project-examples/2026-08/ALA" && ./run.sh
 
 | Purpose | Amber | GROMACS | MD-OpenMM |
 |---|---|---|---|
-| Stage input | `.in` | `.mdp` and compiled `.tpr` | readable `.py` |
+| Stage input | `.in` | `.mdp` and compiled `.tpr` | readable `.py` protocol |
 | Parameterized system | `.prmtop` | `.top`/`.tpr` | `system.xml` and `topology.pdb` |
 | Starting coordinates/state | `.rst7`/`.rst` | `.gro`/`.cpt` | `.state.xml` or prepared coordinates |
 | Text output | `.out` | `.log` | `.out` |
 | Trajectory | `.nc` | `.xtc`/`.trr` | `.dcd` |
 | Restart/checkpoint | `.rst` | `.cpt` | `.state.xml` and `.chk` |
-| Execution | `pmemd.cuda ...` | `gmx mdrun ...` | `python stage.py > stage.out 2>&1` |
+| Execution | `pmemd.cuda -i ... -o ...` | `gmx mdrun -deffnm ...` | `openmm-md -i ... -o ...` |
 
 This is about the **user-facing file and execution model**, not a claim of feature equivalence
 among the engines. OpenMM's input is executable Python rather than a keyword file, which is a real
@@ -138,9 +185,27 @@ gmx mdrun -deffnm eq/nvt_1kcal/nvt_1kcal
 
 ```bash
 # MD-OpenMM
-cd eq/nvt_1kcal
-python nvt_1kcal.py > nvt_1kcal.out 2>&1
+openmm-md \
+  -i eq/nvt_1kcal/nvt_1kcal.py \
+  -p input/topology.pdb \
+  -s input/system.xml \
+  -c min/min.state.xml \
+  -o eq/nvt_1kcal/nvt_1kcal.out \
+  -x eq/nvt_1kcal/nvt_1kcal.dcd \
+  -r eq/nvt_1kcal/nvt_1kcal.state.xml \
+  --checkpoint eq/nvt_1kcal/nvt_1kcal.chk
 ```
+
+which is exactly what the generated launcher runs, so in practice:
+
+```bash
+eq/nvt_1kcal/nvt_1kcal.sh
+```
+
+OpenMM needs both a topology and a serialized `System`, which is why `-p` and `-s` are separate
+where Amber has one `-p`. The generated `bin/openmm-md` is authoritative for that system: it uses
+only the standard library and OpenMM, and decides nothing scientific — no force field, protocol,
+schedule, restraint, temperature, step count or ensemble. Those are visible in the `.py`.
 
 ### The `.out` file
 

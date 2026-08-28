@@ -128,8 +128,10 @@ def _ask(prompt: str, default: str, choices: tuple[str, ...] = ()) -> str:
 
 def cmd_setup(args) -> int:
     """One small request in, a runnable OpenMM directory out."""
-    from ..openmm.simple import SetupRequest, format_preset, generate, resolve
+    from ..openmm.simple import (SetupRequest, format_preset, generate, resolve,
+                                 resolve_contributor, resolve_output_root)
 
+    interactive = not args.config
     if args.config:
         document = yaml.safe_load(Path(args.config).read_text(encoding="utf-8")) or {}
     else:
@@ -143,40 +145,52 @@ def cmd_setup(args) -> int:
             "production": _ask("production duration", "1 ns"),
             "output_interval": _ask("trajectory output interval", "5 ps"),
             "platform": _ask("platform", "automatic", ("CUDA", "CPU", "automatic")),
-            "output": _ask("output location", os.environ.get("MD_DATA", "")),
+            "output": _ask("output location (under $MD_DATA)", os.environ.get("MD_DATA", "")),
         }
 
+    contributor_field = document.pop("contributor", None)
     try:
         request = SetupRequest.from_document(document)
         resolved = resolve(request)
+        contributor = resolve_contributor({"contributor": contributor_field},
+                                          interactive=interactive and not args.yes)
+        output_root, relative_project = resolve_output_root(args.output or request.output)
     except ConfigError as error:
         raise SystemExit(f"setup: {error}")
 
     if args.advanced:
         print("\nAdvanced settings are set through `advanced:` in the request, dotted by path:\n")
-        for line in ("advanced:", "  forcefield.water: amber19/opc.xml",
-                     "  solvent.padding_nm: 1.2", "  common.timestep_fs: 4.0",
-                     "  constraints.hydrogen_mass_amu: 4.0", "  common.temperature_kelvin: 310"):
+        for line in ("advanced:",
+                     "  solvent.padding_nm: 1.2",
+                     "  common.timestep_fs: 4.0",
+                     "  constraints.hydrogen_mass_amu: 4.0     # 4 fs is refused without this",
+                     "  common.temperature_kelvin: 310",
+                     "  common.random_seed: 20260828",
+                     "",
+                     "ff19SB/OPC is a COUPLED selection -- the protein and water force fields must",
+                     "change together, and setting only the water XML would pair ff14SB with OPC:",
+                     "  forcefield.protein: amber19-all.xml",
+                     "  forcefield.water: amber19/opc.xml"):
             print(f"  {line}")
         print()
 
     print("\nResolved preset:\n")
     print(format_preset(resolved))
-    print()
+    print(f"\n  contributor   {contributor['name']}"
+          + (f" <{contributor['email']}>" if contributor.get("email") else ""))
+    print(f"  output        {output_root / resolved['system_id']}")
+    print(f"  portable as   $MD_DATA/{relative_project}/{resolved['system_id']}\n")
 
-    output = args.output or request.output or os.environ.get("MD_DATA")
-    if not output:
-        raise SystemExit("setup: no output location. Pass --output, set `output:` in the request, "
-                         "or export MD_DATA.")
-    print(f"  output        {Path(output).resolve() / resolved['system_id']}\n")
-
-    if not args.config and not args.yes:
+    # `--yes` is what makes a run unattended. Without it BOTH modes ask, config-driven included:
+    # a config file says what to build, not that nobody wants to see it first.
+    if not args.yes:
         if input("  generate? [y/N] ").strip().lower() not in ("y", "yes"):
             print("  nothing written")
             return 0
 
     try:
-        result = generate(resolved, input_path=Path(request.input), output_root=Path(output),
+        result = generate(resolved, input_path=Path(request.input), output_root=output_root,
+                          relative_project=relative_project, contributor=contributor,
                           overwrite=args.overwrite)
     except ConfigError as error:
         raise SystemExit(f"setup: {error}")
@@ -185,7 +199,7 @@ def cmd_setup(args) -> int:
     for name in result["written"]:
         print(f"    {name}")
     print(f"\n  run every stage:  cd {result['system_dir']} && ./run.sh")
-    print(f"  or one at a time: cd {result['system_dir']}/min && python min.py > min.out 2>&1")
+    print(f"  or one at a time: {result['system_dir']}/min/min.sh")
     return 0
 
 
@@ -269,7 +283,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="show how to override force field, box, timestep and the rest")
     setup.add_argument("--overwrite", action="store_true",
                        help="allow generating over a non-empty system directory")
-    setup.add_argument("-y", "--yes", action="store_true", help="skip the confirmation prompt")
+    setup.add_argument("-y", "--yes", action="store_true",
+                   help="do not ask before writing; required for unattended use")
     setup.set_defaults(func=cmd_setup)
 
     sysgen = sub.add_parser("sys-gen", help="build the OpenMM system (advanced; `setup` is the "

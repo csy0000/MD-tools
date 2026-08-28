@@ -1,13 +1,15 @@
-"""Emit short, standalone OpenMM stage scripts.
+"""Emit the pieces of a generated system: protocol files, launchers, and the path map.
 
-Every number in these scripts is a literal, resolved at generation. That is what keeps them
-readable -- `250000`, not `int(config["cMD"]["duration_ns"] * 1e6 / timestep)` -- and it is what
-makes them detached: there is nothing left to look up at run time, so `md_templates` can be deleted
-and every stage still runs.
+Four pieces, deliberately separate:
 
-The `.out` header is written as one f-string rather than assembled by a helper, so the text in the
-script looks like the text in the file it produces. A shared formatting module would have saved a
-dozen lines per script and cost the reader an indirection to understand a header.
+* a Python **protocol** file -- the science, and nothing else. It takes its paths as an argument,
+  so the same file runs against another system by changing only the shell invocation.
+* `paths.sh` -- the portable directory map, resolved from `$MD_DATA`.
+* one **launcher** per stage -- every concrete path, visible, passed explicitly.
+* `bin/openmm-md` -- generic file handling, copied in, with no scientific opinion.
+
+Every scientific number is a literal resolved at generation. A reader sees `250000`, not
+`int(config[...] * 1e6 / timestep)`, and the file needs nothing at run time to explain itself.
 """
 
 from __future__ import annotations
@@ -21,233 +23,334 @@ OUTPUT_VERSION = 1
 def _platform(platform: str, device: Any, precision: Any) -> str:
     """Explicit selection: "whatever OpenMM picked" is not a record of what ran."""
     if str(platform).lower() in ("automatic", "auto", ""):
-        return 'platform, properties = None, None   # OpenMM picks the fastest available'
+        return "    platform, properties = None, None   # OpenMM picks the fastest available"
     if str(platform).upper() == "CUDA":
         props = {"DeviceIndex": str(device if device is not None else 0),
                  "Precision": precision or "mixed"}
-        return (f'platform = Platform.getPlatformByName("CUDA")\n'
-                f'properties = {props!r}')
-    return (f'platform = Platform.getPlatformByName("{platform}")\n'
-            f'properties = None')
+        return (f'    platform = Platform.getPlatformByName("CUDA")\n'
+                f'    properties = {props!r}')
+    return (f'    platform = Platform.getPlatformByName("{platform}")\n'
+            f'    properties = None')
 
 
-def _imports(names: tuple[str, ...], app_names: tuple[str, ...], *, need_sys: bool) -> str:
-    line = "import sys\n" if need_sys else ""
-    return (f'{line}from pathlib import Path\n\n'
+def _imports(names: tuple[str, ...], app_names: tuple[str, ...]) -> str:
+    return (f'import sys\nfrom pathlib import Path\n\n'
             f'import openmm\n'
             f'from openmm import {", ".join(names)}\n'
             f'from openmm.app import {", ".join(app_names)}')
 
 
-def minimization_script(r: dict[str, Any]) -> str:
+def _header(fields: list[str]) -> str:
+    """The `.out` header, written as the text it produces."""
+    body = "\n".join(fields)
+    return f'    print(f"""MD-OPENMM OUTPUT VERSION: {OUTPUT_VERSION}\n{body}\n""", flush=True)'
+
+
+def minimization_protocol(r: dict[str, Any]) -> str:
     box = "True" if not r["implicit"] else "False"
+    seeds = r["seeds"]["min"]
     return f'''#!/usr/bin/env python
-"""Energy minimisation for {r["system_id"]}.  python min.py > min.out 2>&1"""
+"""Energy minimisation for {r["system_id"]}. Run through: openmm-md -i min.py ..."""
 
 {_imports(("LangevinMiddleIntegrator", "Platform", "XmlSerializer", "unit"),
-          ("PDBFile", "Simulation"), need_sys=False)}
+          ("PDBFile", "Simulation"))}
 
-HERE = Path(__file__).resolve().parent
-COMMON = HERE / ".." / "common"
 
-pdb = PDBFile(str(COMMON / "topology.pdb"))
-system = XmlSerializer.deserialize((COMMON / "system.xml").read_text())
+def run(files):
+    pdb = PDBFile(files.topology)
+    system = XmlSerializer.deserialize(Path(files.system).read_text())
 
-# The integrator takes no step here; a Context needs one to exist.
-integrator = LangevinMiddleIntegrator({r["temperature_K"]} * unit.kelvin,
-                                      {r["friction_per_ps"]} / unit.picosecond,
-                                      {r["timestep_fs"]} * unit.femtoseconds)
+    # No step is taken here; a Context needs an integrator to exist.
+    integrator = LangevinMiddleIntegrator({r["temperature_K"]} * unit.kelvin,
+                                          {r["friction_per_ps"]} / unit.picosecond,
+                                          {r["timestep_fs"]} * unit.femtoseconds)
+    integrator.setRandomNumberSeed({seeds["integrator"]})
 {_platform(r["platform"], r.get("device"), r.get("precision"))}
-simulation = Simulation(pdb.topology, system, integrator, platform, properties)
-simulation.context.setPositions(pdb.positions)
+    simulation = Simulation(pdb.topology, system, integrator, platform, properties)
+    simulation.context.setState(XmlSerializer.deserialize(Path(files.coordinates).read_text()))
 
-print(f"""MD-OPENMM OUTPUT VERSION: {OUTPUT_VERSION}
-stage: min
-system: {r["system_id"]}
-openmm_version: {{openmm.version.version}}
-platform: {{simulation.context.getPlatform().getName()}}
-integrator: LangevinMiddleIntegrator
-temperature_K: {r["temperature_K"]}
-timestep_fs: {r["timestep_fs"]}
-max_iterations: {r["minimization_max_iterations"]}
-input_coordinates: ../common/topology.pdb
-final_state: min.state.xml
-""", flush=True)
+{_header([
+    "stage: min", f'system: {r["system_id"]}',
+    "openmm_version: {openmm.version.version}",
+    "platform: {simulation.context.getPlatform().getName()}",
+    "integrator: LangevinMiddleIntegrator",
+    f'temperature_K: {r["temperature_K"]}', f'timestep_fs: {r["timestep_fs"]}',
+    f'integrator_seed: {seeds["integrator"]}',
+    f'max_iterations: {r["minimization_max_iterations"]}',
+    "topology: {files.topology}", "system: {files.system}",
+    "coordinates: {files.coordinates}", "restart: {files.restart}",
+    f'provenance: {r["provenance_hint"]}',
+])}
 
-before = simulation.context.getState(getEnergy=True).getPotentialEnergy()
-simulation.minimizeEnergy(maxIterations={r["minimization_max_iterations"]})
-after = simulation.context.getState(getEnergy=True).getPotentialEnergy()
-print(f"potential_energy_initial: {{before}}")
-print(f"potential_energy_final: {{after}}")
+    before = simulation.context.getState(getEnergy=True).getPotentialEnergy()
+    simulation.minimizeEnergy(maxIterations={r["minimization_max_iterations"]})
+    after = simulation.context.getState(getEnergy=True).getPotentialEnergy()
+    print(f"potential_energy_initial: {{before}}")
+    print(f"potential_energy_final: {{after}}")
 
-state = simulation.context.getState(getPositions=True, getVelocities=True,
-                                    enforcePeriodicBox={box})
-(HERE / "min.state.xml").write_text(XmlSerializer.serialize(state))
-print("run_status: completed")
+    state = simulation.context.getState(getPositions=True, getVelocities=True,
+                                        enforcePeriodicBox={box})
+    Path(files.restart).write_text(XmlSerializer.serialize(state))
+    print("run_status: completed")
 '''
 
 
-def equilibration_script(r: dict[str, Any], stage: dict[str, Any], parent: str) -> str:
+def equilibration_protocol(r: dict[str, Any], stage: dict[str, Any]) -> str:
     name, box = stage["name"], "True" if not r["implicit"] else "False"
     npt = stage["ensemble"] == "NPT"
     restrained = stage["restraint_kcal"] > 0
     first, last = r["solute_range"]
+    seeds = r["seeds"][name]
 
-    imports = _imports(
-        ("CustomExternalForce", "LangevinMiddleIntegrator", "Platform", "XmlSerializer", "unit")
-        if restrained else ("LangevinMiddleIntegrator", "Platform", "XmlSerializer", "unit"),
-        ("DCDReporter", "PDBFile", "Simulation", "StateDataReporter"), need_sys=True)
+    names = ["LangevinMiddleIntegrator", "Platform", "XmlSerializer", "unit"]
+    if restrained:
+        names.insert(0, "CustomExternalForce")
     if npt:
-        imports = imports.replace("from openmm import ", "from openmm import MonteCarloBarostat, ")
+        names.insert(0, "MonteCarloBarostat")
 
     restraint = f'''
-# Hold the solute -- atoms {first}..{last}, the first residues of topology.pdb -- while the solvent
-# relaxes around it. Flat-bottom-free harmonic restraint at {stage["restraint_kcal"]} kcal/mol/A^2.
-restraint = CustomExternalForce("k*periodicdistance(x, y, z, x0, y0, z0)^2")
-restraint.addGlobalParameter("k", {stage["restraint_kcal"]} * unit.kilocalories_per_mole / unit.angstrom**2)
-for parameter in ("x0", "y0", "z0"):
-    restraint.addPerParticleParameter(parameter)
-for index in range({first}, {last + 1}):
-    restraint.addParticle(index, pdb.positions[index].value_in_unit(unit.nanometer))
-system.addForce(restraint)
+    # Hold the solute -- atoms {first}..{last}, the first residues of the topology -- while the
+    # solvent relaxes around it.
+    restraint = CustomExternalForce("k*periodicdistance(x, y, z, x0, y0, z0)^2")
+    restraint.addGlobalParameter(
+        "k", {stage["restraint_kcal"]} * unit.kilocalories_per_mole / unit.angstrom**2)
+    for parameter in ("x0", "y0", "z0"):
+        restraint.addPerParticleParameter(parameter)
+    for index in range({first}, {last + 1}):
+        restraint.addParticle(index, pdb.positions[index].value_in_unit(unit.nanometer))
+    system.addForce(restraint)
 ''' if restrained else ""
 
     barostat = f'''
-system.addForce(MonteCarloBarostat({r["pressure_bar"]} * unit.bar,
-                                   {r["temperature_K"]} * unit.kelvin,
-                                   {r["barostat_interval"]}))
+    barostat = MonteCarloBarostat({r["pressure_bar"]} * unit.bar,
+                                  {r["temperature_K"]} * unit.kelvin,
+                                  {r["barostat_interval"]})
+    barostat.setRandomNumberSeed({seeds["barostat"]})
+    system.addForce(barostat)
 ''' if npt else ""
 
     extra = "volume=True, density=True, " if npt else ""
     return f'''#!/usr/bin/env python
-"""{stage["ensemble"]} equilibration ({name}) for {r["system_id"]}.  python {name}.py > {name}.out 2>&1"""
+"""{stage["ensemble"]} equilibration ({name}) for {r["system_id"]}. Run through openmm-md."""
 
-{imports}
+{_imports(tuple(names), ("DCDReporter", "PDBFile", "Simulation", "StateDataReporter"))}
 
-HERE = Path(__file__).resolve().parent
-COMMON = HERE / ".." / ".." / "common"
 
-pdb = PDBFile(str(COMMON / "topology.pdb"))
-system = XmlSerializer.deserialize((COMMON / "system.xml").read_text())
+def run(files):
+    pdb = PDBFile(files.topology)
+    system = XmlSerializer.deserialize(Path(files.system).read_text())
 {restraint}{barostat}
-integrator = LangevinMiddleIntegrator({r["temperature_K"]} * unit.kelvin,
-                                      {r["friction_per_ps"]} / unit.picosecond,
-                                      {r["timestep_fs"]} * unit.femtoseconds)
+    integrator = LangevinMiddleIntegrator({r["temperature_K"]} * unit.kelvin,
+                                          {r["friction_per_ps"]} / unit.picosecond,
+                                          {r["timestep_fs"]} * unit.femtoseconds)
+    integrator.setRandomNumberSeed({seeds["integrator"]})
 {_platform(r["platform"], r.get("device"), r.get("precision"))}
-simulation = Simulation(pdb.topology, system, integrator, platform, properties)
-simulation.context.setState(XmlSerializer.deserialize(Path("{parent}").read_text()))
-# Positions and velocities carry over; the clock does not, so this stage's .out describes this
-# stage. Lineage is stated by `input_state` above, not by a step number climbing across stages.
-simulation.context.setTime(0.0)
-simulation.currentStep = 0
+    simulation = Simulation(pdb.topology, system, integrator, platform, properties)
+    simulation.context.setState(XmlSerializer.deserialize(Path(files.coordinates).read_text()))
+    # Positions and velocities carry over; the clock does not, so this .out describes this stage.
+    simulation.context.setTime(0.0)
+    simulation.currentStep = 0
 
-print(f"""MD-OPENMM OUTPUT VERSION: {OUTPUT_VERSION}
-stage: {name}
-system: {r["system_id"]}
-openmm_version: {{openmm.version.version}}
-platform: {{simulation.context.getPlatform().getName()}}
-integrator: LangevinMiddleIntegrator
-ensemble: {stage["ensemble"]}
-temperature_K: {r["temperature_K"]}
-friction_per_ps: {r["friction_per_ps"]}
-timestep_fs: {r["timestep_fs"]}
-restraint_kcal_mol_A2: {stage["restraint_kcal"]}
-steps: {stage["steps"]}
-duration_ps: {stage["duration_ps"]}
-input_state: {parent}
-trajectory: {name}.dcd
-final_state: {name}.state.xml
-""", flush=True)
+{_header([
+    f"stage: {name}", f'system: {r["system_id"]}',
+    "openmm_version: {openmm.version.version}",
+    "platform: {simulation.context.getPlatform().getName()}",
+    "integrator: LangevinMiddleIntegrator", f'ensemble: {stage["ensemble"]}',
+    f'temperature_K: {r["temperature_K"]}', f'friction_per_ps: {r["friction_per_ps"]}',
+    f'timestep_fs: {r["timestep_fs"]}',
+    *( [f'pressure_bar: {r["pressure_bar"]}'] if npt else [] ),
+    f'restraint_kcal_mol_A2: {stage["restraint_kcal"]}',
+    f'integrator_seed: {seeds["integrator"]}',
+    *( [f'barostat_seed: {seeds["barostat"]}'] if npt else [] ),
+    f'steps: {stage["steps"]}', f'duration_ps: {stage["duration_ps"]}',
+    f'output_interval_steps: {r["output_interval_steps"]}',
+    "topology: {files.topology}", "system: {files.system}",
+    "coordinates: {files.coordinates}", "trajectory: {files.trajectory}",
+    "restart: {files.restart}", "checkpoint: {files.checkpoint}",
+    f'provenance: {r["provenance_hint"]}',
+])}
 
-simulation.reporters.append(DCDReporter("{name}.dcd", {r["output_interval_steps"]}))
-simulation.reporters.append(StateDataReporter(
-    sys.stdout, {r["output_interval_steps"]}, step=True, time=True, potentialEnergy=True,
-    temperature=True, {extra}speed=True))
+    simulation.reporters.append(DCDReporter(files.trajectory, {r["output_interval_steps"]}))
+    simulation.reporters.append(StateDataReporter(
+        sys.stdout, {r["output_interval_steps"]}, step=True, time=True, potentialEnergy=True,
+        temperature=True, {extra}speed=True))
 
-simulation.step({stage["steps"]})
+    simulation.step({stage["steps"]})
 
-state = simulation.context.getState(getPositions=True, getVelocities=True,
-                                    enforcePeriodicBox={box})
-(HERE / "{name}.state.xml").write_text(XmlSerializer.serialize(state))
-print("run_status: completed")
+    state = simulation.context.getState(getPositions=True, getVelocities=True,
+                                        enforcePeriodicBox={box})
+    Path(files.restart).write_text(XmlSerializer.serialize(state))
+    if files.checkpoint:
+        simulation.saveCheckpoint(files.checkpoint)
+    print("run_status: completed")
 '''
 
 
-def production_script(r: dict[str, Any], parent: str) -> str:
+def production_protocol(r: dict[str, Any]) -> str:
     box = "True" if not r["implicit"] else "False"
     npt = not r["implicit"]
     frames = r["production_steps"] // r["output_interval_steps"]
-    imports = _imports(("LangevinMiddleIntegrator", "Platform", "XmlSerializer", "unit"),
-                       ("CheckpointReporter", "DCDReporter", "PDBFile", "Simulation",
-                        "StateDataReporter"), need_sys=True)
+    seeds = r["seeds"]["cMD"]
+
+    names = ["LangevinMiddleIntegrator", "Platform", "XmlSerializer", "unit"]
     if npt:
-        imports = imports.replace("from openmm import ", "from openmm import MonteCarloBarostat, ")
+        names.insert(0, "MonteCarloBarostat")
     barostat = f'''
-system.addForce(MonteCarloBarostat({r["pressure_bar"]} * unit.bar,
-                                   {r["temperature_K"]} * unit.kelvin,
-                                   {r["barostat_interval"]}))
+    barostat = MonteCarloBarostat({r["pressure_bar"]} * unit.bar,
+                                  {r["temperature_K"]} * unit.kelvin,
+                                  {r["barostat_interval"]})
+    barostat.setRandomNumberSeed({seeds["barostat"]})
+    system.addForce(barostat)
 ''' if npt else ""
     extra = "volume=True, density=True, " if npt else ""
     return f'''#!/usr/bin/env python
 """Conventional MD for {r["system_id"]}: {r["production_ps"]:.3f} ps, a frame every {r["output_interval_ps"]:.3f} ps.
 
 DCDReporter writes at step `interval`, not at step 0, so this produces {frames} frames, not {frames + 1}.
-
-    python cmd.py > cmd.out 2>&1
+Run through openmm-md, which supplies every path.
 """
 
-{imports}
+{_imports(tuple(names), ("CheckpointReporter", "DCDReporter", "PDBFile", "Simulation",
+                         "StateDataReporter"))}
 
-HERE = Path(__file__).resolve().parent
-COMMON = HERE / ".." / "common"
 
-pdb = PDBFile(str(COMMON / "topology.pdb"))
-system = XmlSerializer.deserialize((COMMON / "system.xml").read_text())
+def run(files):
+    pdb = PDBFile(files.topology)
+    system = XmlSerializer.deserialize(Path(files.system).read_text())
 {barostat}
-integrator = LangevinMiddleIntegrator({r["temperature_K"]} * unit.kelvin,
-                                      {r["friction_per_ps"]} / unit.picosecond,
-                                      {r["timestep_fs"]} * unit.femtoseconds)
+    integrator = LangevinMiddleIntegrator({r["temperature_K"]} * unit.kelvin,
+                                          {r["friction_per_ps"]} / unit.picosecond,
+                                          {r["timestep_fs"]} * unit.femtoseconds)
+    integrator.setRandomNumberSeed({seeds["integrator"]})
 {_platform(r["platform"], r.get("device"), r.get("precision"))}
-simulation = Simulation(pdb.topology, system, integrator, platform, properties)
-simulation.context.setState(XmlSerializer.deserialize(Path("{parent}").read_text()))
-# Positions and velocities carry over; the clock does not, so this stage's .out describes this
-# stage. Lineage is stated by `input_state` above, not by a step number climbing across stages.
-simulation.context.setTime(0.0)
-simulation.currentStep = 0
+    simulation = Simulation(pdb.topology, system, integrator, platform, properties)
+    simulation.context.setState(XmlSerializer.deserialize(Path(files.coordinates).read_text()))
+    simulation.context.setTime(0.0)
+    simulation.currentStep = 0
 
-print(f"""MD-OPENMM OUTPUT VERSION: {OUTPUT_VERSION}
-stage: cMD
-system: {r["system_id"]}
-openmm_version: {{openmm.version.version}}
-platform: {{simulation.context.getPlatform().getName()}}
-integrator: LangevinMiddleIntegrator
-ensemble: {"NPT" if npt else "NVT"}
-temperature_K: {r["temperature_K"]}
-friction_per_ps: {r["friction_per_ps"]}
-timestep_fs: {r["timestep_fs"]}
-steps: {r["production_steps"]}
-duration_ps: {r["production_ps"]}
-output_interval_steps: {r["output_interval_steps"]}
-output_interval_ps: {r["output_interval_ps"]}
-frames: {frames}
-input_state: {parent}
-trajectory: cmd.dcd
-final_state: cmd.state.xml
-checkpoint: cmd.chk
-""", flush=True)
+{_header([
+    "stage: cMD", f'system: {r["system_id"]}',
+    "openmm_version: {openmm.version.version}",
+    "platform: {simulation.context.getPlatform().getName()}",
+    "integrator: LangevinMiddleIntegrator", f'ensemble: {"NPT" if npt else "NVT"}',
+    f'temperature_K: {r["temperature_K"]}', f'friction_per_ps: {r["friction_per_ps"]}',
+    f'timestep_fs: {r["timestep_fs"]}',
+    *( [f'pressure_bar: {r["pressure_bar"]}'] if npt else [] ),
+    f'integrator_seed: {seeds["integrator"]}',
+    *( [f'barostat_seed: {seeds["barostat"]}'] if npt else [] ),
+    f'steps: {r["production_steps"]}', f'duration_ps: {r["production_ps"]}',
+    f'output_interval_steps: {r["output_interval_steps"]}',
+    f'output_interval_ps: {r["output_interval_ps"]}', f"frames: {frames}",
+    "topology: {files.topology}", "system: {files.system}",
+    "coordinates: {files.coordinates}", "trajectory: {files.trajectory}",
+    "restart: {files.restart}", "checkpoint: {files.checkpoint}",
+    f'provenance: {r["provenance_hint"]}',
+])}
 
-simulation.reporters.append(DCDReporter("cmd.dcd", {r["output_interval_steps"]}))
-simulation.reporters.append(CheckpointReporter("cmd.chk", {r["output_interval_steps"]}))
-simulation.reporters.append(StateDataReporter(
-    sys.stdout, {r["output_interval_steps"]}, step=True, time=True, potentialEnergy=True,
-    kineticEnergy=True, totalEnergy=True, temperature=True, {extra}speed=True,
-    totalSteps={r["production_steps"]}, remainingTime=True))
+    simulation.reporters.append(DCDReporter(files.trajectory, {r["output_interval_steps"]}))
+    if files.checkpoint:
+        simulation.reporters.append(
+            CheckpointReporter(files.checkpoint, {r["output_interval_steps"]}))
+    simulation.reporters.append(StateDataReporter(
+        sys.stdout, {r["output_interval_steps"]}, step=True, time=True, potentialEnergy=True,
+        kineticEnergy=True, totalEnergy=True, temperature=True, {extra}speed=True,
+        totalSteps={r["production_steps"]}, remainingTime=True))
 
-simulation.step({r["production_steps"]})
+    simulation.step({r["production_steps"]})
 
-state = simulation.context.getState(getPositions=True, getVelocities=True,
-                                    enforcePeriodicBox={box})
-(HERE / "cmd.state.xml").write_text(XmlSerializer.serialize(state))
-simulation.saveCheckpoint("cmd.chk")
-print("run_status: completed")
+    state = simulation.context.getState(getPositions=True, getVelocities=True,
+                                        enforcePeriodicBox={box})
+    Path(files.restart).write_text(XmlSerializer.serialize(state))
+    if files.checkpoint:
+        simulation.saveCheckpoint(files.checkpoint)
+    print("run_status: completed")
+'''
+
+
+# --- the portable path map and the launchers ----------------------------------------------------
+
+def paths_sh(relative_project: str, system_id: str, stage_names: list[str]) -> str:
+    """The directory map, resolved from `$MD_DATA` and a relative project path.
+
+    No absolute path appears here. Move the managed root, export the new `$MD_DATA`, and every
+    launcher follows -- which is the difference between a system that can be archived and one that
+    only works on the machine that made it.
+    """
+    eq = [n for n in stage_names if n != "cMD"]
+    lines = [
+        '#!/usr/bin/env bash',
+        '# Portable directory map. Sourced by every stage launcher; contains no machine path.',
+        '',
+        ': "${MD_DATA:?MD_DATA is not set. Export it to the managed storage root that holds this'
+        ' system.}"',
+        '',
+        f'export PROJECT_DATA="${{MD_DATA}}/{relative_project}"',
+        f'export SYSTEM_ROOT="${{PROJECT_DATA}}/{system_id}"',
+        '',
+        'export INPUT_DIR="${SYSTEM_ROOT}/input"',
+        'export MIN_DIR="${SYSTEM_ROOT}/min"',
+        'export EQ_DIR="${SYSTEM_ROOT}/eq"',
+    ]
+    mapping = {"nvt_1kcal": "NVT_DIR", "npt_1kcal": "NPT_RESTRAINED_DIR",
+               "npt_free": "NPT_FREE_DIR", "nvt_free": "NVT_FREE_DIR"}
+    for name in eq:
+        lines.append(f'export {mapping[name]}="${{EQ_DIR}}/{name}"')
+    lines += [
+        'export CMD_DIR="${SYSTEM_ROOT}/cMD"',
+        '',
+        '# Reserved for the later REST2/AIS work so the map stays stable across methods.',
+        'export CMD_TAU0P5_DIR="${SYSTEM_ROOT}/cMD_tau0p5"',
+        'export REST2_DIR="${SYSTEM_ROOT}/REST2"',
+        'export AIS_DIR="${SYSTEM_ROOT}/AIS"',
+        '',
+        '# The generated copy is authoritative for this system. Override deliberately if you have',
+        '# a compatible executable elsewhere; ordinary use needs no installed command.',
+        'export OPENMM_MD="${OPENMM_MD:-${SYSTEM_ROOT}/bin/openmm-md}"',
+        '',
+    ]
+    return "\n".join(lines)
+
+
+def launcher(stage: str, *, directory_var: str, depth: int, parent_restart: str,
+             trajectory: bool, checkpoint: bool) -> str:
+    """One stage, every path explicit. The wiring is meant to be read, not inferred."""
+    up = "/".join([".."] * depth)
+    options = [
+        f'  -i "${{{directory_var}}}/{stage}.py"',
+        '  -p "${INPUT_DIR}/topology.pdb"',
+        '  -s "${INPUT_DIR}/system.xml"',
+        f'  -c "{parent_restart}"',
+        f'  -o "${{{directory_var}}}/{stage}.out"',
+    ]
+    if trajectory:
+        options.append(f'  -x "${{{directory_var}}}/{stage}.dcd"')
+    options.append(f'  -r "${{{directory_var}}}/{stage}.state.xml"')
+    if checkpoint:
+        options.append(f'  --checkpoint "${{{directory_var}}}/{stage}.chk"')
+    body = " \\\n".join(options)
+    return f'''#!/usr/bin/env bash
+# {stage}: every input and output named explicitly. Re-run with --force to replace outputs.
+set -euo pipefail
+
+STAGE_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+source "${{STAGE_DIR}}/{up}/paths.sh"
+
+"${{OPENMM_MD}}" \\
+{body} \\
+  "$@"
+'''
+
+
+def run_all_sh(stage_paths: list[str]) -> str:
+    """Call each launcher in order. No scientific setting, no reconstructed command."""
+    calls = "\n".join(f'"${{SYSTEM_ROOT}}/{path}" "$@"' for path in stage_paths)
+    return f'''#!/usr/bin/env bash
+# Every stage in order. Each launcher owns its own paths and writes its own .out.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+source "${{HERE}}/paths.sh"
+
+{calls}
+echo "== done =="
 '''
