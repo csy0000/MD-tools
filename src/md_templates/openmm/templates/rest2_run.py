@@ -38,6 +38,7 @@ sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
 import preflight
 from md_stages import (sha256_file, RECORD_FORMAT, active_barostat_count,
+                       stage_config_sha256, stage_invariant_sha256,
                        add_barostat, add_positional_restraint, append_jsonl, count_barostats,
                        derive_seed, device_groups, file_record, make_simulation,
                        next_invocation_index, project_identity, propagate_segment,
@@ -468,6 +469,40 @@ def main(argv=None):
     }
     write_yaml_atomic(HERE / "resolved_run.yaml", record)
     append_jsonl(invocations_path, record)
+
+    # The stage record `preflight.check_own_completion` reads. Without it, a COMPLETED REST2
+    # production is invisible to its own preflight: the check looks for `resolved_stage.yaml`,
+    # finds nothing, and reports "absent; this stage has not run" for a stage that has. Rerunning
+    # then starts production again from the per-tau equilibration states and overwrites a finished
+    # trajectory -- which is the accident the whole shared preflight exists to prevent.
+    #
+    # `resolved_run.yaml` above is the FAIR runtime account of the invocation. This is the
+    # scientific account of the request that ran, and it is what a continuation is checked
+    # against. cMD has written both since the contract-gate fixes; REST2 wrote only the first.
+    write_yaml_atomic(HERE / "resolved_stage.yaml", {
+        "kind": "rest2_exchange",
+        "ensemble": method["ensemble"],
+        "tau_min": float(method["tau_min"]),
+        "tau_max": float(method["tau_max"]),
+        "number_of_replicas": int(method["number_of_replicas"]),
+        "taus": [float(r["tau"]) for r in replica_records],
+        "derived_scale_factors_s": [scale_factor_for_tau(float(r["tau"]))
+                                    for r in replica_records],
+        "temperature_kelvin": float(common["temperature_kelvin"]),
+        "timestep_fs": TIMESTEP_FS,
+        "duration_per_segment_ps": float(method["duration_per_segment_ps"]),
+        "number_of_exchanges": lifetime_rounds,
+        "total_steps": segment_steps * lifetime_rounds,
+        "input_state": "replica_XX/equilibration/final_state.xml",
+        "output_state": "replica_XX/production/final_state.xml",
+        # Two fingerprints, answering different questions -- the same split cmd_run.py records.
+        # The full one identifies the EXACT request that produced these outputs. The invariant one
+        # excludes the extendable fields, `number_of_exchanges` among them, so asking for more
+        # exchange rounds stays legitimate while a changed timestep, ensemble or ladder must stop
+        # the run before a Context exists.
+        "stage_config_sha256": (stage_config_sha256(STAGE) if STAGE else None),
+        "stage_invariant_sha256": (stage_invariant_sha256(STAGE) if STAGE else None),
+    })
 
     ratio = (accepted_total / attempted_total) if attempted_total else float("nan")
     print(f"[remd] segment complete: {n_exchanges} exchange rounds, "
