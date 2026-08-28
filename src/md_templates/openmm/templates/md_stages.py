@@ -445,6 +445,27 @@ def production_stage_document(config, method_name, *, parent_stage, parent_path,
         document["duration_ns"] = float(method["duration_ns"])
     if "number_of_exchanges" in method:
         document["number_of_exchanges"] = int(method["number_of_exchanges"])
+
+    # AIS states its request in nested blocks rather than flat keys, and it has no parent stage:
+    # it starts from an equilibrium ensemble prepared into inputs/, not from the common chain. The
+    # fields below ARE the physics of a switching path -- where it starts, where it ends, how long
+    # the switch takes and how finely the Hamiltonian moves -- so they belong in the invariant.
+    # `number_of_paths` is the one extendable quantity: running more paths is legitimate.
+    if method_name == "AIS":
+        path = method["path"]
+        document["kind"] = "ais_switching"
+        document["ensemble"] = "NVT" if implicit else "NPT"
+        document["tau"] = float(path["tau_start"])
+        document["tau_start"] = float(path["tau_start"])
+        document["tau_end"] = float(path["tau_end"])
+        document["interpolation"] = path.get("interpolation")
+        document["enhanced_region"] = path.get("enhanced_region")
+        document["omega_exclusion"] = bool(path.get("omega_exclusion", True))
+        document["switching_duration_ps"] = float(path["switching_duration_ps"])
+        document["parameter_update_interval_steps"] = int(
+            path["parameter_update_interval_steps"])
+        document["number_of_observations"] = int(method["output"]["number_of_observations"])
+        document["number_of_paths"] = int(method["source"]["number_of_trajectories"])
     return document
 
 

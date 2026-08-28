@@ -182,13 +182,19 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
         # generated launcher has nothing to hand the shared preflight, so `check_parent` and
         # `check_own_completion` short-circuit on `if not stage` and production runs with neither
         # -- which is how a missing parent came to be caught only after a Context existed, and a
-        # changed request not at all. AIS is excluded: it does not start from the common chain and
-        # resolves its own request in path_definition.yaml.
-        if method != "AIS":
+        # changed request not at all.
+        #
+        # AIS gets one too, with a NULL parent: it starts from an equilibrium ensemble prepared
+        # into inputs/, not from the common chain, and `check_parent` skips a stage that declares
+        # none. `path_definition.yaml` still records the resolved path for the run itself; this is
+        # the shared contract every production method now states the same way, so the preflight and
+        # the consumer gate have one shape to check rather than one per method.
+        if True:
+            parent = None if method == "AIS" else resolved["paths"]["common_final_stage"]
             stage_document = _template_module().production_stage_document(
                 resolved, method,
-                parent_stage=resolved["paths"]["common_final_stage"],
-                parent_path=os.path.join("..", resolved["paths"]["common_final_stage"]),
+                parent_stage=parent,
+                parent_path=None if parent is None else os.path.join("..", parent),
                 implicit=implicit,
                 seeds={"integrator": _seed(seed, method, "integrator"),
                        "velocities": _seed(seed, method, "velocities"),
