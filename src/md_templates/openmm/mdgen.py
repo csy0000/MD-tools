@@ -40,6 +40,24 @@ from .stages import stage_plan
 
 TEMPLATES = Path(__file__).resolve().parent / "templates"
 
+
+def _template_module():
+    """Load `templates/md_stages.py` from the same place md-gen copies it from.
+
+    By path rather than by import, for two reasons. `templates/` is package DATA -- it has no
+    `__init__.py` and nothing else in the package imports it -- so making it a namespace package
+    here would be a new shape for the wheel to get right. And the point is that md-gen and the
+    generated launcher share ONE derivation of the stage request: loading the same file they will
+    copy is the most direct statement of that, and it cannot drift from what lands in the project.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_md_templates_stage_helpers", TEMPLATES / "md_stages.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 #: What sys-gen writes and md-gen needs. A missing one is named rather than discovered later.
 REQUIRED_INPUTS = ("system.xml", "topology.pdb", "solute.pdb", "initial_state.xml", "solute.yaml",
                    "resolved_sys.config.yaml")
@@ -159,6 +177,30 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
     for method in methods:
         directory = out / method
         directory.mkdir(parents=True, exist_ok=True)
+
+        # Production stages get a stage.yaml, exactly as the common chain does. Without it the
+        # generated launcher has nothing to hand the shared preflight, so `check_parent` and
+        # `check_own_completion` short-circuit on `if not stage` and production runs with neither
+        # -- which is how a missing parent came to be caught only after a Context existed, and a
+        # changed request not at all. AIS is excluded: it does not start from the common chain and
+        # resolves its own request in path_definition.yaml.
+        if method != "AIS":
+            stage_document = _template_module().production_stage_document(
+                resolved, method,
+                parent_stage=resolved["paths"]["common_final_stage"],
+                parent_path=os.path.join("..", resolved["paths"]["common_final_stage"]),
+                implicit=implicit,
+                seeds={"integrator": _seed(seed, method, "integrator"),
+                       "velocities": _seed(seed, method, "velocities"),
+                       "barostat": _seed(seed, method, "barostat")},
+                template_commit=_template_commit(),
+            )
+            write_yaml(directory / "stage.yaml", stage_document,
+                       header="# The resolved PRODUCTION request. Read by run.py beside this\n"
+                              "# file and by the shared preflight. Its invariant fingerprint is\n"
+                              "# what a continuation is checked against: running longer is a\n"
+                              "# legitimate extension, changing the physics is not.\n")
+
         if method == "cMD":
             shutil.copy2(TEMPLATES / "cmd_run.py", directory / "run.py")
             # cMD carries the scaling module because it may run at tau > 0. It is the SAME file
