@@ -217,7 +217,23 @@ def _ligand_record(*, is_ligand, reported, requested, checksums):
         "openff_resource": ligand.get("forcefield") or ligand.get("smirnoff"),
         "requested_label": requested.get("ligand_forcefield"),
         "charge_method": ligand.get("charge_method") or requested.get("ligand_charge_method"),
-        "charge_model": ligand.get("nagl_model") or ligand.get("charge_model"),
+        # WHAT WAS ACTUALLY EXECUTED, not what was asked for. The method name alone does not
+        # identify a Hamiltonian: `am1bcc` resolves to `am1bcc` or `am1bccelf10` depending on
+        # whether OpenEye is available, and those are different quantities over a flexible
+        # molecule. The builder reports the scheme it ran; this record must carry it through
+        # rather than let a reader infer it from the label.
+        #
+        # It is deliberately NOT defaulted to the requested method: an absent scheme means the
+        # builder did not report one, and saying so is information. Quietly substituting the
+        # label here is how the record came to claim `am1bcc` for runs whose scheme was never
+        # established.
+        "charge_scheme": ligand.get("charge_scheme"),
+        # The NAGL model file is a trained artefact that can be upgraded underneath an unchanged
+        # configuration, so it is recorded by name and digest. `nagl_model_file` is the key the
+        # builder writes; `nagl_model` was looked for here and never existed, which is why the
+        # model identity was dropped alongside the scheme.
+        "charge_model": ligand.get("nagl_model_file") or ligand.get("charge_model"),
+        "charge_model_sha256": ligand.get("nagl_model_sha256"),
         "toolkit_registry": ligand.get("toolkit_registry"),
         "prepared_artifact": prepared.get("path"),
         "prepared_artifact_sha256": prepared.get("sha256"),
@@ -362,5 +378,6 @@ def _nonbonded_record(*, implicit, nonbonded, solvent, build):
 def _null_ligand() -> dict[str, Optional[str]]:
     """No ligand on this route. Every key present and null, so a reader can tell."""
     return {"forcefield": None, "openff_resource": None, "requested_label": None,
-            "charge_method": None, "charge_model": None, "toolkit_registry": None,
+            "charge_method": None, "charge_scheme": None, "charge_model": None,
+            "charge_model_sha256": None, "toolkit_registry": None,
             "prepared_artifact": None, "prepared_artifact_sha256": None}

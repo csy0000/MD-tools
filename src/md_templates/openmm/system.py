@@ -141,9 +141,22 @@ def resolve_nagl_am1bcc_model() -> dict:
     identify a Hamiltonian -- upgrading the models package would change the charges without
     changing any configuration file -- so callers record the file and its hash alongside the name.
     """
-    from openff.nagl_models import get_models_by_type
+    # The optional dependency, and the package's own hashing implementation. These two imports
+    # fail for completely different reasons and must not be reported as the same thing: the first
+    # means "NAGL is not installed here", the second would mean "MD-templates is broken". Keeping
+    # them apart is why the first is caught and the second is not.
+    try:
+        from openff.nagl_models import get_models_by_type
+    except ImportError as error:                      # the genuine optional-dependency case
+        raise RuntimeError(
+            "ligand_charge_method='am1bcc_nagl' needs `openff-nagl-models`, which is not "
+            f"installed in this environment ({error}). Install it, or use "
+            "ligand_charge_method='am1bcc' to charge through AmberTools instead. This is a "
+            "deliberate refusal: falling back to a different charge model silently would change "
+            "the Hamiltonian without changing any configuration file."
+        ) from error
 
-    from md_templates.openmm.hashing import sha256_file
+    from .provenance_min import sha256_file
 
     models = list(get_models_by_type("am1bcc", production_only=True))
     if not models:
