@@ -114,6 +114,10 @@ def _parse(argv):
     parser.add_argument("--force", action="store_true",
                         help="replace existing outputs of a NEW run instead of refusing; never "
                              "combined with --resume or --extend")
+    parser.add_argument("--verify-only", action="store_true", dest="verify_only",
+                        help="run nothing: open the analysis and checkpoint NetCDF and report "
+                             "whether they are a readable, coherent, complete REST2 run. Needs "
+                             "only -x, and optionally --checkpoint and -r.")
     return parser.parse_args(argv)
 
 
@@ -183,10 +187,12 @@ def validate(files, *, force: bool, rank: int = 0) -> list[str]:
             problems.append(
                 f"--trajectory {files.trajectory} does not exist, so there is no run to "
                 f"{'extend' if files.extend else 'resume'}.")
-        if files.restart and not Path(files.restart).exists():
-            problems.append(
-                f"--restart {files.restart} does not exist, so the scientific configuration this "
-                f"storage was created with cannot be checked before appending to it.")
+        # The completion manifest is deliberately NOT required here. A run interrupted before it
+        # finished never wrote one, and that is precisely the run that most needs resuming. The
+        # scientific identity a continuation is checked against lives in the reporter metadata
+        # inside the analysis NetCDF, written before propagation began, with the run-state sidecar
+        # as an independent fallback -- so the runtime can establish it without any manifest.
+        # Requiring `-r` here is what made an interrupted run unrecoverable.
     elif not force and rank == 0:
         existing = [f"--{name} {value}" for name, value in outputs.items()
                     if Path(value).exists()]
@@ -230,6 +236,41 @@ def load_protocol(path: str):
     return module
 
 
+def verify_only(arguments) -> int:
+    """Validate an existing REST2 output. Writes nothing; the exit status is the answer.
+
+    The validator lives beside the storage, in the generated project's REST2 directory, because
+    that is the copy that belongs to this run. Importing it from there rather than from an
+    installed package keeps `--verify-only` working in a project that has been moved and has no
+    `md_templates` anywhere.
+    """
+    storage = arguments.trajectory or os.environ.get("OPENMM_REST2_NETCDF")
+    if not storage:
+        print("openmm-rest2: --verify-only needs -x/--trajectory (the analysis NetCDF)",
+              file=sys.stderr)
+        return 2
+    storage_path = Path(storage).expanduser()
+    directory = str(storage_path.resolve().parent)
+    if directory not in sys.path:
+        sys.path.insert(0, directory)
+    try:
+        import rest2_validate
+    except ImportError as failure:
+        print(f"openmm-rest2: cannot import rest2_validate from {directory} ({failure}). "
+              f"--verify-only reads the copy that belongs to the run being checked.",
+              file=sys.stderr)
+        return 2
+
+    checkpoint = arguments.checkpoint or os.environ.get("OPENMM_REST2_CHECKPOINT")
+    manifest = arguments.restart or os.environ.get("OPENMM_REST2_RESTART")
+    result = rest2_validate.validate_rest2_output(
+        storage=str(storage_path),
+        checkpoint=str(Path(checkpoint).expanduser()) if checkpoint else None,
+        manifest=str(Path(manifest).expanduser()) if manifest else None)
+    print(rest2_validate.format_report(result))
+    return 0 if result.ok else 1
+
+
 def _has_completion_line(report: Path) -> bool:
     """A whole line saying exactly `run_status: completed`, after stripping whitespace."""
     for line in report.read_text(encoding="utf-8").splitlines():
@@ -240,6 +281,10 @@ def _has_completion_line(report: Path) -> bool:
 
 def main(argv=None) -> int:
     arguments = _parse(sys.argv[1:] if argv is None else argv)
+    if arguments.verify_only:
+        # Checking a finished run needs no protocol, topology, system or coordinates, so the
+        # ordinary requirement that all of them be present does not apply here.
+        return verify_only(arguments)
     files, problems = resolve(arguments)
     rank, size = mpi_rank_and_size()
     problems += validate(files, force=arguments.force, rank=rank)

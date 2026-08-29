@@ -415,6 +415,15 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> 
             "checkpoint_interval_ps": 100,
             "whole_system_interval_ps": 100,
             "solute_interval_ps": 10,
+            # Which replicas are proposed for exchange, and therefore WHO decides each swap.
+            # `swap-all` is stock OpenMMTools: it proposes n_replicas**3 uniformly random replica
+            # pairs per mixing event -- over all state pairs, not only adjacent ones -- and makes
+            # every accept/reject decision itself. It is the default because a stock decision path
+            # is worth more than a neighbour sweep that needs project code.
+            # `swap-neighbors` sweeps alternating adjacent pairs, but OpenMMTools 0.26.0's
+            # neighbour path is broken on NumPy >= 1.25, so selecting it activates this
+            # repository's own Metropolis call and the run records that ownership.
+            "replica_mixing_scheme": "swap-all",
         }
     if "AIS" in methods:
         document["AIS"] = ais_defaults()
@@ -439,6 +448,15 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> 
             "checkpoint_interval_ps": 100,
             "whole_system_interval_ps": 100,
             "solute_interval_ps": 10,
+            # Which replicas are proposed for exchange, and therefore WHO decides each swap.
+            # `swap-all` is stock OpenMMTools: it proposes n_replicas**3 uniformly random replica
+            # pairs per mixing event -- over all state pairs, not only adjacent ones -- and makes
+            # every accept/reject decision itself. It is the default because a stock decision path
+            # is worth more than a neighbour sweep that needs project code.
+            # `swap-neighbors` sweeps alternating adjacent pairs, but OpenMMTools 0.26.0's
+            # neighbour path is broken on NumPy >= 1.25, so selecting it activates this
+            # repository's own Metropolis call and the run records that ownership.
+            "replica_mixing_scheme": "swap-all",
         }
     return document
 

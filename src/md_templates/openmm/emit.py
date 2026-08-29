@@ -385,7 +385,10 @@ Hamiltonian scaling, not temperature REMD.
     tau ladder : [{taus}]
     s = (1-tau)^2 on solute-solute terms, sqrt(s) = 1-tau on solute-environment terms
 
-Replica exchange, reduced potentials, NetCDF storage, checkpointing and restart are OpenMMTools'.
+Exchange scheme: {r["rest2"]["replica_mixing_scheme"]}. The accept/reject decision is made by
+{r["rest2"]["exchange_decision_owner"]}; propagation, reduced potentials, NetCDF storage,
+checkpointing and restart are OpenMMTools'. md-templates decides only WHICH iterations attempt an
+exchange (every {r["rest2"]["exchange_stride_iterations"]}).
 Run through openmm-rest2, which supplies every path.
 """
 from rest2_runtime import REST2
@@ -407,6 +410,7 @@ def run(files):
         friction_per_ps={r["friction_per_ps"]},
         random_seed={seeds["integrator"]},
         hydrogen_mass_amu={r["hydrogen_mass_amu"]!r},
+        replica_mixing_scheme={r["rest2"]["replica_mixing_scheme"]!r},
         platform={r["platform"]!r},
     ).run(number_of_exchanges={r["rest2"]["number_of_exchanges"]})
 '''

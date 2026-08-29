@@ -179,6 +179,16 @@ def _resolve_rest2(protocol: dict[str, Any], *, production_ps: float, solute_int
     REST2 defaults and are overridable through `advanced:` like any other default.
     """
     block = protocol["REST2"]
+    # Refused here, at generation, rather than at run time: an unknown scheme would otherwise be
+    # discovered by the launcher after a system had been built.
+    scheme = str(block.get("replica_mixing_scheme", "swap-all"))
+    owner = {"swap-all": "openmmtools", "swap-neighbors": "md-templates"}.get(scheme)
+    if owner is None:
+        raise ConfigError(
+            f"REST2.replica_mixing_scheme must be `swap-all` or `swap-neighbors`, not {scheme!r}. "
+            f"`swap-all` is stock OpenMMTools and is the default; `swap-neighbors` needs this "
+            f"repository's fix for an upstream defect and makes md-templates the owner of the "
+            f"exchange decision.")
     tau_min = float(block["tau_min"])
     tau_max = float(block["tau_max"])
     replicas = int(block["number_of_replicas"])
@@ -229,6 +239,8 @@ def _resolve_rest2(protocol: dict[str, Any], *, production_ps: float, solute_int
         "production_per_replica_ps": production_ps,
         "omega_exclusion": bool(block["omega_exclusion"]),
         "enhanced_region": block["enhanced_region"],
+        "replica_mixing_scheme": scheme,
+        "exchange_decision_owner": owner,
     }
 
 
@@ -689,7 +701,8 @@ def generate(resolved: dict[str, Any], *, input_path: Path, output_root: Path,
         # The engine and the scaling convention travel WITH the project. `rest2_scaling.py` is the
         # same file cMD and AIS get, so a ladder cannot drift from the fixed-tau walker it is meant
         # to match, and `rest2_openmmtools.py` carries the version pin its overrides depend on.
-        for helper in ("rest2_runtime.py", "rest2_openmmtools.py", "rest2_scaling.py"):
+        for helper in ("rest2_runtime.py", "rest2_openmmtools.py", "rest2_scaling.py",
+                       "rest2_statistics.py", "rest2_validate.py"):
             shutil.copy2(TEMPLATES / helper, directory / helper)
             written.append(f"REST2/{helper}")
         written += ["REST2/rest2.py", "REST2/rest2.sh"]
