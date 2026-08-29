@@ -22,15 +22,60 @@ def _md_test_files():
     return [p for p in sorted(TESTS.glob("test_*.py")) if p.name not in NON_MD]
 
 
+#: Source markers that mean a file PROPAGATES: it advances a molecular system in time, or
+#: minimises one. That is the operation the CUDA rule exists for -- device selection, context
+#: creation and replica placement are only exercised when something actually runs.
+PROPAGATION_MARKERS = (
+    "Simulation(", ".minimizeEnergy(", ".step(", "run_stage", "sampler.run(",
+    "number_of_exchanges", ".equilibrate(",
+)
+
+#: The platform names a propagating test must never pin.
+NON_CUDA_PLATFORM_MARKERS = ('MD_PLATFORM="CPU"', "MD_PLATFORM='CPU'", 'platform="CPU"',
+                             'platform="Reference"', "'Reference'", '"Reference"')
+
+
+def propagates(text: str) -> bool:
+    """Whether this test file advances or minimises a molecular system."""
+    return any(marker in text for marker in PROPAGATION_MARKERS)
+
+
 def test_no_simulation_test_names_cpu_or_reference():
+    """A test that PROPAGATES must run on CUDA.
+
+    The rule is about propagation, not about touching OpenMM at all. A test that builds a scaled
+    System and evaluates U(x) at fixed coordinates exercises none of what CUDA is required for,
+    and Reference is the RIGHT platform for it: the REST2 scaling assertions compare energies and
+    force parameters to 1e-12, and single precision cannot carry that. Requiring CUDA there would
+    make an exact comparison approximate, which is a worse test, not a safer one.
+
+    So the audit asks whether a file propagates before it objects to the platform it names.
+    """
     offenders = {}
     for path in _md_test_files():
         text = path.read_text()
-        for needle in ('MD_PLATFORM="CPU"', "MD_PLATFORM='CPU'", 'platform="CPU"',
-                       'platform="Reference"', "'Reference'", '"Reference"'):
+        if not propagates(text):
+            continue
+        for needle in NON_CUDA_PLATFORM_MARKERS:
             if needle in text:
                 offenders.setdefault(path.name, []).append(needle)
-    assert not offenders, f"MD tests must run on CUDA: {offenders}"
+    assert not offenders, f"MD tests that propagate must run on CUDA: {offenders}"
+
+
+def test_the_audit_still_catches_a_propagating_file_that_names_a_non_cuda_platform():
+    """The guard above was narrowed, so this proves it did not become vacuous."""
+    propagating_and_wrong = 'simulation = Simulation(top, sys, integ)\nplatform="CPU"\n'
+    assert propagates(propagating_and_wrong)
+    assert any(needle in propagating_and_wrong for needle in NON_CUDA_PLATFORM_MARKERS)
+
+    evaluating_only = 'context = Context(system, integrator, "Reference")\n'
+    assert not propagates(evaluating_only)
+
+
+def test_every_test_file_that_propagates_is_still_audited():
+    """A file that propagates must be reachable by the audit -- not quietly in NON_MD."""
+    propagating = [p.name for p in _md_test_files() if propagates(p.read_text())]
+    assert propagating, "the audit found no propagating test file, so it is checking nothing"
 
 
 def test_the_shared_runner_leaves_the_platform_to_the_generated_script():

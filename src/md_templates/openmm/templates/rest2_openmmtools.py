@@ -100,6 +100,11 @@ def exchange_stride_for(*, exchange_interval_ps, solute_output_interval_ps):
     if exchange_interval_ps <= 0:
         raise ValueError(f"exchange interval must be positive; got {exchange_interval_ps}")
     ratio = exchange_interval_ps / solute_output_interval_ps
+    if ratio < 1.0:
+        raise ValueError(
+            f"the exchange interval ({exchange_interval_ps} ps) is shorter than the solute output "
+            f"interval ({solute_output_interval_ps} ps). Exchanges cannot be attempted more often "
+            f"than the iteration that carries them.")
     stride = int(round(ratio))
     if abs(ratio - stride) > 1e-9:
         raise ValueError(
@@ -182,7 +187,13 @@ class StridedREST2Sampler(ReplicaExchangeSampler):
         Identical to `ReplicaExchangeSampler._mix_neighboring_replicas` in 0.26.0 except that
         `np.where(...)` is reduced to an `int` before it is used to index the energy matrix.
         """
-        offset = np.random.randint(2)                  # 0 or 1: alternating even/odd pairs
+        # Upstream draws the offset from {0, 1} unconditionally. With only TWO replicas the odd
+        # phase covers no pair at all -- `range(1, 1, 2)` is empty -- so half of the exchange
+        # iterations propose nothing and the ladder silently exchanges at half the configured
+        # rate. The offset is drawn only from phases that actually contain a pair.
+        offsets = [offset for offset in (0, 1)
+                   if any(True for _ in range(offset, self.n_replicas - 1, 2))]
+        offset = offsets[np.random.randint(len(offsets))] if len(offsets) > 1 else offsets[0]
         for state_i in range(offset, self.n_replicas - 1, 2):
             state_j = state_i + 1
             replica_i = int(np.where(self._replica_thermodynamic_states == state_i)[0][0])
