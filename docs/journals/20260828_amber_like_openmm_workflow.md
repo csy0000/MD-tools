@@ -312,3 +312,94 @@ and one `min.py` is run against a second, unrelated set of paths through `openmm
 REST2 and AIS keep their existing generation and their `sys-gen`/`md-gen` path. OpenMMTools is not
 adopted, registration is not implemented, trajectory format is unchanged, and component management
 is untouched. Those are the next task's, not this one's.
+
+---
+
+## Correction pass: solvent coupling, completion marker, contributor
+
+Three inconsistencies in the interface, found by tracing the actual schemas rather than the
+documentation.
+
+### The solvent was contradictory, not merely undocumented
+
+The coupling table in `defaults.py` was already right:
+
+```python
+EXPLICIT_COMBINATIONS = {
+    "TIP3P": {"protein": "amber14-all.xml", "water": "amber14/tip3p.xml"},
+    "OPC":   {"protein": "amber19-all.xml", "water": "amber19/opc.xml"},
+}
+```
+
+The defect was in the `setup` path: it hardcoded the solvent name, so OPC was reachable only by
+overriding a single force-field field through `advanced:`. Doing that produced
+
+```text
+protein: amber14-all.xml   water: amber19/opc.xml   solvent.model: TIP3P
+```
+
+-- three mutually contradictory statements, in a file that claims to record what ran, and OpenMM
+builds that System without complaint. ff19SB's amino-acid CMAPs were fit in OPC and ff14SB's in
+TIP3P; pairing one with the other is not a variant, it is a Hamiltonian nobody parameterised.
+
+`water:` is now the single user-facing choice. It resolves the coupled set, and a trio that is not
+one of the supported pairs is refused after overrides are applied, naming the inconsistency.
+
+**TIP3P remains the default.** The instruction that prompted this pass stated the intended defaults
+were ff19SB/OPC, and I implemented that first -- then established that `DEFAULT_SOLVENT` is
+`"TIP3P"`, the `sys-config` CLI documents ff14SB/TIP3P as its default, and all 15 existing datasets
+used it. The only trace of OPC-as-default is a dead constant whose comment reads *"the resource the
+0.3.x default named"*. So it would have been a change, not a preservation, and it was raised rather
+than made silently; the user chose TIP3P default with OPC optional.
+
+`test_the_setup_default_matches_the_libraries_default_solvent` now pins the two entry points
+together, so the divergence I nearly introduced cannot appear quietly.
+
+Verified through real system generation for both selections -- resolved configuration,
+`forcefield.json`, `config.yaml` and the `.out` header all agree.
+
+### The completion marker was a substring test
+
+`run_status: completed` was checked with `in`, so every one of these would have reported a failed
+stage as finished:
+
+```text
+run_status: completed_with_warnings
+not run_status: completed
+# run_status: completed
+checking whether run_status: completed applies here
+previous run_status: completed (from an earlier stage)
+```
+
+It must now be a whole line after stripping whitespace. Indentation is still tolerated: a reporter
+that indents its final line has still made the claim. All five cases above are tested and rejected,
+and the existing output-file validation is unweakened -- a marker printed before a later exception,
+or standing over a missing trajectory, still fails.
+
+### Contributor prompting was keyed to the wrong thing
+
+`interactive = not args.config` meant a config-driven run was permanently non-interactive, so
+`--config` without `--yes` failed instead of asking. Prompting is now governed by `--yes` and
+whether a terminal is attached. A config file says *what* to build, not that nobody is watching;
+`--yes` is the explicit "do not ask me" and never prompts. There is still no fallback to `$USER` or
+the Git config.
+
+### A test was asserting the defect
+
+`test_an_advanced_override_reaches_the_resolved_configuration` proved that overrides work by setting
+`forcefield.water` alone -- which is exactly the mixed configuration now rejected. It was encoding
+the bug as expected behaviour, and it now overrides an uncoupled field instead.
+
+### Results
+
+```console
+$ pytest tests/test_simple_setup.py tests/test_openmm_md_interface.py -q    92 passed
+$ pytest -m "not gpu" -q       453 passed, 77 deselected, 0 failed    3m58s   (was 425)
+$ pytest -m gpu -q              77 passed, 453 deselected, 0 failed    3m01s
+```
+
+Both examples regenerated and inspected: `paths.sh` free of machine paths, protocols free of
+concrete paths and `Path(__file__)`, all five launchers sourcing `paths.sh`, every file flag present.
+The ligand route correctly records no protein force field.
+
+No REST2 or AIS file was modified. OpenMMTools was not adopted, storage formats are unchanged.
