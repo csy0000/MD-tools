@@ -227,6 +227,13 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
             _write_launcher(TEMPLATES / "stage_run.sh", directory / "run.sh",
                             "AIS switching paths")
         else:
+            # The LEGACY exchange loop. The production REST2 engine is OpenMMTools, reached
+            # through `md-openmm setup` with `protocol: REST2`; this route keeps its own loop
+            # because the datasets already generated through it depend on its on-disk layout,
+            # and invalidating their provenance would be worse than keeping a legacy path that
+            # says so. The two agree by construction: one `exchange_log_acceptance`, one
+            # `exchange_pairs`, and a test that their decisions match. See
+            # docs/openmmtools-rest2.md.
             shutil.copy2(TEMPLATES / "rest2_run.py", directory / "run.py")
             shutil.copy2(TEMPLATES / "rest2_equilibrate.py", directory / "equilibrate.py")
             shutil.copy2(TEMPLATES / "rest2_scaling.py", directory / "rest2_scaling.py")

@@ -288,6 +288,26 @@ Implicit ALA (ff14SB + GBn2/mbondi3, NVT, four replicas, 100 ps/replica) and phe
 mapping recorded, manifest verified. The phenol enhanced region is the 13-atom ligand and its omega
 exclusion list is empty, which is correct — a ligand has no peptide bond.
 
+## The legacy exchange loop
+
+`templates/rest2_run.py` -- the custom Python exchange loop -- is **not** the production engine and
+is not maintained as an alternative to OpenMMTools. It remains only for the older contract-managed
+`md-gen --method REST2` route, whose already-generated datasets depend on its on-disk layout: the
+per-replica directories, its own `exchange_attempts.csv`, and the stage fingerprints the shared
+preflight checks. Deleting it would invalidate existing dataset provenance, which is worse than
+keeping a legacy path that states plainly what it is -- and it does, in its module docstring and in
+a line it prints at run time.
+
+The two are kept in agreement rather than developed in parallel. Both compute acceptance with the
+same `rest2_scaling.exchange_log_acceptance` and pair replicas with the same
+`rest2_scaling.exchange_pairs`, and a test asserts they produce identical accept/reject sequences
+from identical inputs and seeds. **A scientific capability added to one must be added to the
+OpenMMTools path, not to the loop.**
+
+New REST2 work uses `md-openmm setup` with `protocol: REST2`. Retiring
+`md-gen --method REST2` entirely is a separate change: it needs a migration for the existing
+contract-managed datasets and for AIS, which sources equilibrium frames from those runs.
+
 ## Limitations
 
 - Pinned to OpenMMTools **0.26.0**. Any other version is refused until the contract tests are
