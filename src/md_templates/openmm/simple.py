@@ -150,6 +150,88 @@ def _refuse_mixed_solvent(system_config: dict, *, requested: str) -> None:
         f"{requested}` in the request rather than overriding a single field."
     )
 
+def _exact_multiple(numerator: float, denominator: float, *, what: str, per: str) -> int:
+    """`numerator / denominator` as a whole number, or an error naming both.
+
+    Rejected rather than rounded, for the same reason every other duration in this repository is:
+    a rounded interval means the physical time the records claim is not the one simulated.
+    """
+    if denominator <= 0:
+        raise ConfigError(f"{per} must be positive; got {denominator} ps")
+    ratio = numerator / denominator
+    count = int(round(ratio))
+    if abs(ratio - count) > 1e-9:
+        raise ConfigError(
+            f"{what} ({numerator} ps) must be a whole multiple of {per} ({denominator} ps); "
+            f"the ratio is {ratio}.")
+    if count < 1:
+        raise ConfigError(f"{what} ({numerator} ps) is shorter than {per} ({denominator} ps).")
+    return count
+
+
+def _resolve_rest2(protocol: dict[str, Any], *, production_ps: float, solute_interval_ps: float,
+                   timestep_fs: float) -> dict[str, Any]:
+    """The REST2 ladder and its intervals, every conversion made exact here rather than at runtime.
+
+    The request's `production` is production PER REPLICA and its `output_interval` is the SOLUTE
+    output interval -- the fine one, which is the whole point of the OpenMMTools iteration model.
+    The exchange interval and the whole-system interval come from this repository's validated
+    REST2 defaults and are overridable through `advanced:` like any other default.
+    """
+    block = protocol["REST2"]
+    tau_min = float(block["tau_min"])
+    tau_max = float(block["tau_max"])
+    replicas = int(block["number_of_replicas"])
+    if replicas < 2:
+        raise ConfigError(f"REST2.number_of_replicas must be at least 2; got {replicas}")
+    if not 0.0 <= tau_min < 1.0 or not 0.0 <= tau_max < 1.0:
+        raise ConfigError(f"REST2 tau must lie in [0, 1); got {tau_min} to {tau_max}")
+    if tau_max <= tau_min:
+        raise ConfigError(f"REST2.tau_max ({tau_max}) must exceed tau_min ({tau_min})")
+
+    exchange_ps = float(block["duration_per_segment_ps"])
+    whole_ps = float(block["whole_system_interval_ps"])
+
+    # The iteration IS the solute interval, so every other interval is counted in iterations.
+    exchange_stride = _exact_multiple(exchange_ps, solute_interval_ps,
+                                      what="the REST2 exchange interval",
+                                      per="the solute output interval")
+    checkpoint_stride = _exact_multiple(whole_ps, solute_interval_ps,
+                                        what="the REST2 whole-system output interval",
+                                        per="the solute output interval")
+    exchanges = _exact_multiple(production_ps, exchange_ps,
+                                what="the REST2 production duration per replica",
+                                per="the exchange interval")
+    steps_per_iteration = _steps(solute_interval_ps, timestep_fs,
+                                 field_name="output_interval (the REST2 solute interval)")
+    equilibration_ps = float(block["equilibration_duration_ps"])
+    if equilibration_ps:
+        _exact_multiple(equilibration_ps, solute_interval_ps,
+                        what="the REST2 per-tau equilibration duration",
+                        per="the solute output interval")
+
+    step = (tau_max - tau_min) / (replicas - 1)
+    return {
+        "tau_min": tau_min,
+        "tau_max": tau_max,
+        "number_of_replicas": replicas,
+        "taus": [tau_min + step * i for i in range(replicas)],
+        "scale_factors": [(1.0 - (tau_min + step * i)) ** 2 for i in range(replicas)],
+        "exchange_interval_ps": exchange_ps,
+        "solute_interval_ps": solute_interval_ps,
+        "whole_interval_ps": whole_ps,
+        "equilibration_duration_ps": equilibration_ps,
+        "number_of_exchanges": exchanges,
+        "exchange_stride_iterations": exchange_stride,
+        "checkpoint_interval_iterations": checkpoint_stride,
+        "steps_per_iteration": steps_per_iteration,
+        "total_iterations": exchanges * exchange_stride,
+        "production_per_replica_ps": production_ps,
+        "omega_exclusion": bool(block["omega_exclusion"]),
+        "enhanced_region": block["enhanced_region"],
+    }
+
+
 def resolve(request: SetupRequest) -> dict[str, Any]:
     """The request plus this repository's validated defaults, with every number made concrete.
 
@@ -161,10 +243,11 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
         raise ConfigError(f"type must be `peptide` or `ligand`, not {request.type!r}")
     if request.solvent not in ("explicit", "implicit"):
         raise ConfigError(f"solvent must be `explicit` or `implicit`, not {request.solvent!r}")
-    if str(request.protocol).lower() not in ("cmd",):
+    if str(request.protocol).lower() not in ("cmd", "rest2"):
         raise ConfigError(
-            f"protocol must be `cMD` in this milestone, not {request.protocol!r}. REST2 and AIS "
-            f"keep their existing commands and are untouched here.")
+            f"protocol must be `cMD` or `REST2`, not {request.protocol!r}. AIS keeps its existing "
+            f"command and is untouched here.")
+    rest2_requested = str(request.protocol).lower() == "rest2"
 
     implicit = request.solvent == "implicit"
     peptide = request.type == "peptide"
@@ -187,7 +270,8 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
                 f"them.")
 
     system_config = D.sys_defaults(peptide=peptide, solvent=solvent_name)
-    protocol = D.md_defaults(methods=("cMD",), solvent=solvent_name)
+    protocol = D.md_defaults(methods=(("REST2",) if rest2_requested else ("cMD",)),
+                             solvent=solvent_name)
     advanced = dict(request.advanced or {})
 
     # Advanced overrides are applied to the SAME documents the defaults produced, so an override
@@ -246,14 +330,18 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
                                if name.endswith("1kcal") else 0.0),
         })
 
-    stage_names = [s["name"] for s in stages] + ["cMD", "min"]
+    stage_names = [s["name"] for s in stages] + ["cMD", "REST2", "min"]
     # `advanced.common.random_seed` is honoured rather than accepted and ignored: it becomes the
     # base every stage seed is derived from, and each derived value is printed in the preset and
     # written as a literal into the protocol file.
     seeds = derive_seeds(common.get("random_seed"), stage_names)
 
+    rest2 = _resolve_rest2(protocol, production_ps=production_ps, solute_interval_ps=interval_ps,
+                           timestep_fs=timestep_fs) if rest2_requested else None
+
     return {
         "seeds": seeds,
+        "rest2": rest2,
         "water_model": (None if implicit
                         else (system_config.get("solvent") or {}).get("model")),
         "system_id": request.system,
@@ -261,7 +349,7 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
         "type": request.type,
         "solvent": request.solvent,
         "implicit": implicit,
-        "protocol": "cMD",
+        "protocol": "REST2" if rest2_requested else "cMD",
         "platform": request.platform,
         "sys_config": system_config,
         "protocol_config": protocol,
@@ -313,15 +401,42 @@ def format_preset(resolved: dict[str, Any]) -> str:
                      f"{stage['steps']:>10,d} steps  {stage['ensemble']}"
                      + (f"  restraint {stage['restraint_kcal']} kcal/mol/A^2"
                         if stage["restraint_kcal"] else ""))
+    rest2 = resolved.get("rest2")
+    if rest2:
+        ladder = ", ".join(f"{tau:.3f}" for tau in rest2["taus"])
+        scales = ", ".join(f"{s:.4f}" for s in rest2["scale_factors"])
+        lines += [
+            f"REST2 ladder  {rest2['number_of_replicas']} replicas, tau [{ladder}]",
+            f"              s = (1-tau)^2 [{scales}]  -- one thermostat at "
+            f"{resolved['temperature_K']} K, NOT temperature REMD",
+            f"              omega-selective: omega torsions "
+            + ("left UNSCALED" if rest2["omega_exclusion"] else "SCALED"),
+            f"tau equil     {rest2['equilibration_duration_ps']:.3f} ps per replica "
+            f"(not counted as production)",
+            f"production    {rest2['production_per_replica_ps']:.3f} ps per replica  "
+            f"{rest2['number_of_exchanges']:,d} exchange attempts",
+            f"exchange      every {rest2['exchange_interval_ps']:.3f} ps  "
+            f"({rest2['exchange_stride_iterations']} iterations)",
+            f"solute out    every {rest2['solute_interval_ps']:.3f} ps  "
+            f"({rest2['steps_per_iteration']:,d} steps = one iteration)",
+            f"whole out     every {rest2['whole_interval_ps']:.3f} ps  "
+            f"({rest2['checkpoint_interval_iterations']} iterations)",
+            f"engine        openmmtools ReplicaExchangeSampler + MultiStateReporter NetCDF",
+        ]
+    else:
+        lines += [
+            f"production    {resolved['production_ps']:.3f} ps  "
+            f"{resolved['production_steps']:,d} steps",
+            f"output every  {resolved['output_interval_ps']:.3f} ps  "
+            f"{resolved['output_interval_steps']:,d} steps  "
+            f"({resolved['production_steps'] // resolved['output_interval_steps']:,d} frames)",
+        ]
+    method = resolved["protocol"]
     lines += [
-        f"production    {resolved['production_ps']:.3f} ps  {resolved['production_steps']:,d} steps",
-        f"output every  {resolved['output_interval_ps']:.3f} ps  "
-        f"{resolved['output_interval_steps']:,d} steps  "
-        f"({resolved['production_steps'] // resolved['output_interval_steps']:,d} frames)",
         f"platform      {resolved['platform']}",
         f"base seed     {resolved['seeds']['base']['seed']}  "
-        f"(cMD integrator {resolved['seeds']['cMD']['integrator']}, "
-        f"barostat {resolved['seeds']['cMD']['barostat']})",
+        f"({method} integrator {resolved['seeds'][method]['integrator']}, "
+        f"barostat {resolved['seeds'][method]['barostat']})",
     ]
     return "\n".join("  " + line for line in lines)
 
@@ -519,7 +634,16 @@ def generate(resolved: dict[str, Any], *, input_path: Path, output_root: Path,
     runner.chmod(0o755)
     written.append("bin/openmm-md")
 
-    stage_names = [s["name"] for s in resolved["equilibration_stages"]] + ["cMD"]
+    rest2 = resolved.get("rest2")
+    if rest2:
+        # The REST2 ladder has its own file interface, because its outputs are not one trajectory
+        # and one restart: they are a multistate NetCDF, a checkpoint NetCDF and a manifest.
+        rest2_runner = binaries / "openmm-rest2"
+        shutil.copy2(TEMPLATES / "openmm_rest2.py", rest2_runner)
+        rest2_runner.chmod(0o755)
+        written.append("bin/openmm-rest2")
+
+    stage_names = [s["name"] for s in resolved["equilibration_stages"]] + [resolved["protocol"]]
     (system_dir / "paths.sh").write_text(
         emit.paths_sh(relative_project, resolved["system_id"], stage_names), encoding="utf-8")
     (system_dir / "paths.sh").chmod(0o755)
@@ -555,14 +679,31 @@ def generate(resolved: dict[str, Any], *, input_path: Path, output_root: Path,
         launchers.append(f"eq/{name}/{name}.sh")
         parent = f"${{{directory_variable[name]}}}/{name}.state.xml"
 
-    (system_dir / "cMD").mkdir(exist_ok=True)
-    (system_dir / "cMD" / "cmd.py").write_text(emit.production_protocol(resolved), encoding="utf-8")
-    production = emit.launcher("cmd", directory_var="CMD_DIR", depth=1, parent_restart=parent,
-                               trajectory=True, checkpoint=True)
-    (system_dir / "cMD" / "cmd.sh").write_text(production, encoding="utf-8")
-    (system_dir / "cMD" / "cmd.sh").chmod(0o755)
-    written += ["cMD/cmd.py", "cMD/cmd.sh"]
-    launchers.append("cMD/cmd.sh")
+    if rest2:
+        directory = system_dir / "REST2"
+        directory.mkdir(exist_ok=True)
+        (directory / "rest2.py").write_text(emit.rest2_protocol(resolved), encoding="utf-8")
+        (directory / "rest2.sh").write_text(
+            emit.rest2_launcher(parent_restart=parent), encoding="utf-8")
+        (directory / "rest2.sh").chmod(0o755)
+        # The engine and the scaling convention travel WITH the project. `rest2_scaling.py` is the
+        # same file cMD and AIS get, so a ladder cannot drift from the fixed-tau walker it is meant
+        # to match, and `rest2_openmmtools.py` carries the version pin its overrides depend on.
+        for helper in ("rest2_runtime.py", "rest2_openmmtools.py", "rest2_scaling.py"):
+            shutil.copy2(TEMPLATES / helper, directory / helper)
+            written.append(f"REST2/{helper}")
+        written += ["REST2/rest2.py", "REST2/rest2.sh"]
+        launchers.append("REST2/rest2.sh")
+    else:
+        (system_dir / "cMD").mkdir(exist_ok=True)
+        (system_dir / "cMD" / "cmd.py").write_text(emit.production_protocol(resolved),
+                                                   encoding="utf-8")
+        production = emit.launcher("cmd", directory_var="CMD_DIR", depth=1, parent_restart=parent,
+                                   trajectory=True, checkpoint=True)
+        (system_dir / "cMD" / "cmd.sh").write_text(production, encoding="utf-8")
+        (system_dir / "cMD" / "cmd.sh").chmod(0o755)
+        written += ["cMD/cmd.py", "cMD/cmd.sh"]
+        launchers.append("cMD/cmd.sh")
 
     (system_dir / "run.sh").write_text(emit.run_all_sh(launchers), encoding="utf-8")
     (system_dir / "run.sh").chmod(0o755)

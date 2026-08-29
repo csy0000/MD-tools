@@ -279,7 +279,9 @@ def paths_sh(relative_project: str, system_id: str, stage_names: list[str]) -> s
     launcher follows -- which is the difference between a system that can be archived and one that
     only works on the machine that made it.
     """
-    eq = [n for n in stage_names if n != "cMD"]
+    # Only the equilibration stages have a directory variable here; the production method
+    # (cMD or REST2) already has one below, and mapping it twice would be a KeyError.
+    eq = [n for n in stage_names if n not in ("cMD", "REST2", "AIS")]
     lines = [
         '#!/usr/bin/env bash',
         '# Portable directory map. Sourced by every stage launcher; contains no machine path.',
@@ -309,6 +311,7 @@ def paths_sh(relative_project: str, system_id: str, stage_names: list[str]) -> s
         '# The generated copy is authoritative for this system. Override deliberately if you have',
         '# a compatible executable elsewhere; ordinary use needs no installed command.',
         'export OPENMM_MD="${OPENMM_MD:-${SYSTEM_ROOT}/bin/openmm-md}"',
+        'export OPENMM_REST2="${OPENMM_REST2:-${SYSTEM_ROOT}/bin/openmm-rest2}"',
         '',
     ]
     return "\n".join(lines)
@@ -356,4 +359,85 @@ source "${{HERE}}/paths.sh"
 
 {calls}
 echo "== done =="
+'''
+
+
+# --- REST2 ---------------------------------------------------------------------------------------
+
+def rest2_protocol(r: dict[str, Any]) -> str:
+    """The concise `rest2.py`: the scientific protocol and nothing else.
+
+    The exchange implementation is NOT here. It lives in `rest2_runtime.py`, copied into the
+    project beside this file, so the file a user reads and edits stays the size of the physics.
+    """
+    implicit = r["implicit"]
+    pressure = "None" if implicit else f'{r["pressure_bar"]}'
+    ensemble = "NVT" if implicit else "NPT"
+    taus = ", ".join(f"{t:.4f}" for t in r["rest2"]["taus"])
+    seeds = r["seeds"]["REST2"]
+    return f'''#!/usr/bin/env python
+"""REST2 for {r["system_id"]}: {r["rest2"]["number_of_replicas"]} replicas, tau {r["rest2"]["tau_min"]} to {r["rest2"]["tau_max"]}, {ensemble} at {r["temperature_K"]} K.
+
+Omega-selective REST2: torsions about a peptide omega bond are left UNSCALED. Every replica is
+thermostatted at the SAME {r["temperature_K"]} K and differs only by Hamiltonian -- this is
+Hamiltonian scaling, not temperature REMD.
+
+    tau ladder : [{taus}]
+    s = (1-tau)^2 on solute-solute terms, sqrt(s) = 1-tau on solute-environment terms
+
+Replica exchange, reduced potentials, NetCDF storage, checkpointing and restart are OpenMMTools'.
+Run through openmm-rest2, which supplies every path.
+"""
+from rest2_runtime import REST2
+
+
+def run(files):
+    REST2(
+        files,
+        tau_min={r["rest2"]["tau_min"]},
+        tau_max={r["rest2"]["tau_max"]},
+        number_of_replicas={r["rest2"]["number_of_replicas"]},
+        exchange_interval_ps={r["rest2"]["exchange_interval_ps"]},
+        solute_output_interval_ps={r["rest2"]["solute_interval_ps"]},
+        whole_output_interval_ps={r["rest2"]["whole_interval_ps"]},
+        equilibration_duration_ps={r["rest2"]["equilibration_duration_ps"]},
+        temperature_k={r["temperature_K"]},
+        pressure_bar={pressure},
+        timestep_fs={r["timestep_fs"]},
+        friction_per_ps={r["friction_per_ps"]},
+        random_seed={seeds["integrator"]},
+        hydrogen_mass_amu={r["hydrogen_mass_amu"]!r},
+        platform={r["platform"]!r},
+    ).run(number_of_exchanges={r["rest2"]["number_of_exchanges"]})
+'''
+
+
+def rest2_launcher(*, parent_restart: str) -> str:
+    """The Amber-like REST2 command. Every path explicit, none of them machine-specific.
+
+    Amber would need a groupfile naming one input set per replica. There is none here because
+    OpenMMTools keeps one multistate NetCDF for the whole ladder: the replicas share a topology, a
+    base System and a starting state, and differ only by tau.
+    """
+    return f'''#!/usr/bin/env bash
+# REST2: one ladder, one NetCDF. Add --resume to continue, --extend N to lengthen it.
+#
+#   ./rest2.sh                 single process, one device
+#   mpiexec -n 6 ./rest2.sh    one rank per replica; each rank binds its own CUDA device
+set -euo pipefail
+
+STAGE_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+source "${{STAGE_DIR}}/../paths.sh"
+
+"${{OPENMM_REST2}}" \\
+  -i "${{REST2_DIR}}/rest2.py" \\
+  -p "${{INPUT_DIR}}/topology.pdb" \\
+  -s "${{INPUT_DIR}}/system.xml" \\
+  -c "{parent_restart}" \\
+  --solute "${{INPUT_DIR}}/solute.yaml" \\
+  -o "${{REST2_DIR}}/rest2.out" \\
+  -x "${{REST2_DIR}}/rest2.nc" \\
+  -r "${{REST2_DIR}}/restart.json" \\
+  --checkpoint "${{REST2_DIR}}/rest2_checkpoint.nc" \\
+  "$@"
 '''
