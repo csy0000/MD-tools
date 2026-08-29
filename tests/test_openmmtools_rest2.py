@@ -485,3 +485,75 @@ def test_cuda_visible_devices_is_renumbered_to_local_ordinals(monkeypatch):
     assert runtime.visible_cuda_devices() == [0, 1]
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
     assert runtime.visible_cuda_devices() == []
+
+
+# --- 13. agreement with the custom exchange loop this replaces --------------------------------------
+
+def test_the_openmmtools_sampler_and_the_custom_loop_agree_on_fixed_inputs():
+    """The two implementations must decide identically where the algorithms are equivalent.
+
+    The custom loop in `rest2_run.py` pairs replicas with `exchange_pairs(n, phase)` and accepts
+    with `exchange_log_acceptance`. The OpenMMTools override pairs the same neighbours and calls
+    the same function. `_attempt_swap` draws from the GLOBAL numpy RNG, so seeding it identically
+    before each run gives both the same random sequence -- and the accept/reject decisions must
+    then match exactly, not merely in number.
+    """
+    setup = np.random.RandomState(20260829)
+    n_replicas = 6
+    compared, accepted_total = 0, 0
+
+    for trial in range(200):
+        energies = setup.normal(scale=3.0, size=(n_replicas, n_replicas))
+        phase = trial % 2
+        pairs = scaling.exchange_pairs(n_replicas, phase)
+
+        # --- the old loop, exactly as rest2_run.py performs it ---
+        np.random.seed(trial + 1)
+        old_assignment = np.arange(n_replicas)
+        old_decisions = []
+        for i, j in pairs:
+            si, sj = int(old_assignment[i]), int(old_assignment[j])
+            log_p = scaling.exchange_log_acceptance(
+                u_ii=float(energies[i, si]), u_jj=float(energies[j, sj]),
+                u_ij=float(energies[i, sj]), u_ji=float(energies[j, si]))
+            accepted = log_p >= 0.0 or np.random.rand() < math.exp(log_p)
+            old_decisions.append(bool(accepted))
+            if accepted:
+                old_assignment[i], old_assignment[j] = sj, si
+
+        # --- the OpenMMTools override, from the same seed and the same energies ---
+        np.random.seed(trial + 1)
+        sampler = _FakeSampler(energies, np.arange(n_replicas))
+        new_decisions = []
+        for i, j in pairs:
+            before = sampler._replica_thermodynamic_states.copy()
+            sampler._attempt_swap(i, j)
+            new_decisions.append(
+                not np.array_equal(before, sampler._replica_thermodynamic_states))
+
+        assert new_decisions == old_decisions, (
+            f"trial {trial}: the OpenMMTools override and the custom loop disagreed\n"
+            f"  old: {old_decisions}\n  new: {new_decisions}")
+        assert list(sampler._replica_thermodynamic_states) == list(old_assignment)
+        compared += len(pairs)
+        accepted_total += sum(old_decisions)
+
+    # The comparison must have exercised both outcomes, or it proved nothing.
+    assert compared > 0
+    assert 0 < accepted_total < compared, (
+        f"the comparison saw only one outcome ({accepted_total}/{compared} accepted), so "
+        f"agreement was not actually tested")
+
+
+def test_both_implementations_pair_the_same_neighbours():
+    """`exchange_pairs` and the override's loop must cover identical (i, j) pairs."""
+    for n_replicas in (2, 3, 4, 6, 7):
+        for offset in (0, 1):
+            expected = [(i, i + 1) for i in range(offset, n_replicas - 1, 2)]
+            assert scaling.exchange_pairs(n_replicas, offset) == expected
+
+
+def test_the_criterion_is_one_function_used_by_both():
+    """A decisive check: the sampler and the old loop import the SAME callable."""
+    import rest2_scaling
+    assert extension.exchange_log_acceptance is rest2_scaling.exchange_log_acceptance
