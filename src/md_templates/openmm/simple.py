@@ -89,6 +89,15 @@ class SetupRequest:
     input: str
     type: str = "peptide"
     solvent: str = "explicit"
+    #: The explicit-water model, which selects a COUPLED force-field pair. Ignored under implicit
+    #: solvent, which has no water at all.
+    #:
+    #: TIP3P is the default because it is what this repository's validated defaults have used and
+    #: what every existing dataset was generated with; `DEFAULT_SOLVENT` in defaults.py agrees, so
+    #: `setup` and the older sys-config path resolve the same force fields. OPC is a supported
+    #: selection, not a silent upgrade -- ff19SB and OPC were parameterised together and switching
+    #: to them changes the physics of every new system.
+    water: str = "TIP3P"
     protocol: str = "cMD"
     production: Any = "1 ns"
     output_interval: Any = "5 ps"
@@ -110,6 +119,37 @@ class SetupRequest:
         return cls(**{k: v for k, v in document.items() if k in known or k == "advanced"})
 
 
+def _refuse_mixed_solvent(system_config: dict, *, requested: str) -> None:
+    """The protein force field, the water force field and `solvent.model` must agree.
+
+    An `advanced:` override can reach any one of the three. Setting only `forcefield.water` used to
+    produce ff14SB protein with OPC water and a `solvent.model` still reading TIP3P -- three
+    mutually contradictory statements, silently, in a file that claims to record what ran. The
+    resulting System would be built from a combination nobody parameterised.
+
+    So the trio is checked against the supported pairs after overrides are applied, and a
+    combination that is not one of them is refused by name.
+    """
+    forcefield = system_config.get("forcefield") or {}
+    solvent = system_config.get("solvent") or {}
+    protein, water = forcefield.get("protein"), forcefield.get("water")
+    model = solvent.get("model")
+
+    for name, pair in D.EXPLICIT_COMBINATIONS.items():
+        if (protein == pair["protein"] and water == pair["water"]
+                and D.canonical_solvent(model or name) == name):
+            return
+
+    supported = "; ".join(
+        f"{name}: protein {pair['protein']}, water {pair['water']}"
+        for name, pair in D.EXPLICIT_COMBINATIONS.items())
+    raise ConfigError(
+        f"the solvent selection is not internally consistent: protein {protein!r}, water "
+        f"{water!r}, solvent.model {model!r}. These force fields were parameterised together and "
+        f"only the coupled sets are supported -- {supported}. Select one with `water: "
+        f"{requested}` in the request rather than overriding a single field."
+    )
+
 def resolve(request: SetupRequest) -> dict[str, Any]:
     """The request plus this repository's validated defaults, with every number made concrete.
 
@@ -127,8 +167,24 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
             f"keep their existing commands and are untouched here.")
 
     implicit = request.solvent == "implicit"
-    solvent_name = "GBn2" if implicit else "TIP3P"
     peptide = request.type == "peptide"
+
+    # ONE user-facing choice selects the whole coupled set. The protein and water force fields
+    # were parameterised together -- ff19SB's CMAPs were fit in OPC, ff14SB's in TIP3P -- so
+    # `water: OPC` has to move `forcefield.protein`, `forcefield.water` and `solvent.model`
+    # together or it means nothing.
+    if implicit:
+        solvent_name = "GBn2"
+    else:
+        try:
+            solvent_name = D.canonical_solvent(request.water)
+        except ValueError:
+            solvent_name = str(request.water)
+        if solvent_name not in D.EXPLICIT_COMBINATIONS:
+            raise ConfigError(
+                f"water must be one of {sorted(D.EXPLICIT_COMBINATIONS)}, not {request.water!r}. "
+                f"Each selects a coupled protein/water pair; there is no supported way to mix "
+                f"them.")
 
     system_config = D.sys_defaults(peptide=peptide, solvent=solvent_name)
     protocol = D.md_defaults(methods=("cMD",), solvent=solvent_name)
@@ -152,6 +208,9 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
             raise ConfigError(
                 f"advanced setting {dotted!r} matches no field in the resolved configuration")
         target[parts[-1]] = value
+
+    if not implicit:
+        _refuse_mixed_solvent(system_config, requested=solvent_name)
 
     common = protocol["common"]
     timestep_fs = float(common["timestep_fs"])
@@ -195,6 +254,8 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
 
     return {
         "seeds": seeds,
+        "water_model": (None if implicit
+                        else (system_config.get("solvent") or {}).get("model")),
         "system_id": request.system,
         "title": advanced.get("title") or request.system,
         "type": request.type,
@@ -231,7 +292,8 @@ def format_preset(resolved: dict[str, Any]) -> str:
     if resolved["implicit"]:
         lines.append(f"force field   {ff.get('protein')} + {implicit.get('model')}/{implicit.get('radii')}")
     else:
-        lines.append(f"force field   {ff.get('protein')} + {ff.get('water')}")
+        lines.append(f"force field   {ff.get('protein')} + {ff.get('water')}"
+                     f"   (water model {solvent.get('model')})")
         lines.append(f"solvent box   {solvent.get('model')}, {solvent.get('padding_nm')} nm padding, "
                      f"{solvent.get('box_shape')}, {solvent.get('ionic_strength_molar')} M, "
                      f"{solvent.get('cutoff_nm')} nm cutoff")
@@ -351,16 +413,17 @@ def resolve_contributor(document: dict, *, interactive: bool) -> dict:
     Never invented. An attributed record naming someone who did not do the work is worse than one
     that admits it does not know.
     """
-    contributor = document.get("contributor")
-    if not contributor:
-        contributor = os.environ.get("MD_CONTRIBUTOR")
+    # Request, then environment, then a prompt if one is allowed, then an error. Never a guess:
+    # an attributed record naming someone who did not do the work is worse than one that admits
+    # it does not know. There is deliberately no fallback to $USER or the Git config.
+    contributor = document.get("contributor") or os.environ.get("MD_CONTRIBUTOR")
     if not contributor and interactive:
         contributor = input("  contributor (name, or name <email>): ").strip() or None
     if not contributor:
         raise ConfigError(
-            "no contributor. Set `contributor:` in the request, export MD_CONTRIBUTOR, or run "
-            "interactively. This is recorded in config.yaml as who generated the system, and it "
-            "is not something to guess at.")
+            "no contributor. Set `contributor:` in the setup request, export MD_CONTRIBUTOR, or "
+            "run where a prompt is possible. `--yes` never prompts, by design. This is recorded "
+            "in config.yaml as who generated the system, and it is not something to guess at.")
     text = str(contributor).strip()
     if "<" in text and text.endswith(">"):
         name, _, email = text.partition("<")
@@ -531,7 +594,14 @@ def _system_config(resolved: dict[str, Any], input_path: Path, contributor: dict
             "identity": Path(input_path).name,
         },
         "route": resolved["type"],
-        "solvent": resolved["solvent"],
+        "solvent": {
+            "mode": resolved["solvent"],
+            # The coupled selection, recorded as one fact. `water_model` is the user-facing
+            # choice; the two XMLs are what it resolved to, and they move together or not at all.
+            "water_model": resolved["water_model"],
+            "forcefield_protein": (resolved["sys_config"].get("forcefield") or {}).get("protein"),
+            "forcefield_water": (resolved["sys_config"].get("forcefield") or {}).get("water"),
+        },
         "protocol": resolved["protocol"],
         "generated_by": {
             "tool": "md-openmm setup",

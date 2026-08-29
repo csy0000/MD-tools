@@ -13,6 +13,7 @@ generated system.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import shutil
 import subprocess
@@ -64,11 +65,15 @@ def test_durations_accept_the_units_a_person_writes(text, expected_ps):
 
 # --- the resolved preset -------------------------------------------------------
 
-def test_the_peptide_preset_is_this_repository_s_validated_default():
-    """ff14SB + TIP3P. Not ff19SB/OPC, which is a selection and not the default."""
+def test_the_peptide_preset_resolves_the_coupled_default_set():
+    """ff14SB + TIP3P, coupled -- the repository's validated default and what every existing
+    dataset used. `DEFAULT_SOLVENT` agrees, so `setup` and the older sys-config path resolve the
+    same force fields. OPC is a supported selection, covered below, not a silent upgrade.
+    """
     resolved = resolve(_request())
     assert resolved["sys_config"]["forcefield"] == {
         "protein": "amber14-all.xml", "water": "amber14/tip3p.xml"}
+    assert resolved["sys_config"]["solvent"]["model"] == "TIP3P"
     assert resolved["temperature_K"] == 300.0
     assert resolved["timestep_fs"] == 2.0
     assert [s["name"] for s in resolved["equilibration_stages"]] == [
@@ -88,8 +93,14 @@ def test_implicit_solvent_has_no_barostat_and_a_shorter_chain():
 
 
 def test_an_advanced_override_reaches_the_resolved_configuration():
-    resolved = resolve(_request(advanced={"forcefield.water": "amber19/opc.xml"}))
-    assert resolved["sys_config"]["forcefield"]["water"] == "amber19/opc.xml"
+    """An uncoupled field still overrides freely.
+
+    This used to override `forcefield.water` alone, which is exactly the mixed configuration now
+    refused -- the test was asserting the defect. Coupled fields move through `water:`; everything
+    else is still reachable one at a time.
+    """
+    resolved = resolve(_request(advanced={"solvent.padding_nm": 1.2}))
+    assert resolved["sys_config"]["solvent"]["padding_nm"] == 1.2
 
 
 def test_an_advanced_setting_that_matches_nothing_is_refused():
@@ -598,3 +609,115 @@ def test_the_protocol_sets_the_integrator_seed_explicitly(generated):
     text = (generated / "cMD" / "cmd.py").read_text()
     assert "setRandomNumberSeed(" in text
     assert "integrator_seed:" in text, "the seed must reach the .out header too"
+
+
+# --- solvent coupling ----------------------------------------------------------
+#
+# The protein and water force fields were parameterised together: ff19SB's amino-acid CMAPs were
+# fit in OPC, ff14SB's in TIP3P. A configuration naming one protein force field and the other
+# water model is not a variant -- it is a System nobody parameterised, and it runs.
+
+def test_the_default_explicit_selection_is_the_coupled_tip3p_set():
+    resolved = resolve(_request())
+    forcefield = resolved["sys_config"]["forcefield"]
+    assert forcefield["protein"] == "amber14-all.xml"
+    assert forcefield["water"] == "amber14/tip3p.xml"
+    assert resolved["sys_config"]["solvent"]["model"] == "TIP3P"
+
+
+def test_the_setup_default_matches_the_libraries_default_solvent():
+    """`setup` and the older sys-config path must not disagree about the default force field."""
+    from md_templates.openmm import defaults as D
+
+    assert D.canonical_solvent(SetupRequest.__dataclass_fields__["water"].default) == \
+        D.DEFAULT_SOLVENT
+
+
+def test_opc_is_selectable_and_equally_self_consistent():
+    """A supported selection, resolving its own coupled pair -- not a variant of the default."""
+    resolved = resolve(_request(water="OPC"))
+    forcefield = resolved["sys_config"]["forcefield"]
+    assert forcefield["protein"] == "amber19-all.xml"
+    assert forcefield["water"] == "amber19/opc.xml"
+    assert resolved["sys_config"]["solvent"]["model"] == "OPC"
+
+
+def test_one_field_selects_the_whole_coupled_set():
+    """`water:` is the single user-facing choice; nothing else has to be named."""
+    for name, protein, water in (("OPC", "amber19-all.xml", "amber19/opc.xml"),
+                                 ("TIP3P", "amber14-all.xml", "amber14/tip3p.xml")):
+        resolved = resolve(_request(water=name))
+        assert (resolved["sys_config"]["forcefield"]["protein"],
+                resolved["sys_config"]["forcefield"]["water"]) == (protein, water)
+
+
+@pytest.mark.parametrize("override,description", [
+    ({"forcefield.water": "amber19/opc.xml"}, "ff14SB protein with OPC water"),
+    ({"forcefield.protein": "amber19-all.xml"}, "ff19SB protein with TIP3P water"),
+    ({"solvent.model": "OPC"}, "a TIP3P pair labelled OPC"),
+])
+def test_a_contradictory_coupled_override_is_refused(override, description):
+    """Overriding one of the three used to yield a silently mixed configuration."""
+    with pytest.raises(ConfigError, match="not internally consistent"):
+        resolve(_request(advanced=override))
+
+
+def test_an_unsupported_water_model_is_refused_by_name():
+    with pytest.raises(ConfigError, match="water must be one of"):
+        resolve(_request(water="SPCE"))
+
+
+def test_moving_the_whole_coupled_set_together_is_accepted():
+    """The escape hatch still works when every coupled field moves -- though `water: OPC` is the
+    supported way to say the same thing."""
+    resolved = resolve(_request(advanced={"forcefield.protein": "amber19-all.xml",
+                                          "forcefield.water": "amber19/opc.xml",
+                                          "solvent.model": "OPC"}))
+    assert resolved["sys_config"]["solvent"]["model"] == "OPC"
+
+
+def test_the_resolved_water_model_is_shown_in_the_preset():
+    assert "water model TIP3P" in format_preset(resolve(_request()))
+    assert "water model OPC" in format_preset(resolve(_request(water="OPC")))
+
+
+def test_the_generated_configuration_carries_the_coupled_set(generated):
+    """What system generation was actually given, not what the request said."""
+    configuration = yaml.safe_load(
+        (generated / "input" / "resolved_sys.config.yaml").read_text())
+    assert configuration["forcefield"]["protein"] == "amber14-all.xml"
+    assert configuration["forcefield"]["water"] == "amber14/tip3p.xml"
+    assert configuration["solvent"]["model"] == "TIP3P"
+
+
+def test_the_provenance_record_names_the_force_fields_that_were_loaded(generated):
+    forcefield = json.loads((generated / "input" / "forcefield.json").read_text())
+    text = json.dumps(forcefield)
+    assert "amber14-all.xml" in text and "amber14/tip3p.xml" in text
+
+
+# --- contributor ---------------------------------------------------------------
+
+def test_a_contributor_in_the_request_wins_over_the_environment(monkeypatch):
+    monkeypatch.setenv("MD_CONTRIBUTOR", "Environment Person")
+    resolved = resolve_contributor({"contributor": "Request Person"}, interactive=False)
+    assert resolved["name"] == "Request Person"
+
+
+def test_the_environment_is_used_when_the_request_is_silent(monkeypatch):
+    monkeypatch.setenv("MD_CONTRIBUTOR", "Environment Person <e@example.invalid>")
+    assert resolve_contributor({}, interactive=False) == {
+        "name": "Environment Person", "email": "e@example.invalid"}
+
+
+def test_a_prompt_is_used_when_prompting_is_allowed(monkeypatch):
+    monkeypatch.delenv("MD_CONTRIBUTOR", raising=False)
+    monkeypatch.setattr("builtins.input", lambda *_: "Prompted Person")
+    assert resolve_contributor({}, interactive=True)["name"] == "Prompted Person"
+
+
+def test_no_contributor_and_no_prompt_is_an_error_not_a_guess(monkeypatch):
+    """There is deliberately no fallback to $USER or the Git config."""
+    monkeypatch.delenv("MD_CONTRIBUTOR", raising=False)
+    with pytest.raises(ConfigError, match="no contributor"):
+        resolve_contributor({}, interactive=False)

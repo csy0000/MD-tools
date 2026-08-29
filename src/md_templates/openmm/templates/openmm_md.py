@@ -135,6 +135,22 @@ def load_protocol(path: str):
     return module
 
 
+def _has_completion_line(report: Path) -> bool:
+    """A whole line saying exactly `run_status: completed`, after stripping whitespace.
+
+    A substring test would accept a protocol that printed
+    `checking whether run_status: completed applies here` or
+    `run_status: completed_with_warnings`, and report a failed stage as finished. The marker is a
+    claim that the requested outputs exist, so it has to be the whole line and nothing else.
+
+    Leading and trailing whitespace is tolerated deliberately: a reporter that indents its final
+    line has still made the claim. Anything else on the line has not.
+    """
+    for line in report.read_text(encoding="utf-8").splitlines():
+        if line.strip() == COMPLETION_MARKER:
+            return True
+    return False
+
 def main(argv=None) -> int:
     arguments = _parse(sys.argv[1:] if argv is None else argv)
     files, problems = resolve(arguments)
@@ -174,7 +190,7 @@ def main(argv=None) -> int:
             print("openmm-md: the protocol finished but did not write: " + ", ".join(missing),
                   file=sys.stderr)
             status = 1
-        elif COMPLETION_MARKER not in report.read_text(encoding="utf-8"):
+        elif not _has_completion_line(report):
             print(f"openmm-md: {report} has no '{COMPLETION_MARKER}' line; treating as incomplete",
                   file=sys.stderr)
             status = 1

@@ -131,7 +131,10 @@ def cmd_setup(args) -> int:
     from ..openmm.simple import (SetupRequest, format_preset, generate, resolve,
                                  resolve_contributor, resolve_output_root)
 
-    interactive = not args.config
+    # Prompting is governed by --yes and by whether a terminal is attached, NOT by --config.
+    # A config file says what to build; it does not say that nobody is watching. `--yes` is the
+    # explicit "do not ask me" and must never prompt, config or no config.
+    may_prompt = not args.yes and sys.stdin.isatty()
     if args.config:
         document = yaml.safe_load(Path(args.config).read_text(encoding="utf-8")) or {}
     else:
@@ -153,7 +156,7 @@ def cmd_setup(args) -> int:
         request = SetupRequest.from_document(document)
         resolved = resolve(request)
         contributor = resolve_contributor({"contributor": contributor_field},
-                                          interactive=interactive and not args.yes)
+                                          interactive=may_prompt)
         output_root, relative_project = resolve_output_root(args.output or request.output)
     except ConfigError as error:
         raise SystemExit(f"setup: {error}")

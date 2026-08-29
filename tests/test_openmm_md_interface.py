@@ -230,3 +230,75 @@ def test_the_runner_imports_nothing_beyond_the_standard_library_and_openmm():
                "types", "__future__", "openmm"}
     assert imported <= allowed, f"openmm-md imports beyond the allowed set: {imported - allowed}"
     assert "md_templates" not in imported and "yaml" not in imported
+
+
+# --- the completion marker -----------------------------------------------------
+#
+# The marker is a claim that the requested outputs exist. A substring test would accept a protocol
+# that merely mentioned it, and report a failed stage as finished.
+
+def _protocol(body: str) -> str:
+    return textwrap.dedent(f'''
+        from pathlib import Path
+
+        def run(files):
+            Path(files.restart).write_text("<state/>")
+        {body}
+    ''')
+
+
+def test_the_exact_line_counts_as_completion(workspace):
+    (workspace / "protocol.py").write_text(_protocol('    print("run_status: completed")'))
+    assert _run(workspace, *_complete(workspace)).returncode == 0
+
+
+def test_a_missing_marker_is_not_completion(workspace):
+    (workspace / "protocol.py").write_text(_protocol('    print("finished, I think")'))
+    result = _run(workspace, *_complete(workspace))
+    assert result.returncode != 0
+    assert "no 'run_status: completed' line" in result.stderr
+
+
+@pytest.mark.parametrize("misleading", [
+    'checking whether run_status: completed applies here',
+    'run_status: completed_with_warnings',
+    'not run_status: completed',
+    '# run_status: completed',
+    'previous run_status: completed (from an earlier stage)',
+])
+def test_a_line_merely_containing_the_marker_is_not_completion(workspace, misleading):
+    """Each of these contains the marker as a substring and claims nothing."""
+    (workspace / "protocol.py").write_text(_protocol(f'    print({misleading!r})'))
+    result = _run(workspace, *_complete(workspace))
+    assert result.returncode != 0, f"{misleading!r} was accepted as completion"
+
+
+@pytest.mark.parametrize("padded", ["  run_status: completed", "run_status: completed   ",
+                                    "\trun_status: completed"])
+def test_surrounding_whitespace_is_tolerated(workspace, padded):
+    """A reporter that indents its final line has still made the claim."""
+    (workspace / "protocol.py").write_text(_protocol(f'    print({padded!r})'))
+    assert _run(workspace, *_complete(workspace)).returncode == 0, padded
+
+
+def test_a_protocol_exception_is_not_completion_even_if_it_printed_the_marker(workspace):
+    """The marker must not survive a later failure."""
+    (workspace / "protocol.py").write_text(textwrap.dedent('''
+        from pathlib import Path
+
+        def run(files):
+            Path(files.restart).write_text("<state/>")
+            print("run_status: completed")
+            raise RuntimeError("something failed after the marker")
+    '''))
+    result = _run(workspace, *_complete(workspace))
+    assert result.returncode != 0
+    assert "something failed after the marker" in (workspace / "stage.out").read_text()
+
+
+def test_promised_outputs_missing_after_the_protocol_returns_is_not_completion(workspace):
+    """Existing output validation must not be weakened by the stricter line check."""
+    (workspace / "protocol.py").write_text(_protocol('    print("run_status: completed")'))
+    result = _run(workspace, *_complete(workspace, **{"-x": "never-written.dcd"}))
+    assert result.returncode != 0
+    assert "did not write" in result.stderr

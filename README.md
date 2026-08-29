@@ -66,17 +66,30 @@ advanced:
 
 An `advanced:` key that matches no field is an error, not a silent default.
 
-**ff19SB/OPC is a coupled selection.** The protein and water force fields were parameterised
-together, so both must move:
+**The water model is one field, and it selects a coupled set.**
 
 ```yaml
-advanced:
-  forcefield.protein: amber19-all.xml
-  forcefield.water: amber19/opc.xml
+water: OPC        # default: TIP3P
 ```
 
-Setting only the water XML would pair ff14SB with OPC — a combination nobody validated. The
-default remains ff14SB + TIP3P.
+| `water:` | protein | water | `solvent.model` |
+|---|---|---|---|
+| `TIP3P` *(default)* | `amber14-all.xml` | `amber14/tip3p.xml` | TIP3P |
+| `OPC` | `amber19-all.xml` | `amber19/opc.xml` | OPC |
+
+These force fields were parameterised together — ff19SB's amino-acid CMAPs were fit in OPC,
+ff14SB's in TIP3P — so the three values move together or not at all. Overriding one of them through
+`advanced:` is **refused**, naming the inconsistency:
+
+```text
+setup: the solvent selection is not internally consistent: protein 'amber14-all.xml',
+water 'amber19/opc.xml', solvent.model 'TIP3P'. These force fields were parameterised
+together and only the coupled sets are supported ...
+```
+
+Before this check, that combination was generated silently, and OpenMM built the System without
+complaint. TIP3P remains the default: it is what `DEFAULT_SOLVENT` resolves to on the older
+`sys-config` path, so both entry points agree, and it is what every existing dataset used.
 
 Seeds are resolved at generation, not at run time: a base seed (given or generated once) derives a
 distinct integrator and barostat seed per stage, each written as a literal into the protocol and
