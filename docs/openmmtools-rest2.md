@@ -252,6 +252,42 @@ There is **no groupfile**, because there is nothing per-replica to name: the rep
 topology, one base System and one starting state, and differ only by tau. This is a comparison of
 user-facing execution models. **No claim of bitwise equivalence among engines is made or implied.**
 
+## The ALA acceptance run
+
+ACE-ALA-NME, ff19SB + OPC, NPT 300 K / 1 bar, 4 fs with HMR at 3.024 amu, six replicas over
+tau 0 -> 0.5, 10 ps per-tau equilibration, 10 ps exchange interval, 2 ps solute output, 10 ps
+whole-system output. **10 ns per replica, 1000 exchange attempts**, one MPI rank per GPU on six
+RTX 3080s.
+
+```
+iterations          5000 of 5000        exchange attempts   1000 of 1000
+production          10 000 ps/replica   wall clock          9.2 min (60 ns aggregate)
+aggregate rate      9381 ns/day         storage             23.6 MB analysis + 270 MB checkpoint
+```
+
+Acceptance by neighbouring pair, over the whole run — computed from the stored mapping, not from
+the `.out` summary, which shows only the last attempt:
+
+| states | tau | accepted / attempted | rate |
+|---|---|---|---|
+| 0-1 | 0.0 - 0.1 | 232 / ~500 | 46.4% |
+| 1-2 | 0.1 - 0.2 | 229 / ~500 | 45.8% |
+| 2-3 | 0.2 - 0.3 | 237 / ~500 | 47.4% |
+| 3-4 | 0.3 - 0.4 | 232 / ~500 | 46.4% |
+| 4-5 | 0.4 - 0.5 | 261 / ~500 | 52.2% |
+
+Every walker visited all six states, with 5 to 10 round trips from tau = 0 to tau = 0.5 and back.
+Every one of the 5001 stored mapping rows is a permutation, so no state was ever unoccupied or
+doubly occupied.
+
+This says the ladder mixes and the machinery works. **It is one 10 ns run of a dipeptide and is not
+a convergence claim** about any observable.
+
+Implicit ALA (ff14SB + GBn2/mbondi3, NVT, four replicas, 100 ps/replica) and phenol/IPH
+(Sage 2.2.1 + AM1-BCC, ff19SB/OPC, 100 ps/replica) both complete the same contract: NetCDF written,
+mapping recorded, manifest verified. The phenol enhanced region is the 13-atom ligand and its omega
+exclusion list is empty, which is correct — a ligand has no peptide bond.
+
 ## Limitations
 
 - Pinned to OpenMMTools **0.26.0**. Any other version is refused until the contract tests are

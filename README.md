@@ -278,6 +278,50 @@ component ([rcsb.org/ligand/IPH](https://www.rcsb.org/ligand/IPH)) — **not a f
 entry accession.** The SMILES is committed rather than downloaded: the CCD is revised, and a build
 that reaches the network cannot say which revision it used.
 
+### REST2: `protocol: REST2`
+
+The same request with `protocol: REST2` generates a replica-exchange ladder instead of a cMD stage.
+Exchange runs on **`openmmtools.multistate.ReplicaExchangeSampler`**, with `MultiStateReporter`
+NetCDF as the authoritative storage. This repository keeps the REST2 Hamiltonian; OpenMMTools keeps
+propagation, reduced potentials, exchange decisions, storage, checkpointing, restart and extension.
+
+```yaml
+# examples: protocol: REST2, production is PER REPLICA, output_interval is the SOLUTE interval
+protocol: REST2
+production: 10 ns
+output_interval: 2 ps
+advanced:
+  common.timestep_fs: 4.0
+  constraints.hydrogen_mass_amu: 3.024
+  REST2.whole_system_interval_ps: 10.0
+  REST2.equilibration_duration_ps: 10.0
+```
+
+```bash
+REST2/rest2.sh                    # one process, one device
+mpiexec -n 6 REST2/rest2.sh       # one rank per replica, each binding its own GPU
+REST2/rest2.sh --resume           # continue in place; the NetCDF says where it stopped
+REST2/rest2.sh --extend 200       # add 200 exchange attempts
+```
+
+`openmm-rest2` is `openmm-md`'s shape for a ladder — `-i -p -s -c --solute -o -x -r --checkpoint`
+— where `-x` is the multistate NetCDF and `-r` is a small manifest that *references* it. There is
+no groupfile: the replicas share one topology, one base `System` and one starting state, and differ
+only by tau, so there is nothing per-replica to name.
+
+Every replica is thermostatted at the **same** temperature. `s = (1-tau)^2` scales solute-solute
+terms and `sqrt(s) = 1-tau` scales solute-environment terms; this is Hamiltonian scaling, **not**
+temperature REMD. Torsions about a peptide omega bond are left **unscaled** — this repository's
+omega-selective convention, not an unmodified textbook REST2.
+
+The iteration is the *solute* output interval and exchange is attempted every Nth iteration, so
+solute frames are real intermediate configurations rather than one exchange-boundary frame written
+repeatedly. That costs a measured ~20% on ALA.
+
+**See [`docs/openmmtools-rest2.md`](docs/openmmtools-rest2.md)** for the time model and its
+benchmark, the OpenMMTools 0.26.0 version pin and the two upstream defects it corrects, walker
+versus state views, multi-GPU device binding, the completion contract and the limitations.
+
 ### Registration comes later
 
 A generated system is not a registered dataset. Registration is a separate, future operation:
