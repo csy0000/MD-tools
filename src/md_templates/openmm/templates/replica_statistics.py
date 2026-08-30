@@ -10,12 +10,12 @@ Nothing reads a live counter, because a live counter describes the last event an
 import numpy as np
 
 
-def lifetime_statistics(accepted, proposed, *, tau, exchange_stride=None, reservoir_events=None):
-    """Aggregate the per-iteration history into lifetime figures.
+def lifetime_statistics(accepted, proposed, *, tau, reservoir_events=None):
+    """Aggregate the stored exchange history into lifetime figures.
 
-    `accepted` and `proposed` are (iterations, states, states) and NOT cumulative. A non-exchange
-    iteration is an all-zero row, which is what makes exchange attempts countable rather than
-    inferred from the schedule.
+    `accepted` and `proposed` are (exchanges, states, states) and NOT cumulative. Every stored row
+    IS an exchange attempt now -- the schedules are independent, so there are no zero rows standing
+    for skipped propagation and nothing has to be inferred from a stride.
     """
     accepted = np.asarray(accepted, dtype=np.int64)
     proposed = np.asarray(proposed, dtype=np.int64)
@@ -24,9 +24,9 @@ def lifetime_statistics(accepted, proposed, *, tau, exchange_stride=None, reserv
     if accepted.ndim != 3 or accepted.shape[1] != accepted.shape[2]:
         raise ValueError(f"expected (iterations, states, states); got {accepted.shape}")
 
-    n_iterations, n_states, _ = accepted.shape
-    per_iteration = proposed.sum(axis=(1, 2))
-    exchange_iterations = [int(i) for i in np.nonzero(per_iteration)[0]]
+    n_exchanges, n_states, _ = accepted.shape
+    per_row = proposed.sum(axis=(1, 2))
+    rows_with_proposals = [int(i) for i in np.nonzero(per_row)[0]]
 
     total_proposed = proposed.sum(axis=0)
     total_accepted = accepted.sum(axis=0)
@@ -46,29 +46,15 @@ def lifetime_statistics(accepted, proposed, *, tau, exchange_stride=None, reserv
                 "acceptance": (n_accepted / n_proposed) if n_proposed else None,
             })
 
-    schedule = None
-    if exchange_stride:
-        stride = int(exchange_stride)
-        # Iteration k is segment k+1, so an exchange happens where (k+1) % stride == 0.
-        expected = [k for k in range(n_iterations) if (k + 1) % stride == 0]
-        missing = sorted(set(expected) - set(exchange_iterations))
-        unexpected = sorted(set(exchange_iterations) - set(expected))
-        schedule = {
-            "exchange_stride_segments": stride,
-            "expected_exchange_iterations": len(expected),
-            "observed_exchange_iterations": len(exchange_iterations),
-            "agrees_with_schedule": not missing and not unexpected,
-            "scheduled_iterations_without_proposals": missing[:16],
-            "unscheduled_iterations_with_proposals": unexpected[:16],
-        }
-
     reservoir = None
     if reservoir_events is not None:
         events = np.asarray(reservoir_events, dtype=int)
         if events.size:
-            attempted = events[:, 2] >= 0
-            accepted_mask = events[:, 2] == 1
+            # columns: state, frame, source step, outcome
+            attempted = events[:, 3] >= 0
+            accepted_mask = events[:, 3] == 1
             used = events[attempted, 1]
+            source_steps = events[attempted, 2]
             reservoir = {
                 "attempts": int(attempted.sum()),
                 "accepted": int(accepted_mask.sum()),
@@ -79,6 +65,7 @@ def lifetime_statistics(accepted, proposed, *, tau, exchange_stride=None, reserv
                 "frame_usage_counts": {int(f): int((used == f).sum())
                                        for f in sorted(set(int(x) for x in used))} if used.size
                 else {},
+                "source_steps_used": sorted({int(s) for s in source_steps}) if used.size else [],
                 "note": ("a reservoir refresh replaces a configuration and is NOT a swap; it is "
                          "never counted in the pair statistics above, and it is not a "
                          "thermodynamic-state round trip"),
@@ -89,10 +76,10 @@ def lifetime_statistics(accepted, proposed, *, tau, exchange_stride=None, reserv
                          "frame_usage_counts": {}}
 
     return {
-        "basis": "lifetime, summed over every committed iteration in the analysis NetCDF",
-        "iteration_range": [0, int(n_iterations - 1)] if n_iterations else [],
-        "iterations_committed": int(n_iterations),
-        "exchange_iterations": len(exchange_iterations),
+        "basis": "lifetime, summed over every committed exchange row in the analysis NetCDF",
+        "exchange_range": [0, int(n_exchanges - 1)] if n_exchanges else [],
+        "exchanges_committed": int(n_exchanges),
+        "rows_with_proposals": len(rows_with_proposals),
         "total_proposed": int(total_proposed[~np.eye(n_states, dtype=bool)].sum() // 2),
         "total_accepted": int(total_accepted[~np.eye(n_states, dtype=bool)].sum() // 2),
         "overall_acceptance": (
@@ -100,7 +87,6 @@ def lifetime_statistics(accepted, proposed, *, tau, exchange_stride=None, reserv
                   / total_proposed[~np.eye(n_states, dtype=bool)].sum())
             if total_proposed[~np.eye(n_states, dtype=bool)].sum() else None),
         "by_state_pair": pairs,
-        "schedule": schedule,
         "reservoir": reservoir,
     }
 

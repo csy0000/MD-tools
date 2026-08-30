@@ -3,51 +3,30 @@
 
 Copied verbatim into every generated replica project. Depends on `netCDF4` and nothing else.
 
-THREE RECORDS, THREE JOBS
-    analysis NetCDF (-x)   the authoritative history: mapping, stored frames, decision energies,
-                           proposals and acceptances, reservoir events, physical time, and the
-                           scientific identity written BEFORE propagation begins.
-    checkpoint NetCDF      the last committed configurations plus everything needed to continue:
-                           positions, velocities, boxes, mapping, every RNG state, the rule's own
-                           persistent state, the iteration and the original budget.
-    restart.json (-r)      the atomic COMPLETED-run manifest. Evidence of completion; never a
-                           precondition for resuming, because an interrupted run never writes one.
+FOUR STREAMS, FOUR SCHEDULES
+    The previous schema had one row per propagation segment and wrote coordinates only on the
+    whole-output stride, so the "frequent solute stream" it documented did not exist. The schedules
+    are now genuinely independent and each stream carries its own ABSOLUTE STEP:
 
-    A fourth, `<stem>.runstate.json`, is the atomic sidecar recording initialized / running /
-    interrupted / failed / completed. It never claims completion.
+        exchange[e]        one row per exchange attempt: mapping, proposals, acceptances, the
+                           reduced potentials the decision used, and any reservoir event
+        frame[f]           complete coordinates for every walker
+        solute_frame[s]    the solute subset only, typically far more often
+        (checkpoint)       a separate file; see ReplicaCheckpoint
 
-THE SCHEMA
-    Dimensions
-        iteration   unlimited; one row per completed segment
-        frame       unlimited; one row per STORED coordinate frame
-        state       the ladder, ascending in tau
-        walker      the continuous configurations; always as many as states
-        atom, spatial, cell
+    Nothing is inferred from anything else. A frame records the exchange index in force when it was
+    written, so the mapping is reconstructable at every observation without assuming a cadence.
 
-    Variables (analysis)
-        tau[state]                            the ladder, written once
-        segment[iteration]                    which propagation segment this row is
-        time_ps[iteration]                    physical time per replica at the end of it
-        is_exchange[iteration]                whether an exchange was attempted here
-        state_to_walker[iteration, state]     the mapping; every row a permutation
-        proposed[iteration, state, state]     symmetric counts, non-cumulative
-        accepted[iteration, state, state]     symmetric counts, non-cumulative
-        u[iteration, state, state]            reduced potentials used for decisions
-        u_evaluated[iteration, state, state]  1 where u was actually computed
-        reservoir_state[iteration]            state refreshed, or -1
-        reservoir_frame[iteration]            prepared frame used, or -1
-        reservoir_accepted[iteration]         1, 0, or -1 where no attempt was made
-        last_iteration                        the last FULLY committed row
-        frame_iteration[frame]                which iteration a stored frame belongs to
-        positions[frame, walker, atom, spatial]
-        box[frame, walker, cell, spatial]     absent under implicit solvent
+INDEXING
+    Coordinate arrays are WALKER-indexed: `positions[frame, walker, atom, spatial]`. A walker is a
+    continuous trajectory; a thermodynamic state is a Hamiltonian that walkers pass through. The
+    mapping `state_to_walker[exchange, state]` converts, and `replica_statistics.walker_view`
+    inverts it. Both directions are tested against each other.
 
-    `u_evaluated` exists so "not computed" is distinguishable from "computed as zero". A rule that
-    evaluates four numbers per pair leaves the rest unevaluated, and a validator must not read that
-    as a corrupt matrix.
-
-    `last_iteration` is written LAST, after every array for that row. A run killed mid-write leaves
-    it pointing at the previous row, so the storage a resume reads is never the half-written one.
+COMMIT MARKERS
+    Each stream has a `last_*` marker written only AFTER every array for that record. A file
+    truncated by a crash reads back as exactly what was fully committed, and a resume can rewind to
+    the last checkpoint without inventing history.
 """
 import datetime
 import json
@@ -57,13 +36,13 @@ from pathlib import Path
 import numpy as np
 
 #: Bumped when the meaning of the schema changes. Written into the file and checked on read.
-SCHEMA_VERSION = "md-templates-replica-exchange/v1"
+SCHEMA_VERSION = "md-templates-replica-exchange/v2"
 
 #: The completed-run manifest format.
-MANIFEST_FORMAT = "md-templates-replica-restart/v1"
+MANIFEST_FORMAT = "md-templates-replica-restart/v2"
 
 #: The atomic run-state sidecar format.
-RUN_STATE_FORMAT = "md-templates-replica-runstate/v1"
+RUN_STATE_FORMAT = "md-templates-replica-runstate/v2"
 
 #: The exact line a completed run prints, and nothing else on that line.
 COMPLETION_MARKER = "run_status: completed"
@@ -74,22 +53,19 @@ class StorageError(RuntimeError):
 
 
 def run_state_path(storage):
-    """The sidecar beside the analysis NetCDF: `rest2.nc` -> `rest2.runstate.json`.
-
-    Derived from the STORAGE rather than from `-r`, because the storage is what a resume is given
-    and what it is authoritative about. A run interrupted before any manifest exists is still
-    findable from `-x` alone.
-    """
+    """The sidecar beside the analysis NetCDF: `rest2.nc` -> `rest2.runstate.json`."""
     storage = Path(storage)
     return storage.with_name(storage.stem + ".runstate.json")
 
 
-def write_atomic(path, text):
-    """Write through a temporary in the same directory, then rename.
+def solute_path(storage):
+    """The solute stream beside the analysis NetCDF: `rest2.nc` -> `rest2.solute.nc`."""
+    storage = Path(storage)
+    return storage.with_name(storage.stem + ".solute.nc")
 
-    No record this module writes is ever observable in a partial state: a half-written manifest
-    after a crash would be a claim about a run that cannot be checked.
-    """
+
+def write_atomic(path, text):
+    """Write through a temporary in the same directory, then rename."""
     path = Path(path)
     temporary = path.with_name(f"{path.name}.partial.{os.getpid()}")
     temporary.write_text(text, encoding="utf-8")
@@ -102,7 +78,7 @@ def write_run_state(storage, status, **extra):
               "updated_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
               "pid": os.getpid(), "storage": Path(storage).name}
     record.update(extra)
-    write_atomic(run_state_path(storage), json.dumps(record, indent=2) + "\n")
+    write_atomic(run_state_path(storage), json.dumps(record, indent=2, default=str) + "\n")
     return record
 
 
@@ -117,25 +93,29 @@ def read_run_state(storage):
 
 
 class ReplicaReporter:
-    """Writes and reads the analysis file. The only thing that knows the schema."""
+    """Writes and reads the analysis file and the solute stream. The only thing knowing the schema.
+
+    Opened for writing ONLY on rank 0. Every other rank that needs to read does so in mode "r".
+    """
 
     def __init__(self, path, *, mode="r"):
         import netCDF4
 
         self.path = Path(path)
-        self._netCDF4 = netCDF4
+        self.mode = mode
         try:
             self.dataset = netCDF4.Dataset(str(self.path), mode)
         except Exception as failure:
             raise StorageError(
                 f"{self.path} could not be opened as NetCDF ({type(failure).__name__}: "
                 f"{failure}). A truncated or corrupt file fails here.") from None
+        self._solute = None
 
     # -- creation ---------------------------------------------------------------------------------
 
     @classmethod
-    def create(cls, path, *, n_states, n_atoms, has_box, identity, metadata):
-        """Create the file and write everything that is fixed for the whole run.
+    def create(cls, path, *, n_states, n_atoms, n_solute_atoms, has_box, identity, metadata):
+        """Create the file and write everything fixed for the whole run.
 
         The scientific identity goes in HERE, before a single step is propagated, so an interrupted
         run carries in its own storage everything a continuation must be checked against.
@@ -147,10 +127,12 @@ class ReplicaReporter:
         dataset = netCDF4.Dataset(str(path), "w")
         dataset.schema = SCHEMA_VERSION
         dataset.created_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        dataset.identity_json = json.dumps(identity, sort_keys=True)
-        dataset.metadata_json = json.dumps(metadata, sort_keys=True)
+        dataset.identity_json = json.dumps(identity, sort_keys=True, default=str)
+        dataset.metadata_json = json.dumps(metadata, sort_keys=True, default=str)
+        dataset.coordinate_indexing = "walker"
+        dataset.position_unit = "nanometer"
 
-        dataset.createDimension("iteration", None)
+        dataset.createDimension("exchange", None)
         dataset.createDimension("frame", None)
         dataset.createDimension("state", n_states)
         dataset.createDimension("walker", n_states)
@@ -160,35 +142,96 @@ class ReplicaReporter:
 
         tau = dataset.createVariable("tau", "f8", ("state",))
         tau.long_name = "tau[state] is the REST2 source parameter of that thermodynamic state"
-        dataset.createVariable("segment", "i8", ("iteration",))
-        dataset.createVariable("time_ps", "f8", ("iteration",))
-        dataset.createVariable("is_exchange", "i1", ("iteration",))
-        mapping = dataset.createVariable("state_to_walker", "i4", ("iteration", "state"))
-        mapping.long_name = ("state_to_walker[iteration][state] is the walker whose configuration "
-                             "occupied that state; every row is a permutation")
-        dataset.createVariable("proposed", "i8", ("iteration", "state", "state"))
-        dataset.createVariable("accepted", "i8", ("iteration", "state", "state"))
-        u = dataset.createVariable("u", "f8", ("iteration", "state", "state"))
-        u.long_name = ("u[iteration][i][j] is the reduced potential of the configuration in state "
-                       "j evaluated in the Hamiltonian of state i, where it was evaluated")
-        evaluated = dataset.createVariable("u_evaluated", "i1", ("iteration", "state", "state"))
-        evaluated.long_name = ("1 where u was actually computed; a rule evaluating four numbers "
-                               "per pair leaves the rest unevaluated, which is not corruption")
-        dataset.createVariable("reservoir_state", "i4", ("iteration",))
-        dataset.createVariable("reservoir_frame", "i4", ("iteration",))
-        dataset.createVariable("reservoir_accepted", "i1", ("iteration",))
-        last = dataset.createVariable("last_iteration", "i8")
-        last.long_name = ("the last FULLY committed iteration; written after every array for that "
-                          "row, so an interrupted write leaves it on the previous row")
-        last[0] = -1
-        dataset.createVariable("frame_iteration", "i8", ("frame",))
-        dataset.createVariable("positions", "f4", ("frame", "walker", "atom", "spatial"),
-                               zlib=False)
+
+        # -- the exchange stream ------------------------------------------------------------------
+        step = dataset.createVariable("exchange_step", "i8", ("exchange",))
+        step.long_name = "absolute integration step at which this exchange was attempted"
+        dataset.createVariable("exchange_time_ps", "f8", ("exchange",))
+        mapping = dataset.createVariable("state_to_walker", "i4", ("exchange", "state"))
+        mapping.long_name = ("state_to_walker[exchange][state] is the walker occupying that state "
+                             "AFTER this exchange; every row is a permutation")
+        dataset.createVariable("proposed", "i8", ("exchange", "state", "state"))
+        dataset.createVariable("accepted", "i8", ("exchange", "state", "state"))
+        u = dataset.createVariable("u", "f8", ("exchange", "state", "state"))
+        u.long_name = ("u[exchange][i][j] is the reduced potential of walker j's sample evaluated "
+                       "in the Hamiltonian of state i")
+        evaluated = dataset.createVariable("u_evaluated", "i1", ("exchange", "state", "state"))
+        evaluated.long_name = "1 where u was actually computed"
+        dataset.createVariable("reservoir_state", "i4", ("exchange",))
+        dataset.createVariable("reservoir_frame", "i4", ("exchange",))
+        dataset.createVariable("reservoir_source_step", "i8", ("exchange",))
+        dataset.createVariable("reservoir_accepted", "i1", ("exchange",))
+        last_exchange = dataset.createVariable("last_exchange", "i8")
+        last_exchange.long_name = "the last FULLY committed exchange row"
+        last_exchange[0] = -1
+
+        # -- the whole-system stream --------------------------------------------------------------
+        frame_step = dataset.createVariable("frame_step", "i8", ("frame",))
+        frame_step.long_name = "absolute integration step at which this frame was stored"
+        dataset.createVariable("frame_time_ps", "f8", ("frame",))
+        frame_exchange = dataset.createVariable("frame_exchange", "i8", ("frame",))
+        frame_exchange.long_name = ("the exchange index in force when this frame was written, so "
+                                    "the mapping is reconstructable without assuming a cadence")
+        positions = dataset.createVariable("positions", "f4",
+                                           ("frame", "walker", "atom", "spatial"))
+        positions.units = "nanometer"
+        positions.long_name = "positions[frame][walker][atom][xyz]; WALKER-indexed"
         if has_box:
-            dataset.createVariable("box", "f8", ("frame", "walker", "cell", "spatial"))
+            box = dataset.createVariable("box", "f8", ("frame", "walker", "cell", "spatial"))
+            box.units = "nanometer"
+        last_frame = dataset.createVariable("last_frame", "i8")
+        last_frame.long_name = "the last FULLY committed whole-system frame"
+        last_frame[0] = -1
+
         dataset.sync()
         dataset.close()
-        return cls(path, mode="a")
+        reporter = cls(path, mode="a")
+        reporter._create_solute(n_states=n_states, n_solute_atoms=n_solute_atoms,
+                               identity=identity)
+        return reporter
+
+    def _create_solute(self, *, n_states, n_solute_atoms, identity):
+        """The solute stream is its own file: it is written far more often and read separately."""
+        import netCDF4
+
+        path = solute_path(self.path)
+        dataset = netCDF4.Dataset(str(path), "w")
+        dataset.schema = SCHEMA_VERSION
+        dataset.kind = "solute"
+        dataset.identity_json = json.dumps(identity, sort_keys=True, default=str)
+        dataset.coordinate_indexing = "walker"
+        dataset.position_unit = "nanometer"
+        dataset.createDimension("solute_frame", None)
+        dataset.createDimension("walker", n_states)
+        dataset.createDimension("solute_atom", int(n_solute_atoms))
+        dataset.createDimension("spatial", 3)
+        dataset.createVariable("solute_step", "i8", ("solute_frame",))
+        dataset.createVariable("solute_time_ps", "f8", ("solute_frame",))
+        dataset.createVariable("solute_exchange", "i8", ("solute_frame",))
+        positions = dataset.createVariable(
+            "solute_positions", "f4", ("solute_frame", "walker", "solute_atom", "spatial"))
+        positions.units = "nanometer"
+        last = dataset.createVariable("last_solute_frame", "i8")
+        last[0] = -1
+        dataset.sync()
+        dataset.close()
+        self._solute = netCDF4.Dataset(str(path), "a")
+
+    def _open_solute(self, mode="r"):
+        import netCDF4
+
+        if self._solute is not None:
+            return self._solute
+        path = solute_path(self.path)
+        if not path.is_file():
+            return None
+        try:
+            self._solute = netCDF4.Dataset(str(path), mode)
+        except Exception as failure:
+            raise StorageError(
+                f"{path} could not be opened as NetCDF ({type(failure).__name__}: {failure})"
+            ) from None
+        return self._solute
 
     # -- writing ------------------------------------------------------------------------------------
 
@@ -196,38 +239,62 @@ class ReplicaReporter:
         self.dataset.variables["tau"][:] = np.asarray(tau, dtype=float)
         self.dataset.sync()
 
-    def write_iteration(self, iteration, *, segment, time_ps, is_exchange, state_to_walker,
-                        proposed, accepted, u, u_evaluated, reservoir=None):
-        """One committed row. `last_iteration` is written last, deliberately."""
+    def write_exchange(self, index, *, step, time_ps, state_to_walker, proposed, accepted, u,
+                       u_evaluated, reservoir=None):
+        """One committed exchange row. `last_exchange` is written last, deliberately."""
         variables = self.dataset.variables
-        variables["segment"][iteration] = int(segment)
-        variables["time_ps"][iteration] = float(time_ps)
-        variables["is_exchange"][iteration] = 1 if is_exchange else 0
-        variables["state_to_walker"][iteration, :] = np.asarray(state_to_walker, dtype=np.int32)
-        variables["proposed"][iteration, :, :] = np.asarray(proposed, dtype=np.int64)
-        variables["accepted"][iteration, :, :] = np.asarray(accepted, dtype=np.int64)
-        variables["u"][iteration, :, :] = np.asarray(u, dtype=float)
-        variables["u_evaluated"][iteration, :, :] = np.asarray(u_evaluated, dtype=np.int8)
-        state, frame, outcome = (-1, -1, -1) if reservoir is None else reservoir
-        variables["reservoir_state"][iteration] = int(state)
-        variables["reservoir_frame"][iteration] = int(frame)
-        variables["reservoir_accepted"][iteration] = int(outcome)
+        variables["exchange_step"][index] = int(step)
+        variables["exchange_time_ps"][index] = float(time_ps)
+        variables["state_to_walker"][index, :] = np.asarray(state_to_walker, dtype=np.int32)
+        variables["proposed"][index, :, :] = np.asarray(proposed, dtype=np.int64)
+        variables["accepted"][index, :, :] = np.asarray(accepted, dtype=np.int64)
+        variables["u"][index, :, :] = np.asarray(u, dtype=float)
+        variables["u_evaluated"][index, :, :] = np.asarray(u_evaluated, dtype=np.int8)
+        state, frame, source_step, outcome = (
+            (-1, -1, -1, -1) if reservoir is None else reservoir)
+        variables["reservoir_state"][index] = int(state)
+        variables["reservoir_frame"][index] = int(frame)
+        variables["reservoir_source_step"][index] = int(source_step)
+        variables["reservoir_accepted"][index] = int(outcome)
         self.dataset.sync()
-        variables["last_iteration"][0] = int(iteration)
+        variables["last_exchange"][0] = int(index)
         self.dataset.sync()
 
-    def write_frame(self, iteration, configurations):
-        """One stored coordinate frame: every walker's positions, and its box where there is one."""
+    def write_frame(self, *, step, time_ps, exchange_index, configurations):
+        """One whole-system frame: every walker's positions, and its box where there is one."""
         variables = self.dataset.variables
-        index = int(self.dataset.dimensions["frame"].size)
-        variables["frame_iteration"][index] = int(iteration)
-        positions = np.array([c.positions for c in configurations], dtype=np.float32)
-        variables["positions"][index, :, :, :] = positions
+        index = int(variables["last_frame"][0]) + 1
+        variables["frame_step"][index] = int(step)
+        variables["frame_time_ps"][index] = float(time_ps)
+        variables["frame_exchange"][index] = int(exchange_index)
+        variables["positions"][index, :, :, :] = np.array(
+            [c.positions for c in configurations], dtype=np.float32)
         if "box" in variables:
-            boxes = np.array([np.zeros((3, 3)) if c.box is None else c.box
-                              for c in configurations], dtype=float)
-            variables["box"][index, :, :, :] = boxes
+            variables["box"][index, :, :, :] = np.array(
+                [np.zeros((3, 3)) if c.box is None else c.box for c in configurations],
+                dtype=float)
         self.dataset.sync()
+        variables["last_frame"][0] = index
+        self.dataset.sync()
+        return index
+
+    def write_solute_frame(self, *, step, time_ps, exchange_index, configurations,
+                           solute_indices):
+        """One solute frame. Its own file, its own schedule, its own commit marker."""
+        dataset = self._open_solute("a")
+        if dataset is None:
+            raise StorageError("the solute stream was never created")
+        variables = dataset.variables
+        index = int(variables["last_solute_frame"][0]) + 1
+        variables["solute_step"][index] = int(step)
+        variables["solute_time_ps"][index] = float(time_ps)
+        variables["solute_exchange"][index] = int(exchange_index)
+        subset = np.array([c.positions[solute_indices] for c in configurations],
+                          dtype=np.float32)
+        variables["solute_positions"][index, :, :, :] = subset
+        dataset.sync()
+        variables["last_solute_frame"][0] = index
+        dataset.sync()
         return index
 
     # -- reading -------------------------------------------------------------------------------------
@@ -246,99 +313,135 @@ class ReplicaReporter:
         raw = getattr(self.dataset, "metadata_json", None)
         return None if raw is None else json.loads(raw)
 
-    def last_iteration(self):
-        return int(self.dataset.variables["last_iteration"][0])
+    def last_exchange(self):
+        return int(self.dataset.variables["last_exchange"][0])
 
-    def rewind(self, iteration):
-        """Disown every committed row after `iteration`.
+    def last_frame(self):
+        return int(self.dataset.variables["last_frame"][0])
 
-        A resume continues from the last CHECKPOINT, because that is the newest point with
-        configurations to continue from. Rows committed after it describe iterations whose
-        configurations were lost with the process, so leaving `last_iteration` past the checkpoint
-        would leave the storage claiming history the run is about to produce differently.
-
-        The rows are not deleted -- NetCDF has no cheap truncation and they are about to be
-        overwritten anyway -- but they stop being committed, and every reader honours
-        `last_iteration`.
-        """
-        current = self.last_iteration()
-        if int(iteration) > current:
-            raise StorageError(
-                f"cannot rewind to iteration {iteration}: only {current} is committed")
-        self.dataset.variables["last_iteration"][0] = int(iteration)
-        self.dataset.sync()
-        return current
+    def last_solute_frame(self):
+        dataset = self._open_solute("r")
+        if dataset is None:
+            return -1
+        return int(dataset.variables["last_solute_frame"][0])
 
     def n_states(self):
         return int(self.dataset.dimensions["state"].size)
+
+    # How many rows each stream ACTUALLY holds, as opposed to how many its completion marker
+    # claims. The two are compared when an output is validated: a marker ahead of the data is a
+    # file that disagrees with itself.
+    def n_exchange_rows(self):
+        return int(self.dataset.dimensions["exchange"].size)
+
+    def n_whole_frames(self):
+        return int(self.dataset.dimensions["frame"].size)
+
+    def n_solute_frames(self):
+        dataset = self._open_solute("r")
+        if dataset is None:
+            return 0
+        return int(dataset.dimensions["solute_frame"].size)
 
     def tau(self):
         return np.array(self.dataset.variables["tau"][:], dtype=float)
 
     def mapping(self, upto=None):
-        last = self.last_iteration() if upto is None else int(upto)
+        last = self.last_exchange() if upto is None else int(upto)
         if last < 0:
             return np.zeros((0, self.n_states()), dtype=int)
         return np.array(self.dataset.variables["state_to_walker"][:last + 1, :], dtype=int)
 
     def statistics(self, upto=None):
-        """Every proposal and acceptance row up to and including the last committed iteration."""
-        last = self.last_iteration() if upto is None else int(upto)
+        last = self.last_exchange() if upto is None else int(upto)
+        n = self.n_states()
         if last < 0:
-            n = self.n_states()
             return np.zeros((0, n, n), dtype=np.int64), np.zeros((0, n, n), dtype=np.int64)
-        proposed = np.array(self.dataset.variables["proposed"][:last + 1, :, :], dtype=np.int64)
-        accepted = np.array(self.dataset.variables["accepted"][:last + 1, :, :], dtype=np.int64)
-        return accepted, proposed
+        return (np.array(self.dataset.variables["accepted"][:last + 1], dtype=np.int64),
+                np.array(self.dataset.variables["proposed"][:last + 1], dtype=np.int64))
 
-    def reduced_potentials(self, iteration):
-        u = np.array(self.dataset.variables["u"][int(iteration), :, :], dtype=float)
-        mask = np.array(self.dataset.variables["u_evaluated"][int(iteration), :, :], dtype=np.int8)
-        return u, mask
+    def reduced_potentials(self, index):
+        return (np.array(self.dataset.variables["u"][int(index)], dtype=float),
+                np.array(self.dataset.variables["u_evaluated"][int(index)], dtype=np.int8))
 
     def reservoir_events(self, upto=None):
-        last = self.last_iteration() if upto is None else int(upto)
+        last = self.last_exchange() if upto is None else int(upto)
         if last < 0:
-            return np.zeros((0, 3), dtype=int)
-        state = np.array(self.dataset.variables["reservoir_state"][:last + 1], dtype=int)
-        frame = np.array(self.dataset.variables["reservoir_frame"][:last + 1], dtype=int)
-        outcome = np.array(self.dataset.variables["reservoir_accepted"][:last + 1], dtype=int)
-        return np.stack([state, frame, outcome], axis=1)
+            return np.zeros((0, 4), dtype=int)
+        variables = self.dataset.variables
+        return np.stack([
+            np.array(variables["reservoir_state"][:last + 1], dtype=int),
+            np.array(variables["reservoir_frame"][:last + 1], dtype=int),
+            np.array(variables["reservoir_source_step"][:last + 1], dtype=int),
+            np.array(variables["reservoir_accepted"][:last + 1], dtype=int)], axis=1)
 
-    def times(self, upto=None):
-        last = self.last_iteration() if upto is None else int(upto)
+    def exchange_steps(self, upto=None):
+        last = self.last_exchange() if upto is None else int(upto)
         if last < 0:
-            return np.zeros((0,), dtype=float)
-        return np.array(self.dataset.variables["time_ps"][:last + 1], dtype=float)
+            return np.zeros((0,), dtype=np.int64)
+        return np.array(self.dataset.variables["exchange_step"][:last + 1], dtype=np.int64)
 
-    def frames(self):
-        return int(self.dataset.dimensions["frame"].size)
+    def frame_steps(self):
+        last = self.last_frame()
+        if last < 0:
+            return np.zeros((0,), dtype=np.int64)
+        return np.array(self.dataset.variables["frame_step"][:last + 1], dtype=np.int64)
+
+    def solute_steps(self):
+        dataset = self._open_solute("r")
+        last = -1 if dataset is None else int(dataset.variables["last_solute_frame"][0])
+        if last < 0:
+            return np.zeros((0,), dtype=np.int64)
+        return np.array(dataset.variables["solute_step"][:last + 1], dtype=np.int64)
+
+    def rewind(self, *, exchange, frame, solute_frame):
+        """Disown every committed record after a checkpoint's position in each stream.
+
+        A resume continues from the last CHECKPOINT, because that is the newest point with a
+        complete state to continue from. Records committed after it describe work whose state was
+        lost, so leaving the markers past the checkpoint would let the storage claim history the
+        run is about to produce differently -- and would duplicate rows and frames on restart.
+        """
+        variables = self.dataset.variables
+        if int(exchange) > self.last_exchange() or int(frame) > self.last_frame():
+            raise StorageError(
+                f"cannot rewind forwards: asked for exchange {exchange}/frame {frame} but only "
+                f"{self.last_exchange()}/{self.last_frame()} are committed")
+        variables["last_exchange"][0] = int(exchange)
+        variables["last_frame"][0] = int(frame)
+        self.dataset.sync()
+        dataset = self._open_solute("a")
+        if dataset is not None:
+            dataset.variables["last_solute_frame"][0] = int(solute_frame)
+            dataset.sync()
 
     def close(self):
-        try:
-            self.dataset.close()
-        except Exception:
-            pass
+        for dataset in (self._solute, self.dataset):
+            try:
+                if dataset is not None:
+                    dataset.close()
+            except Exception:
+                pass
+        self._solute = None
 
 
 class ReplicaCheckpoint:
-    """The last committed configurations, and everything else a continuation needs.
+    """The last committed state, and everything else a continuation needs.
 
-    Written whole and replaced atomically, so a checkpoint is never half a state. It carries the
-    complete configuration of every walker plus the mapping, every RNG state, the rule's own
-    persistent state, the iteration reached and the original budget.
+    Written whole and replaced atomically, so a checkpoint is never half a state. It carries every
+    walker's complete phase-space sample, the mapping, the RNG states, the rule's persisted state,
+    the absolute step, the event counters and the budget.
 
     OpenMM's own context checkpoints are deliberately NOT stored: they are platform-specific and
-    would make a checkpoint unusable on a different device. Positions, velocities and box vectors
-    are the complete logical state of a Langevin walker, and continuing from them is exact up to
-    the platform's own arithmetic -- which is stated rather than implied.
+    would make a checkpoint unusable on a different device. Positions, velocities and box are the
+    complete logical state of a Langevin walker.
     """
 
     def __init__(self, path):
         self.path = Path(path)
 
-    def write(self, *, iteration, segment, configurations, state_to_walker, rng_states,
-              rule_state, budget_segments, identity, extra=None):
+    def write(self, *, step, exchange_index, frame_index, solute_frame_index, configurations,
+              state_to_walker, rng_states, rule_state, schedule, identity, extra=None):
         import netCDF4
 
         temporary = self.path.with_name(f"{self.path.name}.partial.{os.getpid()}")
@@ -350,13 +453,15 @@ class ReplicaCheckpoint:
             dataset.schema = SCHEMA_VERSION
             dataset.kind = "checkpoint"
             dataset.written_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            dataset.iteration = int(iteration)
-            dataset.segment = int(segment)
-            dataset.budget_segments = int(budget_segments)
-            dataset.identity_json = json.dumps(identity, sort_keys=True)
-            dataset.rng_states_json = json.dumps(rng_states, sort_keys=True)
-            dataset.rule_state_json = json.dumps(rule_state or {}, sort_keys=True)
-            dataset.extra_json = json.dumps(extra or {}, sort_keys=True)
+            dataset.step = int(step)
+            dataset.exchange_index = int(exchange_index)
+            dataset.frame_index = int(frame_index)
+            dataset.solute_frame_index = int(solute_frame_index)
+            dataset.identity_json = json.dumps(identity, sort_keys=True, default=str)
+            dataset.rng_states_json = json.dumps(rng_states, sort_keys=True, default=str)
+            dataset.rule_state_json = json.dumps(rule_state or {}, sort_keys=True, default=str)
+            dataset.schedule_json = json.dumps(schedule, sort_keys=True, default=str)
+            dataset.extra_json = json.dumps(extra or {}, sort_keys=True, default=str)
             dataset.createDimension("walker", n_walkers)
             dataset.createDimension("atom", n_atoms)
             dataset.createDimension("spatial", 3)
@@ -394,17 +499,18 @@ class ReplicaCheckpoint:
             boxes = (np.array(dataset.variables["box"][:], dtype=float)
                      if "box" in dataset.variables else None)
             configurations = [
-                Configuration(positions[i], velocities[i],
-                              None if boxes is None else boxes[i])
+                Configuration(positions[i], velocities[i], None if boxes is None else boxes[i])
                 for i in range(positions.shape[0])]
             return {
-                "iteration": int(dataset.iteration),
-                "segment": int(dataset.segment),
-                "budget_segments": int(dataset.budget_segments),
+                "step": int(dataset.step),
+                "exchange_index": int(dataset.exchange_index),
+                "frame_index": int(dataset.frame_index),
+                "solute_frame_index": int(dataset.solute_frame_index),
                 "state_to_walker": [int(x) for x in dataset.variables["state_to_walker"][:]],
                 "configurations": configurations,
                 "rng_states": json.loads(dataset.rng_states_json),
                 "rule_state": json.loads(dataset.rule_state_json),
+                "schedule": json.loads(dataset.schedule_json),
                 "identity": json.loads(dataset.identity_json),
                 "extra": json.loads(getattr(dataset, "extra_json", "{}")),
             }

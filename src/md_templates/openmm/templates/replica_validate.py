@@ -109,15 +109,63 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
     result.note("n_states", n_states)
 
     try:
-        last = reporter.last_iteration()
+        last = reporter.last_exchange()
     except Exception as failure:
         return result.fail(
-            f"the last committed iteration could not be read ({type(failure).__name__}: "
+            f"the last committed exchange could not be read ({type(failure).__name__}: "
             f"{failure}); the analysis file is missing variables a run must have written")
-    result.note("last_committed_iteration", last)
+    result.note("last_committed_exchange", last)
+    result.note("whole_frames", reporter.last_frame() + 1)
+    result.note("solute_frames", reporter.last_solute_frame() + 1)
     if last < 0:
-        result.fail("no iteration was ever committed to this storage")
+        result.fail("no exchange was ever committed to this storage")
         return result
+
+    # Each stream's completion marker must name a row the file actually holds. The marker is
+    # written LAST precisely so that a crash mid-row leaves it BEHIND the data; a marker AHEAD of
+    # the data cannot arise that way, so it means the file disagrees with itself and a resume
+    # would read rows that were never written.
+    for label, marker, available in (
+            ("last_exchange", last, reporter.n_exchange_rows()),
+            ("last_frame", reporter.last_frame(), reporter.n_whole_frames()),
+            ("last_solute_frame", reporter.last_solute_frame(), reporter.n_solute_frames())):
+        if marker >= available:
+            result.fail(
+                f"{label} is {marker} but the file holds only {available} row(s) of that "
+                f"stream. The marker is committed after the data it describes, so it can lag "
+                f"behind but never lead: this file is inconsistent with itself and must not be "
+                f"resumed or extended.")
+
+    # The three streams are independent, and each carries its own absolute step. Steps must be
+    # strictly increasing within a stream: a repeated step means a restart duplicated a record.
+    for name, steps in (("exchange", reporter.exchange_steps()),
+                        ("whole frame", reporter.frame_steps()),
+                        ("solute frame", reporter.solute_steps())):
+        array = np.asarray(steps)
+        if array.size and not np.all(np.diff(array) > 0):
+            result.fail(
+                f"{name} steps are not strictly increasing; a restart duplicated a record or "
+                f"wrote them out of order")
+    result.note("exchange_steps_last", int(reporter.exchange_steps()[-1])
+                if reporter.exchange_steps().size else None)
+
+    # Strictly increasing is not enough: the stored steps must be the SCHEDULED ones. A run that
+    # dropped an attempt in the middle still has increasing steps, and its budget can still be
+    # reached by the rows that remain, so nothing else here would notice the gap.
+    scheduled = ((identity.get("schedule") or {}).get("exchange_steps")
+                 if isinstance(identity.get("schedule"), dict) else None)
+    steps = reporter.exchange_steps()
+    if scheduled and steps.size:
+        expected_steps = np.arange(1, steps.size + 1, dtype=np.int64) * int(scheduled)
+        if not np.array_equal(np.asarray(steps, dtype=np.int64), expected_steps):
+            missing = sorted(set(expected_steps.tolist()) - set(int(s) for s in steps))
+            result.fail(
+                f"the stored exchange steps are not the scheduled ones (every "
+                f"{int(scheduled)} step(s)); first mismatch at row "
+                f"{int(np.argmax(np.asarray(steps, dtype=np.int64) != expected_steps))}"
+                + (f", missing scheduled step(s) {missing[:4]}" if missing else "")
+                + ". An attempt that was scheduled and never recorded leaves a gap no budget "
+                  "check can see.")
 
     # -- mapping ---------------------------------------------------------------------------------
     try:
@@ -129,7 +177,7 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
         result.note("mapping_shape", list(mapping.shape))
         if mapping.shape[0] != last + 1:
             result.fail(
-                f"the mapping holds {mapping.shape[0]} row(s) but the last committed iteration is "
+                f"the mapping holds {mapping.shape[0]} row(s) but the last committed exchange is "
                 f"{last}; the storage is truncated relative to its own counter")
         ok, offending = statistics.mapping_is_permutation_every_iteration(
             mapping, n_states=n_states)
@@ -160,36 +208,32 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
         result.fail(f"reduced potentials could not be read ({type(failure).__name__}: {failure})")
 
     # -- exchange accounting ---------------------------------------------------------------------------
-    stride = identity.get("exchange_stride_segments")
     try:
         accepted, proposed = reporter.statistics()
         events = reporter.reservoir_events()
         stats = statistics.lifetime_statistics(
             accepted, proposed, tau=identity.get("tau") or list(range(n_states)),
-            exchange_stride=stride, reservoir_events=events)
-        result.note("exchange_iterations", stats["exchange_iterations"])
-        if stats["schedule"] is not None:
-            result.note("expected_exchange_iterations",
-                        stats["schedule"]["expected_exchange_iterations"])
-            if not stats["schedule"]["agrees_with_schedule"]:
-                result.fail(
-                    f"the stored exchange history does not match the configured stride of "
-                    f"{stride}: {len(stats['schedule']['scheduled_iterations_without_proposals'])}"
-                    f" scheduled iteration(s) proposed nothing and "
-                    f"{len(stats['schedule']['unscheduled_iterations_with_proposals'])} "
-                    f"unscheduled one(s) did")
+            reservoir_events=events)
+        result.note("exchanges_committed", stats["exchanges_committed"])
+        expected = identity.get("number_of_exchanges")
+        if expect_completed and expected is not None and stats["exchanges_committed"] != int(
+                expected):
+            result.fail(
+                f"the storage holds {stats['exchanges_committed']} exchange row(s) but the run "
+                f"promised {int(expected)} attempts")
         if stats["reservoir"]:
             result.note("reservoir_attempts", stats["reservoir"]["attempts"])
     except Exception as failure:
         result.fail(f"exchange statistics could not be read ({type(failure).__name__}: {failure})")
 
-    # -- stored frames -------------------------------------------------------------------------------
-    try:
-        result.note("stored_frames", reporter.frames())
-        if reporter.frames() == 0:
-            result.fail("no coordinate frame was ever stored")
-    except Exception as failure:
-        result.fail(f"stored frames could not be counted ({type(failure).__name__}: {failure})")
+    # -- the coordinate streams ------------------------------------------------------------------
+    if reporter.last_frame() < 0:
+        result.fail("no whole-system frame was ever stored")
+    solute_interval = identity.get("solute_output_interval_steps")
+    if solute_interval and reporter.last_solute_frame() < 0:
+        result.fail(
+            "a solute output interval was configured but no solute frame was stored; the "
+            "frequent solute stream is a promise the storage must keep")
 
     # -- the checkpoint --------------------------------------------------------------------------------
     if checkpoint is not None:
@@ -200,7 +244,7 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
         else:
             try:
                 state = storage.ReplicaCheckpoint(path).read()
-                result.note("checkpoint_iteration", state["iteration"])
+                result.note("checkpoint_step", state["step"])
                 result.note("checkpoint_walkers", len(state["configurations"]))
                 if len(state["configurations"]) != n_states:
                     result.fail(
@@ -213,9 +257,9 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
                         result.fail(f"walker {index} in the checkpoint has non-finite velocities")
                 if sorted(state["state_to_walker"]) != list(range(n_states)):
                     result.fail("the checkpoint's mapping is not a permutation")
-                if state["iteration"] > last:
+                if state["exchange_index"] > last:
                     result.fail(
-                        f"the checkpoint is at iteration {state['iteration']} but the analysis "
+                        f"the checkpoint is at exchange {state['exchange_index']} but the analysis "
                         f"file committed only up to {last}; the two disagree about what ran")
             except storage.StorageError as failure:
                 result.fail(str(failure))
@@ -229,17 +273,19 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
                      expect_completed=expect_completed)
     elif expect_completed:
         # Without a manifest the budget still has to be met, and the storage knows it.
-        budget = identity.get("total_segments")
+        budget = identity.get("total_steps")
         sidecar = storage.read_run_state(analysis_path)
-        if isinstance(sidecar, dict) and sidecar.get("budget_segments") is not None:
-            budget = sidecar["budget_segments"]
+        if isinstance(sidecar, dict) and sidecar.get("total_steps") is not None:
+            budget = sidecar["total_steps"]
             result.note("budget_source", f"run-state sidecar ({sidecar.get('status')})")
         else:
             result.note("budget_source", "scientific identity (the original request)")
-        if budget is not None and last + 1 < int(budget):
+        steps = reporter.exchange_steps()
+        reached = int(steps[-1]) if steps.size else 0
+        if budget is not None and reached < int(budget):
             result.fail(
-                f"the storage committed {last + 1} segment(s), short of the {int(budget)} "
-                f"recorded. An incomplete budget is not a completed run.")
+                f"the storage reached step {reached}, short of the {int(budget)} recorded. An "
+                f"incomplete budget is not a completed run.")
     return result
 
 
@@ -267,15 +313,15 @@ def _cross_check(record, identity, last, analysis_path, checkpoint, result, *, e
                 f"{differences[:8]}. A manifest copied from a different run, or a changed "
                 f"configuration, fails here.")
 
-    committed = record.get("iterations_committed")
+    committed = record.get("exchanges_committed")
     if committed is not None and int(committed) != last + 1:
-        result.fail(f"manifest records {int(committed)} committed iteration(s) but the storage "
+        result.fail(f"manifest records {int(committed)} committed exchange(s) but the storage "
                     f"holds {last + 1}")
-    expected = record.get("segments_expected")
-    completed = record.get("segments_completed")
+    expected = record.get("steps_expected")
+    completed = record.get("steps_completed")
     if expect_completed and expected is not None and completed is not None:
         if int(completed) < int(expected):
-            result.fail(f"manifest promised {int(expected)} segment(s) and recorded "
+            result.fail(f"manifest promised {int(expected)} step(s) and recorded "
                         f"{int(completed)}")
     value = record.get("production_ps_per_replica")
     if isinstance(value, float) and not math.isfinite(value):
