@@ -192,7 +192,11 @@ def run(files):
 
 def production_protocol(r: dict[str, Any]) -> str:
     box = "True" if not r["implicit"] else "False"
-    npt = not r["implicit"]
+    # Explicit solvent is NPT unless the request says otherwise. An rREST2 reservoir source must
+    # be NVT: the ladder exchanges complete configurations at fixed volume, and a source carrying
+    # a distribution of volumes would change the density of the rung it refreshes without
+    # accounting for the pV work.
+    npt = (not r["implicit"]) and str(r.get("cmd_ensemble", "NPT")).upper() == "NPT"
     frames = r["production_steps"] // r["output_interval_steps"]
     seeds = r["seeds"]["cMD"]
 
@@ -326,7 +330,13 @@ def _write_resolved_run(files):
 
 # --- the portable path map and the launchers ----------------------------------------------------
 
-def paths_sh(relative_project: str, system_id: str, stage_names: list[str]) -> str:
+def cmd_directory_variable(name: str) -> str:
+    """`cMD` -> CMD_DIR, `cMD_tau0p5` -> CMD_TAU0P5_DIR. A name, mechanically."""
+    return name.upper().replace(".", "P").replace("-", "_") + "_DIR"
+
+
+def paths_sh(relative_project: str, system_id: str, stage_names: list[str],
+             production_dir: str | None = None) -> str:
     """The directory map, resolved from `$MD_DATA` and a relative project path.
 
     No absolute path appears here. Move the managed root, export the new `$MD_DATA`, and every
@@ -366,6 +376,15 @@ def paths_sh(relative_project: str, system_id: str, stage_names: list[str]) -> s
         'export RREST2_DIR="${SYSTEM_ROOT}/rREST2"',
         'export AIS_DIR="${SYSTEM_ROOT}/AIS"',
         '',
+    ]
+    # A fixed-tau walker at a tau other than 0.5 needs its own variable; the two common ones are
+    # already above. Emitted from the directory the system ACTUALLY has, so the launcher and the
+    # map cannot disagree.
+    if production_dir:
+        variable = cmd_directory_variable(production_dir)
+        if f'export {variable}=' not in "\n".join(lines):
+            lines += [f'export {variable}="${{SYSTEM_ROOT}}/{production_dir}"', '']
+    lines += [
         '# The generated copy is authoritative for this system. Override deliberately if you have',
         '# a compatible executable elsewhere; ordinary use needs no installed command.',
         'export OPENMM_MD="${OPENMM_MD:-${SYSTEM_ROOT}/bin/openmm-md}"',

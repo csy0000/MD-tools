@@ -159,6 +159,12 @@ class ReplicaEngine:
         self.topology = topology
         self.owned = list(range(protocol.n_states)) if owned is None else sorted(int(i)
                                                                                 for i in owned)
+        # Whether this system HAS a box, asked of the System rather than inferred from the
+        # vectors. Every OpenMM System carries default periodic box vectors -- (2,0,0),(0,2,0),
+        # (0,0,2) nm unless set -- so "the vectors are non-zero" is true even for an implicit
+        # system with no periodicity at all. An implicit ladder that carried that phantom box
+        # then rejected its own reservoir frames for having none.
+        self.periodic = bool(systems[self.owned[0]].usesPeriodicBoundaryConditions())
         self._simulations = {}
         self._integrators = {}
         for index in self.owned:
@@ -188,7 +194,7 @@ class ReplicaEngine:
         context = self._simulations[state_index].context
         state = context.getState(getPositions=True, getVelocities=True)
         box = None
-        if self.protocol.pressure_bar is not None or _has_box(context):
+        if self.periodic:
             vectors = state.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
             box = np.array(vectors, dtype=float)
         return Configuration(
@@ -251,11 +257,6 @@ class ReplicaEngine:
 
     def load_integrator_state(self, state_index, blob):
         self._simulations[state_index].context.loadCheckpoint(blob)
-
-
-def _has_box(context):
-    vectors = context.getState().getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
-    return bool(np.any(np.asarray(vectors, dtype=float)))
 
 
 def reduced_potential(energy_kj_mol, beta, *, pressure_bar=None, volume_nm3=None):

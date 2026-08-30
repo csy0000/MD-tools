@@ -175,8 +175,16 @@ class ReplicaRun:
         self._resolve_platform()
         systems, self._audit = self.protocol.build_systems(
             self.base_system, self.solute_indices, self.excluded_bonds)
+        # Asked of the System, never inferred from the box vectors: every System has default ones.
+        self._periodic = bool(self.base_system.usesPeriodicBoundaryConditions())
 
         state = self._begin(identity, systems, rule, rule_identity, resume=resume, extend=extend)
+        if self.reservoir is not None:
+            # BEFORE any propagation: a reservoir whose box differs from the ladder's would change
+            # the density of the rung it refreshes on every refresh, silently, and the run would
+            # complete looking healthy. Two systems equilibrated independently do NOT share a box,
+            # which is exactly the case this catches.
+            self.reservoir.check_box_matches(state["configurations"][0].box)
         handlers = _install_interrupt_handlers()
         try:
             self._loop(state, rule)
@@ -349,8 +357,8 @@ class ReplicaRun:
         except Exception:
             velocities = np.zeros_like(np.asarray(positions))
         box = None
-        vectors = state.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
-        if np.any(np.asarray(vectors, dtype=float)):
+        if self._periodic:
+            vectors = state.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
             box = np.array(vectors, dtype=float)
         return Configuration(positions, velocities, box)
 
@@ -506,8 +514,10 @@ class ReplicaRun:
             raise DriverError(
                 "the reservoir frame carries no box but this is an explicit-solvent run; a "
                 "configuration without its box is at an undefined density.")
-        replacement = Configuration(positions, current.velocities,
-                                    None if current.box is None else np.asarray(box, dtype=float))
+        # The LADDER's box is kept, not the reservoir frame's. They are the same lattice -- that
+        # was checked before propagation began -- so this is physically identical, and keeping one
+        # representation stops the stored box from flickering between equivalent bases.
+        replacement = Configuration(positions, current.velocities, current.box)
         state["configurations"][walker] = replacement
         if state_index in self.owned:
             self.engine.set_configuration(state_index, replacement)

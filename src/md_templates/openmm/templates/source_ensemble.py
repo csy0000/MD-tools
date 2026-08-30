@@ -172,6 +172,32 @@ def reduced_box_vectors(vectors):
 
 # --- resolving the source ---------------------------------------------------------------------
 
+def same_lattice(first, second, *, tolerance=1e-6):
+    """Do two sets of box vectors describe the SAME periodic lattice?
+
+    Not the same numbers -- the same lattice. A box may be written in several equivalent bases
+    that differ by adding integer multiples of earlier vectors to later ones, and reduction to
+    OpenMM's preferred form has a genuine boundary case: when |c_x| is exactly a_x/2, rounding may
+    land on +a_x/2 or -a_x/2, and both are correct descriptions of one rhombic dodecahedron.
+
+    Comparing representations reported a mismatch between a reservoir and the ladder it came from.
+    The right question is whether one basis is an integer change of basis away from the other,
+    which is exact: `inv(A) @ B` must be an integer matrix of determinant +/-1.
+    """
+    a = np.asarray(first, dtype=float)
+    b = np.asarray(second, dtype=float)
+    if a.shape != (3, 3) or b.shape != (3, 3):
+        return False
+    try:
+        transform = np.linalg.solve(a.T, b.T).T
+    except np.linalg.LinAlgError:
+        return False
+    rounded = np.rint(transform)
+    if not np.allclose(transform, rounded, atol=tolerance):
+        return False
+    return abs(abs(float(np.linalg.det(rounded))) - 1.0) < tolerance
+
+
 def resolve_source_paths(request):
     """The source trajectory and topology, absolute and as configured.
 

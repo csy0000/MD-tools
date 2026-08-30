@@ -73,7 +73,8 @@ class PreparedReservoir:
     # -- opening -------------------------------------------------------------------------------
 
     @classmethod
-    def open(cls, declaration_path, *, protocol, topology_path, coordinator=None, prepare=True):
+    def open(cls, declaration_path, *, protocol, topology_path, periodic, coordinator=None,
+             prepare=True):
         """Read the declaration, prepare once if needed, validate, and load the configurations."""
         declaration_path = Path(declaration_path)
         if not declaration_path.is_file():
@@ -107,7 +108,7 @@ class PreparedReservoir:
                 "there is none here.")
 
         directory = declaration_path.parent / declaration.get("prepared_directory", "reservoir")
-        request = cls._request(declaration, protocol, declaration_path, topology_path)
+        request = cls._request(declaration, protocol, declaration_path, topology_path, periodic)
 
         rank = 0 if coordinator is None else coordinator.rank
         needs_preparation = not (directory / "prepared_source.yaml").is_file()
@@ -129,7 +130,7 @@ class PreparedReservoir:
                    frames=frames, topology_path=topology_path, protocol=protocol)
 
     @staticmethod
-    def _request(declaration, protocol, declaration_path, topology_path):
+    def _request(declaration, protocol, declaration_path, topology_path, periodic):
         source = declaration["source"]
         return source_ensemble.SourceRequest(
             project=declaration_path.parent.parent,
@@ -141,7 +142,11 @@ class PreparedReservoir:
             count=int(source["frames"]),
             allow_replacement=bool(source.get("allow_sampling_with_replacement", False)),
             seed=int(declaration.get("random_seed") or protocol.random_seed or 20260830),
-            implicit=(protocol.pressure_bar is None and not declaration.get("explicit_solvent")),
+            # NOT `pressure_bar is None`: this runtime is NVT, so pressure is None for an
+            # explicit fixed-volume ladder too. Whether there IS a box is a property of the
+            # System, and asking the wrong question prepared an explicit reservoir with no boxes
+            # at all -- which the ladder then rightly refused.
+            implicit=(not periodic),
             required_tau=float(protocol.tau[-1]),
             required_temperature_k=float(protocol.temperature_k),
             declared_tau=source.get("source_tau"),
@@ -263,12 +268,13 @@ class PreparedReservoir:
             if frame_box is None:
                 raise ReservoirError(
                     f"reservoir frame {index} has no box but the ladder is explicit-solvent")
-            if not np.allclose(np.asarray(frame_box, dtype=float),
-                               np.asarray(box, dtype=float), atol=1e-6):
+            if not source_ensemble.same_lattice(frame_box, box):
                 raise ReservoirError(
                     f"reservoir frame {index} has box\n{np.asarray(frame_box)}\nbut the ladder's "
-                    f"box is\n{np.asarray(box)}\nA different box is a different density; v1 "
-                    f"requires a fixed-volume source at the ladder's own box.")
+                    f"box is\n{np.asarray(box)}\nand these are not the same lattice (checked as "
+                    f"an integer change of basis, so an equivalent representation would pass). A "
+                    f"different box is a different density; v1 requires a fixed-volume source at "
+                    f"the ladder's own box.")
 
     def describe(self):
         contract = self.manifest.get("reservoir") or {}

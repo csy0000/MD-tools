@@ -473,8 +473,11 @@ def run_grouped(files, arguments, groups):
     reservoir = None
     if arguments.reservoir:
         from rrest2_reservoir import PreparedReservoir
-        reservoir = PreparedReservoir.open(arguments.reservoir, protocol=protocol,
-                                           topology_path=first["topology"])
+        reservoir = PreparedReservoir.open(
+            arguments.reservoir, protocol=protocol, topology_path=first["topology"],
+            # Whether the system HAS a box, asked of the System. An explicit NVT ladder has a box
+            # and no pressure, so "no pressure" must not be read as "no box".
+            periodic=bool(base_system.usesPeriodicBoundaryConditions()))
 
     run = ReplicaRun(
         protocol=protocol,

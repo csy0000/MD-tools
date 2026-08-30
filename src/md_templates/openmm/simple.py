@@ -181,7 +181,7 @@ def _cmd_directory(tau: float) -> str:
 
 
 def _resolve_replica(protocol: dict[str, Any], *, production_ps: float, segment_ps: float,
-                     timestep_fs: float, method: str, advanced: dict) -> dict[str, Any]:
+                     timestep_fs: float, method: str) -> dict[str, Any]:
     """The ladder and its schedule, with every conversion made exact here rather than at run time.
 
     The request's `production` is production PER REPLICA and its `output_interval` is the SEGMENT:
@@ -238,11 +238,12 @@ def _resolve_replica(protocol: dict[str, Any], *, production_ps: float, segment_
                           else "generated rrest2_exchange.py"),
     }
     if method == "rREST2":
-        resolved["reservoir"] = _resolve_reservoir(advanced, resolved, production_ps)
+        resolved["reservoir"] = _resolve_reservoir(
+            protocol["rREST2"]["reservoir"], resolved, production_ps)
     return resolved
 
 
-def _resolve_reservoir(advanced: dict, replica: dict, production_ps: float) -> dict[str, Any]:
+def _resolve_reservoir(block: dict, replica: dict, production_ps: float) -> dict[str, Any]:
     """The reservoir request. Its SOURCE is named here; what that source IS comes from its record.
 
     Defaults point at the fixed-tau cMD directory for tau_max, which is the run this repository
@@ -252,17 +253,34 @@ def _resolve_reservoir(advanced: dict, replica: dict, production_ps: float) -> d
     """
     tau_max = replica["tau_max"]
     directory = _cmd_directory(tau_max)
+    if str(block.get("weighting", "boltzmann")).lower() != "boltzmann":
+        raise ConfigError(
+            f"rREST2.reservoir.weighting must be `boltzmann`; got "
+            f"{block.get('weighting')!r}. A non-Boltzmann reservoir needs its own separately "
+            f"derived acceptance rule, and reusing the Boltzmann one would bias every replica.")
+    if str(block.get("ensemble", "NVT")).upper() != "NVT":
+        raise ConfigError(
+            f"rREST2.reservoir.ensemble must be `NVT`; got {block.get('ensemble')!r}. An NPT "
+            f"reservoir carries a distribution of volumes and is refused rather than approximated.")
+    frames = int(block["frames"])
+    if frames < 1:
+        raise ConfigError(f"rREST2.reservoir.frames must be >= 1; got {frames}")
+    interval = int(block["refresh_interval_exchanges"])
+    if interval < 1:
+        raise ConfigError(
+            f"rREST2.reservoir.refresh_interval_exchanges must be >= 1; got {interval}")
     return {
         "format": "md-templates-reservoir-request/v1",
-        "trajectory": advanced.get("rREST2.reservoir.trajectory",
-                                   f"{directory}/cmd.dcd"),
-        "start_time_ps": float(advanced.get("rREST2.reservoir.start_time_ps", 0.0)),
-        "end_time_ps": float(advanced.get("rREST2.reservoir.end_time_ps", production_ps)),
-        "frames": int(advanced.get("rREST2.reservoir.frames", 20)),
-        "refresh_interval_exchanges": int(
-            advanced.get("rREST2.reservoir.refresh_interval_exchanges", 5)),
-        "random_seed": int(advanced.get("rREST2.reservoir.random_seed", 20260830)),
+        "trajectory": block.get("trajectory") or f"{directory}/cmd.dcd",
+        "start_time_ps": float(block.get("start_time_ps") or 0.0),
+        "end_time_ps": float(block["end_time_ps"] if block.get("end_time_ps") is not None
+                             else production_ps),
+        "frames": frames,
+        "refresh_interval_exchanges": interval,
+        "random_seed": int(block["random_seed"]),
         "source_directory": directory,
+        "weighting": "boltzmann",
+        "ensemble": "NVT",
     }
 
 
@@ -306,8 +324,13 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
                 f"them.")
 
     system_config = D.sys_defaults(peptide=peptide, solvent=solvent_name)
-    protocol = D.md_defaults(methods=(("REST2",) if replica_requested else ("cMD",)),
-                             solvent=solvent_name)
+    if protocol_name == "rREST2":
+        methods = ("REST2", "rREST2")
+    elif protocol_name == "REST2":
+        methods = ("REST2",)
+    else:
+        methods = ("cMD",)
+    protocol = D.md_defaults(methods=methods, solvent=solvent_name)
     advanced = dict(request.advanced or {})
 
     # Advanced overrides are applied to the SAME documents the defaults produced, so an override
@@ -374,12 +397,17 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
 
     replica = _resolve_replica(protocol, production_ps=production_ps,
                                segment_ps=interval_ps, timestep_fs=timestep_fs,
-                               method=protocol_name,
-                               advanced=advanced) if replica_requested else None
+                               method=protocol_name) if replica_requested else None
     # A fixed-tau cMD walker. tau = 0 is ordinary conventional MD and the System is untouched;
     # tau > 0 scales the solute Hamiltonian exactly as the matching REST2 rung does, which is what
     # makes such a run a legitimate reservoir source for rREST2 at that tau.
-    cmd_tau = float((protocol.get("cMD") or {}).get("tau", 0.0) or 0.0)
+    cmd_block = protocol.get("cMD") or {}
+    cmd_ensemble = str(cmd_block.get("ensemble", "NPT")).upper()
+    if cmd_ensemble not in ("NVT", "NPT"):
+        raise ConfigError(f"cMD.ensemble must be NVT or NPT; got {cmd_ensemble!r}")
+    if implicit and cmd_ensemble == "NPT":
+        raise ConfigError("implicit solvent has no box, so cMD.ensemble cannot be NPT")
+    cmd_tau = float(cmd_block.get("tau", 0.0) or 0.0)
     if not 0.0 <= cmd_tau < 1.0:
         raise ConfigError(f"cMD.tau must lie in [0, 1); got {cmd_tau}")
 
@@ -387,6 +415,7 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
         "seeds": seeds,
         "replica": replica,
         "cmd_tau": cmd_tau,
+        "cmd_ensemble": cmd_ensemble,
         "cmd_directory": _cmd_directory(cmd_tau),
         "water_model": (None if implicit
                         else (system_config.get("solvent") or {}).get("model")),
@@ -695,7 +724,8 @@ def generate(resolved: dict[str, Any], *, input_path: Path, output_root: Path,
                             else resolved["cmd_directory"])
     stage_names = [s["name"] for s in resolved["equilibration_stages"]] + [resolved["protocol"]]
     (system_dir / "paths.sh").write_text(
-        emit.paths_sh(relative_project, resolved["system_id"], stage_names), encoding="utf-8")
+        emit.paths_sh(relative_project, resolved["system_id"], stage_names,
+                      production_dir=production_directory), encoding="utf-8")
     (system_dir / "paths.sh").chmod(0o755)
     written.append("paths.sh")
 
@@ -775,8 +805,9 @@ def generate(resolved: dict[str, Any], *, input_path: Path, output_root: Path,
             # A fixed-tau walker scales through the same module the ladder uses, so it needs it.
             shutil.copy2(TEMPLATES / "rest2_scaling.py", directory / "rest2_scaling.py")
             written.append(f"{name}/rest2_scaling.py")
-        production = emit.launcher("cmd", directory_var="CMD_DIR", depth=1,
-                                   parent_restart=parent, trajectory=True, checkpoint=True)
+        production = emit.launcher("cmd", directory_var=emit.cmd_directory_variable(name),
+                                   depth=1, parent_restart=parent, trajectory=True,
+                                   checkpoint=True)
         (directory / "cmd.sh").write_text(production, encoding="utf-8")
         (directory / "cmd.sh").chmod(0o755)
         written += [f"{name}/cmd.py", f"{name}/cmd.sh"]

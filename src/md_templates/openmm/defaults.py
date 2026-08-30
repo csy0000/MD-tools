@@ -17,7 +17,10 @@ ENGINE = "openmm"
 ENGINE_VERSION = "8.6.0"
 
 #: Canonical spellings. Input is accepted case-insensitively and written back in these forms.
-METHODS = ("cMD", "REST2", "AIS")
+METHODS = ("cMD", "REST2", "rREST2", "AIS")
+#: rREST2 is REST2 whose top rung is refreshed from a Boltzmann reservoir. It is a REST2
+#: ladder plus a transition rule, not a separate sampling method, and it reuses the REST2
+#: block for everything about the ladder itself.
 SOLVENTS = ("TIP3P", "OPC", "GBn2")
 
 #: What `--solvent` selects when nothing is asked for. TIP3P is the method-development default:
@@ -423,7 +426,40 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> 
             # `swap-neighbors` sweeps alternating adjacent pairs, but OpenMMTools 0.26.0's
             # neighbour path is broken on NumPy >= 1.25, so selecting it activates this
             # repository's own Metropolis call and the run records that ownership.
-            "replica_mixing_scheme": "swap-all",
+        }
+
+    if "rREST2" in methods:
+        document["rREST2"] = {
+            # Reservoir REST2: the hottest rung is periodically refreshed from a finite,
+            # Boltzmann-weighted ensemble instead of waiting for that rung to sample it.
+            #
+            # The refresh is accepted with probability ONE, and that is correct only because the
+            # reservoir is at exactly the top rung's tau, temperature, Hamiltonian and
+            # fixed-volume ensemble. A non-Boltzmann, clustered or kinetic reservoir needs its own
+            # separately derived acceptance rule; using this one would bias EVERY replica, not
+            # only the top (Kasavajhala, Lam, Simmerling, J. Chem. Inf. Model. 2020,
+            # PMCID PMC7725893; Roitberg, Okur, Simmerling, J. Phys. Chem. B 2007,
+            # doi:10.1021/jp068335b).
+            "reservoir": {
+                # null resolves to the fixed-tau cMD directory for tau_max, which is the run this
+                # repository generates for exactly this purpose. The PATH locates the source; it
+                # never establishes what it is. tau, temperature and the frame timing come from
+                # the source run's own resolved_run.yaml, and a run without one is refused.
+                "trajectory": None,
+                "start_time_ps": 0.0,
+                # null means "to the end of the source run", resolved at generation.
+                "end_time_ps": None,
+                # How many configurations are materialised. The finite-reservoir approximation is
+                # real: this is not the top state's full equilibrium distribution.
+                "frames": 20,
+                # In EXCHANGE iterations, not segments.
+                "refresh_interval_exchanges": 5,
+                "random_seed": 20260830,
+                # Stated so a reader sees the contract without opening the code. Only `boltzmann`
+                # is implemented; anything else is refused rather than approximated.
+                "weighting": "boltzmann",
+                "ensemble": "NVT",
+            },
         }
     if "AIS" in methods:
         document["AIS"] = ais_defaults()
@@ -456,7 +492,40 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> 
             # `swap-neighbors` sweeps alternating adjacent pairs, but OpenMMTools 0.26.0's
             # neighbour path is broken on NumPy >= 1.25, so selecting it activates this
             # repository's own Metropolis call and the run records that ownership.
-            "replica_mixing_scheme": "swap-all",
+        }
+
+    if "rREST2" in methods:
+        document["rREST2"] = {
+            # Reservoir REST2: the hottest rung is periodically refreshed from a finite,
+            # Boltzmann-weighted ensemble instead of waiting for that rung to sample it.
+            #
+            # The refresh is accepted with probability ONE, and that is correct only because the
+            # reservoir is at exactly the top rung's tau, temperature, Hamiltonian and
+            # fixed-volume ensemble. A non-Boltzmann, clustered or kinetic reservoir needs its own
+            # separately derived acceptance rule; using this one would bias EVERY replica, not
+            # only the top (Kasavajhala, Lam, Simmerling, J. Chem. Inf. Model. 2020,
+            # PMCID PMC7725893; Roitberg, Okur, Simmerling, J. Phys. Chem. B 2007,
+            # doi:10.1021/jp068335b).
+            "reservoir": {
+                # null resolves to the fixed-tau cMD directory for tau_max, which is the run this
+                # repository generates for exactly this purpose. The PATH locates the source; it
+                # never establishes what it is. tau, temperature and the frame timing come from
+                # the source run's own resolved_run.yaml, and a run without one is refused.
+                "trajectory": None,
+                "start_time_ps": 0.0,
+                # null means "to the end of the source run", resolved at generation.
+                "end_time_ps": None,
+                # How many configurations are materialised. The finite-reservoir approximation is
+                # real: this is not the top state's full equilibrium distribution.
+                "frames": 20,
+                # In EXCHANGE iterations, not segments.
+                "refresh_interval_exchanges": 5,
+                "random_seed": 20260830,
+                # Stated so a reader sees the contract without opening the code. Only `boltzmann`
+                # is implemented; anything else is refused rather than approximated.
+                "weighting": "boltzmann",
+                "ensemble": "NVT",
+            },
         }
     return document
 
