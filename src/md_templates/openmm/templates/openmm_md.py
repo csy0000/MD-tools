@@ -84,6 +84,8 @@ RUN_LEVEL_FLAGS = {"-o", "--output", "-x", "--trajectory", "-r", "--restart", "-
 
 #: Written by the protocol, never by this program, and only once its outputs exist.
 COMPLETION_MARKER = "run_status: completed"
+# A run stopped on purpose at an event boundary: not success, and not a failure.
+INTERRUPTED_STATUS = 130
 
 #: Variables an MPI launcher sets in every rank's environment, read rather than importing mpi4py:
 #: the rank is needed before anything calls MPI_Init, and single mode must work with no MPI at all.
@@ -470,15 +472,8 @@ def run_grouped(files, arguments, groups):
     else:
         solute_indices = list(range(base_system.getNumParticles()))
 
-    reservoir = None
-    if arguments.reservoir:
-        from rrest2_reservoir import PreparedReservoir
-        reservoir = PreparedReservoir.open(
-            arguments.reservoir, protocol=protocol, topology_path=first["topology"],
-            # Whether the system HAS a box, asked of the System. An explicit NVT ladder has a box
-            # and no pressure, so "no pressure" must not be read as "no box".
-            periodic=bool(base_system.usesPeriodicBoundaryConditions()))
-
+    # The reservoir is opened by the driver, which owns the MPI coordinator: preparation happens
+    # once, on rank 0, behind a barrier, and every rank then reads the same prepared file.
     run = ReplicaRun(
         protocol=protocol,
         files=SimpleNamespace(topology=first["topology"], system=first["system"],
@@ -487,13 +482,23 @@ def run_grouped(files, arguments, groups):
                               checkpoint=files.checkpoint, output=files.output),
         base_system=base_system, topology=topology,
         solute_indices=solute_indices, excluded_bonds=excluded_bonds,
-        rule_path=arguments.exchange_rule, reservoir=reservoir,
+        rule_path=arguments.exchange_rule,
+        reservoir_declaration=arguments.reservoir,
+        platform=getattr(protocol, "platform", None),
+        precision=getattr(protocol, "precision", None),
         identity_extra={"groups": len(groups),
                         "group_indices": [g["group_index"] for g in groups]})
     record = run.run(resume=files.resume, extend=files.extend)
     if record.get("run_status") == "completed":
         _print_grouped_summary(record, protocol)
         print(COMPLETION_MARKER)
+        return 0
+    if record.get("run_status") == "interrupted":
+        # An interrupted run did NOT finish, and it has no completion manifest by design. Saying
+        # so with its own status keeps the promise check below -- which exists to catch a protocol
+        # that claimed to finish and silently wrote nothing -- from reporting a deliberate,
+        # cleanly checkpointed stop as a failed run.
+        return INTERRUPTED_STATUS
     return 0
 
 
@@ -501,16 +506,22 @@ def _print_grouped_summary(record, protocol):
     from replica_statistics import adjacent_pairs
 
     stats = record["lifetime_statistics"]
+    schedule = record["schedule"]
     print()
     print("# --- replica exchange summary (the NetCDF is authoritative) ------------------")
-    print(f"# segments completed    : {record['segments_completed']} of "
-          f"{record['segments_expected']}")
-    print(f"# exchange iterations   : {stats['exchange_iterations']}")
+    print(f"# steps completed       : {record['steps_completed']} of {record['steps_expected']}")
+    print(f"# exchanges             : {record['exchanges_committed']} "
+          f"(every {schedule['exchange_interval_steps']} steps = "
+          f"{schedule['exchange_interval_ps']} ps)")
+    print(f"# whole frames          : {record['whole_frames']} "
+          f"(every {schedule['whole_output_interval_steps']} steps)")
+    print(f"# solute frames         : {record['solute_frames']} "
+          f"(every {schedule['solute_output_interval_steps']} steps)")
     print(f"# production per replica: {record['production_ps_per_replica']} ps")
     print(f"# exchange rule         : {record['exchange_rule'].get('name')}")
     print(f"# final state->walker   : {record['final_state_to_walker']}")
     print("# LIFETIME acceptance by adjacent state pair "
-          f"(iterations {stats['iteration_range'][0]}-{stats['iteration_range'][1]}):")
+          f"(exchanges {stats['exchange_range'][0]}-{stats['exchange_range'][1]}):")
     for pair in adjacent_pairs(stats):
         rate = pair["acceptance"]
         shown = "n/a" if rate is None else f"{rate:.3f}"
@@ -520,7 +531,10 @@ def _print_grouped_summary(record, protocol):
     if stats.get("reservoir") and stats["reservoir"]["attempts"]:
         r = stats["reservoir"]
         print(f"# reservoir refreshes   : {r['accepted']}/{r['attempts']} at state(s) "
-              f"{r['states_refreshed']}, {r['distinct_frames_used']} distinct frame(s)")
+              f"{r['states_refreshed']}, {r['distinct_frames_used']} distinct sample(s) from "
+              f"source step(s) {r['source_steps_used'][:6]}")
+        print(f"#   velocity policy      : "
+              f"{record.get('reservoir', {}).get('velocity_policy')}")
     trips = record["round_trips"]
     print(f"# round trips (cold->hot->cold): "
           f"{[w['round_trips'] for w in trips['by_walker']]}")
@@ -572,6 +586,11 @@ def main(argv=None):
             except BaseException:                       # noqa: BLE001 - the .out is the report
                 traceback.print_exc()
                 status = 1
+
+    if status == INTERRUPTED_STATUS:
+        print(f"openmm-md: interrupted at an event boundary; the checkpoint is complete and "
+              f"--resume continues it. See {report}", file=sys.stderr)
+        return status
 
     if status == 0 and rank == 0:
         promised = {name: value for name, value in _outputs(files).items() if name != "output"}

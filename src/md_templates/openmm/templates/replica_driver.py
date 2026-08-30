@@ -1,49 +1,47 @@
 #!/usr/bin/env python
-"""The replica-exchange loop: propagate, evaluate, decide, record. Copied into every project.
+"""The replica-exchange loop: propagate to the next event, act, record. Copied into every project.
 
-This is the only module that knows about all the others. It owns nothing scientific: the ladder
-comes from `replica_protocol`, the Hamiltonians from `rest2_scaling`, the decisions from an
-exchange rule, and the storage schema from `replica_storage`.
+The only module that knows about all the others. It owns nothing scientific: the ladder comes from
+`replica_protocol`, the Hamiltonians from `rest2_scaling`, the decisions from an exchange rule, the
+schedule from `replica_schedule` and the storage schema from `replica_storage`.
 
-THE PARALLEL POLICY, CHOSEN AND STATED
-    World size must be 1 or exactly the number of states. Nothing in between is supported, because
-    a policy that silently packed several states onto one rank would make the device assignment and
-    the timing unreproducible, and "it ran" would stop meaning "it ran the way the record says".
+EVENT-DRIVEN, ABSOLUTE STEPS
+    There is no propagation "segment". The loop asks the schedule for the next step at which
+    anything happens, advances exactly that many steps, and performs whatever falls there in the
+    documented order: exchange, whole frame, solute frame, checkpoint. Simultaneous events happen
+    once each.
 
-        size == 1            one process owns every state
-        size == n_states     rank r owns state r, and drives one device
+MPI: ONE AUTHORITY, NO STALE BROADCAST
+    Rank 0 decides. Every rank applies the same decision to the same walker-indexed state. The rank
+    that owns a state installs it. Then all ranks compare a digest before continuing.
 
-    Configurations are allgathered after propagation, so every rank can evaluate its own state's
-    Hamiltonian against every walker. Decisions are made on rank 0 from a recorded RNG and
-    broadcast, so a run does not depend on every rank drawing the same numbers.
+    The previous implementation broadcast rank 0's configuration list AFTER the owning rank had
+    installed a reservoir sample, so whenever the top rung was not owned by rank 0 the new velocity
+    was silently discarded and the run continued with the ladder's old momenta. Nothing here
+    broadcasts a list that another rank has already modified.
 
-THE ENERGY MATRIX, AND WHAT IT COSTS
-    At each exchange iteration the FULL n x n reduced-potential matrix is evaluated: rank r
-    computes row r, which parallelises exactly. A neighbouring sweep needs only the adjacent
-    blocks, so this does more work than the minimum -- n^2 evaluations instead of about 4n -- and
-    the reason is that it makes the rule contract a pure lookup with no communication, and leaves
-    a complete matrix in storage for later analysis. For a six-state ladder exchanging every fifth
-    segment that is a small fraction of propagation, and it is measured rather than assumed.
-
-    Every entry is evaluated INDEPENDENTLY by installing the configuration and asking OpenMM. No
-    cross energy is ever inferred by scaling another one: the scaled Hamiltonians differ by more
-    than a single factor, so such a shortcut would be a different number that merely looks
-    plausible.
+WRITABLE STORAGE IS ROOT-OWNED
+    Only rank 0 opens the analysis NetCDF for writing, on every path -- new, resume and extend. The
+    previous `_continue` opened it in append mode on every rank and closed the non-root handles
+    afterwards, which is a concurrent-writer window on a file format that does not tolerate one.
 """
 import datetime
+import hashlib
 import json
 import platform as platform_module
+import signal
 import socket
 import sys
 from pathlib import Path
 
 import numpy as np
 
+import hamiltonian_identity
 import replica_storage as storage
 from exchange_rules import (ExchangeContext, NeighbouringExchangeRule, builtin_rule_identity,
                             load_rule)
-from replica_engine import Configuration, ReplicaEngine, resolve_platform, select_device_for_rank, \
-    visible_cuda_devices
+from replica_engine import (Configuration, ReplicaEngine, resolve_platform,
+                            select_device_for_rank, visible_cuda_devices)
 
 
 class DriverError(RuntimeError):
@@ -55,7 +53,7 @@ class IdentityError(DriverError):
 
 
 class Coordinator:
-    """Rank, size, and the three collectives the driver needs. No MPI import when not under MPI."""
+    """Rank, size, and the few collectives the driver needs. No MPI import when not under MPI."""
 
     def __init__(self):
         self.comm = None
@@ -73,18 +71,30 @@ class Coordinator:
         return self.rank == 0
 
     def allgather(self, value):
-        if self.comm is None:
-            return [value]
-        return self.comm.allgather(value)
+        return [value] if self.comm is None else self.comm.allgather(value)
 
     def bcast(self, value):
-        if self.comm is None:
-            return value
-        return self.comm.bcast(value, root=0)
+        return value if self.comm is None else self.comm.bcast(value, root=0)
 
     def barrier(self):
         if self.comm is not None:
             self.comm.barrier()
+
+    def any_true(self, flag):
+        """True on EVERY rank if it is true on any. How a termination request becomes collective."""
+        if self.comm is None:
+            return bool(flag)
+        return bool(max(self.comm.allgather(bool(flag))))
+
+    def agree(self, value, *, what):
+        """Every rank must present the same value. Used to prove shared state is actually shared."""
+        if self.comm is None:
+            return
+        values = self.comm.allgather(value)
+        if len(set(values)) != 1:
+            raise DriverError(
+                f"the ranks disagree about {what}: {sorted(set(values))[:4]}. Continuing would "
+                f"propagate different states under one record.")
 
 
 def owned_states(protocol, coordinator):
@@ -95,10 +105,60 @@ def owned_states(protocol, coordinator):
         raise DriverError(
             f"this ladder has {protocol.n_states} states but MPI world size is "
             f"{coordinator.size}. The supported policy is one process for the whole ladder, or "
-            f"exactly one rank per state. Packing several states onto a rank is refused rather "
-            f"than done silently, because the device assignment and the timing in the record "
-            f"would stop describing what ran.")
+            f"exactly one rank per state.")
     return [coordinator.rank]
+
+
+def configuration_digest(configurations):
+    """A compact digest of every walker's phase-space sample, for cross-rank agreement.
+
+    Positions AND velocities AND boxes: a digest over positions alone would agree happily in
+    exactly the case this exists to catch -- a reservoir refresh whose velocity was lost.
+    """
+    digest = hashlib.sha256()
+    for configuration in configurations:
+        digest.update(np.ascontiguousarray(configuration.positions, dtype=np.float64).tobytes())
+        digest.update(np.ascontiguousarray(configuration.velocities, dtype=np.float64).tobytes())
+        if configuration.box is not None:
+            digest.update(np.ascontiguousarray(configuration.box, dtype=np.float64).tobytes())
+    return digest.hexdigest()
+
+
+class _Interruption:
+    """A termination request, recorded rather than raised.
+
+    Raising inside a signal handler under MPI leaves the other ranks blocked in a collective. The
+    handler only sets a flag; the loop checks it at an event boundary, where every rank checks
+    together, and they stop as one.
+    """
+
+    def __init__(self):
+        self.requested = False
+        self.signal = None
+        self._previous = {}
+
+    def install(self):
+        def stop(signum, frame):
+            self.requested = True
+            self.signal = int(signum)
+
+        for name in ("SIGINT", "SIGTERM"):
+            number = getattr(signal, name, None)
+            if number is None:
+                continue
+            try:
+                self._previous[number] = signal.signal(number, stop)
+            except (ValueError, OSError):
+                pass
+        return self
+
+    def restore(self):
+        for number, handler in self._previous.items():
+            try:
+                signal.signal(number, handler)
+            except (ValueError, OSError):
+                pass
+        self._previous = {}
 
 
 class ReplicaRun:
@@ -106,49 +166,45 @@ class ReplicaRun:
 
     def __init__(self, *, protocol, files, base_system, topology, solute_indices,
                  excluded_bonds=(), platform=None, precision=None, rule_path=None,
-                 reservoir=None, identity_extra=None):
+                 reservoir_declaration=None, identity_extra=None):
         self.protocol = protocol
         self.files = files
         self.base_system = base_system
         self.topology = topology
-        self.solute_indices = list(solute_indices)
+        self.solute_indices = [int(i) for i in solute_indices]
         self.excluded_bonds = list(excluded_bonds)
         self.platform_request = platform
         self.precision = precision
         self.rule_path = rule_path
-        self.reservoir = reservoir
+        self.reservoir_declaration = reservoir_declaration
         self.identity_extra = dict(identity_extra or {})
 
         self.coordinator = Coordinator()
         self.owned = owned_states(protocol, self.coordinator)
         self.engine = None
         self.reporter = None
+        self.reservoir = None
         self._audit = None
         self._run_context = {}
+        self._periodic = bool(base_system.usesPeriodicBoundaryConditions())
 
     # -- identity ---------------------------------------------------------------------------------
 
     def scientific_identity(self, rule_identity):
         """Everything a continuation must agree with, fixed before propagation begins."""
-        import hashlib
-
-        def digest(path):
-            h = hashlib.sha256()
-            with open(path, "rb") as handle:
-                for chunk in iter(lambda: handle.read(1 << 20), b""):
-                    h.update(chunk)
-            return h.hexdigest()
-
         payload = dict(self.protocol.describe())
         payload.update({
-            "format": "md-templates-replica-identity/v1",
+            "format": "md-templates-replica-identity/v2",
             "solute_atoms": len(self.solute_indices),
-            "enhanced_region_sha256": hashlib.sha256(json.dumps(
-                {"solute": [int(i) for i in self.solute_indices],
-                 "omega_excluded_bonds": [[int(a), int(b)] for a, b in self.excluded_bonds]},
-                sort_keys=True).encode("utf-8")).hexdigest(),
-            "topology_sha256": digest(self.files.topology),
-            "system_sha256": digest(self.files.system),
+            # The UNSCALED reference every rung is derived from, recorded as such. Labelling this
+            # digest with tau_max would describe one object with another object's tau: the ladder
+            # is fixed by (reference system, tau list), and the tau list is already in
+            # `protocol.describe()` above.
+            "hamiltonian": hamiltonian_identity.identity_record(
+                self.base_system, tau=None,
+                temperature_k=self.protocol.temperature_k,
+                ensemble="NVT" if self.protocol.pressure_bar is None else "NPT",
+                solute_indices=self.solute_indices, excluded_bonds=self.excluded_bonds),
             "exchange_rule": rule_identity,
         })
         payload.update(self.identity_extra)
@@ -170,7 +226,7 @@ class ReplicaRun:
         if continuing and not Path(self.files.trajectory).exists():
             raise DriverError(
                 f"{self.files.trajectory} does not exist, so there is nothing to "
-                f"{'extend' if extend else 'resume'}. The analysis NetCDF is authoritative.")
+                f"{'extend' if extend else 'resume'}.")
 
         self._resolve_platform()
         context = self._run_context
@@ -180,43 +236,59 @@ class ReplicaRun:
               f"{self.protocol.n_states}")
         print(f"# host               : {context['hostname']}")
         sys.stdout.flush()
+
         systems, self._audit = self.protocol.build_systems(
             self.base_system, self.solute_indices, self.excluded_bonds)
-        # Asked of the System, never inferred from the box vectors: every System has default ones.
-        self._periodic = bool(self.base_system.usesPeriodicBoundaryConditions())
 
-        state = self._begin(identity, systems, rule, rule_identity, resume=resume, extend=extend)
-        if self.reservoir is not None:
-            # BEFORE any propagation: a reservoir whose box differs from the ladder's would change
-            # the density of the rung it refreshes on every refresh, silently, and the run would
-            # complete looking healthy. Two systems equilibrated independently do NOT share a box,
-            # which is exactly the case this catches.
-            self.reservoir.check_box_matches(state["configurations"][0].box)
-        handlers = _install_interrupt_handlers()
+        interruption = _Interruption().install()
         try:
-            self._loop(state, rule)
+            state = self._begin(identity, systems, rule_identity, resume=resume, extend=extend)
+            self._open_reservoir(systems)
+            if self.reservoir is not None:
+                self.reservoir.check_box_matches(state["configurations"][0].box)
+            self._loop(state, rule, interruption)
         except BaseException as failure:
             if self.coordinator.is_root:
-                status = "interrupted" if isinstance(failure, KeyboardInterrupt) else "failed"
+                interrupted = isinstance(failure, KeyboardInterrupt)
                 storage.write_run_state(
-                    self.files.trajectory, status, identity=identity,
+                    self.files.trajectory, "interrupted" if interrupted else "failed",
+                    identity=identity,
                     reason=f"{type(failure).__name__}: {failure}"[:400],
-                    iteration=state["iteration"],
-                    note=("the analysis NetCDF holds every committed iteration and this run can "
-                          "be continued with --resume; no completion manifest exists"))
+                    note=("the analysis NetCDF holds every committed record and this run can be "
+                          "continued with --resume; no completion manifest exists"))
             raise
         finally:
-            _restore_interrupt_handlers(handlers)
-        return self._finish(state, identity, rule, rule_identity, started)
+            interruption.restore()
+
+        if state.get("interrupted"):
+            return self._record_interruption(state, identity)
+        return self._finish(state, identity, rule_identity, started)
 
     # -- setup ------------------------------------------------------------------------------------------
 
     def _load_rule(self):
         if self.rule_path:
-            rule, identity = load_rule(self.rule_path)
-            return rule, identity
+            return load_rule(self.rule_path)
         rule = NeighbouringExchangeRule()
         return rule, builtin_rule_identity(rule)
+
+    def _open_reservoir(self, systems):
+        if not self.reservoir_declaration:
+            return
+        from rrest2_reservoir import PreparedReservoir
+
+        # The reservoir refreshes the TOP rung, so the Hamiltonian it must match is the top rung's
+        # SCALED system -- not the unscaled reference. Comparing against the reference rejected
+        # every correctly prepared source, and would have accepted a source recorded at tau = 0,
+        # which is the pairing that actually breaks the probability-one rule.
+        self.reservoir = PreparedReservoir.open(
+            self.reservoir_declaration, protocol=self.protocol,
+            topology_path=self.files.topology, periodic=self._periodic,
+            system=systems[-1], solute_indices=self.solute_indices,
+            excluded_bonds=self.excluded_bonds, coordinator=self.coordinator)
+        print(f"# reservoir          : {self.reservoir.n_frames} phase-space sample(s), "
+              f"velocity_policy={self.reservoir.velocity_policy}")
+        sys.stdout.flush()
 
     def _resolve_platform(self):
         name = self.platform_request
@@ -243,30 +315,29 @@ class ReplicaRun:
             "platform": name, "device_index": device, "device_policy": policy,
             "precision": self._properties.get("Precision"),
             "mpi_rank": self.coordinator.rank, "mpi_size": self.coordinator.size,
-            "hostname": socket.gethostname(),
-            "owned_states": list(self.owned),
+            "hostname": socket.gethostname(), "owned_states": list(self.owned),
         }
 
-    def _begin(self, identity, systems, rule, rule_identity, *, resume, extend):
+    def _begin(self, identity, systems, rule_identity, *, resume, extend):
         seed = int(self.protocol.random_seed or 20260830)
         self.engine = ReplicaEngine(
             self.protocol, systems, self.topology, owned=self.owned,
             platform=self._platform, properties=self._properties, seed=seed)
 
         if resume or extend:
-            return self._continue(identity, rule_identity, extend=extend)
+            return self._continue(identity, extend=extend)
 
-        # A brand-new run. The identity goes into the storage BEFORE anything propagates.
         start = self._read_initial_configuration()
         configurations = [start.copy() for _ in range(self.protocol.n_states)]
         if self.coordinator.is_root:
             storage.write_run_state(
                 self.files.trajectory, "initialized", identity=identity,
-                budget_segments=self.protocol.total_segments,
+                total_steps=self.protocol.total_steps,
                 note="scientific identity fixed; no propagation has happened yet")
             self.reporter = storage.ReplicaReporter.create(
                 self.files.trajectory, n_states=self.protocol.n_states,
                 n_atoms=configurations[0].n_atoms,
+                n_solute_atoms=len(self.solute_indices),
                 has_box=configurations[0].box is not None,
                 identity=identity,
                 metadata={"created_utc": datetime.datetime.now(
@@ -278,309 +349,425 @@ class ReplicaRun:
         self.coordinator.barrier()
 
         state = {
-            "iteration": -1, "segment": 0,
+            "step": 0, "exchange_index": -1, "frame_index": -1, "solute_frame_index": -1,
             "state_to_walker": list(range(self.protocol.n_states)),
             "configurations": configurations,
-            "budget_segments": self.protocol.total_segments,
+            "schedule": self.protocol.schedule,
             "rng": np.random.default_rng(_stream_seed(seed, "exchange")),
-            "rule_state": {},
-            "exchange_index": 0,
-            "resumed_from": None,
+            "rule_state": {}, "resumed_from_step": None, "interrupted": False,
         }
         self._equilibrate(state)
         if self.coordinator.is_root:
             storage.write_run_state(
                 self.files.trajectory, "running", identity=identity,
-                budget_segments=state["budget_segments"],
+                total_steps=self.protocol.total_steps,
                 note="propagation started; the analysis NetCDF is authoritative for progress")
         return state
 
-    def _continue(self, identity, rule_identity, *, extend):
-        reporter = storage.ReplicaReporter(self.files.trajectory, mode="a")
-        self.reporter = reporter if self.coordinator.is_root else None
-        stored = reporter.identity
-        if stored is None:
-            raise IdentityError(
-                f"{Path(self.files.trajectory).name} carries no scientific identity, so what it "
-                f"was created with cannot be established. Refusing rather than appending samples "
-                f"whose Hamiltonian cannot be checked.")
-        differences = self.compare_identity(stored, identity)
-        if differences:
-            lines = "\n".join(f"    {k}: was {stored.get(k)!r}, now {identity.get(k)!r}"
-                              for k in differences)
-            raise IdentityError(
-                f"the scientific configuration changed since this run was created, so continuing "
-                f"it would append samples from a different calculation:\n{lines}\n"
-                f"  Running longer is a legitimate extension; changing the physics is not.")
+    def _continue(self, identity, *, extend):
+        """Rank 0 validates and decides; every other rank receives the decision.
 
-        checkpoint = storage.ReplicaCheckpoint(self.files.checkpoint).read()
-        committed = reporter.last_iteration()
-        # A run is continued from the last CHECKPOINT, not from the last committed row. The
-        # reporter commits every iteration while checkpoints are written every
-        # whole_output_stride, so an interruption typically leaves committed rows with no
-        # configurations behind them. Continuing from `last_iteration` would carry the
-        # checkpoint's OLDER configurations forward under the newer iteration number, and the
-        # segment counter and the exchange schedule would drift apart from then on.
-        last = int(checkpoint["iteration"])
-        if committed > last and self.coordinator.is_root:
-            reporter.rewind(last)
-            print(f"# rewound {committed - last} committed row(s) with no checkpoint behind them; "
-                  f"continuing from the last checkpoint at iteration {last}")
-        budget = int(checkpoint["budget_segments"])
-        if not self.coordinator.is_root:
-            reporter.close()
+        No non-root rank opens the analysis file at all, in any mode. Rank 0 reads the checkpoint,
+        compares the identity, rewinds the streams and broadcasts a payload the others simply
+        adopt.
+        """
+        payload = None
+        if self.coordinator.is_root:
+            # Read the stored output and check it BEFORE opening it for writing. A file whose
+            # completion markers lead its data, or whose streams have duplicated steps, must not
+            # be continued: the continuation would read rows that were never written and then
+            # append to them. Nothing here trusts the previous process to have exited cleanly.
+            import replica_validate
 
-        if extend:
-            if last + 1 < budget:
+            check = replica_validate.validate_replica_output(
+                analysis=self.files.trajectory, checkpoint=self.files.checkpoint,
+                expect_completed=False)
+            if not check.ok:
+                raise storage.StorageError(
+                    replica_validate.format_report(
+                        check, title="this run cannot be continued"))
+
+            reporter = storage.ReplicaReporter(self.files.trajectory, mode="a")
+            self.reporter = reporter
+            stored = reporter.identity
+            if stored is None:
                 raise IdentityError(
-                    f"--extend lengthens a run that reached its budget, but this one stopped at "
-                    f"segment {last + 1} of {budget}. Use --resume to finish it first; extending "
-                    f"an unfinished run would add segments while abandoning the ones never run.")
-            budget = budget + int(extend) * self.protocol.exchange_stride
+                    f"{Path(self.files.trajectory).name} carries no scientific identity, so what "
+                    f"it was created with cannot be established. Refusing rather than appending "
+                    f"samples whose Hamiltonian cannot be checked.")
+            differences = self.compare_identity(stored, identity)
+            if differences:
+                lines = "\n".join(f"    {k}: was {stored.get(k)!r}, now {identity.get(k)!r}"
+                                  for k in differences)
+                raise IdentityError(
+                    f"the scientific configuration changed since this run was created, so "
+                    f"continuing it would append samples from a different calculation:\n{lines}\n"
+                    f"  Running longer is a legitimate extension; changing the physics is not.")
+
+            checkpoint = storage.ReplicaCheckpoint(self.files.checkpoint).read()
+            committed = reporter.last_exchange()
+            resume_exchange = int(checkpoint["exchange_index"])
+            if committed > resume_exchange:
+                reporter.rewind(exchange=resume_exchange,
+                                frame=int(checkpoint["frame_index"]),
+                                solute_frame=int(checkpoint["solute_frame_index"]))
+                print(f"# rewound {committed - resume_exchange} exchange row(s) with no "
+                      f"checkpoint behind them; continuing from step {checkpoint['step']}")
+
+            total = int(checkpoint["schedule"]["total_steps"])
+            if extend:
+                if int(checkpoint["step"]) < total:
+                    raise IdentityError(
+                        f"--extend lengthens a run that reached its budget, but this one stopped "
+                        f"at step {checkpoint['step']} of {total}. Use --resume to finish it "
+                        f"first; extending an unfinished run would add attempts while abandoning "
+                        f"the ones never run.")
+                # Extend the budget this run ACTUALLY reached, not the one in the protocol file.
+                # A run that was already extended once stores a larger budget than the protocol
+                # describes; extending the protocol's budget instead produced a new total BELOW
+                # the current step, so the loop ran nothing and the summary reported "220000 of
+                # 210000" while exiting successfully.
+                already = ((total - self.protocol.schedule.total_steps)
+                           // self.protocol.schedule.exchange_steps)
+                schedule = self.protocol.schedule.extended(already + int(extend))
+                if schedule.total_steps <= int(checkpoint["step"]):
+                    raise IdentityError(
+                        f"--extend {int(extend)} would set the budget to {schedule.total_steps} "
+                        f"step(s), which is not beyond the {checkpoint['step']} already run. "
+                        f"Refusing rather than reporting a run that propagated nothing as "
+                        f"extended.")
+            else:
+                schedule = self.protocol.schedule
+                if schedule.total_steps != total:
+                    # The checkpoint's budget is authoritative for a resume: the protocol may have
+                    # been generated with a different number_of_exchanges, and a resume finishes
+                    # the run that was started.
+                    schedule = self.protocol.schedule.extended(
+                        (total - self.protocol.schedule.total_steps)
+                        // self.protocol.schedule.exchange_steps)
+            payload = {
+                "step": int(checkpoint["step"]),
+                "exchange_index": resume_exchange,
+                "frame_index": int(checkpoint["frame_index"]),
+                "solute_frame_index": int(checkpoint["solute_frame_index"]),
+                "state_to_walker": list(checkpoint["state_to_walker"]),
+                "rng": checkpoint["rng_states"]["exchange"],
+                "rule_state": dict(checkpoint["rule_state"]),
+                "total_steps": schedule.total_steps,
+                "number_of_exchanges": schedule.number_of_exchanges,
+                "configurations": [(c.positions, c.velocities, c.box)
+                                   for c in checkpoint["configurations"]],
+            }
+        payload = self.coordinator.bcast(payload)
 
         rng = np.random.default_rng()
-        rng.bit_generator.state = _decode_rng(checkpoint["rng_states"]["exchange"])
-        return {
-            "iteration": last, "segment": int(last) + 1,
-            "state_to_walker": list(checkpoint["state_to_walker"]),
-            "configurations": checkpoint["configurations"],
-            "budget_segments": budget,
-            "rng": rng,
-            "rule_state": dict(checkpoint["rule_state"]),
-            # Carried across a resume so the odd/even schedule continues rather than restarting.
-            "exchange_index": int(checkpoint["extra"].get("exchange_index", 0)),
-            "resumed_from": last,
+        rng.bit_generator.state = payload["rng"]
+        schedule = self.protocol.schedule
+        if schedule.number_of_exchanges != payload["number_of_exchanges"]:
+            schedule = schedule.extended(
+                payload["number_of_exchanges"] - schedule.number_of_exchanges)
+        state = {
+            "step": payload["step"], "exchange_index": payload["exchange_index"],
+            "frame_index": payload["frame_index"],
+            "solute_frame_index": payload["solute_frame_index"],
+            "state_to_walker": list(payload["state_to_walker"]),
+            "configurations": [Configuration(p, v, b) for p, v, b in payload["configurations"]],
+            "schedule": schedule,
+            "rng": rng, "rule_state": dict(payload["rule_state"]),
+            "resumed_from_step": payload["step"], "interrupted": False,
         }
+        self.coordinator.agree(configuration_digest(state["configurations"]),
+                               what="the continued configurations")
+        return state
 
     def _read_initial_configuration(self):
         from openmm import XmlSerializer, unit
 
         text = Path(self.files.coordinates).read_text(encoding="utf-8")
-        state = XmlSerializer.deserialize(text)
-        positions = state.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+        opened = XmlSerializer.deserialize(text)
+        positions = opened.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
         try:
-            velocities = state.getVelocities(asNumpy=True).value_in_unit(
+            velocities = opened.getVelocities(asNumpy=True).value_in_unit(
                 unit.nanometer / unit.picosecond)
         except Exception:
             velocities = np.zeros_like(np.asarray(positions))
         box = None
         if self._periodic:
-            vectors = state.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
-            box = np.array(vectors, dtype=float)
+            box = np.array(opened.getPeriodicBoxVectors(asNumpy=True).value_in_unit(
+                unit.nanometer), dtype=float)
         return Configuration(positions, velocities, box)
 
     def _equilibrate(self, state):
         """Per-state relaxation before any exchange. Not counted as production."""
-        if not self.protocol.equilibration_segments:
+        steps = self.protocol.equilibration_steps
+        if not steps:
             return
+        print(f"# equilibration      : {steps} step(s) per state, NOT counted as production")
+        sys.stdout.flush()
         for index in self.owned:
             self.engine.set_configuration(index, state["configurations"][index])
-        for _ in range(self.protocol.equilibration_segments):
-            for index in self.owned:
-                self.engine.propagate(index, self.protocol.steps_per_segment)
-        state["configurations"] = self._gather_configurations()
+            self.engine.propagate(index, steps)
+        state["configurations"] = self._gather_configurations(state)
 
     # -- the loop ------------------------------------------------------------------------------------
 
-    def _gather_configurations(self):
-        """Every walker's configuration, on every rank.
-
-        `state_to_walker` says which walker each state holds, so a rank reads back the state it
-        owns and the allgather assembles the rest.
-        """
-        local = {index: self.engine.get_configuration(index) for index in self.owned}
+    def _gather_configurations(self, state):
+        """Every walker's sample, on every rank, walker-indexed."""
+        local = {}
+        for index in self.owned:
+            walker = state["state_to_walker"][index]
+            local[walker] = self.engine.get_configuration(index)
         if self.coordinator.size == 1:
-            return [local[i] for i in range(self.protocol.n_states)]
-        packed = self.coordinator.allgather(
-            {i: (c.positions, c.velocities, c.box) for i, c in local.items()})
+            return [local[w] for w in range(self.protocol.n_states)]
         assembled = {}
-        for piece in packed:
-            for index, (positions, velocities, box) in piece.items():
-                assembled[index] = Configuration(positions, velocities, box)
-        return [assembled[i] for i in range(self.protocol.n_states)]
+        for piece in self.coordinator.allgather(
+                {w: (c.positions, c.velocities, c.box) for w, c in local.items()}):
+            for walker, (positions, velocities, box) in piece.items():
+                assembled[walker] = Configuration(positions, velocities, box)
+        return [assembled[w] for w in range(self.protocol.n_states)]
 
     def _reduced_potential_matrix(self, configurations):
-        """u[i][w]: walker w's configuration in state i's Hamiltonian. Rank i computes row i."""
+        """u[i][w]: walker w's sample in state i's Hamiltonian. Rank i computes row i."""
         n = self.protocol.n_states
-        rows = {}
-        for index in self.owned:
-            rows[index] = [self.engine.reduced_potential_of(index, configurations[w])
-                           for w in range(n)]
+        rows = {index: [self.engine.reduced_potential_of(index, configurations[w])
+                        for w in range(n)] for index in self.owned}
         if self.coordinator.size > 1:
             for piece in self.coordinator.allgather(rows):
                 rows.update(piece)
         return np.array([rows[i] for i in range(n)], dtype=float)
 
-    def _loop(self, state, rule):
-        protocol = self.protocol
-        n = protocol.n_states
-        # Install the configurations this rank's states hold.
+    def _install_owned(self, state):
         for index in self.owned:
-            walker = state["state_to_walker"][index]
-            self.engine.set_configuration(index, state["configurations"][walker])
+            self.engine.set_configuration(
+                index, state["configurations"][state["state_to_walker"][index]])
 
-        if state["segment"] != state["iteration"] + 1:
-            raise DriverError(
-                f"segment {state['segment']} and iteration {state['iteration']} are out of step; "
-                f"segment N is iteration N-1 by construction, and a continuation that broke that "
-                f"would record every later row under the wrong physical time.")
-        while state["segment"] < state["budget_segments"]:
-            state["segment"] += 1
-            state["iteration"] += 1
+    def _loop(self, state, rule, interruption):
+        schedule = state["schedule"]
+        self._install_owned(state)
+
+        while state["step"] < schedule.total_steps:
+            target = schedule.next_event_step(state["step"])
+            if target is None:
+                break
+            span = target - state["step"]
             for index in self.owned:
-                self.engine.propagate(index, protocol.steps_per_segment)
-            configurations = self._gather_configurations()
-            # `configurations` is indexed by STATE here; re-key it by walker.
-            by_walker = [None] * n
-            for index, walker in enumerate(state["state_to_walker"]):
-                by_walker[walker] = configurations[index]
-            state["configurations"] = by_walker
+                self.engine.propagate(index, span)
+            state["step"] = target
+            state["configurations"] = self._gather_configurations(state)
 
-            is_exchange = (state["segment"] % protocol.exchange_stride == 0)
-            proposed = np.zeros((n, n), dtype=np.int64)
-            accepted = np.zeros((n, n), dtype=np.int64)
-            u = np.zeros((n, n), dtype=float)
-            evaluated = np.zeros((n, n), dtype=np.int8)
+            events = schedule.events_at(target)
             reservoir_event = None
-
-            if is_exchange:
-                matrix = self._reduced_potential_matrix(by_walker)
-                u[:, :] = matrix
-                evaluated[:, :] = 1
-                outcome = self._decide(state, rule, matrix)
-                state["exchange_index"] += 1
-                for state_i, state_j, log_alpha, was_accepted in outcome.proposals:
-                    proposed[state_i, state_j] += 1
-                    proposed[state_j, state_i] += 1
-                    if was_accepted:
-                        accepted[state_i, state_j] += 1
-                        accepted[state_j, state_i] += 1
-                for state_i, state_j in outcome.swaps:
-                    mapping = state["state_to_walker"]
-                    mapping[state_i], mapping[state_j] = mapping[state_j], mapping[state_i]
-                state["rule_state"] = outcome.rule_state or state["rule_state"]
-                if outcome.reservoir_refresh is not None:
-                    reservoir_event = self._apply_reservoir(state, outcome.reservoir_refresh)
-                # Re-install whatever each owned state now holds.
-                for index in self.owned:
-                    self.engine.set_configuration(
-                        index, state["configurations"][state["state_to_walker"][index]])
-
-            time_ps = state["segment"] * protocol.segment_ps
+            if "exchange" in events:
+                reservoir_event = self._exchange(state, rule, target, schedule)
             if self.coordinator.is_root:
-                self.reporter.write_iteration(
-                    state["iteration"], segment=state["segment"], time_ps=time_ps,
-                    is_exchange=is_exchange, state_to_walker=state["state_to_walker"],
-                    proposed=proposed, accepted=accepted, u=u, u_evaluated=evaluated,
-                    reservoir=reservoir_event)
-                if state["segment"] % protocol.whole_output_stride == 0:
-                    self.reporter.write_frame(state["iteration"], state["configurations"])
-                    storage.ReplicaCheckpoint(self.files.checkpoint).write(
-                        iteration=state["iteration"], segment=state["segment"],
+                if "exchange" in events:
+                    pass    # already written by _exchange
+                if "whole" in events:
+                    state["frame_index"] = self.reporter.write_frame(
+                        step=target, time_ps=schedule.step_to_ps(target),
+                        exchange_index=state["exchange_index"],
+                        configurations=state["configurations"])
+                if "solute" in events:
+                    state["solute_frame_index"] = self.reporter.write_solute_frame(
+                        step=target, time_ps=schedule.step_to_ps(target),
+                        exchange_index=state["exchange_index"],
                         configurations=state["configurations"],
-                        state_to_walker=state["state_to_walker"],
-                        rng_states={"exchange": _encode_rng(state["rng"])},
-                        rule_state=state["rule_state"],
-                        budget_segments=state["budget_segments"],
-                        identity=self.reporter.identity,
-                        extra={"exchange_index": state["exchange_index"]})
+                        solute_indices=self.solute_indices)
+                if "checkpoint" in events:
+                    self._write_checkpoint(state, schedule)
             self.coordinator.barrier()
 
-    def _decide(self, state, rule, matrix):
-        """Rule decisions are made on rank 0 and broadcast, so ranks cannot diverge."""
+            # A termination request becomes collective HERE, at an event boundary where every rank
+            # is together. One rank raising inside its signal handler would leave the others in a
+            # collective forever.
+            if self.coordinator.any_true(interruption.requested):
+                if self.coordinator.is_root and "checkpoint" not in events:
+                    self._write_checkpoint(state, schedule)
+                state["interrupted"] = True
+                state["interrupt_signal"] = interruption.signal
+                self.coordinator.barrier()
+                return
+
+    def _exchange(self, state, rule, step, schedule):
+        n = self.protocol.n_states
+        matrix = self._reduced_potential_matrix(state["configurations"])
+        state["exchange_index"] += 1
+
+        payload = None
         if self.coordinator.is_root:
             context = ExchangeContext(
-                iteration=state["iteration"], segment=state["segment"], protocol=self.protocol,
+                iteration=state["exchange_index"], segment=state["step"], protocol=self.protocol,
                 state_to_walker=state["state_to_walker"],
                 reduced_potential=lambda i, w: matrix[i][w],
-                rng=state["rng"], reservoir=self.reservoir,
-                rule_state=state["rule_state"],
+                rng=state["rng"], reservoir=self.reservoir, rule_state=state["rule_state"],
                 exchange_index=state["exchange_index"])
             outcome = rule.propose(context)
             payload = {"proposals": outcome.proposals, "swaps": outcome.swaps,
                        "reservoir_refresh": outcome.reservoir_refresh,
                        "rule_state": outcome.rule_state, "diagnostics": outcome.diagnostics}
-        else:
-            payload = None
         payload = self.coordinator.bcast(payload)
-        from exchange_rules import ExchangeOutcome
-        return ExchangeOutcome(**payload)
+
+        proposed = np.zeros((n, n), dtype=np.int64)
+        accepted = np.zeros((n, n), dtype=np.int64)
+        for state_i, state_j, _log_alpha, was_accepted in payload["proposals"]:
+            proposed[state_i, state_j] += 1
+            proposed[state_j, state_i] += 1
+            if was_accepted:
+                accepted[state_i, state_j] += 1
+                accepted[state_j, state_i] += 1
+        for state_i, state_j in payload["swaps"]:
+            mapping = state["state_to_walker"]
+            mapping[state_i], mapping[state_j] = mapping[state_j], mapping[state_i]
+        state["rule_state"] = payload["rule_state"] or state["rule_state"]
+
+        reservoir_event = None
+        if payload["reservoir_refresh"] is not None:
+            reservoir_event = self._apply_reservoir(state, payload["reservoir_refresh"])
+
+        self._install_owned(state)
+        self.coordinator.agree(configuration_digest(state["configurations"]),
+                               what="the configurations after this exchange")
+
+        if self.coordinator.is_root:
+            self.reporter.write_exchange(
+                state["exchange_index"], step=step, time_ps=schedule.step_to_ps(step),
+                state_to_walker=state["state_to_walker"], proposed=proposed, accepted=accepted,
+                u=matrix, u_evaluated=np.ones((n, n), dtype=np.int8),
+                reservoir=reservoir_event)
+        return reservoir_event
 
     def _apply_reservoir(self, state, refresh):
-        """Replace the configuration in one state from the prepared reservoir.
+        """Install one prepared phase-space sample into the top state. Single authority, no stale
+        broadcast.
 
-        Not a swap and never recorded as one: nothing is displaced into the reservoir, and the
-        walker that was there simply ceases to carry its previous configuration.
+        Every rank reads the SAME sample from the SAME prepared file using the index rank 0 chose,
+        so nothing large travels over MPI and no rank's copy can be stale. The rank owning the
+        state installs it into its Context; every rank updates the walker-indexed list identically;
+        and the caller then verifies a digest across ranks.
+
+        This replaces a flow that installed the sample on the owning rank and then overwrote the
+        list with rank 0's copy -- discarding the new velocity whenever the top rung was not rank
+        0's.
         """
         state_index = int(refresh["state"])
         frame_index = int(refresh["frame"])
         walker = state["state_to_walker"][state_index]
-        positions, box = self.reservoir.configuration(frame_index)
         current = state["configurations"][walker]
-        if box is None and current.box is not None:
+
+        positions, velocities, box, source_step, _source_time = self.reservoir.sample(frame_index)
+
+        if self.reservoir.velocity_policy == "stored":
+            # The recorded momentum, installed unchanged. This is what the probability-one rule is
+            # stated for: a phase-space sample is a point in phase space.
+            installed_velocities = np.asarray(velocities, dtype=float)
+        else:
+            # `maxwell` was asked for explicitly. Drawn on every rank from the same recorded seed
+            # via the owning rank, below.
+            installed_velocities = None
+
+        if self._periodic and box is None:
             raise DriverError(
-                "the reservoir frame carries no box but this is an explicit-solvent run; a "
+                "the reservoir sample carries no box but this is an explicit-solvent run; a "
                 "configuration without its box is at an undefined density.")
-        # The LADDER's box is kept, not the reservoir frame's. They are the same lattice -- that
-        # was checked before propagation began -- so this is physically identical, and keeping one
-        # representation stops the stored box from flickering between equivalent bases.
-        replacement = Configuration(positions, current.velocities, current.box)
+        # The ladder's basis is kept: the lattices were proven equal before propagation, so this is
+        # physically identical and stops the stored box flickering between equivalent bases.
+        keep_box = current.box
+
+        if installed_velocities is None:
+            # Maxwell: the owning rank draws, then shares the drawn momenta so every rank holds the
+            # same sample. Nothing else is broadcast.
+            drawn = None
+            if state_index in self.owned:
+                self.engine.set_configuration(
+                    state_index, Configuration(positions, current.velocities, keep_box))
+                self.engine.set_velocities_to_temperature(
+                    state_index, int(refresh["velocity_seed"]))
+                drawn = self.engine.get_configuration(state_index).velocities
+            if self.coordinator.size > 1:
+                for piece in self.coordinator.allgather(drawn):
+                    if piece is not None:
+                        drawn = piece
+                        break
+            installed_velocities = np.asarray(drawn, dtype=float)
+
+        replacement = Configuration(positions, installed_velocities, keep_box)
         state["configurations"][walker] = replacement
         if state_index in self.owned:
             self.engine.set_configuration(state_index, replacement)
-            # A DCD carries no velocities. Fresh Maxwell momenta at the one common temperature,
-            # from a recorded seed -- a configuration is not a restart.
-            self.engine.set_velocities_to_temperature(state_index, int(refresh["velocity_seed"]))
-            state["configurations"][walker] = self.engine.get_configuration(state_index)
-        state["configurations"] = self.coordinator.bcast(state["configurations"]) \
-            if self.coordinator.size > 1 else state["configurations"]
-        return (state_index, frame_index, 1 if refresh.get("accepted", True) else 0)
+        return (state_index, frame_index, int(source_step),
+                1 if refresh.get("accepted", True) else 0)
+
+    def _write_checkpoint(self, state, schedule):
+        storage.ReplicaCheckpoint(self.files.checkpoint).write(
+            step=state["step"], exchange_index=state["exchange_index"],
+            frame_index=state["frame_index"],
+            solute_frame_index=state["solute_frame_index"],
+            configurations=state["configurations"],
+            state_to_walker=state["state_to_walker"],
+            rng_states={"exchange": _encode_rng(state["rng"])},
+            rule_state=state["rule_state"], schedule=schedule.describe(),
+            identity=self.reporter.identity,
+            extra={"configuration_digest": configuration_digest(state["configurations"])})
 
     # -- finishing ------------------------------------------------------------------------------------
 
-    def _finish(self, state, identity, rule, rule_identity, started):
-        completed = state["segment"]
-        expected = state["budget_segments"]
-        if not self.coordinator.is_root:
-            print(f"# rank {self.coordinator.rank} finished its share of the propagation; "
-                  f"rank 0 owns the manifest and the storage")
-            print(f"rank_status: completed rank={self.coordinator.rank}")
-            return {"run_status": "completed_by_rank", "rank": self.coordinator.rank}
+    def _record_interruption(self, state, identity):
+        if self.coordinator.is_root:
+            storage.write_run_state(
+                self.files.trajectory, "interrupted", identity=identity,
+                step=state["step"], total_steps=state["schedule"].total_steps,
+                signal=state.get("interrupt_signal"),
+                note=("stopped at an event boundary with a complete checkpoint; --resume "
+                      "continues it. No completion manifest exists."))
+            print(f"# interrupted at step {state['step']} of {state['schedule'].total_steps}; "
+                  f"a checkpoint was committed and --resume will continue it")
+        return {"run_status": "interrupted", "step": state["step"]}
+
+    def _finish(self, state, identity, rule_identity, started):
+        completed = state["step"]
+        expected = state["schedule"].total_steps
+        rank = self.coordinator.rank
+        if rank != 0:
+            print(f"# rank {rank} finished its share of the propagation; rank 0 owns the manifest")
+            print(f"rank_status: completed rank={rank}")
+            return {"run_status": "completed_by_rank", "rank": rank}
 
         if completed < expected:
             storage.write_run_state(self.files.trajectory, "interrupted", identity=identity,
-                                    iteration=state["iteration"],
-                                    note="stopped before the requested budget; resumable")
+                                    step=completed, note="stopped before the budget; resumable")
             raise DriverError(
-                f"the run stopped at segment {completed} of {expected}. No completion manifest "
-                f"was written; --resume will continue it.")
+                f"the run stopped at step {completed} of {expected}. No completion manifest was "
+                f"written; --resume will continue it.")
 
         from replica_statistics import lifetime_statistics, round_trip_report
         accepted, proposed = self.reporter.statistics()
         events = self.reporter.reservoir_events()
         mapping = self.reporter.mapping()
         stats = lifetime_statistics(accepted, proposed, tau=self.protocol.tau,
-                                    exchange_stride=self.protocol.exchange_stride,
                                     reservoir_events=events)
         trips = round_trip_report(mapping, n_states=self.protocol.n_states)
 
         record = {
             "format": storage.MANIFEST_FORMAT,
             "run_status": "completed",
-            "segments_expected": int(expected),
-            "segments_completed": int(completed),
-            "iterations_committed": int(self.reporter.last_iteration()) + 1,
-            "exchange_attempts_expected": int(expected) // self.protocol.exchange_stride,
-            "production_ps_per_replica": self.protocol.production_ps(completed),
+            "steps_expected": int(expected),
+            "steps_completed": int(completed),
+            "exchanges_committed": int(self.reporter.last_exchange()) + 1,
+            "whole_frames": int(self.reporter.last_frame()) + 1,
+            "solute_frames": int(self.reporter.last_solute_frame()) + 1,
+            "production_ps_per_replica": state["schedule"].step_to_ps(completed),
             "started_utc": started.isoformat(),
             "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "resumed_from_iteration": state.get("resumed_from"),
+            "resumed_from_step": state.get("resumed_from_step"),
+            "schedule": state["schedule"].describe(),
             "storage": {
                 "analysis_netcdf": Path(self.files.trajectory).name,
+                "solute_netcdf": storage.solute_path(self.files.trajectory).name,
                 "checkpoint_netcdf": Path(self.files.checkpoint).name,
                 "run_state": storage.run_state_path(self.files.trajectory).name,
                 "schema": storage.SCHEMA_VERSION,
                 "authoritative": "analysis_netcdf",
+                "coordinate_indexing": "walker",
             },
             "scientific_identity": identity,
             "exchange_rule": rule_identity,
@@ -598,51 +785,13 @@ class ReplicaRun:
         }
         if self.reservoir is not None:
             record["reservoir"] = self.reservoir.describe()
-        storage.write_atomic(self.files.restart, json.dumps(record, indent=2) + "\n")
+        storage.write_atomic(self.files.restart,
+                             json.dumps(record, indent=2, default=str) + "\n")
         storage.write_run_state(self.files.trajectory, "completed", identity=identity,
-                                iteration=state["iteration"],
+                                step=completed,
                                 note="manifest written; the storage remains authoritative")
         self.reporter.close()
         return record
-
-
-def _install_interrupt_handlers():
-    """Turn SIGINT and SIGTERM into KeyboardInterrupt, so an interruption is RECORDED.
-
-    Without this a SIGTERM ends the process outright: the storage is still resumable, because the
-    reporter writes `last_iteration` after every committed row, but the run-state sidecar would be
-    left saying `running` and nothing would say what happened. The loop checkpoints between
-    iterations, so the raise lands at an iteration boundary and the last committed row is intact.
-
-    Handlers can only be installed on the main thread; a run driven from elsewhere keeps whatever
-    handling it already had rather than failing here.
-    """
-    import signal
-
-    previous = {}
-
-    def stop(signum, frame):
-        raise KeyboardInterrupt(f"signal {signum}")
-
-    for name in ("SIGINT", "SIGTERM"):
-        number = getattr(signal, name, None)
-        if number is None:
-            continue
-        try:
-            previous[number] = signal.signal(number, stop)
-        except (ValueError, OSError):
-            pass
-    return previous
-
-
-def _restore_interrupt_handlers(previous):
-    import signal
-
-    for number, handler in (previous or {}).items():
-        try:
-            signal.signal(number, handler)
-        except (ValueError, OSError):
-            pass
 
 
 def _stream_seed(base, name):
@@ -653,14 +802,8 @@ def _stream_seed(base, name):
 
 
 def _encode_rng(generator):
-    """A numpy Generator state as JSON-safe data, so a resume continues the same stream."""
-    state = generator.bit_generator.state
-    return json.loads(json.dumps(state, default=lambda o: int(o) if hasattr(o, "__int__")
-                                 else str(o)))
-
-
-def _decode_rng(state):
-    return state
+    return json.loads(json.dumps(generator.bit_generator.state,
+                                 default=lambda o: int(o) if hasattr(o, "__int__") else str(o)))
 
 
 def environment_versions():
@@ -669,15 +812,12 @@ def environment_versions():
     record = {"python": platform_module.python_version(),
               "openmm": openmm.version.version,
               "openmm_short": openmm.version.short_version,
-              "netCDF4": netCDF4.__version__,
-              "numpy": np.__version__}
+              "netCDF4": netCDF4.__version__, "numpy": np.__version__}
     for name in ("mdtraj", "mpi4py"):
         try:
             record[name] = __import__(name).__version__
         except ImportError:
             record[name] = None
-    # OpenMMTools is deliberately NOT required by generated production code. It is recorded only
-    # so a reader can see whether the optional test oracle was even present.
     try:
         import openmmtools
         record["openmmtools_present_but_unused"] = openmmtools.__version__
