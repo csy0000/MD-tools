@@ -40,6 +40,22 @@ def propagates(text: str) -> bool:
     return any(marker in text for marker in PROPAGATION_MARKERS)
 
 
+#: A file may opt out of the CUDA requirement only by SAYING SO, in this exact form, with a
+#: reason after the colon. An exemption that has to be written into the file it exempts is one a
+#: reviewer reading that file cannot miss -- unlike a name in a list on the other side of the
+#: suite, which is how exemptions accumulate unnoticed.
+EXEMPTION_MARKER = "PLATFORM_POLICY_EXEMPTION:"
+
+
+def declared_exemption(text: str) -> str | None:
+    """The stated reason this file may name a non-CUDA platform, or None."""
+    for line in text.splitlines():
+        if EXEMPTION_MARKER in line:
+            reason = line.split(EXEMPTION_MARKER, 1)[1].strip(" #\"'")
+            return reason or None
+    return None
+
+
 def test_no_simulation_test_names_cpu_or_reference():
     """A test that PROPAGATES must run on CUDA.
 
@@ -56,10 +72,43 @@ def test_no_simulation_test_names_cpu_or_reference():
         text = path.read_text()
         if not propagates(text):
             continue
+        if declared_exemption(text):
+            continue
         for needle in NON_CUDA_PLATFORM_MARKERS:
             if needle in text:
                 offenders.setdefault(path.name, []).append(needle)
-    assert not offenders, f"MD tests that propagate must run on CUDA: {offenders}"
+    assert not offenders, (
+        f"MD tests that propagate must run on CUDA, or declare "
+        f"`{EXEMPTION_MARKER} <reason>`: {offenders}")
+
+
+def test_every_platform_exemption_states_a_reason():
+    """An exemption without a reason is a silent one, and silent is what this forbids."""
+    for path in _md_test_files():
+        text = path.read_text()
+        if EXEMPTION_MARKER not in text:
+            continue
+        reason = declared_exemption(text)
+        assert reason and len(reason) > 30, (
+            f"{path.name} declares {EXEMPTION_MARKER} without a substantive reason "
+            f"(got {reason!r})")
+
+
+def test_scientific_runtime_evidence_still_comes_from_cuda():
+    """The exemption must not become a way to move MD acceptance onto the CPU.
+
+    Files that both propagate AND carry the `gpu` marker are the suite's scientific runtime
+    evidence. At least one must exist, and none of them may be exempt.
+    """
+    gpu_propagating = [p.name for p in _md_test_files()
+                       if propagates(p.read_text()) and "pytest.mark.gpu" in p.read_text()]
+    assert gpu_propagating, "no propagating test carries the gpu marker any more"
+    for path in _md_test_files():
+        text = path.read_text()
+        if "pytest.mark.gpu" in text and declared_exemption(text):
+            raise AssertionError(
+                f"{path.name} carries the gpu marker AND a platform exemption; a file is one or "
+                f"the other, never both")
 
 
 def test_the_audit_still_catches_a_propagating_file_that_names_a_non_cuda_platform():

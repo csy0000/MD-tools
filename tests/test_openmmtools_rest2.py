@@ -322,8 +322,8 @@ def test_exchange_log_acceptance_is_the_analytical_metropolis_criterion():
     assert math.exp(min(0.0, expected)) == pytest.approx(math.exp(min(0.0, -0.5)))
 
 
-def test_the_sampler_uses_the_repositorys_own_acceptance_criterion():
-    """The override must call `exchange_log_acceptance`, not restate the algebra.
+def test_the_neighbour_sampler_uses_the_repositorys_own_acceptance_criterion():
+    """When the project DOES own the decision, it must call `exchange_log_acceptance`.
 
     Two implementations of one criterion is exactly the drift this repository keeps finding: the
     run uses one and the test checks the other, and both look green.
@@ -333,8 +333,12 @@ def test_the_sampler_uses_the_repositorys_own_acceptance_criterion():
     assert "from rest2_scaling import exchange_log_acceptance" in source
 
 
-class _FakeSampler(extension.StridedREST2Sampler):
-    """Only `_attempt_swap`'s arithmetic, with the machinery it reads stubbed out."""
+class _FakeSampler(extension.NeighbourREST2Sampler):
+    """Only `_attempt_swap`'s arithmetic, with the machinery it reads stubbed out.
+
+    `NeighbourREST2Sampler` is the class that owns a Metropolis decision. The default
+    `StridedREST2Sampler` deliberately owns none, so there is nothing to test in it here.
+    """
 
     def __init__(self, energies, assignment):
         self._energy_thermodynamic_states = np.asarray(energies, dtype=float)
@@ -403,7 +407,7 @@ def test_a_two_replica_ladder_attempts_a_swap_on_every_exchange_iteration():
     """
     attempts = []
 
-    class _Counting(extension.StridedREST2Sampler):
+    class _Counting(extension.NeighbourREST2Sampler):
         def __init__(self):
             self._replica_thermodynamic_states = np.array([0, 1])
             self._energy_thermodynamic_states = np.zeros((2, 2))
@@ -454,6 +458,18 @@ def test_every_overridden_private_method_still_exists_upstream():
     for name in ("_mix_replicas", "_mix_neighboring_replicas", "_attempt_swap", "equilibrate"):
         assert hasattr(ReplicaExchangeSampler, name), (
             f"openmmtools {openmmtools.__version__} has no {name}; the override is now silent")
+
+
+def test_the_stock_swap_all_path_upstream_is_the_one_actually_used():
+    """The default must reach OpenMMTools' own mixing, not a project reimplementation of it."""
+    from openmmtools.multistate import ReplicaExchangeSampler
+    assert hasattr(ReplicaExchangeSampler, "_mix_all_replicas")
+    assert hasattr(ReplicaExchangeSampler, "_mix_all_replicas_numba")
+    default = extension.sampler_class_for(extension.DEFAULT_MIXING_SCHEME)
+    project = [c for c in default.__mro__ if getattr(c, "__module__", "") == "rest2_openmmtools"]
+    for klass in project:
+        assert "_mix_all_replicas" not in klass.__dict__
+        assert "_attempt_swap" not in klass.__dict__
 
 
 # --- the runtime's arithmetic ---------------------------------------------------------------------------

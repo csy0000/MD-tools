@@ -785,6 +785,18 @@ class REST2:
         sampler, reporter = self._sampler, self._reporter
         completed = int(sampler.iteration)
         finished = datetime.datetime.now(datetime.timezone.utc)
+        rank, size = mpi_rank_and_size()
+
+        # Only rank 0 holds an OPEN reporter. OpenMMTools opens the storage in append mode on node
+        # 0 alone (`mpiplus.run_single_node(0, reporter.open, mode='a')`), so a non-zero rank
+        # reading it back gets `'NoneType' object has no attribute 'variables'`. The derived
+        # reports belong to the run, and the run's records belong to rank 0.
+        if rank != 0:
+            print(f"# rank {rank} of {size} finished its share of the propagation; rank 0 owns "
+                  f"{os.path.basename(self.files.restart)} and the NetCDF storage")
+            print(f"rank_status: completed rank={rank}")
+            return {"run_status": "completed_by_rank", "rank": rank,
+                    "iterations_completed": completed}
 
         statistics = self.lifetime_statistics(reporter)
         trips = self.round_trip_report(reporter)
@@ -873,20 +885,15 @@ class REST2:
                 f"completion manifest was written; the NetCDF storage holds what did run and "
                 f"--resume will continue it.")
 
-        rank, _ = mpi_rank_and_size()
-        if rank == 0:
-            _write_atomic(self.files.restart,
-                          json.dumps(record, indent=2, sort_keys=False) + "\n")
-            self.write_run_state("completed", identity=identity,
-                                 iterations_requested=int(total_iterations),
-                                 iterations_completed=completed,
-                                 note="manifest written; storage remains authoritative")
-            self._print_summary(record, trips)
-            print(COMPLETION_MARKER)
-        else:
-            print(f"# rank {self._run_context['mpi_rank']} finished its share of the propagation; "
-                  f"rank 0 owns {os.path.basename(self.files.restart)} and the NetCDF storage")
-            print(f"rank_status: completed rank={self._run_context['mpi_rank']}")
+        # Rank 0 only reaches here; every other rank returned above.
+        _write_atomic(self.files.restart,
+                      json.dumps(record, indent=2, sort_keys=False) + "\n")
+        self.write_run_state("completed", identity=identity,
+                             iterations_requested=int(total_iterations),
+                             iterations_completed=completed,
+                             note="manifest written; storage remains authoritative")
+        self._print_summary(record, trips)
+        print(COMPLETION_MARKER)
         return record
 
     # -- derived reports -------------------------------------------------------------------------

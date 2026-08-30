@@ -255,16 +255,43 @@ def test_a_changed_scientific_configuration_is_refused_before_appending(prepared
     assert "taus" in message
 
 
-def test_a_missing_manifest_makes_a_resume_refuse_rather_than_trust_the_storage(prepared,
-                                                                               tmp_path):
+def test_a_continuation_no_longer_needs_the_completion_manifest(prepared, tmp_path):
+    """This asserted the opposite, and the opposite was the bug.
+
+    Requiring `restart.json` to continue made an INTERRUPTED run unrecoverable, because an
+    interrupted run is precisely the one that never wrote a manifest. The identity a continuation
+    is checked against now lives in reporter metadata inside the authoritative storage, written
+    before propagation began, so the manifest is evidence of completion and not a precondition for
+    continuing.
+    """
+    prepared_dir, _ = prepared
+    (tmp_path / "rest2.py").write_text("# protocol placeholder\n")
+    files = files_in(tmp_path, prepared_dir)
+    make(files).run(number_of_exchanges=2)
+
+    Path(files.restart).unlink()
+    Path(runtime.run_state_path(files.trajectory)).unlink()   # only the NetCDF is left
+
+    record = make(files_in(tmp_path, prepared_dir, extend=1)).run(number_of_exchanges=2)
+    assert record["run_status"] == "completed"
+    assert record["iterations_completed"] == 3 * 5           # 2 exchanges + 1, stride 5
+
+
+def test_a_continuation_is_refused_when_no_identity_can_be_established(prepared, tmp_path,
+                                                                      monkeypatch):
+    """Storage whose identity cannot be read is refused rather than appended to on trust."""
     prepared_dir, _ = prepared
     (tmp_path / "rest2.py").write_text("# protocol placeholder\n")
     files = files_in(tmp_path, prepared_dir)
     make(files).run(number_of_exchanges=2)
     Path(files.restart).unlink()
+    Path(runtime.run_state_path(files.trajectory)).unlink()
 
-    with pytest.raises(FileNotFoundError, match="cannot be established"):
-        make(files_in(tmp_path, prepared_dir, extend=1)).run(number_of_exchanges=2)
+    ladder = make(files_in(tmp_path, prepared_dir, extend=1))
+    monkeypatch.setattr(type(ladder), "stored_identity",
+                        lambda self, reporter: (None, "deliberately unavailable"))
+    with pytest.raises(runtime.Rest2IdentityError, match="cannot be continued on trust"):
+        ladder.run(number_of_exchanges=2)
 
 
 def test_corrupt_storage_fails_clearly(prepared, tmp_path):
@@ -288,13 +315,15 @@ def test_a_run_that_never_started_cannot_be_resumed(prepared, tmp_path):
 
 # --- the recorded provenance ----------------------------------------------------------------------
 
-def test_the_manifest_records_the_extension_and_the_omega_convention(completed):
+def test_the_manifest_records_exchange_ownership_and_the_omega_convention(completed):
     _, _, record = completed
-    extension = record["extension"]
-    assert extension["pinned_to"] == "0.26.0"
-    assert set(extension["overrides"]) >= {"_mix_replicas", "_mix_neighboring_replicas",
-                                           "_attempt_swap"}
-    assert extension["version_override_active"] is False
+    exchange = record["exchange"]
+    # The default is stock OpenMMTools, so the manifest must say OpenMMTools decided the swaps.
+    assert exchange["replica_mixing_scheme"] == "swap-all"
+    assert exchange["decision_owner"] == "openmmtools"
+    # What this repository DOES own is the schedule, and it says so separately.
+    assert exchange["schedule_owner"] == "md-templates"
+    assert exchange["exchange_stride_iterations"] == 5
 
     omega = record["omega_convention"]
     assert omega["name"] == "omega-selective REST2"

@@ -7,8 +7,22 @@ Hamiltonian; OpenMMTools keeps everything about running a ladder.
 
 | owned by | what |
 |---|---|
-| **MD-templates** | the REST2 scaling convention, the tau ladder, physical-time arithmetic, the enhanced region and omega exclusions, input identity checks, the completion manifest |
-| **OpenMMTools** | propagation, reduced potentials, exchange decisions, thermodynamic-state assignment, multistate NetCDF storage, checkpointing, restart, extension, walker-to-state mapping |
+| **MD-templates** | the REST2 scaling convention, the tau ladder, physical-time arithmetic, the enhanced region and omega exclusions, the run's scientific identity, the completion manifest, and **which iterations attempt an exchange** |
+| **OpenMMTools** | propagation, reduced potentials, **the accept/reject decision under the default `swap-all`**, thermodynamic-state assignment, multistate NetCDF storage, checkpointing, restart, extension, walker-to-state mapping |
+
+### Who decides a swap
+
+This is stated precisely because it was previously overstated. Under the default scheme,
+`swap-all`, every proposal and every Metropolis decision happens inside
+`ReplicaExchangeSampler._mix_all_replicas_numba` and this repository touches none of it.
+
+What this repository owns about mixing is **when** it is attempted: `_mix_replicas` is gated so
+exchange happens every `exchange_stride` iterations. That is a schedule, not a decision.
+
+`swap-neighbors` is different and is not the default. OpenMMTools 0.26.0's neighbour path is broken
+on NumPy ≥ 1.25, so selecting it activates `ProjectNeighbourExchangeMixin`, in which **this
+repository performs the Metropolis call**. A run using it records
+`exchange_decision_owner: md-templates`, and every run records which of the two applied.
 
 `MD-project` owns none of it. It pins a generator commit, states a request and consumes results.
 
@@ -79,38 +93,40 @@ while propagation scales with it, so the relative cost falls as the system grows
 `output_interval` equal to the exchange interval and the stride becomes 1 and the overhead goes
 away entirely; that is the trade the number above is there to let you make.
 
-## The extension, and why it is pinned
+## The two upstream defects, and what is still pinned
 
-`templates/rest2_openmmtools.py` is the whole of the OpenMMTools extension. It subclasses three
-private methods, so it **refuses any OpenMMTools other than 0.26.0** rather than silently following
-a changed parent. Two corrections, both established by reading the installed source and running it:
+`templates/rest2_openmmtools.py` holds the whole OpenMMTools extension. Under the default
+`swap-all` it overrides **no** private method that decides anything: only `_mix_replicas`, to skip
+non-exchange iterations, and `equilibrate`, to hold each replica at its own tau.
 
-**1. `swap-neighbors` is unusable on NumPy >= 1.25.** In 0.26.0,
-`ReplicaExchangeSampler._mix_neighboring_replicas` locates replicas with `np.where(...)`, which
-returns a *tuple* of arrays. Indexing the energy matrix with that tuple yields a 2-d array, and the
-acceptance test then calls `math.exp` on it:
+Two defects in 0.26.0's neighbour path, both established by reading the installed source and
+running it:
+
+**1. `swap-neighbors` is unusable on NumPy ≥ 1.25.** `_mix_neighboring_replicas` locates replicas
+with `np.where(...)`, which returns a *tuple* of arrays. Indexing the energy matrix with that tuple
+yields a 2-d array, and the acceptance test then calls `math.exp` on it:
 
 ```
 TypeError: only 0-dimensional arrays can be converted to Python scalars
 ```
 
-The ordered REST2 ladder wants neighbour swaps, so the scheme cannot simply be avoided. The
-override is the same algorithm with scalar indices, and it computes the criterion by calling this
-repository's own `exchange_log_acceptance` — so the ladder and its tests share one definition of
-the Metropolis criterion rather than agreeing by inspection. `swap-all` is unaffected and remains
-available.
+`swap-all` is unaffected because `_mix_all_replicas` draws plain integers.
 
-**2. A two-replica ladder skipped every second exchange iteration.** Upstream draws an offset from
-`{0, 1}` and iterates `range(offset, n-1, 2)`; with two replicas the odd phase covers no pair at
-all, so half the exchange iterations proposed nothing and the ladder exchanged at half its
-configured rate, with a healthy-looking log. The offset is now drawn only from phases that contain
-a pair. The alternating scheme is unchanged for three or more replicas, where both phases do.
+**2. A two-replica ladder exchanged at half its configured rate.** Upstream draws an offset from
+`{0, 1}` and iterates `range(offset, n-1, 2)`; with two replicas the odd phase covers no pair, so
+half the exchange iterations proposed nothing, with a healthy-looking log.
 
-`equilibrate` is overridden for a third reason: upstream calls `_mix_replicas` on every
-equilibration iteration with the counter still at 0, which the stride test reads as an exchange
-iteration — so every replica would swap during the per-tau relaxation that exists to hold it at its
-own tau. Tau equilibration does not count toward production; upstream does not increment the
-iteration counter for it.
+Both are corrected in `ProjectNeighbourExchangeMixin`, used **only** when `swap-neighbors` is
+explicitly selected. Because it subclasses private methods, selecting it requires OpenMMTools
+exactly 0.26.0. Choosing `swap-all` needs no version pin for the decision path at all.
+
+### A third defect, in this repository's own scheduling
+
+The stride gate returned early without zeroing OpenMMTools' proposal matrices, which upstream
+resets at the top of its own `_mix_replicas`. Every skipped iteration therefore re-wrote the
+previous mixing event's counts, and a stride-2 run recorded **23 mixing events where 12 occurred**.
+Skipped iterations now record genuine zeros — which is also what makes a mixing event countable
+from the stored history at all.
 
 ## Running it
 
@@ -203,6 +219,104 @@ manifest, and other ranks write `rest2.out.rankNN` beside it.
 
 CPU and single-GPU execution remain available and are what the smoke tests use.
 
+## Three records, three jobs
+
+Confusing these is what made an interrupted run unrecoverable, so they are named separately.
+
+| record | written | job |
+|---|---|---|
+| **reporter metadata** | inside the analysis NetCDF, **before propagation begins** | the run's scientific identity. This is what makes an interrupted run resumable, because it survives in the authoritative storage whatever happens to the process. |
+| **`<stem>.runstate.json`** | beside the NetCDF, atomically, rank 0 only | `initialized` → `running` → `completed` / `interrupted` / `failed`. Never claims completion. An independent fallback identity source. |
+| **checkpoint NetCDF** | every `checkpoint_interval` iterations | full coordinates; what a restart propagates from. |
+| **`restart.json`** | atomically, after the final iteration is committed | evidence that the run **completed**. It is *not* the source of resume identity. |
+
+## Interrupted resume, and completed extension
+
+These are different operations and are kept distinct.
+
+```bash
+REST2/rest2.sh --resume        # finish a run that stopped short of its budget
+REST2/rest2.sh --extend 200    # add 200 mixing events to a run that reached its budget
+```
+
+**`--resume` does not require `restart.json`.** Requiring it was the bug: a run interrupted before
+finishing never writes one, and that is exactly the run that needs resuming. The identity a
+continuation is checked against comes from reporter metadata, with the run-state sidecar as an
+independent fallback; a continuation that can establish neither is **refused** rather than trusted.
+
+A resume continues to the run's *original* budget without resetting iteration, mapping, seeds or
+statistics. `--extend N` requires a run that already reached its budget and adds exactly `N` mixing
+events; extending an unfinished run is refused, because it would append iterations onto the end
+while silently abandoning the ones never run.
+
+SIGINT and SIGTERM are recorded: the sidecar becomes `interrupted`, no manifest is written, and the
+OpenMMTools storage is left usable. Reporting is wrapped in `mpiplus.delayed_termination` upstream,
+so a signal arriving mid-write is deferred until that iteration's records are complete.
+
+## Authoritative validation
+
+```bash
+openmm-rest2 --verify-only -x REST2/rest2.nc \
+    --checkpoint REST2/rest2_checkpoint.nc -r REST2/restart.json
+```
+
+There is **one** validator, `rest2_validate.py`, copied into every project; `MD-project` calls it
+through this command rather than reimplementing the NetCDF schema. It **opens and reads** the
+storage through the public `MultiStateReporter` API — `Path.is_file()` proves only that a path was
+created, which is what a crashed run leaves behind.
+
+It checks that the analysis and checkpoint NetCDF open; the recorded OpenMMTools version is
+supported; the storage carries a scientific identity; the last committed iteration matches the
+budget; the final checkpoint and its sampler states are readable and finite; the mapping has the
+right shape and **every row is a permutation**; reduced potentials are the right shape and finite;
+mixing statistics exist for **every** scheduled mixing event and none outside the stride; the
+manifest names only files beside itself; and the manifest agrees with the storage's own metadata.
+
+It rejects truncated files, valid NetCDF missing required variables, a manifest copied from a
+different run, a missing final checkpoint, an incomplete budget, and a changed identity. Exit
+status 0 means valid, 1 means not.
+
+The budget's authority is chosen deliberately: the manifest and the sidecar are exact, while
+reporter metadata records the **original** request and is never rewritten — so an extended run
+legitimately exceeds it, and demanding equality there reported a correctly extended run as
+incomplete.
+
+## Lifetime mixing statistics
+
+`sampler._n_proposed_matrix` is reset at the start of every mixing call, so reading it after a run
+gives the **last event only**. A summary built from it described 1000 exchange attempts using the
+statistics of one.
+
+`MultiStateReporter.write_mixing_statistics` runs on *every* iteration, so
+`read_mixing_statistics(slice(None))` returns the complete non-cumulative history — including
+across an interrupted resume and an extension, because the storage is authoritative and not the
+process that wrote it. Summing it is the only honest lifetime figure, and it is a public method, so
+nothing parses a raw NetCDF variable.
+
+Reported per state pair: total proposals, total acceptances, the lifetime fraction, and the
+iteration range covered. Mixing events are **counted** from the stored history and cross-checked
+against the configured stride, never inferred as `iteration // stride`.
+
+**`swap-all` proposals are not a neighbour sweep** and are not labelled as one: they land on all
+state pairs, and a pair may be drawn with `i == j`. A self-swap has `log_p = 0`, is always
+accepted, and is counted on the **diagonal** — so every figure above is computed from off-diagonal
+entries and the diagonal is reported separately.
+
+## Round trips
+
+A complete round trip is:
+
+```
+cold state visited  →  hot state visited later  →  cold state visited later still
+```
+
+The starting position earns nothing. A walker that **begins at the hot state** has not completed a
+round trip when it first reaches cold — it has completed half of one, and must then return to hot
+and come back. The previous counter credited that walker immediately, inflating the count for
+exactly the walkers that had travelled least. It is now a three-state machine, tested for walkers
+starting cold, hot and intermediate, for repeated endpoint residence, half trips and multiple
+trips.
+
 ## Walker view and state view
 
 OpenMMTools stores **walkers** plus a per-iteration `replica_thermodynamic_states` mapping. Both
@@ -265,8 +379,9 @@ production          10 000 ps/replica   wall clock          9.2 min (60 ns aggre
 aggregate rate      9381 ns/day         storage             23.6 MB analysis + 270 MB checkpoint
 ```
 
-Acceptance by neighbouring pair, over the whole run — computed from the stored mapping, not from
-the `.out` summary, which shows only the last attempt:
+Acceptance by neighbouring pair, over the whole run — computed from the stored mapping. (That run
+predates the lifetime-statistics correction, so its `.out` summary showed only the last attempt;
+the figures below were recomputed from the storage. A run made today reports these directly.)
 
 | states | tau | accepted / attempted | rate |
 |---|---|---|---|
@@ -319,5 +434,5 @@ contract-managed datasets and for AIS, which sources equilibrium frames from tho
 - Smoke tests are picoseconds. **A smoke test is not validation, convergence, or evidence of ladder
   quality**, and the acceptance runs here are not either.
 - Implicit-solvent **ligand** REST2 is not scientifically validated and is not claimed to be.
-- Acceptance statistics printed in the `.out` are for the last exchange attempt only, because
-  OpenMMTools resets its proposal matrices each mixing call. The NetCDF holds the full history.
+- Acceptance statistics in the `.out` and the manifest are **lifetime** figures summed over the
+  whole stored history, including across resumes and extensions. The NetCDF remains authoritative.

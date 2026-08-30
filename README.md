@@ -282,8 +282,13 @@ that reaches the network cannot say which revision it used.
 
 The same request with `protocol: REST2` generates a replica-exchange ladder instead of a cMD stage.
 Exchange runs on **`openmmtools.multistate.ReplicaExchangeSampler`**, with `MultiStateReporter`
-NetCDF as the authoritative storage. This repository keeps the REST2 Hamiltonian; OpenMMTools keeps
-propagation, reduced potentials, exchange decisions, storage, checkpointing, restart and extension.
+NetCDF as the authoritative storage.
+
+Under the default `swap-all` scheme OpenMMTools makes **every accept/reject decision** itself, along
+with propagation, reduced potentials, storage, checkpointing, restart and extension. This repository
+keeps the REST2 Hamiltonian and decides only **which iterations attempt an exchange**. Selecting
+`swap-neighbors` instead needs this repository's fix for an upstream defect, and such a run records
+`exchange_decision_owner: md-templates` rather than pretending otherwise.
 
 ```yaml
 # examples: protocol: REST2, production is PER REPLICA, output_interval is the SOLUTE interval
@@ -300,9 +305,17 @@ advanced:
 ```bash
 REST2/rest2.sh                    # one process, one device
 mpiexec -n 6 REST2/rest2.sh       # one rank per replica, each binding its own GPU
-REST2/rest2.sh --resume           # continue in place; the NetCDF says where it stopped
-REST2/rest2.sh --extend 200       # add 200 exchange attempts
+REST2/rest2.sh --resume           # finish an interrupted run; NO restart.json needed
+REST2/rest2.sh --extend 200       # add 200 mixing events to a run that reached its budget
+
+openmm-rest2 --verify-only -x REST2/rest2.nc \
+    --checkpoint REST2/rest2_checkpoint.nc -r REST2/restart.json
 ```
+
+`--verify-only` OPENS the storage and reads it: a file that exists is what a crashed run leaves
+behind, so existence is never treated as completion. `--resume` works from the NetCDF alone,
+because the run's scientific identity is written into reporter metadata before propagation begins
+rather than into a manifest only a finished run produces.
 
 `openmm-rest2` is `openmm-md`'s shape for a ladder — `-i -p -s -c --solute -o -x -r --checkpoint`
 — where `-x` is the multistate NetCDF and `-r` is a small manifest that *references* it. There is
@@ -317,6 +330,10 @@ omega-selective convention, not an unmodified textbook REST2.
 The iteration is the *solute* output interval and exchange is attempted every Nth iteration, so
 solute frames are real intermediate configurations rather than one exchange-boundary frame written
 repeatedly. That costs a measured ~20% on ALA.
+
+Acceptance figures are **lifetime** statistics summed over the whole stored history — including
+across an interrupted resume and an extension — not the last mixing event. A round trip requires
+cold → hot → cold, so a walker that starts hot earns nothing for merely reaching cold.
 
 **See [`docs/openmmtools-rest2.md`](docs/openmmtools-rest2.md)** for the time model and its
 benchmark, the OpenMMTools 0.26.0 version pin and the two upstream defects it corrects, walker
