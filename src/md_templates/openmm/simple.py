@@ -169,31 +169,31 @@ def _exact_multiple(numerator: float, denominator: float, *, what: str, per: str
     return count
 
 
-def _resolve_rest2(protocol: dict[str, Any], *, production_ps: float, solute_interval_ps: float,
-                   timestep_fs: float) -> dict[str, Any]:
-    """The REST2 ladder and its intervals, every conversion made exact here rather than at runtime.
+def _cmd_directory(tau: float) -> str:
+    """`cMD` at tau = 0, `cMD_tau0p5` at 0.5. A NAME, never evidence.
 
-    The request's `production` is production PER REPLICA and its `output_interval` is the SOLUTE
-    output interval -- the fine one, which is the whole point of the OpenMMTools iteration model.
-    The exchange interval and the whole-system interval come from this repository's validated
-    REST2 defaults and are overridable through `advanced:` like any other default.
+    The directory is a convenience for a reader. Nothing downstream infers tau from it: rREST2
+    reads the source run's own `resolved_run.yaml`, and refuses when there is none.
+    """
+    if tau == 0.0:
+        return "cMD"
+    return "cMD_tau" + f"{tau:g}".replace(".", "p")
+
+
+def _resolve_replica(protocol: dict[str, Any], *, production_ps: float, segment_ps: float,
+                     timestep_fs: float, method: str, advanced: dict) -> dict[str, Any]:
+    """The ladder and its schedule, with every conversion made exact here rather than at run time.
+
+    The request's `production` is production PER REPLICA and its `output_interval` is the SEGMENT:
+    the propagation quantum and the stored-frame interval. The exchange interval comes from this
+    repository's validated REST2 defaults and must be a whole multiple of the segment.
     """
     block = protocol["REST2"]
-    # Refused here, at generation, rather than at run time: an unknown scheme would otherwise be
-    # discovered by the launcher after a system had been built.
-    scheme = str(block.get("replica_mixing_scheme", "swap-all"))
-    owner = {"swap-all": "openmmtools", "swap-neighbors": "md-templates"}.get(scheme)
-    if owner is None:
-        raise ConfigError(
-            f"REST2.replica_mixing_scheme must be `swap-all` or `swap-neighbors`, not {scheme!r}. "
-            f"`swap-all` is stock OpenMMTools and is the default; `swap-neighbors` needs this "
-            f"repository's fix for an upstream defect and makes md-templates the owner of the "
-            f"exchange decision.")
     tau_min = float(block["tau_min"])
     tau_max = float(block["tau_max"])
-    replicas = int(block["number_of_replicas"])
-    if replicas < 2:
-        raise ConfigError(f"REST2.number_of_replicas must be at least 2; got {replicas}")
+    states = int(block["number_of_replicas"])
+    if states < 2:
+        raise ConfigError(f"a ladder needs at least 2 states; got {states}")
     if not 0.0 <= tau_min < 1.0 or not 0.0 <= tau_max < 1.0:
         raise ConfigError(f"REST2 tau must lie in [0, 1); got {tau_min} to {tau_max}")
     if tau_max <= tau_min:
@@ -201,46 +201,68 @@ def _resolve_rest2(protocol: dict[str, Any], *, production_ps: float, solute_int
 
     exchange_ps = float(block["duration_per_segment_ps"])
     whole_ps = float(block["whole_system_interval_ps"])
-
-    # The iteration IS the solute interval, so every other interval is counted in iterations.
-    exchange_stride = _exact_multiple(exchange_ps, solute_interval_ps,
-                                      what="the REST2 exchange interval",
-                                      per="the solute output interval")
-    checkpoint_stride = _exact_multiple(whole_ps, solute_interval_ps,
-                                        what="the REST2 whole-system output interval",
-                                        per="the solute output interval")
+    exchange_stride = _exact_multiple(exchange_ps, segment_ps,
+                                      what="the exchange interval", per="the segment duration")
+    whole_stride = _exact_multiple(whole_ps, segment_ps,
+                                   what="the whole-system output interval",
+                                   per="the segment duration")
     exchanges = _exact_multiple(production_ps, exchange_ps,
-                                what="the REST2 production duration per replica",
+                                what="the production duration per replica",
                                 per="the exchange interval")
-    steps_per_iteration = _steps(solute_interval_ps, timestep_fs,
-                                 field_name="output_interval (the REST2 solute interval)")
     equilibration_ps = float(block["equilibration_duration_ps"])
     if equilibration_ps:
-        _exact_multiple(equilibration_ps, solute_interval_ps,
-                        what="the REST2 per-tau equilibration duration",
-                        per="the solute output interval")
+        _exact_multiple(equilibration_ps, segment_ps,
+                        what="the per-state equilibration duration", per="the segment duration")
 
-    step = (tau_max - tau_min) / (replicas - 1)
-    return {
-        "tau_min": tau_min,
-        "tau_max": tau_max,
-        "number_of_replicas": replicas,
-        "taus": [tau_min + step * i for i in range(replicas)],
-        "scale_factors": [(1.0 - (tau_min + step * i)) ** 2 for i in range(replicas)],
+    step = (tau_max - tau_min) / (states - 1)
+    resolved = {
+        "method": method,
+        "tau": [tau_min + step * i for i in range(states)],
+        "scale_factors": [(1.0 - (tau_min + step * i)) ** 2 for i in range(states)],
+        "n_states": states,
+        "tau_min": tau_min, "tau_max": tau_max,
+        "segment_ps": segment_ps,
+        "steps_per_segment": _steps(segment_ps, timestep_fs,
+                                    field_name="output_interval (the segment duration)"),
         "exchange_interval_ps": exchange_ps,
-        "solute_interval_ps": solute_interval_ps,
-        "whole_interval_ps": whole_ps,
-        "equilibration_duration_ps": equilibration_ps,
+        "exchange_stride_segments": exchange_stride,
+        "whole_output_interval_ps": whole_ps,
+        "whole_output_stride_segments": whole_stride,
         "number_of_exchanges": exchanges,
-        "exchange_stride_iterations": exchange_stride,
-        "checkpoint_interval_iterations": checkpoint_stride,
-        "steps_per_iteration": steps_per_iteration,
-        "total_iterations": exchanges * exchange_stride,
+        "total_segments": exchanges * exchange_stride,
         "production_per_replica_ps": production_ps,
+        "equilibration_ps": equilibration_ps,
         "omega_exclusion": bool(block["omega_exclusion"]),
         "enhanced_region": block["enhanced_region"],
-        "replica_mixing_scheme": scheme,
-        "exchange_decision_owner": owner,
+        "exchange_rule": ("built-in neighbouring" if method == "REST2"
+                          else "generated rrest2_exchange.py"),
+    }
+    if method == "rREST2":
+        resolved["reservoir"] = _resolve_reservoir(advanced, resolved, production_ps)
+    return resolved
+
+
+def _resolve_reservoir(advanced: dict, replica: dict, production_ps: float) -> dict[str, Any]:
+    """The reservoir request. Its SOURCE is named here; what that source IS comes from its record.
+
+    Defaults point at the fixed-tau cMD directory for tau_max, which is the run this repository
+    generates for exactly this purpose. The path is a starting point for a reader; `rREST2` reads
+    the source's own `resolved_run.yaml` for tau, temperature and frame timing, and refuses when
+    there is none.
+    """
+    tau_max = replica["tau_max"]
+    directory = _cmd_directory(tau_max)
+    return {
+        "format": "md-templates-reservoir-request/v1",
+        "trajectory": advanced.get("rREST2.reservoir.trajectory",
+                                   f"{directory}/cmd.dcd"),
+        "start_time_ps": float(advanced.get("rREST2.reservoir.start_time_ps", 0.0)),
+        "end_time_ps": float(advanced.get("rREST2.reservoir.end_time_ps", production_ps)),
+        "frames": int(advanced.get("rREST2.reservoir.frames", 20)),
+        "refresh_interval_exchanges": int(
+            advanced.get("rREST2.reservoir.refresh_interval_exchanges", 5)),
+        "random_seed": int(advanced.get("rREST2.reservoir.random_seed", 20260830)),
+        "source_directory": directory,
     }
 
 
@@ -255,11 +277,13 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
         raise ConfigError(f"type must be `peptide` or `ligand`, not {request.type!r}")
     if request.solvent not in ("explicit", "implicit"):
         raise ConfigError(f"solvent must be `explicit` or `implicit`, not {request.solvent!r}")
-    if str(request.protocol).lower() not in ("cmd", "rest2"):
+    protocol_name = {"cmd": "cMD", "rest2": "REST2", "rrest2": "rREST2"}.get(
+        str(request.protocol).lower())
+    if protocol_name is None:
         raise ConfigError(
-            f"protocol must be `cMD` or `REST2`, not {request.protocol!r}. AIS keeps its existing "
-            f"command and is untouched here.")
-    rest2_requested = str(request.protocol).lower() == "rest2"
+            f"protocol must be `cMD`, `REST2` or `rREST2`, not {request.protocol!r}. AIS keeps "
+            f"its existing command and is untouched here.")
+    replica_requested = protocol_name in ("REST2", "rREST2")
 
     implicit = request.solvent == "implicit"
     peptide = request.type == "peptide"
@@ -282,7 +306,7 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
                 f"them.")
 
     system_config = D.sys_defaults(peptide=peptide, solvent=solvent_name)
-    protocol = D.md_defaults(methods=(("REST2",) if rest2_requested else ("cMD",)),
+    protocol = D.md_defaults(methods=(("REST2",) if replica_requested else ("cMD",)),
                              solvent=solvent_name)
     advanced = dict(request.advanced or {})
 
@@ -342,18 +366,28 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
                                if name.endswith("1kcal") else 0.0),
         })
 
-    stage_names = [s["name"] for s in stages] + ["cMD", "REST2", "min"]
+    stage_names = [s["name"] for s in stages] + ["cMD", "REST2", "rREST2", "min"]
     # `advanced.common.random_seed` is honoured rather than accepted and ignored: it becomes the
     # base every stage seed is derived from, and each derived value is printed in the preset and
     # written as a literal into the protocol file.
     seeds = derive_seeds(common.get("random_seed"), stage_names)
 
-    rest2 = _resolve_rest2(protocol, production_ps=production_ps, solute_interval_ps=interval_ps,
-                           timestep_fs=timestep_fs) if rest2_requested else None
+    replica = _resolve_replica(protocol, production_ps=production_ps,
+                               segment_ps=interval_ps, timestep_fs=timestep_fs,
+                               method=protocol_name,
+                               advanced=advanced) if replica_requested else None
+    # A fixed-tau cMD walker. tau = 0 is ordinary conventional MD and the System is untouched;
+    # tau > 0 scales the solute Hamiltonian exactly as the matching REST2 rung does, which is what
+    # makes such a run a legitimate reservoir source for rREST2 at that tau.
+    cmd_tau = float((protocol.get("cMD") or {}).get("tau", 0.0) or 0.0)
+    if not 0.0 <= cmd_tau < 1.0:
+        raise ConfigError(f"cMD.tau must lie in [0, 1); got {cmd_tau}")
 
     return {
         "seeds": seeds,
-        "rest2": rest2,
+        "replica": replica,
+        "cmd_tau": cmd_tau,
+        "cmd_directory": _cmd_directory(cmd_tau),
         "water_model": (None if implicit
                         else (system_config.get("solvent") or {}).get("model")),
         "system_id": request.system,
@@ -361,7 +395,7 @@ def resolve(request: SetupRequest) -> dict[str, Any]:
         "type": request.type,
         "solvent": request.solvent,
         "implicit": implicit,
-        "protocol": "REST2" if rest2_requested else "cMD",
+        "protocol": protocol_name,
         "platform": request.platform,
         "sys_config": system_config,
         "protocol_config": protocol,
@@ -413,32 +447,41 @@ def format_preset(resolved: dict[str, Any]) -> str:
                      f"{stage['steps']:>10,d} steps  {stage['ensemble']}"
                      + (f"  restraint {stage['restraint_kcal']} kcal/mol/A^2"
                         if stage["restraint_kcal"] else ""))
-    rest2 = resolved.get("rest2")
-    if rest2:
-        ladder = ", ".join(f"{tau:.3f}" for tau in rest2["taus"])
-        scales = ", ".join(f"{s:.4f}" for s in rest2["scale_factors"])
+    replica = resolved.get("replica")
+    if replica:
+        ladder = ", ".join(f"{tau:.3f}" for tau in replica["tau"])
+        scales = ", ".join(f"{s:.4f}" for s in replica["scale_factors"])
         lines += [
-            f"REST2 ladder  {rest2['number_of_replicas']} replicas, tau [{ladder}]",
+            f"{replica['method']} ladder  {replica['n_states']} states, tau [{ladder}]",
             f"              s = (1-tau)^2 [{scales}]  -- one thermostat at "
             f"{resolved['temperature_K']} K, NOT temperature REMD",
-            f"              omega-selective: omega torsions "
-            + ("left UNSCALED" if rest2["omega_exclusion"] else "SCALED"),
-            f"tau equil     {rest2['equilibration_duration_ps']:.3f} ps per replica "
+            "              omega-selective: omega torsions "
+            + ("left UNSCALED" if replica["omega_exclusion"] else "SCALED"),
+            f"equilibration {replica['equilibration_ps']:.3f} ps per state "
             f"(not counted as production)",
-            f"production    {rest2['production_per_replica_ps']:.3f} ps per replica  "
-            f"{rest2['number_of_exchanges']:,d} exchange attempts",
-            f"exchange      every {rest2['exchange_interval_ps']:.3f} ps  "
-            f"({rest2['exchange_stride_iterations']} iterations)",
-            f"solute out    every {rest2['solute_interval_ps']:.3f} ps  "
-            f"({rest2['steps_per_iteration']:,d} steps = one iteration)",
-            f"whole out     every {rest2['whole_interval_ps']:.3f} ps  "
-            f"({rest2['checkpoint_interval_iterations']} iterations)",
-            f"engine        openmmtools ReplicaExchangeSampler + MultiStateReporter NetCDF",
+            f"production    {replica['production_per_replica_ps']:.3f} ps per replica  "
+            f"{replica['number_of_exchanges']:,d} exchange attempts",
+            f"segment       {replica['segment_ps']:.3f} ps  "
+            f"({replica['steps_per_segment']:,d} steps = one propagation quantum and one frame)",
+            f"exchange      every {replica['exchange_interval_ps']:.3f} ps  "
+            f"({replica['exchange_stride_segments']} segments)",
+            f"whole out     every {replica['whole_output_interval_ps']:.3f} ps  "
+            f"({replica['whole_output_stride_segments']} segments)",
+            f"exchange rule {replica['exchange_rule']}",
+            "executor      openmm-md -ng N --groupfile ...  (owned runtime, owned NetCDF)",
         ]
+        if replica.get("reservoir"):
+            r = replica["reservoir"]
+            lines += [
+                f"reservoir     Boltzmann, {r['frames']} frames from {r['trajectory']}",
+                f"              refresh every {r['refresh_interval_exchanges']} exchange(s) at "
+                f"tau_max; tau and temperature come from the source's own record",
+            ]
     else:
         lines += [
             f"production    {resolved['production_ps']:.3f} ps  "
-            f"{resolved['production_steps']:,d} steps",
+            f"{resolved['production_steps']:,d} steps"
+            + (f"  at fixed tau = {resolved['cmd_tau']:g}" if resolved.get("cmd_tau") else ""),
             f"output every  {resolved['output_interval_ps']:.3f} ps  "
             f"{resolved['output_interval_steps']:,d} steps  "
             f"({resolved['production_steps'] // resolved['output_interval_steps']:,d} frames)",
@@ -646,15 +689,10 @@ def generate(resolved: dict[str, Any], *, input_path: Path, output_root: Path,
     runner.chmod(0o755)
     written.append("bin/openmm-md")
 
-    rest2 = resolved.get("rest2")
-    if rest2:
-        # The REST2 ladder has its own file interface, because its outputs are not one trajectory
-        # and one restart: they are a multistate NetCDF, a checkpoint NetCDF and a manifest.
-        rest2_runner = binaries / "openmm-rest2"
-        shutil.copy2(TEMPLATES / "openmm_rest2.py", rest2_runner)
-        rest2_runner.chmod(0o755)
-        written.append("bin/openmm-rest2")
+    replica = resolved.get("replica")
 
+    production_directory = (resolved["protocol"] if resolved.get("replica")
+                            else resolved["cmd_directory"])
     stage_names = [s["name"] for s in resolved["equilibration_stages"]] + [resolved["protocol"]]
     (system_dir / "paths.sh").write_text(
         emit.paths_sh(relative_project, resolved["system_id"], stage_names), encoding="utf-8")
@@ -690,33 +728,59 @@ def generate(resolved: dict[str, Any], *, input_path: Path, output_root: Path,
         written += [f"eq/{name}/{name}.py", f"eq/{name}/{name}.sh"]
         launchers.append(f"eq/{name}/{name}.sh")
         parent = f"${{{directory_variable[name]}}}/{name}.state.xml"
+        # The group file is read after the launcher has cd'd to SYSTEM_ROOT, so its paths are
+        # relative to the system root rather than to the shell variable map.
+        parent_relative = f"eq/{name}/{name}.state.xml"
 
-    if rest2:
-        directory = system_dir / "REST2"
+    if replica:
+        method = resolved["protocol"]
+        stem = "rest2" if method == "REST2" else "rrest2"
+        directory = system_dir / method
         directory.mkdir(exist_ok=True)
-        (directory / "rest2.py").write_text(emit.rest2_protocol(resolved), encoding="utf-8")
-        (directory / "rest2.sh").write_text(
-            emit.rest2_launcher(parent_restart=parent), encoding="utf-8")
-        (directory / "rest2.sh").chmod(0o755)
-        # The engine and the scaling convention travel WITH the project. `rest2_scaling.py` is the
-        # same file cMD and AIS get, so a ladder cannot drift from the fixed-tau walker it is meant
-        # to match, and `rest2_openmmtools.py` carries the version pin its overrides depend on.
-        for helper in ("rest2_runtime.py", "rest2_openmmtools.py", "rest2_scaling.py",
-                       "rest2_statistics.py", "rest2_validate.py"):
+        directory_var = "REST2_DIR" if method == "REST2" else "RREST2_DIR"
+
+        (directory / f"{stem}.py").write_text(
+            emit.replica_protocol_file(resolved, method=method), encoding="utf-8")
+        (directory / f"{stem}.group").write_text(
+            emit.replica_group_file(resolved, method=method, protocol_name=f"{stem}.py",
+                                    parent_state=parent_relative), encoding="utf-8")
+        rule = reservoir = None
+        helpers = ["replica_runtime.py", "replica_protocol.py", "replica_engine.py",
+                   "replica_driver.py", "replica_storage.py", "replica_statistics.py",
+                   "replica_validate.py", "exchange_rules.py", "rest2_scaling.py"]
+        if method == "rREST2":
+            rule, reservoir = "rrest2_exchange.py", "reservoir.yaml"
+            (directory / "reservoir.yaml").write_text(
+                emit.reservoir_declaration(resolved), encoding="utf-8")
+            written.append(f"{method}/reservoir.yaml")
+            # The reservoir reader and the shared source-ensemble rules travel with the project.
+            helpers += ["rrest2_exchange.py", "rrest2_reservoir.py", "source_ensemble.py"]
+
+        (directory / f"{stem}.sh").write_text(
+            emit.replica_launcher(resolved, method=method, directory_var=directory_var,
+                                  protocol_name=f"{stem}.py", stem=stem,
+                                  exchange_rule=rule, reservoir=reservoir), encoding="utf-8")
+        (directory / f"{stem}.sh").chmod(0o755)
+        for helper in helpers:
             shutil.copy2(TEMPLATES / helper, directory / helper)
-            written.append(f"REST2/{helper}")
-        written += ["REST2/rest2.py", "REST2/rest2.sh"]
-        launchers.append("REST2/rest2.sh")
+            written.append(f"{method}/{helper}")
+        written += [f"{method}/{stem}.py", f"{method}/{stem}.group", f"{method}/{stem}.sh"]
+        launchers.append(f"{method}/{stem}.sh")
     else:
-        (system_dir / "cMD").mkdir(exist_ok=True)
-        (system_dir / "cMD" / "cmd.py").write_text(emit.production_protocol(resolved),
-                                                   encoding="utf-8")
-        production = emit.launcher("cmd", directory_var="CMD_DIR", depth=1, parent_restart=parent,
-                                   trajectory=True, checkpoint=True)
-        (system_dir / "cMD" / "cmd.sh").write_text(production, encoding="utf-8")
-        (system_dir / "cMD" / "cmd.sh").chmod(0o755)
-        written += ["cMD/cmd.py", "cMD/cmd.sh"]
-        launchers.append("cMD/cmd.sh")
+        name = resolved["cmd_directory"]
+        directory = system_dir / name
+        directory.mkdir(exist_ok=True)
+        (directory / "cmd.py").write_text(emit.production_protocol(resolved), encoding="utf-8")
+        if resolved.get("cmd_tau"):
+            # A fixed-tau walker scales through the same module the ladder uses, so it needs it.
+            shutil.copy2(TEMPLATES / "rest2_scaling.py", directory / "rest2_scaling.py")
+            written.append(f"{name}/rest2_scaling.py")
+        production = emit.launcher("cmd", directory_var="CMD_DIR", depth=1,
+                                   parent_restart=parent, trajectory=True, checkpoint=True)
+        (directory / "cmd.sh").write_text(production, encoding="utf-8")
+        (directory / "cmd.sh").chmod(0o755)
+        written += [f"{name}/cmd.py", f"{name}/cmd.sh"]
+        launchers.append(f"{name}/cmd.sh")
 
     (system_dir / "run.sh").write_text(emit.run_all_sh(launchers), encoding="utf-8")
     (system_dir / "run.sh").chmod(0o755)

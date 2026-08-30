@@ -184,7 +184,9 @@ def run(files):
     Path(files.restart).write_text(XmlSerializer.serialize(state))
     if files.checkpoint:
         simulation.saveCheckpoint(files.checkpoint)
+
     print("run_status: completed")
+
 '''
 
 
@@ -194,9 +196,25 @@ def production_protocol(r: dict[str, Any]) -> str:
     frames = r["production_steps"] // r["output_interval_steps"]
     seeds = r["seeds"]["cMD"]
 
+    tau = float(r.get("cmd_tau", 0.0) or 0.0)
     names = ["LangevinMiddleIntegrator", "Platform", "XmlSerializer", "unit"]
     if npt:
         names.insert(0, "MonteCarloBarostat")
+    # A fixed-tau walker scales the solute Hamiltonian through the SAME module the ladder uses, so
+    # a cMD run at tau and the REST2 rung at tau are the same Hamiltonian by construction. At
+    # tau = 0 `build_scaled_system` returns the System untouched.
+    scaling = ("" if tau == 0.0 else
+               "from rest2_scaling import build_scaled_system, scale_factor_for_tau\n"
+               "import yaml\n")
+    scale_block = ("" if tau == 0.0 else f'''
+    solute = yaml.safe_load(Path(files.topology).parent.joinpath("solute.yaml").read_text())
+    solute_indices = list(range(int(solute["n_solute_atoms"])))
+    excluded = [tuple(int(a) for a in pair)
+                for pair in (solute.get("rest2") or {{}}).get("omega_excluded_bonds", [])]
+    system = build_scaled_system(system, solute_indices, {tau}, excluded_bonds=excluded)
+    print(f"# fixed tau = {tau:g}, s = {{scale_factor_for_tau({tau}):.6f}}, "
+          f"{{len(excluded)}} omega bond(s) left unscaled")
+''')
     barostat = f'''
     barostat = MonteCarloBarostat({r["pressure_bar"]} * unit.bar,
                                   {r["temperature_K"]} * unit.kelvin,
@@ -214,12 +232,12 @@ Run through openmm-md, which supplies every path.
 
 {_imports(tuple(names), ("CheckpointReporter", "DCDReporter", "PDBFile", "Simulation",
                          "StateDataReporter"))}
-
+{scaling}
 
 def run(files):
     pdb = PDBFile(files.topology)
     system = XmlSerializer.deserialize(Path(files.system).read_text())
-{barostat}
+{scale_block}{barostat}
     integrator = LangevinMiddleIntegrator({r["temperature_K"]} * unit.kelvin,
                                           {r["friction_per_ps"]} / unit.picosecond,
                                           {r["timestep_fs"]} * unit.femtoseconds)
@@ -266,7 +284,43 @@ def run(files):
     Path(files.restart).write_text(XmlSerializer.serialize(state))
     if files.checkpoint:
         simulation.saveCheckpoint(files.checkpoint)
+
+    # The companion runtime record. This is what makes the trajectory usable as an AIS source or
+    # an rREST2 reservoir: tau, temperature and the frame-time map are recorded HERE, where they
+    # were decided. A directory name is never evidence, and a frame index is never a time.
+    _write_resolved_run(files)
     print("run_status: completed")
+
+
+def _write_resolved_run(files):
+    import json
+
+    record = {{
+        "format": "md-templates-resolved-run/v1",
+        "method": "cMD",
+        "tau": {r.get("cmd_tau", 0.0) or 0.0},
+        "temperature_kelvin": {r["temperature_K"]},
+        "ensemble": "{"NPT" if npt else "NVT"}",
+        "timestep_fs": {r["timestep_fs"]},
+        "friction_per_ps": {r["friction_per_ps"]},
+        "steps": {r["production_steps"]},
+        "duration_ps": {r["production_ps"]},
+        "trajectories": {{
+            "whole_system": {{
+                "file": Path(files.trajectory).name if files.trajectory else None,
+                "frames": {frames},
+                "frame_time_map": {{
+                    # DCDReporter writes AT step `interval`, not at step 0, so frame 0 is at one
+                    # interval of physical time and not at zero.
+                    "first_frame_time_ps": {r["output_interval_ps"]},
+                    "frame_interval_ps": {r["output_interval_ps"]},
+                    "convention": "DCDReporter writes at step interval; frame i is at (i+1)*interval",
+                }},
+            }},
+        }},
+    }}
+    Path(files.output).parent.joinpath("resolved_run.yaml").write_text(
+        json.dumps(record, indent=2), encoding="utf-8")
 '''
 
 
@@ -281,7 +335,8 @@ def paths_sh(relative_project: str, system_id: str, stage_names: list[str]) -> s
     """
     # Only the equilibration stages have a directory variable here; the production method
     # (cMD or REST2) already has one below, and mapping it twice would be a KeyError.
-    eq = [n for n in stage_names if n not in ("cMD", "REST2", "AIS")]
+    eq = [n for n in stage_names if n not in ("cMD", "REST2", "rREST2", "AIS")
+          and not n.startswith("cMD_tau")]
     lines = [
         '#!/usr/bin/env bash',
         '# Portable directory map. Sourced by every stage launcher; contains no machine path.',
@@ -303,15 +358,17 @@ def paths_sh(relative_project: str, system_id: str, stage_names: list[str]) -> s
     lines += [
         'export CMD_DIR="${SYSTEM_ROOT}/cMD"',
         '',
-        '# Reserved for the later REST2/AIS work so the map stays stable across methods.',
+        '# A fixed-tau cMD walker lives in its own directory so it cannot be confused with the',
+        '# unscaled one. The NAME is a convenience for a reader: nothing infers tau from it, and',
+        '# rREST2 reads the run own resolved_run.yaml instead.',
         'export CMD_TAU0P5_DIR="${SYSTEM_ROOT}/cMD_tau0p5"',
         'export REST2_DIR="${SYSTEM_ROOT}/REST2"',
+        'export RREST2_DIR="${SYSTEM_ROOT}/rREST2"',
         'export AIS_DIR="${SYSTEM_ROOT}/AIS"',
         '',
         '# The generated copy is authoritative for this system. Override deliberately if you have',
         '# a compatible executable elsewhere; ordinary use needs no installed command.',
         'export OPENMM_MD="${OPENMM_MD:-${SYSTEM_ROOT}/bin/openmm-md}"',
-        'export OPENMM_REST2="${OPENMM_REST2:-${SYSTEM_ROOT}/bin/openmm-rest2}"',
         '',
     ]
     return "\n".join(lines)
@@ -362,86 +419,149 @@ echo "== done =="
 '''
 
 
-# --- REST2 ---------------------------------------------------------------------------------------
+# --- replica exchange: REST2 and rREST2 -----------------------------------------------------------
 
-def rest2_protocol(r: dict[str, Any]) -> str:
-    """The concise `rest2.py`: the scientific protocol and nothing else.
+def replica_protocol_file(r: dict[str, Any], *, method: str) -> str:
+    """The concise grouped protocol. It names a ladder and holds no path.
 
-    The exchange implementation is NOT here. It lives in `rest2_runtime.py`, copied into the
-    project beside this file, so the file a user reads and edits stays the size of the physics.
+    `openmm-md` reads `protocol` out of this file. The exchange loop, the storage, the MPI
+    plumbing and the reservoir handling are all elsewhere, which is what keeps this the size of
+    the science.
     """
-    implicit = r["implicit"]
-    pressure = "None" if implicit else f'{r["pressure_bar"]}'
-    ensemble = "NVT" if implicit else "NPT"
-    taus = ", ".join(f"{t:.4f}" for t in r["rest2"]["taus"])
-    seeds = r["seeds"]["REST2"]
+    block = r["replica"]
+    ladder = ", ".join(f"{value:.4f}" for value in block["tau"])
+    reservoir_note = ""
+    if method == "rREST2":
+        reservoir_note = (
+            "\nThe hottest rung is periodically refreshed from a Boltzmann reservoir prepared "
+            "from a\nfixed-tau cMD run at the same tau, temperature and fixed volume. The "
+            "reservoir and its\nschedule are declared in reservoir.yaml; the refresh rule is "
+            "rrest2_exchange.py.\n")
     return f'''#!/usr/bin/env python
-"""REST2 for {r["system_id"]}: {r["rest2"]["number_of_replicas"]} replicas, tau {r["rest2"]["tau_min"]} to {r["rest2"]["tau_max"]}, {ensemble} at {r["temperature_K"]} K.
+"""{method} for {r["system_id"]}: {block["n_states"]} states, tau {block["tau"][0]} to {block["tau"][-1]}, NVT at {r["temperature_K"]} K.
 
-Omega-selective REST2: torsions about a peptide omega bond are left UNSCALED. Every replica is
+Omega-selective REST2: torsions about a peptide omega bond are left UNSCALED. Every state is
 thermostatted at the SAME {r["temperature_K"]} K and differs only by Hamiltonian -- this is
-Hamiltonian scaling, not temperature REMD.
+Hamiltonian scaling, not temperature REMD, and an exchange never rescales velocities.
 
-    tau ladder : [{taus}]
+    tau ladder : [{ladder}]
     s = (1-tau)^2 on solute-solute terms, sqrt(s) = 1-tau on solute-environment terms
-
-Exchange scheme: {r["rest2"]["replica_mixing_scheme"]}. The accept/reject decision is made by
-{r["rest2"]["exchange_decision_owner"]}; propagation, reduced potentials, NetCDF storage,
-checkpointing and restart are OpenMMTools'. md-templates decides only WHICH iterations attempt an
-exchange (every {r["rest2"]["exchange_stride_iterations"]}).
-Run through openmm-rest2, which supplies every path.
+{reservoir_note}
+Run through openmm-md with the group file beside this one, which supplies every path.
 """
-from rest2_runtime import REST2
+from replica_runtime import REST2Protocol
 
-
-def run(files):
-    REST2(
-        files,
-        tau_min={r["rest2"]["tau_min"]},
-        tau_max={r["rest2"]["tau_max"]},
-        number_of_replicas={r["rest2"]["number_of_replicas"]},
-        exchange_interval_ps={r["rest2"]["exchange_interval_ps"]},
-        solute_output_interval_ps={r["rest2"]["solute_interval_ps"]},
-        whole_output_interval_ps={r["rest2"]["whole_interval_ps"]},
-        equilibration_duration_ps={r["rest2"]["equilibration_duration_ps"]},
-        temperature_k={r["temperature_K"]},
-        pressure_bar={pressure},
-        timestep_fs={r["timestep_fs"]},
-        friction_per_ps={r["friction_per_ps"]},
-        random_seed={seeds["integrator"]},
-        hydrogen_mass_amu={r["hydrogen_mass_amu"]!r},
-        replica_mixing_scheme={r["rest2"]["replica_mixing_scheme"]!r},
-        platform={r["platform"]!r},
-    ).run(number_of_exchanges={r["rest2"]["number_of_exchanges"]})
+protocol = REST2Protocol(
+    tau=[{ladder}],
+    temperature_k={r["temperature_K"]},
+    timestep_fs={r["timestep_fs"]},
+    segment_ps={block["segment_ps"]},
+    exchange_interval_ps={block["exchange_interval_ps"]},
+    whole_output_interval_ps={block["whole_output_interval_ps"]},
+    number_of_exchanges={block["number_of_exchanges"]},
+    friction_per_ps={r["friction_per_ps"]},
+    equilibration_ps={block["equilibration_ps"]},
+    random_seed={r["seeds"][method]["integrator"]},
+    hydrogen_mass_amu={r["hydrogen_mass_amu"]!r},
+)
 '''
 
 
-def rest2_launcher(*, parent_restart: str) -> str:
-    """The Amber-like REST2 command. Every path explicit, none of them machine-specific.
+def replica_group_file(r: dict[str, Any], *, method: str, protocol_name: str,
+                       parent_state: str) -> str:
+    """The Amber-like group file: one line per state, inputs only.
 
-    Amber would need a groupfile naming one input set per replica. There is none here because
-    OpenMMTools keeps one multistate NetCDF for the whole ladder: the replicas share a topology, a
-    base System and a starting state, and differ only by tau.
+    Every line names the SAME protocol, topology, System and starting state, because a REST2
+    ladder is one system at several Hamiltonians -- the tau of a group is its index in the
+    protocol's ladder, not a separate file. `--group-index` is stated rather than taken from line
+    order, so a reordered file still means the same thing.
     """
+    lines = [f"# {method} for {r['system_id']}: {r['replica']['n_states']} states, "
+             f"tau {r['replica']['tau'][0]} to {r['replica']['tau'][-1]}.",
+             "# One group per line, inputs only. Run-level -o/-x/-r/--checkpoint go on the",
+             "# openmm-md command, because they describe the coordinated run.",
+             "#",
+             "# Parsed with shlex, never evaluated by a shell."]
+    for index in range(r["replica"]["n_states"]):
+        lines.append(
+            f"-i {method}/{protocol_name} -p input/topology.pdb -s input/system.xml "
+            f"-c {parent_state} --solute input/solute.yaml --group-index {index}")
+    return "\n".join(lines) + "\n"
+
+
+def replica_launcher(r: dict[str, Any], *, method: str, directory_var: str, protocol_name: str,
+                     stem: str, exchange_rule: str | None = None,
+                     reservoir: str | None = None) -> str:
+    """The launcher. One executable, every path explicit, none of them machine-specific."""
+    extra = []
+    if exchange_rule:
+        extra.append(f'  --exchange-rule "${{{directory_var}}}/{exchange_rule}" \\')
+    if reservoir:
+        extra.append(f'  --reservoir "${{{directory_var}}}/{reservoir}" \\')
+    extra_block = ("\n" + "\n".join(extra)) if extra else ""
+    states = r["replica"]["n_states"]
     return f'''#!/usr/bin/env bash
-# REST2: one ladder, one NetCDF. Add --resume to continue, --extend N to lengthen it.
+# {method}: one ladder, one coordinated run, one executor.
 #
-#   ./rest2.sh                 single process, one device
-#   mpiexec -n 6 ./rest2.sh    one rank per replica; each rank binds its own CUDA device
+#   ./{stem}.sh                        single process, one device
+#   mpiexec -n {states} ./{stem}.sh    one rank per state; each rank binds its own CUDA device
+#   ./{stem}.sh --resume               finish an interrupted run; no restart.json needed
+#   ./{stem}.sh --extend 200           add 200 exchange attempts to a completed run
+#   ./{stem}.sh --verify-only          open the stored output and check it, running nothing
 set -euo pipefail
 
 STAGE_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 source "${{STAGE_DIR}}/../paths.sh"
+cd "${{SYSTEM_ROOT}}"
 
-"${{OPENMM_REST2}}" \\
-  -i "${{REST2_DIR}}/rest2.py" \\
-  -p "${{INPUT_DIR}}/topology.pdb" \\
-  -s "${{INPUT_DIR}}/system.xml" \\
-  -c "{parent_restart}" \\
-  --solute "${{INPUT_DIR}}/solute.yaml" \\
-  -o "${{REST2_DIR}}/rest2.out" \\
-  -x "${{REST2_DIR}}/rest2.nc" \\
-  -r "${{REST2_DIR}}/restart.json" \\
-  --checkpoint "${{REST2_DIR}}/rest2_checkpoint.nc" \\
+"${{OPENMM_MD}}" \\
+  -ng {states} \\
+  --groupfile "${{{directory_var}}}/{stem}.group" \\{extra_block}
+  -o "${{{directory_var}}}/{stem}.out" \\
+  -x "${{{directory_var}}}/{stem}.nc" \\
+  -r "${{{directory_var}}}/restart.json" \\
+  --checkpoint "${{{directory_var}}}/{stem}_checkpoint.nc" \\
   "$@"
+'''
+
+
+def reservoir_declaration(r: dict[str, Any]) -> str:
+    """What the rREST2 rule refreshes from, and every assumption it rests on.
+
+    The SOURCE PATH IS NOT EVIDENCE. tau and temperature come from the source run's own companion
+    `resolved_run.yaml`; a directory called `cMD_tau0p5` can be renamed or copied, and a reservoir
+    drawn from the wrong ensemble runs to completion while being wrong.
+    """
+    block = r["replica"]
+    reservoir = block["reservoir"]
+    return f'''# The Boltzmann reservoir the hottest rung is refreshed from.
+#
+# v1 accepts a refresh with probability ONE, and that is only correct because the reservoir is
+# Boltzmann-weighted at exactly the top rung's tau, temperature, Hamiltonian and fixed-volume
+# ensemble. `rrest2_reservoir.py` checks every clause of that and refuses anything else.
+#
+# The finite-reservoir approximation is real: {reservoir["frames"]} configurations are not the top
+# state's full equilibrium distribution, and the assumption that the selected window represents it
+# is an assumption, not a result.
+#
+# Roitberg, Okur, Simmerling, J. Phys. Chem. B 2007, 111, 2415; doi:10.1021/jp068335b
+# Kasavajhala, Lam, Simmerling, J. Chem. Inf. Model. 2020, 60, 1218; PMCID PMC7725893
+format: {reservoir["format"]}
+weighting: boltzmann
+ensemble: NVT
+prepared_directory: reservoir
+# In EXCHANGE iterations, not segments.
+refresh_interval_exchanges: {reservoir["refresh_interval_exchanges"]}
+random_seed: {reservoir["random_seed"]}
+source:
+  # Relative to the system root. The path locates the run; it never establishes what it is.
+  trajectory: {reservoir["trajectory"]}
+  # null: tau and temperature come from the source run's own resolved_run.yaml. Stating them here
+  # too is allowed and is then CHECKED against that record rather than trusted over it.
+  source_tau: null
+  source_temperature_k: null
+  start_time_ps: {reservoir["start_time_ps"]}
+  end_time_ps: {reservoir["end_time_ps"]}
+  frames: {reservoir["frames"]}
+  allow_sampling_with_replacement: false
 '''
