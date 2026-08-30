@@ -161,9 +161,18 @@ def generated(tmp_path_factory):
     return result["system_dir"]
 
 
+#: Modules COPIED into a stage directory, not protocols written for it. They carry shared
+#: machinery -- the REST2 scaling convention, the companion runtime record -- and are reviewed as
+#: library code, so the "keep the protocol small" budget below does not apply to them.
+COPIED_HELPERS = {"rest2_scaling.py", "runtime_record.py", "source_ensemble.py"}
+
+
 def _stage_scripts(system_dir: Path) -> list[Path]:
-    return sorted([*system_dir.glob("min/*.py"), *system_dir.glob("eq/*/*.py"),
-                   *system_dir.glob("cMD/*.py")])
+    """Every PROTOCOL file a stage directory holds. Copied helpers are not protocols."""
+    return sorted(path for path in [*system_dir.glob("min/*.py"), *system_dir.glob("eq/*/*.py"),
+                                    *system_dir.glob("cMD/*.py"),
+                                    *system_dir.glob("cMD_tau*/*.py")]
+                  if path.name not in COPIED_HELPERS)
 
 
 def test_the_layout_is_the_documented_one(generated):

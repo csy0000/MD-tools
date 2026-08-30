@@ -219,17 +219,33 @@ def test_the_runner_imports_nothing_beyond_the_standard_library_and_openmm():
     import ast
 
     tree = ast.parse(RUNNER.read_text())
-    imported = set()
+    module_level, deferred = set(), set()
     for node in ast.walk(tree):
+        names = set()
         if isinstance(node, ast.Import):
-            imported.update(alias.name.split(".")[0] for alias in node.names)
+            names = {alias.name.split(".")[0] for alias in node.names}
         elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module.split(".")[0])
+            names = {node.module.split(".")[0]}
+        if not names:
+            continue
+        # An import inside a function body is paid for only when that path runs.
+        inside_function = any(
+            isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef))
+            for parent in ast.walk(tree)
+            if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node in ast.walk(parent))
+        (deferred if inside_function else module_level).update(names)
 
-    allowed = {"argparse", "contextlib", "importlib", "os", "sys", "traceback", "pathlib",
-               "types", "__future__", "openmm"}
-    assert imported <= allowed, f"openmm-md imports beyond the allowed set: {imported - allowed}"
-    assert "md_templates" not in imported and "yaml" not in imported
+    allowed = {"argparse", "contextlib", "importlib", "json", "os", "shlex", "sys", "traceback",
+               "pathlib", "types", "__future__", "openmm"}
+    assert module_level <= allowed, (
+        f"openmm-md imports beyond the standard library and OpenMM at module level: "
+        f"{module_level - allowed}. A single generated stage must still run once md_templates is "
+        f"gone, so anything else has to be deferred into the path that needs it.")
+    assert "md_templates" not in module_level | deferred
+    # Grouped mode legitimately imports the runtime modules copied beside the protocol -- but only
+    # inside the grouped path, so a single-stage run never touches them.
+    assert "yaml" not in module_level, "yaml is a grouped-mode dependency and must stay deferred"
 
 
 # --- the completion marker -----------------------------------------------------

@@ -207,8 +207,9 @@ def production_protocol(r: dict[str, Any]) -> str:
     # A fixed-tau walker scales the solute Hamiltonian through the SAME module the ladder uses, so
     # a cMD run at tau and the REST2 rung at tau are the same Hamiltonian by construction. At
     # tau = 0 `build_scaled_system` returns the System untouched.
-    scaling = ("" if tau == 0.0 else
+    scaling = ("from runtime_record import write_resolved_run\n" if tau == 0.0 else
                "from rest2_scaling import build_scaled_system, scale_factor_for_tau\n"
+               "from runtime_record import write_resolved_run\n"
                "import yaml\n")
     scale_block = ("" if tau == 0.0 else f'''
     solute = yaml.safe_load(Path(files.topology).parent.joinpath("solute.yaml").read_text())
@@ -289,42 +290,17 @@ def run(files):
     if files.checkpoint:
         simulation.saveCheckpoint(files.checkpoint)
 
-    # The companion runtime record. This is what makes the trajectory usable as an AIS source or
-    # an rREST2 reservoir: tau, temperature and the frame-time map are recorded HERE, where they
-    # were decided. A directory name is never evidence, and a frame index is never a time.
-    _write_resolved_run(files)
+    # The companion runtime record: tau, temperature, ensemble and the frame-time map, recorded
+    # where they were decided. This is what makes the trajectory usable as an AIS source or an
+    # rREST2 reservoir, and why neither ever has to read a directory name.
+    write_resolved_run(
+        Path(files.output).parent, method="cMD", tau={r.get("cmd_tau", 0.0) or 0.0},
+        temperature_kelvin={r["temperature_K"]}, ensemble="{"NPT" if npt else "NVT"}",
+        timestep_fs={r["timestep_fs"]}, friction_per_ps={r["friction_per_ps"]},
+        steps={r["production_steps"]}, duration_ps={r["production_ps"]},
+        trajectory_name=Path(files.trajectory).name if files.trajectory else None,
+        frames={frames}, interval_ps={r["output_interval_ps"]})
     print("run_status: completed")
-
-
-def _write_resolved_run(files):
-    import json
-
-    record = {{
-        "format": "md-templates-resolved-run/v1",
-        "method": "cMD",
-        "tau": {r.get("cmd_tau", 0.0) or 0.0},
-        "temperature_kelvin": {r["temperature_K"]},
-        "ensemble": "{"NPT" if npt else "NVT"}",
-        "timestep_fs": {r["timestep_fs"]},
-        "friction_per_ps": {r["friction_per_ps"]},
-        "steps": {r["production_steps"]},
-        "duration_ps": {r["production_ps"]},
-        "trajectories": {{
-            "whole_system": {{
-                "file": Path(files.trajectory).name if files.trajectory else None,
-                "frames": {frames},
-                "frame_time_map": {{
-                    # DCDReporter writes AT step `interval`, not at step 0, so frame 0 is at one
-                    # interval of physical time and not at zero.
-                    "first_frame_time_ps": {r["output_interval_ps"]},
-                    "frame_interval_ps": {r["output_interval_ps"]},
-                    "convention": "DCDReporter writes at step interval; frame i is at (i+1)*interval",
-                }},
-            }},
-        }},
-    }}
-    Path(files.output).parent.joinpath("resolved_run.yaml").write_text(
-        json.dumps(record, indent=2), encoding="utf-8")
 '''
 
 

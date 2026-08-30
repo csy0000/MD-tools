@@ -801,6 +801,10 @@ def generate(resolved: dict[str, Any], *, input_path: Path, output_root: Path,
         directory = system_dir / name
         directory.mkdir(exist_ok=True)
         (directory / "cmd.py").write_text(emit.production_protocol(resolved), encoding="utf-8")
+        # The companion runtime record is what makes this trajectory usable as an AIS source or an
+        # rREST2 reservoir, so every cMD run writes one.
+        shutil.copy2(TEMPLATES / "runtime_record.py", directory / "runtime_record.py")
+        written.append(f"{name}/runtime_record.py")
         if resolved.get("cmd_tau"):
             # A fixed-tau walker scales through the same module the ladder uses, so it needs it.
             shutil.copy2(TEMPLATES / "rest2_scaling.py", directory / "rest2_scaling.py")

@@ -5,9 +5,10 @@
 
 `md-openmm setup --config <setup.yaml>` with `protocol: REST2` generates a ladder that runs on
 `openmmtools.multistate.ReplicaExchangeSampler` with `MultiStateReporter` NetCDF storage, launched
-by `openmm-rest2`. That is what new work should use: OpenMMTools owns the exchange decisions, the
-reduced potentials, the storage, the restart and the walker-to-state mapping, and it supports MPI
-multi-GPU execution, which this loop does not.
+by `openmm-md -ng N --groupfile ...`. That is what new work should use: it owns its exchange
+schedule and rules, its NetCDF storage, its restart and its walker-to-state mapping, it supports a
+reservoir refresh (rREST2) through a generated exchange rule, and it supports MPI multi-GPU
+execution, which this loop does not.
 
 This custom loop remains ONLY because the older contract-managed `md-gen` route and the datasets
 already generated through it depend on its on-disk layout -- per-replica directories, its own

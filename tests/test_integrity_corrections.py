@@ -435,8 +435,16 @@ def test_repeated_atom_names_do_not_make_two_topologies_the_same(tmp_path):
 
 
 def test_the_identity_tuple_covers_chain_residue_and_element():
-    source = AIS_SOURCE.read_text()
-    block = source[source.index("def atom_identity"):source.index("ATOM_FIELDS")]
+    """`atom_identity` moved to the shared source-ensemble reader, which rREST2 uses too.
+
+    The guard follows it rather than being relaxed: AIS and rREST2 must compare atoms the same
+    way, and the whole point of one implementation is that this check covers both.
+    """
+    source = (AIS_SOURCE.parent / "source_ensemble.py").read_text()
+    start = source.index("def atom_identity")
+    # `ATOM_FIELDS` is defined near the top of the shared helper, so slice to the NEXT definition
+    # after the function rather than to a name that also appears before it.
+    block = source[start:source.index("\ndef ", start + 1)]
     for field in ("chain.index", "residue.index", "residue.name", "atom.name",
                   "atom.element.symbol"):
         assert field in block, field
@@ -451,15 +459,21 @@ def template_module_with_stubs():
     and running a whole project.
     """
     import importlib.util
+    import sys
     import types
 
-    path = REPO_ROOT / "src" / "md_templates" / "openmm" / "templates" / "ais_run.py"
+    templates = REPO_ROOT / "src" / "md_templates" / "openmm" / "templates"
+    path = templates / "ais_run.py"
     source = path.read_text()
     # Everything above the first function definition is project-configuration loading.
     cut = source.index("def relative_to_project")
     module = types.ModuleType("_ais_pure")
     module.__dict__.update({name: __import__(name) for name in ("hashlib", "csv", "json", "yaml")})
     module.__dict__.update({"Path": __import__("pathlib").Path, "np": __import__("numpy")})
+    # `ais_run` delegates the source-ensemble rules to the shared helper that ships beside it, so
+    # that directory has to be importable exactly as it is in a generated project.
+    if str(templates) not in sys.path:
+        sys.path.insert(0, str(templates))
     exec(compile(source[cut:], str(path), "exec"), module.__dict__)
     return module
 

@@ -278,66 +278,87 @@ component ([rcsb.org/ligand/IPH](https://www.rcsb.org/ligand/IPH)) — **not a f
 entry accession.** The SMILES is committed rather than downloaded: the CCD is revised, and a build
 that reaches the network cannot say which revision it used.
 
-### REST2: `protocol: REST2`
+### Replica exchange: `protocol: REST2` and `protocol: rREST2`
 
-The same request with `protocol: REST2` generates a replica-exchange ladder instead of a cMD stage.
-Exchange runs on **`openmmtools.multistate.ReplicaExchangeSampler`**, with `MultiStateReporter`
-NetCDF as the authoritative storage.
-
-Under the default `swap-all` scheme OpenMMTools makes **every accept/reject decision** itself, along
-with propagation, reduced potentials, storage, checkpointing, restart and extension. This repository
-keeps the REST2 Hamiltonian and decides only **which iterations attempt an exchange**. Selecting
-`swap-neighbors` instead needs this repository's fix for an upstream defect, and such a run records
-`exchange_decision_owner: md-templates` rather than pretending otherwise.
-
-```yaml
-# examples: protocol: REST2, production is PER REPLICA, output_interval is the SOLUTE interval
-protocol: REST2
-production: 10 ns
-output_interval: 2 ps
-advanced:
-  common.timestep_fs: 4.0
-  constraints.hydrogen_mass_amu: 3.024
-  REST2.whole_system_interval_ps: 10.0
-  REST2.equilibration_duration_ps: 10.0
-```
+The same request with `protocol: REST2` generates a replica-exchange ladder. There is **one
+simulation executor** -- `openmm-md` -- and a coordinated run is the same command with an
+Amber-like group file:
 
 ```bash
-REST2/rest2.sh                    # one process, one device
-mpiexec -n 6 REST2/rest2.sh       # one rank per replica, each binding its own GPU
-REST2/rest2.sh --resume           # finish an interrupted run; NO restart.json needed
-REST2/rest2.sh --extend 200       # add 200 mixing events to a run that reached its budget
-
-openmm-rest2 --verify-only -x REST2/rest2.nc \
-    --checkpoint REST2/rest2_checkpoint.nc -r REST2/restart.json
+mpiexec -n 6 openmm-md -ng 6 --groupfile REST2/rest2.group \
+    -o REST2/rest2.out -x REST2/rest2.nc -r REST2/restart.json \
+    --checkpoint REST2/rest2_checkpoint.nc
 ```
 
-`--verify-only` OPENS the storage and reads it: a file that exists is what a crashed run leaves
-behind, so existence is never treated as completion. `--resume` works from the NetCDF alone,
-because the run's scientific identity is written into reporter metadata before propagation begins
-rather than into a manifest only a finished run produces.
+which is what the generated `REST2/rest2.sh` runs, so in practice:
 
-`openmm-rest2` is `openmm-md`'s shape for a ladder — `-i -p -s -c --solute -o -x -r --checkpoint`
-— where `-x` is the multistate NetCDF and `-r` is a small manifest that *references* it. There is
-no groupfile: the replicas share one topology, one base `System` and one starting state, and differ
-only by tau, so there is nothing per-replica to name.
+```bash
+REST2/rest2.sh                 # one process, one device
+mpiexec -n 6 REST2/rest2.sh    # one rank per state, each binding its own GPU
+REST2/rest2.sh --resume        # finish an interrupted run; no restart.json needed
+REST2/rest2.sh --extend 200    # add 200 exchange attempts to a completed run
+REST2/rest2.sh --verify-only   # open the stored output and check it, running nothing
+```
 
-Every replica is thermostatted at the **same** temperature. `s = (1-tau)^2` scales solute-solute
-terms and `sqrt(s) = 1-tau` scales solute-environment terms; this is Hamiltonian scaling, **not**
-temperature REMD. Torsions about a peptide omega bond are left **unscaled** — this repository's
-omega-selective convention, not an unmodified textbook REST2.
+The group file is plain text, one state per line, **parsed with `shlex` and never evaluated by a
+shell**. Group lines carry inputs only; `-o`, `-x`, `-r` and `--checkpoint` stay on the outer
+command because they describe the coordinated run:
 
-The iteration is the *solute* output interval and exchange is attempted every Nth iteration, so
-solute frames are real intermediate configurations rather than one exchange-boundary frame written
-repeatedly. That costs a measured ~20% on ALA.
+```text
+-i REST2/rest2.py -p input/topology.pdb -s input/system.xml \
+   -c eq/npt_free/npt_free.state.xml --solute input/solute.yaml --group-index 0
+```
 
-Acceptance figures are **lifetime** statistics summed over the whole stored history — including
-across an interrupted resume and an extension — not the last mixing event. A round trip requires
-cold → hot → cold, so a walker that starts hot earns nothing for merely reaching cold.
+All the science is in a 27-line protocol holding no path at all:
 
-**See [`docs/openmmtools-rest2.md`](docs/openmmtools-rest2.md)** for the time model and its
-benchmark, the OpenMMTools 0.26.0 version pin and the two upstream defects it corrects, walker
-versus state views, multi-GPU device binding, the completion contract and the limitations.
+```python
+from replica_runtime import REST2Protocol
+
+protocol = REST2Protocol(
+    tau=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
+    temperature_k=300.0, timestep_fs=4.0,
+    segment_ps=2.0, exchange_interval_ps=10.0,
+    whole_output_interval_ps=10.0, number_of_exchanges=1000,
+)
+```
+
+Every state is thermostatted at the **same** temperature and differs only by Hamiltonian:
+`s = (1-tau)^2` on solute-solute terms, `sqrt(s) = 1-tau` on solute-environment terms. This is
+Hamiltonian scaling, **not** temperature REMD, and an exchange never rescales velocities. Peptide
+omega torsions are left unscaled. The runtime is NVT: it installs no barostat, and exchanging
+complete configurations under NPT is refused rather than approximated.
+
+The exchange schedule, the storage schema, the checkpoint and the validator are all this
+repository's. OpenMM owns System, Context, Integrator, State and every energy evaluation;
+**OpenMMTools is not imported by generated production code at all.**
+
+#### `protocol: rREST2` -- a Boltzmann reservoir
+
+`rREST2` is the same ladder plus one generated exchange rule that periodically refreshes the
+hottest rung from a finite, Boltzmann-weighted reservoir:
+
+```bash
+mpiexec -n 6 openmm-md -ng 6 --groupfile rREST2/rrest2.group \
+    --exchange-rule rREST2/rrest2_exchange.py --reservoir rREST2/reservoir.yaml \
+    -o rREST2/rrest2.out -x rREST2/rrest2.nc -r rREST2/restart.json \
+    --checkpoint rREST2/rrest2_checkpoint.nc
+```
+
+The reservoir comes from a fixed-tau cMD run at exactly the top rung's tau, temperature,
+Hamiltonian and fixed volume, prepared through the same source reader AIS uses. **The source path
+is not evidence**: tau, temperature and the frame-time map come from that run's own
+`resolved_run.yaml`, and a directory called `cMD_tau0p5` establishes nothing.
+
+A refresh is accepted with probability one, and that is correct *only* under this contract, which
+is checked clause by clause. v1 refuses a non-Boltzmann or clustered reservoir, an NPT reservoir,
+solute-only insertion, and any mismatch of tau, temperature, topology, atom order or box. The
+finite-reservoir approximation is stated in every record.
+
+> Roitberg, Okur, Simmerling, *J. Phys. Chem. B* 2007, **111**, 2415 (doi:10.1021/jp068335b);
+> Kasavajhala, Lam, Simmerling, *J. Chem. Inf. Model.* 2020, **60**, 1218 (PMCID PMC7725893).
+
+A later rule -- a non-Boltzmann or kinetic reservoir -- is a new rule file and changes nothing in
+`openmm-md`.
 
 ### Registration comes later
 

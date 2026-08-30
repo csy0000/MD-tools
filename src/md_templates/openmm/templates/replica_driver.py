@@ -173,6 +173,13 @@ class ReplicaRun:
                 f"{'extend' if extend else 'resume'}. The analysis NetCDF is authoritative.")
 
         self._resolve_platform()
+        context = self._run_context
+        print(f"# platform           : {context['platform']} device={context['device_index']} "
+              f"({context['device_policy']}), precision {context['precision']}")
+        print(f"# this process drives: state(s) {context['owned_states']} of "
+              f"{self.protocol.n_states}")
+        print(f"# host               : {context['hostname']}")
+        sys.stdout.flush()
         systems, self._audit = self.protocol.build_systems(
             self.base_system, self.solute_indices, self.excluded_bonds)
         # Asked of the System, never inferred from the box vectors: every System has default ones.
