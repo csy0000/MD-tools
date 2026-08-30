@@ -51,11 +51,51 @@ an unmodified textbook REST2.
 Because every rung shares one temperature and one beta, an exchange **never rescales velocities**.
 That rescaling belongs to temperature REMD, where the rungs differ in beta; here it would inject or
 remove energy at every accepted swap. A test asserts no runtime module does it outside the
-reservoir path, where a DCD simply supplies no velocities at all.
+reservoir path, where the velocity comes from the reservoir's own stored phase-space sample.
 
 The runtime is **NVT**. It installs no barostat, and a requested pressure is refused: exchanging
 complete configurations under NPT would also have to exchange volumes and carry the pV work, and
 that is deliberately not implemented rather than approximated.
+
+## Four schedules, no `segment_ps`
+
+Exchange, whole-system output, solute output and checkpointing are **four independent schedules**.
+Each is given in picoseconds, each converts to an exact whole number of integration steps, and an
+interval that does not is refused rather than rounded. There is no `segment_ps`: it bundled all
+four into one number, so a solute stream could never be denser than the exchange period. Asking
+for it now raises an error that names what replaced it.
+
+Propagation advances to the next event and never past it. When several events fall on the same
+step they are handled in one fixed order -- `exchange, whole, solute, checkpoint` -- so a frame
+written at an exchange step is the post-exchange state and the checkpoint describes everything
+already written.
+
+## Phase space, not configuration
+
+An rREST2 reservoir stores **positions and velocities and boxes**. A DCD cannot store velocities,
+so a DCD is not a phase-space reservoir and is refused as a source.
+
+`velocity_policy: stored` is the default: the recorded momentum is installed unchanged, which is
+what the probability-one acceptance assumes. `maxwell` redraws at the common temperature from a
+recorded seed and must be asked for **explicitly** -- there is no silent fallback when velocities
+are missing, absent or identically zero. Each of those is a hard error at the moment the source is
+opened, not at the refresh thousands of steps later.
+
+## One Hamiltonian, recomputed on both sides
+
+The reservoir and the rung it refreshes must be the **same complete Hamiltonian**. The comparison
+is a SHA-256 over the canonically serialized OpenMM System plus a digest of the enhanced-region
+selection, and the current side is always **recomputed** -- two stored claims are never compared
+with each other. tau and temperature agreeing is necessary and not sufficient: ff14SB/TIP3P and
+ff19SB/OPC agree on both.
+
+The system compared is the **top rung's scaled** system, not the unscaled reference the ladder is
+built from. The reference is recorded with `tau: null`, which is a different claim from the rung at
+`tau: 0.0`.
+
+The fixed-tau source is generated **with** the ladder, so one input, one force field, one solvation
+model and one equilibrated box are shared by construction rather than by two projects happening to
+agree.
 
 ## The representation, chosen once
 
@@ -188,14 +228,27 @@ Four records, four jobs:
 | `<stem>.runstate.json` | atomically, on transition | `initialized` → `running` → `completed`/`interrupted`/`failed`; never claims completion |
 | `restart.json` (`-r`) | atomically, at the end | evidence of completion; **never** a precondition for resuming |
 
-`last_iteration` is written **after** every array for that row, so an interrupted write leaves the
-counter on the previous, complete row.
+Each stream's marker -- `last_exchange`, `last_frame`, `last_solute_frame` -- is written **after**
+every array for that row, so an interrupted write leaves the counter on the previous, complete row.
+A marker can therefore lag its data but never lead it, and a marker ahead of the rows the file
+holds is refused as a file that disagrees with itself.
 
-A **resume continues from the last checkpoint**, not the last committed row: the reporter commits
-every iteration while checkpoints are written less often, so an interruption leaves committed rows
-with no configurations behind them. Those rows are rewound, and `segment == iteration + 1` is
-asserted rather than assumed. `--resume` needs no `restart.json`; `--extend N` requires a run that
-reached its budget and adds exactly N attempts.
+A **resume continues from the last checkpoint**, not the last committed row: the exchange stream
+commits every attempt while checkpoints are written less often, so an interruption leaves committed
+rows with no configurations behind them. Those rows are rewound. Before anything is opened for
+writing, the stored output is read and validated: markers within their rows, steps strictly
+increasing in every stream, and the stored exchange steps equal to the **scheduled** ones -- a
+dropped attempt in the middle leaves increasing steps and can still reach the budget, so nothing
+else would see it.
+
+`--resume` needs no `restart.json`. `--extend N` requires a run that reached its budget and adds
+exactly N attempts **to the budget that run reached**, not to the one in the protocol file: a run
+already extended once stores a larger budget than the protocol describes, and extending the
+protocol's would produce a total below the steps already run.
+
+An interruption is neither success nor failure and exits with its own status (130). The executor's
+promise check -- "the protocol finished but did not write X" -- applies only to a run that claims
+to have finished.
 
 ```bash
 openmm-md --verify-only -x REST2/rest2.nc --checkpoint REST2/rest2_checkpoint.nc \
@@ -222,7 +275,9 @@ in storage.
 ## Limitations
 
 - NVT only. NPT exchange is refused, not approximated.
-- v1 reservoirs are Boltzmann-weighted and complete-configuration only.
+- v2 reservoirs are Boltzmann-weighted and complete-configuration only.
+- `--extend` and `--resume` are coordinated across ranks at an event boundary; only rank 0 opens
+  the analysis storage for writing, in any mode.
 - Implicit-solvent **ligand** REST2 remains scientifically unvalidated.
 - Smoke runs are picoseconds and validate neither ladder quality nor convergence.
 - The legacy `md-gen --method REST2` loop still exists for the contract-managed route and its

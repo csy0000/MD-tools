@@ -331,7 +331,7 @@ def test_a_loaded_rule_records_its_file_digest(tmp_path):
 # --- the protocol -------------------------------------------------------------------------------
 
 def test_the_protocol_refuses_a_descending_or_duplicated_ladder():
-    common = dict(temperature_k=300.0, timestep_fs=2.0, segment_ps=1.0,
+    common = dict(temperature_k=300.0, timestep_fs=2.0,
                   exchange_interval_ps=2.0, number_of_exchanges=1)
     with pytest.raises(ProtocolError, match="ascending order"):
         REST2Protocol(tau=[0.5, 0.0], **common)
@@ -340,7 +340,7 @@ def test_the_protocol_refuses_a_descending_or_duplicated_ladder():
 
 
 def test_the_protocol_refuses_a_pressure_because_this_runtime_is_nvt():
-    protocol = REST2Protocol(tau=[0.0, 0.5], temperature_k=300.0, timestep_fs=2.0, segment_ps=1.0,
+    protocol = REST2Protocol(tau=[0.0, 0.5], temperature_k=300.0, timestep_fs=2.0,
                              exchange_interval_ps=2.0, number_of_exchanges=1, pressure_bar=1.0)
     with pytest.raises(ProtocolError, match="NVT and installs no barostat"):
         protocol.build_systems(openmm.System(), [0])
@@ -348,15 +348,19 @@ def test_the_protocol_refuses_a_pressure_because_this_runtime_is_nvt():
 
 def test_intervals_must_convert_exactly():
     common = dict(tau=[0.0, 0.5], temperature_k=300.0, timestep_fs=4.0, number_of_exchanges=1)
-    with pytest.raises(ProtocolError, match="whole multiple"):
-        REST2Protocol(segment_ps=2.0, exchange_interval_ps=5.0, **common)
+    # Each schedule is independent now, so each is checked on its own terms: an interval that is
+    # not a whole number of integration steps is refused rather than rounded into one.
     with pytest.raises(ProtocolError, match="whole number"):
-        REST2Protocol(segment_ps=0.003, exchange_interval_ps=0.006, **common)
+        REST2Protocol(exchange_interval_ps=0.006, **common)
+    with pytest.raises(ProtocolError, match="whole number"):
+        REST2Protocol(exchange_interval_ps=2.0, solute_output_interval_ps=0.003, **common)
+    with pytest.raises(ProtocolError, match="whole number"):
+        REST2Protocol(exchange_interval_ps=2.0, whole_output_interval_ps=0.003, **common)
 
 
 def test_the_protocol_records_that_it_is_not_temperature_remd():
     described = REST2Protocol(tau=[0.0, 0.25, 0.5], temperature_k=300.0, timestep_fs=2.0,
-                              segment_ps=1.0, exchange_interval_ps=2.0,
+                              exchange_interval_ps=2.0,
                               number_of_exchanges=3).describe()
     assert described["is_temperature_remd"] is False
     assert described["single_temperature"] is True
@@ -398,17 +402,19 @@ def test_lifetime_statistics_sum_the_whole_history():
     for index, (a, p) in enumerate([(0, 0), (1, 4), (0, 0), (3, 6), (0, 0)]):
         accepted[index, 0, 1] = accepted[index, 1, 0] = a
         proposed[index, 0, 1] = proposed[index, 1, 0] = p
-    stats = statistics.lifetime_statistics(accepted, proposed, tau=[0.0, 0.5], exchange_stride=2)
+    stats = statistics.lifetime_statistics(accepted, proposed, tau=[0.0, 0.5])
     pair = stats["by_state_pair"][0]
     assert pair["proposed"] == 10 and pair["accepted"] == 4
-    assert stats["exchange_iterations"] == 2, "zero rows are not exchange attempts"
-    assert stats["schedule"]["agrees_with_schedule"] is True
+    # Separate schedules mean every stored row IS an attempt: no zero rows stand for skipped
+    # propagation, and nothing is inferred from a stride.
+    assert stats["exchanges_committed"] == 5
 
 
 def test_a_reservoir_refresh_is_never_counted_as_an_exchange():
     accepted = np.zeros((3, 2, 2), dtype=np.int64)
     proposed = np.zeros((3, 2, 2), dtype=np.int64)
-    events = np.array([[-1, -1, -1], [1, 4, 1], [-1, -1, -1]])
+    # columns: state, frame, source step, outcome (-1 = no refresh at that row)
+    events = np.array([[-1, -1, -1, -1], [1, 4, 2000, 1], [-1, -1, -1, -1]])
     stats = statistics.lifetime_statistics(accepted, proposed, tau=[0.0, 0.5],
                                            reservoir_events=events)
     assert stats["total_proposed"] == 0
@@ -538,8 +544,9 @@ def _declaration(tmp_path, **overrides):
         "format": rrest2_reservoir.DECLARATION_FORMAT,
         "weighting": "boltzmann", "ensemble": "NVT", "prepared_directory": "reservoir",
         "refresh_interval_exchanges": 2, "random_seed": 1,
-        "source": {"trajectory": "src/cmd.dcd", "start_time_ps": 0.0, "end_time_ps": 10.0,
-                   "frames": 5},
+        "velocity_policy": "stored",
+        "source": {"phase_space": "src/cmd.phase_space.nc", "start_time_ps": 0.0,
+                   "end_time_ps": 10.0, "frames": 5},
     }
     document.update(overrides)
     path = tmp_path / "reservoir.yaml"
@@ -549,37 +556,41 @@ def _declaration(tmp_path, **overrides):
 
 def _protocol():
     return REST2Protocol(tau=[0.0, 0.25, 0.5], temperature_k=300.0, timestep_fs=2.0,
-                         segment_ps=1.0, exchange_interval_ps=2.0, number_of_exchanges=2)
+                         exchange_interval_ps=2.0, number_of_exchanges=2)
 
 
 def test_a_non_boltzmann_reservoir_is_refused_by_the_v1_rule(tmp_path):
     path = _declaration(tmp_path, weighting="clustered")
     with pytest.raises(rrest2_reservoir.ReservoirError) as raised:
         rrest2_reservoir.PreparedReservoir.open(path, protocol=_protocol(),
-                                                topology_path=tmp_path / "t.pdb", periodic=False)
+                                                topology_path=tmp_path / "t.pdb", periodic=False,
+                                                system=openmm.System())
     message = str(raised.value)
     assert "not implemented" in message and "separately derived acceptance rule" in message
 
 
 def test_an_npt_reservoir_is_refused(tmp_path):
     path = _declaration(tmp_path, ensemble="NPT")
-    with pytest.raises(rrest2_reservoir.ReservoirError, match="exchanges complete configurations"):
+    with pytest.raises(rrest2_reservoir.ReservoirError, match="distribution of volumes"):
         rrest2_reservoir.PreparedReservoir.open(path, protocol=_protocol(),
-                                                topology_path=tmp_path / "t.pdb", periodic=False)
+                                                topology_path=tmp_path / "t.pdb", periodic=False,
+                                                system=openmm.System())
 
 
 def test_solute_only_insertion_is_refused(tmp_path):
     path = _declaration(tmp_path, solute_only=True)
     with pytest.raises(rrest2_reservoir.ReservoirError, match="solute into an unrelated solvent"):
         rrest2_reservoir.PreparedReservoir.open(path, protocol=_protocol(),
-                                                topology_path=tmp_path / "t.pdb", periodic=False)
+                                                topology_path=tmp_path / "t.pdb", periodic=False,
+                                                system=openmm.System())
 
 
 def test_a_declaration_of_the_wrong_format_is_refused(tmp_path):
     path = _declaration(tmp_path, format="something-else/v9")
     with pytest.raises(rrest2_reservoir.ReservoirError, match="is 'something-else/v9'"):
         rrest2_reservoir.PreparedReservoir.open(path, protocol=_protocol(),
-                                                topology_path=tmp_path / "t.pdb", periodic=False)
+                                                topology_path=tmp_path / "t.pdb", periodic=False,
+                                                system=openmm.System())
 
 
 def test_the_rrest2_rule_refreshes_only_the_top_state():
@@ -630,45 +641,62 @@ def test_a_refresh_carries_a_recorded_velocity_seed():
 
 # --- storage and validation -----------------------------------------------------------------------
 
-def _identity(n_states=3, stride=2, segments=4):
+def _identity(n_states=3, n_exchanges=4, exchange_steps=500):
+    """The scientific identity in the vocabulary the storage now uses: absolute steps and a
+    per-stream schedule, with no `segment` and no exchange stride to infer anything from."""
     return {"n_states": n_states, "tau": [0.0, 0.25, 0.5][:n_states],
-            "exchange_stride_segments": stride, "total_segments": segments,
+            "number_of_exchanges": n_exchanges,
+            "schedule": {"exchange_steps": exchange_steps,
+                         "total_steps": exchange_steps * n_exchanges},
             "temperature_k": 300.0, "is_temperature_remd": False}
 
 
-def build_storage(tmp_path, *, segments=4, n_states=3, stride=2, n_atoms=4, has_box=True,
-                  mapping=None, identity=None, omit_exchange_at=()):
+def build_storage(tmp_path, *, n_exchanges=4, n_states=3, n_atoms=4, has_box=True,
+                  mapping=None, identity=None, omit_exchange_at=(), exchange_steps=500,
+                  whole_every=2):
+    """A synthetic run in the current schema.
+
+    Every stored exchange row IS an attempt -- there are no placeholder rows -- and the whole and
+    solute streams are written on their own schedules into their own dimensions.
+    """
     path = tmp_path / "run.nc"
-    identity = identity or _identity(n_states, stride, segments)
+    identity = identity or _identity(n_states, n_exchanges, exchange_steps)
     reporter = storage.ReplicaReporter.create(
-        path, n_states=n_states, n_atoms=n_atoms, has_box=has_box,
+        path, n_states=n_states, n_atoms=n_atoms, n_solute_atoms=1, has_box=has_box,
         identity=identity, metadata={"note": "synthetic"})
     reporter.write_ladder(identity["tau"])
     configurations = [Configuration(np.zeros((n_atoms, 3)), np.zeros((n_atoms, 3)),
                                     np.eye(3) if has_box else None) for _ in range(n_states)]
-    for iteration in range(segments):
-        segment = iteration + 1
-        is_exchange = segment % stride == 0 and segment not in omit_exchange_at
+    written = -1
+    for attempt in range(n_exchanges):
+        if (attempt + 1) in omit_exchange_at:
+            continue
+        step = (attempt + 1) * exchange_steps
         proposed = np.zeros((n_states, n_states), dtype=np.int64)
         accepted = np.zeros((n_states, n_states), dtype=np.int64)
         u = np.zeros((n_states, n_states))
-        evaluated = np.zeros((n_states, n_states), dtype=np.int8)
-        if is_exchange:
-            proposed[0, 1] = proposed[1, 0] = 1
-            evaluated[:, :] = 1
-        row = (mapping[iteration] if mapping is not None else list(range(n_states)))
-        reporter.write_iteration(iteration, segment=segment, time_ps=float(segment),
-                                 is_exchange=is_exchange, state_to_walker=row,
-                                 proposed=proposed, accepted=accepted, u=u,
-                                 u_evaluated=evaluated)
-        if segment % stride == 0:
-            reporter.write_frame(iteration, configurations)
+        evaluated = np.ones((n_states, n_states), dtype=np.int8)
+        proposed[0, 1] = proposed[1, 0] = 1
+        row = (mapping[attempt] if mapping is not None else list(range(n_states)))
+        written += 1
+        reporter.write_exchange(written, step=step, time_ps=step * 0.002,
+                                state_to_walker=row, proposed=proposed, accepted=accepted,
+                                u=u, u_evaluated=evaluated)
+        reporter.write_solute_frame(step=step, time_ps=step * 0.002, exchange_index=written,
+                                    configurations=configurations, solute_indices=[0])
+        if (attempt + 1) % whole_every == 0:
+            frame = reporter.write_frame(step=step, time_ps=step * 0.002,
+                                         exchange_index=written,
+                                         configurations=configurations)
             storage.ReplicaCheckpoint(tmp_path / "run_checkpoint.nc").write(
-                iteration=iteration, segment=segment, configurations=configurations,
+                step=step, exchange_index=written, frame_index=frame,
+                solute_frame_index=written, configurations=configurations,
                 state_to_walker=row, rng_states={"exchange": {}}, rule_state={},
-                budget_segments=segments, identity=identity)
+                schedule=identity["schedule"], identity=identity)
     reporter.close()
-    storage.write_run_state(path, "completed", budget_segments=segments, identity=identity)
+    storage.write_run_state(path, "completed", identity=identity,
+                            step=n_exchanges * exchange_steps,
+                            total_steps=identity["schedule"]["total_steps"])
     return path
 
 
@@ -677,7 +705,7 @@ def test_a_complete_storage_validates(tmp_path):
     result = validate.validate_replica_output(
         analysis=analysis, checkpoint=tmp_path / "run_checkpoint.nc")
     assert result.ok, result.problems
-    assert result.facts["last_committed_iteration"] == 3
+    assert result.facts["last_committed_exchange"] == 3
 
 
 def test_a_truncated_analysis_file_is_rejected(tmp_path):
@@ -704,15 +732,19 @@ def test_a_mapping_row_that_is_not_a_permutation_is_rejected(tmp_path):
 
 
 def test_a_missing_scheduled_exchange_is_rejected(tmp_path):
-    analysis = build_storage(tmp_path, omit_exchange_at=(4,))
+    # A dropped attempt in the MIDDLE: the remaining steps still increase, and the last one still
+    # reaches the budget, so only a comparison against the schedule can see it.
+    analysis = build_storage(tmp_path, n_exchanges=4, omit_exchange_at=(3,))
     result = validate.validate_replica_output(analysis=analysis)
-    assert not result.ok and any("configured stride" in p for p in result.problems)
+    assert not result.ok
+    assert any("not the scheduled ones" in problem for problem in result.problems), result.problems
 
 
 def test_an_incomplete_budget_is_rejected(tmp_path):
-    analysis = build_storage(tmp_path, segments=4,
-                             identity=_identity(segments=10))
-    storage.write_run_state(analysis, "completed", budget_segments=10)
+    analysis = build_storage(tmp_path, n_exchanges=4,
+                             identity=_identity(n_exchanges=10))
+    storage.write_run_state(analysis, "completed", identity=_identity(n_exchanges=10),
+                            step=2000, total_steps=5000)
     result = validate.validate_replica_output(analysis=analysis)
     assert not result.ok and any("short of the" in p for p in result.problems)
 
@@ -739,22 +771,22 @@ def test_a_manifest_from_a_different_run_is_rejected(tmp_path):
     assert not result.ok and any("disagrees with the storage" in p for p in result.problems)
 
 
-def test_last_iteration_is_written_after_the_row_it_describes():
+def test_the_exchange_marker_is_written_after_the_row_it_describes():
     """An interrupted write must leave the counter on the previous, complete row."""
     source = (TEMPLATES / "replica_storage.py").read_text()
-    block = source[source.index("def write_iteration"):source.index("def write_frame")]
-    assert block.index("last_iteration") > block.index("u_evaluated")
+    block = source[source.index("def write_exchange"):source.index("def write_frame")]
+    assert block.rindex("last_exchange") > block.index("u_evaluated")
 
 
 def test_the_reporter_can_rewind_to_a_checkpoint(tmp_path):
-    analysis = build_storage(tmp_path, segments=4)
+    analysis = build_storage(tmp_path, n_exchanges=4)
     reporter = storage.ReplicaReporter(analysis, mode="a")
     try:
-        assert reporter.last_iteration() == 3
-        reporter.rewind(1)
-        assert reporter.last_iteration() == 1
+        assert reporter.last_exchange() == 3
+        reporter.rewind(exchange=1, frame=0, solute_frame=1)
+        assert reporter.last_exchange() == 1
         with pytest.raises(storage.StorageError, match="cannot rewind"):
-            reporter.rewind(3)
+            reporter.rewind(exchange=3, frame=1, solute_frame=3)
     finally:
         reporter.close()
 
@@ -773,7 +805,7 @@ def test_generated_replica_inputs_contain_no_concrete_path():
         resolved = resolve(SetupRequest(
             system="ALA", input="x.pdb", protocol=method, production="20 ps",
             output_interval="1 ps",
-            advanced={"REST2.duration_per_segment_ps": 2.0,
+            advanced={"REST2.exchange_interval_ps": 2.0,
                       "REST2.whole_system_interval_ps": 2.0,
                       "REST2.equilibration_duration_ps": 1.0}))
         text = emit.replica_protocol_file(resolved, method=method)
