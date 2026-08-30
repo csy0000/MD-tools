@@ -1,43 +1,44 @@
 #!/usr/bin/env python
-"""The prepared Boltzmann reservoir rREST2 refreshes its top state from.
+"""The prepared Boltzmann phase-space reservoir rREST2 refreshes its top rung from.
 
 Copied verbatim into every generated rREST2 project.
 
 WHAT rREST2 IS HERE, AND WHAT IT IS NOT
-    Reservoir REST2 replaces the configuration occupying the HOTTEST rung with one drawn from a
-    finite, pre-generated ensemble, instead of waiting for that rung to sample it. The v1 contract
-    is narrow on purpose:
+    Reservoir REST2 replaces the PHASE-SPACE SAMPLE occupying the hottest rung with one drawn from
+    a finite, pre-generated ensemble. The v1 contract is narrow on purpose:
 
-        the reservoir is BOLTZMANN-weighted, at exactly the tau, temperature, Hamiltonian and
-        fixed-volume ensemble of the top rung, and holds COMPLETE configurations.
+        the reservoir is BOLTZMANN-weighted, generated at exactly the top rung's Hamiltonian,
+        tau, temperature and fixed-volume ensemble, and holds complete samples: positions,
+        VELOCITIES and box.
 
-    Under that contract -- and only under it -- a refresh of the top state is accepted with
-    probability one, because the reservoir and the state it replaces are the same distribution.
-    That is the entire justification, and it is why every one of those conditions is checked rather
-    than assumed.
+    Under that contract -- and only under it -- a refresh is accepted with probability one, because
+    the drawn sample is a sample from the same distribution as the one it replaces.
 
     Roitberg, Okur and Simmerling (J. Phys. Chem. B 2007, 111, 2415; doi:10.1021/jp068335b)
     introduced reservoir REMD and derived the acceptance rule for a Boltzmann-weighted reservoir.
     Kasavajhala, Lam and Simmerling (J. Chem. Inf. Model. 2020, 60, 1218; PMCID PMC7725893) show
     what non-Boltzmann and structure-biased reservoirs require instead, and that using the
     Boltzmann rule with a reservoir that is not Boltzmann-weighted biases EVERY replica, not only
-    the top one -- the ladder propagates the error down. A non-Boltzmann reservoir therefore needs
-    its own separately derived and separately tested acceptance rule, and this module refuses one
-    rather than reusing a criterion that does not apply to it.
+    the top one -- the ladder propagates the error down.
 
-    The finite-reservoir approximation is real and is stated in every record: a reservoir of N
-    configurations is not the top state's full equilibrium distribution, and the assumption that
-    the selected source window represents that distribution is an assumption, not a result.
+VELOCITY POLICY
+    `stored` is the DEFAULT and installs the recorded momentum unchanged. It is the policy the
+    probability-one rule is stated for: a phase-space sample is a point in phase space, and
+    replacing its momenta with fresh ones is a different operation.
 
-WHAT IS REFUSED, AND WHY
-    explicit NPT source        volumes would have to be exchanged and pV work carried; not v1
-    solute-only insertion      grafting a solute into unrelated solvent is a different, unvalidated
-                               operation with no acceptance rule here
-    tau mismatch               a different tau is a different distribution
-    temperature mismatch       a different temperature is a different Boltzmann distribution
-    topology/atom-order        the System's parameters are per index
-    box mismatch               a different box is a different density
-    non-Boltzmann weighting    see above; refused rather than approximated
+    `maxwell` exists as an EXPLICIT opt-in for a coordinate-only source. It draws from the Maxwell
+    distribution at the common temperature with a recorded seed. There is NO silent fallback: a
+    `stored` reservoir whose velocities are missing, non-finite or the wrong shape is a hard error
+    before propagation, not a quiet switch to `maxwell`.
+
+WHAT IS REFUSED
+    a coordinate-only source under `stored`   a DCD cannot store velocities
+    explicit NPT source                       volumes would have to be exchanged and pV carried
+    solute-only insertion                     a different operation with no acceptance rule here
+    a different Hamiltonian                   checked on the serialized System, not on tau alone
+    tau / temperature / ensemble mismatch     a different distribution
+    topology, atom-order or box mismatch      the System's parameters are per index
+    non-Boltzmann weighting                   needs its own separately derived acceptance rule
 """
 import hashlib
 import json
@@ -46,13 +47,19 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+import hamiltonian_identity
+import phase_space
 import source_ensemble
 
 #: The declaration format `--reservoir` points at.
-DECLARATION_FORMAT = "md-templates-reservoir-request/v1"
+DECLARATION_FORMAT = "md-templates-reservoir-request/v2"
 
 #: The only weighting v1 implements. Anything else is refused, not approximated.
 SUPPORTED_WEIGHTING = ("boltzmann",)
+
+#: How momenta are obtained. `stored` is the default and the one the probability-one rule assumes.
+VELOCITY_POLICIES = ("stored", "maxwell")
+DEFAULT_VELOCITY_POLICY = "stored"
 
 
 class ReservoirError(ValueError):
@@ -60,22 +67,22 @@ class ReservoirError(ValueError):
 
 
 class PreparedReservoir:
-    """A materialised set of complete configurations, validated against the state it refreshes."""
+    """A materialised phase-space ensemble, validated against the rung it refreshes."""
 
-    def __init__(self, *, declaration, manifest, directory, frames, topology_path, protocol):
+    def __init__(self, *, declaration, directory, reader, manifest, protocol, velocity_policy):
         self.declaration = declaration
-        self.manifest = manifest
         self.directory = Path(directory)
-        self._frames = frames
-        self.topology_path = Path(topology_path)
+        self.reader = reader
+        self.manifest = manifest
         self.protocol = protocol
+        self.velocity_policy = velocity_policy
 
-    # -- opening -------------------------------------------------------------------------------
+    # -- opening ---------------------------------------------------------------------------------
 
     @classmethod
-    def open(cls, declaration_path, *, protocol, topology_path, periodic, coordinator=None,
-             prepare=True):
-        """Read the declaration, prepare once if needed, validate, and load the configurations."""
+    def open(cls, declaration_path, *, protocol, topology_path, periodic, system,
+             solute_indices=(), excluded_bonds=(), coordinator=None, prepare=True):
+        """Read the declaration, prepare once if needed, validate everything, and load it."""
         declaration_path = Path(declaration_path)
         if not declaration_path.is_file():
             raise ReservoirError(f"--reservoir {declaration_path} does not exist")
@@ -83,7 +90,8 @@ class PreparedReservoir:
         if declaration.get("format") != DECLARATION_FORMAT:
             raise ReservoirError(
                 f"{declaration_path.name} is {declaration.get('format')!r}, not "
-                f"{DECLARATION_FORMAT!r}")
+                f"{DECLARATION_FORMAT!r}. v1 declarations named a coordinate-only DCD source and "
+                f"cannot describe a phase-space reservoir; regenerate the project.")
 
         weighting = str(declaration.get("weighting", "")).lower()
         if weighting not in SUPPORTED_WEIGHTING:
@@ -98,173 +106,223 @@ class PreparedReservoir:
         ensemble = str(declaration.get("ensemble", "NVT")).upper()
         if ensemble != "NVT":
             raise ReservoirError(
-                f"reservoir ensemble {ensemble!r} is refused. v1 exchanges complete configurations "
-                f"at fixed volume; an NPT reservoir would also have to exchange volumes and carry "
-                f"the pV work, which is deliberately not implemented rather than approximated.")
+                f"reservoir ensemble {ensemble!r} is refused. v1 exchanges complete samples at "
+                f"fixed volume; an NPT reservoir carries a distribution of volumes, and installing "
+                f"one into a fixed-volume rung would change the density without accounting for the "
+                f"pV work.")
         if declaration.get("solute_only"):
             raise ReservoirError(
                 "solute_only reservoirs are refused. Inserting a solute into an unrelated solvent "
                 "configuration is a different operation with a different acceptance rule, and "
                 "there is none here.")
 
+        policy = str(declaration.get("velocity_policy", DEFAULT_VELOCITY_POLICY)).lower()
+        if policy not in VELOCITY_POLICIES:
+            raise ReservoirError(
+                f"velocity_policy {policy!r} is not one of {list(VELOCITY_POLICIES)}. `stored` is "
+                f"the default and installs the recorded momentum; `maxwell` must be asked for "
+                f"explicitly.")
+
         directory = declaration_path.parent / declaration.get("prepared_directory", "reservoir")
-        request = cls._request(declaration, protocol, declaration_path, topology_path, periodic)
+        prepared = directory / "reservoir.nc"
 
         rank = 0 if coordinator is None else coordinator.rank
-        needs_preparation = not (directory / "prepared_source.yaml").is_file()
-        if needs_preparation and prepare and rank == 0:
-            resolved = source_ensemble.resolve_source_ensemble(request, require_temperature=True)
-            cls._check_source(resolved, declaration, protocol)
-            source_ensemble.write_prepared_source(
-                request, resolved, directory,
-                extra={"reservoir": cls._contract(declaration, protocol, resolved)})
+        if prepare and rank == 0 and not prepared.is_file():
+            cls._prepare(declaration, declaration_path, directory, prepared,
+                         protocol=protocol, topology_path=topology_path, periodic=periodic,
+                         system=system, solute_indices=solute_indices,
+                         excluded_bonds=excluded_bonds)
         if coordinator is not None:
             coordinator.barrier()
 
-        manifest = source_ensemble.read_prepared_source(
-            directory, expected_identity=None)
-        cls._validate_prepared(manifest, declaration, protocol)
-        frames = source_ensemble.read_prepared_frames(directory, manifest, topology_path)
-        cls._validate_frames(frames, protocol, manifest)
-        return cls(declaration=declaration, manifest=manifest, directory=directory,
-                   frames=frames, topology_path=topology_path, protocol=protocol)
+        if not prepared.is_file():
+            raise ReservoirError(
+                f"{prepared} does not exist and preparation was not performed. A reservoir is "
+                f"materialised once, before propagation, by rank 0.")
+        reader = phase_space.PhaseSpaceReader(prepared)
+        manifest = yaml.safe_load((directory / "reservoir.yaml").read_text(encoding="utf-8"))
+        cls._validate(reader, manifest, protocol=protocol, periodic=periodic, system=system,
+                      solute_indices=solute_indices, excluded_bonds=excluded_bonds,
+                      policy=policy)
+        return cls(declaration=declaration, directory=directory, reader=reader,
+                   manifest=manifest, protocol=protocol, velocity_policy=policy)
 
-    @staticmethod
-    def _request(declaration, protocol, declaration_path, topology_path, periodic):
+    # -- preparation -------------------------------------------------------------------------------
+
+    @classmethod
+    def _prepare(cls, declaration, declaration_path, directory, prepared, *, protocol,
+                 topology_path, periodic, system, solute_indices, excluded_bonds,
+                 policy="stored"):
+        """Materialise the reservoir ONCE from the fixed-tau source's phase-space stream.
+
+        The window selection, the evidence rules and the atom-identity comparison are the SHARED
+        ones AIS established -- there is one implementation of "which frames, and is this the same
+        molecule" and both methods call it. What is NOT shared is the materialised format: AIS
+        writes coordinate-only `sources.dcd` because a path needs configurations, and a reservoir
+        writes phase space because a refresh installs momenta.
+        """
         source = declaration["source"]
-        return source_ensemble.SourceRequest(
-            project=declaration_path.parent.parent,
-            prepared_topology=Path(topology_path),
-            trajectory=source["trajectory"],
-            topology=source.get("topology"),
-            start_time_ps=source["start_time_ps"],
-            end_time_ps=source["end_time_ps"],
-            count=int(source["frames"]),
-            allow_replacement=bool(source.get("allow_sampling_with_replacement", False)),
-            seed=int(declaration.get("random_seed") or protocol.random_seed or 20260830),
-            # NOT `pressure_bar is None`: this runtime is NVT, so pressure is None for an
-            # explicit fixed-volume ladder too. Whether there IS a box is a property of the
-            # System, and asking the wrong question prepared an explicit reservoir with no boxes
-            # at all -- which the ladder then rightly refused.
-            implicit=(not periodic),
-            required_tau=float(protocol.tau[-1]),
-            required_temperature_k=float(protocol.temperature_k),
-            declared_tau=source.get("source_tau"),
-            declared_temperature_k=source.get("source_temperature_k"),
-            first_frame_time_ps=source.get("first_frame_time_ps"),
-            frame_interval_ps=source.get("frame_interval_ps"),
-            field_prefix="rREST2.reservoir.source",
-            purpose="rREST2-reservoir",
-            replacement_rationale=("A reservoir that draws the same configuration twice is a "
-                                   "smaller reservoir than it claims to be."),
-        )
-
-    # -- the contract, checked rather than assumed -----------------------------------------------------
-
-    @staticmethod
-    def _check_source(resolved, declaration, protocol):
-        """The source must BE the top rung's ensemble, not merely resemble it."""
-        tau = float(resolved["tau"])
-        if abs(tau - float(protocol.tau[-1])) > 1e-9:
+        configured = str(source["phase_space"])
+        source_path = Path(configured)
+        if not source_path.is_absolute():
+            source_path = (declaration_path.parent.parent / configured).resolve()
+        if not source_path.is_file():
             raise ReservoirError(
-                f"the reservoir source is at tau = {tau} ({resolved['tau_evidence']}) but the top "
-                f"rung is at tau = {protocol.tau[-1]}. A Boltzmann reservoir is accepted with "
-                f"probability one only because it is the SAME distribution as the state it "
-                f"refreshes.")
-        temperature = resolved["temperature_k"]
-        if temperature is None or abs(float(temperature) - protocol.temperature_k) > 1e-9:
-            raise ReservoirError(
-                f"the reservoir source is at {temperature} K "
-                f"({resolved['temperature_evidence']}) but the ladder is at "
-                f"{protocol.temperature_k} K. A different temperature is a different Boltzmann "
-                f"distribution.")
-        record, _ = source_ensemble.companion_record(resolved["paths"]["trajectory"])
-        if isinstance(record, dict):
-            ensemble = str((record.get("ensemble") or record.get("common", {}).get("ensemble")
-                            or "")).upper()
-            if ensemble == "NPT":
+                f"rREST2.reservoir.source.phase_space = {configured!r} does not resolve to a "
+                f"file.\n  Looked for: {source_path}\n"
+                f"  A phase-space reservoir needs a source that RECORDED velocities. A fixed-tau "
+                f"cMD run writes one when its phase-space interval is set; a DCD cannot be used.")
+
+        with phase_space.PhaseSpaceReader(source_path) as reader:
+            problems = reader.validate(expect_atoms=system.getNumParticles(),
+                                       expect_periodic=periodic,
+                                       require_velocities=(policy == "stored"))
+            if problems:
                 raise ReservoirError(
-                    "the reservoir source's own runtime record says it ran under NPT. v1 requires "
-                    "a fixed-volume source: an NPT reservoir carries a distribution of volumes, "
-                    "and exchanging one of its configurations into a fixed-volume rung would "
-                    "change the density without accounting for the pV work.")
+                    "the phase-space source is not usable:\n  - " + "\n  - ".join(problems))
+            recorded = (reader.identity or {}).get("hamiltonian")
+            current = hamiltonian_identity.identity_record(
+                system, tau=protocol.tau[-1], temperature_k=protocol.temperature_k,
+                ensemble="NVT", solute_indices=solute_indices, excluded_bonds=excluded_bonds)
+            hamiltonian_identity.require_same_hamiltonian(
+                recorded, current, what="reservoir source")
 
-    @staticmethod
-    def _contract(declaration, protocol, resolved):
-        """What is written into the prepared manifest, so the assumptions are on the record."""
-        return {
-            "weighting": "boltzmann",
-            "ensemble": "NVT",
-            "matches_state": "top rung (tau_max)",
-            "tau": float(protocol.tau[-1]),
-            "temperature_k": float(protocol.temperature_k),
-            "acceptance_rule": ("probability one: the reservoir is Boltzmann-weighted at exactly "
-                                "the top rung's tau, temperature, Hamiltonian and fixed-volume "
-                                "ensemble, so a drawn configuration is a sample from the same "
-                                "distribution as the one it replaces"),
-            "citations": [
-                "Roitberg, Okur, Simmerling, J. Phys. Chem. B 2007, 111, 2415; "
-                "doi:10.1021/jp068335b",
-                "Kasavajhala, Lam, Simmerling, J. Chem. Inf. Model. 2020, 60, 1218; "
-                "PMCID PMC7725893",
-            ],
-            "finite_reservoir_approximation": (
-                "the reservoir holds a finite number of configurations and is NOT the top state's "
-                "full equilibrium distribution; the assumption that the selected source window "
-                "represents that distribution is an assumption, not a result"),
-            "velocities": ("not read from the source: a DCD carries none. Momenta are redrawn "
-                           "from the Maxwell distribution at the common temperature with a "
-                           "recorded seed."),
+            times = reader.times()
+            steps = reader.steps()
+            request = source_ensemble.SourceRequest(
+                project=declaration_path.parent.parent,
+                prepared_topology=Path(topology_path),
+                trajectory=configured, start_time_ps=source["start_time_ps"],
+                end_time_ps=source["end_time_ps"], count=int(source["frames"]),
+                allow_replacement=bool(source.get("allow_sampling_with_replacement", False)),
+                seed=int(declaration.get("random_seed") or protocol.random_seed or 20260830),
+                implicit=not periodic, required_tau=float(protocol.tau[-1]),
+                required_temperature_k=float(protocol.temperature_k),
+                field_prefix="rREST2.reservoir.source", purpose="rREST2-reservoir",
+                replacement_rationale=("A reservoir that draws the same sample twice is a smaller "
+                                       "reservoir than it claims to be."))
+            selected, eligible = source_ensemble.select_source_frames(
+                request, list(times), {"frame_interval_ps":
+                                       float(times[1] - times[0]) if times.size > 1 else 0.0,
+                                       "source": str(source_path.name)})
+            # Stored in SOURCE order, not draw order. The reservoir is a set -- a refresh draws
+            # uniformly among the stored frames, so the order they were drawn in carries nothing --
+            # and writing them ordered is what lets the stored file assert strictly increasing
+            # absolute steps, which is how a duplicated or truncated reservoir is caught. The
+            # manifest below indexes the same sorted list, so the record and the file agree.
+            selected = sorted(int(i) for i in selected)
+
+            directory.mkdir(parents=True, exist_ok=True)
+            identity = {
+                "purpose": "rREST2-reservoir",
+                "weighting": "boltzmann",
+                "ensemble": "NVT",
+                "matches_state": "top rung (tau_max)",
+                "tau": float(protocol.tau[-1]),
+                "temperature_k": float(protocol.temperature_k),
+                "hamiltonian": current,
+                "source": {
+                    "phase_space_configured": configured,
+                    "phase_space_resolved": str(source_path),
+                    "frames_available": int(reader.n_frames),
+                    "identity": reader.identity,
+                },
+            }
+            phase_space.write_selection(prepared, source=reader, indices=selected,
+                                        identity=identity)
+            selected_steps = [int(steps[i]) for i in selected]
+            selected_times = [float(times[i]) for i in selected]
+
+        manifest = {
+            "format": "md-templates-prepared-reservoir/v1",
+            "reservoir": {
+                "file": prepared.name,
+                "frames": len(selected),
+                "weighting": "boltzmann",
+                "ensemble": "NVT",
+                "velocity_policy_supported": list(VELOCITY_POLICIES),
+                "acceptance_rule": ("probability one: the reservoir is Boltzmann-weighted at "
+                                    "exactly the top rung's Hamiltonian, tau, temperature and "
+                                    "fixed-volume ensemble, so a drawn phase-space sample is a "
+                                    "sample from the same distribution as the one it replaces"),
+                "citations": [
+                    "Roitberg, Okur, Simmerling, J. Phys. Chem. B 2007, 111, 2415; "
+                    "doi:10.1021/jp068335b",
+                    "Kasavajhala, Lam, Simmerling, J. Chem. Inf. Model. 2020, 60, 1218; "
+                    "PMCID PMC7725893",
+                ],
+                "finite_reservoir_approximation": (
+                    f"the reservoir holds {len(selected)} samples and is NOT the top state's full "
+                    f"equilibrium distribution; the assumption that the selected window represents "
+                    f"that distribution is an assumption, not a result"),
+            },
+            "hamiltonian": current,
+            "selection": {
+                "window_ps": [request.start_time_ps, request.end_time_ps],
+                "window_is_inclusive": True,
+                "eligible_frames": len(eligible),
+                "count": request.count,
+                "allow_replacement": request.allow_replacement,
+                "seed": request.seed,
+                "selected_source_frames": [int(i) for i in selected],
+                "selected_source_steps": selected_steps,
+                "selected_source_times_ps": selected_times,
+            },
+            "source": identity["source"],
         }
+        (directory / "reservoir.yaml").write_text(
+            yaml.safe_dump(manifest, sort_keys=False, default_flow_style=False), encoding="utf-8")
+        return manifest
+
+    # -- validation ----------------------------------------------------------------------------------
 
     @staticmethod
-    def _validate_prepared(manifest, declaration, protocol):
-        contract = manifest.get("reservoir") or {}
-        if contract.get("weighting") != "boltzmann":
+    def _validate(reader, manifest, *, protocol, periodic, system, solute_indices,
+                  excluded_bonds, policy):
+        problems = reader.validate(expect_atoms=system.getNumParticles(),
+                                   expect_periodic=periodic,
+                                   require_velocities=(policy == "stored"))
+        if problems:
             raise ReservoirError(
-                f"the prepared reservoir records weighting {contract.get('weighting')!r}; v1 "
-                f"accepts only a Boltzmann-weighted reservoir")
-        if abs(float(contract.get("tau", -1)) - float(protocol.tau[-1])) > 1e-9:
-            raise ReservoirError(
-                f"the prepared reservoir was made for tau = {contract.get('tau')} but the top rung "
-                f"is at {protocol.tau[-1]}. Refusing rather than refreshing from a different "
-                f"ensemble.")
-        if abs(float(contract.get("temperature_k", -1)) - protocol.temperature_k) > 1e-9:
-            raise ReservoirError(
-                f"the prepared reservoir was made at {contract.get('temperature_k')} K but the "
-                f"ladder is at {protocol.temperature_k} K.")
+                "the prepared reservoir is not usable:\n  - " + "\n  - ".join(problems))
 
-    @staticmethod
-    def _validate_frames(frames, protocol, manifest):
-        if not frames:
-            raise ReservoirError("the prepared reservoir holds no configurations")
-        expected_box = protocol.pressure_bar is None and manifest["configurations"]["has_box"]
-        for index, (positions, box) in enumerate(frames):
-            if not np.all(np.isfinite(positions)):
-                raise ReservoirError(f"reservoir frame {index} has non-finite coordinates")
-            if manifest["configurations"]["has_box"] and box is None:
-                raise ReservoirError(
-                    f"reservoir frame {index} carries no box although the manifest says it should; "
-                    f"a configuration without its box is at an undefined density")
+        recorded = (manifest.get("hamiltonian") or (reader.identity or {}).get("hamiltonian"))
+        current = hamiltonian_identity.identity_record(
+            system, tau=protocol.tau[-1], temperature_k=protocol.temperature_k, ensemble="NVT",
+            solute_indices=solute_indices, excluded_bonds=excluded_bonds)
+        hamiltonian_identity.require_same_hamiltonian(recorded, current, what="prepared reservoir")
 
-    # -- access ---------------------------------------------------------------------------------------
+        if policy == "stored":
+            # Eager, and deliberately so: a missing momentum discovered at the refresh that
+            # installs it would be thousands of steps into a run.
+            for index in range(reader.n_frames):
+                _positions, velocities, _box, _step, _time = reader.frame(index)
+                if velocities.shape != (reader.n_atoms, 3):
+                    raise ReservoirError(
+                        f"velocity_policy is `stored` but reservoir frame {index} has velocities "
+                        f"of shape {velocities.shape}, expected ({reader.n_atoms}, 3).")
+                if not np.all(np.isfinite(velocities)):
+                    raise ReservoirError(
+                        f"velocity_policy is `stored` but reservoir frame {index} has non-finite "
+                        f"velocities. There is NO silent fallback to `maxwell`: ask for it "
+                        f"explicitly if that is what you want.")
+
+    # -- access -------------------------------------------------------------------------------------
 
     @property
     def n_frames(self):
-        return len(self._frames)
+        return self.reader.n_frames
 
-    def configuration(self, index):
-        """`(positions_nm, box_nm or None)` for one prepared frame."""
-        if not 0 <= int(index) < self.n_frames:
-            raise ReservoirError(f"reservoir frame {index} is outside 0..{self.n_frames - 1}")
-        positions, box = self._frames[int(index)]
-        return positions, box
+    def sample(self, index):
+        """`(positions, velocities, box, source_step, source_time_ps)` for one prepared frame."""
+        return self.reader.frame(int(index))
 
     def check_box_matches(self, box):
-        """The reservoir's boxes must match the ladder's, or the density silently changes."""
+        """Every reservoir box must be the ladder's LATTICE, or the density silently changes."""
         if box is None:
             return
-        for index, (_, frame_box) in enumerate(self._frames):
+        for index in range(self.n_frames):
+            _positions, _velocities, frame_box, _step, _time = self.reader.frame(index)
             if frame_box is None:
                 raise ReservoirError(
                     f"reservoir frame {index} has no box but the ladder is explicit-solvent")
@@ -273,26 +331,29 @@ class PreparedReservoir:
                     f"reservoir frame {index} has box\n{np.asarray(frame_box)}\nbut the ladder's "
                     f"box is\n{np.asarray(box)}\nand these are not the same lattice (checked as "
                     f"an integer change of basis, so an equivalent representation would pass). A "
-                    f"different box is a different density; v1 requires a fixed-volume source at "
-                    f"the ladder's own box.")
+                    f"different box is a different density.")
 
     def describe(self):
-        contract = self.manifest.get("reservoir") or {}
-        return {
+        block = dict(self.manifest.get("reservoir") or {})
+        block.update({
             "prepared_directory": self.directory.name,
             "frames": self.n_frames,
-            "weighting": contract.get("weighting"),
-            "ensemble": contract.get("ensemble"),
-            "tau": contract.get("tau"),
-            "temperature_k": contract.get("temperature_k"),
-            "acceptance_rule": contract.get("acceptance_rule"),
-            "finite_reservoir_approximation": contract.get("finite_reservoir_approximation"),
-            "citations": contract.get("citations"),
-            "source": self.manifest.get("source"),
-            "evidence": self.manifest.get("evidence"),
+            "velocity_policy": self.velocity_policy,
+            "velocity_policy_note": (
+                "stored: the recorded momentum is installed unchanged, which is what the "
+                "probability-one rule assumes" if self.velocity_policy == "stored" else
+                "maxwell: momenta are redrawn at the common temperature from a recorded seed; "
+                "this was asked for explicitly"),
+            "units": self.reader.units,
+            "hamiltonian": self.manifest.get("hamiltonian"),
             "selection": self.manifest.get("selection"),
-        }
+            "source": self.manifest.get("source"),
+        })
+        return block
 
     def identity(self):
         return hashlib.sha256(json.dumps(self.describe(), sort_keys=True,
                                          default=str).encode("utf-8")).hexdigest()
+
+    def close(self):
+        self.reader.close()
