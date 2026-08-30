@@ -173,7 +173,7 @@ def tiny_project(work: Path, *, solvent: str = "TIP3P", methods=("cMD", "REST2")
     if "REST2" in protocol:
         protocol["REST2"].update({"number_of_replicas": replicas,
                                   "equilibration_duration_ps": SMOKE_STAGE_PS,
-                                  "duration_per_segment_ps": SMOKE_STAGE_PS,
+                                  "exchange_interval_ps": SMOKE_STAGE_PS,
                                   "number_of_exchanges": exchanges, "tau_max": 0.05,
                                   "checkpoint_interval_ps": 0.02,
                                   "whole_system_interval_ps": 0.04,

@@ -7,7 +7,7 @@ the same device policy exchange production uses, from the same helper.
 Every replica starts from the SAME finalized common equilibration state -- the one `cMD/run.py`
 also starts from -- then applies its own tau-scaled Hamiltonian and relaxes under it. That
 relaxation is what this script does, and it is NOT exchange production: no exchange is attempted
-here and none of these steps count towards `duration_per_segment_ps * number_of_exchanges`.
+here and none of these steps count towards `exchange_interval_ps * number_of_exchanges`.
 
     input  : ../<last common stage>/final_state.xml   (the same file for every replica)
     output : replica_NN/equilibration/{stage.log, stage.csv, checkpoint.chk, final_state.xml,

@@ -35,7 +35,7 @@ def project(tmp_path_factory):
             protocol["equilibration"][key] = 0.02
     protocol["cMD"].update({"duration_ns": 0.002, "checkpoint_interval_ps": 1,
                             "whole_system_interval_ps": 1, "solute_interval_ps": 1})
-    protocol["REST2"].update({"number_of_replicas": 2, "duration_per_segment_ps": 0.2,
+    protocol["REST2"].update({"number_of_replicas": 2, "exchange_interval_ps": 0.2,
                               "number_of_exchanges": 1, "tau_max": 0.1,
                               "equilibration_duration_ps": 0.02})
     md_config.write_text(yaml.safe_dump(protocol, sort_keys=False))

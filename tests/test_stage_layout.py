@@ -295,7 +295,7 @@ def test_rest2_production_totals_are_segment_times_exchanges(explicit_run):
 
     config = yaml.safe_load((explicit_run / "md.config.yaml").read_text())
     rest2 = config["REST2"]
-    per_segment = int(round(rest2["duration_per_segment_ps"] * 1000 /
+    per_segment = int(round(rest2["exchange_interval_ps"] * 1000 /
                             config["common"]["timestep_fs"]))
     rows = list(csv.DictReader((explicit_run / "REST2" / "exchange_attempts.csv").open()))
     rounds = sorted({int(row["attempt_index"]) for row in rows})

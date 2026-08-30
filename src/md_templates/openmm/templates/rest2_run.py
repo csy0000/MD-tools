@@ -39,9 +39,9 @@ acceptance criterion.
 
 One invocation runs `number_of_exchanges` rounds of
 
-    propagate every replica for duration_per_segment_ps -> attempt neighbour exchanges
+    propagate every replica for exchange_interval_ps -> attempt neighbour exchanges
 
-so each replica advances `duration_per_segment_ps * number_of_exchanges`. Per-tau equilibration is
+so each replica advances `exchange_interval_ps * number_of_exchanges`. Per-tau equilibration is
 not part of that total.
 
 Restarting: run it again, or ./extend.sh N. Each replica keeps its own checkpoint under
@@ -318,15 +318,15 @@ def main(argv=None):
                 ["attempt_index", "phase", "step", "time_ps", "replica_i", "replica_j",
                  "log_acceptance", "accepted"])
 
-    # duration_per_segment_ps is the time BETWEEN exchange rounds, so this invocation runs
+    # exchange_interval_ps is the time BETWEEN exchange rounds, so this invocation runs
     # segment_steps * number_of_exchanges per replica.
-    segment_steps = steps_for(float(method["duration_per_segment_ps"]), TIMESTEP_FS)
+    segment_steps = steps_for(float(method["exchange_interval_ps"]), TIMESTEP_FS)
     n_exchanges = int(method["number_of_exchanges"])
     if n_exchanges < 1:
         raise SystemExit(f"REST2.number_of_exchanges must be at least 1; got {n_exchanges}")
-    total_ps = float(method["duration_per_segment_ps"]) * n_exchanges
+    total_ps = float(method["exchange_interval_ps"]) * n_exchanges
     print(f"[remd] {n_exchanges} rounds x {segment_steps:,} steps "
-          f"({method['duration_per_segment_ps']} ps) = {segment_steps * n_exchanges:,} steps "
+          f"({method['exchange_interval_ps']} ps) = {segment_steps * n_exchanges:,} steps "
           f"= {total_ps:g} ps of production per replica this invocation")
 
     invocation_first_round = attempt_index
@@ -488,7 +488,7 @@ def main(argv=None):
             "history": "exchange_attempts.csv",
         },
         "segment": {
-            "duration_per_segment_ps": float(method["duration_per_segment_ps"]),
+            "exchange_interval_ps": float(method["exchange_interval_ps"]),
             "steps_per_segment": segment_steps,
             "steps_per_replica_this_invocation": segment_steps * n_exchanges,
         },
@@ -518,7 +518,7 @@ def main(argv=None):
                                     for r in replica_records],
         "temperature_kelvin": float(common["temperature_kelvin"]),
         "timestep_fs": TIMESTEP_FS,
-        "duration_per_segment_ps": float(method["duration_per_segment_ps"]),
+        "exchange_interval_ps": float(method["exchange_interval_ps"]),
         "number_of_exchanges": lifetime_rounds,
         "total_steps": segment_steps * lifetime_rounds,
         "input_state": "replica_XX/equilibration/final_state.xml",
