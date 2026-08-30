@@ -418,51 +418,16 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> 
             "checkpoint_interval_ps": 100,
             "whole_system_interval_ps": 100,
             "solute_interval_ps": 10,
-            # Which replicas are proposed for exchange, and therefore WHO decides each swap.
-            # `swap-all` is stock OpenMMTools: it proposes n_replicas**3 uniformly random replica
-            # pairs per mixing event -- over all state pairs, not only adjacent ones -- and makes
-            # every accept/reject decision itself. It is the default because a stock decision path
-            # is worth more than a neighbour sweep that needs project code.
-            # `swap-neighbors` sweeps alternating adjacent pairs, but OpenMMTools 0.26.0's
-            # neighbour path is broken on NumPy >= 1.25, so selecting it activates this
-            # repository's own Metropolis call and the run records that ownership.
+            # How often to record a PHASE-SPACE frame: positions, velocities and box together.
+            # null means none. A fixed-tau run intended as an rREST2 reservoir source MUST set it,
+            # because a DCD cannot store the velocities a phase-space sample needs -- and a
+            # reservoir with no stored velocity cannot honour `velocity_policy: stored`.
+            "phase_space_interval_ps": None,
         }
 
-    if "rREST2" in methods:
-        document["rREST2"] = {
-            # Reservoir REST2: the hottest rung is periodically refreshed from a finite,
-            # Boltzmann-weighted ensemble instead of waiting for that rung to sample it.
-            #
-            # The refresh is accepted with probability ONE, and that is correct only because the
-            # reservoir is at exactly the top rung's tau, temperature, Hamiltonian and
-            # fixed-volume ensemble. A non-Boltzmann, clustered or kinetic reservoir needs its own
-            # separately derived acceptance rule; using this one would bias EVERY replica, not
-            # only the top (Kasavajhala, Lam, Simmerling, J. Chem. Inf. Model. 2020,
-            # PMCID PMC7725893; Roitberg, Okur, Simmerling, J. Phys. Chem. B 2007,
-            # doi:10.1021/jp068335b).
-            "reservoir": {
-                # null resolves to the fixed-tau cMD directory for tau_max, which is the run this
-                # repository generates for exactly this purpose. The PATH locates the source; it
-                # never establishes what it is. tau, temperature and the frame timing come from
-                # the source run's own resolved_run.yaml, and a run without one is refused.
-                "trajectory": None,
-                "start_time_ps": 0.0,
-                # null means "to the end of the source run", resolved at generation.
-                "end_time_ps": None,
-                # How many configurations are materialised. The finite-reservoir approximation is
-                # real: this is not the top state's full equilibrium distribution.
-                "frames": 20,
-                # In EXCHANGE iterations, not segments.
-                "refresh_interval_exchanges": 5,
-                "random_seed": 20260830,
-                # Stated so a reader sees the contract without opening the code. Only `boltzmann`
-                # is implemented; anything else is refused rather than approximated.
-                "weighting": "boltzmann",
-                "ensemble": "NVT",
-            },
-        }
     if "AIS" in methods:
         document["AIS"] = ais_defaults()
+
     if "REST2" in methods:
         document["REST2"] = {
             "ensemble": ensemble,
@@ -472,17 +437,23 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> 
             "tau_max": 0.5,
             "number_of_replicas": 6,
             "tau_interpolation": "linear",
-            # Time BETWEEN consecutive exchange rounds. Total production is
-            # duration_per_segment_ps * number_of_exchanges, so this default is 10 ns per replica.
-            # Per-tau equilibration, run once per replica by `REST2/equilibrate.py` before any
-            # exchange. It is NOT production and is not counted in the totals below.
+            # Per-state equilibration, run once before any exchange. NOT production.
             "equilibration_duration_ps": 1000.0,
-            "duration_per_segment_ps": 10,
+            # Time between consecutive exchange attempts. Total production is
+            # exchange_interval_ps * number_of_exchanges, so this default is 10 ns per replica.
+            # There is NO `segment_ps`: every interval here is independent and each converts to an
+            # exact integer number of integration steps.
+            "exchange_interval_ps": 10,
             "number_of_exchanges": 1000,
             "enhanced_region": "solute",
             "omega_exclusion": True,
-            "checkpoint_interval_ps": 100,
+            # null means "at every exchange", which is the only boundary at which the mapping and
+            # the RNG agree, so a restart lands exactly where a transition did.
+            "checkpoint_interval_ps": None,
+            # Complete coordinates for every walker. Expensive, so infrequent.
             "whole_system_interval_ps": 100,
+            # The solute subset only. Cheap, so frequent -- a genuinely separate stream, never
+            # derived from the whole-system cadence.
             "solute_interval_ps": 10,
             # Which replicas are proposed for exchange, and therefore WHO decides each swap.
             # `swap-all` is stock OpenMMTools: it proposes n_replicas**3 uniformly random replica
@@ -511,7 +482,7 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> 
                 # repository generates for exactly this purpose. The PATH locates the source; it
                 # never establishes what it is. tau, temperature and the frame timing come from
                 # the source run's own resolved_run.yaml, and a run without one is refused.
-                "trajectory": None,
+                "phase_space": None,
                 "start_time_ps": 0.0,
                 # null means "to the end of the source run", resolved at generation.
                 "end_time_ps": None,
@@ -525,6 +496,11 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> 
                 # is implemented; anything else is refused rather than approximated.
                 "weighting": "boltzmann",
                 "ensemble": "NVT",
+                # How momenta are obtained on a refresh. `stored` installs the recorded velocity
+                # unchanged and is what the probability-one rule assumes; `maxwell` redraws at the
+                # common temperature and must be asked for explicitly. There is NO silent fallback
+                # from `stored` -- missing velocities are a hard error before propagation.
+                "velocity_policy": "stored",
             },
         }
     return document

@@ -207,10 +207,37 @@ def production_protocol(r: dict[str, Any]) -> str:
     # A fixed-tau walker scales the solute Hamiltonian through the SAME module the ladder uses, so
     # a cMD run at tau and the REST2 rung at tau are the same Hamiltonian by construction. At
     # tau = 0 `build_scaled_system` returns the System untouched.
+    phase_ps = r.get("cmd_phase_space_interval_ps")
+    phase_steps = (None if not phase_ps else
+                   int(round(float(phase_ps) / (r["timestep_fs"] / 1000.0))))
     scaling = ("from runtime_record import write_resolved_run\n" if tau == 0.0 else
                "from rest2_scaling import build_scaled_system, scale_factor_for_tau\n"
                "from runtime_record import write_resolved_run\n"
                "import yaml\n")
+    if phase_steps:
+        scaling += ("from hamiltonian_identity import identity_record\n"
+                    "from phase_space import PhaseSpaceReporter\n")
+    phase_block = ("" if not phase_steps else f'''
+    # The PHASE-SPACE stream: positions, velocities and box together, which a DCD cannot carry.
+    # This is what makes a fixed-tau run usable as an rREST2 reservoir source, and the identity
+    # recorded here is what the reservoir validator recomputes and compares against.
+    _identity = {{
+        "hamiltonian": identity_record(
+            system, tau={tau}, temperature_k={r["temperature_K"]},
+            ensemble="{"NPT" if npt else "NVT"}",
+            solute_indices=list(range({r["solute_range"][1] + 1})),
+            excluded_bonds=[tuple(int(a) for a in pair) for pair in
+                            (yaml.safe_load(Path(files.topology).parent.joinpath(
+                                "solute.yaml").read_text()).get("rest2") or {{}}
+                             ).get("omega_excluded_bonds", [])]),
+        "method": "cMD", "tau": {tau}, "temperature_kelvin": {r["temperature_K"]},
+        "ensemble": "{"NPT" if npt else "NVT"}",
+    }}
+    simulation.reporters.append(PhaseSpaceReporter(
+        Path(files.trajectory).with_suffix(".phase_space.nc"), {phase_steps},
+        identity=_identity, periodic={"True" if npt or not r["implicit"] else "False"},
+        timestep_fs={r["timestep_fs"]}))
+''')
     scale_block = ("" if tau == 0.0 else f'''
     solute = yaml.safe_load(Path(files.topology).parent.joinpath("solute.yaml").read_text())
     solute_indices = list(range(int(solute["n_solute_atoms"])))
@@ -273,6 +300,7 @@ def run(files):
     f'provenance: {r["provenance_hint"]}',
 ])}
 
+{phase_block}
     simulation.reporters.append(DCDReporter(files.trajectory, {r["output_interval_steps"]}))
     if files.checkpoint:
         simulation.reporters.append(
@@ -441,6 +469,10 @@ Hamiltonian scaling, not temperature REMD, and an exchange never rescales veloci
 
     tau ladder : [{ladder}]
     s = (1-tau)^2 on solute-solute terms, sqrt(s) = 1-tau on solute-environment terms
+
+Every interval below is a PHYSICAL time and is independent of the others. Each converts to an
+exact whole number of integration steps; the propagation span between events is derived and is not
+a scientific input. There is no `segment_ps`.
 {reservoir_note}
 Run through openmm-md with the group file beside this one, which supplies every path.
 """
@@ -450,14 +482,18 @@ protocol = REST2Protocol(
     tau=[{ladder}],
     temperature_k={r["temperature_K"]},
     timestep_fs={r["timestep_fs"]},
-    segment_ps={block["segment_ps"]},
     exchange_interval_ps={block["exchange_interval_ps"]},
     whole_output_interval_ps={block["whole_output_interval_ps"]},
+    solute_output_interval_ps={block["solute_output_interval_ps"]},
     number_of_exchanges={block["number_of_exchanges"]},
     friction_per_ps={r["friction_per_ps"]},
     equilibration_ps={block["equilibration_ps"]},
     random_seed={r["seeds"][method]["integrator"]},
     hydrogen_mass_amu={r["hydrogen_mass_amu"]!r},
+    # Where this runs. Stated here so the request actually reaches the runtime; it is not part of
+    # the scientific identity, so a continuation on another machine is not refused for it.
+    platform={r["platform"]!r},
+    precision={r.get("precision")!r},
 )
 '''
 
@@ -523,21 +559,27 @@ cd "${{SYSTEM_ROOT}}"
 def reservoir_declaration(r: dict[str, Any]) -> str:
     """What the rREST2 rule refreshes from, and every assumption it rests on.
 
-    The SOURCE PATH IS NOT EVIDENCE. tau and temperature come from the source run's own companion
-    `resolved_run.yaml`; a directory called `cMD_tau0p5` can be renamed or copied, and a reservoir
-    drawn from the wrong ensemble runs to completion while being wrong.
+    The SOURCE PATH IS NOT EVIDENCE. The Hamiltonian fingerprint, tau and temperature come from the
+    source run's own recorded identity; a directory called `cMD_tau0p5` can be renamed or copied,
+    and a reservoir drawn from the wrong Hamiltonian runs to completion while being wrong.
     """
     block = r["replica"]
     reservoir = block["reservoir"]
-    return f'''# The Boltzmann reservoir the hottest rung is refreshed from.
+    stored = reservoir["velocity_policy"] == "stored"
+    return f'''# The Boltzmann PHASE-SPACE reservoir the hottest rung is refreshed from.
 #
-# v1 accepts a refresh with probability ONE, and that is only correct because the reservoir is
-# Boltzmann-weighted at exactly the top rung's tau, temperature, Hamiltonian and fixed-volume
-# ensemble. `rrest2_reservoir.py` checks every clause of that and refuses anything else.
+# A phase-space sample is positions AND velocities AND box. A DCD cannot store velocities, so a
+# DCD is not a phase-space reservoir; this source is the NetCDF stream a fixed-tau cMD run writes.
 #
-# The finite-reservoir approximation is real: {reservoir["frames"]} configurations are not the top
-# state's full equilibrium distribution, and the assumption that the selected window represents it
-# is an assumption, not a result.
+# v1 accepts a refresh with probability ONE, and that is correct only because the reservoir is
+# Boltzmann-weighted at exactly the top rung's HAMILTONIAN, tau, temperature and fixed-volume
+# ensemble. The Hamiltonian is compared on the serialized OpenMM System, recomputed on both sides:
+# tau and temperature agreeing is necessary and not sufficient, because ff14SB/TIP3P and
+# ff19SB/OPC agree on both.
+#
+# The finite-reservoir approximation is real: {reservoir["frames"]} samples are not the top state's
+# full equilibrium distribution, and the assumption that the selected window represents it is an
+# assumption, not a result.
 #
 # Roitberg, Okur, Simmerling, J. Phys. Chem. B 2007, 111, 2415; doi:10.1021/jp068335b
 # Kasavajhala, Lam, Simmerling, J. Chem. Inf. Model. 2020, 60, 1218; PMCID PMC7725893
@@ -545,16 +587,16 @@ format: {reservoir["format"]}
 weighting: boltzmann
 ensemble: NVT
 prepared_directory: reservoir
-# In EXCHANGE iterations, not segments.
+# `stored` installs the RECORDED momentum unchanged, which is what the probability-one rule
+# assumes. `maxwell` redraws at the common temperature from a recorded seed and must be asked for
+# explicitly -- there is no silent fallback when velocities are missing; that is a hard error.
+velocity_policy: {reservoir["velocity_policy"]}{"" if stored else "   # REDRAWN, not the recorded momentum"}
+# In EXCHANGE attempts, not steps.
 refresh_interval_exchanges: {reservoir["refresh_interval_exchanges"]}
 random_seed: {reservoir["random_seed"]}
 source:
   # Relative to the system root. The path locates the run; it never establishes what it is.
-  trajectory: {reservoir["trajectory"]}
-  # null: tau and temperature come from the source run's own resolved_run.yaml. Stating them here
-  # too is allowed and is then CHECKED against that record rather than trusted over it.
-  source_tau: null
-  source_temperature_k: null
+  phase_space: {reservoir["phase_space"]}
   start_time_ps: {reservoir["start_time_ps"]}
   end_time_ps: {reservoir["end_time_ps"]}
   frames: {reservoir["frames"]}
