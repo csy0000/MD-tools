@@ -138,236 +138,97 @@ def trajectory_directory(index):
 
 
 def reduced_box_vectors(vectors):
-    """Put box vectors into the reduced form OpenMM requires, without changing the lattice.
-
-    A DCD stores a box as three lengths and three angles. MDTraj rebuilds vectors from those in the
-    usual lower-triangular convention, which is a correct description of the same lattice but not
-    necessarily the REDUCED one OpenMM insists on:
-
-        openmm.OpenMMException: Periodic box vectors must be in reduced form.
-
-    Reduction subtracts integer multiples of the earlier vectors from the later ones. That changes
-    which vectors name the lattice, not the lattice itself -- the cell volume and every periodic
-    image are unchanged -- so the box the path propagates in is the box the source frame had. This
-    matters for a rhombic dodecahedron, which is exactly the shape this repository builds.
-    """
-    a, b, c = ([float(x) for x in row] for row in vectors)
-    scale = round(c[1] / b[1]) if b[1] else 0.0
-    c = [c[i] - scale * b[i] for i in range(3)]
-    scale = round(c[0] / a[0]) if a[0] else 0.0
-    c = [c[i] - scale * a[i] for i in range(3)]
-    scale = round(b[0] / a[0]) if a[0] else 0.0
-    b = [b[i] - scale * a[i] for i in range(3)]
-    return [a, b, c]
+    """Delegates to the shared helper: reduced form for OpenMM, same lattice."""
+    return source_ensemble.reduced_box_vectors(vectors)
 
 
 # ---------------------------------------------------------------------------------------------
 # The source ensemble
+#
+# The rules for reading configurations out of an equilibrium production run live in
+# `source_ensemble.py`, which rREST2 uses too. They were established here and are not restated:
+# a second implementation is a second thing that can be wrong, and its wrongness would be silent.
+# The functions below build the request AIS's configuration describes and delegate.
+#
+# `source_ensemble.derive_seed` is deliberately this file's own multiplicative derivation, and the
+# selection stream is still ("AIS", "source-selection"), so every existing AIS project selects the
+# configurations it always did.
 # ---------------------------------------------------------------------------------------------
 
-def resolve_source_paths():
-    """The source trajectory and topology, as an absolute path and as the configured one.
+import source_ensemble
 
-    Both are kept. The absolute path says what this execution actually read; the configured path is
-    what stays true when the project is moved, which is the whole reason paths in this project are
-    relative.
-    """
+
+def source_request(*, count=None):
+    """AIS's configuration, expressed as the shared source-ensemble request."""
     source = method["source"]
-    configured = str(source["trajectory"])
-    trajectory = Path(configured)
-    if not trajectory.is_absolute():
-        trajectory = (PROJECT / configured).resolve()
-    if not trajectory.is_file():
-        raise SystemExit(
-            f"AIS.source.trajectory = {configured!r} does not resolve to a file.\n"
-            f"  Looked for: {trajectory}\n"
-            f"  Relative paths are resolved against the generated project, {PROJECT}.")
+    return source_ensemble.SourceRequest(
+        project=PROJECT,
+        prepared_topology=INPUTS / "topology.pdb",
+        trajectory=source["trajectory"],
+        topology=source.get("topology"),
+        start_time_ps=source["start_time_ps"],
+        end_time_ps=source["end_time_ps"],
+        count=int(source["number_of_trajectories"] if count is None else count),
+        allow_replacement=bool(source["allow_sampling_with_replacement"]),
+        seed=BASE_SEED,
+        implicit=implicit,
+        required_tau=float(PATH_DEFINITION["path"]["tau_start"]),
+        declared_tau=source.get("source_tau"),
+        first_frame_time_ps=source.get("first_frame_time_ps"),
+        frame_interval_ps=source.get("frame_interval_ps"),
+        field_prefix="AIS.source",
+        replacement_rationale=("Two independent paths starting from the same configuration are "
+                               "not two independent realisations."),
+        chunk_frames=SOURCE_CHUNK_FRAMES,
+        purpose="AIS",
+        selection_purpose=("AIS", "source-selection"),
+    )
 
-    configured_topology = source.get("topology")
-    if configured_topology:
-        topology = Path(configured_topology)
-        if not topology.is_absolute():
-            topology = (PROJECT / configured_topology).resolve()
-        chosen = "AIS.source.topology"
-    else:
-        topology = INPUTS / "topology.pdb"
-        chosen = "inputs/topology.pdb (AIS.source.topology was null)"
-    if not topology.is_file():
-        raise SystemExit(f"the source topology {topology} does not exist")
-    return {"trajectory": trajectory, "trajectory_configured": configured,
-            "topology": topology, "topology_choice": chosen}
+
+def resolve_source_paths():
+    """Delegates to the shared source-ensemble helper. See `source_ensemble.py`."""
+    try:
+        return source_ensemble.resolve_source_paths(source_request())
+    except source_ensemble.SourceError as failure:
+        raise SystemExit(str(failure)) from None
 
 
 def companion_record(trajectory):
-    """The `resolved_run.yaml` that describes the run which wrote `trajectory`, if there is one.
-
-    Searched in the trajectory's own directory and then upward: a cMD trajectory sits beside its
-    record, a REST2 replica trajectory sits two levels below the record that covers every replica.
-    Returns `(record, path)` or `(None, None)` -- absence is not an error here, it only means the
-    user has to supply the frame timing and the source tau themselves.
-    """
-    directory = trajectory.parent
-    for candidate in [directory, *list(directory.parents)[:4]]:
-        record = candidate / "resolved_run.yaml"
-        if record.is_file():
-            try:
-                return yaml.safe_load(record.read_text()), record
-            except Exception:
-                return None, None
-    return None, None
+    """Delegates to the shared helper: the `resolved_run.yaml` describing the writing run."""
+    return source_ensemble.companion_record(trajectory)
 
 
 def _replica_entry(record, trajectory):
-    """The replica block of a REST2 record whose directory the trajectory lives under."""
-    parts = set(trajectory.resolve().parts)
-    for entry in record.get("replicas") or []:
-        if str(entry.get("replica")) in parts:
-            return entry
-    return None
+    """Delegates to the shared helper."""
+    return source_ensemble._replica_entry(record, trajectory)
 
 
 def source_frame_timing(trajectory, n_frames):
-    """`(times_ps, evidence)` for every frame, or a refusal.
-
-    A frame index is never treated as a time and a DCD header is never treated as the production
-    clock. Two routes, in order:
-
-      1. the companion `resolved_run.yaml`, which records the reporter interval and timestep the
-         frames were written with -- the value recorded where it was decided;
-      2. `AIS.source.first_frame_time_ps` and `frame_interval_ps`, supplied by the user.
-
-    If neither is available the run stops and says which two fields would settle it.
-    """
-    source = method["source"]
-    first = source.get("first_frame_time_ps")
-    interval = source.get("frame_interval_ps")
-    if first is not None and interval is not None:
-        times = [float(first) + index * float(interval) for index in range(n_frames)]
-        return times, {"route": "configured", "first_frame_time_ps": float(first),
-                       "frame_interval_ps": float(interval),
-                       "source": "AIS.source.first_frame_time_ps / frame_interval_ps"}
-
-    record, record_path = companion_record(trajectory)
-    if record is not None:
-        block = record.get("trajectories") or {}
-        entry = _replica_entry(record, trajectory)
-        if entry is not None:
-            block = entry.get("trajectories") or {}
-        mapping = ((block.get("whole_system") or {}).get("frame_time_map")
-                   if isinstance(block.get("whole_system"), dict) else None)
-        if mapping:
-            first = float(mapping["first_frame_time_ps"])
-            interval = float(mapping["frame_interval_ps"])
-            times = [first + index * interval for index in range(n_frames)]
-            return times, {"route": "companion_record",
-                           "record": relative_to_project(record_path),
-                           "first_frame_time_ps": first, "frame_interval_ps": interval,
-                           "convention": mapping.get("convention"),
-                           "source": f"{record_path.name} trajectories.whole_system.frame_time_map"}
-
-    raise SystemExit(
-        f"cannot establish a physical time for the frames of {trajectory.name}.\n"
-        f"  No companion resolved_run.yaml with a frame_time_map was found beside or above it, "
-        f"and AIS.source.first_frame_time_ps / frame_interval_ps are not set.\n"
-        f"  A frame index is not a time, and this refuses to invent one. Either point "
-        f"AIS.source.trajectory at a trajectory written by this repository's cMD or REST2 runtime "
-        f"(which records the map), or set BOTH of:\n"
-        f"      AIS.source.first_frame_time_ps   time of frame 0, in ps\n"
-        f"      AIS.source.frame_interval_ps     spacing between frames, in ps")
+    """Delegates to the shared helper. A frame index is never a time; a DCD header never a clock."""
+    try:
+        return source_ensemble.source_frame_timing(source_request(), trajectory, n_frames)
+    except source_ensemble.SourceError as failure:
+        raise SystemExit(str(failure)) from None
 
 
 def source_tau(trajectory):
-    """The tau the source ensemble was generated at, where that came from, and by which route.
-
-    Two routes, and they must not disagree:
-
-      1. the companion `resolved_run.yaml`, which records the tau the run actually used;
-      2. `AIS.source.source_tau`, stated by the user -- REQUIRED for an external trajectory that
-         has no such record.
-
-    Never assumed. A path that starts from an ensemble equilibrated at a different tau than
-    `path.tau_start` is not an annealed importance sampling path at all: the first work value
-    would silently absorb the mismatch. A CONFLICT between the two routes is refused rather than
-    resolved by preferring one, because whichever were preferred, the other would be wrong.
-    """
-    declared = method["source"].get("source_tau")
-    recorded, evidence = None, None
-    record, record_path = companion_record(trajectory)
-    if record is not None:
-        entry = _replica_entry(record, trajectory)
-        if entry is not None and entry.get("tau") is not None:
-            recorded = float(entry["tau"])
-            evidence = (f"{relative_to_project(record_path)} replicas[{entry.get('replica')}].tau")
-        elif record.get("tau") is not None:
-            recorded = float(record["tau"])
-            evidence = f"{relative_to_project(record_path)} tau"
-
-    if declared is not None and recorded is not None:
-        if abs(float(declared) - recorded) > 1e-9:
-            raise SystemExit(
-                f"AIS.source.source_tau is {declared}, but the source trajectory's own runtime "
-                f"record says tau = {recorded} ({evidence}).\n"
-                f"  These must agree. Correct the configuration, or point "
-                f"AIS.source.trajectory at the run you meant.")
-        return recorded, f"{evidence}; confirmed by AIS.source.source_tau", "companion record"
-    if recorded is not None:
-        return recorded, evidence, "companion record"
-    if declared is not None:
-        return (float(declared), "AIS.source.source_tau (no companion runtime record)",
-                "explicit configuration")
-
-    raise SystemExit(
-        f"cannot establish the Hamiltonian tau of the source trajectory {trajectory.name}.\n"
-        f"  No companion resolved_run.yaml recording `tau` was found beside or above it, and "
-        f"AIS.source.source_tau is not set.\n"
-        f"  This is refused rather than assumed to be "
-        f"{PATH_DEFINITION['path']['tau_start']}: an ensemble equilibrated at a different tau "
-        f"makes the first work value absorb the mismatch, silently.\n"
-        f"  Either point AIS.source.trajectory at a fixed-tau cMD run or a REST2 replica produced "
-        f"by this repository, whose runtime record names its tau, or state it yourself:\n"
-        f"      AIS:\n        source:\n          source_tau: "
-        f"{PATH_DEFINITION['path']['tau_start']}")
+    """Delegates to the shared helper. NEVER inferred from a directory name such as cMD_tau0p5."""
+    try:
+        return source_ensemble.source_tau(source_request(), trajectory)
+    except source_ensemble.SourceError as failure:
+        raise SystemExit(str(failure)) from None
 
 
 def select_source_frames(times, evidence):
-    """Which frames each path starts from -- deterministic, inclusive, and recorded before any run.
+    """Delegates to the shared helper, on a request rebuilt from the CURRENT configuration.
 
-    Uniform over the eligible frames, without replacement by default. The window is INCLUSIVE at
-    both ends, which is what `start_time_ps` and `end_time_ps` mean.
+    Rebuilt each call rather than cached: the window and the trajectory count are configuration,
+    and a caller that changes them expects the next selection to honour the change.
     """
-    source = method["source"]
-    start = float(source["start_time_ps"])
-    end = float(source["end_time_ps"])
-    # A tolerance of half a frame interval: a frame written at exactly `end_time_ps` must be
-    # eligible, and floating-point time accumulation must not exclude it.
-    tolerance = 0.5 * float(evidence.get("frame_interval_ps") or 0.0) * 1e-6
-    eligible = [index for index, time in enumerate(times)
-                if start - tolerance <= time <= end + tolerance]
-    count = int(source["number_of_trajectories"])
-    replace = bool(source["allow_sampling_with_replacement"])
-
-    if not eligible:
-        raise SystemExit(
-            f"no frame of the source trajectory falls in [{start}, {end}] ps.\n"
-            f"  The trajectory covers {times[0]:g} to {times[-1]:g} ps "
-            f"({len(times)} frames, {evidence.get('frame_interval_ps')} ps apart, "
-            f"from {evidence.get('source')}).\n"
-            f"  Both bounds are inclusive; widen AIS.source.start_time_ps / end_time_ps.")
-    if not replace and count > len(eligible):
-        raise SystemExit(
-            f"AIS.source.number_of_trajectories = {count}, but only {len(eligible)} frame(s) of "
-            f"the source trajectory fall in [{start}, {end}] ps and "
-            f"allow_sampling_with_replacement is false.\n"
-            f"  Two independent paths starting from the same configuration are not two "
-            f"independent realisations. Either widen the time window, ask for at most "
-            f"{len(eligible)} trajectories, or set allow_sampling_with_replacement true and accept "
-            f"that the paths share starting points.")
-
-    # Seeded from the recorded master seed, so the same project selects the same frames on any
-    # machine. numpy's Generator is used rather than `random` because its stream is versioned.
-    generator = np.random.default_rng(derive_seed(BASE_SEED, "AIS", "source-selection"))
-    chosen = generator.choice(len(eligible), size=count, replace=replace)
-    return [int(eligible[int(i)]) for i in chosen], eligible
+    try:
+        return source_ensemble.select_source_frames(source_request(), times, evidence)
+    except source_ensemble.SourceError as failure:
+        raise SystemExit(str(failure)) from None
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1043,96 +904,29 @@ def resolve_ais_inputs(*, prepare=True):
 
 
 def _iterload(paths, chunk):
-    """`mdtraj.iterload` over the source trajectory, in bounded chunks.
-
-    `mdtraj.load` is deliberately not used and must not be reintroduced: it reads the entire
-    trajectory into memory, and an AIS source is an equilibrium production run that may be tens of
-    gigabytes. Everything this runtime needs -- the frame count, the atom count, the box vectors,
-    and a few selected frames -- is obtainable a chunk at a time.
-    """
-    import mdtraj
-
-    return mdtraj.iterload(str(paths["trajectory"]), top=str(paths["topology"]), chunk=chunk)
+    """Delegates to the shared helper. `mdtraj.load` is not used and must not be reintroduced."""
+    return source_ensemble._iterload(paths, chunk)
 
 
 def survey_source(paths, *, chunk=SOURCE_CHUNK_FRAMES):
-    """Pass one: how many frames, how many atoms, and whether every frame carries a box.
-
-    Nothing is retained. This exists so the frame count and the atom check happen without the
-    trajectory ever being resident.
-    """
-    n_frames = 0
-    n_atoms = None
-    chunks = 0
-    boxes_present = True
-    for piece in _iterload(paths, chunk):
-        chunks += 1
-        n_frames += int(piece.n_frames)
-        n_atoms = int(piece.n_atoms)
-        if piece.unitcell_vectors is None:
-            boxes_present = False
-    if n_atoms is None:
-        raise SystemExit(f"{paths['trajectory'].name} contains no frames.")
-    return {"n_frames": n_frames, "n_atoms": n_atoms, "chunks_read": chunks,
-            "chunk_frames": int(chunk), "boxes_present": boxes_present,
-            "loader": "mdtraj.iterload"}
+    """Delegates to the shared helper: frame count, atom count, box presence, nothing retained."""
+    try:
+        return source_ensemble.survey_source(paths, chunk=chunk)
+    except source_ensemble.SourceError as failure:
+        raise SystemExit(str(failure)) from None
 
 
 def collect_frames(paths, wanted, *, chunk=SOURCE_CHUNK_FRAMES):
-    """Pass two: stream again and keep ONLY the deterministically selected frames.
-
-    Returns `{global_index: (positions_nm, box_vectors_nm or None)}`. Peak memory is one chunk plus
-    the selected frames, and the loop stops as soon as everything wanted has been seen.
-    """
-    wanted = set(int(i) for i in wanted)
-    kept = {}
-    offset = 0
-    chunks = 0
-    for piece in _iterload(paths, chunk):
-        chunks += 1
-        for local in range(int(piece.n_frames)):
-            index = offset + local
-            if index in wanted:
-                box = (None if piece.unitcell_vectors is None
-                       else np.array(piece.unitcell_vectors[local], dtype=float))
-                kept[index] = (np.array(piece.xyz[local], dtype=float), box)
-        offset += int(piece.n_frames)
-        if len(kept) == len(wanted):
-            break
-    missing = sorted(wanted - set(kept))
-    if missing:
-        raise SystemExit(
-            f"the source trajectory ended before frame(s) {missing[:5]} could be read; it has "
-            f"{offset} frame(s).")
-    return kept, chunks
+    """Delegates to the shared helper: stream again, keep only the selected frames."""
+    try:
+        return source_ensemble.collect_frames(paths, wanted, chunk=chunk)
+    except source_ensemble.SourceError as failure:
+        raise SystemExit(str(failure)) from None
 
 
 def atom_identity(topology):
-    """A per-index identity tuple for every atom, and the bond set as index pairs.
-
-    Atom NAME alone is not identity. A protein is full of repeated names -- every residue has an
-    N, a CA, a C, an O -- so a topology whose residues were reassigned, whose chains were split
-    differently, or whose atoms were renumbered within a residue compares equal on names while
-    describing a different molecule. The System's parameters are assigned per index, so that
-    mismatch would scale the wrong atoms, silently, with every count still agreeing.
-    """
-    atoms = []
-    for atom in topology.atoms():
-        residue = atom.residue
-        chain = residue.chain
-        atoms.append((
-            str(getattr(chain, "id", "") or ""),
-            int(chain.index),
-            int(residue.index),
-            str(getattr(residue, "id", "") or ""),
-            str(residue.name),
-            str(atom.name),
-            (atom.element.symbol if atom.element is not None else ""),
-        ))
-    # Sorted within each pair and then overall, so the same connectivity written in a different
-    # order is the same connectivity. Bond ORDER between different atoms is a real difference.
-    bonds = sorted(tuple(sorted((int(a.index), int(b.index)))) for a, b in topology.bonds())
-    return atoms, bonds
+    """Delegates to the shared helper. Atom NAME alone is not identity."""
+    return source_ensemble.atom_identity(topology)
 
 
 ATOM_FIELDS = ("chain id", "chain index", "residue index", "residue id", "residue name",
@@ -1140,85 +934,24 @@ ATOM_FIELDS = ("chain id", "chain index", "residue index", "residue id", "residu
 
 
 def validate_topologies(paths):
-    """The source topology and the prepared topology are the same atoms, in the same order.
-
-    Compared on full per-index identity and on bond connectivity, not on names and counts.
-    Coordinates are deliberately NOT compared: the source ensemble is expected to hold different
-    configurations, which is the entire point of sampling from it.
-    """
-    reference = PDBFile(str(paths["topology"]))
-    prepared = PDBFile(str(INPUTS / "topology.pdb"))
-    source_atoms, source_bonds = atom_identity(reference.topology)
-    prepared_atoms, prepared_bonds = atom_identity(prepared.topology)
-
-    if len(source_atoms) != len(prepared_atoms):
-        raise SystemExit(
-            f"{paths['topology']} has {len(source_atoms)} atoms but the prepared "
-            f"inputs/topology.pdb has {len(prepared_atoms)}.")
-
-    for index, (mine, theirs) in enumerate(zip(source_atoms, prepared_atoms)):
-        if mine == theirs:
-            continue
-        differing = ", ".join(f"{ATOM_FIELDS[i]} {a!r} vs {b!r}"
-                              for i, (a, b) in enumerate(zip(mine, theirs)) if a != b)
-        raise SystemExit(
-            f"the source topology and inputs/topology.pdb disagree at atom index {index}: "
-            f"{differing}.\n"
-            f"  source:   {mine}\n"
-            f"  prepared: {theirs}\n"
-            f"  The System's parameters are assigned per index, so a topology that differs here "
-            f"would scale the wrong atoms while every count still matched.")
-
-    if source_bonds != prepared_bonds:
-        only_source = [b for b in source_bonds if b not in set(prepared_bonds)]
-        only_prepared = [b for b in prepared_bonds if b not in set(source_bonds)]
-        first = (only_source or only_prepared or [None])[0]
-        raise SystemExit(
-            f"the source topology and inputs/topology.pdb have {len(source_bonds)} and "
-            f"{len(prepared_bonds)} bond(s) and they are not the same bonds; first difference "
-            f"{first} ({len(only_source)} only in the source, {len(only_prepared)} only in the "
-            f"prepared inputs).\n"
-            f"  Same atoms in the same order is not enough: different connectivity is a different "
-            f"molecule, and REST2 scaling is decided from bonded terms.")
-    return reference
+    """Delegates to the shared helper: same atoms, same order, same connectivity."""
+    try:
+        return source_ensemble.validate_topologies(source_request(), paths)
+    except source_ensemble.SourceError as failure:
+        raise SystemExit(str(failure)) from None
 
 
 def resolve_source_ensemble():
-    """Everything about the source that can be decided without keeping a single frame.
+    """Delegates to the shared helper, then applies AIS's own tau_start requirement.
 
-    Shared by the preflight and by `build_plan`, so the check and the run agree by construction
-    rather than by two implementations happening to match.
+    The helper already refuses a source whose tau differs from the required one; AIS's required
+    tau IS `path.tau_start`, so the check is the same one, stated in AIS's own words when it
+    fails.
     """
-    paths = resolve_source_paths()
-    reference = validate_topologies(paths)
-    survey = survey_source(paths)
-    if survey["n_atoms"] != reference.topology.getNumAtoms():
-        raise SystemExit(
-            f"the source trajectory has {survey['n_atoms']} atoms but "
-            f"{paths['topology'].name} has {reference.topology.getNumAtoms()}. AIS switches the "
-            f"System built from inputs/topology.pdb, so the two must be the same system in the "
-            f"same order.")
-    if not implicit and not survey["boxes_present"]:
-        raise SystemExit(
-            f"{paths['trajectory'].name} carries no periodic box vectors, but this is an "
-            f"explicit-solvent system and each path keeps the box of the frame it starts from. "
-            f"A DCD written by this repository's cMD or REST2 runtime has them.")
-
-    times, timing = source_frame_timing(paths["trajectory"], survey["n_frames"])
-    tau_source, tau_evidence, tau_route = source_tau(paths["trajectory"])
-    tau_start = float(PATH_DEFINITION["path"]["tau_start"])
-    if abs(tau_source - tau_start) > 1e-9:
-        raise SystemExit(
-            f"the source trajectory was produced at tau = {tau_source} ({tau_evidence}), but "
-            f"AIS.path.tau_start is {tau_start}.\n"
-            f"  The path must begin in the ensemble it anneals away from. Set tau_start to "
-            f"{tau_source}, or point AIS.source.trajectory at an ensemble equilibrated at "
-            f"{tau_start}.")
-
-    selected, eligible = select_source_frames(times, timing)
-    return {"paths": paths, "survey": survey, "times": times, "timing": timing,
-            "tau": tau_source, "tau_evidence": tau_evidence, "tau_route": tau_route,
-            "selected": selected, "eligible": eligible}
+    try:
+        return source_ensemble.resolve_source_ensemble(source_request())
+    except source_ensemble.SourceError as failure:
+        raise SystemExit(str(failure)) from None
 
 
 def check_ais_source(dynamics=True):

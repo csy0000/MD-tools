@@ -219,6 +219,10 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
             # md-gen; the trajectory directories and every runtime record are written by the run.
             shutil.copy2(TEMPLATES / "ais_run.py", directory / "run.py")
             shutil.copy2(TEMPLATES / "rest2_scaling.py", directory / "rest2_scaling.py")
+            # The shared source-ensemble reader. AIS and rREST2 both draw configurations out of an
+            # equilibrium production run, and the rules for doing that safely live in one file so
+            # a second implementation cannot drift from it.
+            shutil.copy2(TEMPLATES / "source_ensemble.py", directory / "source_ensemble.py")
             write_yaml(directory / "path_definition.yaml",
                        _ais_path_definition(resolved, implicit=implicit),
                        header="# The AIS path, its schedule and its work convention, resolved\n"
