@@ -25,6 +25,8 @@ from .config import (ConfigError, openff_resource, resolve_sys_config, sha256_of
                      write_yaml)
 from .defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT
 from .forcefield_record import build_forcefield_record
+from .templates.rest2_scaling import (OMEGA_DETECTOR_VERSION,
+                                      torsion_exclusion_report)
 
 OUTPUT_FILES = ("system.xml", "topology.pdb", "solute.pdb", "initial_state.xml", "solute.yaml",
                 "forcefield.json", "resolved_sys.config.yaml", "provenance.yaml", "SHA256SUMS",
@@ -140,7 +142,29 @@ def _water_xml(name: Optional[str]) -> Optional[str]:
     return qualified
 
 
-def _solute_document(topology, solute_indices, omega, *, route: str) -> dict[str, Any]:
+def _omega_evidence(candidate: dict) -> dict:
+    """One ambiguous candidate, with WHY it could not be classified.
+
+    A bare list of unresolved atom pairs tells a reader that something blocked production and
+    nothing about what to do next. What is needed is the bond, the residues on both ends, and the
+    sentence the classifier itself would have said -- so the answer is either "add this name to
+    rest2.proline_like_residues" or "this input is wrong", and neither requires re-deriving the
+    classification by hand.
+    """
+    return {
+        "bond": [int(a) for a in candidate["bond"]],
+        "carbon": int(candidate["carbon"]),
+        "nitrogen": int(candidate["nitrogen"]),
+        "carbon_residue": candidate.get("carbon_residue"),
+        "nitrogen_residue": candidate.get("nitrogen_residue"),
+        "carbon_residue_index": candidate.get("carbon_residue_index"),
+        "nitrogen_residue_index": candidate.get("nitrogen_residue_index"),
+        "ring_sizes": candidate.get("ring_sizes"),
+        "evidence": candidate.get("ambiguous"),
+    }
+
+
+def _solute_document(topology, solute_indices, omega, *, route: str, system=None) -> dict[str, Any]:
     residues = []
     solute_set = set(int(i) for i in solute_indices)
     for residue in topology.residues():
@@ -168,6 +192,25 @@ def _solute_document(topology, solute_indices, omega, *, route: str) -> dict[str
             "omega_proline_like_scaled_bonds": [[int(a), int(b)] for a, b in omega.get(
                 "omega_proline_like_scaled_bonds", [])],
             "omega_detection_method": omega.get("omega_detection_method"),
+            # Section 3: the route and the detector version are persisted, so a record can be
+            # checked against the detector that produced it rather than against whichever
+            # detector happens to be installed when it is read.
+            "omega_detection_route": route,
+            "omega_detector_version": OMEGA_DETECTOR_VERSION,
+            # Candidates neither rule could name, with their evidence. A NON-EMPTY LIST BLOCKS
+            # PRODUCTION: it means an amide was found that the classifier could not call ordinary
+            # or proline-like, and guessing either way silently changes the Hamiltonian.
+            "omega_ambiguous_candidates": [
+                _omega_evidence(candidate)
+                for candidate in omega.get("omega_unclassified_candidates", [])],
+            # What the exclusion actually DOES: the PeriodicTorsionForce terms each excluded
+            # central bond protects, in this System. The bond pair alone would leave a reader to
+            # re-derive that mapping with assumptions that may not match the ones used here.
+            **(torsion_exclusion_report(
+                system, solute_set,
+                [tuple(int(a) for a in bond)
+                 for bond in omega.get("omega_unscaled_bonds", [])]) if system is not None
+               else {}),
         },
     }
 
@@ -552,7 +595,7 @@ def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
     _warn_if_not_reproducible(log)
 
     write_yaml(out / "solute.yaml",
-               _solute_document(topology, solute_indices, omega, route=route))
+               _solute_document(topology, solute_indices, omega, route=route, system=system))
     # The generator identity travels with the resolved configuration too. `md-gen` reads this
     # file back, and preflight compares it against every other record that names a generator: a
     # dataset whose system was prepared by one MD-templates and whose scripts were written by

@@ -649,13 +649,55 @@ def resolve_output_root(output: Optional[str]) -> tuple[Path, str]:
         raise ConfigError(f"--output {root} traverses outside {managed_path}")
 
     worktree = _inside_git_worktree(root)
-    if worktree:
+    if worktree and not _staging_opt_in(root):
         raise ConfigError(
             f"{root} is inside the Git working tree at {worktree}. Generated systems, "
             f"trajectories and checkpoints must live outside every repository -- an ignore rule is "
-            f"not protection, because it is one `git add -f` from being wrong.")
+            f"not protection, because it is one `git add -f` from being wrong.\n"
+            f"  A project-local STAGING area, the kind `md-data-register` later moves out, is the "
+            f"one exception: create {root}/.md-staging, make sure `git check-ignore` agrees "
+            f"that paths beneath it are ignored, and set MD_TEMPLATES_ALLOW_STAGING=1.")
+    if worktree:
+        print(f"# staging            : {root} is inside {worktree} and is a declared staging "
+              f"area. It is git-ignored and MUST be registered out before it is cited.")
 
     return root, relative.as_posix()
+
+
+def _staging_opt_in(root: Path) -> bool:
+    """Is this an explicitly declared, genuinely ignored staging area?
+
+    The worktree rule below exists because "it is in .gitignore" is not protection: an ignore rule
+    is one `git add -f` from being wrong. That reasoning is sound and it stays. What it did not
+    allow for is the staging step the registration pipeline is built on -- a dataset is generated
+    project-locally, finished, verified, and only then moved under $MD_DATA by `md-data-register`.
+
+    So the exception is narrow and it is CHECKED rather than asserted. All three must hold:
+
+      * the caller opted in for this run, by setting MD_TEMPLATES_ALLOW_STAGING=1;
+      * a marker file `.md-staging` sits in the directory, so the intent is visible to anyone who
+        looks at the tree and does not depend on the environment of whoever ran the command;
+      * `git check-ignore` agrees that what is created beneath the root is actually ignored --
+        asking git rather than trusting that a rule was written correctly. The root itself is
+        often tracked (it holds a README); what must be ignored is where the data lands.
+
+    A directory that is merely inside a repository still fails, which is the case the rule is for.
+    """
+    if os.environ.get("MD_TEMPLATES_ALLOW_STAGING") != "1":
+        return False
+    if not (root / ".md-staging").is_file():
+        return False
+    # What must be ignored is where the DATA lands -- the system directories created beneath the
+    # root -- not the root itself, which is often a tracked directory holding a README. Asking
+    # about a child is asking the question that matters. `check-ignore` matches paths, so the
+    # probe does not need to exist.
+    probe = root / "any-generated-system"
+    try:
+        result = subprocess.run(["git", "check-ignore", "--quiet", str(probe)],
+                                cwd=str(root), capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
 
 
 def refuse_unsafe_output(root: Path) -> None:
