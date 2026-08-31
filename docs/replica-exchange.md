@@ -348,10 +348,45 @@ one entry, while two genuinely different migrations stay separate. Order is firs
 the order the migrations happened in — not sorted, because no timestamp here is guaranteed
 comparable across machines.
 
-**The file is the durable authority for its own schema history.** The event is written into the
-analysis NetCDF as `storage_migrations_json` in the **same `sync()`** as the mutation it describes.
-That closes the crash window: a process killed immediately after migrating still leaves a file
-that says it was migrated, so the next continuation reads the truth instead of inferring it.
+**The migration is a transaction, and it is not atomic.** An earlier version of this document
+said the event was committed "in the same `sync()`" as the mutation and called that atomic. It was
+not, and the claim is withdrawn. NetCDF offers no transaction: `createVariable`, a backfill and an
+attribute write are three operations, and a `sync()` after them commits only what it reaches.
+Killing a process between them was measured on this build — after the backfill call the file held
+the variable full of HDF5 **fill values** (-9223372036854775806), no history attribute, and nothing
+recording that a migration had ever begun. The reader returned those fill values *as seeds*.
+
+What the migration actually is, is **restartable and idempotent**:
+
+```
+write the intent, sync        from here a crash is detectable
+create missing fields         idempotent; the intent says which fields are this transaction's
+backfill the recorded rows, sync
+append the committed event by its stable id, sync
+clear the intent, sync
+```
+
+Every crash point leaves a file the next continuation can finish:
+
+| killed | what is on disk | what the restart does |
+|---|---|---|
+| before the intent | nothing happened | begins a fresh migration |
+| after the intent | fields may exist holding fill values | the intent names the fields, the row range and the value, so they are rewritten |
+| after the backfill | values correct, event not yet recorded | appends the event |
+| after the commit | event recorded, marker stale | clears the marker; does **not** append twice, because the event carries the id the intent fixed |
+
+The intent — `storage_migration_pending_json` — is what makes a crash detectable at all, and it
+decides which fields belong to the transaction. A crash after `createVariable` leaves the field
+present; without the intent a restart would see nothing missing and record no event.
+
+**A file left by the pre-transaction implementation cannot be repaired.** Field present, fill
+values, no marker, no history: the event that would have explained it was never written and cannot
+be reconstructed. Such a file is refused with that explanation rather than given an invented
+history, and its fill values are refused rather than read as seeds.
+
+**`--verify-only` reports a pending migration and finishes nothing.** A continuation is the only
+thing that reconciles one — treating a pending marker as a reason to refuse everywhere would
+deadlock the file against the one command that can recover it.
 
 **Every authoritative record is merged**, none trusted to be complete: the file's own history, the
 previous completion manifest, and the run state. A run migrated by an earlier build recorded the
