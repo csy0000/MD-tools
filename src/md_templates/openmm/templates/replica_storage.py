@@ -71,6 +71,33 @@ OPTIONAL_EXCHANGE_FIELDS = {
 #: so, and the next continuation would have no way to know.
 MIGRATION_HISTORY_ATTRIBUTE = "storage_migrations_json"
 
+#: Where an UNFINISHED migration declares itself, so a crash is recoverable rather than silent.
+#:
+#: NetCDF gives no transaction. `createVariable`, a backfill and an attribute write are three
+#: operations, and a `sync()` after them commits only what is reached. Killing a process between
+#: them was measured on this build: after the backfill call the variable is on disk holding HDF5
+#: FILL values, the history attribute is absent, and nothing in the file says a migration was ever
+#: started. The reader then returns -9223372036854775806 where a seed should be.
+#:
+#: So the intent is written and synced FIRST. Its presence means "a migration was begun and is not
+#: finished"; its content is everything needed to finish or reconcile it afterwards.
+MIGRATION_PENDING_ATTRIBUTE = "storage_migration_pending_json"
+
+#: A test-only seam for hard-killing the transaction at a named point. Read from the environment
+#: because crash tests must run in a separate process. It is inert unless set, is not a CLI option,
+#: and is not documented for users.
+_MIGRATION_FAULT_ENV = "MD_TEMPLATES_MIGRATION_FAULT_POINT"
+
+#: The points a fault may be injected at, in transaction order.
+MIGRATION_FAULT_POINTS = ("after_intent", "after_create", "after_backfill", "after_commit")
+
+
+def _migration_fault(point):
+    """Hard-exit if this run was asked to fail here. No cleanup, no close, no flush."""
+    if os.environ.get(_MIGRATION_FAULT_ENV) == point:
+        os._exit(97)
+
+
 #: The key an event is identified by. Two records of the SAME event -- one copied into a
 #: completion manifest, one into a run-state sidecar -- carry the same id and collapse to one.
 #: Two genuinely different migrations differ in their content and stay separate.
@@ -491,13 +518,17 @@ class ReplicaReporter:
 
     # -- optional v2 fields --------------------------------------------------------------------
 
-    def inspect_optional_exchange_fields(self):
+    def inspect_optional_exchange_fields(self, pending=None):
         """READ-ONLY. What each optional field is: present and usable, absent, or malformed.
 
         Separated from the migration on purpose. A continuation has to know what it is about to do
         while it is still only reading, so that every other continuation check can refuse first and
         leave the file untouched.
+
+        A field named by `pending` is not value-checked: an unfinished transaction is expected to
+        have left fill values behind, and reconciling it is exactly what will rewrite them.
         """
+        covered = set((pending or {}).get("fields") or ())
         report = {}
         for name, spec in OPTIONAL_EXCHANGE_FIELDS.items():
             variable = self.dataset.variables.get(name)
@@ -513,27 +544,81 @@ class ReplicaReporter:
                 problem = (
                     f"{name} has dtype {np.dtype(variable.dtype)!s}, which cannot hold the "
                     f"recorded integer seeds")
+            elif name not in covered:
+                # A value that is neither the documented absent value nor a real seed is not data.
+                # The pre-transaction implementation could leave HDF5 fill values here: killed
+                # between `createVariable` and the value write, it produced a field full of
+                # -9223372036854775806 that the reader returned AS seeds, with nothing in the file
+                # recording that a migration had been started. Such a file is refused rather than
+                # read as though those numbers meant something.
+                values = np.asarray(variable[:], dtype=np.int64)
+                absent = int(spec["absent_value"])
+                invalid = values[(values != absent) & (values < 0)]
+                if invalid.size:
+                    problem = (
+                        f"{name} holds {invalid.size} value(s) that are neither {absent} (the "
+                        f"documented 'nothing was drawn') nor a real seed; the first is "
+                        f"{int(invalid[0])}. This is what an interrupted migration left before "
+                        f"migrations were transactional: the variable was created and the "
+                        f"backfill never reached disk. The values cannot be trusted, and the "
+                        f"migration event that would have explained them was never recorded, so "
+                        f"it cannot be reconstructed. Nothing here will invent one.")
             report[name] = {"state": "present", "problem": problem}
         return report
 
+    def pending_migration(self):
+        """The unfinished migration this file declares, or None. READ-ONLY.
+
+        Its presence is the only reliable evidence that a migration was begun: NetCDF offers no
+        transaction, so a process killed mid-way leaves a variable on disk with no other trace.
+        """
+        raw = getattr(self.dataset, MIGRATION_PENDING_ATTRIBUTE, None)
+        if raw is None:
+            return None
+        try:
+            pending = json.loads(raw)
+        except ValueError:
+            raise StorageError(
+                f"{self.path} declares a pending migration that is not valid JSON. Refusing to "
+                f"guess what was in progress.") from None
+        if not isinstance(pending, dict) or not pending.get("fields"):
+            raise StorageError(
+                f"{self.path} declares a pending migration with no fields. Refusing to guess "
+                f"what was in progress.")
+        return pending
+
     def ensure_optional_exchange_fields(self):
-        """Add any optional v2 field this file predates, and say what was done.
+        """Run the optional-field migration as a recoverable transaction.
 
-        Rank 0 only, on a file already opened for append, and only AFTER every continuation check
-        has passed -- a file must never be modified merely because it could be opened. Existing
-        rows are initialised to the field's `absent_value`, which is its true meaning for a row
-        written before the field existed rather than a filler.
+        NetCDF has no transaction, so this is not atomic and is not described as such. What it is
+        is RESTARTABLE and IDEMPOTENT, in this order:
 
-        An existing field is validated and never deleted or replaced: a definition this runtime
-        cannot use is a refusal, because silently rewriting one would destroy a record whose
-        provenance we do not know.
+            write the intent, sync   -- from here a crash is detectable
+            create missing fields    -- idempotent; the intent says which are ours
+            backfill the recorded row range, sync
+            append the committed event by its stable id, sync
+            clear the intent, sync
+
+        Every crash point leaves the file in a state the next continuation can finish:
+
+            before the intent      nothing happened; a fresh migration begins
+            after the intent       fields may exist with FILL values; the intent says which
+                                   fields, which rows and what value, so they are rewritten
+            after the backfill     the event is not yet recorded; it is appended
+            after the commit       the event is recorded; the intent is stale and is cleared,
+                                   and the event is NOT appended twice because it carries the
+                                   id the intent fixed
+
+        Rank 0 only, on a file opened for append, and only after every continuation check has
+        passed. An existing field is validated and never deleted or replaced.
         """
         if self.mode not in ("a", "r+", "w"):
             raise StorageError(
                 f"{self.path} is open in mode {self.mode!r}; the optional-field migration writes "
                 f"and must be given a file opened for append. Nothing was changed.")
 
-        inspection = self.inspect_optional_exchange_fields()
+        pending = self.pending_migration()
+        inspection = self.inspect_optional_exchange_fields(pending=pending)
         malformed = [entry["problem"] for entry in inspection.values() if entry["problem"]]
         if malformed:
             raise StorageError(
@@ -542,42 +627,128 @@ class ReplicaReporter:
                 "\n  It is left exactly as it is. Refusing rather than deleting or redefining a "
                 "variable whose provenance is unknown.")
 
-        rows = self.n_exchange_rows()
-        added, present = [], []
-        for name, entry in inspection.items():
-            if entry["state"] == "present":
-                present.append(name)
-                continue
-            spec = OPTIONAL_EXCHANGE_FIELDS[name]
-            variable = self.dataset.createVariable(name, spec["dtype"], spec["dimensions"])
-            if rows:
-                # Every row that already exists gets the value the field MEANS for it. The
-                # dimension is unlimited, so this both fills and sizes the new variable.
-                variable[:rows] = np.full(rows, spec["absent_value"], dtype=np.int64)
-            added.append(name)
+        if pending is None:
+            missing = [name for name, entry in inspection.items() if entry["state"] == "absent"]
+            if not missing:
+                # Nothing to do. No marker, no event, no fabricated provenance.
+                return {
+                    "schema": SCHEMA_VERSION, "fields_added": [],
+                    "fields_already_present": sorted(inspection),
+                    "rows_initialised": 0, "initialised_to": {},
+                    "previous_committed_exchanges": int(self.last_exchange()) + 1,
+                    "recorded_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "note": "no optional field was missing; this file needed no migration",
+                }
+            pending = self._begin_migration(missing)
+            _migration_fault("after_intent")
+        else:
+            self._check_pending_applies(pending)
 
+        self._apply_migration(pending)
+        event = self._commit_migration(pending)
+        self._clear_pending_migration()
+        return event
+
+    # -- the transaction, one step per method ----------------------------------------------------
+
+    def _begin_migration(self, missing):
+        """Declare the intent and make it durable BEFORE the first schema mutation."""
+        rows = self.n_exchange_rows()
+        pending = {
+            "format": "md-templates-migration-transaction/v1",
+            "schema": SCHEMA_VERSION,
+            "fields": sorted(missing),
+            "definitions": {
+                name: {"dtype": OPTIONAL_EXCHANGE_FIELDS[name]["dtype"],
+                       "dimensions": list(OPTIONAL_EXCHANGE_FIELDS[name]["dimensions"])}
+                for name in sorted(missing)},
+            "backfill": {name: OPTIONAL_EXCHANGE_FIELDS[name]["absent_value"]
+                         for name in sorted(missing)},
+            "rows_at_intent": int(rows),
+            "previous_committed_exchanges": int(self.last_exchange()) + 1,
+            "created_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        # The id is fixed HERE, before anything is mutated, so a restart commits the same event
+        # this attempt would have committed rather than a new one.
+        pending["transaction_id"] = hashlib.sha256(
+            json.dumps(pending, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        self.dataset.setncattr(MIGRATION_PENDING_ATTRIBUTE,
+                               json.dumps(pending, sort_keys=True, default=str))
+        self.dataset.sync()
+        return pending
+
+    def _check_pending_applies(self, pending):
+        """A pending record from another schema, or naming fields this build does not know, is
+        refused rather than reinterpreted."""
+        if pending.get("schema") != SCHEMA_VERSION:
+            raise StorageError(
+                f"{self.path} declares a pending migration for schema "
+                f"{pending.get('schema')!r}, but this file is {SCHEMA_VERSION!r}. Refusing to "
+                f"reconcile a transaction that was not started against this schema.")
+        unknown = [name for name in pending["fields"] if name not in OPTIONAL_EXCHANGE_FIELDS]
+        if unknown:
+            raise StorageError(
+                f"{self.path} declares a pending migration for field(s) {unknown} that this "
+                f"runtime does not define. Refusing to finish a transaction it cannot describe.")
+        if int(pending.get("rows_at_intent", -1)) > self.n_exchange_rows():
+            raise StorageError(
+                f"{self.path} declares a pending migration over "
+                f"{pending['rows_at_intent']} exchange row(s) but holds "
+                f"{self.n_exchange_rows()}. The file has fewer rows than the transaction was "
+                f"begun against; refusing rather than backfilling a range that no longer exists.")
+
+    def _apply_migration(self, pending):
+        """Create what is missing and backfill the recorded range. Idempotent by construction.
+
+        The INTENT decides which fields belong to this transaction, not what the file currently
+        holds -- a crash after `createVariable` leaves the field present, and it is still ours to
+        finish. The backfill is rewritten unconditionally over the recorded range because a crash
+        between creation and the value write leaves HDF5 fill values there, which are not the
+        documented absent value and are not seeds.
+        """
+        rows = int(pending["rows_at_intent"])
+        for name in pending["fields"]:
+            spec = OPTIONAL_EXCHANGE_FIELDS[name]
+            variable = self.dataset.variables.get(name)
+            if variable is None:
+                variable = self.dataset.createVariable(
+                    name, spec["dtype"], tuple(spec["dimensions"]))
+                _migration_fault("after_create")
+            if rows:
+                variable[:rows] = np.full(rows, pending["backfill"][name], dtype=np.int64)
+        self.dataset.sync()
+        _migration_fault("after_backfill")
+
+    def _commit_migration(self, pending):
+        """Append the event, once, under the id the intent fixed."""
         event = {
             "schema": SCHEMA_VERSION,
-            "fields_added": added,
-            "fields_already_present": present,
-            "rows_initialised": int(rows) if added else 0,
-            "initialised_to": {name: OPTIONAL_EXCHANGE_FIELDS[name]["absent_value"]
-                               for name in added},
-            "previous_committed_exchanges": int(self.last_exchange()) + 1,
-            "recorded_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "fields_added": list(pending["fields"]),
+            "fields_already_present": [name for name in sorted(OPTIONAL_EXCHANGE_FIELDS)
+                                       if name not in pending["fields"]],
+            "rows_initialised": int(pending["rows_at_intent"]),
+            "initialised_to": dict(pending["backfill"]),
+            "previous_committed_exchanges": int(pending["previous_committed_exchanges"]),
+            "recorded_utc": pending["created_utc"],
+            "transaction_id": pending["transaction_id"],
             "note": ("an older v2 file predates this field; the rows it already held record that "
                      "no velocity seed was used, which is what they mean"),
         }
-        if added:
-            # The event is written into the SAME file the mutation changed, and both are committed
-            # by the sync below. A process killed here leaves a file that already says it was
-            # migrated, so the next continuation reads the truth rather than having to infer it.
-            event[MIGRATION_EVENT_ID] = migration_event_id(event)
-            history = merge_migration_histories(self.migration_history(), [event])
+        event[MIGRATION_EVENT_ID] = migration_event_id(event)
+        history = self.migration_history()
+        if not any(e.get(MIGRATION_EVENT_ID) == event[MIGRATION_EVENT_ID] for e in history):
+            history = merge_migration_histories(history, [event])
             self.dataset.setncattr(MIGRATION_HISTORY_ATTRIBUTE,
                                    json.dumps(history, sort_keys=True, default=str))
-        self.dataset.sync()
+            self.dataset.sync()
+        _migration_fault("after_commit")
         return event
+
+    def _clear_pending_migration(self):
+        """Only once the committed history is durable."""
+        if MIGRATION_PENDING_ATTRIBUTE in self.dataset.ncattrs():
+            self.dataset.delncattr(MIGRATION_PENDING_ATTRIBUTE)
+            self.dataset.sync()
 
     def migration_history(self):
         """The cumulative migration history this FILE carries. Read-only, and never fabricated."""
