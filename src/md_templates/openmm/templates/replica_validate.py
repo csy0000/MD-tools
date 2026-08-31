@@ -70,7 +70,8 @@ def _check_manifest_paths(manifest_path, record, result):
             result.fail(f"manifest storage.{key}={name} does not exist beside the manifest")
 
 
-def validate_replica_output(*, analysis, checkpoint=None, manifest=None, expect_completed=True):
+def validate_replica_output(*, analysis, checkpoint=None, manifest=None, expect_completed=True,
+                            reconcilable=False):
     """Open the storage and decide whether it is a complete, coherent replica-exchange run."""
     result = ValidationResult()
     analysis_path = Path(analysis)
@@ -91,14 +92,15 @@ def validate_replica_output(*, analysis, checkpoint=None, manifest=None, expect_
         except storage.StorageError as failure:
             return result.fail(str(failure))
         _validate(reporter, analysis_path, checkpoint, record, result,
-                  expect_completed=expect_completed)
+                  expect_completed=expect_completed, reconcilable=reconcilable)
     finally:
         if reporter is not None:
             reporter.close()
     return result
 
 
-def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_completed):
+def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_completed,
+              reconcilable=False):
     schema = reporter.schema
     result.note("schema", schema)
     if schema != storage.SCHEMA_VERSION:
@@ -111,6 +113,32 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
         identity = {}
     n_states = int(identity.get("n_states") or reporter.n_states())
     result.note("n_states", n_states)
+
+    # An unfinished migration transaction is reported, never finished. Validation is read-only:
+    # it must not create the field, backfill it, commit the event or clear the marker, because a
+    # user who asked to inspect a file did not ask to change it.
+    try:
+        pending = reporter.pending_migration()
+    except Exception as failure:                            # noqa: BLE001 - reported, not raised
+        pending = None
+        result.fail(f"the pending-migration record could not be read "
+                    f"({type(failure).__name__}: {failure})")
+    if pending:
+        result.note("pending_migration_fields", list(pending.get("fields") or []))
+        result.note("pending_migration_transaction", pending.get("transaction_id"))
+        if reconcilable:
+            # A CONTINUATION is about to reconcile this, so it is a state to report, not a reason
+            # to refuse. Failing here instead would be a deadlock: the only thing that can finish
+            # the transaction is the resume that this check would block.
+            result.note("pending_migration", "will be reconciled before propagation")
+        else:
+            result.fail(
+                f"an incomplete migration transaction is recorded in this file: field(s) "
+                f"{list(pending.get('fields') or [])} were being added when a previous process "
+                f"stopped. Nothing here will finish it -- verification is read-only. Run "
+                f"`--resume` or `--extend N`, which reconcile the transaction before any step is "
+                f"propagated.")
+    result.note("migration_events", len(reporter.migration_history()))
 
     try:
         last = reporter.last_exchange()

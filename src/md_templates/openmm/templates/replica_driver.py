@@ -241,6 +241,7 @@ class ReplicaRun:
             self.base_system, self.solute_indices, self.excluded_bonds)
 
         interruption = _Interruption().install()
+        state = None
         try:
             state = self._begin(identity, systems, rule_identity, resume=resume, extend=extend)
             self._open_reservoir(systems)
@@ -249,13 +250,26 @@ class ReplicaRun:
             self._loop(state, rule, interruption)
         except BaseException as failure:
             if self.coordinator.is_root:
-                interrupted = isinstance(failure, KeyboardInterrupt)
-                storage.write_run_state(
-                    self.files.trajectory, "interrupted" if interrupted else "failed",
-                    identity=identity,
-                    reason=f"{type(failure).__name__}: {failure}"[:400],
-                    note=("the analysis NetCDF holds every committed record and this run can be "
-                          "continued with --resume; no completion manifest exists"))
+                # This record REPLACES whatever run state exists, so writing one without the
+                # migration history would erase the only note that a legacy file had been
+                # migrated -- from the very path that runs when something went wrong.
+                if isinstance(state, dict):
+                    history = list(state.get("storage_migrations") or [])
+                else:
+                    # `_begin` never returned, so there is no in-memory history to use.
+                    history = self._recover_history_readonly()
+                if history is not None:
+                    interrupted = isinstance(failure, KeyboardInterrupt)
+                    storage.write_run_state(
+                        self.files.trajectory, "interrupted" if interrupted else "failed",
+                        identity=identity,
+                        reason=f"{type(failure).__name__}: {failure}"[:400],
+                        storage_migrations=history,
+                        note=("the analysis NetCDF holds every committed record and this run can "
+                              "be continued with --resume; no completion manifest exists"))
+                # If it could not be read, the existing run state is left exactly as it is. An
+                # incomplete claim about provenance is worse than a slightly stale true one, and
+                # the exception below is the thing that actually needs reporting.
             raise
         finally:
             interruption.restore()
@@ -332,6 +346,9 @@ class ReplicaRun:
         if self.coordinator.is_root:
             storage.write_run_state(
                 self.files.trajectory, "initialized", identity=identity,
+                # A file this run created needs no migration; empty is the truthful record.
+                storage_migrations=[],
+                
                 total_steps=self.protocol.total_steps,
                 note="scientific identity fixed; no propagation has happened yet")
             self.reporter = storage.ReplicaReporter.create(
@@ -363,9 +380,34 @@ class ReplicaRun:
         if self.coordinator.is_root:
             storage.write_run_state(
                 self.files.trajectory, "running", identity=identity,
+                # A file this run created needs no migration; empty is the truthful record.
+                storage_migrations=[],
+                
                 total_steps=self.protocol.total_steps,
                 note="propagation started; the analysis NetCDF is authoritative for progress")
         return state
+
+    def _recover_history_readonly(self):
+        """Best effort, read-only: the cumulative history from every authoritative record.
+
+        Returns None when it cannot be read. That is not the same as "there is none", and the
+        caller must treat it differently: replacing a truthful run state with an empty claim is
+        worse than leaving the old record in place.
+        """
+        try:
+            probe = storage.ReplicaReporter(self.files.trajectory, mode="r")
+            try:
+                file_history = probe.migration_history()
+            finally:
+                probe.close()
+            return storage.merge_migration_histories(
+                file_history,
+                storage.migration_history_of(self._previous_manifest()),
+                storage.migration_history_of(storage.read_run_state(self.files.trajectory)))
+        except Exception:                                   # noqa: BLE001 - see the docstring
+            # Deliberately swallowed. This runs inside an exception handler, and a failure to read
+            # provenance must never replace the exception that brought us here.
+            return None
 
     def _previous_manifest(self):
         """The completion manifest of the run being continued, if it wrote one.
@@ -398,7 +440,10 @@ class ReplicaRun:
 
             check = replica_validate.validate_replica_output(
                 analysis=self.files.trajectory, checkpoint=self.files.checkpoint,
-                expect_completed=False)
+                expect_completed=False,
+                # A pending migration is what this path exists to finish. Treating it as a reason
+                # to refuse would deadlock the only route that can reconcile it.
+                reconcilable=True)
             if not check.ok:
                 raise storage.StorageError(
                     replica_validate.format_report(
@@ -823,6 +868,7 @@ class ReplicaRun:
 
         if completed < expected:
             storage.write_run_state(self.files.trajectory, "interrupted", identity=identity,
+                                    storage_migrations=list(state.get('storage_migrations') or []),
                                     step=completed, note="stopped before the budget; resumable")
             raise DriverError(
                 f"the run stopped at step {completed} of {expected}. No completion manifest was "
