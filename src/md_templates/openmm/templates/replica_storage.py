@@ -29,6 +29,7 @@ COMMIT MARKERS
     the last checkpoint without inventing history.
 """
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -60,6 +61,85 @@ OPTIONAL_EXCHANGE_FIELDS = {
                     "nothing"),
     },
 }
+
+#: Where the cumulative migration history lives INSIDE the analysis file.
+#:
+#: The file is the durable authority for its own schema history, and it has to be: the event and
+#: the mutation it describes are committed in one `sync()`, so a process killed immediately after
+#: migrating still leaves a file that says it was migrated. Recording the event only in the run
+#: state or the manifest would leave a window in which storage had been changed and nothing said
+#: so, and the next continuation would have no way to know.
+MIGRATION_HISTORY_ATTRIBUTE = "storage_migrations_json"
+
+#: The key an event is identified by. Two records of the SAME event -- one copied into a
+#: completion manifest, one into a run-state sidecar -- carry the same id and collapse to one.
+#: Two genuinely different migrations differ in their content and stay separate.
+MIGRATION_EVENT_ID = "event_id"
+
+
+def migration_event_id(event):
+    """A deterministic identity for one migration event.
+
+    Over the canonical JSON of everything except the id itself, so an event copied between records
+    keeps its identity and two distinct migrations keep theirs.
+    """
+    payload = {key: value for key, value in dict(event).items() if key != MIGRATION_EVENT_ID}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def normalise_migration_event(event):
+    """One event in canonical form, or None if it records no change to storage.
+
+    A migration that added nothing is not history. Keeping such an event would let a later no-op
+    continuation look exactly like the real one that preceded it, which is how the singular field
+    lost the real event in the first place.
+    """
+    if not isinstance(event, dict):
+        return None
+    if not event.get("fields_added"):
+        return None
+    canonical = dict(event)
+    canonical[MIGRATION_EVENT_ID] = canonical.get(MIGRATION_EVENT_ID) or migration_event_id(event)
+    return canonical
+
+
+def migration_history_of(record):
+    """The history carried by any record, accepting the legacy singular field.
+
+    Older records wrote `storage_migration:` as a single value. A meaningful one becomes a
+    one-event history; a no-op one is dropped, because it never described a change.
+    """
+    if not isinstance(record, dict):
+        return []
+    history = record.get("storage_migrations")
+    if history is None:
+        singular = record.get("storage_migration")
+        history = [singular] if singular is not None else []
+    if isinstance(history, dict):
+        history = [history]
+    return [event for event in (normalise_migration_event(e) for e in history or []) if event]
+
+
+def merge_migration_histories(*histories):
+    """Every distinct event, in first-seen order.
+
+    Order is preserved rather than sorted: it is the order the migrations happened in, and no
+    timestamp in these records is guaranteed to be comparable across machines.
+    """
+    merged, seen = [], set()
+    for history in histories:
+        for event in history or []:
+            canonical = normalise_migration_event(event)
+            if canonical is None:
+                continue
+            identity = canonical[MIGRATION_EVENT_ID]
+            if identity in seen:
+                continue
+            seen.add(identity)
+            merged.append(canonical)
+    return merged
+
 
 #: The completed-run manifest format.
 MANIFEST_FORMAT = "md-templates-replica-restart/v2"
@@ -476,8 +556,7 @@ class ReplicaReporter:
                 variable[:rows] = np.full(rows, spec["absent_value"], dtype=np.int64)
             added.append(name)
 
-        self.dataset.sync()
-        return {
+        event = {
             "schema": SCHEMA_VERSION,
             "fields_added": added,
             "fields_already_present": present,
@@ -485,9 +564,33 @@ class ReplicaReporter:
             "initialised_to": {name: OPTIONAL_EXCHANGE_FIELDS[name]["absent_value"]
                                for name in added},
             "previous_committed_exchanges": int(self.last_exchange()) + 1,
+            "recorded_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "note": ("an older v2 file predates this field; the rows it already held record that "
                      "no velocity seed was used, which is what they mean"),
         }
+        if added:
+            # The event is written into the SAME file the mutation changed, and both are committed
+            # by the sync below. A process killed here leaves a file that already says it was
+            # migrated, so the next continuation reads the truth rather than having to infer it.
+            event[MIGRATION_EVENT_ID] = migration_event_id(event)
+            history = merge_migration_histories(self.migration_history(), [event])
+            self.dataset.setncattr(MIGRATION_HISTORY_ATTRIBUTE,
+                                   json.dumps(history, sort_keys=True, default=str))
+        self.dataset.sync()
+        return event
+
+    def migration_history(self):
+        """The cumulative migration history this FILE carries. Read-only, and never fabricated."""
+        raw = getattr(self.dataset, MIGRATION_HISTORY_ATTRIBUTE, None)
+        if raw is None:
+            return []
+        try:
+            recorded = json.loads(raw)
+        except ValueError:
+            raise StorageError(
+                f"{self.path} carries a {MIGRATION_HISTORY_ATTRIBUTE} attribute that is not "
+                f"valid JSON. Refusing to guess what happened to this file.") from None
+        return merge_migration_histories(recorded)
 
     def reservoir_velocity_seeds(self, upto=None):
         """The Maxwell seed per exchange row; -1 where nothing was drawn.
