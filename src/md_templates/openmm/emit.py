@@ -537,8 +537,11 @@ def replica_launcher(r: dict[str, Any], *, method: str, directory_var: str, prot
 #   ./{stem}.sh                        single process, one device
 #   mpiexec -n {states} ./{stem}.sh    one rank per state; each rank binds its own CUDA device
 #   ./{stem}.sh --resume               finish an interrupted run; no restart.json needed
-#   ./{stem}.sh --extend 200           add 200 exchange attempts to a completed run
+#   ./{stem}.sh --extend 200           add 200 exchange attempts IN PLACE to a completed run
 #   ./{stem}.sh --verify-only          open the stored output and check it, running nothing
+#
+# To add a segment WITHOUT touching this run, use `{stem}_extend.sh` beside this file: it writes a
+# new directory and leaves this one byte-for-byte unchanged.
 set -euo pipefail
 
 STAGE_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
@@ -552,6 +555,72 @@ cd "${{SYSTEM_ROOT}}"
   -x "${{{directory_var}}}/{stem}.nc" \\
   -r "${{{directory_var}}}/restart.json" \\
   --checkpoint "${{{directory_var}}}/{stem}_checkpoint.nc" \\
+  --rem "${{{directory_var}}}/rem.log" \\
+  "$@"
+'''
+
+
+def replica_extension_launcher(r: dict[str, Any], *, method: str, directory_var: str,
+                               stem: str, exchange_rule: str | None = None,
+                               reservoir: str | None = None) -> str:
+    """Add a segment to a COMPLETED ladder without touching it.
+
+    The parent stays exactly as it is. This writes a sibling directory holding only the new
+    dynamics, with step and time coordinates continuing the parent's, and provenance pinning the
+    parent by content.
+    """
+    extra = []
+    if exchange_rule:
+        extra.append(f'  --exchange-rule "${{{directory_var}}}/{exchange_rule}" \\')
+    if reservoir:
+        extra.append(f'  --reservoir "${{{directory_var}}}/{reservoir}" \\')
+    extra_block = ("\n" + "\n".join(extra)) if extra else ""
+    states = r["replica"]["n_states"]
+    return f'''#!/usr/bin/env bash
+# {method}: continue a COMPLETED ladder into a NEW directory, leaving the finished one untouched.
+#
+#   ./{stem}_extend.sh {method}_ext1 200
+#       read {method}/ (never write to it), add 200 exchange attempts, write {method}_ext1/
+#
+#   mpiexec -n {states} ./{stem}_extend.sh {method}_ext1 200
+#       the same, one rank per state
+#
+# This is NOT `--extend`, which lengthens a run in place. Here the parent is opened read-only and
+# is left byte-for-byte unchanged, which is what makes it citable as a finished 
+# segment while the chain grows past it.
+set -euo pipefail
+
+if [ "$#" -lt 2 ]; then
+  echo "usage: $(basename "$0") <extension-directory> <exchanges> [openmm-md options...]" >&2
+  echo "  e.g. $(basename "$0") {method}_ext1 200" >&2
+  exit 2
+fi
+TARGET="$1"; EXCHANGES="$2"; shift 2
+
+STAGE_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+source "${{STAGE_DIR}}/../paths.sh"
+cd "${{SYSTEM_ROOT}}"
+
+PARENT="${{{directory_var}}}"
+EXTENSION="${{SYSTEM_ROOT}}/${{TARGET}}"
+if [ "${{EXTENSION}}" = "${{PARENT}}" ]; then
+  echo "the extension directory must differ from the parent ${{PARENT}}" >&2
+  exit 2
+fi
+mkdir -p "${{EXTENSION}}"
+
+# The ladder inputs are the parent's: same protocol, same group file, same topology and system.
+# Only the OUTPUT paths move.
+"${{OPENMM_MD}}" \\
+  -ng {states} \\
+  --groupfile "${{PARENT}}/{stem}.group" \\{extra_block}
+  --extend-from "${{PARENT}}" \\
+  --extend "${{EXCHANGES}}" \\
+  -o "${{EXTENSION}}/{stem}.out" \\
+  -x "${{EXTENSION}}/{stem}.nc" \\
+  -r "${{EXTENSION}}/restart.json" \\
+  --checkpoint "${{EXTENSION}}/{stem}_checkpoint.nc" \\
+  --rem "${{EXTENSION}}/rem.log" \\
   "$@"
 '''
 

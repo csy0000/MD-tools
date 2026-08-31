@@ -469,9 +469,34 @@ class ReplicaRun:
         except (OSError, ValueError):
             return None
 
-    #: The parent's files, by the layout section 14 fixes. An extension reads exactly these.
-    PARENT_FILES = {"analysis": "exchange.nc", "checkpoint": "checkpoint.nc",
-                    "manifest": "restart.json"}
+    #: The one name an extension assumes. Everything else it needs is READ OUT of this file:
+    #: a completion manifest records the analysis and checkpoint names it was written with, and
+    #: those are the truth. Assuming them instead would work only for runs whose outputs happen
+    #: to be named the way the documentation example names them -- the generated ladders call
+    #: theirs `rest2.nc` and `rest2_checkpoint.nc` -- and would fail confusingly for the rest.
+    PARENT_MANIFEST = "restart.json"
+
+    @classmethod
+    def parent_files(cls, parent):
+        """The parent's manifest, and the analysis and checkpoint files it names."""
+        parent = Path(parent)
+        manifest_path = parent / cls.PARENT_MANIFEST
+        if not manifest_path.is_file():
+            raise DriverError(
+                f"{parent} holds no {cls.PARENT_MANIFEST}, so it is not a completed run. An "
+                f"extension continues a finished parent; a run that never wrote a completion "
+                f"manifest is resumed in place with --resume instead.")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        names = manifest.get("storage") or {}
+        analysis = names.get("analysis_netcdf")
+        checkpoint = names.get("checkpoint_netcdf")
+        if not analysis or not checkpoint:
+            raise DriverError(
+                f"{manifest_path} does not record which files it was written with "
+                f"(storage.analysis_netcdf / storage.checkpoint_netcdf). Guessing conventional "
+                f"names here could open a different run's storage, so it is refused.")
+        return manifest, {"manifest": manifest_path, "analysis": parent / analysis,
+                          "checkpoint": parent / checkpoint}
 
     def _extend_from(self, identity, parent, *, extend):
         """Continue a COMPLETED parent into a NEW output set, leaving the parent untouched.
@@ -490,7 +515,13 @@ class ReplicaRun:
         if self.coordinator.is_root:
             import replica_validate
 
-            files = {name: parent / basename for name, basename in self.PARENT_FILES.items()}
+            manifest, files = self.parent_files(parent)
+            for name in ("analysis", "checkpoint"):
+                if not files[name].is_file():
+                    raise DriverError(
+                        f"{files['manifest']} names {files[name].name} as its {name}, and that "
+                        f"file is not in {parent}. The parent is incomplete: refused read-only, "
+                        f"before anything here is created.")
 
             # PHASE 1 -- READ ONLY, and complete. Nothing local exists yet, so a refusal here
             # leaves no half-created extension directory behind to be mistaken for a run.
@@ -501,7 +532,6 @@ class ReplicaRun:
                 raise storage.StorageError(replica_validate.format_report(
                     check, title=f"{parent} cannot be extended"))
 
-            manifest = json.loads(files["manifest"].read_text(encoding="utf-8"))
             if manifest.get("run_status") != "completed":
                 raise DriverError(
                     f"{files['manifest']} records run_status "

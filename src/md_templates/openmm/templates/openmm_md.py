@@ -367,13 +367,33 @@ def validate(files, arguments, *, rank=0, groups=None):
                     f"--{name} {value} is inside the parent {parent}. The parent of an extension "
                     f"is immutable: it is read, never written, and an output placed inside it "
                     f"would modify the very run being continued.")
-        missing = [name for name in ("exchange.nc", "checkpoint.nc", "restart.json")
-                   if not (parent / name).is_file()]
-        if missing and parent.is_dir():
-            problems.append(
-                f"{parent} is not a completed run: {', '.join(missing)} missing. An extension "
-                f"continues a finished parent, and a parent that never finished is refused "
-                f"read-only rather than continued from whatever it happens to hold.")
+        # Only the manifest name is assumed. It records the analysis and checkpoint names the
+        # parent was actually written with, and those are checked rather than guessed -- the
+        # generated ladders name theirs after the method, not after the documentation example.
+        if parent.is_dir():
+            manifest = parent / "restart.json"
+            if not manifest.is_file():
+                problems.append(
+                    f"{parent} holds no restart.json, so it is not a completed run. An extension "
+                    f"continues a finished parent; an unfinished one is resumed in place with "
+                    f"--resume so that its own budget is met first.")
+            else:
+                try:
+                    recorded = json.loads(manifest.read_text(encoding="utf-8"))
+                except ValueError as failure:
+                    problems.append(f"{manifest} is not readable JSON ({failure})")
+                    recorded = {}
+                if recorded.get("run_status") not in (None, "completed"):
+                    problems.append(
+                        f"{manifest} records run_status {recorded.get('run_status')!r}, not "
+                        f"'completed'. Only a finished run is extended.")
+                names = recorded.get("storage") or {}
+                for field in ("analysis_netcdf", "checkpoint_netcdf"):
+                    named = names.get(field)
+                    if named and not (parent / named).is_file():
+                        problems.append(
+                            f"{manifest} names {named} as its {field} and that file is not in "
+                            f"{parent}: the parent is incomplete.")
 
     # -- paths ---------------------------------------------------------------------------------
     inputs = {name: getattr(files, name)

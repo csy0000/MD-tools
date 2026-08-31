@@ -867,10 +867,14 @@ def generate(resolved: dict[str, Any], *, input_path: Path, output_root: Path,
             emit.replica_group_file(resolved, method=method, protocol_name=f"{stem}.py",
                                     parent_state=parent_relative), encoding="utf-8")
         rule = reservoir = None
+        # Every module `replica_driver` imports must travel with the generated project: it runs
+        # from this directory with nothing but these files on the path, so a helper left out here
+        # is an ImportError at launch, not a missing feature.
         helpers = ["replica_runtime.py", "replica_protocol.py", "replica_schedule.py",
                    "replica_engine.py", "replica_driver.py", "replica_storage.py",
                    "replica_statistics.py", "replica_validate.py", "exchange_rules.py",
-                   "rest2_scaling.py", "hamiltonian_identity.py"]
+                   "rest2_scaling.py", "hamiltonian_identity.py",
+                   "rem_log.py", "amber_trajectory.py", "state_trajectories.py"]
         if method == "rREST2":
             rule, reservoir = "rrest2_exchange.py", "reservoir.yaml"
             (directory / "reservoir.yaml").write_text(
@@ -885,6 +889,13 @@ def generate(resolved: dict[str, Any], *, input_path: Path, output_root: Path,
                                   protocol_name=f"{stem}.py", stem=stem,
                                   exchange_rule=rule, reservoir=reservoir), encoding="utf-8")
         (directory / f"{stem}.sh").chmod(0o755)
+        (directory / f"{stem}_extend.sh").write_text(
+            emit.replica_extension_launcher(resolved, method=method,
+                                            directory_var=directory_var, stem=stem,
+                                            exchange_rule=rule, reservoir=reservoir),
+            encoding="utf-8")
+        (directory / f"{stem}_extend.sh").chmod(0o755)
+        written.append(f"{method}/{stem}_extend.sh")
         if method == "rREST2":
             # Emitted BEFORE the ladder launcher so `run.sh` fills the reservoir source before
             # anything tries to read it.

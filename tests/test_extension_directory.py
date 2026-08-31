@@ -329,3 +329,47 @@ def test_extend_from_without_extend_is_refused(prepared, tmp_path_factory):
     result = _invoke(extension, "--extend-from", str(parent))
     assert result.returncode != 0
     assert "--extend N" in (result.stdout + result.stderr)
+
+
+@pytest.mark.slow
+def test_the_parent_file_names_are_read_from_its_manifest_not_assumed(prepared,
+                                                                      tmp_path_factory):
+    """A parent whose outputs are not named the way the documentation names them still extends.
+
+    The generated ladders call theirs `rest2.nc` and `rest2_checkpoint.nc`. Assuming
+    `exchange.nc` would make the documented example work and every real ladder fail, so the names
+    come out of the parent's own completion manifest.
+    """
+    source, _, _ = prepared
+    root = tmp_path_factory.mktemp("named")
+    parent, extension = root / "REST2", root / "REST2_ext1"
+    for directory in (parent, extension):
+        directory.mkdir()
+        for name in ("system.xml", "topology.pdb", "coordinates.xml", "protocol.py",
+                     "ladder.group"):
+            shutil.copy(source / name, directory / name)
+
+    environment = dict(os.environ, PYTHONPATH=str(TEMPLATES), OPENMM_CPU_THREADS="1")
+    first = subprocess.run(
+        [sys.executable, str(TEMPLATES / "openmm_md.py"),
+         "--groupfile", "ladder.group", "-ng", str(len(TAUS)),
+         "-x", "rest2.nc", "-r", "restart.json", "--checkpoint", "rest2_checkpoint.nc",
+         "-o", "run.out", "--rem", "rem.log"],
+        cwd=str(parent), capture_output=True, text=True, timeout=1800, env=environment)
+    assert first.returncode == 0, first.stdout[-3000:] + first.stderr[-3000:]
+    before = {name: _digest(parent / name) for name in
+              ("rest2.nc", "rest2_checkpoint.nc", "restart.json", "remd0.nc", "remd1.nc")}
+
+    second = subprocess.run(
+        [sys.executable, str(TEMPLATES / "openmm_md.py"),
+         "--groupfile", "ladder.group", "-ng", str(len(TAUS)),
+         "-x", "rest2.nc", "-r", "restart.json", "--checkpoint", "rest2_checkpoint.nc",
+         "-o", "run.out", "--rem", "rem.log",
+         "--extend-from", str(parent), "--extend", str(EXCHANGES)],
+        cwd=str(extension), capture_output=True, text=True, timeout=1800, env=environment)
+    assert second.returncode == 0, second.stdout[-3000:] + second.stderr[-3000:]
+
+    assert {name: _digest(parent / name) for name in before} == before
+    record = json.loads((extension / "restart.json").read_text(encoding="utf-8"))
+    assert record["extends"]["parent"]["analysis"]["name"] == "rest2.nc"
+    assert record["extends"]["parent"]["checkpoint"]["name"] == "rest2_checkpoint.nc"
