@@ -355,6 +355,9 @@ class ReplicaRun:
             "schedule": self.protocol.schedule,
             "rng": np.random.default_rng(_stream_seed(seed, "exchange")),
             "rule_state": {}, "resumed_from_step": None, "interrupted": False,
+            # A file this process just created needs no migration and must not be given a
+            # fabricated event. Empty is the honest record.
+            "storage_migrations": [],
         }
         self._equilibrate(state)
         if self.coordinator.is_root:
@@ -363,6 +366,20 @@ class ReplicaRun:
                 total_steps=self.protocol.total_steps,
                 note="propagation started; the analysis NetCDF is authoritative for progress")
         return state
+
+    def _previous_manifest(self):
+        """The completion manifest of the run being continued, if it wrote one.
+
+        Read-only and forgiving: an interrupted run never wrote one, and that is the ordinary
+        case for a resume rather than a problem.
+        """
+        path = getattr(self.files, "restart", None)
+        if not path or not Path(path).is_file():
+            return None
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
 
     def _continue(self, identity, *, extend):
         """Rank 0 validates and decides; every other rank receives the decision.
@@ -395,8 +412,19 @@ class ReplicaRun:
                 stored = probe.identity
                 committed = probe.last_exchange()
                 optional_fields = probe.inspect_optional_exchange_fields()
+                file_history = probe.migration_history()
             finally:
                 probe.close()
+
+            # Every authoritative record that could carry migration history, all read-only. The
+            # file is the durable authority for its own schema, but a run migrated by an earlier
+            # build recorded the event only in its manifest, and an interrupted one only in its
+            # run state -- so all three are consulted and merged rather than any one trusted to be
+            # complete.
+            prior_history = storage.merge_migration_histories(
+                file_history,
+                storage.migration_history_of(self._previous_manifest()),
+                storage.migration_history_of(storage.read_run_state(self.files.trajectory)))
 
             malformed = [entry["problem"] for entry in optional_fields.values()
                          if entry["problem"]]
@@ -463,6 +491,10 @@ class ReplicaRun:
             # here, before a single step is integrated -- never lazily at the first exchange, where
             # a schema error would surface only after new dynamics had already been produced.
             migration = reporter.ensure_optional_exchange_fields()
+            # Append-only. A continuation that changed nothing contributes nothing, so it cannot
+            # overwrite the event that a real migration recorded -- which is exactly what the
+            # singular field did, losing the fact that a legacy file had ever been migrated.
+            migrations = storage.merge_migration_histories(prior_history, [migration])
             if migration["fields_added"]:
                 print(f"# storage migrated     : added {migration['fields_added']} to this v2 "
                       f"file and set {migration['rows_initialised']} existing row(s) to "
@@ -479,7 +511,7 @@ class ReplicaRun:
                       f"checkpoint behind them; continuing from step {checkpoint['step']}")
 
             payload = {
-                "storage_migration": migration,
+                "storage_migrations": migrations,
                 "step": int(checkpoint["step"]),
                 "exchange_index": resume_exchange,
                 "frame_index": int(checkpoint["frame_index"]),
@@ -509,7 +541,7 @@ class ReplicaRun:
             "schedule": schedule,
             "rng": rng, "rule_state": dict(payload["rule_state"]),
             "resumed_from_step": payload["step"], "interrupted": False,
-            "storage_migration": payload.get("storage_migration"),
+            "storage_migrations": list(payload.get("storage_migrations") or []),
         }
         self.coordinator.agree(configuration_digest(state["configurations"]),
                                what="the continued configurations")
@@ -519,18 +551,17 @@ class ReplicaRun:
             # propagated anything, including how many exchanges the file already held. A reader
             # who finds `-1` in the early rows of a seed history can tell from here whether those
             # rows predate the field or were written by a `stored`-policy run.
-            migration = state["storage_migration"] or {}
+            history = state["storage_migrations"]
             storage.write_run_state(
                 self.files.trajectory, "running", identity=identity,
                 total_steps=state["schedule"].total_steps,
                 resumed_from_step=int(state["step"]),
-                storage_migration=migration,
+                storage_migrations=history,
                 note=("continuation started; the analysis NetCDF is authoritative for progress"
-                      + (f". Optional v2 field(s) {migration['fields_added']} were added to this "
-                         f"file before propagation, with its "
-                         f"{migration['previous_committed_exchanges']} already-committed "
-                         f"exchange(s) set to {migration['initialised_to']}"
-                         if migration.get("fields_added") else "")))
+                      + (f". This file carries {len(history)} recorded schema migration(s); the "
+                         f"most recent added {history[-1]['fields_added']} with "
+                         f"{history[-1]['previous_committed_exchanges']} exchange(s) already "
+                         f"committed" if history else "")))
         return state
 
     def _read_initial_configuration(self):
@@ -774,6 +805,7 @@ class ReplicaRun:
                 self.files.trajectory, "interrupted", identity=identity,
                 step=state["step"], total_steps=state["schedule"].total_steps,
                 signal=state.get("interrupt_signal"),
+                storage_migrations=list(state.get("storage_migrations") or []),
                 note=("stopped at an event boundary with a complete checkpoint; --resume "
                       "continues it. No completion manifest exists."))
             print(f"# interrupted at step {state['step']} of {state['schedule'].total_steps}; "
@@ -822,7 +854,7 @@ class ReplicaRun:
             # reader of the finished run would otherwise have no record that this file was
             # written before the field existed -- which is exactly what explains a leading run of
             # -1 in its seed history.
-            "storage_migration": state.get("storage_migration"),
+            "storage_migrations": list(state.get("storage_migrations") or []),
             "schedule": state["schedule"].describe(),
             "storage": {
                 "analysis_netcdf": Path(self.files.trajectory).name,
@@ -851,8 +883,12 @@ class ReplicaRun:
             record["reservoir"] = self.reservoir.describe()
         storage.write_atomic(self.files.restart,
                              json.dumps(record, indent=2, default=str) + "\n")
+        # The completed sidecar carries the history too. It is one of the sources a later
+        # continuation merges, and a `completed` record that reported none would be a source
+        # claiming this file had never been migrated.
         storage.write_run_state(self.files.trajectory, "completed", identity=identity,
                                 step=completed,
+                                storage_migrations=list(state.get("storage_migrations") or []),
                                 note="manifest written; the storage remains authoritative")
         self.reporter.close()
         return record
