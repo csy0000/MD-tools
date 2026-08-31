@@ -27,6 +27,7 @@ sys.path.insert(0, str(SRC))
 import openmm_md                                                   # noqa: E402
 import phase_space                                                 # noqa: E402
 import hamiltonian_identity                                        # noqa: E402
+import replica_storage as storage                                  # noqa: E402
 import rrest2_reservoir                                            # noqa: E402
 import source_ensemble                                             # noqa: E402
 from replica_protocol import REST2Protocol                         # noqa: E402
@@ -462,7 +463,7 @@ def test_a_descriptive_manifest_field_is_not_checked_as_a_filename(tmp_path):
     manifest = tmp_path / "restart.json"
     (tmp_path / "run.nc").write_bytes(b"x")
     record = {"storage": {"analysis_netcdf": "run.nc",
-                          "schema": "md-templates-replica-exchange/v2",
+                          "schema": storage.SCHEMA_VERSION,
                           "authoritative": "analysis_netcdf",
                           "coordinate_indexing": "walker"}}
     result = replica_validate.ValidationResult()

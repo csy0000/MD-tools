@@ -38,6 +38,7 @@ import numpy as np
 
 import hamiltonian_identity
 import replica_storage as storage
+import state_trajectories
 from exchange_rules import (ExchangeContext, NeighbouringExchangeRule, builtin_rule_identity,
                             load_rule)
 from replica_engine import (Configuration, ReplicaEngine, resolve_platform,
@@ -722,10 +723,19 @@ class ReplicaRun:
                 if "exchange" in events:
                     pass    # already written by _exchange
                 if "whole" in events:
+                    # One logical commit across N+1 files. The state trajectories take the
+                    # row
+                    # first and are synced; only then does the marker in the authoritative record
+                    # move. A crash between the two leaves rows nothing counts, which a
+                    # continuation ignores -- a crash after it leaves a set every file agrees on.
+                    self.trajectories.write_frame(
+                        step=target, time_ps=schedule.step_to_ps(target),
+                        state_to_walker=state["state_to_walker"],
+                        configurations=state["configurations"])
+                    self.trajectories.sync()
                     state["frame_index"] = self.reporter.write_frame(
                         step=target, time_ps=schedule.step_to_ps(target),
-                        exchange_index=state["exchange_index"],
-                        configurations=state["configurations"])
+                        exchange_index=state["exchange_index"])
                 if "solute" in events:
                     state["solute_frame_index"] = self.reporter.write_solute_frame(
                         step=target, time_ps=schedule.step_to_ps(target),
@@ -966,6 +976,8 @@ class ReplicaRun:
                                 step=completed,
                                 storage_migrations=list(state.get("storage_migrations") or []),
                                 note="manifest written; the storage remains authoritative")
+        if self.trajectories is not None:
+            self.trajectories.close()
         self.reporter.close()
         return record
 

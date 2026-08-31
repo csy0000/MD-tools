@@ -69,8 +69,7 @@ def _modern(path, rows=3):
         step = (index + 1) * 500
         reporter.write_solute_frame(step=step, time_ps=step * 0.002, exchange_index=index,
                                     configurations=configurations, solute_indices=[0])
-    reporter.write_frame(step=rows * 500, time_ps=rows * 500 * 0.002, exchange_index=rows - 1,
-                         configurations=configurations)
+    reporter.write_frame(step=rows * 500, time_ps=rows * 500 * 0.002, exchange_index=rows - 1)
     reporter.close()
     return path
 

@@ -56,8 +56,7 @@ def _legacy(path, rows=4):
         step = (index + 1) * 500
         reporter.write_solute_frame(step=step, time_ps=step * 0.002, exchange_index=index,
                                     configurations=configurations, solute_indices=[0])
-        reporter.write_frame(step=step, time_ps=step * 0.002, exchange_index=index,
-                             configurations=configurations)
+        reporter.write_frame(step=step, time_ps=step * 0.002, exchange_index=index)
     reporter.close()
     with netCDF4.Dataset(str(source), "r") as src, netCDF4.Dataset(str(path), "w") as dst:
         dst.setncatts({k: src.getncattr(k) for k in src.ncattrs()})

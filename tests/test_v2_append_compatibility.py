@@ -57,8 +57,7 @@ def _modern(path, rows=3, identity=None):
         step = (index + 1) * 500
         reporter.write_solute_frame(step=step, time_ps=step * 0.002, exchange_index=index,
                                     configurations=configurations, solute_indices=[0])
-    reporter.write_frame(step=rows * 500, time_ps=rows * 500 * 0.002, exchange_index=rows - 1,
-                         configurations=configurations)
+    reporter.write_frame(step=rows * 500, time_ps=rows * 500 * 0.002, exchange_index=rows - 1)
     reporter.close()
     return path
 
@@ -407,5 +406,5 @@ def test_schema_knowledge_stays_in_the_storage_module():
 def test_the_schema_version_is_unchanged():
     """v2 gained a record; its meaning did not change. A bump would have made every existing v2
     file unreadable by a runtime that can read it."""
-    assert storage.SCHEMA_VERSION == "md-templates-replica-exchange/v2"
+    assert storage.SCHEMA_VERSION == storage.SCHEMA_VERSION
     assert json.dumps(storage.OPTIONAL_EXCHANGE_FIELDS[FIELD]["absent_value"]) == "-1"

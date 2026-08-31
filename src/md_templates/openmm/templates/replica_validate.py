@@ -103,6 +103,10 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
               reconcilable=False):
     schema = reporter.schema
     result.note("schema", schema)
+    if schema in storage.SUPERSEDED_SCHEMAS:
+        # Identified, explained, and refused -- not silently reinterpreted as if it were current.
+        result.fail(f"{schema} is superseded: {storage.SUPERSEDED_SCHEMAS[schema]}")
+        return result
     if schema != storage.SCHEMA_VERSION:
         result.fail(f"storage schema is {schema!r}, not {storage.SCHEMA_VERSION!r}")
 

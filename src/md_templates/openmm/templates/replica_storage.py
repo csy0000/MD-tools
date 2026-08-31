@@ -37,7 +37,15 @@ from pathlib import Path
 import numpy as np
 
 #: Bumped when the meaning of the schema changes. Written into the file and checked on read.
-SCHEMA_VERSION = "md-templates-replica-exchange/v2"
+#:
+#: v3 removed the bundled coordinate arrays. Coordinates now live in one Amber NetCDF trajectory
+#: per
+#: fixed thermodynamic state (`remd0.nc` ...), and this file keeps the exchange record and the one
+#: committed-frame marker that says how much of that set is real. A v2 file is not a v3 file
+#: missing
+#: a feature -- it holds its coordinates somewhere else entirely -- so it is refused rather than
+#: reinterpreted.
+SCHEMA_VERSION = "md-templates-replica-exchange/v3"
 
 #: Fields on the `exchange` dimension that were added to v2 AFTER v2 was first published.
 #:
@@ -215,6 +223,34 @@ def merge_migration_histories(*histories):
     return merged
 
 
+#: Schemas this build can identify but must not continue, with the reason attached.
+SUPERSEDED_SCHEMAS = {
+    "md-templates-replica-exchange/v2": (
+        "v2 stored coordinates inside this file as positions[frame, walker, atom, spatial], "
+        "walker-indexed. v3 stores them as one Amber NetCDF trajectory per fixed thermodynamic "
+        "state, state-indexed. Those are different layouts of different things, and no migration "
+        "is offered: reindexing walkers into states after the fact would require the mapping "
+        "history to be replayed, and a mistake there would silently attribute a configuration to "
+        "the wrong Hamiltonian."),
+    "md-templates-replica-exchange/v1": (
+        "v1 predates the independent event schedules and the separate solute stream."),
+}
+
+
+def refuse_superseded_schema(schema, *, path=None, what="this run"):
+    """Refuse a file this build can read the header of but must not continue."""
+    if schema == SCHEMA_VERSION:
+        return
+    reason = SUPERSEDED_SCHEMAS.get(schema)
+    where = f"{path}: " if path else ""
+    raise StorageError(
+        f"{where}{what} uses storage schema {schema!r}; this build writes\n"
+        f"  {SCHEMA_VERSION!r}.\n"
+        f"  {reason or 'That schema is not one this build implements.'}\n"
+        f"  The file is left exactly as it is. Read it with the build that wrote it, or start a "
+        f"new dataset under {SCHEMA_VERSION!r}.")
+
+
 #: The completed-run manifest format.
 MANIFEST_FORMAT = "md-templates-replica-restart/v2"
 
@@ -353,13 +389,10 @@ class ReplicaReporter:
         frame_exchange = dataset.createVariable("frame_exchange", "i8", ("frame",))
         frame_exchange.long_name = ("the exchange index in force when this frame was written, so "
                                     "the mapping is reconstructable without assuming a cadence")
-        positions = dataset.createVariable("positions", "f4",
-                                           ("frame", "walker", "atom", "spatial"))
-        positions.units = "nanometer"
-        positions.long_name = "positions[frame][walker][atom][xyz]; WALKER-indexed"
-        if has_box:
-            box = dataset.createVariable("box", "f8", ("frame", "walker", "cell", "spatial"))
-            box.units = "nanometer"
+        # No coordinate arrays here in v3. `frame_step`/`frame_time_ps`/`frame_exchange`
+        # describe a frame; the coordinates for it are the row at the same index in each
+        # `remd{state}.nc`, and `last_frame` below is the marker that says how many of those rows
+        # are committed across the whole set.
         last_frame = dataset.createVariable("last_frame", "i8")
         last_frame.long_name = "the last FULLY committed whole-system frame"
         last_frame[0] = -1
@@ -448,19 +481,18 @@ class ReplicaReporter:
         variables["last_exchange"][0] = int(index)
         self.dataset.sync()
 
-    def write_frame(self, *, step, time_ps, exchange_index, configurations):
-        """One whole-system frame: every walker's positions, and its box where there is one."""
+    def write_frame(self, *, step, time_ps, exchange_index):
+        """Commit one whole-system frame.
+
+        Called AFTER every state trajectory has the row and has been synced. Advancing this marker
+        is what makes the set real: a crash before it leaves rows nothing counts, and a crash after
+        it leaves a set every file agrees on.
+        """
         variables = self.dataset.variables
         index = int(variables["last_frame"][0]) + 1
         variables["frame_step"][index] = int(step)
         variables["frame_time_ps"][index] = float(time_ps)
         variables["frame_exchange"][index] = int(exchange_index)
-        variables["positions"][index, :, :, :] = np.array(
-            [c.positions for c in configurations], dtype=np.float32)
-        if "box" in variables:
-            variables["box"][index, :, :, :] = np.array(
-                [np.zeros((3, 3)) if c.box is None else c.box for c in configurations],
-                dtype=float)
         self.dataset.sync()
         variables["last_frame"][0] = index
         self.dataset.sync()

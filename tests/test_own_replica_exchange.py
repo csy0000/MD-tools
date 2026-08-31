@@ -686,8 +686,7 @@ def build_storage(tmp_path, *, n_exchanges=4, n_states=3, n_atoms=4, has_box=Tru
                                     configurations=configurations, solute_indices=[0])
         if (attempt + 1) % whole_every == 0:
             frame = reporter.write_frame(step=step, time_ps=step * 0.002,
-                                         exchange_index=written,
-                                         configurations=configurations)
+                                         exchange_index=written)
             storage.ReplicaCheckpoint(tmp_path / "run_checkpoint.nc").write(
                 step=step, exchange_index=written, frame_index=frame,
                 solute_frame_index=written, configurations=configurations,
