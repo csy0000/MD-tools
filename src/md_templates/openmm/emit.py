@@ -600,5 +600,9 @@ source:
   start_time_ps: {reservoir["start_time_ps"]}
   end_time_ps: {reservoir["end_time_ps"]}
   frames: {reservoir["frames"]}
+  # Refused if set to true, before anything is selected or written. A repeated draw would give
+  # one configuration extra statistical weight, make `frames` overstate the effective reservoir
+  # size, and produce a file this repository's own strictly-increasing-step check rejects. Ask
+  # for at most as many frames as the window holds, or widen the window.
   allow_sampling_with_replacement: false
 '''

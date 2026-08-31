@@ -387,6 +387,21 @@ def source_temperature(request, trajectory):
     return None, "no companion runtime record and no explicit declaration"
 
 
+def eligible_frames(times, start_time_ps, end_time_ps, *, frame_interval_ps=None):
+    """The frames of `times` inside an INCLUSIVE window, as source indices in order.
+
+    One implementation, two callers: the selector below and the rREST2 reservoir boundary, which
+    has to report how many DISTINCT frames a request could draw from. Computing the window twice
+    would let the count in an error message drift from the count the selector actually used.
+
+    Half a frame interval of tolerance: a frame written at exactly `end_time_ps` must be eligible,
+    and floating-point time accumulation must not exclude it.
+    """
+    tolerance = 0.5 * float(frame_interval_ps or 0.0) * 1e-6
+    return [index for index, time in enumerate(times)
+            if start_time_ps - tolerance <= time <= end_time_ps + tolerance]
+
+
 def select_source_frames(request, times, evidence):
     """Which frames are taken -- deterministic, inclusive, and recorded before anything runs.
 
@@ -394,11 +409,8 @@ def select_source_frames(request, times, evidence):
     both ends, which is what `start_time_ps` and `end_time_ps` mean.
     """
     start, end = request.start_time_ps, request.end_time_ps
-    # Half a frame interval of tolerance: a frame written at exactly `end_time_ps` must be
-    # eligible, and floating-point time accumulation must not exclude it.
-    tolerance = 0.5 * float(evidence.get("frame_interval_ps") or 0.0) * 1e-6
-    eligible = [index for index, time in enumerate(times)
-                if start - tolerance <= time <= end + tolerance]
+    eligible = eligible_frames(times, start, end,
+                               frame_interval_ps=evidence.get("frame_interval_ps"))
 
     if not eligible:
         raise SourceError(
