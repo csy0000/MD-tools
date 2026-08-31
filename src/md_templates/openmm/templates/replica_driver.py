@@ -387,9 +387,25 @@ class ReplicaRun:
                     replica_validate.format_report(
                         check, title="this run cannot be continued"))
 
-            reporter = storage.ReplicaReporter(self.files.trajectory, mode="a")
-            self.reporter = reporter
-            stored = reporter.identity
+            # PHASE 1 -- READ ONLY. Every reason to refuse is established while the file is open
+            # for reading and nothing can be written. A file must never be modified merely because
+            # it could be opened, and the optional-field migration below is a modification.
+            probe = storage.ReplicaReporter(self.files.trajectory, mode="r")
+            try:
+                stored = probe.identity
+                committed = probe.last_exchange()
+                optional_fields = probe.inspect_optional_exchange_fields()
+            finally:
+                probe.close()
+
+            malformed = [entry["problem"] for entry in optional_fields.values()
+                         if entry["problem"]]
+            if malformed:
+                raise storage.StorageError(
+                    "this run cannot be continued because an optional field is defined in a way "
+                    "this runtime cannot use:\n  - " + "\n  - ".join(malformed) +
+                    "\n  The file is left exactly as it is.")
+
             if stored is None:
                 raise IdentityError(
                     f"{Path(self.files.trajectory).name} carries no scientific identity, so what "
@@ -405,15 +421,7 @@ class ReplicaRun:
                     f"  Running longer is a legitimate extension; changing the physics is not.")
 
             checkpoint = storage.ReplicaCheckpoint(self.files.checkpoint).read()
-            committed = reporter.last_exchange()
             resume_exchange = int(checkpoint["exchange_index"])
-            if committed > resume_exchange:
-                reporter.rewind(exchange=resume_exchange,
-                                frame=int(checkpoint["frame_index"]),
-                                solute_frame=int(checkpoint["solute_frame_index"]))
-                print(f"# rewound {committed - resume_exchange} exchange row(s) with no "
-                      f"checkpoint behind them; continuing from step {checkpoint['step']}")
-
             total = int(checkpoint["schedule"]["total_steps"])
             if extend:
                 if int(checkpoint["step"]) < total:
@@ -445,7 +453,33 @@ class ReplicaRun:
                     schedule = self.protocol.schedule.extended(
                         (total - self.protocol.schedule.total_steps)
                         // self.protocol.schedule.exchange_steps)
+
+            # PHASE 2 -- every check has passed, so now, and only now, the file is opened for
+            # append and may be changed.
+            reporter = storage.ReplicaReporter(self.files.trajectory, mode="a")
+            self.reporter = reporter
+
+            # An older v2 file predates the optional exchange fields. Adding them is done ONCE,
+            # here, before a single step is integrated -- never lazily at the first exchange, where
+            # a schema error would surface only after new dynamics had already been produced.
+            migration = reporter.ensure_optional_exchange_fields()
+            if migration["fields_added"]:
+                print(f"# storage migrated     : added {migration['fields_added']} to this v2 "
+                      f"file and set {migration['rows_initialised']} existing row(s) to "
+                      f"{migration['initialised_to']}; "
+                      f"{migration['previous_committed_exchanges']} exchange(s) were committed "
+                      f"before this continuation")
+                sys.stdout.flush()
+
+            if committed > resume_exchange:
+                reporter.rewind(exchange=resume_exchange,
+                                frame=int(checkpoint["frame_index"]),
+                                solute_frame=int(checkpoint["solute_frame_index"]))
+                print(f"# rewound {committed - resume_exchange} exchange row(s) with no "
+                      f"checkpoint behind them; continuing from step {checkpoint['step']}")
+
             payload = {
+                "storage_migration": migration,
                 "step": int(checkpoint["step"]),
                 "exchange_index": resume_exchange,
                 "frame_index": int(checkpoint["frame_index"]),
@@ -475,9 +509,28 @@ class ReplicaRun:
             "schedule": schedule,
             "rng": rng, "rule_state": dict(payload["rule_state"]),
             "resumed_from_step": payload["step"], "interrupted": False,
+            "storage_migration": payload.get("storage_migration"),
         }
         self.coordinator.agree(configuration_digest(state["configurations"]),
                                what="the continued configurations")
+
+        if self.coordinator.is_root:
+            # The continuation provenance says what this process did to the storage before it
+            # propagated anything, including how many exchanges the file already held. A reader
+            # who finds `-1` in the early rows of a seed history can tell from here whether those
+            # rows predate the field or were written by a `stored`-policy run.
+            migration = state["storage_migration"] or {}
+            storage.write_run_state(
+                self.files.trajectory, "running", identity=identity,
+                total_steps=state["schedule"].total_steps,
+                resumed_from_step=int(state["step"]),
+                storage_migration=migration,
+                note=("continuation started; the analysis NetCDF is authoritative for progress"
+                      + (f". Optional v2 field(s) {migration['fields_added']} were added to this "
+                         f"file before propagation, with its "
+                         f"{migration['previous_committed_exchanges']} already-committed "
+                         f"exchange(s) set to {migration['initialised_to']}"
+                         if migration.get("fields_added") else "")))
         return state
 
     def _read_initial_configuration(self):
@@ -764,6 +817,12 @@ class ReplicaRun:
             "started_utc": started.isoformat(),
             "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "resumed_from_step": state.get("resumed_from_step"),
+            # Durable provenance for the optional-field migration. The run-state sidecar records
+            # it while the continuation is running, but that file is rewritten on completion, so a
+            # reader of the finished run would otherwise have no record that this file was
+            # written before the field existed -- which is exactly what explains a leading run of
+            # -1 in its seed history.
+            "storage_migration": state.get("storage_migration"),
             "schedule": state["schedule"].describe(),
             "storage": {
                 "analysis_netcdf": Path(self.files.trajectory).name,
