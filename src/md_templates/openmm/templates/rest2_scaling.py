@@ -33,15 +33,50 @@ from openmm import (CMAPTorsionForce, CustomGBForce, NonbondedForce, PeriodicTor
 #: stored is a second thing to keep consistent, and the one that drifts is never the one you check.
 REST2_IMPLEMENTATION = {
     "name": "rest2-no-bond-angle-omega",
-    "version": 1,
+    "version": 2,
     "state_coordinate": "tau",
     "solute_solute_nonbonded_scale": "(1-tau)^2",
     "solute_environment_nonbonded_scale": "1-tau",
+    "generalized_born_scale": "1-tau",
     "eligible_solute_torsion_scale": "(1-tau)^2",
     "bonds": "unscaled",
     "angles": "unscaled",
     "ordinary_amide_omega": "unscaled",
 }
+
+#: Identities this build can read but must NOT continue. v1 scaled the whole generalised-Born
+#: contribution by (1-tau)^2; v2 scales it by (1-tau). That is a different Hamiltonian, so a v1 run
+#: cannot be extended or resumed under v2 -- the samples would come from two different ensembles.
+#: v1 records stay exactly as written; nothing here rewrites history to pretend otherwise.
+HISTORICAL_REST2_IMPLEMENTATIONS = {
+    ("rest2-no-bond-angle-omega", 1): (
+        "v1 scaled the complete generalised-Born energy by (1-tau)^2. v2 scales it by (1-tau), "
+        "which is a different Hamiltonian: a v1 trajectory and a v2 trajectory do not sample the "
+        "same implicit-solvent ensemble, so one cannot continue the other."),
+}
+
+
+def require_compatible_implementation(recorded, *, what="this run"):
+    """Refuse to continue a run written under a superseded Hamiltonian identity.
+
+    Two runs agree only if they agree about what REST2 meant. A version bump here is not
+    bookkeeping -- it says the energy function changed -- so continuing across one would silently
+    join samples from two different ensembles.
+    """
+    if not isinstance(recorded, dict) or not recorded:
+        return
+    name = recorded.get("name")
+    version = recorded.get("version")
+    if name == REST2_IMPLEMENTATION["name"] and version == REST2_IMPLEMENTATION["version"]:
+        return
+    reason = HISTORICAL_REST2_IMPLEMENTATIONS.get((name, version))
+    current = f"{REST2_IMPLEMENTATION['name']}/v{REST2_IMPLEMENTATION['version']}"
+    raise ValueError(
+        f"{what} records the Hamiltonian identity {name}/v{version}, but this build implements "
+        f"{current}.\n"
+        f"  {reason or 'That identity is not one this build implements.'}\n"
+        f"  The recorded run is left exactly as it is. Start a new dataset under {current} rather "
+        f"than continuing one written under a different energy function.")
 
 
 def scaling_for_tau(tau):
@@ -213,14 +248,19 @@ def _scale_cmap(force, solute, solute_solute, duplicates=None):
 REST2_GB_SCALE_PARAMETER = "rest2_scale_gb"
 
 
-def _scale_customgb(force, system, solute, solute_solute):
-    """Scale the ENTIRE generalised-Born energy by the solute-solute factor, `(1 - tau)^2`.
+def _scale_customgb(force, system, solute, solute_environment):
+    """Scale the ENTIRE generalised-Born energy by the LINEAR factor, `(1 - tau)`.
+
+    The whole GB contribution is a solute-environment interaction: it is the solute's coupling to a
+    continuum standing in for solvent, so it follows the solute-environment factor rather than the
+    solute-solute one. An earlier version of this module used `(1 - tau)^2` here; that is a
+    different Hamiltonian and is refused for continuation rather than reinterpreted.
 
     Charge scaling alone is not enough, and this is the part that is easy to get wrong. GBn2 has
-    three energy terms: two are proportional to charge products and would follow
-    `charge * (1 - tau)` correctly, but the third is a non-polar/dispersion correction with no
-    charge dependence. It still has to scale by `(1 - tau)^2`, and scaling charges leaves it
-    untouched. Multiplying every term by
+    three energy terms: two are proportional to charge products and would follow `charge * (1-tau)`
+    correctly, but the third is a non-polar/dispersion correction with no charge dependence. It
+    still has to scale, and scaling charges leaves it untouched -- which is why every term is
+    multiplied by one global parameter instead. Multiplying every term by
     one global parameter scales all three uniformly.
 
     The whole system must be the enhanced region. A GB energy is not decomposable per atom the way
@@ -257,7 +297,7 @@ def _scale_customgb(force, system, solute, solute_solute):
 
     index = [force.getGlobalParameterName(i)
              for i in range(force.getNumGlobalParameters())].index(REST2_GB_SCALE_PARAMETER)
-    force.setGlobalParameterDefaultValue(index, float(solute_solute))
+    force.setGlobalParameterDefaultValue(index, float(solute_environment))
 
 
 #: Force classes this module knows how to scale. Each has an explicit `_scale_*` implementation.
@@ -344,7 +384,7 @@ def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=(),
         elif isinstance(force, CMAPTorsionForce):
             _scale_cmap(force, solute, solute_solute)
         elif isinstance(force, CustomGBForce):
-            _scale_customgb(force, system, solute, solute_solute)
+            _scale_customgb(force, system, solute, solute_environment)
     return system
 
 
@@ -456,7 +496,8 @@ class TauSwitcher:
             elif isinstance(force, CustomGBForce):
                 # The expressions already carry the global parameter; only its value changes, and
                 # a global parameter is set on the Context rather than pushed through the Force.
-                context.setParameter(REST2_GB_SCALE_PARAMETER, float(solute_solute))
+                context.setParameter(REST2_GB_SCALE_PARAMETER,
+                                     float(solute_environment))
         return solute_solute
 
 

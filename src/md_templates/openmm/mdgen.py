@@ -549,7 +549,7 @@ def _ais_path_definition(resolved: dict[str, Any], *, implicit: bool) -> dict[st
             # tau is the SOURCE parameter; the other two are labelled derived and are never read
             # back in as input.
             "source_parameter": "tau",
-            "rest2_implementation": "rest2-no-bond-angle-omega/v1; tau is the only coordinate",
+            "rest2_implementation": "rest2-no-bond-angle-omega/v2; tau is the only coordinate",
             "implementation": "rest2_scaling.TauSwitcher, the same decomposition a static REST2 "
                               "rung is built with",
             "enhanced_region": path["enhanced_region"],
