@@ -422,12 +422,15 @@ def test_a_reservoir_refresh_is_never_counted_as_an_exchange():
     assert "NOT a swap" in stats["reservoir"]["note"]
 
 
-@pytest.mark.parametrize("series,expected", [
-    ([0, 1, 2, 1, 0], 1), ([2, 1, 0], 0), ([2, 0, 1, 2, 0], 1), ([0, 2, 0, 2, 0], 2),
-    ([1, 1, 1], 0), ([0, 1, 2], 0),
-])
-def test_round_trips_require_cold_then_hot_then_cold(series, expected):
-    assert statistics.count_round_trips(series, cold_state=0, hot_state=2) == expected
+def test_round_trip_counting_is_not_offered_here():
+    """It is downstream analysis, and it was deliberately removed from this layer.
+
+    The committed mapping is preserved in the authoritative NetCDF, so anyone who wants round
+    trips can compute them from it with their own burn-in and window choices -- which is the point:
+    those choices are not ours to make silently.
+    """
+    for gone in ("count_round_trips", "round_trip_report"):
+        assert not hasattr(statistics, gone), f"{gone} belongs downstream, not here"
 
 
 # --- the source ensemble, shared by AIS and rREST2 ------------------------------------------------

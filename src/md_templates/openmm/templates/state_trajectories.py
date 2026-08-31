@@ -66,6 +66,29 @@ class StateTrajectorySet:
             for index, tau in enumerate(taus)]
         return cls(writers, directory=directory)
 
+    @classmethod
+    def continue_from(cls, directory, *, taus, n_atoms, committed_frames):
+        """Reopen an existing set to continue it, at the committed-frame marker.
+
+        Inspection comes FIRST and the files are opened read-only for it. Nothing is opened for
+        writing until every state file has been shown to be present, to belong to this ladder, and
+        to be at least as long as the marker. A continuation that discovered the corruption half
+        way through would already have appended to the healthy files.
+        """
+        directory = Path(directory)
+        report = cls.inspect(directory, n_states=len(taus), expect_frames=int(committed_frames),
+                             expect_taus=list(taus))
+        if report["problems"]:
+            raise StateTrajectoryError(
+                "the state trajectories in {} cannot be continued:\n  - {}".format(
+                    directory, "\n  - ".join(report["problems"])))
+        writers = [
+            AmberTrajectoryWriter.open_existing(
+                directory / state_trajectory_name(index), n_atoms=n_atoms, state_index=index,
+                tau=float(tau), from_frame=int(committed_frames))
+            for index, tau in enumerate(taus)]
+        return cls(writers, directory=directory)
+
     # -- the commit ------------------------------------------------------------------------------
 
     def write_frame(self, *, step, time_ps, state_to_walker, configurations):

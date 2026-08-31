@@ -136,6 +136,51 @@ class AmberTrajectoryWriter:
             angles.units = "degree"
         self._frames = 0
 
+    @classmethod
+    def open_existing(cls, path, *, n_atoms, state_index, tau, from_frame):
+        """Reopen a state trajectory for append, positioned at the committed marker.
+
+        `from_frame` is the committed-frame count from the authoritative record, and it is where
+        writing resumes. Rows at or past it are UNCOMMITTED -- a crash left them behind after the
+        set was written but before the marker moved -- and they are overwritten in place. An Amber
+        NetCDF cannot shrink, so overwriting is how they are retired; the marker, not the file
+        length, is what says how many frames exist.
+
+        Every identifying attribute is checked before the file is opened for writing. Continuing
+        into a file that belongs to another state, another ladder or another system would corrupt
+        it silently, and the filename alone is not evidence of any of those.
+        """
+        import netCDF4
+
+        path = Path(path)
+        seen = read_frames(path)
+        if seen["conventions"] != AMBER_CONVENTIONS:
+            raise ValueError(
+                f"{path.name} is not an Amber trajectory (Conventions={seen['conventions']!r})")
+        if seen["state_index"] != int(state_index):
+            raise ValueError(
+                f"{path.name} records state {seen['state_index']}, not {int(state_index)}")
+        if abs(seen["tau"] - float(tau)) > 1e-12:
+            raise ValueError(
+                f"{path.name} records tau {seen['tau']} but this ladder puts {float(tau)} at "
+                f"state {int(state_index)}. This is a different ladder, not a continuation.")
+        if seen["n_atoms"] != int(n_atoms):
+            raise ValueError(
+                f"{path.name} holds {seen['n_atoms']} atoms, not {int(n_atoms)}")
+        if int(from_frame) > seen["n_frames"]:
+            raise ValueError(
+                f"{path.name} holds {seen['n_frames']} frames but the committed marker says "
+                f"{int(from_frame)} exist. The marker only advances once every file has the row, "
+                f"so this is corruption; it is refused rather than padded.")
+
+        writer = object.__new__(cls)
+        writer.path = path
+        writer.n_atoms = int(n_atoms)
+        writer.periodic = bool(seen["periodic"])
+        writer.dataset = netCDF4.Dataset(str(path), "a", format="NETCDF3_64BIT_OFFSET")
+        writer._frames = int(from_frame)
+        return writer
+
     @property
     def n_frames(self):
         return self._frames

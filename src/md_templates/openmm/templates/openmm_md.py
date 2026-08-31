@@ -505,7 +505,8 @@ def run_grouped(files, arguments, groups):
         files=SimpleNamespace(topology=first["topology"], system=first["system"],
                               coordinates=first["coordinates"],
                               trajectory=files.trajectory, restart=files.restart,
-                              checkpoint=files.checkpoint, output=files.output),
+                              checkpoint=files.checkpoint, output=files.output,
+                              rem=getattr(files, "rem", None)),
         base_system=base_system, topology=topology,
         solute_indices=solute_indices, excluded_bonds=excluded_bonds,
         rule_path=arguments.exchange_rule,
@@ -529,8 +530,6 @@ def run_grouped(files, arguments, groups):
 
 
 def _print_grouped_summary(record, protocol):
-    from replica_statistics import adjacent_pairs
-
     stats = record["lifetime_statistics"]
     schedule = record["schedule"]
     print()
@@ -546,26 +545,28 @@ def _print_grouped_summary(record, protocol):
     print(f"# production per replica: {record['production_ps_per_replica']} ps")
     print(f"# exchange rule         : {record['exchange_rule'].get('name')}")
     print(f"# final state->walker   : {record['final_state_to_walker']}")
-    print("# LIFETIME acceptance by adjacent state pair "
-          f"(exchanges {stats['exchange_range'][0]}-{stats['exchange_range'][1]}):")
-    for pair in adjacent_pairs(stats):
+    # Neighbouring pairs and an overall figure, rendered from the same structure that was
+    # persisted in the completion manifest so the terminal and the file cannot disagree. Round
+    # trips, transition matrices, first-passage times and convergence diagnostics are downstream
+    # analysis and are deliberately absent.
+    report = record["completion_report"]
+    print("# NEIGHBOURING-PAIR acceptance:")
+    print(f"#   basis: {report['basis']}")
+    for pair in report["by_neighbouring_pair"]:
         rate = pair["acceptance"]
         shown = "n/a" if rate is None else f"{rate:.3f}"
         i, j = pair["state_pair"]
-        print(f"#   states {i}-{j} (tau {pair['tau_pair'][0]:.3f}-{pair['tau_pair'][1]:.3f}): "
-              f"{pair['accepted']}/{pair['proposed']} = {shown}")
-    if stats.get("reservoir") and stats["reservoir"]["attempts"]:
-        r = stats["reservoir"]
+        print(f"#   state {i} <-> state {j}   {pair['accepted']}/{pair['proposed']}   {shown}")
+    overall = report["overall"]
+    shown = "n/a" if overall["acceptance"] is None else f"{overall['acceptance']:.3f}"
+    print(f"#   overall               {overall['accepted']}/{overall['proposed']}   {shown}")
+    if "reservoir" in report:
+        r, stats_r = report["reservoir"], stats["reservoir"]
         print(f"# reservoir refreshes   : {r['accepted']}/{r['attempts']} at state(s) "
-              f"{r['states_refreshed']}, {r['distinct_frames_used']} distinct sample(s) from "
-              f"source step(s) {r['source_steps_used'][:6]}")
+              f"{r['states_refreshed']}, {stats_r['distinct_frames_used']} distinct sample(s) "
+              f"from source step(s) {stats_r['source_steps_used'][:6]}")
         print(f"#   velocity policy      : "
               f"{record.get('reservoir', {}).get('velocity_policy')}")
-    trips = record["round_trips"]
-    print(f"# round trips (cold->hot->cold): "
-          f"{[w['round_trips'] for w in trips['by_walker']]}")
-    print(f"#   walkers started at states  : "
-          f"{[w['started_at_state'] for w in trips['by_walker']]}")
     print("# ---------------------------------------------------------------------------")
 
 

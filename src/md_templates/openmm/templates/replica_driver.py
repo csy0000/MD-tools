@@ -185,6 +185,9 @@ class ReplicaRun:
         self.owned = owned_states(protocol, self.coordinator)
         self.engine = None
         self.reporter = None
+        # The N per-state Amber trajectories. Root-only: only the root writes frames, so only the
+        # root holds writers, and every other rank leaves this None for the whole run.
+        self.trajectories = None
         self.reservoir = None
         self._audit = None
         self._run_context = {}
@@ -365,6 +368,14 @@ class ReplicaRun:
                     "execution": self._run_context,
                     "exchange_rule": rule_identity})
             self.reporter.write_ladder(self.protocol.tau)
+            # Created here, with the reporter, because the two are one commit: the marker in the
+            # authoritative record counts rows in these files, so neither may exist without the
+            # other.
+            self.trajectories = state_trajectories.StateTrajectorySet.create(
+                Path(self.files.trajectory).parent,
+                taus=self.protocol.tau, n_atoms=configurations[0].n_atoms,
+                temperature_k=self.protocol.temperature_k, periodic=self._periodic,
+                program_version=environment_versions().get("md_templates", "0"))
         self.coordinator.barrier()
 
         state = {
@@ -586,6 +597,17 @@ class ReplicaRun:
                                 solute_frame=int(checkpoint["solute_frame_index"]))
                 print(f"# rewound {committed - resume_exchange} exchange row(s) with no "
                       f"checkpoint behind them; continuing from step {checkpoint['step']}")
+
+            # The state trajectories are continued from the SAME marker the reporter was rewound
+            # to, so the two records agree about how many frames exist before a single new step is
+            # propagated. Rows past it were written before a crash moved the marker: they are
+            # uncommitted, and they are overwritten from here on.
+            committed_frames = int(checkpoint["frame_index"]) + 1
+            self.trajectories = state_trajectories.StateTrajectorySet.continue_from(
+                Path(self.files.trajectory).parent,
+                taus=self.protocol.tau,
+                n_atoms=int(checkpoint["configurations"][0].n_atoms),
+                committed_frames=committed_frames)
 
             payload = {
                 "storage_migrations": migrations,
@@ -939,14 +961,19 @@ class ReplicaRun:
                 f"the run stopped at step {completed} of {expected}. No completion manifest was "
                 f"written; --resume will continue it.")
 
-        from replica_statistics import lifetime_statistics, round_trip_report
+        from replica_statistics import (completion_report, lifetime_statistics,
+                                        mapping_is_permutation_every_iteration)
         accepted, proposed = self.reporter.statistics()
         events = self.reporter.reservoir_events()
         mapping = self.reporter.mapping()
         stats = lifetime_statistics(
             accepted, proposed, tau=self.protocol.tau, reservoir_events=events,
             reservoir_velocity_seeds=self.reporter.reservoir_velocity_seeds())
-        trips = round_trip_report(mapping, n_states=self.protocol.n_states)
+        # The permutation check is storage integrity, not analysis: every committed row must be
+        # a bijection state->walker, and a row that is not means the mapping was corrupted.
+        permuted, offending_rows = mapping_is_permutation_every_iteration(
+            mapping, n_states=self.protocol.n_states)
+        report = completion_report(stats)
 
         record = {
             "format": storage.MANIFEST_FORMAT,
@@ -967,6 +994,11 @@ class ReplicaRun:
             # -1 in its seed history.
             "storage_migrations": list(state.get("storage_migrations") or []),
             "schedule": state["schedule"].describe(),
+            # Section 4: the resolved state records. Deliberately here and not in the scientific
+            # identity -- `effective_temperature_k` is derived and reporting-only, and a
+            # continuation compares the identity key by key, so a reporting field in it would
+            # refuse every file written before the field existed.
+            "states": self.protocol.state_records(),
             "storage": {
                 "analysis_netcdf": Path(self.files.trajectory).name,
                 "solute_netcdf": storage.solute_path(self.files.trajectory).name,
@@ -979,7 +1011,12 @@ class ReplicaRun:
             "scientific_identity": identity,
             "exchange_rule": rule_identity,
             "lifetime_statistics": stats,
-            "round_trips": trips,
+            "completion_report": report,
+            "mapping_integrity": {
+                "rows": int(len(mapping)),
+                "every_row_is_a_permutation": bool(permuted),
+                "offending_rows": offending_rows,
+            },
             "hamiltonian": {
                 "forces_scaled": [n for _, n in self._audit["scaled"]],
                 "forces_unscaled_by_convention": [

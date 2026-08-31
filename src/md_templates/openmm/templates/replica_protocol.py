@@ -223,6 +223,32 @@ class REST2Protocol:
 
     # -- building the ladder ------------------------------------------------------------------------
 
+    def state_records(self):
+        """One record per fixed thermodynamic state: index, trajectory, exact tau, and a derived
+        effective temperature.
+
+        `effective_temperature_k` is FOR REPORTING. It is what a temperature-REMD ladder would need
+        to reach the same solute-solute weakening, and it is useful for saying how hot a rung
+        "feels" -- but nothing here is thermostatted at it. Every rung runs at the one physical
+        temperature; tau is the state coordinate and the only one persisted as such.
+
+        The trajectory basename comes from the state index and never from tau, so two ladders with
+        different tau at the same index name the same file.
+        """
+        from amber_trajectory import state_trajectory_name
+
+        records = []
+        for index, tau in enumerate(self.tau):
+            solute_solute, _ = scaling_for_tau(tau)
+            records.append({
+                "index": index,
+                "trajectory": state_trajectory_name(index),
+                "tau": float(tau),
+                "effective_temperature_k": (float(self.temperature_k) / solute_solute
+                                            if solute_solute else None),
+            })
+        return records
+
     def build_systems(self, base_system, solute_indices, excluded_bonds=()):
         """One scaled System per rung, from the audited REST2 scaling implementation."""
         audit = audit_force_classes(base_system, where="REST2 ladder construction")

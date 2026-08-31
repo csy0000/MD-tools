@@ -103,28 +103,48 @@ def adjacent_pairs(statistics):
     return [pair for pair in statistics["by_state_pair"] if pair["adjacent"]]
 
 
-def count_round_trips(series, *, cold_state, hot_state):
-    """Complete round trips in one walker's state history.
+def completion_report(statistics):
+    """The completion report: neighbouring-pair acceptance, an overall figure, and nothing else.
 
-        cold visited  ->  hot visited later  ->  cold visited later still
+    One builder so the printed report and the persisted one cannot drift apart -- the summary that
+    reaches the terminal is rendered from this same structure.
 
-    The starting position earns nothing. A walker that BEGINS at the hot state has not completed a
-    round trip when it first reaches cold: it has completed half of one, and must then return to
-    hot and come back.
+    `overall` is summed over the neighbouring pairs only. That is the whole of what was proposed
+    under a neighbour-only rule, so it agrees with `overall_acceptance` there; under any rule that
+    proposes a non-neighbouring swap it would not, and this figure is the one that matches the
+    table printed above it.
     """
-    if cold_state == hot_state:
-        raise ValueError(f"cold and hot states must differ; both are {cold_state}")
-    phase, completed = "seeking_cold", 0
-    for value in np.asarray(series).tolist():
-        value = int(value)
-        if value == cold_state:
-            if phase == "at_hot":
-                completed += 1
-            phase = "at_cold"
-        elif value == hot_state:
-            if phase == "at_cold":
-                phase = "at_hot"
-    return completed
+    pairs = []
+    accepted = proposed = 0
+    for pair in adjacent_pairs(statistics):
+        pairs.append({
+            "state_pair": list(pair["state_pair"]),
+            "tau_pair": list(pair["tau_pair"]),
+            "accepted": int(pair["accepted"]),
+            "proposed": int(pair["proposed"]),
+            "acceptance": pair["acceptance"],
+        })
+        accepted += int(pair["accepted"])
+        proposed += int(pair["proposed"])
+    report = {
+        "basis": ("cumulative over every committed exchange row in the authoritative NetCDF, "
+                  "exchanges {}-{}".format(*statistics["exchange_range"])
+                  if statistics["exchange_range"] else "no committed exchange rows"),
+        "by_neighbouring_pair": pairs,
+        "overall": {"accepted": accepted, "proposed": proposed,
+                    "acceptance": (accepted / proposed) if proposed else None},
+    }
+    reservoir = statistics.get("reservoir") or {}
+    if reservoir.get("attempts"):
+        # Separate, and never folded into the pair figures: a reservoir refresh replaces a
+        # configuration rather than swapping two, so adding it in would inflate them.
+        report["reservoir"] = {
+            "attempts": int(reservoir["attempts"]),
+            "accepted": int(reservoir["accepted"]),
+            "acceptance": reservoir["acceptance"],
+            "states_refreshed": list(reservoir["states_refreshed"]),
+        }
+    return report
 
 
 def walker_view(mapping):
@@ -147,32 +167,8 @@ def mapping_is_permutation_every_iteration(mapping, *, n_states=None):
     return (not bad), bad[:16]
 
 
-def round_trip_report(mapping, *, n_states):
-    """Round trips per walker, from the WALKER view of the stored mapping."""
-    mapping = np.asarray(mapping, dtype=int)
-    ok, offending = mapping_is_permutation_every_iteration(mapping, n_states=n_states)
-    cold, hot = 0, int(n_states) - 1
-    walkers = []
-    if mapping.size:
-        inverse = walker_view(mapping)
-        for walker in range(int(n_states)):
-            series = inverse[:, walker]
-            visited = sorted({int(v) for v in series.tolist()})
-            walkers.append({
-                "walker": walker,
-                "started_at_state": int(series[0]),
-                "round_trips": count_round_trips(series, cold_state=cold, hot_state=hot),
-                "visited_cold": cold in visited,
-                "visited_hot": hot in visited,
-                "visited_all_states": visited == list(range(int(n_states))),
-            })
-    return {
-        "definition": ("cold state visited, then the hot state later, then the cold state again. "
-                       "The starting position earns nothing, and a reservoir refresh is not a "
-                       "round trip."),
-        "cold_state": cold, "hot_state": hot,
-        "mapping_rows": int(mapping.shape[0]) if mapping.size else 0,
-        "every_row_is_a_permutation": bool(ok),
-        "offending_rows": offending,
-        "by_walker": walkers,
-    }
+# Round trips, transition matrices, first-passage times and convergence diagnostics are
+# deliberately NOT here. They are downstream analysis: they need a burn-in choice and a window
+# choice that this layer has no basis to make, and a single number computed here would end up
+# quoted as if the choice had been justified. The committed mapping is preserved in the NetCDF,
+# so any of them can be computed later from the authoritative record.
