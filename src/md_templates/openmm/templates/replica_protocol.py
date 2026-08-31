@@ -16,7 +16,8 @@ That rescaling belongs to temperature REMD, where the rungs differ in beta; appl
 inject or remove energy at every accepted swap and quietly change the ensemble being sampled.
 """
 from replica_schedule import EventSchedule, ScheduleError, exact_steps   # noqa: F401
-from rest2_scaling import (audit_force_classes, build_scaled_system, scale_factor_for_tau)
+from rest2_scaling import (REST2_IMPLEMENTATION, audit_force_classes,
+                           build_scaled_system, scaling_for_tau)
 
 #: Boltzmann constant in the units this repository uses everywhere, kJ/mol/K.
 KB_KJ_PER_MOL_K = 0.008314462618
@@ -171,8 +172,9 @@ class REST2Protocol:
 
     @property
     def scale_factors(self):
-        """s = (1 - tau)^2 for every rung. Derived; never accepted back as input."""
-        return [scale_factor_for_tau(t) for t in self.tau]
+        """The solute-solute factor per rung. Derived for reporting only, never persisted and
+        never accepted back as input: tau is the state coordinate."""
+        return [scaling_for_tau(t)[0] for t in self.tau]
 
     @property
     def beta(self):
@@ -195,7 +197,8 @@ class REST2Protocol:
         record = {
             "method": "REST2",
             "is_temperature_remd": False,
-            "hamiltonian_scaling": ("s = (1 - tau)^2 solute-solute; sqrt(s) = 1 - tau "
+            "rest2_implementation": dict(REST2_IMPLEMENTATION),
+            "hamiltonian_scaling": ("(1 - tau)^2 solute-solute; (1 - tau) "
                                     "solute-environment; environment unchanged"),
             "tau": list(self.tau),
             "scale_factors": [float(s) for s in self.scale_factors],

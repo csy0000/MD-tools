@@ -71,7 +71,7 @@ from md_stages import (sha256_file, RECORD_FORMAT, active_barostat_count,
                        set_restraint, steps_for, trajectory_record, trim_to_checkpoint, utc_now,
                        write_final_state, write_yaml_atomic)
 from rest2_scaling import (build_scaled_system, exchange_log_acceptance, exchange_pairs,
-                           linear_tau_ladder, reduced_potential, scale_factor_for_tau)
+                           linear_tau_ladder, reduced_potential, REST2_IMPLEMENTATION)
 
 CONFIG = yaml.safe_load((HERE.parent / "md.config.yaml").read_text())
 
@@ -245,7 +245,8 @@ def main(argv=None):
                  for index, group in enumerate(groups) for replica in group}
 
     print(f"[remd] {N_REPLICAS} replicas, tau {taus[0]:.3f}..{taus[-1]:.3f}, "
-          f"s = {[round(scale_factor_for_tau(t), 4) for t in taus]}")
+          f"implementation = {REST2_IMPLEMENTATION['name']}"
+          f"/v{REST2_IMPLEMENTATION['version']}")
     print(f"[remd] one temperature ({common['temperature_kelvin']} K) and one beta for every "
           f"replica; the rungs differ by Hamiltonian")
     print(f"[remd] {len(excluded)} omega bond(s) excluded from torsion scaling")
@@ -409,8 +410,7 @@ def main(argv=None):
             "tau": tau,
             # tau is the source parameter; these two are labelled derived so nothing downstream
             # can feed them back in as inputs.
-            "derived_scale_factor_s": scale_factor_for_tau(tau),
-            "derived_solute_environment_coupling_sqrt_s": 1.0 - tau,
+            "rest2_implementation": dict(REST2_IMPLEMENTATION),
             "seeds": {name: derive_seed(BASE_SEED, "REST2", replica, name)
                       for name in ("integrator", "velocities", "barostat")},
             "cuda_device": device_of.get(replica),
@@ -514,7 +514,7 @@ def main(argv=None):
         "tau_max": float(method["tau_max"]),
         "number_of_replicas": int(method["number_of_replicas"]),
         "taus": [float(r["tau"]) for r in replica_records],
-        "derived_scale_factors_s": [scale_factor_for_tau(float(r["tau"]))
+        "rest2_implementation_per_replica": [dict(REST2_IMPLEMENTATION)
                                     for r in replica_records],
         "temperature_kelvin": float(common["temperature_kelvin"]),
         "timestep_fs": TIMESTEP_FS,

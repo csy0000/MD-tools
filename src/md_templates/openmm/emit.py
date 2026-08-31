@@ -211,7 +211,7 @@ def production_protocol(r: dict[str, Any]) -> str:
     phase_steps = (None if not phase_ps else
                    int(round(float(phase_ps) / (r["timestep_fs"] / 1000.0))))
     scaling = ("from runtime_record import write_resolved_run\n" if tau == 0.0 else
-               "from rest2_scaling import build_scaled_system, scale_factor_for_tau\n"
+               "from rest2_scaling import REST2_IMPLEMENTATION, build_scaled_system\n"
                "from runtime_record import write_resolved_run\n"
                "import yaml\n")
     if phase_steps:
@@ -244,7 +244,7 @@ def production_protocol(r: dict[str, Any]) -> str:
     excluded = [tuple(int(a) for a in pair)
                 for pair in (solute.get("rest2") or {{}}).get("omega_excluded_bonds", [])]
     system = build_scaled_system(system, solute_indices, {tau}, excluded_bonds=excluded)
-    print(f"# fixed tau = {tau:g}, s = {{scale_factor_for_tau({tau}):.6f}}, "
+    print(f"# fixed tau = {tau:g}, "
           f"{{len(excluded)}} omega bond(s) left unscaled")
 ''')
     barostat = f'''
@@ -468,7 +468,7 @@ thermostatted at the SAME {r["temperature_K"]} K and differs only by Hamiltonian
 Hamiltonian scaling, not temperature REMD, and an exchange never rescales velocities.
 
     tau ladder : [{ladder}]
-    s = (1-tau)^2 on solute-solute terms, sqrt(s) = 1-tau on solute-environment terms
+    (1-tau)^2 on solute-solute terms, (1-tau) on solute-environment terms
 
 Every interval below is a PHYSICAL time and is independent of the others. Each converts to an
 exact whole number of integration steps; the propagation span between events is derived and is not

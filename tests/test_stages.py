@@ -6,7 +6,6 @@ files that are copied into a generated project.
 """
 from __future__ import annotations
 
-import math
 import time
 
 import pytest
@@ -206,13 +205,15 @@ def test_a_two_replica_ladder_offers_its_pair_in_the_phase_the_runner_falls_back
 
 # --- the scaling convention ------------------------------------------------
 
-def test_the_ladder_scales_solute_solute_by_s_and_solute_environment_by_its_root():
-    """s = (1-tau)^2 and sqrt(s) = (1-tau), applied to charges, epsilons and exceptions."""
+def test_the_ladder_scales_solute_solute_by_the_square_and_solute_environment_linearly():
+    """(1-tau)^2 on solute-solute and (1-tau) on solute-environment, applied to charges,
+    epsilons and exceptions."""
     from openmm import NonbondedForce, System
 
     tau = 0.2
-    s = scaling.scale_factor_for_tau(tau)
-    assert s == pytest.approx(0.64)
+    solute_solute, solute_environment = scaling.scaling_for_tau(tau)
+    assert solute_solute == pytest.approx(0.64)
+    assert solute_environment == pytest.approx(0.8)
 
     system = System()
     force = NonbondedForce()
@@ -227,27 +228,26 @@ def test_the_ladder_scales_solute_solute_by_s_and_solute_environment_by_its_root
 
     scaled = scaling.build_scaled_system(system, [0, 1], tau)
     out = scaled.getForce(0)
-    root = math.sqrt(s)
 
     charge, _, epsilon = out.getParticleParameters(0)
-    assert charge.value_in_unit(charge.unit) == pytest.approx(0.5 * root)
-    assert epsilon.value_in_unit(epsilon.unit) == pytest.approx(0.8 * s)
+    assert charge.value_in_unit(charge.unit) == pytest.approx(0.5 * solute_environment)
+    assert epsilon.value_in_unit(epsilon.unit) == pytest.approx(0.8 * solute_solute)
 
     charge, _, epsilon = out.getParticleParameters(2)
     assert charge.value_in_unit(charge.unit) == pytest.approx(0.2), "environment must not scale"
     assert epsilon.value_in_unit(epsilon.unit) == pytest.approx(0.4)
 
     _, _, product, _, epsilon = out.getExceptionParameters(0)
-    assert product.value_in_unit(product.unit) == pytest.approx(0.1 * s)
-    assert epsilon.value_in_unit(epsilon.unit) == pytest.approx(0.5 * s)
+    assert product.value_in_unit(product.unit) == pytest.approx(0.1 * solute_solute)
+    assert epsilon.value_in_unit(epsilon.unit) == pytest.approx(0.5 * solute_solute)
 
     _, _, product, _, epsilon = out.getExceptionParameters(1)
-    assert product.value_in_unit(product.unit) == pytest.approx(0.2 * root)
-    assert epsilon.value_in_unit(epsilon.unit) == pytest.approx(0.7 * root)
+    assert product.value_in_unit(product.unit) == pytest.approx(0.2 * solute_environment)
+    assert epsilon.value_in_unit(epsilon.unit) == pytest.approx(0.7 * solute_environment)
 
 
 def test_the_cold_rung_is_the_unmodified_system():
-    assert scaling.scale_factor_for_tau(0.0) == 1.0
+    assert scaling.scaling_for_tau(0.0) == (1.0, 1.0)
 
 
 # --- GPU grouping ----------------------------------------------------------

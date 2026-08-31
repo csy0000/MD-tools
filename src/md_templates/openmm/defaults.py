@@ -123,7 +123,7 @@ def ais_defaults() -> dict[str, Any]:
     AIS anneals the REST2 Hamiltonian from `tau_start` to `tau_end` while the coordinates propagate,
     and records the nonequilibrium work. The scaling is the SAME decomposition REST2 uses, so a
     fixed-tau cMD walker, a REST2 rung and an AIS path at the same tau are the same Hamiltonian:
-    `s = (1 - tau)^2` for solute-solute terms and `sqrt(s) = 1 - tau` for solute-environment terms,
+    `(1 - tau)^2` for solute-solute terms and `(1 - tau)` for solute-environment terms,
     with torsions about an omega bond left unscaled. Temperature and beta come from
     `common.temperature_kelvin` and do not change along the path -- this is Hamiltonian switching,
     not temperature annealing.
@@ -409,7 +409,7 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> 
             # unscaled, physical Hamiltonian, and the System is left byte-identical. tau > 0 keeps
             # the same thermostat temperature and scales only the solute Hamiltonian, exactly as
             # the matching REST2 rung does -- it is NOT high-temperature MD, and beta is unchanged.
-            # tau is the SOURCE parameter; s = (1 - tau)^2 is a derived diagnostic.
+            # tau is the ONLY state coordinate; the scale factors are derived, never persisted.
             "tau": 0.0,
             # Only meaningful at tau > 0, and matched to the REST2 default so a fixed-tau walker
             # and the ladder rung at the same tau are the same Hamiltonian.

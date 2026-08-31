@@ -65,7 +65,16 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 import preflight                                                     # noqa: E402
 from md_stages import stage_config_sha256, stage_invariant_sha256    # noqa: E402
-from rest2_scaling import TauSwitcher, scale_factor_for_tau           # noqa: E402
+from rest2_scaling import TauSwitcher, scaling_for_tau                # noqa: E402
+
+
+def _ais_solute_solute_scale(tau):
+    """AIS records `s` and `sqrt_s` in its own switching observations, and datasets
+    written with those columns exist on disk. That schema is AIS's, not REST2's, and
+    renaming it would break readers of data this repository already produced -- so it
+    stays, taking its value from the one REST2 entry point."""
+    return scaling_for_tau(tau)[0]
+
 
 PROJECT = HERE.parent
 CONFIG = yaml.safe_load((PROJECT / "md.config.yaml").read_text())

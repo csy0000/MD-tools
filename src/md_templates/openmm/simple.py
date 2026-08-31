@@ -534,7 +534,7 @@ def format_preset(resolved: dict[str, Any]) -> str:
         scales = ", ".join(f"{s:.4f}" for s in replica["scale_factors"])
         lines += [
             f"{replica['method']} ladder  {replica['n_states']} states, tau [{ladder}]",
-            f"              s = (1-tau)^2 [{scales}]  -- one thermostat at "
+            f"              solute-solute (1-tau)^2 [{scales}]  -- one thermostat at "
             f"{resolved['temperature_K']} K, NOT temperature REMD",
             "              omega-selective: omega torsions "
             + ("left UNSCALED" if replica["omega_exclusion"] else "SCALED"),

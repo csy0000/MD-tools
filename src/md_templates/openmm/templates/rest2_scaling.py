@@ -3,11 +3,11 @@
 This is the AMBER-compatible convention, expressed in tau:
 
     s        = (1 - tau)^2        solute-solute terms
-    sqrt(s)  = (1 - tau)          solute-environment terms
+    (1 - tau)     solute-environment terms
 
 so that for a pairwise nonbonded force
 
-    U_s = s * U_solute-solute  +  sqrt(s) * U_solute-environment  +  U_environment
+    U_tau = (1-tau)^2 * U_solute-solute  +  (1-tau) * U_solute-environment  +  U_environment
 
 Charges scale by sqrt(s) and epsilons by s, which produces exactly that split without needing a
 custom force. Solute torsions scale by s; CMAP maps that are wholly within the solute scale by s.
@@ -20,17 +20,46 @@ describing the scaling, not a second thermostat: beta is common to the whole lad
 
 It lives in the generated project rather than being imported, so a moved project needs only OpenMM.
 """
-import math
 
 from openmm import (CMAPTorsionForce, CustomGBForce, NonbondedForce, PeriodicTorsionForce,
                     XmlSerializer)
 
 
-def scale_factor_for_tau(tau):
-    """s = (1 - tau)^2. tau = 0 is the cold, unscaled replica."""
+#: The Hamiltonian convention this module implements, by name and version.
+#:
+#: It participates in Hamiltonian identity and continuation checks: two runs agree only if they
+#: agree about what "REST2" meant, and that includes which terms are left alone. `tau` is the only
+#: state coordinate. There is deliberately no second variable: a derived quantity that is also
+#: stored is a second thing to keep consistent, and the one that drifts is never the one you check.
+REST2_IMPLEMENTATION = {
+    "name": "rest2-no-bond-angle-omega",
+    "version": 1,
+    "state_coordinate": "tau",
+    "solute_solute_nonbonded_scale": "(1-tau)^2",
+    "solute_environment_nonbonded_scale": "1-tau",
+    "eligible_solute_torsion_scale": "(1-tau)^2",
+    "bonds": "unscaled",
+    "angles": "unscaled",
+    "ordinary_amide_omega": "unscaled",
+}
+
+
+def scaling_for_tau(tau):
+    """The two factors this convention needs, derived from tau once.
+
+    Returned together and passed down, rather than recomputed inside each force handler: a
+    `sqrt()` repeated in three places is three chances for one of them to be changed alone.
+
+        solute_solute_scale       (1 - tau)^2   solute-solute nonbonded, eligible solute torsions
+        solute_environment_scale  (1 - tau)     solute-environment nonbonded
+
+    tau = 0 is the cold, unscaled replica, where both factors are 1.
+    """
     if not 0.0 <= tau < 1.0:
         raise ValueError(f"tau must be in [0, 1); got {tau}")
-    return (1.0 - tau) ** 2
+    solute_solute_scale = (1.0 - tau) ** 2
+    solute_environment_scale = 1.0 - tau
+    return solute_solute_scale, solute_environment_scale
 
 
 def linear_tau_ladder(minimum, maximum, count):
@@ -44,29 +73,34 @@ def clone_system(system):
     return XmlSerializer.deserialize(XmlSerializer.serialize(system))
 
 
-def _scale_nonbonded(force, solute, s):
-    root = math.sqrt(s)
+def _scale_nonbonded(force, solute, solute_solute, solute_environment):
     for index in range(force.getNumParticles()):
         charge, sigma, epsilon = force.getParticleParameters(index)
         if index in solute:
-            force.setParticleParameters(index, charge * root, sigma, epsilon * s)
+            force.setParticleParameters(index, charge * solute_environment, sigma,
+                                        epsilon * solute_solute)
     for index in range(force.getNumExceptions()):
         i, j, charge_product, sigma, epsilon = force.getExceptionParameters(index)
         n_solute = int(i in solute) + int(j in solute)
         if n_solute == 2:
-            force.setExceptionParameters(index, i, j, charge_product * s, sigma, epsilon * s)
+            force.setExceptionParameters(index, i, j, charge_product * solute_solute,
+                                         sigma, epsilon * solute_solute)
         elif n_solute == 1:
-            force.setExceptionParameters(index, i, j, charge_product * root, sigma, epsilon * root)
+            # One solute partner: the cross term follows the solute-environment factor, exactly
+            # as an unexcepted solute-environment pair does.
+            force.setExceptionParameters(index, i, j, charge_product * solute_environment,
+                                         sigma, epsilon * solute_environment)
 
 
-def _scale_torsions(force, solute, s, excluded_bonds):
+def _scale_torsions(force, solute, solute_solute, excluded_bonds):
     for index in range(force.getNumTorsions()):
         i, j, k, l, periodicity, phase, k_value = force.getTorsionParameters(index)
         if all(a in solute for a in (i, j, k, l)) and frozenset((int(j), int(k))) not in excluded_bonds:
-            force.setTorsionParameters(index, i, j, k, l, periodicity, phase, k_value * s)
+            force.setTorsionParameters(index, i, j, k, l, periodicity, phase,
+                                       k_value * solute_solute)
 
 
-def _scale_cmap(force, solute, s):
+def _scale_cmap(force, solute, solute_solute):
     """CMAP maps are shared, so a map used by ANY non-solute torsion must not be scaled in place."""
     solute_maps, other_maps = set(), set()
     for index in range(force.getNumTorsions()):
@@ -75,7 +109,7 @@ def _scale_cmap(force, solute, s):
         (solute_maps if all(a in solute for a in atoms) else other_maps).add(map_index)
     for map_index in sorted(solute_maps - other_maps):
         size, energy = force.getMapParameters(map_index)
-        force.setMapParameters(map_index, size, [e * s for e in energy])
+        force.setMapParameters(map_index, size, [e * solute_solute for e in energy])
 
 
 #: Name of the global parameter injected into every CustomGBForce energy term. Chosen not to clash
@@ -83,13 +117,14 @@ def _scale_cmap(force, solute, s):
 REST2_GB_SCALE_PARAMETER = "rest2_scale_gb"
 
 
-def _scale_customgb(force, system, solute, s):
-    """Scale the ENTIRE generalised-Born energy by `s`.
+def _scale_customgb(force, system, solute, solute_solute):
+    """Scale the ENTIRE generalised-Born energy by the solute-solute factor, `(1 - tau)^2`.
 
     Charge scaling alone is not enough, and this is the part that is easy to get wrong. GBn2 has
-    three energy terms: two are proportional to charge products and would follow `charge*sqrt(s)`
-    correctly, but the third is a non-polar/dispersion correction with no charge dependence. It
-    still has to scale by `s`, and scaling charges leaves it untouched. Multiplying every term by
+    three energy terms: two are proportional to charge products and would follow
+    `charge * (1 - tau)` correctly, but the third is a non-polar/dispersion correction with no
+    charge dependence. It still has to scale by `(1 - tau)^2`, and scaling charges leaves it
+    untouched. Multiplying every term by
     one global parameter scales all three uniformly.
 
     The whole system must be the enhanced region. A GB energy is not decomposable per atom the way
@@ -126,7 +161,7 @@ def _scale_customgb(force, system, solute, s):
 
     index = [force.getGlobalParameterName(i)
              for i in range(force.getNumGlobalParameters())].index(REST2_GB_SCALE_PARAMETER)
-    force.setGlobalParameterDefaultValue(index, float(s))
+    force.setGlobalParameterDefaultValue(index, float(solute_solute))
 
 
 #: Force classes this module knows how to scale. Each has an explicit `_scale_*` implementation.
@@ -194,26 +229,26 @@ def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=(),
     afterwards -- so a path that starts at tau = 0 and moves away from it would have no way to
     scale the generalised-Born energy at all.
     """
-    s = scale_factor_for_tau(tau)
+    solute_solute, solute_environment = scaling_for_tau(tau)
     # Before touching anything: refuse a System carrying an energy term that cannot be placed.
     # Doing this first means the failure is "this System has a force I do not understand", not a
     # half-scaled System that looks finished.
     audit_force_classes(base_system)
     system = clone_system(base_system)
-    if s == 1.0 and not prepare_for_switching:
+    if solute_solute == 1.0 and not prepare_for_switching:
         return system                              # the cold replica is the unmodified system
     solute = set(int(i) for i in solute_indices)
     excluded = {frozenset((int(a), int(b))) for a, b in excluded_bonds}
     for index in range(system.getNumForces()):
         force = system.getForce(index)
         if isinstance(force, NonbondedForce):
-            _scale_nonbonded(force, solute, s)
+            _scale_nonbonded(force, solute, solute_solute, solute_environment)
         elif isinstance(force, PeriodicTorsionForce):
-            _scale_torsions(force, solute, s, excluded)
+            _scale_torsions(force, solute, solute_solute, excluded)
         elif isinstance(force, CMAPTorsionForce):
-            _scale_cmap(force, solute, s)
+            _scale_cmap(force, solute, solute_solute)
         elif isinstance(force, CustomGBForce):
-            _scale_customgb(force, system, solute, s)
+            _scale_customgb(force, system, solute, solute_solute)
     return system
 
 
@@ -281,33 +316,35 @@ class TauSwitcher:
                                    prepare_for_switching=True)
 
     def set_tau(self, context, system, tau):
-        """Change `system`'s Hamiltonian to `tau` and push it into `context`. Returns s.
+        """Change `system`'s Hamiltonian to `tau` and push it into `context`.
+
+        Returns the solute-solute factor, for the caller to record if it wants it.
 
         `system` must be the System the Context was created from -- the one `prepared_system`
         returned -- because `updateParametersInContext` writes through the Force objects the
         Context already holds.
         """
-        s = scale_factor_for_tau(tau)
+        solute_solute, solute_environment = scaling_for_tau(tau)
         for index in range(system.getNumForces()):
             force = system.getForce(index)
             reference = self.base.getForce(index)
             if isinstance(force, NonbondedForce):
                 _restore_nonbonded(force, reference)
-                _scale_nonbonded(force, self.solute, s)
+                _scale_nonbonded(force, self.solute, solute_solute, solute_environment)
                 force.updateParametersInContext(context)
             elif isinstance(force, PeriodicTorsionForce):
                 _restore_torsions(force, reference)
-                _scale_torsions(force, self.solute, s, self.excluded)
+                _scale_torsions(force, self.solute, solute_solute, self.excluded)
                 force.updateParametersInContext(context)
             elif isinstance(force, CMAPTorsionForce):
                 _restore_cmap(force, reference)
-                _scale_cmap(force, self.solute, s)
+                _scale_cmap(force, self.solute, solute_solute)
                 force.updateParametersInContext(context)
             elif isinstance(force, CustomGBForce):
                 # The expressions already carry the global parameter; only its value changes, and
                 # a global parameter is set on the Context rather than pushed through the Force.
-                context.setParameter(REST2_GB_SCALE_PARAMETER, float(s))
-        return s
+                context.setParameter(REST2_GB_SCALE_PARAMETER, float(solute_solute))
+        return solute_solute
 
 
 def _restore_nonbonded(force, reference):

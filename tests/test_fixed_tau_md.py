@@ -72,10 +72,10 @@ def test_tau_zero_returns_the_system_unmodified():
 # --- the generalised-Born energy scales, and scales by s ---------------------
 
 @pytest.mark.parametrize("tau", [1 / 6, 1 / 3, 0.5])
-def test_the_whole_generalised_born_energy_scales_by_s(tau):
+def test_the_whole_generalised_born_energy_scales_by_the_solute_solute_factor(tau):
     """GBn2 carries a non-polar term with no charge dependence; charge scaling would miss it."""
     scaled = scaling.build_scaled_system(_gb_system(), [0, 1, 2], tau)
-    assert _gb_scale_value(scaled) == pytest.approx(scaling.scale_factor_for_tau(tau))
+    assert _gb_scale_value(scaled) == pytest.approx(scaling.scaling_for_tau(tau)[0])
 
 
 def test_a_partial_enhanced_region_is_refused_under_generalised_born():

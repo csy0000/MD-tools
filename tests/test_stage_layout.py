@@ -688,7 +688,9 @@ def test_rest2_records_every_replica_and_the_exchange_lifetime(explicit_run):
 
     seeds = []
     for replica in record["replicas"]:
-        assert replica["derived_scale_factor_s"] == pytest.approx((1 - replica["tau"]) ** 2)
+        assert replica["rest2_implementation"]["name"] == "rest2-no-bond-angle-omega"
+        assert replica["rest2_implementation"]["state_coordinate"] == "tau"
+        assert "s" not in replica, "tau is the only persisted scaling coordinate"
         assert replica["ended_at_step"] >= replica["started_at_step"]
         seeds.extend(replica["seeds"].values())
     assert len(set(seeds)) == len(seeds), "replica seeds repeat"

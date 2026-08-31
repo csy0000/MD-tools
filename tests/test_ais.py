@@ -247,7 +247,7 @@ def test_the_path_definition_records_the_schedule_and_the_conventions(ais_projec
     assert schedule["taus"][0] == 0.5 and schedule["taus"][-1] == 0.0
     assert schedule["number_of_updates"] % 20 == 0
     assert definition["scaling"]["source_parameter"] == "tau"
-    assert "(1 - tau)^2" in definition["scaling"]["derived_s"]
+    assert "rest2-no-bond-angle-omega" in definition["scaling"]["rest2_implementation"]
     assert "U(tau_{j+1}, x_j) - U(tau_j, x_j)" in definition["work_convention"]
     assert definition["ensemble"]["constant_volume"] is True
     assert definition["ensemble"]["barostat"] is None
