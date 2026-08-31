@@ -124,7 +124,7 @@ def default_project(tmp_path_factory):
         if key.endswith("_duration_ps") and value is not None:
             protocol["equilibration"][key] = 0.05
     protocol["REST2"].update({"number_of_replicas": 2, "equilibration_duration_ps": 0.05,
-                              "duration_per_segment_ps": 0.05, "number_of_exchanges": 2,
+                              "exchange_interval_ps": 0.05, "number_of_exchanges": 2,
                               "tau_max": 0.05, "checkpoint_interval_ps": 0.05,
                               "whole_system_interval_ps": 0.05, "solute_interval_ps": 0.05})
     path.write_text(yaml.safe_dump(protocol, sort_keys=False))

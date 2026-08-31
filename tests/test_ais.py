@@ -190,9 +190,12 @@ def test_md_gen_writes_the_standalone_ais_layout(ais_project):
     present = sorted(p.name for p in directory.iterdir())
     # `stage.yaml` is the resolved production request, the same contract cMD and REST2 state. AIS
     # is the last method to carry one; `path_definition.yaml` still records the resolved path the
-    # run itself reads. The set stays EXACT, so any other new file still fails here.
+    # run itself reads. `source_ensemble.py` is the shared reader that draws configurations out of
+    # an equilibrium production run: AIS established those rules and rREST2 needs the same ones, so
+    # they live in one file rather than in two implementations that can drift apart. The set stays
+    # EXACT, so any other new file still fails here.
     assert present == ["path_definition.yaml", "rest2_scaling.py", "run.py", "run.sh",
-                       "stage.yaml"], present
+                       "source_ensemble.py", "stage.yaml"], present
     # Trajectory directories and every runtime record are written by the run, not by md-gen.
     assert not list(directory.glob("trajectory_*"))
     assert not (directory / "resolved_run.yaml").exists()
@@ -244,7 +247,7 @@ def test_the_path_definition_records_the_schedule_and_the_conventions(ais_projec
     assert schedule["taus"][0] == 0.5 and schedule["taus"][-1] == 0.0
     assert schedule["number_of_updates"] % 20 == 0
     assert definition["scaling"]["source_parameter"] == "tau"
-    assert "(1 - tau)^2" in definition["scaling"]["derived_s"]
+    assert "rest2-no-bond-angle-omega" in definition["scaling"]["rest2_implementation"]
     assert "U(tau_{j+1}, x_j) - U(tau_j, x_j)" in definition["work_convention"]
     assert definition["ensemble"]["constant_volume"] is True
     assert definition["ensemble"]["barostat"] is None

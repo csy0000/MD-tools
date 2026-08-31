@@ -1,0 +1,489 @@
+# Replica exchange: REST2 and rREST2, through `openmm-md`
+
+There is **one simulation executor**. A single system and a coordinated ladder are the same
+command with different arguments, exactly as Amber has `pmemd` and `pmemd.MPI -groupfile`:
+
+```bash
+# one system
+openmm-md -i eq/npt_free/npt_free.py -p input/topology.pdb -s input/system.xml \
+          -c min/min.state.xml -o npt_free.out -x npt_free.dcd -r npt_free.state.xml
+
+# a ladder
+mpiexec -n 6 openmm-md -ng 6 --groupfile REST2/rest2.group \
+          -o REST2/rest2.out -x REST2/rest2.nc -r REST2/restart.json \
+          --checkpoint REST2/rest2_checkpoint.nc
+
+# a ladder with a different transition rule
+mpiexec -n 6 openmm-md -ng 6 --groupfile rREST2/rrest2.group \
+          --exchange-rule rREST2/rrest2_exchange.py --reservoir rREST2/reservoir.yaml \
+          -o rREST2/rrest2.out -x rREST2/rrest2.nc -r rREST2/restart.json \
+          --checkpoint rREST2/rrest2_checkpoint.nc
+```
+
+A method is a protocol file plus, when the transitions differ, a rule file. It is never a new
+executable, a new flag namespace and a new set of help text to keep consistent with this one.
+
+## Who owns what
+
+| owned by | what |
+|---|---|
+| **OpenMM** | System, Context, Integrator, State, and every energy evaluation |
+| **MD-templates** | the REST2 Hamiltonian, the ladder, the exchange schedule and rules, the NetCDF schema, checkpointing, restart, validation, statistics |
+| **MD-project** | which systems, which request, the campaign schedule, and where the analysis boundary is |
+
+**OpenMMTools is not imported by generated production code.** It remains available as an optional
+oracle in tests, and the production package and generated runtime work without it installed.
+
+## The science
+
+REST2 is Hamiltonian replica exchange at ONE physical thermostat temperature. tau is persisted;
+everything else is derived:
+
+```
+s        = (1 - tau)^2      solute-solute terms, and solute torsions
+sqrt(s)  = 1 - tau          solute-environment terms
+1                           environment-environment terms
+```
+
+Peptide omega torsions are left **unscaled** -- this repository's omega-selective convention, not
+an unmodified textbook REST2.
+
+Because every rung shares one temperature and one beta, an exchange **never rescales velocities**.
+That rescaling belongs to temperature REMD, where the rungs differ in beta; here it would inject or
+remove energy at every accepted swap. A test asserts no runtime module does it outside the
+reservoir path, where the velocity comes from the reservoir's own stored phase-space sample.
+
+The runtime is **NVT**. It installs no barostat, and a requested pressure is refused: exchanging
+complete configurations under NPT would also have to exchange volumes and carry the pV work, and
+that is deliberately not implemented rather than approximated.
+
+## Four schedules, no `segment_ps`
+
+Exchange, whole-system output, solute output and checkpointing are **four independent schedules**.
+Each is given in picoseconds, each converts to an exact whole number of integration steps, and an
+interval that does not is refused rather than rounded. There is no `segment_ps`: it bundled all
+four into one number, so a solute stream could never be denser than the exchange period. Asking
+for it now raises an error that names what replaced it.
+
+Propagation advances to the next event and never past it. When several events fall on the same
+step they are handled in one fixed order -- `exchange, whole, solute, checkpoint` -- so a frame
+written at an exchange step is the post-exchange state and the checkpoint describes everything
+already written.
+
+## Phase space, not configuration
+
+An rREST2 reservoir stores **positions and velocities and boxes**. A DCD cannot store velocities,
+so a DCD is not a phase-space reservoir and is refused as a source.
+
+Both policies read the **same** source. The phase-space NetCDF is what carries positions, box,
+absolute source step and time, the Hamiltonian identity, the atom identity and the completion
+marker in one auditable file; the policy decides what is done with the recorded momenta and does
+not widen the source format.
+
+`velocity_policy: stored` is the default: the recorded momentum is installed unchanged, which is
+what the probability-one acceptance assumes. It requires finite, correctly shaped, **nonzero**
+velocities in every frame.
+
+`maxwell` is an explicit alternative. It uses the source positions and box and **deliberately
+ignores** the recorded velocity values, redrawing at the one common temperature from a seed
+recorded per refresh -- so any single draw is reproducible from the storage alone. Under MPI only
+the owning rank calls OpenMM's draw and the resulting array is shared, so serial and six ranks
+install identical momenta.
+
+`maxwell` is **not** DCD or coordinate-only support. A DCD carries no Hamiltonian identity, no
+absolute source step and no completion marker, so it satisfies this contract under neither policy.
+A coordinate-only source would need its own versioned, separately validated contract; there is
+none.
+
+There is no silent fallback. Velocities that are missing, the wrong shape, non-finite or
+identically zero are a hard error when the source is opened, never a quiet switch to `maxwell`.
+
+The reservoir is materialised **without replacement**, and asking for it is refused before a
+directory exists. A repeated draw would give one configuration extra statistical weight, make
+`frames` overstate the effective reservoir size, and produce a file this repository's own
+strictly-increasing-step check rejects.
+
+## One Hamiltonian, recomputed on both sides
+
+The reservoir and the rung it refreshes must be the **same complete Hamiltonian**. The comparison
+is a SHA-256 over the canonically serialized OpenMM System plus a digest of the enhanced-region
+selection, and the current side is always **recomputed** -- two stored claims are never compared
+with each other. tau and temperature agreeing is necessary and not sufficient: ff14SB/TIP3P and
+ff19SB/OPC agree on both.
+
+The system compared is the **top rung's scaled** system, not the unscaled reference the ladder is
+built from. The reference is recorded with `tau: null`, which is a different claim from the rung at
+`tau: 0.0`.
+
+The fixed-tau source is generated **with** the ladder, so one input, one force field, one solvation
+model and one equilibrated box are shared by construction rather than by two projects happening to
+agree.
+
+## The representation, chosen once
+
+Contexts are **fixed to thermodynamic states**. Context *i* is built from the System scaled to
+`tau[i]` and never changes Hamiltonian; an accepted exchange moves complete **configurations** --
+positions, velocities and box together -- between two contexts.
+
+The alternative, walkers fixed to contexts with state assignments moving, would need either a
+System rebuild per accepted swap or every rank holding every scaled System. Copying coordinates is
+cheaper than both.
+
+Both views are reconstructable and are tested to invert each other exactly:
+
+```
+state_to_walker[i]   which walker's configuration currently sits in state i   (stored)
+walker_to_state[w]   which state walker w's configuration sits in             (derived)
+```
+
+Every stored mapping row is a permutation, and the validator refuses storage where one is not.
+
+## The group file
+
+Plain text, one group per line, **parsed with `shlex` and never evaluated by a shell** -- a data
+file that can run commands is a vulnerability, not a convenience. Blank lines and `#` comments are
+ignored.
+
+```text
+-i REST2/rest2.py -p input/topology.pdb -s input/system.xml \
+   -c eq/npt_free/npt_free.state.xml --solute input/solute.yaml --group-index 0
+```
+
+Group lines carry **inputs only**. `-o`, `-x`, `-r` and `--checkpoint` appear once on the outer
+command, because they describe the coordinated run rather than one replica of it. Indices are
+unique, contiguous and zero-based, and are stated rather than taken from line order so a reordered
+file still means the same thing. Unknown fields, missing values, duplicates, run-level flags inside
+a group line and index gaps are each refused **by line number**.
+
+## The exchange-rule contract
+
+A rule receives a bounded view -- iteration, exchange count, the mapping, a reduced-potential
+lookup, a dedicated RNG, an optional reservoir, and its own persisted state -- and returns explicit
+proposals and decisions. It never propagates, opens storage, touches MPI or parses a command line.
+
+This is a contract, not a framework: no registry, no plugin discovery, no method database.
+`--exchange-rule FILE.py` loads one file and takes the `rule` object it defines. A later
+non-Boltzmann or kinetic reservoir becomes a new rule file and changes nothing in `openmm-md`.
+
+### The default rule
+
+Conventional neighbouring REST2: one sweep of adjacent pairs per exchange, with a **strictly
+alternating** odd/even schedule. All four reduced potentials of a pair are evaluated
+independently -- never inferred by scaling another energy, because the scaled Hamiltonians differ
+by more than a single factor.
+
+```
+log(alpha) = [u_i(x_i) + u_j(x_j)] - [u_i(x_j) + u_j(x_i)]
+```
+
+The phase alternates on the **exchange-attempt count**, not the iteration number. Exchanges land
+every `exchange_stride` iterations, so an even stride freezes the iteration parity and one phase
+would run forever -- a three-state ladder proposed (1,2) six times and (0,1) not once before this
+was corrected.
+
+## rREST2: a Boltzmann reservoir
+
+`rREST2` refreshes the configuration occupying the **hottest** rung from a finite, pre-generated
+ensemble. Under the v1 contract -- Boltzmann-weighted, at exactly the top rung's tau, temperature,
+Hamiltonian and fixed volume, holding complete configurations -- a refresh is accepted with
+probability one, because the drawn configuration is a sample from the same distribution as the one
+it replaces.
+
+**That is the entire justification, so every clause is checked.** v1 refuses a non-Boltzmann,
+clustered or kinetic reservoir; an NPT reservoir; solute-only insertion; and any mismatch of tau,
+temperature, topology, atom order or box.
+
+> Roitberg, Okur, Simmerling, *J. Phys. Chem. B* 2007, **111**, 2415 (doi:10.1021/jp068335b)
+> introduced reservoir REMD and derived the Boltzmann acceptance rule.
+> Kasavajhala, Lam, Simmerling, *J. Chem. Inf. Model.* 2020, **60**, 1218 (PMCID PMC7725893) show
+> what non-Boltzmann reservoirs require instead, and that using the Boltzmann rule with a reservoir
+> that is not Boltzmann-weighted biases **every** replica -- the ladder propagates the error down.
+
+The **finite-reservoir approximation** is real and is written into every record: N configurations
+are not the top state's full equilibrium distribution, and the assumption that the selected source
+window represents it is an assumption, not a result.
+
+### The order, chosen once
+
+When an exchange iteration and a reservoir attempt coincide, the **neighbouring sweep happens
+first** and the refresh second. A refresh installs a configuration this ladder has not propagated;
+going first would let it be swapped down the ladder in the same iteration, having never been
+propagated in the ladder at all. The order is recorded in the rule's `describe()` and in the
+manifest, never left to scheduling.
+
+### Where the reservoir comes from
+
+A fixed-tau cMD run at the top rung's tau -- `cMD_tau0p5` when `tau_max` is 0.5. **The path is not
+evidence.** tau, temperature, ensemble and the frame-time map come from that run's own
+`resolved_run.yaml`, written where they were decided. A directory name can be renamed or copied,
+and a reservoir drawn from the wrong ensemble runs to completion while being wrong. The prepared
+manifest records `tau_from_directory_name: false`.
+
+## The shared source reader
+
+`source_ensemble.py` holds the rules for drawing configurations out of an equilibrium production
+run. AIS established them; rREST2 needs the same ones; there is one implementation, because a
+second is a second thing that can be wrong and its wrongness would be silent.
+
+- never `mdtraj.load` a production trajectory -- bounded `iterload` only;
+- never hash a production trajectory at run time; record bounded observations instead;
+- a frame index is not a time and a DCD header is not the production clock;
+- source tau is never a directory name, and a declared/recorded conflict is refused, not resolved;
+- atom NAME is not identity -- full per-index identity and bond connectivity are compared;
+- a DCD carries no velocities; momenta are redrawn at the common temperature from a recorded seed;
+- box vectors come from recorded exact values, reduced for OpenMM;
+- the selection is materialised **once** with a manifest, after which the source is never reopened;
+- prepared inputs that disagree with their manifest are **refused**, never silently regenerated.
+
+Two boxes are compared as **lattices**, not as numbers: reduction has a genuine boundary case at
+`|c_x| = a_x/2` where `+a_x/2` and `-a_x/2` describe one rhombic dodecahedron. The check is an
+integer change of basis, which is exact.
+
+## Storage, restart and validation
+
+Four records, four jobs:
+
+| record | written | job |
+|---|---|---|
+| analysis NetCDF (`-x`) | every committed iteration | the authoritative history, plus the scientific identity written **before** propagation begins |
+| checkpoint NetCDF | every `whole_output_stride` | configurations, mapping, RNG states, rule state, iteration and budget |
+| `<stem>.runstate.json` | atomically, on transition | `initialized` → `running` → `completed`/`interrupted`/`failed`; never claims completion |
+| `restart.json` (`-r`) | atomically, at the end | evidence of completion; **never** a precondition for resuming |
+
+Each stream's marker -- `last_exchange`, `last_frame`, `last_solute_frame` -- is written **after**
+every array for that row, so an interrupted write leaves the counter on the previous, complete row.
+A marker can therefore lag its data but never lead it, and a marker ahead of the rows the file
+holds is refused as a file that disagrees with itself.
+
+A **resume continues from the last checkpoint**, not the last committed row: the exchange stream
+commits every attempt while checkpoints are written less often, so an interruption leaves committed
+rows with no configurations behind them. Those rows are rewound. Before anything is opened for
+writing, the stored output is read and validated: markers within their rows, steps strictly
+increasing in every stream, and the stored exchange steps equal to the **scheduled** ones -- a
+dropped attempt in the middle leaves increasing steps and can still reach the budget, so nothing
+else would see it.
+
+`--resume` needs no `restart.json`. `--extend N` requires a run that reached its budget and adds
+exactly N attempts **to the budget that run reached**, not to the one in the protocol file: a run
+already extended once stores a larger budget than the protocol describes, and extending the
+protocol's would produce a total below the steps already run. For the same reason the validator
+treats the identity's `number_of_exchanges` as a **floor** -- an extended run legitimately holds
+more rows than the protocol was created with.
+
+Both flags are **grouped only**. The conventional single-protocol path builds a fresh run -- it
+resets time and step state and creates its reporters from scratch -- so append-safe continuation
+of a cMD stage is not implemented, and asking for it is refused in the validation pass before a
+directory is created, a report is opened or the protocol is imported. A refused invocation leaves
+every existing byte untouched. `--force` is a deliberate fresh-run replacement, not continuation.
+
+An interruption is neither success nor failure and exits with its own status (130). The executor's
+promise check -- "the protocol finished but did not write X" -- applies only to a run that claims
+to have finished.
+
+```bash
+openmm-md --verify-only -x REST2/rest2.nc --checkpoint REST2/rest2_checkpoint.nc \
+          -r REST2/restart.json
+```
+
+The validator **opens and reads** the files. A file that exists is what a crashed run leaves
+behind, so existence is never treated as completion.
+
+## Optional v2 fields, and the rank-0 migration
+
+`md-templates-replica-exchange/v2` has one **optional** field on the `exchange` dimension:
+
+```
+reservoir_velocity_seed[exchange]    i8, -1 where nothing was drawn
+```
+
+It was added to v2 after v2 was first published, so a file written by an earlier build of this
+same schema legitimately lacks it. That is not corruption: v2's meaning did not change, it gained a
+record. Bumping to v3 would have been the heavier answer to a strictly additive change, and would
+have made every existing v2 file unreadable by a runtime that can in fact read it.
+
+Readers tolerate absence and report `-1`, which is the field's **meaning** for those rows rather
+than a placeholder: files that predate it also predate working Maxwell refreshes, and a
+stored-velocity refresh draws no momenta. So an older stored-mode run and a Maxwell run stay
+scientifically distinguishable — the migrated history of the former contains only `-1`.
+
+When rank 0 continues such a file it adds the field **once, before any step is integrated**:
+
+```
+read-only validation of every authoritative file
+  → identity, checkpoint, counters, schedule and continuation request checked, still read-only
+    → close the read-only handle
+      → open the analysis NetCDF for append, rank 0 only
+        → ensure the optional fields exist; initialise existing rows
+          → rewind uncommitted rows, broadcast the decision
+            → propagate
+```
+
+The ordering is the safety property. **A file is never modified merely because it could be
+opened**: an identity mismatch, a corrupt or truncated file, a bad completion marker, a checkpoint
+or schedule disagreement, an invalid `--resume`/`--extend` request or an unsupported schema all
+refuse while the file is still open read-only, and leave every byte unchanged.
+
+An existing field is validated, never deleted or replaced. Wrong dimensions or a non-integer type
+is a refusal, because silently redefining a variable whose provenance is unknown would destroy a
+record.
+
+Migration is never lazy. A schema error surfaces before new dynamics exist, not at the first
+exchange after propagation has begun. `--verify-only` stays read-only and accepts an older file
+without adding anything.
+
+### Migration provenance is cumulative
+
+The first version of this recorded **one** value, `storage_migration`, rewritten by every
+continuation. That was lossy: a later resume or extension that needed no schema change produced a
+no-op record and overwrote the real event, so a completed run could end up with no record that its
+file had ever been a legacy file. The fix is an append-only history, `storage_migrations`.
+
+**Only real events are history.** A continuation with `fields_added: []` changed nothing and
+contributes nothing, so it cannot displace the event before it. A run that never needed a
+migration carries an empty history rather than a fabricated one.
+
+**Each event is content-addressed.** `event_id` is a SHA-256 over the canonical JSON of the event
+minus the id itself, so the same event copied into a manifest and into a run state collapses to
+one entry, while two genuinely different migrations stay separate. Order is first-seen, which is
+the order the migrations happened in — not sorted, because no timestamp here is guaranteed
+comparable across machines.
+
+**The migration is a transaction, and it is not atomic.** An earlier version of this document
+said the event was committed "in the same `sync()`" as the mutation and called that atomic. It was
+not, and the claim is withdrawn. NetCDF offers no transaction: `createVariable`, a backfill and an
+attribute write are three operations, and a `sync()` after them commits only what it reaches.
+Killing a process between them was measured on this build — after the backfill call the file held
+the variable full of HDF5 **fill values** (-9223372036854775806), no history attribute, and nothing
+recording that a migration had ever begun. The reader returned those fill values *as seeds*.
+
+What the migration actually is, is **restartable and idempotent**:
+
+```
+write the intent, sync        from here a crash is detectable
+create missing fields         idempotent; the intent says which fields are this transaction's
+backfill the recorded rows, sync
+append the committed event by its stable id, sync
+clear the intent, sync
+```
+
+Every crash point leaves a file the next continuation can finish:
+
+| killed | what is on disk | what the restart does |
+|---|---|---|
+| before the intent | nothing happened | begins a fresh migration |
+| after the intent | fields may exist holding fill values | the intent names the fields, the row range and the value, so they are rewritten |
+| after the backfill | values correct, event not yet recorded | appends the event |
+| after the commit | event recorded, marker stale | clears the marker; does **not** append twice, because the event carries the id the intent fixed |
+
+The intent — `storage_migration_pending_json` — is what makes a crash detectable at all, and it
+decides which fields belong to the transaction. A crash after `createVariable` leaves the field
+present; without the intent a restart would see nothing missing and record no event.
+
+**A file left by the pre-transaction implementation cannot be repaired.** Field present, fill
+values, no marker, no history: the event that would have explained it was never written and cannot
+be reconstructed. Such a file is refused with that explanation rather than given an invented
+history, and its fill values are refused rather than read as seeds.
+
+### One pending-record validator, used by all three callers
+
+`--verify-only`, the driver's read-only continuation probe and the append-time reconciliation all
+call **`validated_pending_migration()`**. They must, because they answer the same question — *is
+this record trustworthy?* — and a second, looser check drifts from the first.
+
+That is not hypothetical. The driver's probe once called `inspect_optional_exchange_fields()`
+without the pending record, while storage called it *with* one. A migration killed after
+`createVariable` leaves the field physically present holding fill values; inspected without the
+record that looks malformed, so the driver refused a file its own storage layer could reconcile —
+and whether recovery worked at all depended on whether the unsynced variable had happened to reach
+disk.
+
+`reconcilable=True` does not weaken anything. It says only that a **valid** pending transaction may
+be finished by a continuation. An invalid record is refused for verification and for continuation
+alike, and a malformed field with *no* pending record stays refused everywhere.
+
+### The pending record, and what is checked
+
+```yaml
+format:                       md-templates-migration-transaction/v1   # exact
+schema:                       md-templates-replica-exchange/v2        # must match the file
+fields:                       [..]        non-empty, unique, canonically sorted, all known
+definitions:                  {field: {dtype, dimensions}}            # vs the registry
+backfill:                     {field: int}                            # vs the registry
+rows_at_intent:               int
+previous_committed_exchanges: int
+created_utc:                  ISO-8601 with an explicit UTC offset
+transaction_id:               sha256 of the record without this key
+```
+
+Every rule below is checked **read-only**, before anything is created or written:
+
+- **Keys** are exactly this set. Not a minimum — an unexpected key means the record was written by
+  something this build cannot read, and finishing a transaction described in unreadable terms is
+  worse than refusing.
+- **Definitions** are compared against `OPTIONAL_EXCHANGE_FIELDS`, dtype after an explicit
+  normalisation (`numpy.dtype(x).str`, so `i8` and `int64` agree) and dimensions in exact order. A
+  conflicting stored definition is refused, never silently replaced with the current one.
+- **Backfill** values must be plain integers — `True` is an `int` in Python and is not one here —
+  and must equal the registry's `absent_value`. This number is written over every legacy row, so a
+  record that disagrees is refused rather than trusted or "repaired" back to the default.
+- **Counts.** Nothing may propagate or rewind between the intent and its reconciliation, so
+  `rows_at_intent` must **equal** the current physical row count — not merely bound it.
+  `previous_committed_exchanges` must equal the current committed marker, and may be **lower** than
+  `rows_at_intent`: rows can exist past the marker when an earlier run was interrupted between a
+  row write and its checkpoint. Any difference that no supported crash point can produce is
+  refused rather than guessed.
+- **Timestamp** must parse and carry an explicit UTC offset, and is preserved unchanged.
+- **Identity** is recomputed by `migration_transaction_id()` — the one function creation also uses
+  — over the record minus the id, and must match exactly. A mismatch means the record was edited
+  after it was written, and nothing in it can then be trusted to decide what gets created or what
+  value overwrites existing rows. Reconciliation never mints a new id.
+- **Fields already on disk** are checked for dtype and dimensions. Their *values* are treated as
+  incomplete only because a valid record authorises a deterministic backfill; fill values with no
+  valid record remain refused.
+
+**`--verify-only` reports a pending migration and finishes nothing.** A continuation is the only
+thing that reconciles one — treating a pending marker as a reason to refuse everywhere would
+deadlock the file against the one command that can recover it.
+
+**Every authoritative record is merged**, none trusted to be complete: the file's own history, the
+previous completion manifest, and the run state. A run migrated by an earlier build recorded the
+event only in its manifest; an interrupted one, only in its run state.
+
+**Legacy records are normalised.** A meaningful singular `storage_migration` becomes a one-event
+history. A singular no-op is dropped, because it never described a change.
+
+The complete history is persisted in the run state while a run is active, interrupted or complete,
+and in the completion manifest when it finishes — including how many exchanges the file already
+held, which is what explains a leading run of `-1` in a seed history.
+
+`--verify-only` writes none of it. It adds no variable, no attribute, no manifest and no run-state
+update.
+
+Schema knowledge lives in `replica_storage.py` (`OPTIONAL_EXCHANGE_FIELDS`,
+`inspect_optional_exchange_fields()`, `ensure_optional_exchange_fields()`). The driver decides
+*when* to migrate; it never creates a NetCDF variable itself.
+
+## Parallel policy
+
+World size must be **1 or exactly the number of states**. Nothing in between: a policy that
+silently packed several states onto a rank would make the device assignment and the timing
+unreproducible, and "it ran" would stop meaning "it ran the way the record says".
+
+Nothing binds ranks to devices automatically, so every rank binds explicitly and records rank,
+host, visible devices, selected `DeviceIndex`, precision and the states it drives.
+
+At each exchange the **full n x n** reduced-potential matrix is evaluated -- rank *r* computes row
+*r*, which parallelises exactly. That is more work than a neighbouring sweep needs, and the reason
+is that it makes the rule contract a pure lookup with no communication and leaves a complete matrix
+in storage.
+
+## Limitations
+
+- NVT only. NPT exchange is refused, not approximated.
+- v2 reservoirs are Boltzmann-weighted and complete-configuration only.
+- `--extend` and `--resume` are coordinated across ranks at an event boundary; only rank 0 opens
+  the analysis storage for writing, in any mode.
+- Implicit-solvent **ligand** REST2 remains scientifically unvalidated.
+- Smoke runs are picoseconds and validate neither ladder quality nor convergence.
+- The legacy `md-gen --method REST2` loop still exists for the contract-managed route and its
+  existing datasets; it is marked legacy and points at `openmm-md`.

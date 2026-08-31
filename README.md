@@ -26,6 +26,360 @@ Every one of those values is argued, with its evidence classified and its limita
 
 ---
 
+## Conventional MD: `md-openmm setup`
+
+For ordinary cMD this is the whole interface. One small request in, a directory that runs like an
+Amber or GROMACS job out:
+
+```bash
+md-openmm setup --config examples/ALA/setup.yaml
+```
+
+```yaml
+# examples/ALA/setup.yaml -- the entire request
+system: ALA
+input: inputs/structures/example_ace_ala_nme.pdb
+type: peptide            # or: ligand
+solvent: explicit        # or: implicit
+protocol: cMD
+production: 1 ns
+output_interval: 5 ps
+platform: CUDA
+```
+
+Force field, water model, box, ionic strength, integrator, thermostat, barostat and the
+equilibration schedule all come from the preset. `setup` prints the resolved values and asks before
+writing anything. Interactively, `md-openmm setup` with no arguments asks nine questions — the eight fields above
+plus the output location. Both modes show the complete resolved preset and ask before writing;
+`--yes` is what makes a run unattended, and the automated examples pass it.
+
+Anything else is reachable without cluttering the request:
+
+```yaml
+advanced:
+  solvent.padding_nm: 1.2
+  common.timestep_fs: 4.0
+  constraints.hydrogen_mass_amu: 4.0      # 4 fs is refused without this
+  common.temperature_kelvin: 310
+  common.random_seed: 20260828            # honoured: every stage seed derives from it
+```
+
+An `advanced:` key that matches no field is an error, not a silent default.
+
+**The water model is one field, and it selects a coupled set.**
+
+```yaml
+water: OPC        # default: TIP3P
+```
+
+| `water:` | protein | water | `solvent.model` |
+|---|---|---|---|
+| `TIP3P` *(default)* | `amber14-all.xml` | `amber14/tip3p.xml` | TIP3P |
+| `OPC` | `amber19-all.xml` | `amber19/opc.xml` | OPC |
+
+These force fields were parameterised together — ff19SB's amino-acid CMAPs were fit in OPC,
+ff14SB's in TIP3P — so the three values move together or not at all. Overriding one of them through
+`advanced:` is **refused**, naming the inconsistency:
+
+```text
+setup: the solvent selection is not internally consistent: protein 'amber14-all.xml',
+water 'amber19/opc.xml', solvent.model 'TIP3P'. These force fields were parameterised
+together and only the coupled sets are supported ...
+```
+
+Before this check, that combination was generated silently, and OpenMM built the System without
+complaint. TIP3P remains the default: it is what `DEFAULT_SOLVENT` resolves to on the older
+`sys-config` path, so both entry points agree, and it is what every existing dataset used.
+
+Seeds are resolved at generation, not at run time: a base seed (given or generated once) derives a
+distinct integrator and barostat seed per stage, each written as a literal into the protocol and
+printed in the `.out`. A run whose seed was chosen at run time cannot be repeated from its record.
+
+### What it generates
+
+```text
+ALA/
+├── config.yaml            identity, contributor, date, generator version -- not the parameters
+├── paths.sh               the directory map, resolved from $MD_DATA; no machine path
+├── bin/openmm-md          the file interface: stdlib + OpenMM, no scientific opinion
+├── input/                 topology.pdb, system.xml, initial_state.xml, provenance, force field
+├── min/{min.py,min.sh}
+├── eq/nvt_1kcal/{nvt_1kcal.py,nvt_1kcal.sh}
+├── eq/npt_1kcal/{npt_1kcal.py,npt_1kcal.sh}
+├── eq/npt_free/{npt_free.py,npt_free.sh}
+├── cMD/{cmd.py,cmd.sh}
+└── run.sh                 calls the launchers in order; holds no setting of its own
+```
+
+Four pieces, deliberately separate: the `.py` holds the science, `paths.sh` the portable map, the
+`.sh` every concrete path, and `bin/openmm-md` the generic file handling.
+
+Each script is ordinary OpenMM application code with every parameter as a literal — 39 to 60
+non-blank lines, no `md_templates` import, no YAML parsing, no Git, no absolute paths. **The
+directory is detached**: delete this package and every stage still runs.
+
+```bash
+"$MD_DATA/md-project-examples/2026-08/ALA/eq/nvt_1kcal/nvt_1kcal.sh"
+```
+
+Each launcher sources the system's `paths.sh` — which resolves everything from `$MD_DATA` and
+contains no machine path — and passes every concrete file to `openmm-md`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+STAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${STAGE_DIR}/../../paths.sh"
+
+"${OPENMM_MD}" \
+  -i "${NVT_DIR}/nvt_1kcal.py" \
+  -p "${INPUT_DIR}/topology.pdb" \
+  -s "${INPUT_DIR}/system.xml" \
+  -c "${MIN_DIR}/min.state.xml" \
+  -o "${NVT_DIR}/nvt_1kcal.out" \
+  -x "${NVT_DIR}/nvt_1kcal.dcd" \
+  -r "${NVT_DIR}/nvt_1kcal.state.xml" \
+  --checkpoint "${NVT_DIR}/nvt_1kcal.chk" \
+  "$@"
+```
+
+Because the protocol takes its paths as an argument, the same `nvt_1kcal.py` runs against another
+system by changing only the invocation. Move the managed root, export the new `$MD_DATA`, and every
+launcher follows.
+
+or all of it, in order:
+
+```bash
+cd "$MD_DATA/md-project-examples/2026-08/ALA" && ./run.sh
+```
+
+### How this compares with Amber and GROMACS
+
+| Purpose | Amber | GROMACS | MD-OpenMM |
+|---|---|---|---|
+| Stage input | `.in` | `.mdp` and compiled `.tpr` | readable `.py` protocol |
+| Parameterized system | `.prmtop` | `.top`/`.tpr` | `system.xml` and `topology.pdb` |
+| Starting coordinates/state | `.rst7`/`.rst` | `.gro`/`.cpt` | `.state.xml` or prepared coordinates |
+| Text output | `.out` | `.log` | `.out` |
+| Trajectory | `.nc` | `.xtc`/`.trr` | `.dcd` |
+| Restart/checkpoint | `.rst` | `.cpt` | `.state.xml` and `.chk` |
+| Execution | `pmemd.cuda -i ... -o ...` | `gmx mdrun -deffnm ...` | `openmm-md -i ... -o ...` |
+
+This is about the **user-facing file and execution model**, not a claim of feature equivalence
+among the engines. OpenMM's input is executable Python rather than a keyword file, which is a real
+difference: a `.py` can do anything. The generated scripts are deliberately kept close to the
+concise examples in the OpenMM user guide's
+[Running Simulations](https://docs.openmm.org/latest/userguide/application/02_running_sims.html)
+page, so what is on the page is what is in the file.
+
+The same equilibration stage, three ways:
+
+```bash
+# Amber
+pmemd.cuda \
+  -i eq/nvt_1kcal/nvt_1kcal.in \
+  -o eq/nvt_1kcal/nvt_1kcal.out \
+  -p common/topology.prmtop \
+  -c min/min.rst \
+  -x eq/nvt_1kcal/nvt_1kcal.nc \
+  -r eq/nvt_1kcal/nvt_1kcal.rst
+```
+
+```bash
+# GROMACS
+gmx grompp \
+  -f eq/nvt_1kcal/nvt_1kcal.mdp \
+  -c min/min.gro \
+  -p common/topology.top \
+  -o eq/nvt_1kcal/nvt_1kcal.tpr
+
+gmx mdrun -deffnm eq/nvt_1kcal/nvt_1kcal
+```
+
+```bash
+# MD-OpenMM
+openmm-md \
+  -i eq/nvt_1kcal/nvt_1kcal.py \
+  -p input/topology.pdb \
+  -s input/system.xml \
+  -c min/min.state.xml \
+  -o eq/nvt_1kcal/nvt_1kcal.out \
+  -x eq/nvt_1kcal/nvt_1kcal.dcd \
+  -r eq/nvt_1kcal/nvt_1kcal.state.xml \
+  --checkpoint eq/nvt_1kcal/nvt_1kcal.chk
+```
+
+which is exactly what the generated launcher runs, so in practice:
+
+```bash
+eq/nvt_1kcal/nvt_1kcal.sh
+```
+
+OpenMM needs both a topology and a serialized `System`, which is why `-p` and `-s` are separate
+where Amber has one `-p`. The generated `bin/openmm-md` is authoritative for that system: it uses
+only the standard library and OpenMM, and decides nothing scientific — no force field, protocol,
+schedule, restraint, temperature, step count or ensemble. Those are visible in the `.py`.
+
+### The `.out` file
+
+A versioned header a person and a parser can both read, then ordinary `StateDataReporter` output,
+then a completion marker written last — after the state and checkpoint exist, so a crash cannot
+print it:
+
+```text
+MD-OPENMM OUTPUT VERSION: 1
+stage: cMD
+system: ALA
+openmm_version: 8.6.0
+platform: CUDA
+integrator: LangevinMiddleIntegrator
+ensemble: NPT
+temperature_K: 300.0
+timestep_fs: 2.0
+steps: 500000
+duration_ps: 1000.0
+output_interval_ps: 5.0
+frames: 200
+input_state: ../eq/npt_free/npt_free.state.xml
+trajectory: cmd.dcd
+final_state: cmd.state.xml
+checkpoint: cmd.chk
+
+#"Step","Time (ps)","Potential Energy (kJ/mole)",...
+2500,5.0,-25376.1,...
+...
+run_status: completed
+```
+
+Every value is what the script executed, not what a configuration said it should. Each stage resets
+its own clock, so a stage's `.out` describes that stage; lineage is `input_state`.
+
+### Example 2 — phenol, the ligand route
+
+```bash
+md-openmm setup --config examples/phenol-IPH/setup.yaml
+```
+
+```yaml
+system: phenol-IPH
+input: inputs/ligands/phenol_IPH.smi     # Oc1ccccc1
+type: ligand                             # <- the only meaningful difference from ALA
+solvent: explicit
+protocol: cMD
+production: 1 ns
+output_interval: 5 ps
+```
+
+`type: ligand` selects OpenFF Sage 2.2.1 with AM1-BCC charges assigned through AmberTools. No
+partial charge is written by hand and no generated force-field artefact is edited.
+
+**`IPH` is an RCSB Chemical Component Dictionary identifier** — the code for phenol as a ligand
+component ([rcsb.org/ligand/IPH](https://www.rcsb.org/ligand/IPH)) — **not a four-character PDB
+entry accession.** The SMILES is committed rather than downloaded: the CCD is revised, and a build
+that reaches the network cannot say which revision it used.
+
+### Replica exchange: `protocol: REST2` and `protocol: rREST2`
+
+The same request with `protocol: REST2` generates a replica-exchange ladder. There is **one
+simulation executor** -- `openmm-md` -- and a coordinated run is the same command with an
+Amber-like group file:
+
+```bash
+mpiexec -n 6 openmm-md -ng 6 --groupfile REST2/rest2.group \
+    -o REST2/rest2.out -x REST2/rest2.nc -r REST2/restart.json \
+    --checkpoint REST2/rest2_checkpoint.nc
+```
+
+which is what the generated `REST2/rest2.sh` runs, so in practice:
+
+```bash
+REST2/rest2.sh                 # one process, one device
+mpiexec -n 6 REST2/rest2.sh    # one rank per state, each binding its own GPU
+REST2/rest2.sh --resume        # finish an interrupted run; no restart.json needed
+REST2/rest2.sh --extend 200    # add 200 exchange attempts to a completed run
+REST2/rest2.sh --verify-only   # open the stored output and check it, running nothing
+```
+
+The group file is plain text, one state per line, **parsed with `shlex` and never evaluated by a
+shell**. Group lines carry inputs only; `-o`, `-x`, `-r` and `--checkpoint` stay on the outer
+command because they describe the coordinated run:
+
+```text
+-i REST2/rest2.py -p input/topology.pdb -s input/system.xml \
+   -c eq/npt_free/npt_free.state.xml --solute input/solute.yaml --group-index 0
+```
+
+All the science is in a 27-line protocol holding no path at all:
+
+```python
+from replica_runtime import REST2Protocol
+
+protocol = REST2Protocol(
+    tau=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
+    temperature_k=300.0, timestep_fs=4.0,
+    segment_ps=2.0, exchange_interval_ps=10.0,
+    whole_output_interval_ps=10.0, number_of_exchanges=1000,
+)
+```
+
+Every state is thermostatted at the **same** temperature and differs only by Hamiltonian:
+`s = (1-tau)^2` on solute-solute terms, `sqrt(s) = 1-tau` on solute-environment terms. This is
+Hamiltonian scaling, **not** temperature REMD, and an exchange never rescales velocities. Peptide
+omega torsions are left unscaled. The runtime is NVT: it installs no barostat, and exchanging
+complete configurations under NPT is refused rather than approximated.
+
+The exchange schedule, the storage schema, the checkpoint and the validator are all this
+repository's. OpenMM owns System, Context, Integrator, State and every energy evaluation;
+**OpenMMTools is not imported by generated production code at all.**
+
+#### `protocol: rREST2` -- a Boltzmann reservoir
+
+`rREST2` is the same ladder plus one generated exchange rule that periodically refreshes the
+hottest rung from a finite, Boltzmann-weighted reservoir:
+
+```bash
+mpiexec -n 6 openmm-md -ng 6 --groupfile rREST2/rrest2.group \
+    --exchange-rule rREST2/rrest2_exchange.py --reservoir rREST2/reservoir.yaml \
+    -o rREST2/rrest2.out -x rREST2/rrest2.nc -r rREST2/restart.json \
+    --checkpoint rREST2/rrest2_checkpoint.nc
+```
+
+The reservoir comes from a fixed-tau cMD run at exactly the top rung's tau, temperature,
+Hamiltonian and fixed volume, prepared through the same source reader AIS uses. **The source path
+is not evidence**: tau, temperature and the frame-time map come from that run's own
+`resolved_run.yaml`, and a directory called `cMD_tau0p5` establishes nothing.
+
+A refresh is accepted with probability one, and that is correct *only* under this contract, which
+is checked clause by clause. v1 refuses a non-Boltzmann or clustered reservoir, an NPT reservoir,
+solute-only insertion, and any mismatch of tau, temperature, topology, atom order or box. The
+finite-reservoir approximation is stated in every record.
+
+> Roitberg, Okur, Simmerling, *J. Phys. Chem. B* 2007, **111**, 2415 (doi:10.1021/jp068335b);
+> Kasavajhala, Lam, Simmerling, *J. Chem. Inf. Model.* 2020, **60**, 1218 (PMCID PMC7725893).
+
+A later rule -- a non-Boltzmann or kinetic reservoir -- is a new rule file and changes nothing in
+`openmm-md`.
+
+### Registration comes later
+
+A generated system is not a registered dataset. Registration is a separate, future operation:
+
+```bash
+md-data register-system md/ALA --config md/ALA/config.yaml --root "$MD_DATA"
+```
+
+The registrar reads `config.yaml`, the stage scripts, the `.out` files and the artefacts they name,
+computes checksums and writes authoritative registry metadata. None of that belongs in a stage
+script, which is why none of it is there.
+
+---
+
+## The older commands
+
+`sys-config`, `sys-gen` and `md-gen` remain, and REST2 and AIS still go through them. For
+conventional MD, `setup` is the entry point and these are the advanced path — `setup` calls the
+same `sys-gen` system builder, so the science is identical.
+
 ## The six commands
 
 ```bash

@@ -173,7 +173,7 @@ def tiny_project(work: Path, *, solvent: str = "TIP3P", methods=("cMD", "REST2")
     if "REST2" in protocol:
         protocol["REST2"].update({"number_of_replicas": replicas,
                                   "equilibration_duration_ps": SMOKE_STAGE_PS,
-                                  "duration_per_segment_ps": SMOKE_STAGE_PS,
+                                  "exchange_interval_ps": SMOKE_STAGE_PS,
                                   "number_of_exchanges": exchanges, "tau_max": 0.05,
                                   "checkpoint_interval_ps": 0.02,
                                   "whole_system_interval_ps": 0.04,
@@ -252,3 +252,70 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "gpu" in item.keywords:
             item.add_marker(skip)
+
+
+# --- a tiny complete REST2 ladder, shared by the end-to-end and extension suites ----------------
+#
+# Two states, alanine dipeptide in vacuum, CPU, a few seconds. Small enough to be a unit test and
+# real enough to execute the driver's loop, which nothing that reads source can do.
+
+TAUS = [0.0, 0.3]
+EXCHANGES = 6
+
+
+PROTOCOL = f"""
+from replica_runtime import REST2Protocol
+
+protocol = REST2Protocol(
+    tau={TAUS!r},
+    temperature_k=300.0,
+    timestep_fs=1.0,
+    exchange_interval_ps=0.05,
+    whole_output_interval_ps=0.05,
+    solute_output_interval_ps=0.05,
+    checkpoint_interval_ps=0.15,
+    number_of_exchanges={EXCHANGES},
+    platform="CPU",
+)
+"""
+
+
+@pytest.fixture(scope="session")
+def prepared(tmp_path_factory):
+    """Alanine dipeptide in vacuum, serialised the way a generated stage would leave it."""
+    from openmm import XmlSerializer, unit
+    from openmm.app import ForceField, PDBFile
+
+    work = tmp_path_factory.mktemp("grouped")
+    pdb = PDBFile(str(ALA_PDB))
+    field = ForceField("amber14-all.xml")
+    system = field.createSystem(pdb.topology, constraints=None, removeCMMotion=False)
+
+    (work / "system.xml").write_text(XmlSerializer.serialize(system), encoding="utf-8")
+    with open(work / "topology.pdb", "w") as handle:
+        PDBFile.writeFile(pdb.topology, pdb.positions, handle)
+
+    # The coordinates a stage hands on are a serialised State, not a PDB: they carry velocities,
+    # which a continuation needs and a PDB cannot hold.
+    from openmm import LangevinMiddleIntegrator, Platform
+    from openmm.app import Simulation
+
+    simulation = Simulation(pdb.topology, system,
+                            LangevinMiddleIntegrator(300.0 * unit.kelvin, 1.0 / unit.picosecond,
+                                                     1.0 * unit.femtosecond),
+                            Platform.getPlatformByName("CPU"))
+    simulation.context.setPositions(pdb.positions)
+    simulation.minimizeEnergy(maxIterations=50)
+    simulation.context.setVelocitiesToTemperature(300.0 * unit.kelvin, 20260831)
+    opened = simulation.context.getState(getPositions=True, getVelocities=True)
+    (work / "coordinates.xml").write_text(XmlSerializer.serialize(opened), encoding="utf-8")
+    (work / "protocol.py").write_text(PROTOCOL, encoding="utf-8")
+
+    lines = []
+    for index in range(len(TAUS)):
+        lines.append(f"-i protocol.py -p topology.pdb -s system.xml -c coordinates.xml "
+                     f"--group-index {index}")
+    (work / "ladder.group").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return work, pdb.topology.getNumAtoms(), unit
+
+

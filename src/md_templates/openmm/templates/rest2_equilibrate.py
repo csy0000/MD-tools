@@ -7,7 +7,7 @@ the same device policy exchange production uses, from the same helper.
 Every replica starts from the SAME finalized common equilibration state -- the one `cMD/run.py`
 also starts from -- then applies its own tau-scaled Hamiltonian and relaxes under it. That
 relaxation is what this script does, and it is NOT exchange production: no exchange is attempted
-here and none of these steps count towards `duration_per_segment_ps * number_of_exchanges`.
+here and none of these steps count towards `exchange_interval_ps * number_of_exchanges`.
 
     input  : ../<last common stage>/final_state.xml   (the same file for every replica)
     output : replica_NN/equilibration/{stage.log, stage.csv, checkpoint.chk, final_state.xml,
@@ -34,7 +34,8 @@ from md_stages import (active_barostat_count, add_barostat, add_positional_restr
                        propagate_segment, require_parent_state, resolve_platform,
                        restraint_strength, set_restraint, steps_for, write_final_pdb,
                        write_final_state)
-from rest2_scaling import build_scaled_system, linear_tau_ladder, scale_factor_for_tau
+from rest2_scaling import (REST2_IMPLEMENTATION, build_scaled_system,
+                           linear_tau_ladder)
 
 CONFIG = yaml.safe_load((HERE.parent / "md.config.yaml").read_text())
 INPUTS = (HERE.parent / CONFIG["paths"]["inputs_folder"]).resolve()
@@ -203,7 +204,7 @@ def main(argv=None):
             potentialEnergy=True, temperature=True, volume=not implicit, append=done > 0))
 
         active = active_barostat_count(simulation)
-        print(f"[remd-eq] replica {replica}: tau {tau:.3f}, s = {scale_factor_for_tau(tau):.4f}, "
+        print(f"[remd-eq] replica {replica}: tau {tau:.3f}, "
               f"device {device_of.get(replica)}, seeds {seeds}, {active} active barostat(s), "
               f"{steps - done:,} steps to run", flush=True)
         if steps - done > 0:
@@ -218,7 +219,7 @@ def main(argv=None):
             "ensemble": method["ensemble"],
             "implicit_solvent": implicit,
             "tau": tau,
-            "scale_factor_s": scale_factor_for_tau(tau),
+            "rest2_implementation": dict(REST2_IMPLEMENTATION),
             "duration_ps": float(method["equilibration_duration_ps"]),
             "steps": steps,
             "restraint_k_kcal_mol_a2": 0.0,

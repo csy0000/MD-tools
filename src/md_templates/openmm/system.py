@@ -704,6 +704,10 @@ def _amide_candidates(topology, solute: set[int]) -> list[dict]:
             "bond": (int(c.index), int(n.index)),
             "carbon": int(c.index), "nitrogen": int(n.index),
             "carbon_residue": c.residue.name, "nitrogen_residue": n.residue.name,
+            # The residue INDEX as well as the name: a chain with eleven alanines gives a reader
+            # nothing to act on if the evidence says only "ALA".
+            "carbon_residue_index": int(c.residue.index),
+            "nitrogen_residue_index": int(n.residue.index),
             "inter_residue": c.residue.index != n.residue.index,
             "ambiguous": reason,
         })

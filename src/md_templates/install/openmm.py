@@ -35,6 +35,13 @@ CONDA_PACKAGES = (
     "parmed",                 # prmtop/rst7 <-> OpenMM, used by the implicit route
     "rdkit",                  # SMILES -> 3D conformer for the ligand route
     "mdtraj",                 # reads the source DCD and its box vectors for the AIS method
+    # REST2 runs on openmmtools.multistate.ReplicaExchangeSampler. The version is EXACT because
+    # `rest2_openmmtools.py` subclasses private methods of it and refuses any other version; see
+    # TESTED_OPENMMTOOLS_VERSION there. netcdf4 is the multistate storage layer and is named here
+    # rather than left to openmmtools' own dependencies, because a REST2 run that cannot open its
+    # storage has nowhere to put its results.
+    "openmmtools=0.26.0",
+    "netcdf4",
 )
 
 #: Imports that must succeed, and the package that provides each. A missing one is named rather
@@ -51,6 +58,10 @@ REQUIRED_IMPORTS = (
     # runtime that reads a whole-system DCD and its periodic box vectors, so an environment without
     # mdtraj can generate an AIS project it cannot run.
     ("mdtraj", "mdtraj"),
+    # REST2 is one of the three advertised methods and is now an OpenMMTools calculation, so an
+    # environment without these can generate a REST2 project it cannot run.
+    ("openmmtools", "openmmtools=0.26.0"),
+    ("netCDF4", "netcdf4"),
 )
 
 #: AmberTools executables the two routes shell out to.
@@ -640,7 +651,8 @@ def detect_nvidia():
 out["nvidia"] = detect_nvidia()
 
 for module in ("openmm", "yaml", "numpy", "openff.toolkit", "openff.nagl_models",
-               "openmmforcefields", "parmed", "rdkit", "mdtraj"):
+               "openmmforcefields", "parmed", "rdkit", "mdtraj",
+               "openmmtools", "netCDF4", "pymbar"):
     try:
         loaded = importlib.import_module(module)
         version = getattr(loaded, "__version__", None)
@@ -695,6 +707,62 @@ out["plugin_load_failures"] = list(openmm.Platform.getPluginLoadFailures())
 out["openmm_version"] = openmm.version.version
 out["openmm_short_version"] = openmm.version.short_version
 out["openmm_git_revision"] = getattr(openmm.version, "git_revision", "") or ""
+
+
+def rest2_stack():
+    # What a REST2 ladder needs, reported together because a run needs ALL of it: the engine, its
+    # storage, the platform it will pick, and -- for a multi-GPU run -- which devices exist to bind
+    # ranks to. mpiplus ships with openmmtools but does nothing without mpi4py and a working MPI,
+    # so the two are reported separately: mpiplus present and mpi4py absent means single-process
+    # only, which is a supported configuration and not a fault.
+    stack = {
+        "openmmtools": out["versions"].get("openmmtools"),
+        "openmmtools_tested_version": "0.26.0",
+        "netCDF4": out["versions"].get("netCDF4"),
+        "pymbar": out["versions"].get("pymbar"),
+        "openmm": out.get("openmm_version"),
+    }
+    stack["openmmtools_is_tested_version"] = (
+        stack["openmmtools"] == stack["openmmtools_tested_version"])
+    try:
+        importlib.import_module("mpiplus")
+        stack["mpiplus"] = "present"
+    except Exception:
+        stack["mpiplus"] = None
+    try:
+        stack["mpi4py"] = importlib.import_module("mpi4py").__version__
+    except Exception:
+        stack["mpi4py"] = None
+    stack["mpi_multi_gpu_ready"] = bool(stack["mpiplus"] and stack["mpi4py"])
+    # The platform a generated REST2 run would select, and the devices it could bind ranks to.
+    stack["selected_platform"] = "CUDA" if out["cuda_available"] else (
+        "CPU" if "CPU" in out["platforms"] else None)
+    devices = []
+    if out["cuda_available"]:
+        from openmm import Context, System, VerletIntegrator
+        cuda = openmm.Platform.getPlatformByName("CUDA")
+        for index in range(64):
+            probe = System()
+            probe.addParticle(1.0)
+            try:
+                context = Context(probe, VerletIntegrator(0.001), cuda,
+                                  {"DeviceIndex": str(index)})
+            except Exception:
+                break
+            try:
+                devices.append({"device_index": index,
+                                "name": context.getPlatform().getPropertyValue(
+                                    context, "DeviceName")})
+            except Exception:
+                devices.append({"device_index": index, "name": None})
+            del context
+    stack["cuda_devices"] = devices
+    stack["cuda_device_count"] = len(devices)
+    stack["cuda_visible_devices"] = os.environ.get("CUDA_VISIBLE_DEVICES")
+    return stack
+
+
+out["rest2_stack"] = rest2_stack()
 
 
 def conda_package(name):

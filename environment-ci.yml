@@ -40,6 +40,15 @@ dependencies:
   - rdkit                     # SMILES -> 3D conformer
   - mdtraj                    # reads the AIS source DCD and its box vectors
 
+  # --- the REST2 engine -------------------------------------------------------------------------
+  # REST2 runs on openmmtools.multistate.ReplicaExchangeSampler. The version is EXACT because
+  # templates/rest2_openmmtools.py subclasses private methods of it and refuses any other version.
+  - openmmtools=0.26.0
+  - netcdf4                   # the multistate NetCDF storage a REST2 run writes and restarts from
+  # mpi4py is deliberately ABSENT: single-process and single-GPU REST2 are fully supported, and a
+  # CI runner has no second device to bind a second rank to. Multi-GPU REST2 needs `mpi4py` and a
+  # working MPI, installed alongside; `md-template install --validate` reports whether it is there.
+
   # cuda-version is deliberately ABSENT: the runners are CPU-only. OpenMM still provides the
   # Reference and CPU platforms, which is what the smoke tests use.
 

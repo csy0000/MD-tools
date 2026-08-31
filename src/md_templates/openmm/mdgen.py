@@ -219,6 +219,10 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
             # md-gen; the trajectory directories and every runtime record are written by the run.
             shutil.copy2(TEMPLATES / "ais_run.py", directory / "run.py")
             shutil.copy2(TEMPLATES / "rest2_scaling.py", directory / "rest2_scaling.py")
+            # The shared source-ensemble reader. AIS and rREST2 both draw configurations out of an
+            # equilibrium production run, and the rules for doing that safely live in one file so
+            # a second implementation cannot drift from it.
+            shutil.copy2(TEMPLATES / "source_ensemble.py", directory / "source_ensemble.py")
             write_yaml(directory / "path_definition.yaml",
                        _ais_path_definition(resolved, implicit=implicit),
                        header="# The AIS path, its schedule and its work convention, resolved\n"
@@ -227,6 +231,13 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
             _write_launcher(TEMPLATES / "stage_run.sh", directory / "run.sh",
                             "AIS switching paths")
         else:
+            # The LEGACY exchange loop. The production REST2 engine is OpenMMTools, reached
+            # through `md-openmm setup` with `protocol: REST2`; this route keeps its own loop
+            # because the datasets already generated through it depend on its on-disk layout,
+            # and invalidating their provenance would be worse than keeping a legacy path that
+            # says so. The two agree by construction: one `exchange_log_acceptance`, one
+            # `exchange_pairs`, and a test that their decisions match. See
+            # docs/openmmtools-rest2.md.
             shutil.copy2(TEMPLATES / "rest2_run.py", directory / "run.py")
             shutil.copy2(TEMPLATES / "rest2_equilibrate.py", directory / "equilibrate.py")
             shutil.copy2(TEMPLATES / "rest2_scaling.py", directory / "rest2_scaling.py")
@@ -538,8 +549,7 @@ def _ais_path_definition(resolved: dict[str, Any], *, implicit: bool) -> dict[st
             # tau is the SOURCE parameter; the other two are labelled derived and are never read
             # back in as input.
             "source_parameter": "tau",
-            "derived_s": "s = (1 - tau)^2, scaling solute-solute terms",
-            "derived_sqrt_s": "sqrt(s) = 1 - tau, scaling solute-environment terms",
+            "rest2_implementation": "rest2-no-bond-angle-omega/v2; tau is the only coordinate",
             "implementation": "rest2_scaling.TauSwitcher, the same decomposition a static REST2 "
                               "rung is built with",
             "enhanced_region": path["enhanced_region"],

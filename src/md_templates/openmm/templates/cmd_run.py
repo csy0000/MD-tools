@@ -41,7 +41,7 @@ from md_stages import (stage_config_sha256, stage_invariant_sha256, sha256_file,
                        require_parent_state, resolve_platform, restraint_strength,
                        set_barostat_frequency, set_restraint, steps_for, trajectory_record,
                        trim_to_checkpoint, utc_now, write_final_state, write_yaml_atomic)
-from rest2_scaling import build_scaled_system, scale_factor_for_tau
+from rest2_scaling import REST2_IMPLEMENTATION, build_scaled_system
 
 CONFIG = yaml.safe_load((HERE.parent / "md.config.yaml").read_text())
 INPUTS = (HERE.parent / CONFIG["paths"]["inputs_folder"]).resolve()
@@ -137,7 +137,7 @@ def main(argv=None):
                                 barostat_frequency_steps=BAROSTAT_FREQUENCY_STEPS,
                                 solute_indices=SOLUTE_INDICES, scale_system=scale)
     if TAU:
-        print(f"[cMD] fixed tau = {TAU:g}, s = {scale_factor_for_tau(TAU):.6f}, "
+        print(f"[cMD] fixed tau = {TAU:g}, "
               f"sqrt(s) = {1.0 - TAU:.6f}, {len(OMEGA_EXCLUDED)} omega bond(s) unscaled")
         print(f"[cMD] thermostat stays at {TEMPERATURE}; this is Hamiltonian scaling, "
               "not high-temperature MD")
@@ -226,8 +226,7 @@ def main(argv=None):
         "kind": "fixed_tau_md" if TAU else "conventional_md",
         "ensemble": method["ensemble"],
         "tau": TAU,
-        "derived_scale_factor_s": scale_factor_for_tau(TAU),
-        "derived_solute_environment_coupling_sqrt_s": 1.0 - TAU,
+        "rest2_implementation": dict(REST2_IMPLEMENTATION),
         "omega_exclusion": bool(method.get("omega_exclusion", True)) and bool(TAU),
         "omega_excluded_bonds": [list(map(int, b)) for b in OMEGA_EXCLUDED] if TAU else [],
         "temperature_kelvin": float(common["temperature_kelvin"]),

@@ -5,6 +5,7 @@ Four subcommands and no state between them: each reads files and writes files.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -115,6 +116,96 @@ def cmd_show_default(args) -> int:
     return 0
 
 
+def _ask(prompt: str, default: str, choices: tuple[str, ...] = ()) -> str:
+    """One interactive question. Enter takes the default, which is always shown."""
+    hint = f" [{'/'.join(choices)}]" if choices else ""
+    while True:
+        answer = input(f"  {prompt}{hint} ({default}): ").strip() or default
+        if not choices or answer.lower() in [c.lower() for c in choices]:
+            return answer
+        print(f"    choose one of {', '.join(choices)}")
+
+
+def cmd_setup(args) -> int:
+    """One small request in, a runnable OpenMM directory out."""
+    from ..openmm.simple import (SetupRequest, format_preset, generate, resolve,
+                                 resolve_contributor, resolve_output_root)
+
+    # Prompting is governed by --yes and by whether a terminal is attached, NOT by --config.
+    # A config file says what to build; it does not say that nobody is watching. `--yes` is the
+    # explicit "do not ask me" and must never prompt, config or no config.
+    may_prompt = not args.yes and sys.stdin.isatty()
+    if args.config:
+        document = yaml.safe_load(Path(args.config).read_text(encoding="utf-8")) or {}
+    else:
+        print("md-openmm setup -- press Enter to accept each default\n")
+        document = {
+            "input": _ask("input structure", "inputs/ALA.pdb"),
+            "system": _ask("system name", "ALA"),
+            "type": _ask("system type", "peptide", ("peptide", "ligand")),
+            "solvent": _ask("solvent", "explicit", ("explicit", "implicit")),
+            "protocol": _ask("protocol", "cMD", ("cMD",)),
+            "production": _ask("production duration", "1 ns"),
+            "output_interval": _ask("trajectory output interval", "5 ps"),
+            "platform": _ask("platform", "automatic", ("CUDA", "CPU", "automatic")),
+            "output": _ask("output location (under $MD_DATA)", os.environ.get("MD_DATA", "")),
+        }
+
+    contributor_field = document.pop("contributor", None)
+    try:
+        request = SetupRequest.from_document(document)
+        resolved = resolve(request)
+        contributor = resolve_contributor({"contributor": contributor_field},
+                                          interactive=may_prompt)
+        output_root, relative_project = resolve_output_root(args.output or request.output)
+    except ConfigError as error:
+        raise SystemExit(f"setup: {error}")
+
+    if args.advanced:
+        print("\nAdvanced settings are set through `advanced:` in the request, dotted by path:\n")
+        for line in ("advanced:",
+                     "  solvent.padding_nm: 1.2",
+                     "  common.timestep_fs: 4.0",
+                     "  constraints.hydrogen_mass_amu: 4.0     # 4 fs is refused without this",
+                     "  common.temperature_kelvin: 310",
+                     "  common.random_seed: 20260828",
+                     "",
+                     "ff19SB/OPC is a COUPLED selection -- the protein and water force fields must",
+                     "change together, and setting only the water XML would pair ff14SB with OPC:",
+                     "  forcefield.protein: amber19-all.xml",
+                     "  forcefield.water: amber19/opc.xml"):
+            print(f"  {line}")
+        print()
+
+    print("\nResolved preset:\n")
+    print(format_preset(resolved))
+    print(f"\n  contributor   {contributor['name']}"
+          + (f" <{contributor['email']}>" if contributor.get("email") else ""))
+    print(f"  output        {output_root / resolved['system_id']}")
+    print(f"  portable as   $MD_DATA/{relative_project}/{resolved['system_id']}\n")
+
+    # `--yes` is what makes a run unattended. Without it BOTH modes ask, config-driven included:
+    # a config file says what to build, not that nobody wants to see it first.
+    if not args.yes:
+        if input("  generate? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("  nothing written")
+            return 0
+
+    try:
+        result = generate(resolved, input_path=Path(request.input), output_root=output_root,
+                          relative_project=relative_project, contributor=contributor,
+                          overwrite=args.overwrite)
+    except ConfigError as error:
+        raise SystemExit(f"setup: {error}")
+
+    print(f"\n  wrote {result['system_dir']}")
+    for name in result["written"]:
+        print(f"    {name}")
+    print(f"\n  run every stage:  cd {result['system_dir']} && ./run.sh")
+    print(f"  or one at a time: {result['system_dir']}/min/min.sh")
+    return 0
+
+
 def cmd_sys_gen(args) -> int:
     from ..openmm.sysgen import generate_system
 
@@ -184,7 +275,23 @@ def build_parser() -> argparse.ArgumentParser:
                            "convenience.")
     show.set_defaults(func=cmd_show_default)
 
-    sysgen = sub.add_parser("sys-gen", help="build the OpenMM system")
+    setup = sub.add_parser(
+        "setup", help="one small request -> a runnable OpenMM directory",
+        description="Resolve a small request against this repository's validated defaults and "
+                    "write a runnable OpenMM directory: one readable script per stage, run "
+                    "directly, writing a .out beside it.")
+    setup.add_argument("--config", help="setup.yaml; omit for the interactive prompts")
+    setup.add_argument("--output", help="storage root; defaults to $MD_DATA")
+    setup.add_argument("--advanced", action="store_true",
+                       help="show how to override force field, box, timestep and the rest")
+    setup.add_argument("--overwrite", action="store_true",
+                       help="allow generating over a non-empty system directory")
+    setup.add_argument("-y", "--yes", action="store_true",
+                   help="do not ask before writing; required for unattended use")
+    setup.set_defaults(func=cmd_setup)
+
+    sysgen = sub.add_parser("sys-gen", help="build the OpenMM system (advanced; `setup` is the "
+                                            "normal entry point)")
     sysgen.add_argument("-i", "--input", required=True,
                         help="structure (.pdb) or a file containing a SMILES string")
     sysgen.add_argument("--config", required=True, help="sys.config.yaml")
