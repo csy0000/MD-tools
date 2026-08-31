@@ -15,9 +15,7 @@ PLATFORM_POLICY_EXEMPTION: git and the filesystem. Nothing runs.
 """
 from __future__ import annotations
 
-import os
 import subprocess
-from pathlib import Path
 
 import pytest
 
