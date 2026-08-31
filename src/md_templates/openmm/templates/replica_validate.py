@@ -117,15 +117,18 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
     # An unfinished migration transaction is reported, never finished. Validation is read-only:
     # it must not create the field, backfill it, commit the event or clear the marker, because a
     # user who asked to inspect a file did not ask to change it.
+    # The SAME strict validator the driver and the reconciliation use. An invalid record is a
+    # reported failure here, never something quietly downgraded to "reconcilable".
     try:
-        pending = reporter.pending_migration()
+        pending = reporter.validated_pending_migration()
     except Exception as failure:                            # noqa: BLE001 - reported, not raised
         pending = None
-        result.fail(f"the pending-migration record could not be read "
+        result.fail(f"the pending-migration record is not usable "
                     f"({type(failure).__name__}: {failure})")
     if pending:
         result.note("pending_migration_fields", list(pending.get("fields") or []))
         result.note("pending_migration_transaction", pending.get("transaction_id"))
+        result.note("pending_migration_created_utc", pending.get("created_utc"))
         if reconcilable:
             # A CONTINUATION is about to reconcile this, so it is a state to report, not a reason
             # to refuse. Failing here instead would be a deadlock: the only thing that can finish

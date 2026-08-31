@@ -409,6 +409,32 @@ class ReplicaRun:
             # provenance must never replace the exception that brought us here.
             return None
 
+    def read_only_probe(self):
+        """Everything the continuation needs to know before it may write anything.
+
+        Extracted so it can be exercised directly: the ordering here IS the safety property, and a
+        test that only searched the source for a keyword would not notice it moving.
+
+        The pending record is validated STRICTLY, read-only, and then handed to the field
+        inspection. Without it the inspection cannot tell an unfinished transaction from a corrupt
+        file -- a migration killed after `createVariable` leaves the field physically present
+        holding HDF5 fill values, and inspecting it blind classified that as malformed and refused.
+        Recovery then depended on whether the unsynced variable had happened to reach disk. It is
+        the same validator `--verify-only` and the reconciliation use: one contract, not three.
+        """
+        probe = storage.ReplicaReporter(self.files.trajectory, mode="r")
+        try:
+            pending = probe.validated_pending_migration()
+            return {
+                "identity": probe.identity,
+                "committed": probe.last_exchange(),
+                "pending": pending,
+                "optional_fields": probe.inspect_optional_exchange_fields(pending=pending),
+                "file_history": probe.migration_history(),
+            }
+        finally:
+            probe.close()
+
     def _previous_manifest(self):
         """The completion manifest of the run being continued, if it wrote one.
 
@@ -452,14 +478,18 @@ class ReplicaRun:
             # PHASE 1 -- READ ONLY. Every reason to refuse is established while the file is open
             # for reading and nothing can be written. A file must never be modified merely because
             # it could be opened, and the optional-field migration below is a modification.
-            probe = storage.ReplicaReporter(self.files.trajectory, mode="r")
-            try:
-                stored = probe.identity
-                committed = probe.last_exchange()
-                optional_fields = probe.inspect_optional_exchange_fields()
-                file_history = probe.migration_history()
-            finally:
-                probe.close()
+            probed = self.read_only_probe()
+            stored = probed["identity"]
+            committed = probed["committed"]
+            pending = probed["pending"]
+            optional_fields = probed["optional_fields"]
+            file_history = probed["file_history"]
+
+            if pending:
+                print(f"# pending migration   : transaction {pending['transaction_id'][:12]} for "
+                      f"{pending['fields']} is unfinished and will be reconciled before any step "
+                      f"is propagated")
+                sys.stdout.flush()
 
             # Every authoritative record that could carry migration history, all read-only. The
             # file is the durable authority for its own schema, but a run migrated by an earlier
