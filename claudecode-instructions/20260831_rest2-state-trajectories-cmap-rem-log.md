@@ -303,3 +303,87 @@ Create an execution journal in each repository recording exact commits, environm
 Run all applicable unit, integration, formatting, linting, generation, restart, verify-only, cpptraj, CUDA, and MPI checks. Inspect generated outputs and Git status. Make logical commits. Push each branch only after its local suite passes. Do not merge into `dev` or `main`.
 
 Stop and report rather than inventing Amber field semantics, silently migrating incompatible trajectory files, weakening restart validation, or claiming hardware/parser validation that was unavailable.
+
+
+## 13. Replace old machine test data with one human-readable validation dataset
+
+Before running the new hardware validation, inventory the old generated test data under the immediate entries matching:
+
+```text
+/path/to/MD_DATA*
+```
+
+The wildcard is for discovery only. Never pass `/path/to/MD_DATA*` or another unresolved glob to `rm`, `mv`, `find -delete`, or any recursive destructive command.
+
+Resolve every candidate to an explicit absolute path and classify it using its manifests, journals, completion records, ownership, and repository references. Remove only obsolete generated REST2/rREST2 validation datasets made by the preceding implementation attempts. Preserve:
+
+- source structures and configuration inputs;
+- accepted or archived scientific datasets;
+- unrelated projects;
+- any directory whose ownership or purpose is uncertain;
+- the new validation dataset;
+- repository fixtures such as the committed small ALA PDB.
+
+Before removal, record an inventory in the execution journal containing each exact path, its classification, why it is obsolete, and whether another committed file references it. Prefer a recoverable same-filesystem move into one explicitly named quarantine/trash directory when practical. If the old data cannot be distinguished safely, stop and report the candidates rather than guessing. After cleanup, confirm the old confusing `MD_DATA*` validation roots are gone or quarantined and report exactly what happened and how it can be recovered.
+
+Use one human-readable canonical validation root for the new run. Unless the installed MD-data contract requires a different exact structure, use the semantic shape:
+
+```text
+/path/to/MD_DATA/validation/2026-08/alanine-dipeptide-nvt-rest2/
+├── inputs/
+├── common/
+├── REST2/
+└── REST2_ext1/
+```
+
+Do not create numbered roots such as `MD_DATA2`, `MD_DATA_test3`, or names encoding implementation attempts. Record the actual chosen canonical path and why it satisfies the current MD-data contract. Paths in committed configuration remain portable; machine-specific absolute paths belong only in ignored local configuration and the execution journal.
+
+## 14. ALA 5 ns run plus a separate 5 ns extension example
+
+After all unit, short smoke, parser, restart, and dry-run checks pass, perform one human-readable ALA NVT REST2 validation example:
+
+```text
+REST2/       initial 5 ns per state
+REST2_ext1/  one genuine additional 5 ns continuation per state
+```
+
+The initial `REST2/` run must use the completed fixed-state output design:
+
+```text
+REST2/
+├── remd0.nc ... remdN.nc
+├── exchange.nc
+├── rem.log
+├── checkpoint.nc
+├── restart.json
+└── resolved protocol/provenance records
+```
+
+`REST2_ext1/` is not an independent rerun and not a copy relabelled as an extension. It must consume the terminal coordinated checkpoint and authoritative completion state of `REST2/`, continue all states for exactly another 5 ns, and write a new output set under `REST2_ext1/`:
+
+```text
+REST2_ext1/
+├── remd0.nc ... remdN.nc
+├── exchange.nc
+├── rem.log
+├── checkpoint.nc
+├── restart.json
+└── extension provenance
+```
+
+The extension contract is:
+
+- the original `REST2/` directory is a completed, immutable parent and remains byte-for-byte unchanged;
+- state indices, tau ladder, Hamiltonian identity, topology, atom order, timestep, physical temperature, exchange rule, and implementation identity are identical;
+- positions, velocities, fixed box, walker/state mapping, integrator state, exchange-rule RNG/state, reservoir state where applicable, absolute step, physical time, exchange index, and cumulative budget continue from the parent;
+- the extension contains 5 ns of new dynamics, so the chain represents 10 ns total;
+- extension-local trajectories contain only the new segment, but their time and step coordinates remain absolute and begin after the parent terminal values;
+- extension provenance records the parent dataset/path, parent project/component commits, parent completion-manifest identity/checksum, parent terminal checkpoint identity/checksum, inherited exchange count, segment duration, and cumulative duration;
+- cumulative neighbouring acceptance may be reported for the complete 10 ns chain, but segment-local counts must remain distinguishable;
+- cpptraj can concatenate `REST2/remd{index}.nc` followed by `REST2_ext1/remd{index}.nc` without duplicated or missing boundary frames;
+- rem.log semantics and exchange numbering across the boundary are explicit and tested;
+- a mismatched or incomplete parent is refused read-only before `REST2_ext1/` is created.
+
+If the current `--extend` interface only appends in place, redesign it narrowly so the documented example produces a new extension directory without mutating its parent. Do not fake the requested structure by copying the parent or restarting from coordinates alone. The groupfile, `paths.sh`, README example, MD-project workflow, validation command, and execution journal must show the exact reproducible commands.
+
+The two 5 ns segments are the requested hardware validation exception. No other production-like test should duplicate them. If CUDA/MPI/AmberTools or wall time makes the full 5 ns + 5 ns validation unavailable, complete the implementation with short tests, record the exact limitation, and provide the exact command without claiming the long run passed.
