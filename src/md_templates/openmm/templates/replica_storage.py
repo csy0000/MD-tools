@@ -38,6 +38,29 @@ import numpy as np
 #: Bumped when the meaning of the schema changes. Written into the file and checked on read.
 SCHEMA_VERSION = "md-templates-replica-exchange/v2"
 
+#: Fields on the `exchange` dimension that were added to v2 AFTER v2 was first published.
+#:
+#: A file written by an earlier build of this same schema legitimately lacks them, and that is not
+#: corruption: v2's meaning did not change, it gained a record. Readers therefore tolerate absence
+#: and report `absent_value`, and rank 0 adds the field once when it opens such a file for append.
+#: Bumping to v3 would have been the heavier answer to a strictly additive change, and would have
+#: made every existing v2 file unreadable by a runtime that can in fact read it.
+#:
+#: `absent_value` is what the field MEANS for rows written before it existed -- not a placeholder.
+#: Old v2 files predate working Maxwell refreshes, and a stored-velocity refresh draws no momenta,
+#: so -1 is the true statement "no velocity seed was used for this exchange row".
+OPTIONAL_EXCHANGE_FIELDS = {
+    "reservoir_velocity_seed": {
+        "dtype": "i8",
+        "dimensions": ("exchange",),
+        "absent_value": -1,
+        "added_in": "the velocity-policy provenance work",
+        "meaning": ("the seed the momenta were drawn from under `velocity_policy: maxwell`; "
+                    "-1 where no refresh happened and where the policy was `stored`, which draws "
+                    "nothing"),
+    },
+}
+
 #: The completed-run manifest format.
 MANIFEST_FORMAT = "md-templates-replica-restart/v2"
 
@@ -161,11 +184,10 @@ class ReplicaReporter:
         dataset.createVariable("reservoir_frame", "i4", ("exchange",))
         dataset.createVariable("reservoir_source_step", "i8", ("exchange",))
         dataset.createVariable("reservoir_accepted", "i1", ("exchange",))
-        # The seed the momenta were drawn from, under `velocity_policy: maxwell`. -1 where no
-        # refresh happened, and where the policy is `stored` and nothing was drawn. Without it a
-        # Maxwell run is reproducible only by replaying the rule's RNG from the beginning; with
-        # it, any single refresh can be reproduced from the storage on its own.
-        dataset.createVariable("reservoir_velocity_seed", "i8", ("exchange",))
+        # The optional v2 fields. A NEW file always gets them here, so only a file written before
+        # they existed ever needs the migration in `ensure_optional_exchange_fields()`.
+        for name, spec in OPTIONAL_EXCHANGE_FIELDS.items():
+            dataset.createVariable(name, spec["dtype"], spec["dimensions"])
         last_exchange = dataset.createVariable("last_exchange", "i8")
         last_exchange.long_name = "the last FULLY committed exchange row"
         last_exchange[0] = -1
@@ -261,6 +283,12 @@ class ReplicaReporter:
         variables["reservoir_frame"][index] = int(frame)
         variables["reservoir_source_step"][index] = int(source_step)
         variables["reservoir_accepted"][index] = int(outcome)
+        if "reservoir_velocity_seed" not in variables:
+            raise StorageError(
+                f"{self.path} has no `reservoir_velocity_seed` variable. It is an optional v2 "
+                f"field that rank 0 adds once, before propagation, when it opens an older file "
+                f"for append. Reaching a row write without it means the continuation path skipped "
+                f"that step -- refusing here rather than dropping the record for this exchange.")
         variables["reservoir_velocity_seed"][index] = int(velocity_seed)
         self.dataset.sync()
         variables["last_exchange"][0] = int(index)
@@ -380,6 +408,86 @@ class ReplicaReporter:
             np.array(variables["reservoir_frame"][:last + 1], dtype=int),
             np.array(variables["reservoir_source_step"][:last + 1], dtype=int),
             np.array(variables["reservoir_accepted"][:last + 1], dtype=int)], axis=1)
+
+    # -- optional v2 fields --------------------------------------------------------------------
+
+    def inspect_optional_exchange_fields(self):
+        """READ-ONLY. What each optional field is: present and usable, absent, or malformed.
+
+        Separated from the migration on purpose. A continuation has to know what it is about to do
+        while it is still only reading, so that every other continuation check can refuse first and
+        leave the file untouched.
+        """
+        report = {}
+        for name, spec in OPTIONAL_EXCHANGE_FIELDS.items():
+            variable = self.dataset.variables.get(name)
+            if variable is None:
+                report[name] = {"state": "absent", "problem": None}
+                continue
+            problem = None
+            if tuple(variable.dimensions) != tuple(spec["dimensions"]):
+                problem = (
+                    f"{name} has dimensions {tuple(variable.dimensions)}, expected "
+                    f"{tuple(spec['dimensions'])}")
+            elif np.dtype(variable.dtype).kind not in "iu":
+                problem = (
+                    f"{name} has dtype {np.dtype(variable.dtype)!s}, which cannot hold the "
+                    f"recorded integer seeds")
+            report[name] = {"state": "present", "problem": problem}
+        return report
+
+    def ensure_optional_exchange_fields(self):
+        """Add any optional v2 field this file predates, and say what was done.
+
+        Rank 0 only, on a file already opened for append, and only AFTER every continuation check
+        has passed -- a file must never be modified merely because it could be opened. Existing
+        rows are initialised to the field's `absent_value`, which is its true meaning for a row
+        written before the field existed rather than a filler.
+
+        An existing field is validated and never deleted or replaced: a definition this runtime
+        cannot use is a refusal, because silently rewriting one would destroy a record whose
+        provenance we do not know.
+        """
+        if self.mode not in ("a", "r+", "w"):
+            raise StorageError(
+                f"{self.path} is open in mode {self.mode!r}; the optional-field migration writes "
+                f"and must be given a file opened for append. Nothing was changed.")
+
+        inspection = self.inspect_optional_exchange_fields()
+        malformed = [entry["problem"] for entry in inspection.values() if entry["problem"]]
+        if malformed:
+            raise StorageError(
+                "this file cannot be continued because an optional field is defined in a way this "
+                "runtime cannot use:\n  - " + "\n  - ".join(malformed) +
+                "\n  It is left exactly as it is. Refusing rather than deleting or redefining a "
+                "variable whose provenance is unknown.")
+
+        rows = self.n_exchange_rows()
+        added, present = [], []
+        for name, entry in inspection.items():
+            if entry["state"] == "present":
+                present.append(name)
+                continue
+            spec = OPTIONAL_EXCHANGE_FIELDS[name]
+            variable = self.dataset.createVariable(name, spec["dtype"], spec["dimensions"])
+            if rows:
+                # Every row that already exists gets the value the field MEANS for it. The
+                # dimension is unlimited, so this both fills and sizes the new variable.
+                variable[:rows] = np.full(rows, spec["absent_value"], dtype=np.int64)
+            added.append(name)
+
+        self.dataset.sync()
+        return {
+            "schema": SCHEMA_VERSION,
+            "fields_added": added,
+            "fields_already_present": present,
+            "rows_initialised": int(rows) if added else 0,
+            "initialised_to": {name: OPTIONAL_EXCHANGE_FIELDS[name]["absent_value"]
+                               for name in added},
+            "previous_committed_exchanges": int(self.last_exchange()) + 1,
+            "note": ("an older v2 file predates this field; the rows it already held record that "
+                     "no velocity seed was used, which is what they mean"),
+        }
 
     def reservoir_velocity_seeds(self, upto=None):
         """The Maxwell seed per exchange row; -1 where nothing was drawn.
