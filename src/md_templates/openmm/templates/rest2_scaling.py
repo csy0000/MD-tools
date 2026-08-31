@@ -100,14 +100,65 @@ def _scale_torsions(force, solute, solute_solute, excluded_bonds):
                                        k_value * solute_solute)
 
 
-def _scale_cmap(force, solute, solute_solute):
-    """CMAP maps are shared, so a map used by ANY non-solute torsion must not be scaled in place."""
+def cmap_map_roles(force, solute):
+    """Which CMAP maps belong to the solute, to the environment, or to both.
+
+    A map is a shared lookup table, not a per-torsion parameter: one map is typically referenced by
+    every torsion of the same residue type in the system. So "is this map the solute's" is a
+    question about its USERS, and it has three answers, not two.
+    """
     solute_maps, other_maps = set(), set()
     for index in range(force.getNumTorsions()):
         parameters = force.getTorsionParameters(index)
         map_index, atoms = parameters[0], parameters[1:]
         (solute_maps if all(a in solute for a in atoms) else other_maps).add(map_index)
-    for map_index in sorted(solute_maps - other_maps):
+    return {"exclusive_solute": solute_maps - other_maps,
+            "shared": solute_maps & other_maps,
+            "exclusive_other": other_maps - solute_maps}
+
+
+def shared_cmap_originals(force, solute):
+    """The shared maps, in the deterministic order duplicates are appended in.
+
+    The order is part of the contract: it is what lets a duplicate be matched back to its original
+    later, without storing a side table that could drift from the System it describes.
+    """
+    return sorted(cmap_map_roles(force, solute)["shared"])
+
+
+def duplicate_shared_cmaps(force, solute):
+    """Give the solute its own copy of every shared map, and point its torsions at the copy.
+
+    Scaling a shared map in place would scale it for the environment too. Leaving it alone -- what
+    this used to do -- is the opposite error and just as wrong: a solute torsion that happens to
+    share a map with a non-solute one then gets NO scaling, and the Hamiltonian silently stops
+    being the one the ladder says it is.
+
+    Returns `{duplicate_index: original_index}`. A map used only by the solute needs no copy and is
+    scaled in place; a map used only by the environment is untouched.
+    """
+    duplicates = {}
+    for original in shared_cmap_originals(force, solute):
+        size, energy = force.getMapParameters(original)
+        duplicates[force.addMap(size, list(energy))] = original
+    if not duplicates:
+        return duplicates
+    redirect = {original: duplicate for duplicate, original in duplicates.items()}
+    for index in range(force.getNumTorsions()):
+        parameters = list(force.getTorsionParameters(index))
+        if parameters[0] in redirect and all(a in solute for a in parameters[1:]):
+            parameters[0] = redirect[parameters[0]]
+            force.setTorsionParameters(index, *parameters)
+    return duplicates
+
+
+def _scale_cmap(force, solute, solute_solute, duplicates=None):
+    """Scale exactly the maps the solute owns, after duplicating any it has to share."""
+    if duplicates is None:
+        duplicates = duplicate_shared_cmaps(force, solute)
+    # Computed after duplication, so the fresh copies count as the solute's own.
+    targets = set(cmap_map_roles(force, solute)["exclusive_solute"]) | set(duplicates)
+    for map_index in sorted(targets):
         size, energy = force.getMapParameters(map_index)
         force.setMapParameters(map_index, size, [e * solute_solute for e in energy])
 
@@ -309,9 +360,25 @@ class TauSwitcher:
         self.base = clone_system(base_system)
         self.solute = set(int(i) for i in solute_indices)
         self.excluded = {frozenset((int(a), int(b))) for a, b in excluded_bonds}
+        # Which CMAP maps the solute has to share, and therefore which duplicates a prepared
+        # System will carry. Derived from the untouched base, in the same deterministic order
+        # `duplicate_shared_cmaps` appends them, so a duplicate can be matched back to its
+        # original without a side table that could drift from the System.
+        self._cmap_duplicates = {}
+        for index in range(self.base.getNumForces()):
+            force = self.base.getForce(index)
+            if isinstance(force, CMAPTorsionForce):
+                originals = shared_cmap_originals(force, self.solute)
+                first = force.getNumMaps()
+                self._cmap_duplicates[index] = {
+                    first + offset: original for offset, original in enumerate(originals)}
 
     def prepared_system(self, tau):
-        """The System to create the Context from: scaled to `tau` and ready to be switched."""
+        """The System to create the Context from: scaled to `tau` and ready to be switched.
+
+        The duplicates are created HERE, once. `set_tau` afterwards only rewrites map energies:
+        adding a copy per switch would grow the System without bound and compound the scaling.
+        """
         return build_scaled_system(self.base, self.solute, tau, self.excluded,
                                    prepare_for_switching=True)
 
@@ -337,8 +404,9 @@ class TauSwitcher:
                 _scale_torsions(force, self.solute, solute_solute, self.excluded)
                 force.updateParametersInContext(context)
             elif isinstance(force, CMAPTorsionForce):
-                _restore_cmap(force, reference)
-                _scale_cmap(force, self.solute, solute_solute)
+                duplicates = self._cmap_duplicates.get(index, {})
+                _restore_cmap(force, reference, duplicates)
+                _scale_cmap(force, self.solute, solute_solute, duplicates)
                 force.updateParametersInContext(context)
             elif isinstance(force, CustomGBForce):
                 # The expressions already carry the global parameter; only its value changes, and
@@ -359,7 +427,15 @@ def _restore_torsions(force, reference):
         force.setTorsionParameters(index, *reference.getTorsionParameters(index))
 
 
-def _restore_cmap(force, reference):
+def _restore_cmap(force, reference, duplicates=None):
+    """Put every map back to its unscaled energies.
+
+    A duplicate has no counterpart in the reference -- it did not exist there -- so it is restored
+    from the ORIGINAL it was copied from. Without this the restore would read past the end of the
+    reference and the switcher would compound scaling instead of reapplying it.
+    """
+    duplicates = duplicates or {}
     for index in range(force.getNumMaps()):
-        size, energy = reference.getMapParameters(index)
+        source = duplicates.get(index, index)
+        size, energy = reference.getMapParameters(source)
         force.setMapParameters(index, size, list(energy))
