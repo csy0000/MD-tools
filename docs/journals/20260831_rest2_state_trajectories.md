@@ -196,3 +196,59 @@ Each item names what it blocks, so the next session can start without re-derivin
 
 The concatenation requirement in item 10 is already established at the writer level (above), so the
 5 ns run has to demonstrate it end to end rather than discover it.
+
+---
+
+# Second pass — §15 superseding correction
+
+**MD-templates** `feat/rest2-state-trajectories` → `c50a13e1ac7dbb8b2420f7b08d507306777fa0e2`, from `caad06c`.
+Suite **822 passed**, 0 failed, 0 skipped at every commit. Ruff delta zero; no added line over 99.
+
+## The generalised-Born contribution now scales by `1 - tau`
+
+§15 supersedes §1's rule and the decision recorded in the first pass of this journal. The whole GB
+contribution is the solute's coupling to a continuum standing in for solvent, so it is a
+solute-environment interaction and follows the linear factor.
+
+Every term is still multiplied by one global parameter rather than through charges: GBn2's
+non-polar term has no charge dependence, so charge scaling would silently leave it at full strength.
+A test asserts exactly that on a charge-free term — `7.0` becomes `5.25` at tau = 0.25.
+
+## The identity is v2, and v1 is refused for continuation
+
+```yaml
+rest2_implementation:
+  name: rest2-no-bond-angle-omega
+  version: 2
+  generalized_born_scale: "1-tau"
+```
+
+`require_compatible_implementation` refuses to continue a run recorded under v1, with the reason
+attached: a version bump here says the energy function changed, so continuing across one would join
+samples from two different ensembles. v1 is kept as a historical identity. No old manifest or
+journal was rewritten.
+
+## Energy tests, not parameter tests
+
+The ordinary nonbonded force and the GB force are placed in separate OpenMM force groups and
+evaluated independently, so each ratio is measured on the energy that force actually produces:
+
+| tau | GB ratio | nonbonded ratio |
+|---|---|---|
+| 0.0 | 1.0 | 1.0 |
+| 0.25 | 0.75 | 0.5625 |
+| 0.5 | **0.5** | **0.25** |
+
+At tau = 0.5 GB halves while nonbonded quarters. That divergence is the correction, and a test that
+only inspected parameters would not have seen it. Cloned states and live switching are both covered,
+and repeated switching 0.5 → 0.25 → 0.5 returns to the same energy rather than compounding.
+
+`test_fixed_tau_md.py` is updated where it pinned the superseded rule.
+
+## Still unfinished in this repository
+
+Items 1–7 of the dependency list above are unchanged: the driver integration that replaces the
+bundled coordinate layout, the `exchange.nc` schema version, the multi-file commit protocol, the
+`--rem` flag, resolved per-state YAML, the neighbouring-only report, and the omega
+ambiguous-candidate evidence. Item 8, the extension-directory interface, still blocks the 5 ns
+validation.
