@@ -188,9 +188,17 @@ def test_migration_leaves_every_other_record_logically_unchanged(tmp_path):
     after = _fingerprint(path)["logical"]
     assert after["variables"] == sorted(before["variables"] + [FIELD])
     for key in ("u", "state_to_walker", "proposed", "accepted", "reservoir_state",
-                "last_exchange", "attributes"):
+                "last_exchange"):
         assert after[key] == before[key], key
     assert after["dimensions"] == before["dimensions"]
+
+    # Exactly one attribute is added: the migration history, which the file records for itself in
+    # the same sync as the mutation so an interrupted process still leaves a file that says what
+    # happened to it. Every pre-existing attribute is untouched.
+    added = set(after["attributes"]) - set(before["attributes"])
+    assert added == {storage.MIGRATION_HISTORY_ATTRIBUTE}
+    for key, value in before["attributes"].items():
+        assert after["attributes"][key] == value, key
 
 
 # --- 5/6. what the migrated file records afterwards --------------------------------------------
@@ -371,9 +379,11 @@ def test_only_rank_zero_opens_writable_storage(tmp_path):
 
 
 def test_the_migration_is_recorded_in_the_continuation_provenance():
+    """Recorded as a cumulative HISTORY. A singular field was rewritten by every continuation, so
+    a later no-op erased the real event -- see test_migration_provenance.py."""
     source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
-    assert "storage_migration=migration" in source
-    assert '"storage_migration": migration' in source
+    assert "storage_migrations=history" in source
+    assert '"storage_migrations": migrations' in source
 
 
 def test_schema_knowledge_stays_in_the_storage_module():

@@ -331,9 +331,41 @@ Migration is never lazy. A schema error surfaces before new dynamics exist, not 
 exchange after propagation has begun. `--verify-only` stays read-only and accepts an older file
 without adding anything.
 
-What was done is recorded twice: in the run-state sidecar while the continuation runs, and in the
-completion manifest as `storage_migration` — including how many exchanges the file already held,
-which is what explains a leading run of `-1` in a seed history.
+### Migration provenance is cumulative
+
+The first version of this recorded **one** value, `storage_migration`, rewritten by every
+continuation. That was lossy: a later resume or extension that needed no schema change produced a
+no-op record and overwrote the real event, so a completed run could end up with no record that its
+file had ever been a legacy file. The fix is an append-only history, `storage_migrations`.
+
+**Only real events are history.** A continuation with `fields_added: []` changed nothing and
+contributes nothing, so it cannot displace the event before it. A run that never needed a
+migration carries an empty history rather than a fabricated one.
+
+**Each event is content-addressed.** `event_id` is a SHA-256 over the canonical JSON of the event
+minus the id itself, so the same event copied into a manifest and into a run state collapses to
+one entry, while two genuinely different migrations stay separate. Order is first-seen, which is
+the order the migrations happened in — not sorted, because no timestamp here is guaranteed
+comparable across machines.
+
+**The file is the durable authority for its own schema history.** The event is written into the
+analysis NetCDF as `storage_migrations_json` in the **same `sync()`** as the mutation it describes.
+That closes the crash window: a process killed immediately after migrating still leaves a file
+that says it was migrated, so the next continuation reads the truth instead of inferring it.
+
+**Every authoritative record is merged**, none trusted to be complete: the file's own history, the
+previous completion manifest, and the run state. A run migrated by an earlier build recorded the
+event only in its manifest; an interrupted one, only in its run state.
+
+**Legacy records are normalised.** A meaningful singular `storage_migration` becomes a one-event
+history. A singular no-op is dropped, because it never described a change.
+
+The complete history is persisted in the run state while a run is active, interrupted or complete,
+and in the completion manifest when it finishes — including how many exchanges the file already
+held, which is what explains a leading run of `-1` in a seed history.
+
+`--verify-only` writes none of it. It adds no variable, no attribute, no manifest and no run-state
+update.
 
 Schema knowledge lives in `replica_storage.py` (`OPTIONAL_EXCHANGE_FIELDS`,
 `inspect_optional_exchange_fields()`, `ensure_optional_exchange_fields()`). The driver decides
