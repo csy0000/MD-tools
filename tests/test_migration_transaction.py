@@ -153,7 +153,7 @@ def test_the_fault_seam_is_inert_by_default(tmp_path):
 
 def test_the_fault_points_are_the_transaction_steps():
     assert storage.MIGRATION_FAULT_POINTS == (
-        "after_intent", "after_create", "after_backfill", "after_commit")
+        "after_intent", "after_create", "after_create_durable", "after_backfill", "after_commit")
 
 
 # --- hard interruption at each transaction point -----------------------------------------------
@@ -351,18 +351,33 @@ def test_verify_only_accepts_a_reconciled_file(tmp_path):
 
 # --- refusals that leave the file alone ---------------------------------------------------------
 
+def _genuine_pending(path):
+    """A real record from `_begin_migration`, so a test can change ONE thing about it."""
+    reporter = storage.ReplicaReporter(path, mode="a")
+    try:
+        return reporter._begin_migration([FIELD])
+    finally:
+        reporter.close()
+
+
+def _resigned(record, **changes):
+    """An edited record whose id is recomputed, so the CONTENT rule is what is being tested."""
+    edited = dict(record)
+    edited.update(changes)
+    edited.pop("transaction_id", None)
+    edited["transaction_id"] = storage.migration_transaction_id(edited)
+    return edited
+
+
 def test_a_pending_record_for_another_schema_is_refused(tmp_path):
     path = _make_legacy(tmp_path / "wrong.nc", rows=2)
+    record = _resigned(_genuine_pending(path), schema="md-templates-replica-exchange/v9")
     with netCDF4.Dataset(str(path), "a") as d:
-        d.setncattr(storage.MIGRATION_PENDING_ATTRIBUTE,
-                    json.dumps({"schema": "md-templates-replica-exchange/v9",
-                                "fields": [FIELD], "rows_at_intent": 2,
-                                "backfill": {FIELD: -1}, "previous_committed_exchanges": 2,
-                                "created_utc": "x", "transaction_id": "y"}))
+        d.setncattr(storage.MIGRATION_PENDING_ATTRIBUTE, json.dumps(record, sort_keys=True))
     before = hashlib.sha256(path.read_bytes()).hexdigest()
     reporter = storage.ReplicaReporter(path, mode="a")
     try:
-        with pytest.raises(storage.StorageError, match="not started against this schema"):
+        with pytest.raises(storage.StorageError, match="not begun against this schema"):
             reporter.ensure_optional_exchange_fields()
     finally:
         reporter.close()
@@ -371,15 +386,14 @@ def test_a_pending_record_for_another_schema_is_refused(tmp_path):
 
 def test_a_pending_record_naming_an_unknown_field_is_refused(tmp_path):
     path = _make_legacy(tmp_path / "unknown.nc", rows=2)
+    record = _resigned(_genuine_pending(path), fields=["not_a_field"],
+                       definitions={"not_a_field": {"dtype": "i8", "dimensions": ["exchange"]}},
+                       backfill={"not_a_field": -1})
     with netCDF4.Dataset(str(path), "a") as d:
-        d.setncattr(storage.MIGRATION_PENDING_ATTRIBUTE,
-                    json.dumps({"schema": storage.SCHEMA_VERSION, "fields": ["not_a_field"],
-                                "rows_at_intent": 2, "backfill": {"not_a_field": -1},
-                                "previous_committed_exchanges": 2, "created_utc": "x",
-                                "transaction_id": "y"}))
+        d.setncattr(storage.MIGRATION_PENDING_ATTRIBUTE, json.dumps(record, sort_keys=True))
     reporter = storage.ReplicaReporter(path, mode="a")
     try:
-        with pytest.raises(storage.StorageError, match="does not define"):
+        with pytest.raises(storage.StorageError, match="not defined by this runtime"):
             reporter.ensure_optional_exchange_fields()
     finally:
         reporter.close()

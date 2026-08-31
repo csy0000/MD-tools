@@ -271,8 +271,9 @@ def test_current_storage_needs_no_migration_and_gains_no_event(tmp_path):
 def test_the_driver_merges_every_authoritative_source():
     source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
     block = source[source.index("def _continue"):source.index("def _loop")]
+    probe = source[source.index("def read_only_probe"):source.index("def _previous_manifest")]
     assert "merge_migration_histories" in block
-    assert "migration_history()" in block, "the file's own durable history is not read"
+    assert "migration_history()" in probe, "the file's own durable history is not read"
     assert "_previous_manifest()" in block, "the previous completion manifest is not read"
     assert "read_run_state" in block, "the run state is not read"
     # and the merge happens before the payload is built

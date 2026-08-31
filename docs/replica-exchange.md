@@ -384,6 +384,63 @@ values, no marker, no history: the event that would have explained it was never 
 be reconstructed. Such a file is refused with that explanation rather than given an invented
 history, and its fill values are refused rather than read as seeds.
 
+### One pending-record validator, used by all three callers
+
+`--verify-only`, the driver's read-only continuation probe and the append-time reconciliation all
+call **`validated_pending_migration()`**. They must, because they answer the same question — *is
+this record trustworthy?* — and a second, looser check drifts from the first.
+
+That is not hypothetical. The driver's probe once called `inspect_optional_exchange_fields()`
+without the pending record, while storage called it *with* one. A migration killed after
+`createVariable` leaves the field physically present holding fill values; inspected without the
+record that looks malformed, so the driver refused a file its own storage layer could reconcile —
+and whether recovery worked at all depended on whether the unsynced variable had happened to reach
+disk.
+
+`reconcilable=True` does not weaken anything. It says only that a **valid** pending transaction may
+be finished by a continuation. An invalid record is refused for verification and for continuation
+alike, and a malformed field with *no* pending record stays refused everywhere.
+
+### The pending record, and what is checked
+
+```yaml
+format:                       md-templates-migration-transaction/v1   # exact
+schema:                       md-templates-replica-exchange/v2        # must match the file
+fields:                       [..]        non-empty, unique, canonically sorted, all known
+definitions:                  {field: {dtype, dimensions}}            # vs the registry
+backfill:                     {field: int}                            # vs the registry
+rows_at_intent:               int
+previous_committed_exchanges: int
+created_utc:                  ISO-8601 with an explicit UTC offset
+transaction_id:               sha256 of the record without this key
+```
+
+Every rule below is checked **read-only**, before anything is created or written:
+
+- **Keys** are exactly this set. Not a minimum — an unexpected key means the record was written by
+  something this build cannot read, and finishing a transaction described in unreadable terms is
+  worse than refusing.
+- **Definitions** are compared against `OPTIONAL_EXCHANGE_FIELDS`, dtype after an explicit
+  normalisation (`numpy.dtype(x).str`, so `i8` and `int64` agree) and dimensions in exact order. A
+  conflicting stored definition is refused, never silently replaced with the current one.
+- **Backfill** values must be plain integers — `True` is an `int` in Python and is not one here —
+  and must equal the registry's `absent_value`. This number is written over every legacy row, so a
+  record that disagrees is refused rather than trusted or "repaired" back to the default.
+- **Counts.** Nothing may propagate or rewind between the intent and its reconciliation, so
+  `rows_at_intent` must **equal** the current physical row count — not merely bound it.
+  `previous_committed_exchanges` must equal the current committed marker, and may be **lower** than
+  `rows_at_intent`: rows can exist past the marker when an earlier run was interrupted between a
+  row write and its checkpoint. Any difference that no supported crash point can produce is
+  refused rather than guessed.
+- **Timestamp** must parse and carry an explicit UTC offset, and is preserved unchanged.
+- **Identity** is recomputed by `migration_transaction_id()` — the one function creation also uses
+  — over the record minus the id, and must match exactly. A mismatch means the record was edited
+  after it was written, and nothing in it can then be trusted to decide what gets created or what
+  value overwrites existing rows. Reconciliation never mints a new id.
+- **Fields already on disk** are checked for dtype and dimensions. Their *values* are treated as
+  incomplete only because a valid record authorises a deterministic backfill; fill values with no
+  valid record remain refused.
+
 **`--verify-only` reports a pending migration and finishes nothing.** A continuation is the only
 thing that reconciles one — treating a pending marker as a reason to refuse everywhere would
 deadlock the file against the one command that can recover it.

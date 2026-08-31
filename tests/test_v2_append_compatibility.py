@@ -358,24 +358,28 @@ def test_the_driver_validates_before_it_opens_for_append(tmp_path):
     """Ordering is the safety property. A file must not be modified because it could be opened."""
     source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
     block = source[source.index("def _continue"):source.index("def _loop")]
-    read_only = block.index('storage.ReplicaReporter(self.files.trajectory, mode="r")')
+    probe = block.index("self.read_only_probe()")
     identity = block.index("the scientific configuration changed since this run was created")
     checkpoint = block.index("storage.ReplicaCheckpoint(self.files.checkpoint).read()")
     append = block.index('storage.ReplicaReporter(self.files.trajectory, mode="a")')
     migrate = block.index("ensure_optional_exchange_fields()")
-    assert read_only < identity < checkpoint < append < migrate
-    assert block.index("validate_replica_output") < read_only
+    assert probe < identity < checkpoint < append < migrate
+    assert block.index("validate_replica_output") < probe
+
+    # And the probe itself opens read-only and nothing else.
+    reader = source[source.index("def read_only_probe"):source.index("def _previous_manifest")]
+    assert 'mode="r"' in reader and 'mode="a"' not in reader
 
 
 def test_only_rank_zero_opens_writable_storage(tmp_path):
     source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
     block = source[source.index("def _continue"):source.index("def _loop")]
-    for opener in ('mode="a"', 'mode="r"', "ensure_optional_exchange_fields()"):
-        assert opener in block
+    for opener in ('mode="a"', "self.read_only_probe()", "ensure_optional_exchange_fields()"):
+        assert opener in block, opener
     # Everything in `_continue` that touches the analysis file sits under the root guard.
     guard = block.index("if self.coordinator.is_root:")
     assert guard < block.index('mode="a"')
-    assert guard < block.index('mode="r"')
+    assert guard < block.index("self.read_only_probe()")
 
 
 def test_the_migration_is_recorded_in_the_continuation_provenance():
@@ -389,7 +393,10 @@ def test_the_migration_is_recorded_in_the_continuation_provenance():
 def test_schema_knowledge_stays_in_the_storage_module():
     """No raw NetCDF variable creation for these fields anywhere but `replica_storage.py`."""
     driver = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
-    assert "createVariable" not in driver
+    code = "\n".join(line for line in driver.splitlines()
+                     if not line.strip().startswith("#"))
+    assert "self.dataset.createVariable" not in code and ".createVariable(" not in code, (
+        "the driver creates a NetCDF variable itself")
     # Calling the reader `reservoir_velocity_seeds()` is right; naming the raw variable is not.
     assert f'"{FIELD}"' not in driver and f"'{FIELD}'" not in driver, (
         "the driver names a raw schema variable it should ask the storage module about")
