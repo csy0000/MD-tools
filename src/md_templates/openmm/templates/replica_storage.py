@@ -83,18 +83,65 @@ MIGRATION_HISTORY_ATTRIBUTE = "storage_migrations_json"
 #: finished"; its content is everything needed to finish or reconcile it afterwards.
 MIGRATION_PENDING_ATTRIBUTE = "storage_migration_pending_json"
 
+#: The pending record's own format. Bumped only when its KEYS or their meaning change.
+MIGRATION_TRANSACTION_FORMAT = "md-templates-migration-transaction/v1"
+
+#: Exactly the keys a v1 pending record has. Not a minimum: an unexpected key means the record was
+#: written by something this build does not understand, and finishing a transaction described in
+#: terms it cannot read is worse than refusing.
+MIGRATION_PENDING_KEYS = frozenset({
+    "format", "schema", "fields", "definitions", "backfill",
+    "rows_at_intent", "previous_committed_exchanges", "created_utc", "transaction_id"})
+
+
+def migration_transaction_id(payload):
+    """The transaction id, from one implementation used by both creation and validation.
+
+    Over the canonical JSON of the record MINUS the id itself. Two copies would be two chances to
+    disagree, and a mismatch would mean either refusing a valid record or accepting an edited one.
+    """
+    body = {key: value for key, value in dict(payload).items() if key != "transaction_id"}
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def _is_plain_int(value):
+    """`True` is an `int` in Python. It is not a row count, and it is not a backfill value."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _normalised_dtype(value):
+    """`"i8"`, `"int64"` and `numpy.int64` all name one type; a comparison must not care which."""
+    try:
+        return np.dtype(value).str
+    except TypeError:
+        return None
+
+
 #: A test-only seam for hard-killing the transaction at a named point. Read from the environment
 #: because crash tests must run in a separate process. It is inert unless set, is not a CLI option,
 #: and is not documented for users.
 _MIGRATION_FAULT_ENV = "MD_TEMPLATES_MIGRATION_FAULT_POINT"
 
 #: The points a fault may be injected at, in transaction order.
-MIGRATION_FAULT_POINTS = ("after_intent", "after_create", "after_backfill", "after_commit")
+#:
+#: `after_create_durable` exists because the natural `after_create` crash is NOT deterministic: a
+#: variable created and not synced usually never reaches disk, so the state that actually blocked
+#: recovery -- field physically present, holding fill values -- cannot be produced reliably by
+#: killing at that point. This one syncs first, then dies, which forces exactly that state.
+MIGRATION_FAULT_POINTS = ("after_intent", "after_create", "after_create_durable",
+                          "after_backfill", "after_commit")
 
 
-def _migration_fault(point):
-    """Hard-exit if this run was asked to fail here. No cleanup, no close, no flush."""
+def _migration_fault(point, flush=None):
+    """Hard-exit if this run was asked to fail here. No cleanup, no close.
+
+    `flush` forces the preceding operation to disk first, for the one point whose whole purpose is
+    to leave a partially migrated file behind.
+    """
     if os.environ.get(_MIGRATION_FAULT_ENV) == point:
+        if flush is not None:
+            flush.sync()
         os._exit(97)
 
 
@@ -567,7 +614,10 @@ class ReplicaReporter:
         return report
 
     def pending_migration(self):
-        """The unfinished migration this file declares, or None. READ-ONLY.
+        """The raw pending record as JSON, or None. READ-ONLY, and NOT validated.
+
+        A parser, not a contract. Use `validated_pending_migration()` for anything that decides
+        what gets created or written.
 
         Its presence is the only reliable evidence that a migration was begun: NetCDF offers no
         transaction, so a process killed mid-way leaves a variable on disk with no other trace.
@@ -581,10 +631,12 @@ class ReplicaReporter:
             raise StorageError(
                 f"{self.path} declares a pending migration that is not valid JSON. Refusing to "
                 f"guess what was in progress.") from None
-        if not isinstance(pending, dict) or not pending.get("fields"):
+        if not isinstance(pending, dict):
             raise StorageError(
-                f"{self.path} declares a pending migration with no fields. Refusing to guess "
-                f"what was in progress.")
+                f"{self.path} declares a pending migration that is not a mapping. Refusing to "
+                f"guess what was in progress.")
+        # Everything else is `validated_pending_migration`'s job. A second, looser check here
+        # would be a second contract, and the two would drift.
         return pending
 
     def ensure_optional_exchange_fields(self):
@@ -617,7 +669,7 @@ class ReplicaReporter:
                 f"{self.path} is open in mode {self.mode!r}; the optional-field migration writes "
                 f"and must be given a file opened for append. Nothing was changed.")
 
-        pending = self.pending_migration()
+        pending = self.validated_pending_migration()
         inspection = self.inspect_optional_exchange_fields(pending=pending)
         malformed = [entry["problem"] for entry in inspection.values() if entry["problem"]]
         if malformed:
@@ -641,8 +693,6 @@ class ReplicaReporter:
                 }
             pending = self._begin_migration(missing)
             _migration_fault("after_intent")
-        else:
-            self._check_pending_applies(pending)
 
         self._apply_migration(pending)
         event = self._commit_migration(pending)
@@ -655,7 +705,7 @@ class ReplicaReporter:
         """Declare the intent and make it durable BEFORE the first schema mutation."""
         rows = self.n_exchange_rows()
         pending = {
-            "format": "md-templates-migration-transaction/v1",
+            "format": MIGRATION_TRANSACTION_FORMAT,
             "schema": SCHEMA_VERSION,
             "fields": sorted(missing),
             "definitions": {
@@ -670,32 +720,160 @@ class ReplicaReporter:
         }
         # The id is fixed HERE, before anything is mutated, so a restart commits the same event
         # this attempt would have committed rather than a new one.
-        pending["transaction_id"] = hashlib.sha256(
-            json.dumps(pending, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        pending["transaction_id"] = migration_transaction_id(pending)
         self.dataset.setncattr(MIGRATION_PENDING_ATTRIBUTE,
                                json.dumps(pending, sort_keys=True, default=str))
         self.dataset.sync()
         return pending
 
-    def _check_pending_applies(self, pending):
-        """A pending record from another schema, or naming fields this build does not know, is
-        refused rather than reinterpreted."""
-        if pending.get("schema") != SCHEMA_VERSION:
-            raise StorageError(
-                f"{self.path} declares a pending migration for schema "
-                f"{pending.get('schema')!r}, but this file is {SCHEMA_VERSION!r}. Refusing to "
-                f"reconcile a transaction that was not started against this schema.")
-        unknown = [name for name in pending["fields"] if name not in OPTIONAL_EXCHANGE_FIELDS]
+    def validated_pending_migration(self):
+        """READ-ONLY. The pending record, strictly validated, or None.
+
+        ONE contract, used by `--verify-only`, by the driver's read-only continuation probe, and
+        by append-time reconciliation. Two validators would be two chances to disagree, and this
+        record decides which variables get created and what value is written over legacy rows --
+        an edited one could rewrite a run's history with an arbitrary number.
+
+        Nothing here writes. Every failure is a refusal that leaves the file exactly as it is.
+        """
+        pending = self.pending_migration()
+        if pending is None:
+            return None
+        fail = self._pending_error
+
+        # -- container and keys ------------------------------------------------------------------
+        keys = set(pending)
+        missing, unexpected = MIGRATION_PENDING_KEYS - keys, keys - MIGRATION_PENDING_KEYS
+        if missing:
+            fail(f"required key(s) {sorted(missing)} are missing")
+        if unexpected:
+            fail(f"unexpected key(s) {sorted(unexpected)}; v1 has no extension mechanism, so a "
+                 f"record carrying more than it defines was written by something this build "
+                 f"cannot read")
+        if pending["format"] != MIGRATION_TRANSACTION_FORMAT:
+            fail(f"format is {pending['format']!r}, not {MIGRATION_TRANSACTION_FORMAT!r}")
+        if pending["schema"] != SCHEMA_VERSION:
+            fail(f"schema is {pending['schema']!r}, but this file is {SCHEMA_VERSION!r}; the "
+                 f"transaction was not begun against this schema")
+
+        # -- fields ------------------------------------------------------------------------------
+        fields = pending["fields"]
+        if not isinstance(fields, list) or not fields:
+            fail(f"fields must be a non-empty list; got {fields!r}")
+        if not all(isinstance(name, str) and name for name in fields):
+            fail(f"every entry of fields must be a non-empty string; got {fields!r}")
+        if len(set(fields)) != len(fields):
+            fail(f"fields contains duplicates: {fields!r}")
+        if fields != sorted(fields):
+            fail(f"fields is not in the canonical order this transaction is written in; got "
+                 f"{fields!r}, expected {sorted(fields)!r}. The order is part of what the "
+                 f"transaction id signs.")
+        unknown = [name for name in fields if name not in OPTIONAL_EXCHANGE_FIELDS]
         if unknown:
-            raise StorageError(
-                f"{self.path} declares a pending migration for field(s) {unknown} that this "
-                f"runtime does not define. Refusing to finish a transaction it cannot describe.")
-        if int(pending.get("rows_at_intent", -1)) > self.n_exchange_rows():
-            raise StorageError(
-                f"{self.path} declares a pending migration over "
-                f"{pending['rows_at_intent']} exchange row(s) but holds "
-                f"{self.n_exchange_rows()}. The file has fewer rows than the transaction was "
-                f"begun against; refusing rather than backfilling a range that no longer exists.")
+            fail(f"field(s) {unknown} are not defined by this runtime")
+
+        # -- definitions and backfill, against the AUTHORITATIVE registry -------------------------
+        for key in ("definitions", "backfill"):
+            value = pending[key]
+            if not isinstance(value, dict):
+                fail(f"{key} must be a mapping; got {type(value).__name__}")
+            if sorted(value) != sorted(fields):
+                fail(f"{key} keys {sorted(value)} do not match fields {sorted(fields)}")
+
+        for name in fields:
+            spec = OPTIONAL_EXCHANGE_FIELDS[name]
+            definition = pending["definitions"][name]
+            if not isinstance(definition, dict) or set(definition) != {"dtype", "dimensions"}:
+                fail(f"definitions[{name!r}] must have exactly 'dtype' and 'dimensions'; got "
+                     f"{definition!r}")
+            stored_dtype = _normalised_dtype(definition["dtype"])
+            if stored_dtype is None or stored_dtype != _normalised_dtype(spec["dtype"]):
+                fail(f"definitions[{name!r}].dtype is {definition['dtype']!r}, but this runtime "
+                     f"defines {spec['dtype']!r}. Refusing rather than substituting the current "
+                     f"definition for the one the transaction was begun with.")
+            if not isinstance(definition["dimensions"], list) or \
+                    tuple(definition["dimensions"]) != tuple(spec["dimensions"]):
+                fail(f"definitions[{name!r}].dimensions is {definition['dimensions']!r}, but this "
+                     f"runtime defines {list(spec['dimensions'])!r}")
+
+            value = pending["backfill"][name]
+            if not _is_plain_int(value):
+                fail(f"backfill[{name!r}] must be an integer (a bool is not one); got {value!r}")
+            if value != int(spec["absent_value"]):
+                fail(f"backfill[{name!r}] is {value!r}, but this runtime's absent value for "
+                     f"that field is {spec['absent_value']!r}. This number is written over every "
+                     f"legacy row, so a record that disagrees is refused rather than repaired.")
+
+        # -- counts, against what the file actually holds ---------------------------------------
+        #
+        # No propagation and no rewind may happen between the intent and its reconciliation, so
+        # the physical row count cannot have changed: equality is required, not an inequality.
+        # `previous_committed_exchanges` may legitimately be LOWER than the physical count -- rows
+        # can exist past the committed marker when an earlier run was interrupted between a row
+        # write and its checkpoint -- but it must still match the marker this file carries now.
+        rows, committed = pending["rows_at_intent"], pending["previous_committed_exchanges"]
+        if not _is_plain_int(rows) or rows < 0:
+            fail(f"rows_at_intent must be a non-negative integer (a bool is not one); "
+                 f"got {rows!r}")
+        if not _is_plain_int(committed) or committed < 0:
+            fail(f"previous_committed_exchanges must be a non-negative integer (a bool is not "
+                 f"one); got {committed!r}")
+        if committed > rows:
+            fail(f"previous_committed_exchanges ({committed}) exceeds rows_at_intent ({rows}); a "
+                 f"run cannot have committed more exchanges than the file holds rows")
+        actual_rows = self.n_exchange_rows()
+        if rows != actual_rows:
+            fail(f"rows_at_intent is {rows} but the file holds {actual_rows} exchange row(s). "
+                 f"Nothing may propagate or rewind between the intent and its reconciliation, so "
+                 f"this difference cannot arise from any supported crash point.")
+        actual_committed = int(self.last_exchange()) + 1
+        if committed != actual_committed:
+            fail(f"previous_committed_exchanges is {committed} but the file's committed marker "
+                 f"says {actual_committed}. This cannot arise from any supported crash point.")
+
+        # -- timestamp --------------------------------------------------------------------------
+        created = pending["created_utc"]
+        if not isinstance(created, str) or not created:
+            fail(f"created_utc must be a non-empty string; got {created!r}")
+        try:
+            parsed = datetime.datetime.fromisoformat(created)
+        except ValueError:
+            fail(f"created_utc {created!r} is not an ISO-8601 timestamp")
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            fail(f"created_utc {created!r} carries no UTC offset; a timestamp without one cannot "
+                 f"be compared across machines")
+
+        # -- identity ---------------------------------------------------------------------------
+        stored_id = pending["transaction_id"]
+        if not isinstance(stored_id, str) or len(stored_id) != 64 \
+                or any(c not in "0123456789abcdef" for c in stored_id):
+            fail(f"transaction_id {stored_id!r} is not a SHA-256 digest")
+        if migration_transaction_id(pending) != stored_id:
+            fail("transaction_id does not match the record it signs; this pending record was "
+                 "edited or corrupted after it was written, and nothing in it can be trusted to "
+                 "decide what gets created or what value is written over existing rows")
+
+        # -- the fields already on disk ---------------------------------------------------------
+        for name in fields:
+            variable = self.dataset.variables.get(name)
+            if variable is None:
+                continue                                # the process died before creating it
+            spec = OPTIONAL_EXCHANGE_FIELDS[name]
+            if tuple(variable.dimensions) != tuple(spec["dimensions"]):
+                fail(f"{name} already exists with dimensions {tuple(variable.dimensions)}, not "
+                     f"{tuple(spec['dimensions'])}")
+            if _normalised_dtype(variable.dtype) != _normalised_dtype(spec["dtype"]):
+                fail(f"{name} already exists with dtype {np.dtype(variable.dtype)!s}, which "
+                     f"cannot hold the recorded integer values")
+        return pending
+
+    def _pending_error(self, detail):
+        raise StorageError(
+            f"{self.path} declares a pending migration that cannot be trusted: {detail}.\n"
+            f"  Nothing was changed. The transaction is not finished and this file will not be "
+            f"continued until the record is understood; a pending record decides which variables "
+            f"are created and what value is written over existing rows, so an untrusted one is "
+            f"refused rather than repaired.")
 
     def _apply_migration(self, pending):
         """Create what is missing and backfill the recorded range. Idempotent by construction.
@@ -714,6 +892,7 @@ class ReplicaReporter:
                 variable = self.dataset.createVariable(
                     name, spec["dtype"], tuple(spec["dimensions"]))
                 _migration_fault("after_create")
+                _migration_fault("after_create_durable", flush=self.dataset)
             if rows:
                 variable[:rows] = np.full(rows, pending["backfill"][name], dtype=np.int64)
         self.dataset.sync()
