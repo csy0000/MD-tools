@@ -387,3 +387,191 @@ The extension contract is:
 If the current `--extend` interface only appends in place, redesign it narrowly so the documented example produces a new extension directory without mutating its parent. Do not fake the requested structure by copying the parent or restarting from coordinates alone. The groupfile, `paths.sh`, README example, MD-project workflow, validation command, and execution journal must show the exact reproducible commands.
 
 The two 5 ns segments are the requested hardware validation exception. No other production-like test should duplicate them. If CUDA/MPI/AmberTools or wall time makes the full 5 ns + 5 ns validation unavailable, complete the implementation with short tests, record the exact limitation, and provide the exact command without claiming the long run passed.
+
+
+## 15. Superseding correction: linear generalized-Born scaling
+
+This section supersedes the generalized-Born rule in section 1 and the contrary decision recorded in
+the 2026-08-31 journals. The supported implicit-solvent GBn2 REST2 route must scale the complete
+generalized-Born energy contribution linearly:
+
+```text
+U_tau,implicit =
+    (1 - tau)^2 * U_solute-solute,ordinary-nonbonded
+  + (1 - tau)   * U_GB
+  + (1 - tau)^2 * U_eligible-solute-torsions
+  +                 U_bonds,angles,ordinary-amide-omega
+```
+
+For the supported whole-system implicit-solvent route, multiply the entire GB force contribution by
+`1 - tau`. This includes every term implemented by that GB force; do not obtain this result only by
+scaling charges, because charge scaling can leave non-charge-dependent terms unchanged. Do not
+silently apply the old solute-solute factor `(1-tau)^2` to GB. If a future partial-solute implicit
+system cannot partition GB contributions without changing the requested Hamiltonian, refuse it with
+a clear message rather than inventing a decomposition.
+
+Thread the already-derived linear factor into cloned-system generation and live `TauSwitcher`
+updates. Repeated switching must always restore from the unscaled reference and must not compound
+the factor.
+
+This physics change requires a new Hamiltonian identity:
+
+```yaml
+rest2_implementation:
+  name: rest2-no-bond-angle-omega
+  version: 2
+  state_coordinate: tau
+  solute_solute_nonbonded_scale: "(1-tau)^2"
+  solute_environment_nonbonded_scale: "1-tau"
+  generalized_born_scale: "1-tau"
+  eligible_solute_torsion_scale: "(1-tau)^2"
+  bonds: unscaled
+  angles: unscaled
+  ordinary_amide_omega: unscaled
+```
+
+Replace references to `rest2-no-bond-angle-omega/v1` in active code, schemas, generated records,
+tests, examples, and documentation with version 2. Preserve version 1 only as a historical identity
+that continuation and verification must refuse as Hamiltonian-incompatible. Do not rewrite old
+manifests or journals to pretend they used version 2.
+
+Add force-level and end-to-end tests at tau 0, at least one intermediate tau, and tau 0.5. Separate
+the ordinary nonbonded and GB energy groups and verify their ratios independently, for both cloned
+states and live switching. Retain the existing GBn2/mbondi3/no-SASA default checks. Record the
+resolved GB force class, scaling expression, and implementation identity in YAML and completion
+provenance.
+
+## 16. Superseding data lifecycle: finish locally, then register
+
+This section supersedes the direct-to-`$MD_DATA` generation path in sections 13 and 14 and in the
+current journals. The cleanup already recorded remains historical evidence, but the new validation
+must be generated first in the ignored project-local staging area:
+
+```text
+{MD-project checkout}/
+├── config/
+│   └── machine/
+│       └── machine.config       ignored, machine-local
+├── configs/
+│   └── data/
+│       └── ALA.yaml             tracked registration intent
+└── data/
+    └── ALA/                     ignored while active
+        ├── dataset.draft.yaml
+        ├── common/
+        ├── REST2/
+        └── REST2_ext1/
+```
+
+The initial 5 ns and genuine 5 ns extension from section 14 run under
+`./data/ALA/REST2/` and `./data/ALA/REST2_ext1/`. Generated launchers and records must remain
+valid before and after registration: use paths relative to the generated dataset root and do not
+embed the checkout path or the final `$MD_DATA` path.
+
+### Machine configuration
+
+Implement and document the ignored file exactly at:
+
+```text
+config/machine/machine.config
+```
+
+with a machine-local value such as:
+
+```yaml
+schema_version: 1
+paths:
+  md_data: /path/to/MD_DATA
+```
+
+`md-data-register` must discover the project root and read this file automatically. It must resolve
+and validate `paths.md_data`, require an existing writable managed root, reject a relative path,
+reject the filesystem root, and print the configuration file and resolved destination during
+preflight. Do not commit this file or copy its absolute path into portable project configuration.
+An explicit `--machine-config` may select another file, but normal use requires no machine-path
+argument. If the file or key is missing, stop with an actionable error before touching the dataset.
+
+### Registration ownership and interface
+
+Implement `md-data-register` in MD-project, not MD-templates. MD-templates emits
+`dataset.draft.yaml`, simulation manifests, and checksums it authoritatively knows; MD-project owns
+completion policy, common/project assignment, movement, symlink creation, and the `$MD_DATA`
+catalogue boundary. Reuse and migrate compatible schemas from MD-data rather than creating a
+competing manifest. Do not delete or archive the MD-data repository in this milestone.
+
+The normal interface is:
+
+```bash
+md-data-register \
+  --idata ./data/ALA/ \
+  --iconfig ./configs/data/ALA.yaml
+```
+
+and the same command with `--dry-run` must perform every read-only validation and print the exact
+plan without changing source, destination, registry, or symlinks.
+
+The tracked registration configuration owns human intent, including dataset ID/title, access and
+licensing status, and `common` versus project ownership. The generated draft owns generator facts.
+Merge them into one resolved authoritative dataset manifest during registration, retaining both
+source identities and checksums. A disagreement in an overlapping authoritative field is an error,
+not a precedence guess.
+
+### Finish gate
+
+Registration is forbidden until the dataset is finished. For this ALA acceptance dataset, the gate
+must establish read-only that:
+
+- `REST2/` completed exactly 5 ns per state;
+- `REST2_ext1/` is a genuine chained additional 5 ns per state;
+- the parent is unchanged and all parent/extension identities and checkpoint hashes agree;
+- the Hamiltonian is `rest2-no-bond-angle-omega/v2`;
+- all `remd{index}.nc` files, `exchange.nc`, `rem.log`, checkpoints, resolved YAML, completion
+  manifests, and extension provenance exist and validate;
+- state indices, tau ladder, topology, atom order, absolute steps/times, exchange numbering, and
+  committed-frame markers are coherent;
+- cpptraj parses every state trajectory and concatenates parent plus extension without a duplicate
+  or missing boundary frame;
+- required checksums are complete and no output is actively open or being written;
+- the source is a real directory inside this project checkout, is ignored by Git, and is not already
+  a symlink or registered destination.
+
+A failed gate leaves everything unchanged and reports every detected error where safe.
+
+### Transaction
+
+Registration must be restartable and failure-safe:
+
+1. inventory the source and calculate required checksums;
+2. resolve the common/project destination from the tracked configuration;
+3. refuse an existing conflicting dataset ID or destination;
+4. write a durable transaction plan and registration ID;
+5. stage the complete dataset at the destination;
+6. verify destination size, inventory, manifests, and checksums;
+7. atomically commit the resolved dataset manifest and catalogue entry;
+8. only then remove the original source directory;
+9. create `./data/ALA` as a symlink to the registered destination;
+10. verify the symlink and registered dataset read-only and mark the transaction complete.
+
+For different filesystems use copy, sync, checksum verification, destination commit, source removal,
+then symlink creation. Never delete the source after an incomplete copy. For the same filesystem an
+atomic rename is allowed only after all preflight checks and with a recoverable transaction record.
+On interruption, rerunning must resume or report the exact recoverable state; it must not duplicate,
+silently overwrite, or register a partial dataset.
+
+The symlink target should be relative when safely representable; otherwise document why an absolute
+machine-local symlink is required. The registered data and symlink remain ignored by Git, while
+`configs/data/ALA.yaml`, schemas, tests, and portable provenance references remain tracked.
+
+### Tests and acceptance
+
+Use temporary project and managed-data roots for unit/integration tests. Cover missing or malformed
+machine configuration, unsafe roots, dry-run purity, unfinished data refusal, active-writer refusal,
+common/project assignment, destination collision, same- and cross-filesystem transaction paths,
+checksum failure, interruption at every mutation boundary, idempotent resume, symlink creation, and
+post-registration verification.
+
+For the hardware example, capture inventories and checksums before and after registration and prove
+that the local source became a valid link to one complete registered dataset. Update MD-project
+documentation and its journal with the exact generation, finish-check, dry-run, registration, and
+verification commands. The long simulation must finish before registration begins; do not register
+partial output merely to demonstrate the CLI.
