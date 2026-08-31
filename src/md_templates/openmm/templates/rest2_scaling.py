@@ -100,6 +100,51 @@ def _scale_torsions(force, solute, solute_solute, excluded_bonds):
                                        k_value * solute_solute)
 
 
+#: Bumped when the omega classification RULES change, not when their inputs do. A record carrying
+#: this version says which algorithm decided what, so a stored exclusion can be re-derived.
+OMEGA_DETECTOR_VERSION = 1
+
+
+def torsion_exclusion_report(system, solute, excluded_bonds):
+    """Which PeriodicTorsionForce torsions each excluded central bond actually protects.
+
+    The stored exclusion is a pair of ATOM indices, but what it does is leave a set of TORSION
+    terms unscaled -- and the mapping between them depends on the force field that built the
+    System. Recording the bond alone means a reader has to re-derive that mapping to check
+    anything, using assumptions that may not match the ones used here. This records the result.
+
+    Only wholly-solute torsions are listed, because only those were candidates for scaling in the
+    first place; a torsion reaching into the environment is untouched either way. The predicate is
+    the same one `_scale_torsions` applies, so the report cannot describe a different exclusion
+    than the one performed.
+    """
+    excluded = {frozenset((int(a), int(b))) for a, b in excluded_bonds}
+    solute = set(int(i) for i in solute)
+    report = {tuple(sorted(bond)): [] for bond in excluded}
+    scaled = 0
+    for index in range(system.getNumForces()):
+        force = system.getForce(index)
+        if not isinstance(force, PeriodicTorsionForce):
+            continue
+        for torsion in range(force.getNumTorsions()):
+            i, j, k, l, _periodicity, _phase, _k = force.getTorsionParameters(torsion)
+            if not all(a in solute for a in (i, j, k, l)):
+                continue
+            central = frozenset((int(j), int(k)))
+            if central in excluded:
+                report[tuple(sorted(central))].append(int(torsion))
+            else:
+                scaled += 1
+    return {
+        "detector_version": OMEGA_DETECTOR_VERSION,
+        "excluded_central_bonds": [list(bond) for bond in sorted(report)],
+        "excluded_torsion_indices": {f"{a}-{b}": indices for (a, b), indices in sorted(
+            report.items())},
+        "n_excluded_torsions": sum(len(v) for v in report.values()),
+        "n_scaled_solute_torsions": scaled,
+    }
+
+
 def cmap_map_roles(force, solute):
     """Which CMAP maps belong to the solute, to the environment, or to both.
 

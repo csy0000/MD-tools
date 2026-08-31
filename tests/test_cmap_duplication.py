@@ -146,3 +146,58 @@ def test_repeated_switching_neither_accumulates_copies_nor_compounds_scaling():
         assert _energies(force, 0) == [4.0] * 4, "the environment's map must never change"
         assert _energies(force, 1) == pytest.approx([expected] * 4), (
             f"tau={tau} must be applied to the unscaled energies, not composed on the previous")
+
+
+# --- the omega exclusion, recorded as torsions rather than only as a bond -----------------------
+
+def _torsion_system(torsions, n_atoms=8):
+    system = openmm.System()
+    for _ in range(n_atoms):
+        system.addParticle(12.0)
+    force = openmm.PeriodicTorsionForce()
+    for (i, j, k, l) in torsions:
+        force.addTorsion(i, j, k, l, 1, 0.0, 10.0)
+    system.addForce(force)
+    return system
+
+
+def test_the_report_names_every_torsion_an_excluded_bond_protects():
+    """A stored bond needs a force field to mean anything. The report says which torsion terms
+    the exclusion actually left unscaled, against the System the ladder was built from."""
+    system = _torsion_system([(0, 1, 2, 3), (1, 2, 3, 4), (2, 1, 2, 5), (0, 1, 6, 7)])
+    report = scaling.torsion_exclusion_report(system, range(6), [(1, 2)])
+
+    assert report["detector_version"] == scaling.OMEGA_DETECTOR_VERSION
+    assert report["excluded_central_bonds"] == [[1, 2]]
+    assert report["excluded_torsion_indices"] == {"1-2": [0, 2]}, (
+        "both torsions about the excluded central bond, not just the first"
+    )
+    assert report["n_excluded_torsions"] == 2
+    assert report["n_scaled_solute_torsions"] == 1, "the environment-reaching torsion is neither"
+
+
+def test_the_report_uses_the_same_predicate_as_the_scaling():
+    """If the report and the scaling could disagree, the record would describe a different
+    exclusion than the one performed."""
+    system = _torsion_system([(0, 1, 2, 3), (1, 2, 3, 4)])
+    report = scaling.torsion_exclusion_report(system, range(6), [(1, 2)])
+    scaled = scaling.build_scaled_system(system, range(6), 0.5, excluded_bonds=[(1, 2)])
+    force = [scaled.getForce(i) for i in range(scaled.getNumForces())][0]
+
+    protected = report["excluded_torsion_indices"]["1-2"]
+    for index in range(force.getNumTorsions()):
+        k_value = force.getTorsionParameters(index)[6]
+        magnitude = float(k_value.value_in_unit(k_value.unit))
+        if index in protected:
+            assert magnitude == pytest.approx(10.0), "an excluded torsion must be unscaled"
+        else:
+            assert magnitude == pytest.approx(2.5), "a scaled solute torsion follows (1-tau)^2"
+
+
+def test_no_exclusions_reports_an_empty_mapping_not_a_missing_one():
+    system = _torsion_system([(0, 1, 2, 3)])
+    report = scaling.torsion_exclusion_report(system, range(6), [])
+    assert report["excluded_central_bonds"] == []
+    assert report["excluded_torsion_indices"] == {}
+    assert report["n_excluded_torsions"] == 0
+    assert report["n_scaled_solute_torsions"] == 1
