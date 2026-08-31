@@ -10,7 +10,8 @@ Nothing reads a live counter, because a live counter describes the last event an
 import numpy as np
 
 
-def lifetime_statistics(accepted, proposed, *, tau, reservoir_events=None):
+def lifetime_statistics(accepted, proposed, *, tau, reservoir_events=None,
+                        reservoir_velocity_seeds=None):
     """Aggregate the stored exchange history into lifetime figures.
 
     `accepted` and `proposed` are (exchanges, states, states) and NOT cumulative. Every stored row
@@ -66,6 +67,13 @@ def lifetime_statistics(accepted, proposed, *, tau, reservoir_events=None):
                                        for f in sorted(set(int(x) for x in used))} if used.size
                 else {},
                 "source_steps_used": sorted({int(s) for s in source_steps}) if used.size else [],
+                # Under `maxwell` every refresh redrew momenta from one of these seeds, and each
+                # draw can be reproduced from the storage alone. Empty under `stored`, where the
+                # recorded momentum was installed and nothing was drawn.
+                "velocity_seeds_used": (
+                    sorted({int(s) for s in np.asarray(reservoir_velocity_seeds, dtype=int)[
+                        attempted] if int(s) >= 0})
+                    if reservoir_velocity_seeds is not None else []),
                 "note": ("a reservoir refresh replaces a configuration and is NOT a swap; it is "
                          "never counted in the pair statistics above, and it is not a "
                          "thermodynamic-state round trip"),

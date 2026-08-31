@@ -161,6 +161,11 @@ class ReplicaReporter:
         dataset.createVariable("reservoir_frame", "i4", ("exchange",))
         dataset.createVariable("reservoir_source_step", "i8", ("exchange",))
         dataset.createVariable("reservoir_accepted", "i1", ("exchange",))
+        # The seed the momenta were drawn from, under `velocity_policy: maxwell`. -1 where no
+        # refresh happened, and where the policy is `stored` and nothing was drawn. Without it a
+        # Maxwell run is reproducible only by replaying the rule's RNG from the beginning; with
+        # it, any single refresh can be reproduced from the storage on its own.
+        dataset.createVariable("reservoir_velocity_seed", "i8", ("exchange",))
         last_exchange = dataset.createVariable("last_exchange", "i8")
         last_exchange.long_name = "the last FULLY committed exchange row"
         last_exchange[0] = -1
@@ -250,12 +255,13 @@ class ReplicaReporter:
         variables["accepted"][index, :, :] = np.asarray(accepted, dtype=np.int64)
         variables["u"][index, :, :] = np.asarray(u, dtype=float)
         variables["u_evaluated"][index, :, :] = np.asarray(u_evaluated, dtype=np.int8)
-        state, frame, source_step, outcome = (
-            (-1, -1, -1, -1) if reservoir is None else reservoir)
+        state, frame, source_step, outcome, velocity_seed = (
+            (-1, -1, -1, -1, -1) if reservoir is None else reservoir)
         variables["reservoir_state"][index] = int(state)
         variables["reservoir_frame"][index] = int(frame)
         variables["reservoir_source_step"][index] = int(source_step)
         variables["reservoir_accepted"][index] = int(outcome)
+        variables["reservoir_velocity_seed"][index] = int(velocity_seed)
         self.dataset.sync()
         variables["last_exchange"][0] = int(index)
         self.dataset.sync()
@@ -374,6 +380,19 @@ class ReplicaReporter:
             np.array(variables["reservoir_frame"][:last + 1], dtype=int),
             np.array(variables["reservoir_source_step"][:last + 1], dtype=int),
             np.array(variables["reservoir_accepted"][:last + 1], dtype=int)], axis=1)
+
+    def reservoir_velocity_seeds(self, upto=None):
+        """The Maxwell seed per exchange row; -1 where nothing was drawn.
+
+        Kept out of `reservoir_events` on purpose: that array is the statistics contract, and
+        widening it would change what every consumer indexes.
+        """
+        last = self.last_exchange() if upto is None else int(upto)
+        if last < 0:
+            return np.zeros((0,), dtype=int)
+        if "reservoir_velocity_seed" not in self.dataset.variables:
+            return np.full(last + 1, -1, dtype=int)
+        return np.array(self.dataset.variables["reservoir_velocity_seed"][:last + 1], dtype=int)
 
     def exchange_steps(self, upto=None):
         last = self.last_exchange() if upto is None else int(upto)

@@ -694,8 +694,12 @@ class ReplicaRun:
         state["configurations"][walker] = replacement
         if state_index in self.owned:
             self.engine.set_configuration(state_index, replacement)
+        # The seed is recorded only when it was actually used. Under `stored` nothing was drawn,
+        # and writing the rule's unused seed there would suggest a draw that never happened.
+        drawn_from = (int(refresh["velocity_seed"])
+                      if self.reservoir.velocity_policy == "maxwell" else -1)
         return (state_index, frame_index, int(source_step),
-                1 if refresh.get("accepted", True) else 0)
+                1 if refresh.get("accepted", True) else 0, drawn_from)
 
     def _write_checkpoint(self, state, schedule):
         storage.ReplicaCheckpoint(self.files.checkpoint).write(
@@ -743,8 +747,9 @@ class ReplicaRun:
         accepted, proposed = self.reporter.statistics()
         events = self.reporter.reservoir_events()
         mapping = self.reporter.mapping()
-        stats = lifetime_statistics(accepted, proposed, tau=self.protocol.tau,
-                                    reservoir_events=events)
+        stats = lifetime_statistics(
+            accepted, proposed, tau=self.protocol.tau, reservoir_events=events,
+            reservoir_velocity_seeds=self.reporter.reservoir_velocity_seeds())
         trips = round_trip_report(mapping, n_states=self.protocol.n_states)
 
         record = {
