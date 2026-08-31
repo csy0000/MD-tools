@@ -226,11 +226,14 @@ def _parse(argv):
     parser.add_argument("--reservoir", dest="reservoir", default=None,
                         help="a prepared reservoir manifest, for rules that need one")
     parser.add_argument("--resume", action="store_true",
-                        help="continue a run that stopped short of its budget, in place")
+                        help="GROUPED ONLY: continue a coordinated run that stopped short of its "
+                             "budget, in place")
     parser.add_argument("--extend", type=int, default=0, metavar="N",
-                        help="add N exchange attempts to a run that reached its budget")
+                        help="GROUPED ONLY: add N exchange attempts to a coordinated run that "
+                             "reached its budget")
     parser.add_argument("--force", action="store_true",
-                        help="replace existing outputs of a NEW run instead of refusing")
+                        help="replace existing outputs of a NEW run instead of refusing. This is "
+                             "not continuation: it starts over")
     parser.add_argument("--verify-only", action="store_true", dest="verify_only",
                         help="run nothing: open the stored output and report whether it is a "
                              "readable, coherent, complete run")
@@ -297,6 +300,27 @@ def validate(files, arguments, *, rank=0, groups=None):
     if grouped and files.trajectory is None:
         problems.append("-x is required in grouped mode: the analysis NetCDF is the authoritative "
                         "record of a coordinated run")
+
+    # -- continuation is a GROUPED capability ---------------------------------------------------
+    # Only the replica runtime implements append-safe continuation: it rewinds uncommitted rows,
+    # validates the stored output before opening it for writing, and reopens the analysis NetCDF
+    # in append mode on rank 0. The conventional single-protocol path does none of that -- it
+    # builds a fresh Simulation, resets time and step state, and creates its reporters from
+    # scratch -- so `--resume` there promised something nothing implements, and would have
+    # rewritten the DCD, checkpoint and phase-space outputs of the run it claimed to continue.
+    #
+    # Refused here, in the pure validation pass, so nothing is created, opened or imported first.
+    if continuing and not grouped:
+        flag = "--extend" if files.extend else "--resume"
+        problems.append(
+            f"{flag} is supported only with --groupfile. Append-safe continuation of a "
+            f"conventional cMD stage is not implemented: that path starts a fresh run and would "
+            f"write over the outputs of the one you meant to continue, so it is refused rather "
+            f"than approximated.\n"
+            f"  Run the stage into a new or empty output location instead, or wait for a "
+            f"dedicated continuation implementation. `--force` is a deliberate fresh-run "
+            f"replacement and is NOT continuation: it starts over rather than carrying anything "
+            f"forward.")
 
     if continuing and arguments.force:
         problems.append("--force replaces a new run's outputs and cannot be combined with "
