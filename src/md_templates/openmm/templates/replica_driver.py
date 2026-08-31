@@ -44,6 +44,7 @@ from exchange_rules import (ExchangeContext, NeighbouringExchangeRule, builtin_r
                             load_rule)
 from replica_engine import (Configuration, ReplicaEngine, resolve_platform,
                             select_device_for_rank, visible_cuda_devices)
+from rest2_scaling import require_compatible_implementation
 
 
 class DriverError(RuntimeError):
@@ -222,12 +223,14 @@ class ReplicaRun:
 
     # -- the run -------------------------------------------------------------------------------------
 
-    def run(self, *, resume=False, extend=0):
+    def run(self, *, resume=False, extend=0, extend_from=None):
         rule, rule_identity = self._load_rule()
         identity = self.scientific_identity(rule_identity)
         started = datetime.datetime.now(datetime.timezone.utc)
 
-        continuing = bool(resume or extend)
+        # An out-of-place extension continues its PARENT, not the file named by -x: that one is
+        # new and must not exist yet. The existence rule below is about the file being continued.
+        continuing = bool(resume or extend) and not extend_from
         if continuing and not Path(self.files.trajectory).exists():
             raise DriverError(
                 f"{self.files.trajectory} does not exist, so there is nothing to "
@@ -248,7 +251,8 @@ class ReplicaRun:
         interruption = _Interruption().install()
         state = None
         try:
-            state = self._begin(identity, systems, rule_identity, resume=resume, extend=extend)
+            state = self._begin(identity, systems, rule_identity, resume=resume,
+                                extend=extend, extend_from=extend_from)
             self._open_reservoir(systems)
             if self.reservoir is not None:
                 self.reservoir.check_box_matches(state["configurations"][0].box)
@@ -337,12 +341,15 @@ class ReplicaRun:
             "hostname": socket.gethostname(), "owned_states": list(self.owned),
         }
 
-    def _begin(self, identity, systems, rule_identity, *, resume, extend):
+    def _begin(self, identity, systems, rule_identity, *, resume, extend,
+               extend_from=None):
         seed = int(self.protocol.random_seed or 20260830)
         self.engine = ReplicaEngine(
             self.protocol, systems, self.topology, owned=self.owned,
             platform=self._platform, properties=self._properties, seed=seed)
 
+        if extend_from:
+            return self._extend_from(identity, Path(extend_from), extend=extend)
         if resume or extend:
             return self._continue(identity, extend=extend)
 
@@ -461,6 +468,183 @@ class ReplicaRun:
             return json.loads(Path(path).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
+
+    #: The parent's files, by the layout section 14 fixes. An extension reads exactly these.
+    PARENT_FILES = {"analysis": "exchange.nc", "checkpoint": "checkpoint.nc",
+                    "manifest": "restart.json"}
+
+    def _extend_from(self, identity, parent, *, extend):
+        """Continue a COMPLETED parent into a NEW output set, leaving the parent untouched.
+
+        This is not `--resume`, which reopens the parent's own files for append. Here the parent
+        is opened read-only, every reason to refuse is established before anything local is
+        created, and the new segment is written to its own storage. What carries across the
+        boundary is the physical state -- positions, velocities, box, the mapping, the RNG, the
+        rule's state, the absolute step and the exchange count -- and nothing else.
+
+        The parent is never opened for writing on any path in this method. That is the whole
+        contract: an extension that could modify its parent is not an extension, it is an
+        in-place append with extra directories.
+        """
+        payload = None
+        if self.coordinator.is_root:
+            import replica_validate
+
+            files = {name: parent / basename for name, basename in self.PARENT_FILES.items()}
+
+            # PHASE 1 -- READ ONLY, and complete. Nothing local exists yet, so a refusal here
+            # leaves no half-created extension directory behind to be mistaken for a run.
+            check = replica_validate.validate_replica_output(
+                analysis=str(files["analysis"]), checkpoint=str(files["checkpoint"]),
+                expect_completed=True, reconcilable=False)
+            if not check.ok:
+                raise storage.StorageError(replica_validate.format_report(
+                    check, title=f"{parent} cannot be extended"))
+
+            manifest = json.loads(files["manifest"].read_text(encoding="utf-8"))
+            if manifest.get("run_status") != "completed":
+                raise DriverError(
+                    f"{files['manifest']} records run_status "
+                    f"{manifest.get('run_status')!r}, not 'completed'. An extension continues a "
+                    f"finished parent; an unfinished one is resumed in place instead, with "
+                    f"--resume, so that its own budget is met before anything is added to it.")
+
+            stored = manifest.get("scientific_identity")
+            if stored is None:
+                raise IdentityError(
+                    f"{files['manifest']} carries no scientific identity, so what the parent was "
+                    f"created with cannot be established. Refusing rather than continuing a "
+                    f"Hamiltonian that cannot be checked.")
+            differences = self.compare_identity(stored, identity)
+            if differences:
+                raise IdentityError(
+                    "the extension does not describe the same run as its parent, so it would not "
+                    "be a continuation of it. These differ:\n  - " + "\n  - ".join(
+                        f"{key}: parent {stored.get(key)!r} vs here {identity.get(key)!r}"
+                        for key in differences))
+
+            require_compatible_implementation(
+                (stored.get("rest2_implementation") or {}),
+                what=f"the parent run in {parent}")
+
+            checkpoint = storage.ReplicaCheckpoint(str(files["checkpoint"])).read()
+            if int(checkpoint["step"]) != int(manifest["steps_completed"]):
+                raise DriverError(
+                    f"{parent} is inconsistent: the completion manifest says "
+                    f"{manifest['steps_completed']} steps but the terminal checkpoint holds "
+                    f"{checkpoint['step']}. The two must agree before anything continues from "
+                    f"either.")
+
+            inherited = {
+                "path": str(parent.resolve()),
+                "manifest": {"name": files["manifest"].name,
+                             "sha256": _sha256_of(files["manifest"])},
+                "checkpoint": {"name": files["checkpoint"].name,
+                               "sha256": _sha256_of(files["checkpoint"])},
+                "analysis": {"name": files["analysis"].name,
+                             "sha256": _sha256_of(files["analysis"])},
+                "state_trajectories": _state_trajectory_digests(
+                    parent, n_states=self.protocol.n_states),
+                "exchanges_committed": int(manifest["exchanges_committed"]),
+                "steps_completed": int(checkpoint["step"]),
+                "whole_frames": int(manifest["whole_frames"]),
+                "production_ps": float(manifest["production_ps_per_replica"]),
+                "completion_report": manifest.get("completion_report"),
+                "versions": manifest.get("versions"),
+                "execution": manifest.get("execution"),
+                "storage_migrations": list(manifest.get("storage_migrations") or []),
+            }
+
+            # PHASE 2 -- the parent has been accepted, so now the LOCAL set is created. The
+            # schedule is absolute: its total is the parent's plus the new segment, so steps and
+            # times in this directory carry on from the parent's terminal values rather than
+            # restarting at zero.
+            already = int(checkpoint["schedule"]["number_of_exchanges"])
+            schedule = self.protocol.schedule.extended(
+                already + int(extend) - self.protocol.schedule.number_of_exchanges)
+
+            storage.write_run_state(
+                self.files.trajectory, "initialized", identity=identity,
+                storage_migrations=[], total_steps=schedule.total_steps,
+                note=f"extension of {parent}; no new propagation has happened yet")
+            self.reporter = storage.ReplicaReporter.create(
+                self.files.trajectory, n_states=self.protocol.n_states,
+                n_atoms=checkpoint["configurations"][0].n_atoms,
+                n_solute_atoms=len(self.solute_indices),
+                has_box=checkpoint["configurations"][0].box is not None,
+                identity=identity,
+                metadata={"created_utc": datetime.datetime.now(
+                    datetime.timezone.utc).isoformat(),
+                    "versions": environment_versions(),
+                    "execution": self._run_context,
+                    "exchange_rule": identity.get("exchange_rule"),
+                    "extends": json.dumps(inherited, default=str)})
+            self.reporter.write_ladder(self.protocol.tau)
+            self.trajectories = state_trajectories.StateTrajectorySet.create(
+                Path(self.files.trajectory).parent,
+                taus=self.protocol.tau,
+                n_atoms=checkpoint["configurations"][0].n_atoms,
+                temperature_k=self.protocol.temperature_k, periodic=self._periodic,
+                program_version=environment_versions().get("md_templates", "0"))
+
+            print(f"# extending          : {parent}")
+            print(f"#   parent           : {inherited['steps_completed']} step(s), "
+                  f"{inherited['exchanges_committed']} exchange(s), "
+                  f"{inherited['production_ps']} ps, left unchanged")
+            print(f"#   this segment adds : {int(extend)} exchange(s) to step "
+                  f"{schedule.total_steps}")
+            sys.stdout.flush()
+
+            payload = {
+                "extends": inherited,
+                "storage_migrations": [],
+                "step": int(checkpoint["step"]),
+                "exchange_index": -1,
+                "frame_index": -1,
+                "solute_frame_index": -1,
+                "parent_exchange_index": int(checkpoint["exchange_index"]),
+                "state_to_walker": list(checkpoint["state_to_walker"]),
+                "rng": checkpoint["rng_states"]["exchange"],
+                "rule_state": dict(checkpoint["rule_state"]),
+                "total_steps": schedule.total_steps,
+                "number_of_exchanges": schedule.number_of_exchanges,
+                "configurations": [(c.positions, c.velocities, c.box)
+                                   for c in checkpoint["configurations"]],
+            }
+        payload = self.coordinator.bcast(payload)
+
+        rng = np.random.default_rng()
+        rng.bit_generator.state = payload["rng"]
+        schedule = self.protocol.schedule
+        if schedule.number_of_exchanges != payload["number_of_exchanges"]:
+            schedule = schedule.extended(
+                payload["number_of_exchanges"] - schedule.number_of_exchanges)
+
+        # The local counters start at -1: this storage holds the NEW segment only. The parent's
+        # counts are carried alongside, not added in, so a segment-local figure stays a
+        # segment-local figure and the chain total is an explicit sum rather than an accident.
+        state = {
+            "step": payload["step"], "exchange_index": -1,
+            "frame_index": -1, "solute_frame_index": -1,
+            "state_to_walker": list(payload["state_to_walker"]),
+            "configurations": [Configuration(p, v, b) for p, v, b in payload["configurations"]],
+            "schedule": schedule,
+            "rng": rng, "rule_state": dict(payload["rule_state"]),
+            "resumed_from_step": payload["step"], "interrupted": False,
+            "storage_migrations": [],
+            "extends": payload["extends"],
+            "parent_exchange_index": payload["parent_exchange_index"],
+        }
+        self.coordinator.agree(configuration_digest(state["configurations"]),
+                               what="the extended configurations")
+        if self.coordinator.is_root:
+            storage.write_run_state(
+                self.files.trajectory, "running", identity=identity,
+                total_steps=schedule.total_steps, resumed_from_step=int(state["step"]),
+                storage_migrations=[],
+                note=(f"extension of {payload['extends']['path']} started; that parent is "
+                      f"complete and is not written to"))
+        return state
 
     def _continue(self, identity, *, extend):
         """Rank 0 validates and decides; every other rank receives the decision.
@@ -931,6 +1115,47 @@ class ReplicaRun:
 
     # -- finishing ------------------------------------------------------------------------------------
 
+    def _extension_provenance(self, state, report):
+        """What this segment inherited, and what belongs to it alone.
+
+        Section 14 allows a cumulative figure for the whole chain and requires the segment-local
+        counts to stay distinguishable. Both are here, separately, and the chain figure is a
+        stated sum of two stated segments rather than a number whose provenance has to be
+        reconstructed.
+        """
+        parent = dict(state["extends"])
+        parent_report = parent.get("completion_report") or {}
+        parent_overall = parent_report.get("overall") or {}
+        segment = report["overall"]
+
+        accepted = int(segment["accepted"]) + int(parent_overall.get("accepted") or 0)
+        proposed = int(segment["proposed"]) + int(parent_overall.get("proposed") or 0)
+        chain = {"accepted": accepted, "proposed": proposed,
+                 "acceptance": (accepted / proposed) if proposed else None,
+                 "complete": bool(parent_overall)}
+        return {
+            "format": "md-templates-extension/v1",
+            "parent": parent,
+            "segment": {
+                "steps": int(state["step"]) - int(parent["steps_completed"]),
+                "starts_after_step": int(parent["steps_completed"]),
+                "exchanges": int(self.reporter.last_exchange()) + 1,
+                "first_exchange_number": int(parent["exchanges_committed"]) + 1,
+                "production_ps": (state["schedule"].step_to_ps(state["step"])
+                                  - float(parent["production_ps"])),
+                "neighbouring_acceptance": segment,
+            },
+            "chain": {
+                "steps": int(state["step"]),
+                "exchanges": int(parent["exchanges_committed"])
+                             + int(self.reporter.last_exchange()) + 1,
+                "production_ps": state["schedule"].step_to_ps(state["step"]),
+                "segments": 2 if not parent.get("chain_length") else
+                            int(parent["chain_length"]) + 1,
+                "neighbouring_acceptance": chain,
+            },
+        }
+
     def _record_interruption(self, state, identity):
         if self.coordinator.is_root:
             storage.write_run_state(
@@ -1027,6 +1252,8 @@ class ReplicaRun:
             "execution": self._run_context,
             "final_state_to_walker": list(state["state_to_walker"]),
         }
+        if state.get("extends"):
+            record["extends"] = self._extension_provenance(state, report)
         if self.reservoir is not None:
             record["reservoir"] = self.reservoir.describe()
         storage.write_atomic(self.files.restart,
@@ -1050,6 +1277,32 @@ def _stream_seed(base, name):
     for byte in str(name).encode("utf-8"):
         value = (value * 1000003 + byte) & 0xFFFFFFFF
     return (value % (2 ** 31 - 1)) or 1
+
+
+def _sha256_of(path, *, chunk=1 << 20):
+    """The file exactly as it is on disk. Provenance that names a parent without pinning its
+    contents records only where someone looked, not what they found."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(chunk), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _state_trajectory_digests(directory, *, n_states):
+    """The parent's per-state trajectories, pinned. A missing one is recorded as missing rather
+    than skipped: a silent gap in this list would read as a parent that had fewer states."""
+    from amber_trajectory import state_trajectory_name
+
+    records = []
+    for index in range(int(n_states)):
+        path = Path(directory) / state_trajectory_name(index)
+        records.append({
+            "index": index, "name": path.name,
+            "sha256": _sha256_of(path) if path.is_file() else None,
+            "present": path.is_file(),
+        })
+    return records
 
 
 def _encode_rng(generator):

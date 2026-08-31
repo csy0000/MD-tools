@@ -79,7 +79,21 @@ def format_header(n_exchanges, *, remlog_name="rem.log", remtype_name="rem.type"
 
 
 def format_block_header(exchange_number):
-    """1-based, as Amber writes it."""
+    """1-based, as Amber writes it.
+
+    ACROSS AN EXTENSION BOUNDARY the numbering is SEGMENT-LOCAL: an extension's `rem.log` starts
+    again at exchange 1, exactly as Amber's does when a run is restarted, and its `numexchg` is
+    that segment's own count. Two reasons, in order:
+
+      * `numexchg` must equal the number of blocks in the file -- cpptraj checks it and reports a
+        mismatch -- so a file numbered 7..12 with `numexchg 6` is self-inconsistent by that check;
+      * it is what Amber does, and this format exists to be read by tools that expect Amber.
+
+    cpptraj was measured on both conventions and parses either (it does not read the block number
+    at all), so this is a deliberate choice rather than a constraint. The absolute position of the
+    segment is not lost: the extension provenance records `first_exchange_number`, which is where
+    this segment's block 1 falls in the chain.
+    """
     return f"# exchange {int(exchange_number):8d}"
 
 

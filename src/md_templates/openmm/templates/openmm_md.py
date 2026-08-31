@@ -232,6 +232,11 @@ def _parse(argv):
     parser.add_argument("--extend", type=int, default=0, metavar="N",
                         help="GROUPED ONLY: add N exchange attempts to a coordinated run that "
                              "reached its budget")
+    parser.add_argument("--extend-from", dest="extend_from", default=None, metavar="DIRECTORY",
+                        help="GROUPED ONLY: continue a COMPLETED run held in DIRECTORY, writing a "
+                             "new output set here. The parent is opened read-only and is left "
+                             "byte-for-byte unchanged; use --extend N to say how much new "
+                             "dynamics to add. Without it, --extend lengthens the run in place")
     parser.add_argument("--force", action="store_true",
                         help="replace existing outputs of a NEW run instead of refusing. This is "
                              "not continuation: it starts over")
@@ -261,6 +266,10 @@ def resolve(arguments):
         files[name] = str(path)
     files["resume"] = bool(arguments.resume)
     files["extend"] = int(arguments.extend or 0)
+    parent = getattr(arguments, "extend_from", None) or os.environ.get("OPENMM_EXTEND_FROM")
+    files["extend_from"] = str(Path(parent).expanduser()) if parent else None
+    if files["extend_from"] and not Path(files["extend_from"]).is_dir():
+        problems.append(f"--extend-from {files['extend_from']} is not a directory")
     return SimpleNamespace(**files), problems
 
 
@@ -274,7 +283,10 @@ def validate(files, arguments, *, rank=0, groups=None):
     """Everything decidable without touching OpenMM or writing a byte."""
     problems = []
     grouped = bool(arguments.groupfile)
-    continuing = bool(files.resume or files.extend)
+    extending_out = bool(getattr(files, "extend_from", None))
+    # An out-of-place extension writes a NEW output set, so it is a fresh run as far as the
+    # output rules are concerned: `-x` here must NOT exist, and the parent is never an output.
+    continuing = bool(files.resume or files.extend) and not extending_out
 
     # -- mode ---------------------------------------------------------------------------------
     if grouped and arguments.number_of_groups is None:
@@ -329,6 +341,39 @@ def validate(files, arguments, *, rank=0, groups=None):
                         "--resume/--extend, which continue an existing one")
     if files.extend < 0:
         problems.append(f"--extend must be >= 0; got {files.extend}")
+
+    # -- out-of-place extension -----------------------------------------------------------------
+    if extending_out:
+        parent = Path(files.extend_from)
+        if not grouped:
+            problems.append("--extend-from is supported only with --groupfile: only the replica "
+                            "runtime can carry a coordinated ladder across a boundary")
+        if not files.extend:
+            problems.append("--extend-from needs --extend N: how much new dynamics the extension "
+                            "adds is stated, never inherited from the parent's own budget")
+        if files.resume:
+            problems.append("--resume continues a run in place and --extend-from writes a new "
+                            "output set; they are different operations and cannot be combined")
+        if arguments.force:
+            problems.append("--force replaces outputs; an extension never writes into its parent "
+                            "and has nothing to replace")
+        for name, value in _outputs(files).items():
+            try:
+                inside = parent.resolve() in Path(value).resolve().parents
+            except OSError:
+                inside = False
+            if inside:
+                problems.append(
+                    f"--{name} {value} is inside the parent {parent}. The parent of an extension "
+                    f"is immutable: it is read, never written, and an output placed inside it "
+                    f"would modify the very run being continued.")
+        missing = [name for name in ("exchange.nc", "checkpoint.nc", "restart.json")
+                   if not (parent / name).is_file()]
+        if missing and parent.is_dir():
+            problems.append(
+                f"{parent} is not a completed run: {', '.join(missing)} missing. An extension "
+                f"continues a finished parent, and a parent that never finished is refused "
+                f"read-only rather than continued from whatever it happens to hold.")
 
     # -- paths ---------------------------------------------------------------------------------
     inputs = {name: getattr(files, name)
@@ -515,7 +560,8 @@ def run_grouped(files, arguments, groups):
         precision=getattr(protocol, "precision", None),
         identity_extra={"groups": len(groups),
                         "group_indices": [g["group_index"] for g in groups]})
-    record = run.run(resume=files.resume, extend=files.extend)
+    record = run.run(resume=files.resume, extend=files.extend,
+                     extend_from=getattr(files, 'extend_from', None))
     if record.get("run_status") == "completed":
         _print_grouped_summary(record, protocol)
         print(COMPLETION_MARKER)
@@ -598,7 +644,8 @@ def main(argv=None):
         Path(value).parent.mkdir(parents=True, exist_ok=True)
 
     report = Path(report_path_for_rank(files.output, rank))
-    mode = "a" if (files.resume or files.extend) else "w"
+    mode = "a" if (files.resume or files.extend) and not getattr(
+        files, "extend_from", None) else "w"
     status = 0
     with open(report, mode, encoding="utf-8", buffering=1) as handle:
         with contextlib.redirect_stdout(handle), contextlib.redirect_stderr(handle):
