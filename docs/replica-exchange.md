@@ -75,11 +75,33 @@ already written.
 An rREST2 reservoir stores **positions and velocities and boxes**. A DCD cannot store velocities,
 so a DCD is not a phase-space reservoir and is refused as a source.
 
+Both policies read the **same** source. The phase-space NetCDF is what carries positions, box,
+absolute source step and time, the Hamiltonian identity, the atom identity and the completion
+marker in one auditable file; the policy decides what is done with the recorded momenta and does
+not widen the source format.
+
 `velocity_policy: stored` is the default: the recorded momentum is installed unchanged, which is
-what the probability-one acceptance assumes. `maxwell` redraws at the common temperature from a
-recorded seed and must be asked for **explicitly** -- there is no silent fallback when velocities
-are missing, absent or identically zero. Each of those is a hard error at the moment the source is
-opened, not at the refresh thousands of steps later.
+what the probability-one acceptance assumes. It requires finite, correctly shaped, **nonzero**
+velocities in every frame.
+
+`maxwell` is an explicit alternative. It uses the source positions and box and **deliberately
+ignores** the recorded velocity values, redrawing at the one common temperature from a seed
+recorded per refresh -- so any single draw is reproducible from the storage alone. Under MPI only
+the owning rank calls OpenMM's draw and the resulting array is shared, so serial and six ranks
+install identical momenta.
+
+`maxwell` is **not** DCD or coordinate-only support. A DCD carries no Hamiltonian identity, no
+absolute source step and no completion marker, so it satisfies this contract under neither policy.
+A coordinate-only source would need its own versioned, separately validated contract; there is
+none.
+
+There is no silent fallback. Velocities that are missing, the wrong shape, non-finite or
+identically zero are a hard error when the source is opened, never a quiet switch to `maxwell`.
+
+The reservoir is materialised **without replacement**, and asking for it is refused before a
+directory exists. A repeated draw would give one configuration extra statistical weight, make
+`frames` overstate the effective reservoir size, and produce a file this repository's own
+strictly-increasing-step check rejects.
 
 ## One Hamiltonian, recomputed on both sides
 
@@ -244,7 +266,15 @@ else would see it.
 `--resume` needs no `restart.json`. `--extend N` requires a run that reached its budget and adds
 exactly N attempts **to the budget that run reached**, not to the one in the protocol file: a run
 already extended once stores a larger budget than the protocol describes, and extending the
-protocol's would produce a total below the steps already run.
+protocol's would produce a total below the steps already run. For the same reason the validator
+treats the identity's `number_of_exchanges` as a **floor** -- an extended run legitimately holds
+more rows than the protocol was created with.
+
+Both flags are **grouped only**. The conventional single-protocol path builds a fresh run -- it
+resets time and step state and creates its reporters from scratch -- so append-safe continuation
+of a cMD stage is not implemented, and asking for it is refused in the validation pass before a
+directory is created, a report is opened or the protocol is imported. A refused invocation leaves
+every existing byte untouched. `--force` is a deliberate fresh-run replacement, not continuation.
 
 An interruption is neither success nor failure and exits with its own status (130). The executor's
 promise check -- "the protocol finished but did not write X" -- applies only to a run that claims
