@@ -56,7 +56,11 @@ def _check_manifest_paths(manifest_path, record, result):
     """
     directory = Path(manifest_path).resolve().parent
     for key, name in (record.get("storage") or {}).items():
-        if key in ("schema", "authoritative") or name is None:
+        # The block mixes filenames with description. `schema` names a format, `authoritative`
+        # names another KEY of this block, and `coordinate_indexing` says how the stored
+        # coordinates are indexed -- none of them is a file, and checking them as files failed
+        # every extended run with "walker does not exist beside the manifest".
+        if key in ("schema", "authoritative", "coordinate_indexing") or name is None:
             continue
         if Path(name).is_absolute() or Path(name).name != name:
             result.fail(
@@ -215,12 +219,27 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
             accepted, proposed, tau=identity.get("tau") or list(range(n_states)),
             reservoir_events=events)
         result.note("exchanges_committed", stats["exchanges_committed"])
+        # The identity records what was ORIGINALLY requested, and `--extend` legitimately runs
+        # past it: a run extended twice holds more rows than the protocol ever asked for. So the
+        # identity's count is a FLOOR, and the authoritative budget is the schedule the run
+        # actually finished under -- the manifest's, or the sidecar's, whichever exists.
         expected = identity.get("number_of_exchanges")
-        if expect_completed and expected is not None and stats["exchanges_committed"] != int(
+        actual_budget = None
+        if isinstance(record, dict):
+            schedule = record.get("schedule")
+            if isinstance(schedule, dict):
+                actual_budget = schedule.get("number_of_exchanges")
+        if actual_budget is not None:
+            result.note("budget_exchanges", int(actual_budget))
+            if expect_completed and stats["exchanges_committed"] != int(actual_budget):
+                result.fail(
+                    f"the storage holds {stats['exchanges_committed']} exchange row(s) but the "
+                    f"run finished under a budget of {int(actual_budget)} attempts")
+        elif expect_completed and expected is not None and stats["exchanges_committed"] < int(
                 expected):
             result.fail(
-                f"the storage holds {stats['exchanges_committed']} exchange row(s) but the run "
-                f"promised {int(expected)} attempts")
+                f"the storage holds {stats['exchanges_committed']} exchange row(s), fewer than "
+                f"the {int(expected)} attempts the run was created to make")
         if stats["reservoir"]:
             result.note("reservoir_attempts", stats["reservoir"]["attempts"])
     except Exception as failure:
