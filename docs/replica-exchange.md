@@ -288,6 +288,57 @@ openmm-md --verify-only -x REST2/rest2.nc --checkpoint REST2/rest2_checkpoint.nc
 The validator **opens and reads** the files. A file that exists is what a crashed run leaves
 behind, so existence is never treated as completion.
 
+## Optional v2 fields, and the rank-0 migration
+
+`md-templates-replica-exchange/v2` has one **optional** field on the `exchange` dimension:
+
+```
+reservoir_velocity_seed[exchange]    i8, -1 where nothing was drawn
+```
+
+It was added to v2 after v2 was first published, so a file written by an earlier build of this
+same schema legitimately lacks it. That is not corruption: v2's meaning did not change, it gained a
+record. Bumping to v3 would have been the heavier answer to a strictly additive change, and would
+have made every existing v2 file unreadable by a runtime that can in fact read it.
+
+Readers tolerate absence and report `-1`, which is the field's **meaning** for those rows rather
+than a placeholder: files that predate it also predate working Maxwell refreshes, and a
+stored-velocity refresh draws no momenta. So an older stored-mode run and a Maxwell run stay
+scientifically distinguishable — the migrated history of the former contains only `-1`.
+
+When rank 0 continues such a file it adds the field **once, before any step is integrated**:
+
+```
+read-only validation of every authoritative file
+  → identity, checkpoint, counters, schedule and continuation request checked, still read-only
+    → close the read-only handle
+      → open the analysis NetCDF for append, rank 0 only
+        → ensure the optional fields exist; initialise existing rows
+          → rewind uncommitted rows, broadcast the decision
+            → propagate
+```
+
+The ordering is the safety property. **A file is never modified merely because it could be
+opened**: an identity mismatch, a corrupt or truncated file, a bad completion marker, a checkpoint
+or schedule disagreement, an invalid `--resume`/`--extend` request or an unsupported schema all
+refuse while the file is still open read-only, and leave every byte unchanged.
+
+An existing field is validated, never deleted or replaced. Wrong dimensions or a non-integer type
+is a refusal, because silently redefining a variable whose provenance is unknown would destroy a
+record.
+
+Migration is never lazy. A schema error surfaces before new dynamics exist, not at the first
+exchange after propagation has begun. `--verify-only` stays read-only and accepts an older file
+without adding anything.
+
+What was done is recorded twice: in the run-state sidecar while the continuation runs, and in the
+completion manifest as `storage_migration` — including how many exchanges the file already held,
+which is what explains a leading run of `-1` in a seed history.
+
+Schema knowledge lives in `replica_storage.py` (`OPTIONAL_EXCHANGE_FIELDS`,
+`inspect_optional_exchange_fields()`, `ensure_optional_exchange_fields()`). The driver decides
+*when* to migrate; it never creates a NetCDF variable itself.
+
 ## Parallel policy
 
 World size must be **1 or exactly the number of states**. Nothing in between: a policy that
