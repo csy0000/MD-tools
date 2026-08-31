@@ -66,6 +66,7 @@ SPEC = [
     ("checkpoint",  None, "--checkpoint",  "OPENMM_CHECKPOINT",  False, False),
     ("restart",     "-r", "--restart",     "OPENMM_RESTART",     False, True),
     ("solute_x",    None, "--solute-x",    "OPENMM_SOLUTE_X",    False, False),
+    ("rem",         None, "--rem",         "OPENMM_REM",         False, False),
 ]
 
 #: What a GROUP line may carry. Inputs only, plus its index. Anything else is refused by name.
@@ -283,7 +284,8 @@ def validate(files, arguments, *, rank=0, groups=None):
         problems.append("-ng describes a group file and has no meaning without --groupfile")
     if not grouped:
         for flag, value in (("--exchange-rule", arguments.exchange_rule),
-                            ("--reservoir", arguments.reservoir)):
+                            ("--reservoir", arguments.reservoir),
+                            ("--rem", getattr(files, "rem", None))):
             if value:
                 problems.append(f"{flag} applies to a coordinated run and needs --groupfile")
     if grouped and groups is not None:

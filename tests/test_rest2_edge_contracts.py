@@ -257,6 +257,7 @@ class _Files:
         self.restart = None
         self.checkpoint = None
         self.solute_x = None
+        self.rem = None
         self.resume = resume
         self.extend = extend
 

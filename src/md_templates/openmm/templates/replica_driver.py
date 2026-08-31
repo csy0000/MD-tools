@@ -38,6 +38,7 @@ import numpy as np
 
 import hamiltonian_identity
 import replica_storage as storage
+import rem_log
 import state_trajectories
 from exchange_rules import (ExchangeContext, NeighbouringExchangeRule, builtin_rule_identity,
                             load_rule)
@@ -744,6 +745,8 @@ class ReplicaRun:
                         solute_indices=self.solute_indices)
                 if "checkpoint" in events:
                     self._write_checkpoint(state, schedule)
+                    # Kept in step with the checkpoint: both describe committed rows.
+                    self._write_rem_log()
             self.coordinator.barrier()
 
             # A termination request becomes collective HERE, at an event boundary where every rank
@@ -870,6 +873,28 @@ class ReplicaRun:
         return (state_index, frame_index, int(source_step),
                 1 if refresh.get("accepted", True) else 0, drawn_from)
 
+    def _write_rem_log(self):
+        """Regenerate `rem.log` in full from committed exchange rows, and replace it atomically.
+
+        A projection, never an authority: every row comes from `exchange.nc`, so the log cannot
+        drift from the record it describes. Rewriting rather than appending is what makes it
+        crash-safe -- a torn append would disagree with the record and nothing in the file would
+        say which half was true.
+        """
+        path = getattr(self.files, "rem", None)
+        if not path or not self.coordinator.is_root:
+            return None
+        last = self.reporter.last_exchange()
+        if last < 0:
+            return None
+        accepted, proposed = self.reporter.statistics()
+        exchanges = [(proposed[i], accepted[i], self.reporter.reduced_potentials(i)[0])
+                     for i in range(last + 1)]
+        blocks = rem_log.build(n_states=self.protocol.n_states, exchanges=exchanges,
+                               beta=self.protocol.beta,
+                               temperature_k=self.protocol.temperature_k)
+        return rem_log.write(path, blocks, remlog_name=Path(path).name)
+
     def _write_checkpoint(self, state, schedule):
         storage.ReplicaCheckpoint(self.files.checkpoint).write(
             step=state["step"], exchange_index=state["exchange_index"],
@@ -972,6 +997,7 @@ class ReplicaRun:
         # The completed sidecar carries the history too. It is one of the sources a later
         # continuation merges, and a `completed` record that reported none would be a source
         # claiming this file had never been migrated.
+        self._write_rem_log()
         storage.write_run_state(self.files.trajectory, "completed", identity=identity,
                                 step=completed,
                                 storage_migrations=list(state.get("storage_migrations") or []),

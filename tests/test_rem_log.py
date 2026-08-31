@@ -211,3 +211,48 @@ def test_cpptraj_reconstructs_the_exchange_history_we_recorded(tmp_path):
     # states 0 and 1 swapped their coordinate sets; the rest stayed put.
     assert first[0] == "2" and first[1] == "1", produced[:3]
     assert first[2:] == ["3", "4", "5", "6"], produced[:3]
+
+
+# --- the --rem flag ------------------------------------------------------------------------------
+
+def test_rem_is_a_coordinated_flag_and_needs_a_groupfile():
+    """Like --exchange-rule and --reservoir: it describes a ladder, not a single protocol."""
+    import openmm_md
+
+    class _Files:
+        def __init__(self, rem):
+            for name in ("input", "topology", "system", "coordinates", "output", "trajectory",
+                         "restart", "checkpoint", "solute_x"):
+                setattr(self, name, None)
+            self.output = "run.out"
+            self.rem = rem
+            self.resume, self.extend = False, 0
+
+    class _Arguments:
+        groupfile = None
+        number_of_groups = None
+        exchange_rule = None
+        reservoir = None
+        force = False
+
+    problems = openmm_md.validate(_Files("rem.log"), _Arguments(), rank=0, groups=None)
+    assert any("--rem" in p and "groupfile" in p for p in problems), problems
+
+    assert not [p for p in openmm_md.validate(_Files(None), _Arguments(), rank=0, groups=None)
+                if "--rem" in p], "no --rem, no complaint"
+
+
+def test_the_flag_is_spelled_exactly_as_documented():
+    source = (TEMPLATES / "openmm_md.py").read_text(encoding="utf-8")
+    assert '"--rem"' in source
+    assert '"OPENMM_REM"' in source
+
+
+def test_the_driver_regenerates_rather_than_appends():
+    """A torn append would disagree with the record it came from, with nothing saying which half
+    is true. The log is rewritten in full from committed rows and replaced atomically."""
+    driver = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    block = driver[driver.index("def _write_rem_log"):driver.index("def _write_checkpoint")]
+    assert "rem_log.build" in block and "rem_log.write" in block
+    assert "last_exchange()" in block, "the log must be built from committed rows only"
+    assert "self.coordinator.is_root" in block, "only rank 0 writes it"
