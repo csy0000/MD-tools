@@ -245,10 +245,109 @@ and repeated switching 0.5 → 0.25 → 0.5 returns to the same energy rather th
 
 `test_fixed_tau_md.py` is updated where it pinned the superseded rule.
 
+## Second pass — everything remaining, and four defects the tests could not see
+
+### The class of defect, and the fix for the class
+
+Every test of `replica_driver` reads its source text or binds one of its methods to a stub.
+Nothing executed `_loop`. Four things were committed and pushed in that state, each of which a
+single real run breaks on:
+
+| defect | consequence | committed in |
+|---|---|---|
+| `self.trajectories` used by the frame event and at close, **never assigned anywhere** | the per-state trajectories were never created; a real run raised `AttributeError` at its first frame | `1614eb5` |
+| `completion_report` called without being imported | `NameError` at completion | this pass |
+| `--rem` parsed, validated and documented, never put into the driver's `files` | `_write_rem_log` returned early every time; no real run wrote a REM log | `0cf93f6` |
+| `rem_log`, `amber_trajectory`, `state_trajectories` missing from the generated-project copy list | every generated ladder raised `ImportError` at launch | `1614eb5` |
+
+The third was found by `ruff --select F821`; the first and fourth by writing the test that should
+have existed all along.
+
+`tests/test_grouped_run_end_to_end.py` now runs one complete grouped REST2 ladder — two states,
+alanine dipeptide in vacuum, CPU platform, a few seconds — through the real `openmm_md.py` entry
+point with a real group file, and asserts the state trajectories, the REM log, the completion
+report and a continuation. `tests/test_generated_project_completeness.py` checks the copy list
+against the driver's actual import-time closure, computed from the source rather than remembered.
+
+### §4 — the resolved state records
+
+`restart.json` gains `states`: index, trajectory basename, exact tau, and
+`effective_temperature_k = T_physical / (1 - tau)^2`, derived and reporting-only.
+
+Not in `protocol.describe()`, which feeds the identity a continuation compares key by key: a
+reporting field there would make every previously written file report a difference and refuse to
+continue. A test states exactly that, because the mistake is an easy one and looks tidier.
+
+### §8 — the completion report
+
+Neighbouring pairs, an overall figure, and nothing else, from one builder that renders both the
+persisted record and the terminal summary so the two cannot drift.
+
+Round-trip counting was **removed** rather than merely unprinted, together with
+`count_round_trips` and `round_trip_report`. It needs burn-in and window choices this layer has no
+basis to make, and a number printed at completion is quoted as though the choice had been
+justified. `mapping_is_permutation_every_iteration` stayed and is recorded as `mapping_integrity`
+— that is storage integrity, not analysis.
+
+### §3 — the omega record
+
+`solute.yaml` now carries the detection route, the detector version, the ambiguous candidates with
+evidence (bond, both residues by name and index, and the classifier's own sentence), and the exact
+`PeriodicTorsionForce` indices each excluded central bond protects.
+
+`tests/test_omega_classification_cases.py` states the six cases, each with its reason. The two
+worth repeating: an **N-methyl amide is ordinary**, because an N-methylated amide isomerises more
+readily than an N-H amide rather than less; and the **≤ 7-membered ring bound** is what makes the
+ligand route correct for macrocycles, since every backbone nitrogen of a cyclic peptide is "in a
+ring" and an unbounded `[NX3;R]` test would free every macrocyclic omega for scaling.
+
+### §14 — `--extend-from`
+
+The parent is opened read-only and every refusal is decided before anything local exists.
+`AmberTrajectoryWriter.open_existing` reopens a state trajectory for append at the committed-frame
+marker, checking state index, tau, atom count and conventions first;
+`StateTrajectorySet.continue_from` inspects the whole set read-only and refuses before touching
+any file, so a corrupt member cannot be found after the healthy ones were appended to.
+
+Two things worth recording:
+
+* The first version assumed the parent's files were named `exchange.nc` and `checkpoint.nc` — the
+  names §14's illustration uses and that nothing real uses. A generated ladder writes `rest2.nc`
+  and `rest2_checkpoint.nc`. Only `restart.json` is assumed now; the rest is read out of it.
+* **The continuation is proved, not asserted.** The out-of-place extension runs beside an in-place
+  `--extend` of the same parent and the frames must be *identical*. A rerun from the input
+  coordinates, a coordinate-only restart or a dropped RNG state each break that at once.
+
+**rem.log across the boundary** is segment-local, from 1, as Amber does on restart, with
+`numexchg` counting that segment's blocks — which cpptraj checks. Both conventions were measured
+against the installed cpptraj (V7.6.2) first: it parses either and never reads the block number,
+so this is a choice and it is recorded as one. The absolute offset lives in the extension
+provenance as `first_exchange_number`.
+
+### The staging exception
+
+`resolve_output_root` still refuses an output inside a git working tree — an ignore rule is one
+`git add -f` from being wrong. One exception now exists for the staging step the registration
+pipeline needs, and it is checked rather than declared: `MD_TEMPLATES_ALLOW_STAGING=1`, a
+`.md-staging` marker visible in the tree, and `git check-ignore`'s opinion about a path *beneath*
+the root — not the root, which is usually tracked. Any one missing and the refusal stands.
+
+### Commands and results
+
+```bash
+export PATH=/path/to/software/md-stack/envs/openmm-rest2/bin:$PATH
+python -m pytest tests -q -p no:randomly        # 900 passed
+ruff check --select F821 src tests              # all checks passed
+```
+
+Without the scientific environment on `PATH`, `test_a_stage_runs_with_md_templates_unavailable`
+fails: the generated launcher resolves `python` from `PATH` and finds an interpreter with no
+OpenMM. That is the test working.
+
 ## Still unfinished in this repository
 
-Items 1–7 of the dependency list above are unchanged: the driver integration that replaces the
-bundled coordinate layout, the `exchange.nc` schema version, the multi-file commit protocol, the
-`--rem` flag, resolved per-state YAML, the neighbouring-only report, and the omega
-ambiguous-candidate evidence. Item 8, the extension-directory interface, still blocks the 5 ns
-validation.
+Nothing from the dependency list. Items 1–8 are all complete, and the ALA 5 ns + 5 ns validation
+is recorded in the MD-project journal, `docs/journals/20260831_rest2-state-trajectories.md`, which
+is where the dataset and the registration pipeline live.
+
+**Local validation only.** No CI ran on these commits and none is claimed.
