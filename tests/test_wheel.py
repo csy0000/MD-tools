@@ -23,7 +23,7 @@ def _template_files() -> set[str]:
 
     templates = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
     local = {p.name for p in templates.glob("*.py")}
-    seen, queue = set(), ["openmm_md.py", "replica_driver.py", "rest2_run.py"]
+    seen, queue = set(), ["openmm_md.py", "replica_driver.py", "replica_runtime.py"]
     while queue:
         name = queue.pop()
         if name in seen or name not in local:
@@ -94,14 +94,14 @@ def _outside(site, work, *args):
 
 
 def test_the_wheel_contains_every_generated_project_file(installed):
-    """Every template md-gen copies must be in the wheel, and nothing dead should be."""
+    """Every runtime module a generated script reaches must be in the wheel, nothing dead."""
     site, _ = installed
     templates = site / "md_tools" / "openmm" / "templates"
     assert templates.is_dir(), "the templates directory did not survive packaging"
     present = {path.name for path in templates.iterdir() if path.is_file()}
     assert TEMPLATE_FILES <= present, f"missing from the wheel: {TEMPLATE_FILES - present}"
 
-    # A template in the wheel that md-gen never copies is dead weight, and usually the sign of a
+    # A module in the wheel that no generated script can reach is dead weight, and usually a sign of a
     # cached build tree shipping a file that was deleted from the checkout.
     tracked = {path.name for path in
                (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates").iterdir()

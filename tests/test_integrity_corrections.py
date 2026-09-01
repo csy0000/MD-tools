@@ -21,8 +21,10 @@ import yaml
 
 from .conftest import ALA_PDB, REPO_ROOT, run_cli, template_module
 
-AIS_SOURCE = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates" / "ais_run.py"
-PREFLIGHT_SOURCE = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates" / "preflight.py"
+#: The AIS runtime. These assertions read source text because they are about what the code must
+#: NOT do -- a property no successful run can demonstrate. They followed the implementation from
+#: the retired `templates/ais_run.py` to its live home rather than being dropped with it.
+AIS_SOURCE = REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py"
 
 
 # --- 1. the production source is never hashed ---------------------------------------------------
@@ -30,105 +32,31 @@ PREFLIGHT_SOURCE = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates" / "pr
 def test_the_ais_runtime_never_hashes_the_production_source():
     """A full-file digest of a production trajectory costs more than it proves.
 
-    The whole point of the bounded `iterload` survey is that cost must not scale with the length
-    of the source; hashing it puts that back.
+    The source is read frame by frame; hashing it would mean reading the whole thing an extra
+    time to produce a number nothing checks. The live runtime computes no digest at all, which
+    is a stronger statement of the same guarantee than the retired script could make.
     """
     source = AIS_SOURCE.read_text()
-    prepared = source[source.index("def write_prepared_sources"):
-                      source.index("def read_prepared_sources")]
-    assert "sha256_file" not in prepared, "write_prepared_sources hashes something"
-    assert "hashlib" not in prepared
-    assert '"trajectory_sha256": None' in prepared
-    assert "trajectory_bytes" in prepared
+    assert "sha256" not in source, "the AIS runtime digests something; it used to digest the source"
+    assert "hashlib" not in source
 
 
 
 
-#: The subprocess guard. Injected as a `sitecustomize` on PYTHONPATH so it is installed before the
-#: generated `run.py` imports anything.
-#:
-#: It wraps `pathlib.Path.open`, NOT `builtins.open`. The generated `sha256_file()` does
-#: `Path(path).open("rb")`, and `pathlib.Path.open` delegates to `io.open` -- which is a separate
-#: reference from `builtins.open`, so rebinding the builtin intercepts nothing. The earlier version
-#: of this test patched the builtin and therefore proved nothing at all: it would have passed with
-#: the production source hashed on every run.
-#:
-#: Path-specific and caller-specific: the forbidden trajectory may be opened freely by
-#: `mdtraj.iterload`, and is rejected only when the call comes from `sha256_file`. Named small
-#: files still hash normally.
-_HASH_GUARD = '''
-import pathlib
-import traceback
+def test_the_no_hashing_assertion_is_not_vacuous():
+    """A "this string is absent" assertion passes just as happily against the wrong file.
 
-FORBIDDEN = pathlib.Path(%r).resolve()
-MARK = pathlib.Path(__file__).with_name("_guard")
-MARK.write_text("installed")
-
-_real_open = pathlib.Path.open
-
-
-def _guarded_open(self, *args, **kwargs):
-    try:
-        same = self.resolve() == FORBIDDEN
-    except Exception:
-        same = False
-    if same:
-        # Only hashing is forbidden. iterload opens the same file and must keep working.
-        frames = traceback.extract_stack()
-        if any(frame.name == "sha256_file" for frame in frames):
-            MARK.write_text("TRIGGERED")
-            raise AssertionError("the production source was passed to sha256_file")
-    return _real_open(self, *args, **kwargs)
-
-
-pathlib.Path.open = _guarded_open
-'''
-
-
-
-
-def test_patching_builtins_open_would_not_have_intercepted_path_open():
-    """Why the previous guard proved nothing, kept as a regression against reintroducing it."""
-    import builtins
-    import io
-
-    real = builtins.open
-    seen = []
-    builtins.open = lambda *a, **k: (seen.append(1), real(*a, **k))[1]
-    try:
-        with Path(__file__).open("rb") as handle:
-            handle.read(1)
-        assert not seen, "Path.open went through builtins.open after all"
-        assert io.open is not builtins.open
-    finally:
-        builtins.open = real
-
-
-def test_the_hashing_guard_would_actually_fire(tmp_path):
-    """The guard is only evidence if it triggers when the thing it forbids happens.
-
-    Without this, a guard that silently failed to match the path would look exactly like a guard
-    that was never triggered -- which is the flaw in the test this replaces.
+    The guard this replaces installed a `sitecustomize` that intercepted `pathlib.Path.open` and
+    failed the run if the production source reached `sha256_file`. It could only run against the
+    retired script, which hashed things; the live runtime hashes nothing at all, so there is no
+    call to intercept. What is still worth proving is that the check DISCRIMINATES -- that the same
+    assertion applied to code which does hash would fail.
     """
-    ais = template_module_with_stubs()
-    target = tmp_path / "whole_system.dcd"
-    target.write_bytes(b"not really a dcd")
-    small = tmp_path / "solute.yaml"
-    small.write_text("n_solute_atoms: 22\n")
-
-    forbidden = target.resolve()
-    real = ais.sha256_file
-
-    def guarded(path):
-        if Path(path).resolve() == forbidden:
-            raise AssertionError("the production source was passed to sha256_file")
-        return real(path)
-
-    # A named small file still hashes.
-    assert len(guarded(small)) == 64
-    # The production source does not.
-    with pytest.raises(AssertionError, match="production source"):
-        guarded(target)
+    root = REPO_ROOT / "src" / "md_tools"
+    hashing = (root / "runtime" / "stage.py").read_text()
+    assert "sha256" in hashing, (
+        "the positive control no longer hashes, so the absence check above proves nothing")
+    assert "sha256" not in AIS_SOURCE.read_text()
 
 
 # --- 2. physical truncation, with the header left alone -----------------------------------------
@@ -151,121 +79,99 @@ def _truncate_bytes(path, *, drop):
 
 
 
-def test_the_header_count_is_documented_as_insufficient():
-    source = AIS_SOURCE.read_text()
-    assert "def dcd_header_frames" in source and "def validate_generated_dcd" in source
-    import re
-
-    assert not re.findall(r"mdtraj\.load\s*\(", source), "the AIS runtime calls mdtraj.load"
-    # The validator must actually read, not just re-read the header.
-    validator = source[source.index("def validate_generated_dcd"):
-                       source.index("def path_is_complete")]
-    assert "mdtraj.iterload" in validator and "isfinite" in validator
+# `test_the_header_count_is_documented_as_insufficient` is retired with `templates/ais_run.py`.
+# It asserted that `dcd_header_frames` documented a DCD header's frame count as untrustworthy,
+# because that script wrote its own DCD and then re-read it. The live runtime does not write a
+# trajectory it must re-count: it validates a finished path against the schedule itself -- row
+# count, both tau endpoints, and exactly zero cumulative work at observation 0 -- which is what
+# `test_ais_runs_through_the_real_cli_and_keeps_its_work_contract` exercises end to end.
 
 
-# --- 3. route-aware, exact force-field preflight ------------------------------------------------
+# --- 3. the route-aware force-field record ------------------------------------------------------
+#
+# These tests used to drive `preflight.check_forcefield`, which compared `inputs/forcefield.json`
+# against `resolved_sys.config.yaml` and refused a mismatch: a peptide system claiming a ligand
+# force field, a ligand system claiming a protein one, an implicit system claiming a water model.
+#
+# That comparison no longer has two sides to compare. `forcefield.json` and the route that wrote it
+# are retired, and `build_forcefield_record` now builds the record FROM the builder's own report at
+# the point the System is constructed -- so the record cannot disagree with what was built, and the
+# entire class of defect is gone by construction rather than by being checked for.
+#
+# What survives is the property the check existed to protect: the record must be route-aware, and
+# must say "not applicable here" rather than naming a Hamiltonian that parameterised nothing. That
+# is asserted directly against the live function.
 
-def test_an_absent_expected_field_does_not_pass(tmp_path):
-    """The old comparison skipped when either side was missing, which is when it mattered most."""
-    preflight = template_module("preflight")
-    inputs = tmp_path / "common"
-    inputs.mkdir()
-    (inputs / "resolved_sys.config.yaml").write_text(yaml.safe_dump({
-        "solvation": "explicit", "solute": {"peptide": True},
-        "forcefield": {"protein": "amber14-all.xml", "water": "amber14/tip3p.xml"}}))
-    (inputs / "forcefield.json").write_text(json.dumps({
-        "solvation": "explicit", "protein": {"openmm_resource": None},
-        "water": {"openmm_resource": "amber14/tip3p.xml"}, "ligand": {}}))
-    row, = preflight.check_forcefield(inputs)
-    assert row.status == preflight.FAIL
-    assert "records no the protein force field" in row.detail or "records no" in row.detail
-
-
-@pytest.mark.parametrize("mutate, expected", [
-    (lambda b, w: b["protein"].update(openmm_resource="amber19-all.xml"), "amber19-all.xml"),
-    (lambda b, w: b["water"].update(openmm_resource="amber14/tip3pfb.xml"), "tip3pfb"),
-    (lambda b, w: b.update(ligand={"openff_resource": "openff-2.2.1"}), "ligand"),
-])
-def test_the_peptide_route_refuses_a_wrong_or_extra_force_field(tmp_path, mutate, expected):
-    preflight = template_module("preflight")
-    inputs = tmp_path / "common"
-    inputs.mkdir()
-    wanted = {"solvation": "explicit", "solute": {"peptide": True},
-              "forcefield": {"protein": "amber14-all.xml", "water": "amber14/tip3p.xml"}}
-    built = {"solvation": "explicit",
-             "protein": {"openmm_resource": "amber14-all.xml"},
-             "water": {"openmm_resource": "amber14/tip3p.xml"}, "ligand": {}}
-    mutate(built, wanted)
-    (inputs / "resolved_sys.config.yaml").write_text(yaml.safe_dump(wanted))
-    (inputs / "forcefield.json").write_text(json.dumps(built))
-    row, = preflight.check_forcefield(inputs)
-    assert row.status == preflight.FAIL, row.detail
-    assert expected in row.detail
+NONBONDED_REPORT = {"method": "PME", "cutoff_nm": 0.9, "switching": True, "switch_nm": 0.8,
+                    "ewald_tolerance": 0.0005, "dispersion_correction": True}
 
 
-@pytest.mark.parametrize("mutate, expected", [
-    (lambda b: b["ligand"].update(openff_resource="openff-2.1.0"), "openff-2.1.0"),
-    (lambda b: b["ligand"].update(charge_method="am1bcc_nagl"), "charge method"),
-    (lambda b: b["protein"].update(openmm_resource="amber14-all.xml"), "protein force field"),
-])
-def test_the_ligand_route_refuses_a_wrong_or_extra_force_field(tmp_path, mutate, expected):
-    preflight = template_module("preflight")
-    inputs = tmp_path / "common"
-    inputs.mkdir()
-    wanted = {"solvation": "explicit",
-              "solute": {"peptide": False, "ligand_forcefield": "sage-2.2.1",
-                         "ligand_charge_method": "am1bcc"},
-              "forcefield": {"water": "amber14/tip3p.xml", "ligand": "openff-2.2.1",
-                             "ligand_charge_method": "am1bcc"}}
-    built = {"solvation": "explicit", "protein": {},
-             "ligand": {"openff_resource": "openff-2.2.1", "charge_method": "am1bcc"},
-             "water": {"openmm_resource": "amber14/tip3p.xml"}}
-    mutate(built)
-    (inputs / "resolved_sys.config.yaml").write_text(yaml.safe_dump(wanted))
-    (inputs / "forcefield.json").write_text(json.dumps(built))
-    row, = preflight.check_forcefield(inputs)
-    assert row.status == preflight.FAIL, row.detail
-    assert expected in row.detail
+def _record(*, resolved, route, report):
+    from md_tools.openmm.forcefield_record import build_forcefield_record
+
+    return build_forcefield_record(resolved=resolved, route=route, record=report,
+                                   inputs_dir=Path("."), artifacts={})
 
 
-def test_an_implicit_system_may_claim_neither_water_nor_a_barostat(tmp_path):
-    preflight = template_module("preflight")
-    inputs = tmp_path / "common"
-    inputs.mkdir()
-    wanted = {"solvation": "implicit", "solute": {"peptide": True},
-              "forcefield": {"protein": "amber14-all.xml", "water": None},
-              "implicit_solvent": {"model": "GBn2", "radii": "mbondi3", "nonpolar_sasa": False}}
-    built = {"solvation": "implicit", "protein": {"openmm_resource": "amber14-all.xml"},
-             "ligand": {}, "water": {"openmm_resource": "amber14/tip3p.xml"},
-             "implicit_solvent": {"model": "GBn2", "radii": "mbondi3", "nonpolar_sasa": False}}
-    (inputs / "resolved_sys.config.yaml").write_text(yaml.safe_dump(wanted))
-    (inputs / "forcefield.json").write_text(json.dumps(built))
-    row, = preflight.check_forcefield(inputs)
-    assert row.status == preflight.FAIL
-    assert "water model" in row.detail and "no box" in row.detail
+def test_the_ligand_route_records_no_protein_force_field():
+    """Recording ff14SB for a ligand-only build names a Hamiltonian that parameterised nothing."""
+    built = _record(
+        resolved={"solvation": "explicit",
+                  "solute": {"peptide": False, "ligand_forcefield": "sage-2.2.1"},
+                  "forcefield": {"water": "tip3p"}},
+        route="ligand",
+        report={"nonbonded": NONBONDED_REPORT,
+                "forcefield": {"ligand": {"openff_resource": "openff-2.2.1",
+                                          "charge_method": "am1bcc"},
+                               "water": {"openmm_resource": "amber14/tip3p.xml"}}})
 
-    built["water"] = {"openmm_resource": None}
-    built["implicit_solvent"]["nonpolar_sasa"] = True
-    (inputs / "forcefield.json").write_text(json.dumps(built))
-    row, = preflight.check_forcefield(inputs)
-    assert row.status == preflight.FAIL
-    assert "nonpolar surface-area term" in row.detail
+    assert built["protein"]["openmm_resource"] is None
+    assert built["protein"]["tleap_resource"] is None
+    # Present and explained, not absent: a reader must be able to tell "not applicable" from
+    # "nobody recorded it".
+    assert "loads no protein force field" in built["protein"]["note"]
+    assert built["ligand"]["charge_method"] == "am1bcc"
 
 
-def test_the_route_itself_must_agree(tmp_path):
-    preflight = template_module("preflight")
-    inputs = tmp_path / "common"
-    inputs.mkdir()
-    (inputs / "resolved_sys.config.yaml").write_text(yaml.safe_dump({
-        "solvation": "explicit", "solute": {"peptide": True},
-        "forcefield": {"protein": "amber14-all.xml", "water": "amber14/tip3p.xml"}}))
-    (inputs / "forcefield.json").write_text(json.dumps({
-        "solvation": "explicit", "protein": {},
-        "ligand": {"openff_resource": "openff-2.2.1", "charge_method": "am1bcc"},
-        "water": {"openmm_resource": "amber14/tip3p.xml"}}))
-    row, = preflight.check_forcefield(inputs)
-    assert row.status == preflight.FAIL
-    assert "a ligand route" in row.detail and "a peptide one" in row.detail
+def test_an_implicit_system_records_no_water_model():
+    """An implicit system has no box and no water, and saying so is information."""
+    built = _record(
+        resolved={"solvation": "implicit", "solute": {"peptide": True},
+                  "forcefield": {"protein": "ff14SB"},
+                  "implicit_solvent": {"model": "GBn2", "radii": "mbondi3",
+                                       "nonpolar_sasa": False}},
+        route="peptide",
+        report={"implicit_report": {"model": "GBn2", "radii": "mbondi3"}})
+
+    assert built["water"]["openmm_resource"] is None
+    assert built["water"]["model"] is None
+    assert "no water model" in built["water"]["note"]
+    assert built["implicit_solvent"]["model"] == "GBn2"
+    assert built["implicit_solvent"]["nonpolar_sasa"] is False
+
+
+def test_the_record_refuses_to_invent_a_nonbonded_treatment():
+    """The guard that replaced the comparison: a value the builder did not report is an error,
+    not a plausible default. This is the failure mode the old check could only notice afterwards.
+    """
+    with pytest.raises(ValueError, match="no nonbonded treatment"):
+        _record(resolved={"solvation": "explicit", "solute": {"peptide": True},
+                          "forcefield": {"protein": "ff14SB", "water": "tip3p"}},
+                route="peptide",
+                report={"forcefield": {"protein": {"openmm_resource": "amber14-all.xml"}}})
+
+
+def test_the_record_states_which_route_produced_it():
+    """Route is recorded, so a reader never has to infer it from which fields happen to be null."""
+    peptide = _record(
+        resolved={"solvation": "explicit", "solute": {"peptide": True},
+                  "forcefield": {"protein": "ff14SB", "water": "tip3p"}},
+        route="peptide",
+        report={"nonbonded": NONBONDED_REPORT,
+                "forcefield": {"protein": {"openmm_resource": "amber14-all.xml"},
+                               "water": {"openmm_resource": "amber14/tip3p.xml"}}})
+    assert peptide["route"] == "peptide"
+    assert peptide["solvation"] == "explicit"
 
 
 # --- 5. the template commit is evidence, not a well-formed string -------------------------------
@@ -286,7 +192,7 @@ def test_the_route_itself_must_agree(tmp_path):
 
 def test_repeated_atom_names_do_not_make_two_topologies_the_same(tmp_path):
     """Every residue has an N, a CA, a C and an O. Names alone cannot tell residues apart."""
-    ais = template_module_with_stubs()
+    ais = template_module("source_ensemble")
     from openmm.app import PDBFile
 
     original = PDBFile(str(ALA_PDB))
@@ -305,7 +211,8 @@ def test_the_identity_tuple_covers_chain_residue_and_element():
     The guard follows it rather than being relaxed: AIS and rREST2 must compare atoms the same
     way, and the whole point of one implementation is that this check covers both.
     """
-    source = (AIS_SOURCE.parent / "source_ensemble.py").read_text()
+    source = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
+          / "source_ensemble.py").read_text()
     start = source.index("def atom_identity")
     # `ATOM_FIELDS` is defined near the top of the shared helper, so slice to the NEXT definition
     # after the function rather than to a name that also appears before it.
@@ -316,31 +223,10 @@ def test_the_identity_tuple_covers_chain_residue_and_element():
     assert "topology.bonds()" in block
 
 
-def template_module_with_stubs():
-    """`ais_run.py` reads a generated project's configuration at import time.
-
-    The pure functions in it are still worth testing directly, so the module is loaded with the
-    handful of files it opens faked out. This is the only way to unit-test them without generating
-    and running a whole project.
-    """
-    import importlib.util
-    import sys
-    import types
-
-    templates = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
-    path = templates / "ais_run.py"
-    source = path.read_text()
-    # Everything above the first function definition is project-configuration loading.
-    cut = source.index("def relative_to_project")
-    module = types.ModuleType("_ais_pure")
-    module.__dict__.update({name: __import__(name) for name in ("hashlib", "csv", "json", "yaml")})
-    module.__dict__.update({"Path": __import__("pathlib").Path, "np": __import__("numpy")})
-    # `ais_run` delegates the source-ensemble rules to the shared helper that ships beside it, so
-    # that directory has to be importable exactly as it is in a generated project.
-    if str(templates) not in sys.path:
-        sys.path.insert(0, str(templates))
-    exec(compile(source[cut:], str(path), "exec"), module.__dict__)
-    return module
+# `template_module_with_stubs` is gone with `templates/ais_run.py`. It existed to import that
+# script with its project-configuration loading faked out, so that the pure functions inside it
+# could be unit-tested. Those functions were already delegates: `atom_identity` and the rest live
+# in `source_ensemble.py`, which is an ordinary importable module and is what these tests now use.
 
 
 def _renumber_residue(pdb_text, *, old_seq, new_seq, new_name=None):
@@ -362,7 +248,7 @@ def test_a_reassigned_residue_is_caught_though_every_atom_name_is_identical(tmp_
     """The case atom names cannot see: same names, same order, different molecule."""
     from openmm.app import PDBFile
 
-    ais = template_module_with_stubs()
+    ais = template_module("source_ensemble")
     original_text = ALA_PDB.read_text()
     original = PDBFile(str(ALA_PDB))
 
@@ -388,7 +274,7 @@ def test_changed_connectivity_is_caught(tmp_path):
     """Same atoms in the same order is not enough: different bonds is a different molecule."""
     from openmm.app import PDBFile
 
-    ais = template_module_with_stubs()
+    ais = template_module("source_ensemble")
     mutated_path = tmp_path / "renamed.pdb"
     mutated_path.write_text(_renumber_residue(ALA_PDB.read_text(), old_seq=2, new_seq=2,
                                               new_name="GLY"))
@@ -419,14 +305,22 @@ def _mutate_yaml(path, key, value):
 
 
 def test_there_is_one_stage_fingerprint_implementation():
-    """Two subtly different hashes over "the stage request" is the bug this check exists for."""
-    preflight = PREFLIGHT_SOURCE.read_text()
-    assert "from md_stages import stage_config_sha256" in preflight
-    # Preflight must not carry its own canonicalisation.
-    assert "yaml.safe_dump(document, sort_keys=True" not in preflight
-    stage_run = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
-                 / "stage_run.py").read_text()
-    assert "stage_config_sha256(STAGE)" in stage_run
+    """Two subtly different hashes over "the stage request" is the bug this check exists for.
+
+    Each retired launcher hashed the stage itself and `preflight` hashed it again. All of them are
+    gone, and `runtime.stage._config_fingerprint` is now the only implementation. It is also
+    stronger than what it replaced: it covers the System and topology digests, so a checkpoint
+    cannot be resumed against a System that was rebuilt underneath it.
+    """
+    root = REPO_ROOT / "src" / "md_tools"
+    definitions = sorted(path.relative_to(root).as_posix() for path in root.rglob("*.py")
+                         if "def _config_fingerprint(" in path.read_text(encoding="utf-8")
+                         or "def stage_config_sha256(" in path.read_text(encoding="utf-8"))
+    assert definitions == ["runtime/stage.py"], definitions
+
+    runtime = (root / "runtime" / "stage.py").read_text()
+    assert "_config_fingerprint(stage, system_sha, topology_sha)" in runtime, \
+        "the runtime no longer fingerprints the stage it is about to run"
 
 
 # --- 7. the pinned, public validator ------------------------------------------------------------

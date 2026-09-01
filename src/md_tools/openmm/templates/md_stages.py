@@ -351,51 +351,10 @@ STAGE_RUNTIME_OUTPUTS = ("stage.log", "stage.csv", "checkpoint.chk", "final_stat
                          "final.pdb", "resolved_stage.yaml")
 
 
-def stage_config_sha256(document):
-    """One signature over the WHOLE stage request.
-
-    A hand-kept list of "the fields that matter" is a list that goes stale: it accepted a completed
-    stage after its input state, pressure, seeds or solvent mode had changed, because those keys
-    were not on it. Hashing the entire canonicalised document instead means every key counts, and
-    a key added later counts without anyone remembering to add it here.
-
-    `sort_keys=True` makes the text independent of the order the mapping happens to be written in,
-    so the same request always hashes the same way.
-    """
-    import hashlib
-
-    import yaml
-
-    canonical = yaml.safe_dump(document, sort_keys=True, default_flow_style=False,
-                               allow_unicode=True)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-#: The fields of a PRODUCTION stage request that a legitimate extension may change.
-#:
-#: A common stage is fixed at generation and refuses to rerun at all, so hashing its whole
-#: document is exactly right. Production is different: running longer is the documented way to
-#: extend an active dataset, and it changes the requested length and nothing else. Hashing the
-#: whole document there would forbid every extension in order to catch an unsafe edit.
-#:
-#: So production carries two fingerprints. The full one identifies the exact request that
-#: produced a completion record; the INVARIANT one covers everything an extension may not
-#: touch -- timestep, temperature, ensemble, tau, seeds, solvent mode, the parent handoff. A
-#: changed invariant means the checkpoint on disk was produced under different physics, and
-#: continuing from it would silently splice two Hamiltonians into one trajectory.
-PRODUCTION_EXTENDABLE_FIELDS = ("duration_ns", "duration_ps", "total_steps",
-                                "number_of_exchanges", "number_of_paths")
 
 
-def stage_invariant_sha256(document):
-    """Fingerprint over everything a legitimate extension may NOT change.
-
-    Same canonicalisation as :func:`stage_config_sha256`, over the document with the extendable
-    fields removed. Deriving it from the same function is deliberate: two independent hashes over
-    "the stage request" is how a run comes to write one and a check to compare another.
-    """
-    return stage_config_sha256(
-        {k: v for k, v in dict(document).items() if k not in PRODUCTION_EXTENDABLE_FIELDS})
 
 
 def production_stage_document(config, method_name, *, parent_stage, parent_path, implicit,
@@ -603,39 +562,5 @@ def write_final_pdb(simulation, path, *, implicit):
         PDBFile.writeFile(simulation.topology, state.getPositions(), handle, keepIds=True)
 
 
-def device_groups(n_replicas, devices):
-    """Replicas grouped by the device they run on, round-robin over at most n_replicas devices.
-
-    Returns one list per device actually used, so `len(groups)` is
-    `min(n_replicas, n_visible_devices)`. With no devices there is one group: the sequential path.
-    """
-    if not devices:
-        return [list(range(n_replicas))]
-    used = list(devices)[:min(n_replicas, len(devices))]
-    groups = [[] for _ in used]
-    for replica in range(n_replicas):
-        groups[replica % len(used)].append(replica)
-    return [group for group in groups if group]
 
 
-def propagate_segment(groups, step_fn):
-    """Advance every replica by one segment, then return.
-
-    Replicas that share a device propagate sequentially -- interleaving them on one GPU makes both
-    slower, not faster. Different devices propagate concurrently: OpenMM releases the GIL while
-    stepping, so plain threads genuinely overlap. Every group is awaited before the caller attempts
-    an exchange, because an exchange reads energies that a still-running replica has not produced.
-    """
-    if len(groups) <= 1:
-        for replica in (groups[0] if groups else ()):
-            step_fn(replica)
-        return
-
-    def run_group(group):
-        for replica in group:
-            step_fn(replica)
-
-    with ThreadPoolExecutor(max_workers=len(groups)) as pool:
-        futures = [pool.submit(run_group, group) for group in groups]
-        for future in futures:
-            future.result()             # re-raise here, before any exchange is attempted

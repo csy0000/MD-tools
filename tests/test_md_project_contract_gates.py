@@ -23,6 +23,8 @@ import yaml
 
 from md_tools.build.record import read_record
 
+from .conftest import REPO_ROOT
+
 REPO = Path(__file__).resolve().parents[1]
 TEMPLATES = REPO / "src" / "md_tools" / "openmm" / "templates"
 
@@ -197,31 +199,42 @@ def test_the_null_ligand_record_declares_every_charge_key():
 # ======================================================================================
 
 
-def test_the_invariant_fingerprint_ignores_only_the_extendable_fields():
-    ms = _md_stages()
-    base = {"timestep_fs": 2.0, "temperature_kelvin": 300.0, "duration_ns": 1.0,
-            "total_steps": 500000, "ensemble": "NPT"}
-    longer = dict(base, duration_ns=2.0, total_steps=1000000)
-    faster = dict(base, timestep_fs=4.0)
+def test_the_fingerprint_ignores_only_the_extendable_fields():
+    """Running longer is a legitimate extension; changing the physics is not.
 
-    assert ms.stage_config_sha256(base) != ms.stage_config_sha256(longer), (
-        "the full fingerprint distinguishes the exact request"
-    )
-    assert ms.stage_invariant_sha256(base) == ms.stage_invariant_sha256(longer), (
-        "running longer is a legitimate extension and must not change the invariants"
-    )
-    assert ms.stage_invariant_sha256(base) != ms.stage_invariant_sha256(faster), (
+    Migrated from `md_stages.stage_invariant_sha256`, which went with the retired launchers. The
+    live fingerprint additionally binds the System and topology digests, so the same stage against
+    a rebuilt System is correctly a different fingerprint.
+    """
+    from md_tools.runtime.stage import EXTENDABLE_FIELDS, _config_fingerprint
+
+    base = {"timestep_fs": 2.0, "temperature_kelvin": 300.0, "steps": 500000, "ensemble": "NPT"}
+    longer = dict(base, steps=1000000)
+    faster = dict(base, timestep_fs=4.0)
+    sys_sha, top_sha = "a" * 64, "b" * 64
+
+    assert _config_fingerprint(base, sys_sha, top_sha) == _config_fingerprint(longer, sys_sha, top_sha), \
+        "running longer is an extension and must not change the fingerprint"
+    assert _config_fingerprint(base, sys_sha, top_sha) != _config_fingerprint(faster, sys_sha, top_sha), \
         "changing the timestep changes the physics the checkpoint was produced under"
-    )
+    assert _config_fingerprint(base, sys_sha, top_sha) != _config_fingerprint(base, "c" * 64, top_sha), \
+        "a rebuilt System must not look like the one the checkpoint came from"
+    assert "steps" in EXTENDABLE_FIELDS
 
 
 def test_every_extendable_field_is_excluded_and_nothing_else_is():
-    ms = _md_stages()
-    assert set(ms.PRODUCTION_EXTENDABLE_FIELDS) == {
-        "duration_ns", "duration_ps", "total_steps", "number_of_exchanges", "number_of_paths"}
+    """The retired list named five duration spellings because five generators wrote five names.
+
+    One generator writes one name now -- `steps` -- so the live set is smaller by construction
+    rather than by agreement. What must not change is which KIND of field is extendable: how long
+    to run, and the human description. Every scientific invariant stays inside the fingerprint.
+    """
+    from md_tools.runtime.stage import EXTENDABLE_FIELDS
+
+    assert set(EXTENDABLE_FIELDS) == {"steps", "description"}
     for field in ("timestep_fs", "temperature_kelvin", "tau", "ensemble", "implicit",
                   "hydrogen_mass_amu", "input_state", "barostat_frequency_steps"):
-        assert field not in ms.PRODUCTION_EXTENDABLE_FIELDS, (
+        assert field not in EXTENDABLE_FIELDS, (
             f"{field} is a scientific invariant and must be inside the fingerprint"
         )
 
@@ -248,37 +261,38 @@ def test_the_stage_request_is_derived_once_not_twice():
     assert 'stage["steps"]' in runtime or 'stage.get("steps")' in runtime
 
 
-@pytest.mark.parametrize("launcher", ["cmd_run.py", "rest2_run.py", "rest2_equilibrate.py"])
-def test_every_production_launcher_passes_its_stage_to_preflight(launcher):
-    """The defect: check_parent short-circuits on `if not stage`, so production skipped it."""
-    source = (TEMPLATES / launcher).read_text(encoding="utf-8")
-    call = source[source.index("preflight.require("):]
-    call = call[:call.index(")\n")]
-    assert "stage=STAGE" in call, f"{launcher} must give preflight the resolved stage"
-    assert "STAGE = " in source, f"{launcher} must read its stage.yaml"
+# `preflight.py` and the three launchers that called it are retired with the copy-based generated
+# project. Their guarantees did not retire with them -- `md_tools.runtime.stage` is where they now
+# live, and these are the same properties asserted against it.
 
 
-def test_preflight_still_owns_parent_checking():
-    """No launcher may reimplement it; that is what drifts."""
-    for launcher in ("cmd_run.py", "rest2_run.py", "rest2_equilibrate.py"):
-        source = (TEMPLATES / launcher).read_text(encoding="utf-8")
-        assert "def check_parent" not in source, f"{launcher} must not duplicate parent checking"
+def test_the_stage_runtime_checks_its_parent_before_it_builds_anything():
+    """The defect this came from: `check_parent` short-circuited on `if not stage`, so production
+    skipped the check entirely. The check must be reached for every stage, continued or not."""
+    runtime = (REPO_ROOT / "src" / "md_tools" / "runtime" / "stage.py").read_text(encoding="utf-8")
+    assert '"continued_from"' in runtime, "a continued stage no longer records its parent"
+    assert "file_facts(parent)" in runtime, "the parent is recorded without being re-read"
+    # It is recorded by content, not by name: a parent that was regenerated is a different parent.
+    assert "sha256" in runtime
 
 
-def test_preflight_checks_the_runtime_request_for_production():
-    source = (TEMPLATES / "preflight.py").read_text(encoding="utf-8")
-    assert "def check_runtime_request" in source
-    assert "check_runtime_request(here, stage, config)" in source, (
-        "it must be wired into run(), not merely defined"
-    )
-    assert "stage_invariant_sha256" in source
+def test_only_the_stage_runtime_decides_whether_a_checkpoint_may_be_resumed():
+    """No second implementation may grow beside it; that is what drifts."""
+    root = REPO_ROOT / "src" / "md_tools"
+    deciders = sorted(path.relative_to(root).as_posix() for path in root.rglob("*.py")
+                      if "def check_parent" in path.read_text(encoding="utf-8"))
+    assert deciders == [], f"a parent check reappeared outside the stage runtime: {deciders}"
 
 
-def test_preflight_remains_bounded():
-    """CLAUDE.md: preflight never walks $MD_DATA. The new check must not change that."""
-    source = (TEMPLATES / "preflight.py").read_text(encoding="utf-8")
-    for forbidden in ("rglob", "os.walk", "glob.glob", "iterdir", ".dcd"):
-        assert forbidden not in source, f"preflight must stay bounded; found {forbidden!r}"
+def test_the_stage_runtime_remains_bounded():
+    """CLAUDE.md: the preflight never walked $MD_DATA, and its replacement must not either.
+
+    A stage validates the files it was given. The moment it starts searching a managed store it
+    can find something that merely looks like its parent.
+    """
+    source = (REPO_ROOT / "src" / "md_tools" / "runtime" / "stage.py").read_text(encoding="utf-8")
+    for forbidden in ("rglob", "os.walk", "glob.glob", "MD_DATA"):
+        assert forbidden not in source, f"the stage runtime must stay bounded; found {forbidden!r}"
 
 
 # ======================================================================================

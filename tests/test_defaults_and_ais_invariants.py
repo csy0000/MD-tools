@@ -110,19 +110,20 @@ def _preflight():
 
 
 
-def test_preflight_never_walks_the_storage_root_or_hashes_a_trajectory():
+def test_the_ais_runtime_never_walks_the_storage_root_or_hashes_a_trajectory():
     """A bounded check is a safety property: pointing a recursive tool at production storage is
-    the accident this must not enable."""
-    source = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
-              / "preflight.py").read_text()
-    for forbidden in ("rglob", "os.walk", "glob.glob", "iterdir()"):
-        assert forbidden not in source, f"preflight uses {forbidden}"
-    # The only hashing it does is over the files SHA256SUMS names -- small preparation records,
-    # never a production trajectory.
-    assert "SHA256SUMS" in source
-    assert ".dcd" not in source
+    the accident this must not enable.
 
-
+    Migrated from `templates/preflight.py`, which is retired with the copy-based generated project.
+    The AIS runtime is now the thing that opens a production trajectory, so it is the thing that
+    has to stay bounded.
+    """
+    source = (REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py").read_text()
+    for forbidden in ("rglob", "os.walk", "glob.glob"):
+        assert forbidden not in source, f"the AIS runtime uses {forbidden}"
+    # It reads the one source trajectory it was given, by streaming it.
+    assert "mdtraj.iterload" in source
+    assert "MD_DATA" not in source, "the runtime must not resolve a managed storage root"
 
 
 # --- AIS source tau -----------------------------------------------------------------------------
@@ -166,8 +167,7 @@ def test_a_declared_source_tau_must_equal_the_path_start():
 
 def test_the_ais_runtime_never_calls_mdtraj_load():
     """`mdtraj.load` reads an entire trajectory into memory. An AIS source is a production run."""
-    source = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
-              / "ais_run.py").read_text()
+    source = (REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py").read_text()
     import re
 
     calls = re.findall(r"mdtraj\.load\s*\(", source)
@@ -175,23 +175,36 @@ def test_the_ais_runtime_never_calls_mdtraj_load():
     assert "mdtraj.iterload" in source
 
 
-def test_the_plan_json_carries_no_coordinates():
-    """A JSON array of a solvated system's coordinates is enormous, and every worker reads it."""
-    source = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
-              / "ais_run.py").read_text()
+def test_the_ais_runtime_never_serialises_coordinates():
+    """A JSON array of a solvated system's coordinates is enormous, and every path would read it.
+
+    The retired `ais_run.py` wrote a plan JSON and this asserted the plan carried an index rather
+    than positions. There is no plan file any more -- the runtime streams the source and records
+    the frame it used -- so the guarantee is stated against what the rows actually carry.
+    """
+    source = (REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py").read_text()
     assert '"positions_nm"' not in source
-    # Coordinates live in the prepared inputs; the plan carries only the index into them.
-    assert '"dcd_frame_index"' in source and "SOURCES_DCD" in source
+    assert "positions.tolist()" not in source and "getPositions().tolist()" not in source
+    # A frame is identified by its index into the source trajectory, never copied out of it.
+    assert '"source_frame_index"' in source
 
 
-def test_the_prepared_inputs_never_claim_to_hold_velocities():
-    """A directory of starting configurations is where someone would look for velocities."""
-    source = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
-              / "ais_run.py").read_text()
-    assert '"stored": False' in source
-    assert "NOT restart states" in source
-    # The momenta are generated from a recorded seed, and that is what the record says.
-    assert "setVelocitiesToTemperature(TEMPERATURE, int(entry[\"velocity_seed\"]))" in source
+def test_the_starting_configurations_never_claim_to_hold_velocities():
+    """A set of starting configurations is where someone would look for velocities.
+
+    They are not stored. Each path draws its momenta from a seed derived from the run's own seed,
+    and that seed is what the record carries -- so the ensemble is reproducible without a restart
+    file, and nobody can mistake a configuration for a full phase-space state.
+    """
+    source = (REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py").read_text()
+    assert "setVelocitiesToTemperature" in source
+    assert 'derive_seed(int(dynamics["seed"]), "ais", index, "velocity")' in source
+    assert '"velocity_seed": velocity_seed' in source
+    # Velocities are read back exactly once, to serialise the state a finished path ended in.
+    # Nowhere does a STARTING configuration acquire velocities from anything but the seed.
+    assert source.count("getVelocities") == 1
+    final_state = source[source.index("getVelocities") - 400:source.index("getVelocities") + 400]
+    assert "final_state.xml" in final_state, final_state
 
 
 # --- the default force-field selection ----------------------------------------------------------

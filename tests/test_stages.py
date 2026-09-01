@@ -250,81 +250,76 @@ def test_the_cold_rung_is_the_unmodified_system():
     assert scaling.scaling_for_tau(0.0) == (1.0, 1.0)
 
 
-# --- GPU grouping ----------------------------------------------------------
-
-def test_replicas_are_assigned_round_robin_to_at_most_one_device_each():
-    assert stages.device_groups(6, [0, 1]) == [[0, 2, 4], [1, 3, 5]]
-    assert stages.device_groups(2, [0, 1, 2, 3]) == [[0], [1]], "no more devices than replicas"
-    assert stages.device_groups(4, []) == [[0, 1, 2, 3]], "no devices: one sequential group"
-
-
-def test_two_devices_propagate_concurrently_and_one_device_does_not():
-    """Mocked stepping, so this proves the schedule without needing CUDA.
-
-    The failure it guards against is a multi-GPU run that costs N GPUs and takes as long as one.
-    """
-    def timed(groups):
-        spans = {}
-
-        def step(replica):
-            start = time.monotonic()
-            time.sleep(0.25)
-            spans[replica] = (start, time.monotonic())
-
-        stages.propagate_segment(groups, step)
-        return spans
-
-    two_devices = timed([[0], [1]])
-    latest_start = max(span[0] for span in two_devices.values())
-    earliest_end = min(span[1] for span in two_devices.values())
-    assert earliest_end > latest_start, "different devices must overlap"
-
-    one_device = timed([[0, 1]])
-    assert one_device[0][1] <= one_device[1][0], "replicas sharing a device must not overlap"
-
-
-def test_a_failure_inside_one_group_reaches_the_caller_before_any_exchange():
-    def step(replica):
-        if replica == 3:
-            raise RuntimeError("particle position is NaN")
-
-    with pytest.raises(RuntimeError, match="NaN"):
-        stages.propagate_segment([[0, 1], [2, 3]], step)
+# --- GPU placement -----------------------------------------------------------
+#
+# `device_groups` and `propagate_segment` are retired with the thread-based launchers that used
+# them: one process opened N Contexts and hand-scheduled them across devices. The ladder now runs
+# one MPI rank per state, so concurrency is the process model rather than a schedule to prove, and
+# the only remaining decision is which device each rank takes. That is
+# `replica_engine.select_device_for_rank`, asserted below.
 
 
 # --- REST2 equilibration scheduling ------------------------------------------
 
-def test_equilibration_uses_the_same_device_policy_as_exchange_production():
-    """Per-tau equilibration ran replicas one after another, idling every GPU but one.
+def test_the_same_device_policy_serves_equilibration_and_production():
+    """One policy, not two that can drift apart.
 
-    Pure scheduling, so this needs no GPU: `device_groups` is the single place the policy lives,
-    and both `equilibrate.py` and `run.py` call it.
+    Equilibration and production are the same ladder under `openmm_md`, so they cannot disagree
+    about placement by construction. This asserts the single decision point still exists and that
+    nothing has grown a second one.
     """
-    assert stages.device_groups(4, [0, 1, 2, 3]) == [[0], [1], [2], [3]]
-    assert stages.device_groups(6, [0, 1]) == [[0, 2, 4], [1, 3, 5]]
-    assert stages.device_groups(2, [0, 1, 2, 3]) == [[0], [1]], "no more devices than replicas"
-
-
-def test_both_rest2_scripts_schedule_through_the_same_helper():
-    """One policy, not two that can drift apart."""
     from .conftest import REPO_ROOT
 
-    templates = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
-    for name in ("rest2_equilibrate.py", "rest2_run.py"):
-        source = (templates / name).read_text()
-        assert "device_groups(" in source, name
-        assert "propagate_segment(" in source, name
+    root = REPO_ROOT / "src" / "md_tools"
+    choosers = sorted(path.relative_to(root).as_posix() for path in root.rglob("*.py")
+                      if "def select_device_for_rank(" in path.read_text(encoding="utf-8")
+                      or "def device_groups(" in path.read_text(encoding="utf-8"))
+    assert choosers == ["openmm/templates/replica_engine.py"], choosers
 
 
-def test_a_failing_replica_stops_equilibration_before_it_reports_success():
-    """Every replica is awaited and exceptions propagate, or a ladder with a dead rung would be
-    declared equilibrated and then produce from a state that was never written."""
-    def step(replica):
-        if replica == 2:
-            raise RuntimeError("particle position is NaN")
+def test_one_device_is_chosen_per_rank_and_ranks_never_share():
+    """`device_groups` placed replicas on devices for the retired thread-based launcher. The
+    ladder now runs one MPI rank per state, so placement is per rank -- and two ranks landing on
+    one device is the failure that used to halve throughput silently.
+    """
+    from .conftest import template_module
 
-    with pytest.raises(RuntimeError, match="NaN"):
-        stages.propagate_segment([[0, 1], [2, 3]], step)
+    engine = template_module("replica_engine")
+    devices = [0, 1, 2, 3]
+    # The engine returns the device index as OpenMM wants it -- a string for `DeviceIndex`.
+    chosen = [engine.select_device_for_rank(rank, 4, devices)[0] for rank in range(4)]
+    assert sorted(int(device) for device in chosen) == devices, \
+        f"ranks did not get distinct devices: {chosen}"
+
+    # Fewer devices than ranks is a real configuration, and it must wrap deterministically
+    # rather than leaving a rank with nothing.
+    two = [engine.select_device_for_rank(rank, 4, [0, 1])[0] for rank in range(4)]
+    assert all(device is not None for device in two), two
+    assert {int(device) for device in two} == {0, 1}, two
+
+    # No visible device is not a placement decision to guess at.
+    assert engine.select_device_for_rank(0, 4, [])[0] is None
+
+
+def test_a_failing_replica_is_never_reported_as_a_finished_run():
+    """A ladder with a dead rung must not be declared complete and then produced from.
+
+    `propagate_segment` awaited every thread and let exceptions out. The ladder is MPI now, so the
+    same guarantee lives in the driver: any failure records the run as failed or interrupted and
+    is then re-raised, and only the path that did NOT raise reaches `_finish`.
+    """
+    from .conftest import REPO_ROOT
+
+    driver = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
+              / "replica_driver.py").read_text(encoding="utf-8")
+    handler = driver[driver.index("except BaseException as failure:"):]
+    handler = handler[:handler.index("finally:")]
+    assert '"interrupted" if interrupted else "failed"' in handler, \
+        "a failed run no longer records that it failed"
+    assert handler.rstrip().endswith("raise"), \
+        "the driver swallows the failure instead of re-raising it"
+    # `_finish` -- which writes the completion manifest -- is reachable only after the try block.
+    assert "return self._finish(" in driver[driver.index("finally:"):]
 
 
 # --- the nonpolar term is worth knowing the size of --------------------------
