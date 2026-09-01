@@ -32,11 +32,14 @@ For ordinary cMD this is the whole interface. One small request in, a directory 
 Amber or GROMACS job out:
 
 ```bash
-md-openmm setup --config examples/ALA/setup.yaml
+export MD_DATA=/your/managed/root          # setup resolves --output beneath this
+export MD_CONTRIBUTOR="Your Name <you@example.org>"
+md-openmm setup --config setup.yaml --yes
 ```
 
 ```yaml
-# examples/ALA/setup.yaml -- the entire request
+# setup.yaml -- the entire request
+contributor: Your Name <you@example.org>   # else $MD_CONTRIBUTOR, else a prompt. Never invented
 system: ALA
 input: inputs/structures/example_ace_ala_nme.pdb
 type: peptide            # or: ligand
@@ -46,6 +49,11 @@ production: 1 ns
 output_interval: 5 ps
 platform: CUDA
 ```
+
+The request files live in the *project* that calls this repository, not here — MD-projects keeps
+its own under `examples/`. `contributor` is required: `setup` resolves it from this field, then
+`$MD_CONTRIBUTOR`, then an interactive prompt, and refuses rather than inventing one, so `--yes`
+with neither set will stop.
 
 Force field, water model, box, ionic strength, integrator, thermostat, barostat and the
 equilibration schedule all come from the preset. `setup` prints the resolved values and asks before
@@ -257,7 +265,7 @@ its own clock, so a stage's `.out` describes that stage; lineage is `input_state
 ### Example 2 — phenol, the ligand route
 
 ```bash
-md-openmm setup --config examples/phenol-IPH/setup.yaml
+md-openmm setup --config setup.phenol.yaml --yes
 ```
 
 ```yaml
@@ -285,20 +293,101 @@ simulation executor** -- `openmm-md` -- and a coordinated run is the same comman
 Amber-like group file:
 
 ```bash
-mpiexec -n 6 openmm-md -ng 6 --groupfile REST2/rest2.group \
+mpiexec -n 4 openmm-md -ng 4 --groupfile REST2/rest2.group \
     -o REST2/rest2.out -x REST2/rest2.nc -r REST2/restart.json \
-    --checkpoint REST2/rest2_checkpoint.nc
+    --checkpoint REST2/rest2_checkpoint.nc --rem REST2/rem.log
 ```
 
-which is what the generated `REST2/rest2.sh` runs, so in practice:
+which is what the generated `REST2/rest2.sh` runs -- `--rem` included -- so in practice:
 
 ```bash
 REST2/rest2.sh                 # one process, one device
-mpiexec -n 6 REST2/rest2.sh    # one rank per state, each binding its own GPU
+mpiexec -n 4 REST2/rest2.sh    # one rank per state, each binding its own GPU
 REST2/rest2.sh --resume        # finish an interrupted run; no restart.json needed
-REST2/rest2.sh --extend 200    # add 200 exchange attempts to a completed run
+REST2/rest2.sh --extend 200    # add 200 exchange attempts to a completed run, IN PLACE
 REST2/rest2.sh --verify-only   # open the stored output and check it, running nothing
 ```
+
+The rank count must be **1 or exactly the number of states**; anything between is refused rather
+than packing several states onto a rank silently.
+
+#### What a ladder writes
+
+```text
+REST2/
+├── remd0.nc  remd1.nc  ...  remdN.nc   one Amber NetCDF per fixed thermodynamic STATE
+├── rest2.nc                            the AUTHORITATIVE exchange and provenance record
+├── rem.log                             the Amber H-REMD log, for cpptraj
+├── rest2_checkpoint.nc                 the coordinated checkpoint
+├── rest2.solute.nc                     the fine-grained solute stream
+├── rest2.runstate.json                 written before propagation; survives a crash
+└── restart.json                        the completion manifest, written only on completion
+```
+
+The generic names used in the documentation are `exchange.nc` and `checkpoint.nc`; a generated
+ladder names them after its stem, so `rest2.nc` and `rest2_checkpoint.nc` above. What matters is
+the role, not the stem: the exchange record is whatever file `-x` names.
+
+**Each `remd{index}.nc` follows a fixed thermodynamic state, not a walker.** After an accepted
+exchange the configuration occupying state 2 belongs to a different walker, and it is that one
+which is written to `remd2.nc` from then on. Reading `remd0.nc` gives the unscaled ensemble
+directly, with no mapping to apply. **The filename carries the state index and never tau** -- what
+tau a state holds is in the file's own validated metadata, where it can be checked, rather than in
+a name anyone can rename. Nothing sorts these files lexicographically or parses a number back out
+of a path.
+
+**`rest2.nc` is the authoritative record**, schema `md-templates-replica-exchange/v3`. It holds
+the reduced-potential matrix, the state-to-walker mapping, the exchange statistics, the scientific
+identity and one committed-frame marker. The state trajectories are written and synced *before*
+that marker advances, so a crash leaves rows the marker does not count -- uncommitted rows a
+continuation ignores and overwrites. A state file *shorter* than the marker is corruption, not an
+interrupted commit, and is refused rather than padded.
+
+The Amber trajectories and `rem.log` are **compatible projections, not competing authorities**.
+Both are regenerated in full from committed rows rather than appended to, so neither can drift from
+the record or be left torn by a crash. Their compatibility is established by having the installed
+cpptraj read them, not by inspection of the format.
+
+Schema v2 is **refused**, not migrated: it kept coordinates inside the exchange record, so a v2
+file is a different file rather than a shorter one, and inventing a migration would mean
+fabricating per-state trajectories that were never written.
+
+#### Continuing a run: two different operations
+
+```bash
+# 1. An interrupted run, finished in place. Needs no restart.json.
+REST2/rest2.sh --resume
+
+# 2. A completed run, lengthened IN PLACE. Modifies this run.
+REST2/rest2.sh --extend 200
+
+# 3. A completed run, continued into a NEW directory. Leaves this one untouched.
+REST2/rest2_extend.sh REST2_ext1 200
+mpiexec -n 4 REST2/rest2_extend.sh REST2_ext1 200
+```
+
+The third is the out-of-place extension, and it is what `--extend-from` implements:
+
+```bash
+openmm-md -ng 4 --groupfile REST2/rest2.group \
+    --extend-from REST2/ --extend 200 \
+    -o REST2_ext1/rest2.out -x REST2_ext1/rest2.nc -r REST2_ext1/restart.json \
+    --checkpoint REST2_ext1/rest2_checkpoint.nc --rem REST2_ext1/rem.log
+```
+
+The parent is opened **read-only** and stays byte-for-byte unchanged; no output may be placed
+inside it. Every reason to refuse -- completion status, scientific identity, Hamiltonian
+implementation, checkpoint-versus-manifest agreement -- is established before anything in the new
+directory is created, so a refusal leaves no half-built extension behind. What carries across is
+the physical state: positions, velocities, box, the state-to-walker mapping, the exchange RNG, the
+rule's state, the absolute step and the cumulative budget. The extension holds only its own new
+frames, but their step and time coordinates continue the parent's rather than restarting at zero,
+and its manifest pins the parent by sha256 -- manifest, exchange record, checkpoint and every state
+trajectory.
+
+`rem.log` numbering is segment-local: an extension's log starts again at exchange 1, as Amber's
+does on restart, and its `numexchg` counts that segment's own blocks. The absolute position is
+recorded as `first_exchange_number` in the extension provenance.
 
 The group file is plain text, one state per line, **parsed with `shlex` and never evaluated by a
 shell**. Group lines carry inputs only; `-o`, `-x`, `-r` and `--checkpoint` stay on the outer
@@ -309,24 +398,71 @@ command because they describe the coordinated run:
    -c eq/npt_free/npt_free.state.xml --solute input/solute.yaml --group-index 0
 ```
 
-All the science is in a 27-line protocol holding no path at all:
+All the science is in a short protocol holding no path at all:
 
 ```python
 from replica_runtime import REST2Protocol
 
 protocol = REST2Protocol(
-    tau=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
-    temperature_k=300.0, timestep_fs=4.0,
-    segment_ps=2.0, exchange_interval_ps=10.0,
-    whole_output_interval_ps=10.0, number_of_exchanges=1000,
+    tau=[0.0, 0.1667, 0.3333, 0.5],
+    temperature_k=300.0, timestep_fs=2.0,
+    exchange_interval_ps=10.0,
+    whole_output_interval_ps=10.0, solute_output_interval_ps=10.0,
+    number_of_exchanges=500,
 )
 ```
 
-Every state is thermostatted at the **same** temperature and differs only by Hamiltonian:
-`s = (1-tau)^2` on solute-solute terms, `sqrt(s) = 1-tau` on solute-environment terms. This is
-Hamiltonian scaling, **not** temperature REMD, and an exchange never rescales velocities. Peptide
-omega torsions are left unscaled. The runtime is NVT: it installs no barostat, and exchanging
-complete configurations under NPT is refused rather than approximated.
+There is no `segment_ps`. It was the propagation quantum every other interval had to be a multiple
+of; the intervals are independent now, and a protocol still carrying it is refused with a migration
+message rather than reinterpreted. Production per replica is
+`exchange_interval_ps * number_of_exchanges` -- 5 ns here.
+
+#### The Hamiltonian, in tau
+
+Every state is thermostatted at the **same** temperature and differs only by Hamiltonian. `tau` is
+the only state coordinate; there is deliberately no second variable:
+
+```text
+solute-solute ordinary nonbonded   (1 - tau)^2
+solute-environment nonbonded       (1 - tau)
+generalized-Born contribution      (1 - tau)
+eligible solute torsions and CMAP  (1 - tau)^2
+bonds and angles                   unscaled
+ordinary amide omega               unscaled
+```
+
+This is Hamiltonian scaling, **not** temperature REMD, and an exchange never rescales velocities.
+The runtime is **NVT only**: it installs no barostat, and exchanging complete configurations under
+NPT is refused rather than approximated.
+
+The active implementation identity is:
+
+```text
+rest2-no-bond-angle-omega/v2
+```
+
+**Version 1 is a different energy function**, not an older format: it scaled the complete
+generalized-Born contribution by `(1 - tau)^2` where v2 scales it by `(1 - tau)`. A v1 record is
+therefore **refused for continuation rather than silently reinterpreted** — continuing one as the
+other would produce a single trajectory that no single Hamiltonian describes. v1 remains valid as
+a historical record of what it sampled.
+
+#### The completion report
+
+At normal completion the run prints, and persists, **neighbouring-pair acceptance and an overall
+figure** — nothing else:
+
+```text
+#   state 0 <-> state 1   612/2500   0.245
+#   ...
+#   overall               2977/12500   0.238
+```
+
+Round trips, transition matrices, first-passage times and convergence diagnostics are **downstream
+analysis** and are deliberately absent: they need a burn-in choice and a window choice this layer
+has no basis to make, and a single number printed here would be quoted as though that choice had
+been justified. The committed mapping is preserved in the authoritative record, so any of them can
+be computed later from it.
 
 The exchange schedule, the storage schema, the checkpoint and the validator are all this
 repository's. OpenMM owns System, Context, Integrator, State and every energy evaluation;
@@ -360,17 +496,39 @@ finite-reservoir approximation is stated in every record.
 A later rule -- a non-Boltzmann or kinetic reservoir -- is a new rule file and changes nothing in
 `openmm-md`.
 
-### Registration comes later
+### Registration belongs to the project, not here
 
-A generated system is not a registered dataset. Registration is a separate, future operation:
+A generated system is not a registered dataset, and **this repository does not register anything**.
+The boundary as implemented:
 
-```bash
-md-data register-system md/ALA --config md/ALA/config.yaml --root "$MD_DATA"
-```
+- **MD-templates** generates a *detached simulation bundle* — the prepared system, the stage
+  launchers, and the authoritative run records those runs write. It knows nothing about datasets,
+  namespaces or a managed root.
+- **The project** runs that bundle first in its own ignored local staging area, typically
+  `./data/<SYSTEM>/`.
+- **MD-project** owns `md-data-finish` and `md-data-register`. The first decides whether the bytes
+  are complete; the second independently revalidates and then moves the dataset into the managed
+  root as a restartable, checksum-verified transaction, leaving a symlink behind.
+- Registration happens **only after completion and verification**. A dataset that is unfinished,
+  still being written, or open in an editor is refused.
 
-The registrar reads `config.yaml`, the stage scripts, the `.out` files and the artefacts they name,
-computes checksums and writes authoritative registry metadata. None of that belongs in a stage
-script, which is why none of it is there.
+There is no registration command in this repository. `md-data register-system` never existed.
+
+#### Generation is dataset-root-relative
+
+`setup` requires `MD_DATA` to be set and its `--output` to be beneath it, so that the generated
+`paths.sh` carries no machine path — every launcher addresses its files relative to the dataset
+root it is given. It also **refuses an output inside a Git working tree**, because an ignore rule
+is one `git add -f` from being wrong.
+
+The staging area the project uses is the one narrow exception, and it is checked rather than
+asserted: the directory must carry a `.md-staging` marker, `MD_TEMPLATES_ALLOW_STAGING=1` must be
+set, and `git check-ignore` must agree that what is created beneath it is actually ignored. Any one
+missing and the refusal stands.
+
+Because the launchers are dataset-root-relative, they remain valid before and after the staging
+directory becomes a symlink to the registered dataset — the tree moves, the commands do not
+change.
 
 ---
 
@@ -380,18 +538,20 @@ script, which is why none of it is there.
 conventional MD, `setup` is the entry point and these are the advanced path — `setup` calls the
 same `sys-gen` system builder, so the science is identical.
 
-## The six commands
+## The seven commands
 
 ```bash
 md-template init            # create an MD stack directory and inspect the machine
 md-template install         # install OpenMM into it
+md-openmm    setup          # one small request -> a runnable OpenMM directory
 md-openmm    sys-config     # write sys.config.yaml and md.config.yaml
 md-openmm    show-default   # print the defaults those files start from
 md-openmm    sys-gen        # build the OpenMM system
 md-openmm    md-gen         # generate the run scripts
 ```
 
-There is no seventh. AIS is a `--method`, not a command:
+`setup` is the normal entry point; `sys-config` / `sys-gen` / `md-gen` are the older route, and
+AIS is still reached only through it. There is no eighth. AIS is a `--method`, not a command:
 
 ```bash
 md-openmm sys-config --method cMD AIS --peptide true --solvent TIP3P
@@ -648,9 +808,13 @@ together, so the acceptance is
 log(alpha) = beta * [U_i(x_i,V_i) + U_j(x_j,V_j) - U_i(x_j,V_j) - U_j(x_i,V_i)]
 ```
 
-with the pV contributions cancelling at the common beta and pressure. Every replica writes
-`replica_NN_whole.dcd`, `replica_NN_solute.dcd`, `replica_NN.csv` and `replica_NN.chk`, and gets its
-own integrator, velocity and barostat seeds.
+with the pV contributions cancelling at the common beta and pressure — **this older route did
+install a barostat under explicit solvent**, which is why a pV term appears at all. The `setup`
+route above does not: it is NVT only, and refuses a requested pressure rather than approximating
+it. Do not read this acceptance expression as a statement about the current engine.
+
+Every replica writes `replica_NN/production/whole_system.dcd`, `solute.dcd`, `replica.csv`,
+`production.chk` and `final_state.xml`, and gets its own integrator, velocity and barostat seeds.
 
 Every attempt is appended to `exchange_attempts.csv`:
 
@@ -762,12 +926,16 @@ exists.
 
 ### The path
 
-The Hamiltonian actually changes, through the same REST2 decomposition a fixed-tau cMD walker or a
-REST2 rung uses — it is not interpolated between two endpoint energies:
+The Hamiltonian actually changes, through the same scaling a fixed-tau cMD walker or a REST2 rung
+uses — it is not interpolated between two endpoint energies. `tau` moves linearly along the path,
+and the terms scale as they do everywhere else in this repository:
 
 ```text
-s        = (1 - tau)^2      solute-solute terms        quadratic along a linear path in tau
-sqrt(s)  = 1 - tau          solute-environment terms   linear along a linear path in tau
+solute-solute ordinary nonbonded   (1 - tau)^2      quadratic along a linear path in tau
+solute-environment nonbonded       (1 - tau)        linear along a linear path in tau
+generalized-Born contribution      (1 - tau)
+eligible solute torsions and CMAP  (1 - tau)^2
+bonds and angles                   unscaled
 ```
 
 Torsions about an omega bond are left unscaled, from the same `inputs/solute.yaml` list cMD and
@@ -822,7 +990,8 @@ MD/AIS/
 ├── resolved_run.yaml  provenance.yaml # written by the run
 ├── trajectory_0000/
 │   ├── observations.dcd               # exactly 21 whole-system frames
-│   ├── observations.csv               # 21 rows, one per frame, with tau/s/sqrt(s) and the work
+│   ├── observations.csv               # 21 rows, one per frame; columns include tau, s, sqrt_s
+│   │                                  #   (s = (1-tau)^2 recorded for convenience) and the work
 │   ├── final_state.xml  stdout.log  completed.json
 └── trajectory_0001/ ...
 ```
@@ -990,13 +1159,24 @@ present, or `sys-gen` stops **before building anything**.
 
 ### Preflight, and `--check`
 
-Every generated launcher — `run.sh`, `run_all.sh`, the REST2 workers, the AIS paths — runs the same
-preflight before an OpenMM `Context`, an integrator, a worker process, a checkpoint or a trajectory
-exists. It is not opt-in and there is no flag to skip it.
+**On the older `sys-gen` / `md-gen` route**, every generated launcher — `run.sh`, `run_all.sh`,
+the REST2 workers, the AIS paths — runs the same preflight before an OpenMM `Context`, an
+integrator, a worker process, a checkpoint or a trajectory exists. It is not opt-in there, and
+there is no flag to skip it.
 
 ```bash
 ./run_all.sh --check     # the whole preflight, zero integration steps, nothing written
 cd minimization && ./run.sh --check
+```
+
+**The `setup` route has no `--check`.** Its launchers forward their arguments straight to
+`openmm-md`, whose parser has no such flag, so `./min/min.sh --check` fails rather than running a
+preflight. That is deliberate: `setup` moves the equivalent checks to *generation* time, refusing a
+configuration it cannot resolve before writing any script at all. The nearest equivalents on a
+generated ladder are:
+
+```bash
+REST2/rest2.sh --verify-only    # open the stored output and check it, running nothing
 ```
 
 `--check` runs the identical gate a real run runs and then stops. It creates no trajectory, no
