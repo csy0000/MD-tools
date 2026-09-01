@@ -27,3 +27,13 @@ from .model import (CONTRACT_VERSION, Component, Dataset, DatasetError, MANIFEST
 __all__ = ["CONTRACT_VERSION", "Component", "Dataset", "DatasetError", "MANIFEST_NAME",
            "Person", "SourceRepository", "canonical_path", "validate_dataset",
            "validate_dataset_file"]
+
+
+def exported_schema_path():
+    """The committed JSON schema, located without assuming a source checkout."""
+    from importlib.resources import files
+    from pathlib import Path
+
+    from .model import CONTRACT_VERSION
+    return Path(str(files("md_tools.data_contract").joinpath(
+        "schemas", f"dataset-v{CONTRACT_VERSION}.schema.json")))

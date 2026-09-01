@@ -1,0 +1,329 @@
+{
+  "$defs": {
+    "Component": {
+      "additionalProperties": false,
+      "description": "One method or asset directory inside a dataset.\n\n`cMD`, `REST2` and the prepared inputs they share are components of ONE dataset when they were\ngenerated as a single comparison suite -- not three datasets that happen to be adjacent.",
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "maxLength": 1024,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "linked": {
+          "default": false,
+          "title": "Linked",
+          "type": "boolean"
+        },
+        "method": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Method"
+        },
+        "name": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "[A-Za-z0-9][A-Za-z0-9._-]*",
+          "title": "Name",
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Path",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "complete",
+            "archived",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "simulation",
+            "shared-input",
+            "analysis",
+            "reference"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "path",
+        "status"
+      ],
+      "title": "Component",
+      "type": "object"
+    },
+    "Person": {
+      "additionalProperties": false,
+      "description": "A scientific identity, not a machine login.\n\nPer-run operator and host details belong in the run records, where they are useful for\ndebugging. A dataset manifest travels; it carries who is answerable for the science.",
+      "properties": {
+        "affiliation": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Affiliation"
+        },
+        "name": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "orcid": {
+          "anyOf": [
+            {
+              "pattern": "^\\d{4}-\\d{4}-\\d{4}-\\d{3}[\\dX]$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Orcid"
+        },
+        "person_id": {
+          "maxLength": 128,
+          "minLength": 2,
+          "pattern": "[a-z0-9][a-z0-9-]*",
+          "title": "Person Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "person_id",
+        "name"
+      ],
+      "title": "Person",
+      "type": "object"
+    },
+    "SourceRepository": {
+      "additionalProperties": false,
+      "description": "A repository pinned at an exact commit.\n\nBoth fields are required together. Naming a repository without a commit records where to look\nbut not what ran, which is the failure this contract exists to prevent.",
+      "properties": {
+        "commit": {
+          "pattern": "[0-9a-f]{40}",
+          "title": "Commit",
+          "type": "string"
+        },
+        "repository": {
+          "maxLength": 2048,
+          "pattern": "https://[^\\s]+",
+          "title": "Repository",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        }
+      },
+      "required": [
+        "repository",
+        "commit"
+      ],
+      "title": "SourceRepository",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/csy0000/MD-tools/schemas/dataset-v2.0.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The authoritative manifest at the root of one dataset directory.\n\nCanonical location, contract v2:\n\n    $MD_DATA/{year}/{project_name}/{data_name}/dataset.yaml\n    $MD_DATA/{year}/common/{project_name}/{data_name}/dataset.yaml",
+  "properties": {
+    "archived_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Archived At"
+    },
+    "completed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Completed At"
+    },
+    "components": {
+      "items": {
+        "$ref": "#/$defs/Component"
+      },
+      "minItems": 1,
+      "title": "Components",
+      "type": "array"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "created_by": {
+      "$ref": "#/$defs/Person"
+    },
+    "data_name": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "[A-Za-z0-9][A-Za-z0-9._-]*",
+      "title": "Data Name",
+      "type": "string"
+    },
+    "dataset_id": {
+      "maxLength": 128,
+      "minLength": 2,
+      "pattern": "[a-z0-9][a-z0-9-]*",
+      "title": "Dataset Id",
+      "type": "string"
+    },
+    "derived_from": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Derived From",
+      "type": "array"
+    },
+    "notes": {
+      "anyOf": [
+        {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Notes"
+    },
+    "origin": {
+      "$ref": "#/$defs/SourceRepository"
+    },
+    "path": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "title": "Path",
+      "type": "string"
+    },
+    "project_name": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "[A-Za-z0-9][A-Za-z0-9._-]*",
+      "title": "Project Name",
+      "type": "string"
+    },
+    "role": {
+      "enum": [
+        "project",
+        "common"
+      ],
+      "title": "Role",
+      "type": "string"
+    },
+    "schema_version": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "software": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SourceRepository"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "status": {
+      "enum": [
+        "active",
+        "complete",
+        "archived"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "system": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "title": "System",
+      "type": "string"
+    },
+    "year": {
+      "pattern": "\\d{4}",
+      "title": "Year",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "dataset_id",
+    "path",
+    "year",
+    "project_name",
+    "data_name",
+    "role",
+    "system",
+    "created_at",
+    "created_by",
+    "status",
+    "origin",
+    "components"
+  ],
+  "title": "MD-data dataset manifest",
+  "type": "object"
+}

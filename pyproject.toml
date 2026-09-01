@@ -42,6 +42,9 @@ include = ["md_tools*"]
 # path named in the documentation is a symlink to this directory -- one copy, so the example and
 # the schema that enforces it cannot drift apart.
 "md_tools" = ["configs/*.example", "configs/openmm/*.config"]
+# The generated JSON schema and the v1-to-v2 migration note travel with the contract they
+# describe, so an installed wheel can be checked against them without the repository.
+"md_tools.data_contract" = ["schemas/*.json", "*.md"]
 
 [tool.pytest.ini_options]
 # The MD smoke tests build systems and integrate them, so they are marked slow and run before a

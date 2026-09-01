@@ -2,4 +2,6 @@
 recursive-include src/md_tools/openmm/templates *.py *.sh
 # The shipped configuration examples, resolved with importlib.resources.
 recursive-include src/md_tools/configs *.config *.example
+# The contract's generated schema and its migration note.
+recursive-include src/md_tools/data_contract *.json *.md
 include README.md

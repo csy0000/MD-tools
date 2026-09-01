@@ -408,3 +408,76 @@ def test_an_incomplete_staging_directory_is_not_committed(world):
     _register(world)
     assert (destination / MANIFEST_NAME).is_file(), "committed a dataset with no manifest"
     validate_dataset_file(destination / MANIFEST_NAME)
+
+
+# -- the published schema, the shipped example, and the migration note ----------------------------
+
+def test_the_exported_schema_matches_the_model_that_actually_validates():
+    """A published schema that has drifted from the running validator is worse than none.
+
+    The file is generated from the pydantic model, so this regenerates and compares rather than
+    checking a few fields by hand.
+    """
+    import json
+
+    from md_tools.data_contract import exported_schema_path
+    from md_tools.data_contract.model import json_schema
+
+    path = exported_schema_path()
+    assert path.is_file(), f"{path} is not shipped"
+    committed = json.loads(path.read_text(encoding="utf-8"))
+    assert committed == json_schema(), (
+        "the exported dataset schema differs from what the model renders. Regenerate it; do not "
+        "edit it by hand.")
+
+
+def test_the_exported_schema_describes_the_year_first_path():
+    import json
+
+    from md_tools.data_contract import exported_schema_path
+
+    schema = json.loads(exported_schema_path().read_text(encoding="utf-8"))
+    for field in ("year", "project_name", "data_name"):
+        assert field in schema["properties"], field
+    assert "namespace" not in schema["properties"], "v1's namespace must not be in the v2 schema"
+    assert "2.0" in schema["$id"]
+
+
+def test_the_user_configuration_example_is_shipped_and_carries_no_secret():
+    """It must be shipped, and it must be safe to ship."""
+    from importlib.resources import files
+
+    path = Path(str(files("md_tools").joinpath("configs", "user.config.example")))
+    assert path.is_file(), f"{path} is not shipped"
+    text = path.read_text(encoding="utf-8")
+    assert "schema_version" in text and "md_data" in text and "person_id" in text
+    lowered = text.lower()
+    for forbidden in ("token", "password", "secret", "api_key", "private_key"):
+        assert forbidden not in lowered, f"the shipped example mentions {forbidden!r}"
+
+
+def test_the_shipped_example_is_what_init_actually_writes(tmp_path, monkeypatch):
+    """The example must describe the file that gets created, not an older idea of it."""
+    from importlib.resources import files
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.delenv("MD_TOOLS_CONFIG", raising=False)
+    root = tmp_path / "MD_DATA"; root.mkdir()
+    written = yaml.safe_load(init_user_config(
+        noninteractive=True, person_id="a-person", name="A Person",
+        md_data=str(root)).read_text(encoding="utf-8"))
+    example = yaml.safe_load(
+        Path(str(files("md_tools").joinpath("configs", "user.config.example"))).read_text())
+    assert set(written) == set(example), (set(written), set(example))
+    assert set(written["user"]) == set(example["user"])
+    assert set(written["machine"]) == set(example["machine"])
+
+
+def test_the_migration_document_exists_and_names_both_versions():
+    from importlib.resources import files
+
+    path = Path(str(files("md_tools.data_contract").joinpath("migration.md")))
+    assert path.is_file(), "the v1-to-v2 migration document is missing"
+    text = path.read_text(encoding="utf-8")
+    assert "20d982eb463ed439095f1b95e00ff1b1d75906b4" in text, "the ported commit is not attributed"
+    assert "{namespace}/{yyyy-mm}/{dataset_name}" in text and "{year}/{project_name}/{data_name}" in text

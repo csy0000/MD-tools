@@ -1,0 +1,31 @@
+# MD-tools user configuration.
+#
+# This file is YAML, despite the .config suffix. It holds who you are scientifically and where
+# your managed storage root is. It is NOT part of the installed package and must never be checked
+# into a repository: it is specific to one person on one machine.
+#
+# Location, highest precedence first:
+#   1. md-openmm data-register --user-config PATH
+#   2. $MD_TOOLS_CONFIG
+#   3. ${XDG_CONFIG_HOME:-$HOME/.config}/md-tools/user.config
+#
+# Create it with:
+#   md-openmm data-register --init
+#
+schema_version: "1.0"
+
+user:
+  # A stable identifier for you, lowercase, used as the person_id in every dataset manifest you
+  # register. Changing it later makes your old and new datasets look like different people.
+  person_id: "your-name-here"
+  # Your name as it should appear in provenance.
+  name: "Your Name"
+  # An ORCID, or null. Recorded as-is; it is not looked up or verified.
+  orcid: null
+  # Optional affiliation.
+  affiliation: null
+
+machine:
+  # The managed storage root: the directory registered datasets are written beneath. An absolute
+  # path. $MD_DATA overrides this, and an explicit --md-data overrides both.
+  md_data: "/absolute/path/to/MD_DATA"
