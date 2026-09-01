@@ -116,20 +116,33 @@ def test_the_audit_accepts_a_system_made_only_of_known_forces():
 # --- configuration ----------------------------------------------------------
 
 @pytest.mark.parametrize("tau", [-0.1, 1.0, 1.5, "warm"])
-def test_a_tau_outside_the_ladder_is_refused_by_the_config(tau):
-    from md_tools.openmm.config import ConfigError, resolve_md_config
+def test_a_tau_outside_the_ladder_is_refused_by_the_config(tau, tmp_path):
+    """tau is a ladder rung, not a free parameter: 1.0 scales the solute Hamiltonian away entirely.
 
-    document = {"methods": ["cMD"], "common": {"timestep_fs": 2.0, "pressure_bar": None},
-                "cMD": {"ensemble": "NVT", "tau": tau, "duration_ns": 1}}
+    Asserted against `build.md`, the only MD resolver. It used to be asserted against the retired
+    `methods:` model, whose `cMD.tau` this replaced.
+    """
+    import yaml
+
+    from md_tools.build.md import resolve_md_config
+    from md_tools.build.strict import ConfigError
+
+    path = tmp_path / "cmd.config"
+    path.write_text(yaml.safe_dump(
+        {"protocol": "cMD", "solvent": "implicit", "dynamics": {"tau": tau}}), encoding="utf-8")
     with pytest.raises(ConfigError, match="tau"):
-        resolve_md_config(document, implicit=True)
+        resolve_md_config(path)
 
 
-def test_the_default_cmd_block_is_ordinary_conventional_md():
+def test_the_default_protocol_is_ordinary_conventional_md(tmp_path):
     """tau must default to 0: a default that scaled the Hamiltonian would be a silent change."""
-    from md_tools.openmm.defaults import md_defaults
+    import yaml
 
-    assert md_defaults(methods=["cMD"])["cMD"]["tau"] == 0.0
+    from md_tools.build.md import resolve_md_config
+
+    path = tmp_path / "cmd.config"
+    path.write_text(yaml.safe_dump({"protocol": "cMD"}), encoding="utf-8")
+    assert resolve_md_config(path)["dynamics"]["tau"] == 0.0
 
 
 # --- the uncommitted tail ---------------------------------------------------

@@ -69,7 +69,7 @@ def write_solute_document(topology_path: Path, system_path: Path, out: Path, *,
     from openmm import XmlSerializer
     from openmm.app import PDBFile
 
-    from ..openmm.config import write_yaml
+    from ..openmm.yaml_io import write_yaml
     from ..openmm.system import classify_omega_bonds
     from ..openmm.builders import _solute_document
     from .stage import solute_atom_indices

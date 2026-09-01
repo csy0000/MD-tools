@@ -16,7 +16,7 @@ blocks: nothing read them after the stage chain replaced the old workflow manage
 `barostat_interval: 50` sitting beside the live `barostat_frequency_steps: 25` is exactly the kind
 of second declaration this module is not allowed to keep.
 """
-from .defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT, EXPLICIT_COMBINATIONS
+from .system_defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT, EXPLICIT_COMBINATIONS
 
 #: Which combination the base carries is `defaults.DEFAULT_SOLVENT`, not a second spelling of it.
 #: Every key here is overwritten from the user's YAML before a build; this only decides what a

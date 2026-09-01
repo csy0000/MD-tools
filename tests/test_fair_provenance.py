@@ -69,8 +69,8 @@ def test_environment_records_absent_packages_as_null_not_missing():
 # --- forcefield.json ---------------------------------------------------------
 
 def _record_for(solvent, route, reported=None, implicit_report=None):
-    from md_tools.openmm.config import resolve_sys_config
-    from md_tools.openmm.defaults import sys_defaults
+    from md_tools.openmm.system_config import resolve_sys_config
+    from md_tools.openmm.system_defaults import sys_defaults
     from md_tools.openmm.forcefield_record import build_forcefield_record
 
     resolved = resolve_sys_config(sys_defaults(solvent=solvent, peptide=(route == "peptide")))
@@ -172,7 +172,12 @@ def test_implicit_ligand_records_the_openff_provenance_used_before_parmed():
 # --- the 0.3.x retrofit ------------------------------------------------------
 
 def _legacy_fixture(root: Path, *, with_hash: bool = True) -> Path:
-    """A synthetic 0.3.x tree. Small and fixed; no private data, no $MD_DATA, no OpenMM."""
+    """A synthetic 0.3.x tree. Small and fixed; no private data, no $MD_DATA, no OpenMM.
+
+    The `methods:`/`duration_ns` document below is HISTORICAL DATA, not configuration this package
+    would write: the point of the fixture is that provenance can still be read out of a tree
+    written by an older version. A search for the retired vocabulary finds it here on purpose.
+    """
     import hashlib
 
     (root / "inputs").mkdir(parents=True)

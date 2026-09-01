@@ -357,75 +357,11 @@ STAGE_RUNTIME_OUTPUTS = ("stage.log", "stage.csv", "checkpoint.chk", "final_stat
 
 
 
-def production_stage_document(config, method_name, *, parent_stage, parent_path, implicit,
-                              seeds, template_commit, omega_excluded=()):
-    """The resolved request for one production stage.
+# `production_stage_document` lived here. It built the production stage record for the retired
+# `methods:` configuration -- the only code left reading `duration_ns` and
+# `switching_duration_ps` -- and had no caller once that route was removed. `build.md`
+# writes the stage document now, in integer steps.
 
-    ONE derivation, used by `build-md` when it writes `stage.yaml` and by the generated launcher
-    when it recomputes the current request. If the two derived it separately they would drift,
-    and the check would compare a hash of one thing against a hash of another.
-    """
-    common = config["common"]
-    method = config[method_name]
-    tau = float(method.get("tau", 0.0) or 0.0)
-    document = {
-        "name": method_name,
-        "group": None,
-        "kind": "fixed_tau_md" if (method_name == "cMD" and tau) else {
-            "cMD": "conventional_md", "REST2": "rest2_exchange", "AIS": "ais_switching",
-        }.get(method_name, method_name.lower()),
-        "production": True,
-        "ensemble": method.get("ensemble"),
-        "tau": tau,
-        "omega_exclusion": bool(method.get("omega_exclusion", True)) and bool(tau),
-        "omega_excluded_bonds": [list(map(int, b)) for b in omega_excluded] if tau else [],
-        "temperature_kelvin": float(common["temperature_kelvin"]),
-        "timestep_fs": float(common["timestep_fs"]),
-        "friction_per_ps": float(common["friction_per_ps"]),
-        "implicit": bool(implicit),
-        "pressure_bar": None if implicit else float(common["pressure_bar"]),
-        "barostat_frequency_steps": (0 if implicit
-                                     else int(common["barostat_frequency_steps"])),
-        "hydrogen_mass_amu": (config.get("constraints") or {}).get("hydrogen_mass_amu"),
-        "parent": parent_stage,
-        "parent_path": parent_path,
-        "input_state": f"../{parent_stage}/final_state.xml" if parent_stage else None,
-        # cMD hands one final state on. REST2 keeps a state per replica and has no single
-        # top-level handoff, so it declares none rather than naming a file that never appears.
-        "output_state": "final_state.xml" if method_name == "cMD" else None,
-        "integrator_seed": seeds.get("integrator"),
-        "velocity_seed": seeds.get("velocities"),
-        "barostat_seed": seeds.get("barostat"),
-        "template_commit": template_commit,
-    }
-    # The extendable part, kept in the document because a reader wants to see the request, and
-    # excluded from the invariant fingerprint because extending is legitimate.
-    if "duration_ns" in method:
-        document["duration_ns"] = float(method["duration_ns"])
-    if "number_of_exchanges" in method:
-        document["number_of_exchanges"] = int(method["number_of_exchanges"])
-
-    # AIS states its request in nested blocks rather than flat keys, and it has no parent stage:
-    # it starts from an equilibrium ensemble prepared into inputs/, not from the common chain. The
-    # fields below ARE the physics of a switching path -- where it starts, where it ends, how long
-    # the switch takes and how finely the Hamiltonian moves -- so they belong in the invariant.
-    # `number_of_paths` is the one extendable quantity: running more paths is legitimate.
-    if method_name == "AIS":
-        path = method["path"]
-        document["kind"] = "ais_switching"
-        document["ensemble"] = "NVT" if implicit else "NPT"
-        document["tau"] = float(path["tau_start"])
-        document["tau_start"] = float(path["tau_start"])
-        document["tau_end"] = float(path["tau_end"])
-        document["interpolation"] = path.get("interpolation")
-        document["enhanced_region"] = path.get("enhanced_region")
-        document["omega_exclusion"] = bool(path.get("omega_exclusion", True))
-        document["switching_duration_ps"] = float(path["switching_duration_ps"])
-        document["parameter_update_interval_steps"] = int(
-            path["parameter_update_interval_steps"])
-        document["number_of_observations"] = int(method["output"]["number_of_observations"])
-        document["number_of_paths"] = int(method["source"]["number_of_trajectories"])
-    return document
 
 
 RECORD_FORMAT = "md-tools-runtime-record/v1"

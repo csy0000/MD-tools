@@ -95,7 +95,7 @@ def test_a_solute_small_enough_that_1p5nm_would_break_the_cutoff_grows_the_box()
 
 
 def test_the_conservative_2nm_option_gives_more_clearance_and_stays_selectable():
-    from md_tools.openmm.defaults import CONSERVATIVE_PADDING_NM, DEFAULT_PADDING_NM
+    from md_tools.openmm.system_defaults import CONSERVATIVE_PADDING_NM, DEFAULT_PADDING_NM
 
     assert (DEFAULT_PADDING_NM, CONSERVATIVE_PADDING_NM) == (1.5, 2.0)
     default = _geometry(padding_nm=DEFAULT_PADDING_NM, radius_nm=1.2)

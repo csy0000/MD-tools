@@ -18,8 +18,10 @@ from typing import Any, Optional
 
 import yaml
 
-from .config import ConfigError, openff_resource, write_yaml
-from .defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT
+from ..build.strict import ConfigError
+from .system_config import openff_resource
+from .yaml_io import write_yaml
+from .system_defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT
 from .templates.rest2_scaling import (OMEGA_DETECTOR_VERSION,
                                      torsion_exclusion_report)
 

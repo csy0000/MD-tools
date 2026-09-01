@@ -343,7 +343,7 @@ def test_the_ace_nonpolar_term_is_a_real_energy_difference(tmp_path):
     # itself is unchanged and maintained.
     from md_tools.build.top import _sys_document, resolve_build_config
     from md_tools.openmm.builders import Log, _build_implicit, _legacy_cfg
-    from md_tools.openmm.config import resolve_sys_config
+    from md_tools.openmm.system_config import resolve_sys_config
 
     work = tmp_path
     staging = work / "_work"

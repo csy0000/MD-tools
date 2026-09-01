@@ -128,39 +128,29 @@ def test_the_ais_runtime_never_walks_the_storage_root_or_hashes_a_trajectory():
 
 # --- AIS source tau -----------------------------------------------------------------------------
 
-def test_an_explicit_source_tau_is_required_when_there_is_no_companion_record():
-    """An external trajectory has no runtime record, so the user has to say what it is."""
-    from md_tools.openmm.config import ConfigError, resolve_md_config
-    from md_tools.openmm.defaults import md_defaults
+def test_the_path_start_must_equal_the_source_ensemble_tau():
+    """A path must begin in the ensemble it anneals away from.
 
-    document = md_defaults(methods=["AIS"])
-    document["AIS"]["path"]["switching_duration_ps"] = 0.08
-    document["AIS"]["source"].update({"trajectory": "external.dcd", "start_time_ps": 0.0,
-                                      "end_time_ps": 10.0, "number_of_trajectories": 1,
-                                      "first_frame_time_ps": 0.0, "frame_interval_ps": 0.5})
-    # Valid without it: the runtime decides whether a companion record supplies it.
-    resolve_md_config(document, implicit=False)
+    The retired `methods:` model carried a second, user-declared `AIS.source.source_tau` that
+    configuration validated against the path start. There is no such field now, and that is the
+    improvement: a user restating the source's tau could restate it WRONGLY, and configuration had
+    no way to tell. `ais.tau_start` is the single declaration, and the source's OWN record is
+    checked against it at run time -- see `runtime/ais.py`, which refuses a source whose recorded
+    tau disagrees, and which records `thermodynamic_states.source_tau` from `ais.tau_start`.
+    """
+    from md_tools.build.md import MD_SCHEMA
 
-    document["AIS"]["source"]["source_tau"] = 0.25
-    with pytest.raises(ConfigError, match="source_tau"):
-        resolve_md_config(document, implicit=False)
+    ais = MD_SCHEMA.sections["ais"]
+    fields = ais.fields
+    assert "source_tau" not in fields, (
+        "a second, user-declared source tau reintroduces the disagreement this removed")
+    assert fields["tau_start"].default == 0.5
+    assert "record is checked against this" in fields["tau_start"].doc
 
+    runtime = (REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py").read_text(encoding="utf-8")
+    assert '"source_tau": float(ais["tau_start"])' in runtime, \
+        "the run no longer records which ensemble its paths started in"
 
-def test_a_declared_source_tau_must_equal_the_path_start():
-    from md_tools.openmm.config import ConfigError, resolve_md_config
-    from md_tools.openmm.defaults import md_defaults
-
-    document = md_defaults(methods=["AIS"])
-    document["AIS"]["path"]["switching_duration_ps"] = 0.08
-    document["AIS"]["source"].update({"trajectory": "external.dcd", "start_time_ps": 0.0,
-                                      "end_time_ps": 10.0, "number_of_trajectories": 1,
-                                      "source_tau": 0.5})
-    resolved = resolve_md_config(document, implicit=False)
-    assert resolved["AIS"]["source"]["source_tau"] == 0.5
-
-    document["AIS"]["source"]["source_tau"] = 1.5
-    with pytest.raises(ConfigError, match=r"in \[0, 1\)"):
-        resolve_md_config(document, implicit=False)
 
 
 # --- streamed AIS sources -----------------------------------------------------------------------
@@ -210,7 +200,7 @@ def test_the_starting_configurations_never_claim_to_hold_velocities():
 # --- the default force-field selection ----------------------------------------------------------
 
 def test_the_generated_default_names_ff14sb_sage_221_and_tip3p():
-    from md_tools.openmm.defaults import sys_defaults
+    from md_tools.openmm.system_defaults import sys_defaults
 
     document = sys_defaults()
     assert document["forcefield"]["protein"] == "amber14-all.xml"

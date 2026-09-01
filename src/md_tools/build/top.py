@@ -28,7 +28,7 @@ from typing import Any
 
 import yaml
 
-from ..openmm.defaults import DEFAULT_PADDING_NM, SOLVENTS, canonical_solvent, is_implicit
+from ..openmm.system_defaults import DEFAULT_PADDING_NM, SOLVENTS, canonical_solvent, is_implicit
 from .record import LogWriter, file_facts, openmm_platform_facts
 from .strict import ConfigError, Field, Schema, Section
 
@@ -165,7 +165,7 @@ def _sys_document(resolved: dict[str, Any]) -> dict[str, Any]:
     One direction, one place. The builders downstream are the validated ones; this does not
     reinterpret any chemistry, it only renames.
     """
-    from ..openmm.defaults import sys_defaults
+    from ..openmm.system_defaults import sys_defaults
 
     solvent = canonical_solvent(resolved["solvent"]["model"])
     peptide = bool(resolved["solute"]["peptide"])
@@ -312,7 +312,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
     document = _sys_document(resolved)
 
-    from ..openmm.config import resolve_sys_config
+    from ..openmm.system_config import resolve_sys_config
     from ..openmm.builders import (Log as _BuilderLog, _build_explicit, _build_implicit,
                                _legacy_cfg)
 

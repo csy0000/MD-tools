@@ -33,6 +33,7 @@ import yaml
 
 from .record import LogWriter
 from .strict import ConfigError, Field, Schema, Section
+from ..openmm.system_defaults import DEFAULT_BAROSTAT_FREQUENCY_STEPS
 
 PROTOCOLS = ("cMD", "REST2", "rREST2", "AIS")
 
@@ -67,7 +68,8 @@ MD_SCHEMA = Schema(
                       "implicit solvent, which has no volume."),
             Field("friction_per_ps", float, default=1.0, minimum=0.01, maximum=100.0, unit="1/ps",
                   doc="LangevinMiddleIntegrator collision rate."),
-            Field("barostat_interval_steps", int, default=25, minimum=1, unit="steps",
+            Field("barostat_interval_steps", int, default=DEFAULT_BAROSTAT_FREQUENCY_STEPS,
+                  minimum=1, unit="steps",
                   doc="MonteCarloBarostat volume-move attempt interval, in STEPS. It is the "
                       "frequency, not the barostat's presence, that makes a stage NPT."),
             Field("restraint_kcal_per_mol_A2", float, default=1.0, minimum=0.0, maximum=1000.0,
