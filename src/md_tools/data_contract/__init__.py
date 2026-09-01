@@ -20,20 +20,28 @@ way nothing detects. `migration.md` beside this module records what changed and 
 
 from __future__ import annotations
 
+from .extension import (EXTENSION_NAME, Extension, ExtensionTarget, check_dataset_extension,
+                        validate_extension, validate_extension_file)
 from .model import (CONTRACT_VERSION, Component, Dataset, DatasetError, MANIFEST_NAME,
                     Person, SourceRepository, canonical_path, validate_dataset,
                     validate_dataset_file)
 
-__all__ = ["CONTRACT_VERSION", "Component", "Dataset", "DatasetError", "MANIFEST_NAME",
-           "Person", "SourceRepository", "canonical_path", "validate_dataset",
-           "validate_dataset_file"]
+__all__ = ["CONTRACT_VERSION", "Component", "Dataset", "DatasetError", "EXTENSION_NAME",
+           "Extension", "ExtensionTarget", "MANIFEST_NAME", "Person", "SourceRepository",
+           "canonical_path", "check_dataset_extension", "validate_dataset",
+           "validate_dataset_file", "validate_extension", "validate_extension_file"]
 
 
-def exported_schema_path():
-    """The committed JSON schema, located without assuming a source checkout."""
+def exported_schema_path(which: str = "dataset"):
+    """A committed JSON schema, located without assuming a source checkout.
+
+    `which` is "dataset" or "extension". Both are generated from their models and drift-checked.
+    """
     from importlib.resources import files
     from pathlib import Path
 
     from .model import CONTRACT_VERSION
+    if which not in ("dataset", "extension"):
+        raise ValueError(f"unknown schema {which!r}; expected 'dataset' or 'extension'")
     return Path(str(files("md_tools.data_contract").joinpath(
-        "schemas", f"dataset-v{CONTRACT_VERSION}.schema.json")))
+        "schemas", f"{which}-v{CONTRACT_VERSION}.schema.json")))

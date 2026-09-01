@@ -21,7 +21,7 @@ with a message that names the difference.
 | dated segment | creation **month**, `yyyy-mm` | completion **year**, `YYYY` |
 | identity fields | `namespace`, `dataset_name` | `year`, `project_name`, `data_name` |
 | software provenance | `templates` | `software` |
-| `extension.yaml` | a separate operational record | not carried into v2; continuation provenance lives in the run records |
+| `extension.yaml` | a separate operational record | **carried into v2**, with a required checkpoint hash (see below) |
 | catalogue | `catalogue-v1.schema.json` | dropped — nothing consumed it |
 
 ### The month segment is gone
@@ -71,8 +71,29 @@ A v1 dataset that genuinely needs to be v2 is re-registered: `md-openmm data-reg
 run records, derives a fresh manifest, and writes it at the v2 path. The v1 copy is not touched by
 that, and removing it afterwards is a deliberate act.
 
+## Extensions
+
+`extension.yaml` is ported with its semantics intact: the two modes, the status and timestamp
+rules, the immutability of a completed parent, and the requirement that new output go to a
+component the extending dataset owns rather than to a link into the parent.
+
+One thing is REQUIRED in v2 that v1 did not record: **the digest of the checkpoint the
+continuation restarted from**, and a flag saying whether that checkpoint was copied out of the
+parent first.
+
+A restart point that the running simulation can itself overwrite is not a restart point. In-place
+extensions write into the very component they restarted from, so v2 refuses one that did not copy
+the checkpoint: without the copy, the join becomes unreproducible the moment the continuation
+advances past it, and nothing in the record would show that it had.
+
+Registration validates the record, cross-checks it against `dataset.yaml`, and re-hashes the
+checkpoint if the file travelled with the data. It **never opens the parent dataset** -- the parent
+is named by `target.dataset_id`, and a completed parent is immutable precisely so that nothing
+needs to reach into it. `derived_from` in the new dataset's manifest is derived from that same
+record, so a continuation cannot be registered without saying where it came from.
+
 ## The exported schema
 
-`schemas/dataset-v2.0.schema.json` is generated from the pydantic model in `model.py`, never
-maintained by hand, and a test regenerates it and compares. A published schema that has drifted
+`schemas/dataset-v2.0.schema.json` and `schemas/extension-v2.0.schema.json` are generated from the pydantic models in `model.py` and
+`extension.py`, never maintained by hand, and tests regenerate them and compare. A published schema that has drifted
 from the validator that actually runs is worse than no published schema.

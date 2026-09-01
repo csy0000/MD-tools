@@ -33,6 +33,8 @@ from typing import Any
 
 import yaml
 
+from ..data_contract.extension import (EXTENSION_NAME, check_dataset_extension,
+                                       validate_extension_file)
 from ..data_contract.model import (INVENTORY_NAME, MANIFEST_NAME, RESOLVED_NAME, Dataset,
                                    DatasetError, canonical_path, check_segment,
                                    validate_dataset)
@@ -129,9 +131,14 @@ def register_dataset(*, source: Path, project_name: str, data_name: str, year: s
     say(f"inventory            : {len(entries)} files, {total / 1e6:.1f} MB, all hashed")
 
     # -- 7: the manifests ----------------------------------------------------------------------
+    # If this data continues something, the manifest has to SAY so: `derived_from` is where a
+    # reader learns the provenance, and the extension record is cross-checked against it below.
+    # Read here, before the manifest is derived; validated in full once the dataset exists.
+    parent = _declared_parent(source)
     manifest = _manifest(source=source, relative=relative, year=year,
                          project_name=project_name, data_name=data_name, common=common,
-                         records=found["records"], user=document["user"])
+                         records=found["records"], user=document["user"],
+                         derived_from=[parent] if parent else [])
     try:
         dataset = validate_dataset(manifest)
     except DatasetError as exc:
@@ -141,6 +148,9 @@ def register_dataset(*, source: Path, project_name: str, data_name: str, year: s
     say(f"contract             : dataset.yaml validates against contract v2 "
         f"({len(dataset.components)} components)")
 
+    # -- the extension record, if this data continues something ---------------------------
+    extension = _validate_extension(source, dataset, say)
+
     resolved = {
         "format": "md-tools-resolved-provenance/2.0",
         "registered_utc": _now(),
@@ -149,6 +159,7 @@ def register_dataset(*, source: Path, project_name: str, data_name: str, year: s
                     for entry in found["records"]],
         "lineage": notes,
         "inventory": entries,
+        "extension": extension,
     }
 
     if dry_run:
@@ -271,6 +282,59 @@ def _resume(transaction: Transaction, *, source: Path, destination: Path, relati
             "files": len(entries), "bytes": sum(e["bytes"] for e in entries)}
 
 
+def _validate_extension(source: Path, dataset: Dataset, say) -> dict[str, Any] | None:
+    """Validate `extension.yaml` if the data carries one, WITHOUT touching the parent.
+
+    The parent of a continuation is named, never opened. Loading it would make registering this
+    dataset depend on another dataset still being present and unchanged -- and a completed parent
+    is immutable precisely so that nothing needs to reach into it.
+
+    The checkpoint the continuation restarted from IS verified, because that is the join point:
+    the record states its digest, and if the file is here it must still hash to that.
+    """
+    path = Path(source) / EXTENSION_NAME
+    if not path.is_file():
+        return None
+    try:
+        record = validate_extension_file(path)
+    except DatasetError as exc:
+        raise RegistrationError(
+            f"this data carries an {EXTENSION_NAME} that violates the contract:\n{exc}\n\n"
+            f"Nothing has been moved or changed.") from None
+
+    problems = check_dataset_extension(dataset, record)
+    if problems:
+        raise RegistrationError(
+            f"{EXTENSION_NAME} and {MANIFEST_NAME} disagree:\n"
+            + "\n".join(f"  {problem}" for problem in problems)
+            + "\n\nNothing has been moved or changed.")
+
+    checkpoint = Path(source) / record.target.source_checkpoint
+    if checkpoint.is_file():
+        from ..build.record import sha256_file
+        actual = sha256_file(checkpoint)
+        if actual != record.target.source_checkpoint_sha256:
+            raise RegistrationError(
+                f"{EXTENSION_NAME} records the restart checkpoint "
+                f"{record.target.source_checkpoint} as "
+                f"{record.target.source_checkpoint_sha256[:12]}..., but the file present hashes "
+                f"to {actual[:12]}.... The join point is not the one the record describes.")
+        say(f"extension            : {record.mode}, restart verified against "
+            f"{record.target.source_checkpoint}")
+    else:
+        say(f"extension            : {record.mode}, parent "
+            f"{record.target.dataset_id!r} (checkpoint not carried here)")
+
+    return {"mode": record.mode, "parent_dataset_id": record.target.dataset_id,
+            "parent_component": record.target.component,
+            "output_component": record.output_component,
+            "restart_step": record.restart_step,
+            "source_checkpoint": record.target.source_checkpoint,
+            "source_checkpoint_sha256": record.target.source_checkpoint_sha256,
+            "combined_length_ns": record.combined_length_ns,
+            "status": record.status}
+
+
 def _relative_link(link: Path, destination: Path) -> str:
     """A relative symlink where one is possible, so a moved project still resolves."""
     try:
@@ -334,8 +398,28 @@ def _verify_only(destination: Path, relative: str, say) -> dict[str, Any]:
             "verified": True, "files": len(entries)}
 
 
+def _declared_parent(source: Path) -> str | None:
+    """The parent dataset id an `extension.yaml` names, if there is one.
+
+    Read without validating: the full contract check needs the derived dataset, and the dataset
+    cannot be derived until `derived_from` is known. A malformed record is caught moments later by
+    `_validate_extension`, which refuses the registration outright.
+    """
+    path = Path(source) / EXTENSION_NAME
+    if not path.is_file():
+        return None
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return None
+    target = document.get("target") or {}
+    parent = target.get("dataset_id")
+    return parent if isinstance(parent, str) and parent else None
+
+
 def _manifest(*, source: Path, relative: str, year: str, project_name: str, data_name: str,
-              common: bool, records: list[dict[str, Any]], user: dict[str, Any]) -> dict[str, Any]:
+              common: bool, records: list[dict[str, Any]], user: dict[str, Any],
+              derived_from: list[str] | None = None) -> dict[str, Any]:
     """Derive `dataset.yaml` from the records, never from the directory looking finished."""
     times = [entry["record"].get("finished_utc") or entry["record"].get("started_utc")
              for entry in records]
@@ -390,7 +474,7 @@ def _manifest(*, source: Path, relative: str, year: str, project_name: str, data
         "origin": _origin(),
         "software": software,
         "components": components,
-        "derived_from": [],
+        "derived_from": list(derived_from or []),
         "notes": None,
     }
 

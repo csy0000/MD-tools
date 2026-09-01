@@ -18,7 +18,7 @@ import yaml
 
 from md_tools.build.record import BEGIN, END, RECORD_SCHEMA_VERSION
 from md_tools.data_contract.model import MANIFEST_NAME, canonical_path, validate_dataset_file
-from md_tools.registry import inventory
+from md_tools.registry import inventory, register
 from md_tools.registry.errors import RegistrationError
 from md_tools.registry.register import register_dataset
 from md_tools.registry.transaction import ORDER, Transaction
@@ -480,3 +480,96 @@ def test_the_migration_document_exists_and_names_both_versions():
     text = path.read_text(encoding="utf-8")
     assert "20d982eb463ed439095f1b95e00ff1b1d75906b4" in text, "the ported commit is not attributed"
     assert "{namespace}/{yyyy-mm}/{dataset_name}" in text and "{year}/{project_name}/{data_name}" in text
+
+
+# -- extension records at registration ------------------------------------------------------------
+
+def _extension_document(*, parent_sha, mode="new-dataset", **patch):
+    from datetime import datetime, timedelta, timezone
+
+    t0 = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+    document = {
+        "schema_version": "2.0", "mode": mode, "dataset_id": "ala-ala-cmd",
+        "target": {"dataset_id": "ala-parent", "component": "cMD",
+                   "source_checkpoint": "cMD/parent.chk",
+                   "source_checkpoint_sha256": parent_sha,
+                   "source_checkpoint_copied": True, "original_length_ns": 5.0},
+        "output_component": "cMD", "additional_length_ns": 5.0,
+        "combined_length_ns": 10.0, "restart_step": 2_500_000,
+        "reason": "The first 5 ns did not sample the transition often enough.",
+        "requested_by": {"person_id": "test-person", "name": "Test Person"},
+        "requested_at": t0.isoformat(), "status": "complete",
+        "started_at": (t0 + timedelta(minutes=1)).isoformat(),
+        "completed_at": (t0 + timedelta(minutes=30)).isoformat(),
+        "final_length_ns": 10.0,
+        "generation": {"repository": "https://github.com/csy0000/MD-tools", "commit": "b" * 40},
+    }
+    document.update(patch)
+    return document
+
+
+def _with_extension(world, **patch):
+    """Put a checkpoint and a matching extension.yaml into the source."""
+    from md_tools.build.record import sha256_file
+
+    checkpoint = world["source"] / "cMD" / "parent.chk"
+    checkpoint.write_bytes(b"the state the continuation restarted from")
+    document = _extension_document(parent_sha=sha256_file(checkpoint), **patch)
+    (world["source"] / "extension.yaml").write_text(yaml.safe_dump(document), encoding="utf-8")
+    _age(world["source"])
+    return document
+
+
+def test_a_dataset_carrying_a_valid_extension_registers(world):
+    _with_extension(world)
+    result = _register(world, data_name="ALA-cMD")
+    destination = world["root"] / "2026" / "ALA" / "ALA-cMD"
+    assert (destination / "extension.yaml").is_file(), "the record must travel with the data"
+
+    resolved = yaml.safe_load((destination / "dataset.resolved.yaml").read_text())
+    assert resolved["extension"]["mode"] == "new-dataset"
+    assert resolved["extension"]["parent_dataset_id"] == "ala-parent"
+    assert resolved["extension"]["restart_step"] == 2_500_000
+
+
+def test_an_extension_that_violates_the_contract_is_refused_and_preserves_the_source(world):
+    _with_extension(world, combined_length_ns=99.0)
+    with pytest.raises(RegistrationError, match="violates the contract"):
+        _register(world)
+    assert world["source"].is_dir() and not world["source"].is_symlink()
+
+
+def test_a_checkpoint_that_no_longer_matches_the_record_is_refused(world):
+    _with_extension(world)
+    (world["source"] / "cMD" / "parent.chk").write_bytes(b"a different state entirely")
+    _age(world["source"])
+    with pytest.raises(RegistrationError, match="not the one the record describes"):
+        _register(world)
+    assert world["source"].is_dir()
+
+
+def test_an_extension_naming_an_output_component_the_dataset_does_not_own_is_refused(world):
+    _with_extension(world, output_component="not_a_component")
+    with pytest.raises(RegistrationError, match="disagree"):
+        _register(world)
+    assert world["source"].is_dir()
+
+
+def test_registration_never_opens_the_parent_dataset(world):
+    """A completed parent is immutable precisely so nothing needs to reach into it."""
+    _with_extension(world)
+    _register(world, data_name="ALA-cMD")
+    # The parent does not exist anywhere under the managed root, and registration still succeeded.
+    assert not (world["root"] / "2026" / "ALA" / "ALA-parent").exists()
+
+    source = Path(register.__file__).read_text(encoding="utf-8")
+    assert "The parent of a continuation is named, never opened" in source
+
+
+def test_a_dataset_without_an_extension_registers_unchanged(world):
+    """The record is optional: most datasets are not continuations."""
+    result = _register(world)
+    destination = Path(result["destination"])
+    assert not (destination / "extension.yaml").exists()
+    resolved = yaml.safe_load((destination / "dataset.resolved.yaml").read_text())
+    assert resolved["extension"] is None
