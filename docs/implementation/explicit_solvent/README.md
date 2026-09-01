@@ -42,7 +42,7 @@ scripts/md.py                     (c) one free walker, cold or hot by config
 scripts/md_REST2.py               (d) REST2-REMD reference
 scripts/run_all.sh                (a)+(b) then (c)/(c)/(d), one per GPU
 scripts/config_defaults.json      the whole parameter tree, dumped
-src/md_templates/systems/explicit_baseline.py     the implementation (all of it)
+src/md_tools/systems/explicit_baseline.py     the implementation (all of it)
 ```
 
 Stage **(e)** — `md_cBAR.py` and `pREST2.py` — is not built. `generate_config.py --cbar/--prest2`
@@ -84,11 +84,11 @@ Override with `--s_cold / --s_hot / --N_rungs / --interp`, or by setting
 
 ```bash
 conda env create -f docs/implementation/explicit_solvent/environment.yml
-conda activate md-templates
+conda activate md-tools
 pip install -e . --no-deps            # from the repository root
 ```
 
-The existing repo-root `environment.yml` (unpinned, `md-templates`) also works and is what the
+The existing repo-root `environment.yml` (unpinned, `md-tools`) also works and is what the
 measurements below were actually made in; the pinned file exists so a future reader can reproduce
 them exactly.
 

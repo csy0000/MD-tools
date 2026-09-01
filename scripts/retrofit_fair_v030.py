@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Read an MD-templates 0.3.x simulation directory and write a FAIR registration candidate beside it.
+"""Read an MD-tools 0.3.x simulation directory and write a FAIR registration candidate beside it.
 
     python scripts/retrofit_fair_v030.py \\
         --inputs /path/to/inputs --md /path/to/MD --output /path/to/fair-registration \\
@@ -32,7 +32,7 @@ from typing import Any, Optional
 
 import yaml
 
-FORMAT = "md-templates-fair-retrofit/v1"
+FORMAT = "md-tools-fair-retrofit/v1"
 #: The sidecar's own manifests cannot appear in the manifest they define.
 SELF_EXCLUDED = ("SHA256SUMS",)
 PROGRESS_BYTES = 256 * 1024 * 1024
@@ -299,8 +299,8 @@ def main(argv=None) -> int:
                                    source="inputs/provenance.yaml"),
         "resolved_system_config": evidence(sys_resolved, "recorded" if sys_resolved else "unknown",
                                            source="inputs/resolved_sys.config.yaml"),
-        "implementation": evidence((sys_prov.get("md_templates") or None),
-                                   "recorded" if sys_prov.get("md_templates") else "unknown",
+        "implementation": evidence((sys_prov.get("md_tools") or None),
+                                   "recorded" if sys_prov.get("md_tools") else "unknown",
                                    source="inputs/provenance.yaml"),
         "environment": evidence(supplied_environment,
                                 "user_supplied" if supplied_environment else "unknown",
@@ -479,7 +479,7 @@ def _evidence_counts(*records: dict) -> dict[str, int]:
 def _write_readme(out: Path, grade: dict, common_root: Path, inputs: Path, md: Path) -> None:
     (out / "README.md").write_text(f"""# FAIR registration candidate
 
-Produced by `scripts/retrofit_fair_v030.py` from an MD-templates 0.3.x simulation directory.
+Produced by `scripts/retrofit_fair_v030.py` from an MD-tools 0.3.x simulation directory.
 
     inputs : {inputs.relative_to(common_root).as_posix()}
     MD     : {md.relative_to(common_root).as_posix()}

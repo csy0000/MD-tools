@@ -488,11 +488,11 @@ def render(source: Path, target: Path) -> dict:
     document = BaseDocTemplate(str(target), pagesize=PAGE,
                                leftMargin=MARGIN, rightMargin=MARGIN,
                                topMargin=MARGIN, bottomMargin=MARGIN + 6 * mm,
-                               title=Path(source).stem, author="MD-templates")
+                               title=Path(source).stem, author="MD-tools")
     frame = Frame(MARGIN, MARGIN + 6 * mm, width, PAGE[1] - 2 * MARGIN - 6 * mm, id="body",
                   leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
 
-    footer_text = f"{Path(source).name}  ·  MD-templates"
+    footer_text = f"{Path(source).name}  ·  MD-tools"
 
     def footer(canvas, doc):
         canvas.saveState()

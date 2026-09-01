@@ -21,8 +21,8 @@ md-template init      md-template install
 md-openmm show-default    md-openmm sys-config    md-openmm sys-gen    md-openmm md-gen
 ```
 
-`generate_system()` lives in `src/md_templates/openmm/sysgen.py`, `generate_md()` in
-`src/md_templates/openmm/mdgen.py`. There are no root-level `MD_system_gen.py` or
+`generate_system()` lives in `src/md_tools/openmm/sysgen.py`, `generate_md()` in
+`src/md_tools/openmm/mdgen.py`. There are no root-level `MD_system_gen.py` or
 `MD_input_gen.py`.
 
 A previous architecture — a template registry, a bundle format, schema-migration engines, a
@@ -35,20 +35,20 @@ plain file with a documented format.
 
 | repository | owns |
 |---|---|
-| [MD-templates](https://github.com/csy0000/MD-templates) | system construction, force-field record, resolved protocol, seeds, generated scripts, execution provenance |
+| [MD-tools](https://github.com/csy0000/MD-tools) | system construction, force-field record, resolved protocol, seeds, generated scripts, execution provenance |
 | [MD-data](https://github.com/csy0000/MD-data) | permanent dataset ID, `$MD_DATA` storage, complete archive checksums, metadata, retention and access lifecycle |
 | [MD-analysis](https://github.com/csy0000/MD-analysis) | analysis configuration, software identity, consumed dataset IDs, derived-result lineage |
 | project-template | project inputs, configs, workflows and component locks — **not yet available** |
 
-The boundary is not "MD-templates never touches `$MD_DATA`". It is narrower and more useful:
+The boundary is not "MD-tools never touches `$MD_DATA`". It is narrower and more useful:
 
-- MD-templates **may** write simulation files and a contract-valid `dataset.yaml` into the ONE
+- MD-tools **may** write simulation files and a contract-valid `dataset.yaml` into the ONE
   active dataset directory the user explicitly selected, and nowhere else. It writes there because
   that is where the run's own outputs go; writing them somewhere else first and moving them later
   would break the stage chain's on-disk dependency.
 - MD-data owns everything about that directory as a dataset: the schema, the validator, the
   permanent identity, the lifecycle (`active` -> `complete` -> `archived`), the catalogue, aliases,
-  extensions, archival checksums and retention. MD-templates imports MD-data's validator; it never
+  extensions, archival checksums and retention. MD-tools imports MD-data's validator; it never
   reimplements it, never invents a field, and never changes a lifecycle status.
 
 Concretely, this repository still never assigns a dataset ID, never walks or hashes `$MD_DATA`,
@@ -131,7 +131,7 @@ A stored hash that is merely PRESENT proves nothing. Every one of these recomput
 - Force-field preflight is route-aware and exact. An ABSENT expected field FAILS — that is the case
   where what was built is least knowable. A peptide system must claim no ligand force field, a
   ligand system no protein one, and an implicit system neither a water model nor a barostat.
-- There is ONE resolution of "which MD-templates is this": `provenance_min.template_identity()`.
+- There is ONE resolution of "which MD-tools is this": `provenance_min.template_identity()`.
   Never reach past it for `implementation_identity()["git_commit"]` — that is null in a
   VCS-installed package whose `direct_url.json` proves the commit, and it is how `dataset.yaml`
   came to carry a verified commit while the `stage.yaml` files beside it carried nulls.
@@ -215,7 +215,7 @@ A stored hash that is merely PRESENT proves nothing. Every one of these recomput
 
 `md-gen` writes standalone OpenMM scripts. They must:
 
-- not import `md_templates`, and not name this checkout;
+- not import `md_tools`, and not name this checkout;
 - use paths relative to the generated project, so moving `inputs/` and `MD/` together is enough;
 - carry the small helpers they need (`md_stages.py`, `rest2_scaling.py`) as copies.
 

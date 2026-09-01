@@ -32,7 +32,7 @@ import re
 
 #: Bumped when the canonicalisation changes, because a fingerprint is only comparable to one
 #: produced the same way.
-FINGERPRINT_FORMAT = "md-templates-hamiltonian-identity/v1"
+FINGERPRINT_FORMAT = "md-tools-hamiltonian-identity/v1"
 
 #: Attributes stripped before hashing: they describe the file, not the physics.
 _VOLATILE = (

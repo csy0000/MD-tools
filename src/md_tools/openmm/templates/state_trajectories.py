@@ -46,7 +46,7 @@ class StateTrajectorySet:
 
     @classmethod
     def create(cls, directory, *, taus, n_atoms, temperature_k, periodic,
-               program="md-templates", program_version="0"):
+               program="md-tools", program_version="0"):
         """A fresh set. Refuses to overwrite files it did not just create."""
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)

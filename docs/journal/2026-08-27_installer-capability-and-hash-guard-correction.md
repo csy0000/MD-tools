@@ -170,8 +170,8 @@ A round-trip test covers both the ready and unavailable cases, and a separate te
 
 ### Scientific runtime unchanged
 
-The diff touches three files: `src/md_templates/install/openmm.py`,
-`src/md_templates/cli/md_template.py`, `tests/test_integrity_corrections.py`, plus the new
+The diff touches three files: `src/md_tools/install/openmm.py`,
+`src/md_tools/cli/md_template.py`, `tests/test_integrity_corrections.py`, plus the new
 `tests/test_installer_capability.py`. A grep of the changed paths for `ais_run`, `rest2`, `sysgen`,
 `mdgen`, `stage_run`, `md_stages`, `system.py`, `solvation`, `forcefield_record`, `implicit`,
 `preflight`, `config.py` and `defaults.py` returns nothing. No MD equation, force field,

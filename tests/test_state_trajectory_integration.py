@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_templates" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
 netCDF4 = pytest.importorskip("netCDF4")
 sys.path.insert(0, str(TEMPLATES))
 
@@ -173,13 +173,13 @@ def test_the_schema_is_v3_and_carries_no_bundled_coordinates(tmp_path):
 
 def test_a_superseded_schema_is_refused_with_its_reason():
     with pytest.raises(storage.StorageError, match="different layouts of different things"):
-        storage.refuse_superseded_schema("md-templates-replica-exchange/v2", path="old.nc")
+        storage.refuse_superseded_schema("md-tools-replica-exchange/v2", path="old.nc")
     storage.refuse_superseded_schema(storage.SCHEMA_VERSION)
 
 
 def test_no_migration_from_the_bundled_layout_is_offered():
     """Reindexing walkers into states after the fact would need the mapping history replayed, and
     a mistake there would attribute a configuration to the wrong Hamiltonian."""
-    reason = storage.SUPERSEDED_SCHEMAS["md-templates-replica-exchange/v2"]
+    reason = storage.SUPERSEDED_SCHEMAS["md-tools-replica-exchange/v2"]
     assert "no migration is offered" in reason
     assert "wrong Hamiltonian" in reason

@@ -19,7 +19,7 @@ import subprocess
 
 import pytest
 
-from md_templates.openmm.simple import ConfigError, resolve_output_root
+from md_tools.openmm.simple import ConfigError, resolve_output_root
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def staged(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "-q", str(repository)], check=True)
     (repository / ".gitignore").write_text("/data/**\n", encoding="utf-8")
     monkeypatch.setenv("MD_DATA", str(repository / "data"))
-    monkeypatch.delenv("MD_TEMPLATES_ALLOW_STAGING", raising=False)
+    monkeypatch.delenv("MD_TOOLS_ALLOW_STAGING", raising=False)
     return repository / "data"
 
 
@@ -39,7 +39,7 @@ def _resolve(root):
 
 
 def test_a_declared_ignored_staging_area_is_accepted(staged, monkeypatch):
-    monkeypatch.setenv("MD_TEMPLATES_ALLOW_STAGING", "1")
+    monkeypatch.setenv("MD_TOOLS_ALLOW_STAGING", "1")
     (staged / ".md-staging").write_text("", encoding="utf-8")
     root, relative = _resolve(staged)
     assert root == staged.resolve()
@@ -55,7 +55,7 @@ def test_without_the_opt_in_the_refusal_stands(staged):
 def test_without_the_marker_file_the_refusal_stands(staged, monkeypatch):
     """The environment variable alone is one person's shell. The marker is what the next reader
     of the tree sees."""
-    monkeypatch.setenv("MD_TEMPLATES_ALLOW_STAGING", "1")
+    monkeypatch.setenv("MD_TOOLS_ALLOW_STAGING", "1")
     with pytest.raises(ConfigError, match="inside the Git working tree"):
         _resolve(staged)
 
@@ -69,7 +69,7 @@ def test_a_directory_that_is_not_actually_ignored_is_refused(tmp_path, monkeypat
     subprocess.run(["git", "init", "-q", str(repository)], check=True)
     # no .gitignore at all
     monkeypatch.setenv("MD_DATA", str(repository / "data"))
-    monkeypatch.setenv("MD_TEMPLATES_ALLOW_STAGING", "1")
+    monkeypatch.setenv("MD_TOOLS_ALLOW_STAGING", "1")
     (repository / "data" / ".md-staging").write_text("", encoding="utf-8")
     with pytest.raises(ConfigError, match="inside the Git working tree"):
         _resolve(repository / "data")
@@ -87,7 +87,7 @@ def test_an_ignore_rule_that_covers_only_some_children_is_refused(tmp_path, monk
     subprocess.run(["git", "init", "-q", str(repository)], check=True)
     (repository / ".gitignore").write_text("/data/REST2/**\n", encoding="utf-8")
     monkeypatch.setenv("MD_DATA", str(repository / "data"))
-    monkeypatch.setenv("MD_TEMPLATES_ALLOW_STAGING", "1")
+    monkeypatch.setenv("MD_TOOLS_ALLOW_STAGING", "1")
     (repository / "data" / ".md-staging").write_text("", encoding="utf-8")
     with pytest.raises(ConfigError, match="inside the Git working tree"):
         _resolve(repository / "data")
@@ -95,7 +95,7 @@ def test_an_ignore_rule_that_covers_only_some_children_is_refused(tmp_path, monk
 
 def test_a_root_outside_any_repository_needs_none_of_this(tmp_path, monkeypatch):
     monkeypatch.setenv("MD_DATA", str(tmp_path))
-    monkeypatch.delenv("MD_TEMPLATES_ALLOW_STAGING", raising=False)
+    monkeypatch.delenv("MD_TOOLS_ALLOW_STAGING", raising=False)
     root, _ = _resolve(tmp_path)
     assert root == tmp_path.resolve()
 
@@ -106,5 +106,5 @@ def test_the_refusal_says_exactly_what_would_make_it_pass(staged):
         _resolve(staged)
     message = str(raised.value)
     assert ".md-staging" in message
-    assert "MD_TEMPLATES_ALLOW_STAGING=1" in message
+    assert "MD_TOOLS_ALLOW_STAGING=1" in message
     assert "check-ignore" in message

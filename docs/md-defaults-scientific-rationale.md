@@ -1,8 +1,8 @@
-# Scientific rationale for the MD-templates OpenMM defaults
+# Scientific rationale for the MD-tools OpenMM defaults
 
 | | |
 |---|---|
-| Repository | MD-templates (`csy0000/MD-templates`), version 0.4.0.dev0 |
+| Repository | MD-tools (`csy0000/MD-tools`), version 0.4.0.dev0 |
 | Applies to | the values `md-openmm sys-config` and `md-openmm show-default` write |
 | Date | 2026-08-27 |
 | References | `docs/md-defaults-references.bib` |

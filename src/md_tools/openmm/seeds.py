@@ -8,7 +8,7 @@ every scientific input still shared an integrator stream and looked more alike t
 
 ## The derivation
 
-    seed(purpose) = 1 + (sha256("md-templates/seed/v1|<master>|<purpose>") mod (2**31 - 2))
+    seed(purpose) = 1 + (sha256("md-tools/seed/v1|<master>|<purpose>") mod (2**31 - 2))
 
 Properties that matter, and why each is required:
 
@@ -65,7 +65,7 @@ __all__ = [
 DERIVATION_VERSION = 1
 
 #: Human-readable identifier of the algorithm, persisted for the same reason.
-DERIVATION_ALGORITHM = "sha256/md-templates-seed-v1"
+DERIVATION_ALGORITHM = "sha256/md-tools-seed-v1"
 
 #: The frozen `master_seed + index` rule of `RandomnessSpec.resolve()`. Named so that a persisted
 #: seed always says which regime produced it. Not used for any new purpose.
@@ -75,7 +75,7 @@ LEGACY_DERIVATION_ALGORITHM = "legacy/master-plus-stage-index-v0"
 #: so the two entry points do not disagree about what "the default run" means.
 DEFAULT_MASTER_SEED = 20260814
 
-_PREFIX = "md-templates/seed/v1"
+_PREFIX = "md-tools/seed/v1"
 
 #: OpenMM seeds are 32-bit signed and 0 means "pick randomly", so the usable range is [1, 2**31-1].
 _MODULUS = 2 ** 31 - 2

@@ -469,7 +469,7 @@ def production_stage_document(config, method_name, *, parent_stage, parent_path,
     return document
 
 
-RECORD_FORMAT = "md-templates-runtime-record/v1"
+RECORD_FORMAT = "md-tools-runtime-record/v1"
 
 
 def utc_now():
@@ -573,9 +573,9 @@ def next_invocation_index(path):
 
 
 def project_identity(config):
-    """Which MD-templates generated this project, as carried in md.config.yaml."""
+    """Which MD-tools generated this project, as carried in md.config.yaml."""
     provenance = config.get("provenance") or {}
-    return {"md_templates_version": provenance.get("md_templates_version"),
+    return {"md_tools_version": provenance.get("md_tools_version"),
             "template_commit": provenance.get("template_commit"),
             "installed_fingerprint": provenance.get("installed_fingerprint")}
 

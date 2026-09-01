@@ -143,7 +143,7 @@ def resolve_nagl_am1bcc_model() -> dict:
     """
     # The optional dependency, and the package's own hashing implementation. These two imports
     # fail for completely different reasons and must not be reported as the same thing: the first
-    # means "NAGL is not installed here", the second would mean "MD-templates is broken". Keeping
+    # means "NAGL is not installed here", the second would mean "MD-tools is broken". Keeping
     # them apart is why the first is caught and the second is not.
     try:
         from openff.nagl_models import get_models_by_type
@@ -223,8 +223,8 @@ def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
         if method == "am1bcc" and "AmberToolsToolkitWrapper" not in wrappers:
             raise RuntimeError(
                 "forcefield.ligand_charge_method='am1bcc' needs AmberTools' sqm, but the OpenFF "
-                f"toolkit registry only has {wrappers}.  Activate the md-templates environment "
-                "(conda activate md-templates) so antechamber/sqm are on PATH, or set "
+                f"toolkit registry only has {wrappers}.  Activate the md-tools environment "
+                "(conda activate md-tools) so antechamber/sqm are on PATH, or set "
                 "forcefield.ligand_charge_method to 'am1bcc_nagl' if that is intended -- NAGL is "
                 "a graph network TRAINED to predict AM1-BCC ELF10 charges and needs no sqm, but it "
                 "is not that calculation and not numerically identical to it, so it is a different "
@@ -592,7 +592,7 @@ def verify_hydrogen_mass_repartitioning(
         "total_mass_amu": round(total_after, 6),
         "scope": "solute" if solute is not None else "all-non-water",
         "performed_by": "openmm.app.ForceField.createSystem(hydrogenMass=...)",
-        "verified_by": "md_templates.openmm.system.verify_hydrogen_mass_repartitioning",
+        "verified_by": "md_tools.openmm.system.verify_hydrogen_mass_repartitioning",
     }
 
 

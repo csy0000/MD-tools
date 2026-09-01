@@ -13,13 +13,13 @@ built; an installed-catalog API; packaged identity resolution; a wheel-based CI 
 tests; this journal.
 
 Not implemented, by instruction: generic template dispatch or a general CLI; routing `prepare`, `md`
-or `rest2` through descriptors; moving OpenMM code to `src/md_templates/engines/openmm/`;
+or `rest2` through descriptors; moving OpenMM code to `src/md_tools/engines/openmm/`;
 template-local profiles; writing template identity into bundles or run manifests; bundle or restart
 schema changes; another engine or method; the Amber-style adapter; any scientific-validation claim.
 
 Every invariant in the instruction's list was preserved. `md-openmm`, its help text, dispatch,
 profiles, scientific defaults, bundle formats, restart formats, seeds, REST2 behaviour and omega
-exclusion are untouched; `src/md_templates/openmm/` was not moved.
+exclusion are untouched; `src/md_tools/openmm/` was not moved.
 
 ## Base and head
 
@@ -36,7 +36,7 @@ The tracked root `registry.yaml` and `templates/<method>/<engine>/<variant>/temp
 ```
 tracked                                   generated at build time (never in the working tree)
 registry.yaml                    ──┐
-templates/**/template.yaml       ──┤ copied ──▶ build/lib/md_templates/core/_packaged/
+templates/**/template.yaml       ──┤ copied ──▶ build/lib/md_tools/core/_packaged/
                                    │             registry.yaml
                                    │             templates/**/template.yaml
                                    │             resource_manifest.json
@@ -47,7 +47,7 @@ Two tracked copies would be edited independently exactly once, after which the r
 describe two catalogs and an identity — whose entire job is to say "these bytes, that commit" — would
 be ambiguous about which bytes. A `build_py` hook does the copying; `_packaged` is underscored
 because it is generated. A test asserts the tracked tree contains exactly one registry and two
-descriptors, and that `src/md_templates/core/_packaged/` does not exist in the checkout.
+descriptors, and that `src/md_tools/core/_packaged/` does not exist in the checkout.
 
 ## Schemas added
 
@@ -116,7 +116,7 @@ matters.
 ## Public API added
 
 ```python
-from md_templates.core import (
+from md_tools.core import (
     load_packaged_catalog,      # -> TemplateCatalog, from the installed distribution
     resolve_packaged_identity,  # -> TemplateIdentity, or a typed refusal
     load_packaged_provenance,   # -> BuildProvenance, resolved or not, for diagnostics
@@ -182,8 +182,8 @@ committed** tree (`bf85d42`, the implementation stashed away) it resolved both i
 exact commit:
 
 ```
-https://github.com/csy0000/MD-templates@bf85d42411d3fadf6f33ac871054379d814e5a0f#templates/conventional-md/openmm/explicit-water/template.yaml
-https://github.com/csy0000/MD-templates@bf85d42411d3fadf6f33ac871054379d814e5a0f#templates/rest2/openmm/explicit-water/template.yaml
+https://github.com/csy0000/MD-tools@bf85d42411d3fadf6f33ac871054379d814e5a0f#templates/conventional-md/openmm/explicit-water/template.yaml
+https://github.com/csy0000/MD-tools@bf85d42411d3fadf6f33ac871054379d814e5a0f#templates/rest2/openmm/explicit-water/template.yaml
 ```
 
 That pair is the whole point of PR 2: an installed wheel, with no checkout and no Git, naming the
@@ -193,7 +193,7 @@ commit its bytes came from.
 
 **The new tests fail against the merged PR 1 base.** Run against a worktree at `d4af9ad` with only
 the test file added: collection fails outright — `ModuleNotFoundError: No module named
-'md_templates.core.packaged'`. That is a weaker demonstration than assertion failures would be, and
+'md_tools.core.packaged'`. That is a weaker demonstration than assertion failures would be, and
 is reported as what it is: the module under test does not exist at the base, so nothing finer can be
 observed there.
 
@@ -253,12 +253,12 @@ catch it, and does. A test that only ever corrupted one record would not have sh
 * Profile selection, profile hashes, configuration projections and hashes, seed derivation, bundle
   and run-state contracts and REST2 defaults are unchanged — asserted by the existing 20 golden tests
   inside the 491.
-* `git diff d4af9ad..HEAD -- src/md_templates/openmm/` is **0 lines**.
+* `git diff d4af9ad..HEAD -- src/md_tools/openmm/` is **0 lines**.
 * `md-openmm --help` for the root command and all five subcommands is byte-identical to `d4af9ad`.
 * No bundle, run manifest, checksum domain, continuity path or hash projection gained a template
   field. The existing PR 1 tests asserting that still pass.
 
-The only changes outside `md_templates/core` and the build files are documentation.
+The only changes outside `md_tools/core` and the build files are documentation.
 
 ## CI status actually observed
 

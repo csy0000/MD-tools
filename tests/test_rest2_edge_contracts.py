@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 import yaml
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_templates" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 openmm = pytest.importorskip("openmm")
@@ -420,7 +420,7 @@ def test_the_statistics_report_the_seeds_that_were_actually_used():
 
 def test_the_prepared_manifest_names_the_policy_it_was_materialised_under():
     source = (TEMPLATES / "rrest2_reservoir.py").read_text(encoding="utf-8")
-    manifest_block = source[source.index('"format": "md-templates-prepared-reservoir/v1"'):
+    manifest_block = source[source.index('"format": "md-tools-prepared-reservoir/v1"'):
                             source.index('"citations"')]
     assert '"velocity_policy": policy' in manifest_block, (
         "the manifest records only which policies the FORMAT supports, not the one selected")
@@ -431,7 +431,7 @@ def test_the_prepared_manifest_names_the_policy_it_was_materialised_under():
 def test_the_generated_cmd_launcher_passes_no_continuation_flag():
     """The fixed-tau stage an rREST2 project generates is an ordinary single-protocol cMD run. It
     must never be launched as though it could be continued."""
-    from md_templates.openmm import emit
+    from md_tools.openmm import emit
 
     launcher = emit.launcher("cmd", directory_var="CMD_TAU0P5_DIR", depth=1,
                              parent_restart="eq/nvt_free/nvt_free.state.xml",

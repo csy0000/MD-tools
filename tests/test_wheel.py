@@ -21,7 +21,7 @@ pytestmark = pytest.mark.slow
 def _template_files() -> set[str]:
     import re
 
-    source = (REPO_ROOT / "src" / "md_templates" / "openmm" / "mdgen.py").read_text(
+    source = (REPO_ROOT / "src" / "md_tools" / "openmm" / "mdgen.py").read_text(
         encoding="utf-8")
     found = set(re.findall(r'TEMPLATES / "([A-Za-z0-9_.]+)"', source))
     assert found, "mdgen.py copies no templates -- the pattern stopped matching"
@@ -45,9 +45,9 @@ def test_the_package_and_project_versions_agree():
     """Two places state the version; a release where they disagree ships a lie in its metadata."""
     import re
 
-    init = (REPO_ROOT / "src" / "md_templates" / "__init__.py").read_text(encoding="utf-8")
+    init = (REPO_ROOT / "src" / "md_tools" / "__init__.py").read_text(encoding="utf-8")
     match = re.search(r'^__version__\s*=\s*"([^"]+)"', init, re.MULTILINE)
-    assert match, "md_templates/__init__.py has no __version__"
+    assert match, "md_tools/__init__.py has no __version__"
     assert match.group(1) == _declared_version()
 
 
@@ -59,7 +59,7 @@ def installed(tmp_path_factory):
                             "--wheel-dir", str(work / "dist"), str(REPO_ROOT)],
                            capture_output=True, text=True, timeout=900)
     assert built.returncode == 0, built.stdout[-3000:] + built.stderr[-3000:]
-    wheels = list((work / "dist").glob("md_templates-*.whl"))
+    wheels = list((work / "dist").glob("md_tools-*.whl"))
     assert len(wheels) == 1, wheels
 
     site = work / "site"
@@ -83,7 +83,7 @@ def _outside(site, work, *args):
 def test_the_wheel_contains_every_generated_project_file(installed):
     """Every template md-gen copies must be in the wheel, and nothing dead should be."""
     site, _ = installed
-    templates = site / "md_templates" / "openmm" / "templates"
+    templates = site / "md_tools" / "openmm" / "templates"
     assert templates.is_dir(), "the templates directory did not survive packaging"
     present = {path.name for path in templates.iterdir() if path.is_file()}
     assert TEMPLATE_FILES <= present, f"missing from the wheel: {TEMPLATE_FILES - present}"
@@ -91,7 +91,7 @@ def test_the_wheel_contains_every_generated_project_file(installed):
     # A template in the wheel that md-gen never copies is dead weight, and usually the sign of a
     # cached build tree shipping a file that was deleted from the checkout.
     tracked = {path.name for path in
-               (REPO_ROOT / "src" / "md_templates" / "openmm" / "templates").iterdir()
+               (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates").iterdir()
                if path.is_file()}
     assert present <= tracked, f"the wheel carries files not in the checkout: {present - tracked}"
 
@@ -100,11 +100,11 @@ def test_both_generators_import_from_the_wheel_rather_than_the_checkout(installe
     """`sys-gen` and `md-gen` are the two scientifically central entry points."""
     site, work = installed
     result = _outside(site, work, "-c", """
-import md_templates
-from md_templates.openmm.sysgen import generate_system
-from md_templates.openmm.mdgen import generate_md
+import md_tools
+from md_tools.openmm.sysgen import generate_system
+from md_tools.openmm.mdgen import generate_md
 assert callable(generate_system) and callable(generate_md)
-print(md_templates.__file__)
+print(md_tools.__file__)
 """)
     assert result.returncode == 0, result.stdout + result.stderr
     origin = result.stdout.strip().splitlines()[-1]
@@ -113,12 +113,11 @@ print(md_templates.__file__)
 
 
 @pytest.mark.parametrize("command", [
-    ("md_templates.cli.md_template", "--help"),
-    ("md_templates.cli.md_openmm", "--help"),
-    ("md_templates.cli.md_openmm", "sys-config", "--help"),
-    ("md_templates.cli.md_openmm", "sys-gen", "--help"),
-    ("md_templates.cli.md_openmm", "md-gen", "--help"),
-    ("md_templates.cli.md_openmm", "show-default", "sys"),
+    ("md_tools.cli.md_openmm", "--help"),
+    ("md_tools.cli.md_openmm", "sys-config", "--help"),
+    ("md_tools.cli.md_openmm", "sys-gen", "--help"),
+    ("md_tools.cli.md_openmm", "md-gen", "--help"),
+    ("md_tools.cli.md_openmm", "show-default", "sys"),
 ])
 def test_each_public_command_runs_from_outside_the_checkout(installed, command):
     site, work = installed
@@ -129,7 +128,7 @@ def test_each_public_command_runs_from_outside_the_checkout(installed, command):
 def test_the_built_wheel_carries_the_declared_version(installed):
     """What was built, not what was asked for."""
     _site, work = installed
-    wheels = list((work / "dist").glob("md_templates-*.whl"))
+    wheels = list((work / "dist").glob("md_tools-*.whl"))
     assert len(wheels) == 1, wheels
     built = wheels[0].name.split("-")[1]
     assert built == _declared_version(), f"wheel is {built}, pyproject says {_declared_version()}"
@@ -138,7 +137,7 @@ def test_the_built_wheel_carries_the_declared_version(installed):
 def test_the_installed_package_reports_the_declared_version(installed):
     site, work = installed
     result = _outside(site, work, "-c",
-                      "import md_templates; print(md_templates.__version__)")
+                      "import md_tools; print(md_tools.__version__)")
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip().splitlines()[-1] == _declared_version()
 

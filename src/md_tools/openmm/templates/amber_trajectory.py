@@ -86,7 +86,7 @@ class AmberTrajectoryWriter:
     """One Amber NetCDF trajectory, for one fixed thermodynamic state."""
 
     def __init__(self, path, *, n_atoms, state_index, tau, temperature_k, periodic,
-                 program="md-templates", program_version="0"):
+                 program="md-tools", program_version="0"):
         import netCDF4
 
         self.path = Path(path)

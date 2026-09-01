@@ -65,10 +65,10 @@ and bundle manifests record the status verbatim.
 ## Install
 
 ```bash
-conda env create -f environment.yml          # name: md-templates
-conda activate md-templates
-python -m build                              # writes dist/md_templates-<version>-py3-none-any.whl
-python -m pip install dist/md_templates-*.whl --no-deps
+conda env create -f environment.yml          # name: md-tools
+conda activate md-tools
+python -m build                              # writes dist/md_tools-<version>-py3-none-any.whl
+python -m pip install dist/md_tools-*.whl --no-deps
 ```
 
 `--no-deps` is deliberate: the heavy scientific stack (OpenMM, OpenFF, AmberTools, RDKit) comes

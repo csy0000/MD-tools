@@ -1,13 +1,13 @@
-# FAIR handoff: what MD-templates provides, and what it does not
+# FAIR handoff: what MD-tools provides, and what it does not
 
-MD-templates makes simulation data **FAIR-ready**. It does not make it FAIR. The difference is not
+MD-tools makes simulation data **FAIR-ready**. It does not make it FAIR. The difference is not
 pedantry — it decides who is responsible when someone cannot find or reuse a dataset a year later.
 
 ## The boundary
 
 | repository | owns |
 |---|---|
-| [MD-templates](https://github.com/csy0000/MD-templates) | system construction, the force-field record, the resolved protocol, seeds, generated scripts, execution provenance |
+| [MD-tools](https://github.com/csy0000/MD-tools) | system construction, the force-field record, the resolved protocol, seeds, generated scripts, execution provenance |
 | [MD-data](https://github.com/csy0000/MD-data) | the permanent dataset ID, immutable storage under `$MD_DATA`, the complete archive checksum manifest, searchable metadata, locations, retention, replacement, access lifecycle |
 | [MD-analysis](https://github.com/csy0000/MD-analysis) | analysis configuration, software identity, the dataset IDs and checksums consumed, derived-result lineage |
 | project-template *(not yet available)* | project-specific inputs, configs and workflows, and exact locks for the three components plus the registered datasets |
@@ -18,28 +18,28 @@ its trajectories. Saying otherwise would promise something no code in this repos
 
 ### Where the boundary actually runs
 
-It is tempting to state it as "MD-templates never writes into `$MD_DATA`". That is wrong, and the
+It is tempting to state it as "MD-tools never writes into `$MD_DATA`". That is wrong, and the
 wrong version is the one that causes trouble, because a run's outputs have to land where the run
 can read its own parent stage.
 
 The accurate version:
 
-- MD-templates **may** write generated simulation files and a contract-valid `dataset.yaml` into
+- MD-tools **may** write generated simulation files and a contract-valid `dataset.yaml` into
   the single active dataset directory the user explicitly selected with `MD_DATA_LOCAL`.
 - It **never** writes anywhere else under `$MD_DATA`, never walks or hashes the archive, never
   touches a second dataset, and never writes into one that is already `complete` or `archived`.
 - MD-data owns the schema, the validator, identity, the `active -> complete -> archived` lifecycle,
-  the catalogue, aliases, extensions, archival checksums and retention. MD-templates *imports*
+  the catalogue, aliases, extensions, archival checksums and retention. MD-tools *imports*
   MD-data's validator rather than agreeing with it by hand: the failure mode being avoided is two
   repositories that each believe they implement the same contract and slowly stop doing so.
 
-A dataset that MD-templates has written is still a registration candidate. Passing the contract
+A dataset that MD-tools has written is still a registration candidate. Passing the contract
 validator means the directory is *shaped* correctly; it does not mint an identifier, and the
 `dataset_id` in the manifest is one the user obtained from MD-data, not one generated here.
 
 ## Against the four letters
 
-**Findable** and **Accessible** are completed by MD-data, not here. MD-templates contributes the
+**Findable** and **Accessible** are completed by MD-data, not here. MD-tools contributes the
 content that makes a record worth finding — what the molecule was, how it was parameterised, what
 ran — but identity and access are assigned at registration.
 

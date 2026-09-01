@@ -20,7 +20,7 @@ before anything noticed.
 
 ## 1. The dataset contract, from MD-data and not from here
 
-`src/md_templates/openmm/md_data_contract.py` assembles a manifest and hands it to **MD-data's own
+`src/md_tools/openmm/md_data_contract.py` assembles a manifest and hands it to **MD-data's own
 validator** — `md_data.validate_dataset` and `md_data.storage.check_dataset_tree`, imported. There
 is no copy of the schema in this repository, no second implementation of the rules, and no field
 this repository invented. That was the whole design decision: two repositories that each believe
@@ -64,7 +64,7 @@ would falsify the one record whose job is to say what happened.
 stage reads them — the stage chain's dependency is on disk. The accurate boundary is now written
 in all three:
 
-> MD-templates may write generated files and a contract-valid `dataset.yaml` into the **one**
+> MD-tools may write generated files and a contract-valid `dataset.yaml` into the **one**
 > active dataset directory the user explicitly selected. MD-data owns the schema, the validator,
 > identity, the `active -> complete -> archived` lifecycle, the catalogue, aliases, extensions,
 > archival checksums and retention.
@@ -75,7 +75,7 @@ hashed, no second dataset is touched, no lifecycle status is changed, and a `com
 
 ## 2. Preflight
 
-`src/md_templates/openmm/templates/preflight.py` is copied into every generated project and run by
+`src/md_tools/openmm/templates/preflight.py` is copied into every generated project and run by
 every launcher — `run.sh`, `run_all.sh`, the REST2 workers, the AIS paths — **before any OpenMM
 Context, integrator, worker process, checkpoint or trajectory exists**. There is no flag to skip it.
 

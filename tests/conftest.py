@@ -37,16 +37,16 @@ CHECKOUT_SRC = REPO_ROOT / "src"
 
 
 def _pin_this_process_to_the_checkout() -> None:
-    """Make `md_templates` resolve to THIS checkout, in this process and in everything it spawns.
+    """Make `md_tools` resolve to THIS checkout, in this process and in everything it spawns.
 
     conftest is imported before any test module, so this runs before the suite's first
-    `from md_templates...`. Two halves, and both are needed:
+    `from md_tools...`. Two halves, and both are needed:
 
       * `sys.path`, for in-process imports. Without it, a machine carrying an editable install of
         another checkout runs every in-process test against that other code -- which surfaces as
         the BASE commit's defects failing tests the branch under test has already fixed.
       * `os.environ["PYTHONPATH"]`, for subprocesses. Tests spawn `python -m
-        md_templates.cli.md_openmm` to generate projects, and a subprocess resolves the INSTALLED
+        md_tools.cli.md_openmm` to generate projects, and a subprocess resolves the INSTALLED
         package regardless of what this process imported. Setting the variable here rather than
         passing `env=` per call means every call site is covered, including ones written later --
         several tests spawn their own subprocesses without going through `run_cli`.
@@ -58,7 +58,7 @@ def _pin_this_process_to_the_checkout() -> None:
     while entry in sys.path:
         sys.path.remove(entry)
     sys.path.insert(0, entry)
-    for name in [n for n in sys.modules if n == "md_templates" or n.startswith("md_templates.")]:
+    for name in [n for n in sys.modules if n == "md_tools" or n.startswith("md_tools.")]:
         del sys.modules[name]
     importlib.invalidate_caches()
 
@@ -72,7 +72,7 @@ _pin_this_process_to_the_checkout()
 
 def run_cli(module: str, *args, cwd: Path | None = None):
     """Invoke an entry point the way a user does. Pinned via os.environ, see above."""
-    return subprocess.run([sys.executable, "-m", f"md_templates.cli.{module}", *args],
+    return subprocess.run([sys.executable, "-m", f"md_tools.cli.{module}", *args],
                           capture_output=True, text=True, cwd=str(cwd or REPO_ROOT))
 
 
@@ -80,13 +80,6 @@ def run_cli(module: str, *args, cwd: Path | None = None):
 def md_openmm(tmp_path):
     def call(*args, cwd=None):
         return run_cli("md_openmm", *args, cwd=cwd or tmp_path)
-    return call
-
-
-@pytest.fixture
-def md_template(tmp_path):
-    def call(*args, cwd=None):
-        return run_cli("md_template", *args, cwd=cwd or tmp_path)
     return call
 
 
@@ -98,7 +91,7 @@ def template_module(name: str):
     """
     import importlib.util
 
-    path = REPO_ROOT / "src" / "md_templates" / "openmm" / "templates" / f"{name}.py"
+    path = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(f"_template_{name}", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

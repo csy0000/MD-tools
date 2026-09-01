@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 #: Bumped when the meaning of what a rule receives or returns changes.
-RULE_INTERFACE_VERSION = "md-templates-exchange-rule/v1"
+RULE_INTERFACE_VERSION = "md-tools-exchange-rule/v1"
 
 
 class ExchangeRuleError(ValueError):

@@ -21,30 +21,30 @@ from .conftest import CHECKOUT_SRC
 
 
 def test_this_process_imports_the_checkout_under_test():
-    """In-process half: `from md_templates...` in a test module must resolve here."""
-    import md_templates
+    """In-process half: `from md_tools...` in a test module must resolve here."""
+    import md_tools
 
-    resolved = Path(md_templates.__file__).resolve().parent
-    assert resolved == (CHECKOUT_SRC / "md_templates").resolve(), (
-        f"this test process imports md_templates from {resolved}, not from the checkout under "
-        f"test ({CHECKOUT_SRC / 'md_templates'}). Every in-process assertion in this suite would "
+    resolved = Path(md_tools.__file__).resolve().parent
+    assert resolved == (CHECKOUT_SRC / "md_tools").resolve(), (
+        f"this test process imports md_tools from {resolved}, not from the checkout under "
+        f"test ({CHECKOUT_SRC / 'md_tools'}). Every in-process assertion in this suite would "
         f"be about different code, and would look like a pass."
     )
 
 
 def test_subprocesses_run_the_checkout_under_test():
-    """Subprocess half: generation is spawned as `python -m md_templates.cli.md_openmm`.
+    """Subprocess half: generation is spawned as `python -m md_tools.cli.md_openmm`.
 
     A subprocess resolves the INSTALLED package regardless of what this process imported, so the
     pin has to reach it through the environment.
     """
     result = subprocess.run(
         [sys.executable, "-c",
-         "import md_templates, os; print(os.path.dirname(md_templates.__file__))"],
+         "import md_tools, os; print(os.path.dirname(md_tools.__file__))"],
         capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     resolved = Path(result.stdout.strip()).resolve()
-    assert resolved == (CHECKOUT_SRC / "md_templates").resolve(), (
-        f"subprocesses in this suite import md_templates from {resolved}, not from the checkout "
+    assert resolved == (CHECKOUT_SRC / "md_tools").resolve(), (
+        f"subprocesses in this suite import md_tools from {resolved}, not from the checkout "
         f"under test. Every generated project below would be built by different code."
     )

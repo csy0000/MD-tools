@@ -141,14 +141,14 @@ resume with that stated, never silently treated as continuable.
 $ python -m pytest tests/ -q -m "not slow"        285 passed, 3 deselected
 $ python -m pytest tests/test_crash_recovery.py -q -m slow    1 passed (106.93 s)
 $ python -m compileall -q src scripts             clean
-$ python -m build --wheel                         md_templates-0.1.0-py3-none-any.whl
+$ python -m build --wheel                         md_tools-0.1.0-py3-none-any.whl
 $ unzip -l <wheel>                                5 profiles, 4 systems, 3 experiments present
 ```
 
 From a **clean cloned environment**, wheel-installed, in `/tmp/outside` with no checkout:
 
 ```console
-$ md-openmm --version                             md-templates 0.1.0
+$ md-openmm --version                             md-tools 0.1.0
 $ md-openmm config list-profiles                  all five profiles
 $ md-openmm config init/validate/resolve          YAML and JSON hashes identical
 $ md-openmm smoke --platform CPU                  rc=0, completed, 4/4 rounds

@@ -447,7 +447,7 @@ def load_module(path, name):
 
     A generated project keeps its runtime modules beside the protocol, so the protocol's directory
     goes on `sys.path` -- which is what lets `from replica_runtime import REST2Protocol` resolve in
-    a project that has been moved and has no `md_templates` anywhere.
+    a project that has been moved and has no `md_tools` anywhere.
     """
     path = Path(path)
     directory = str(path.resolve().parent)

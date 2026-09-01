@@ -215,7 +215,7 @@ def _solute_document(topology, solute_indices, omega, *, route: str, system=None
     }
 
 
-SYSTEM_PROVENANCE_FORMAT = "md-templates-system-provenance/v1"
+SYSTEM_PROVENANCE_FORMAT = "md-tools-system-provenance/v1"
 CHECKSUM_MANIFEST = "SHA256SUMS"
 
 
@@ -330,8 +330,8 @@ DATASET_HEADER = """\
 # MD-data dataset manifest, schema v1.
 #
 # The CONTRACT is owned by csy0000/MD-data (docs/contracts/dataset-v1.md). This file was written
-# by MD-templates from the `dataset:` block of sys.config.yaml and validated with MD-data's own
-# validator; MD-templates carries no copy of that schema.
+# by MD-tools from the `dataset:` block of sys.config.yaml and validated with MD-data's own
+# validator; MD-tools carries no copy of that schema.
 #
 # Paths are relative: `path` to $MD_DATA, each component to this dataset root. Marking this
 # dataset complete or archived is a deliberate MD-data operation by its owner, not something any
@@ -598,7 +598,7 @@ def generate_system(*, input_path: Path, config_path: Path, output_folder: Path,
                _solute_document(topology, solute_indices, omega, route=route, system=system))
     # The generator identity travels with the resolved configuration too. `md-gen` reads this
     # file back, and preflight compares it against every other record that names a generator: a
-    # dataset whose system was prepared by one MD-templates and whose scripts were written by
+    # dataset whose system was prepared by one MD-tools and whose scripts were written by
     # another has a single recorded provenance that is true of only half of it.
     from .provenance_min import template_identity as _template_identity
 

@@ -1,6 +1,6 @@
 """Appending to a v2 file written before the optional exchange fields existed.
 
-`reservoir_velocity_seed` was added to `md-templates-replica-exchange/v2` without a schema bump.
+`reservoir_velocity_seed` was added to `md-tools-replica-exchange/v2` without a schema bump.
 New files carry it and readers tolerate its absence, but `write_exchange()` wrote it
 unconditionally -- so a current runtime could READ an older v2 file and then fail the moment it
 tried to resume or extend one.
@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_templates" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
 
 netCDF4 = pytest.importorskip("netCDF4")
 sys.path.insert(0, str(TEMPLATES))

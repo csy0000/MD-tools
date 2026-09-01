@@ -17,8 +17,8 @@ import ast
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-TEMPLATES = REPO / "src" / "md_templates" / "openmm" / "templates"
-SIMPLE = REPO / "src" / "md_templates" / "openmm" / "simple.py"
+TEMPLATES = REPO / "src" / "md_tools" / "openmm" / "templates"
+SIMPLE = REPO / "src" / "md_tools" / "openmm" / "simple.py"
 
 LOCAL = {path.name for path in TEMPLATES.glob("*.py")}
 

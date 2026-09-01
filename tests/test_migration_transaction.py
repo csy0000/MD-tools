@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_templates" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
 
 netCDF4 = pytest.importorskip("netCDF4")
 sys.path.insert(0, str(TEMPLATES))
@@ -370,7 +370,7 @@ def _resigned(record, **changes):
 
 def test_a_pending_record_for_another_schema_is_refused(tmp_path):
     path = _make_legacy(tmp_path / "wrong.nc", rows=2)
-    record = _resigned(_genuine_pending(path), schema="md-templates-replica-exchange/v9")
+    record = _resigned(_genuine_pending(path), schema="md-tools-replica-exchange/v9")
     with netCDF4.Dataset(str(path), "a") as d:
         d.setncattr(storage.MIGRATION_PENDING_ATTRIBUTE, json.dumps(record, sort_keys=True))
     before = hashlib.sha256(path.read_bytes()).hexdigest()

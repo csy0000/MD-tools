@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_templates" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 openmm = pytest.importorskip("openmm")
@@ -225,7 +225,7 @@ def test_an_unknown_velocity_policy_is_refused_rather_than_defaulted(tmp_path):
     import rrest2_reservoir
     declaration = tmp_path / "reservoir.yaml"
     declaration.write_text(
-        "format: md-templates-reservoir-request/v2\nvelocity_policy: whatever\n"
+        "format: md-tools-reservoir-request/v2\nvelocity_policy: whatever\n"
         "weighting: boltzmann\nensemble: NVT\nprepared_directory: reservoir\n"
         "refresh_interval_exchanges: 1\nrandom_seed: 1\n"
         "source:\n  phase_space: nowhere.nc\n  frames: 1\n", encoding="utf-8")
@@ -284,8 +284,8 @@ def test_the_generated_replica_protocol_states_its_platform():
     """The defect: `platform: CPU` was accepted at setup and printed in the preset, but the
     generated replica protocol carried no platform at all, so the runtime fell back to
     `automatic` and every replica run silently took whatever OpenMM picked."""
-    from md_templates.openmm import emit
-    from md_templates.openmm.simple import SetupRequest, resolve
+    from md_tools.openmm import emit
+    from md_tools.openmm.simple import SetupRequest, resolve
 
     resolved = resolve(SetupRequest(system="A", input="x.pdb", solvent="implicit",
                                     protocol="REST2", production="20 ps",

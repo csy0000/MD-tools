@@ -88,9 +88,9 @@ Both reject the other's configuration keys rather than ignoring them.
 ```
 new  MD_system_gen.py                              root entry point, molecular preparation
 new  MD_input_gen.py                               root entry point, protocol generation
-new  src/md_templates/openmm/system_prep.py        bundle construction, stops before dynamics
-new  src/md_templates/openmm/input_gen.py          staged-project projection
-new  src/md_templates/openmm/stage.py              the thin stage command launchers call
+new  src/md_tools/openmm/system_prep.py        bundle construction, stops before dynamics
+new  src/md_tools/openmm/input_gen.py          staged-project projection
+new  src/md_tools/openmm/stage.py              the thin stage command launchers call
 new  tests/test_public_generators.py               50 tests
 new  test/{ala,rgd}/REST2/system_config.json, md_config.json
 new  test/rgd/REST2/cyclo_rgdfv.smi                the vetted SMILES
@@ -296,7 +296,7 @@ whether everything was finished. It was not. Three items were missing.
 Preparing RGDfV through `MD_system_gen.py` for the first time failed:
 
 ```
-File "src/md_templates/openmm/system.py", line 51, in initial_structure
+File "src/md_tools/openmm/system.py", line 51, in initial_structure
     params.randomSeed = int(ecfg["seed"])
 TypeError: int() argument must be ... not 'NoneType'
 ```
@@ -370,13 +370,13 @@ packages, not run output.
 ### `run_all.sh` did not run — twice
 
 ```
-.../ambertools26/bin/python: No module named 'md_templates'
+.../ambertools26/bin/python: No module named 'md_tools'
 ```
 
 The launchers called a bare `python`. `activate-md-stack.sh` puts AmberTools' interpreter first on
-PATH, and that one has neither `openmm` nor `md_templates`. Every launcher now records the
+PATH, and that one has neither `openmm` nor `md_tools`. Every launcher now records the
 interpreter it was **generated** with as an overridable default, exports the matching `PYTHONPATH`,
-and preflights `import md_templates, openmm` before doing anything -- so the failure mode is an
+and preflights `import md_tools, openmm` before doing anything -- so the failure mode is an
 instruction rather than a traceback.
 
 The second report of the same error was a *stale* project generated before the fix. Generated
@@ -436,7 +436,7 @@ CLI-only**:
 * *CLI-only* -- the precise part existed nowhere, and anything calling the library directly got the
   late guard. That is the same shape as the `--inherit` bug earlier today.
 
-Now in `md_templates/openmm/destination.py`, one implementation used by both generators:
+Now in `md_tools/openmm/destination.py`, one implementation used by both generators:
 
 **`check_destination`** runs before any work and refuses when a file *being written* already exists,
 naming those files. A destination holding only unrelated files is not blocked.

@@ -47,7 +47,7 @@ def _git(*args: str) -> Optional[str]:
 
 
 def installed_fingerprint() -> dict[str, Any]:
-    """A deterministic digest of the installed `md_templates` implementation.
+    """A deterministic digest of the installed `md_tools` implementation.
 
     Two installs of the same code fingerprint identically; a single edited line changes the digest.
     That is what identifies the implementation when `git_commit` is null, which is the normal case
@@ -56,7 +56,7 @@ def installed_fingerprint() -> dict[str, Any]:
     Sorted relative POSIX paths and streamed contents, so the value does not depend on filesystem
     ordering or on where the package happens to live.
     """
-    root = Path(__file__).resolve().parent.parent          # .../md_templates
+    root = Path(__file__).resolve().parent.parent          # .../md_tools
     files = []
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix not in FINGERPRINT_SUFFIXES:
@@ -81,7 +81,7 @@ def direct_url_record() -> Optional[dict[str, Any]]:
     from importlib import metadata
 
     try:
-        distribution = metadata.distribution("md-templates")
+        distribution = metadata.distribution("md-tools")
         text = distribution.read_text("direct_url.json")
     except Exception:                              # noqa: BLE001
         return None
@@ -96,7 +96,7 @@ def direct_url_record() -> Optional[dict[str, Any]]:
 
 
 def implementation_identity() -> dict[str, Any]:
-    """Which MD-templates wrote this. Never null in every field at once.
+    """Which MD-tools wrote this. Never null in every field at once.
 
     `git_commit` is the best answer and is often unavailable. `installed_fingerprint` is always
     available, so "which implementation" always has an answer even from a wheel.
@@ -104,7 +104,7 @@ def implementation_identity() -> dict[str, Any]:
     from importlib import metadata
 
     try:
-        version = metadata.version("md-templates")
+        version = metadata.version("md-tools")
     except metadata.PackageNotFoundError:
         version = None
 
@@ -119,14 +119,14 @@ def implementation_identity() -> dict[str, Any]:
 
 
 #: The one repository URL. Everything that records the generator reads it from here.
-REPOSITORY = "https://github.com/csy0000/MD-templates"
+REPOSITORY = "https://github.com/csy0000/MD-tools"
 
 #: An exact 40-hex commit. A branch, a tag or an abbreviation is not a pin.
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 def template_identity() -> dict[str, Any]:
-    """THE canonical answer to "which MD-templates is this", resolved once.
+    """THE canonical answer to "which MD-tools is this", resolved once.
 
     Everything that records the generator -- `dataset.yaml`, both `provenance.yaml` files,
     `resolved_sys.config.yaml`, `md.config.yaml`, every `stage.yaml`, every method record -- reads
@@ -229,7 +229,7 @@ def package_provenance() -> dict[str, Any]:
     """The short form kept for existing callers."""
     identity = implementation_identity()
     return {
-        "md_templates": {
+        "md_tools": {
             "version": identity["version"],
             "git_commit": identity["git_commit"],
             "git_dirty": identity["git_dirty"],

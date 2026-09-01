@@ -28,7 +28,7 @@ executable, a new flag namespace and a new set of help text to keep consistent w
 | owned by | what |
 |---|---|
 | **OpenMM** | System, Context, Integrator, State, and every energy evaluation |
-| **MD-templates** | the REST2 Hamiltonian, the ladder, the exchange schedule and rules, the NetCDF schema, checkpointing, restart, validation, statistics |
+| **MD-tools** | the REST2 Hamiltonian, the ladder, the exchange schedule and rules, the NetCDF schema, checkpointing, restart, validation, statistics |
 | **MD-project** | which systems, which request, the campaign schedule, and where the analysis boundary is |
 
 **OpenMMTools is not imported by generated production code.** It remains available as an optional
@@ -290,7 +290,7 @@ behind, so existence is never treated as completion.
 
 ## Optional v2 fields, and the rank-0 migration
 
-`md-templates-replica-exchange/v2` has one **optional** field on the `exchange` dimension:
+`md-tools-replica-exchange/v2` has one **optional** field on the `exchange` dimension:
 
 ```
 reservoir_velocity_seed[exchange]    i8, -1 where nothing was drawn
@@ -404,8 +404,8 @@ alike, and a malformed field with *no* pending record stays refused everywhere.
 ### The pending record, and what is checked
 
 ```yaml
-format:                       md-templates-migration-transaction/v1   # exact
-schema:                       md-templates-replica-exchange/v2        # must match the file
+format:                       md-tools-migration-transaction/v1   # exact
+schema:                       md-tools-replica-exchange/v2        # must match the file
 fields:                       [..]        non-empty, unique, canonically sorted, all known
 definitions:                  {field: {dtype, dimensions}}            # vs the registry
 backfill:                     {field: int}                            # vs the registry

@@ -5,7 +5,7 @@
 | Date | 2026-08-28 |
 | Branch | `fix/md-project-contract-gates` |
 | Base | `1a54f45ebfe126e3aab55b97e2a040a97174bf32` (`dev` at the time, unchanged) |
-| Reported by | MD-project `dev-test-ala-rgdfv`, `docs/upstream/20260828_md-templates-preflight-and-charge-provenance.md` |
+| Reported by | MD-project `dev-test-ala-rgdfv`, `docs/upstream/20260828_md-tools-preflight-and-charge-provenance.md` |
 | Scope | five blocking properties. Charge caching deliberately excluded. |
 
 Five safety and provenance properties failed against `1a54f45`, found by running the real
@@ -19,7 +19,7 @@ MD-project examples rather than by reading the code. Each was reproduced before 
 
 ```python
 # system.py:146
-from md_templates.openmm.hashing import sha256_file      # no such module
+from md_tools.openmm.hashing import sha256_file      # no such module
 ```
 
 `resolve_nagl_am1bcc_model()` raised `ModuleNotFoundError` for anyone selecting a method the

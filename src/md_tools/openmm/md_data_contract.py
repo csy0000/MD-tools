@@ -12,7 +12,7 @@ There is deliberately no copy of MD-data's Pydantic models or JSON schema here. 
 implementation of a contract is a contract that drifts, and the failure would be silent: this
 repository would keep writing manifests that its own copy accepts and MD-data rejects.
 
-**The boundary.** MD-templates may generate simulation files and a contract-valid manifest inside
+**The boundary.** MD-tools may generate simulation files and a contract-valid manifest inside
 the ONE explicitly selected active dataset. It does not register, copy, move, archive, delete or
 catalogue anything, does not walk `$MD_DATA`, does not open another dataset, and does not hash a
 production trajectory.
@@ -96,14 +96,14 @@ def require_md_data():
 
 
 # ---------------------------------------------------------------------------------------------
-# Which MD-templates generated this
+# Which MD-tools generated this
 # ---------------------------------------------------------------------------------------------
 
 def generator_commit() -> dict[str, Any]:
     """The canonical template identity, as this module's callers expect it.
 
     A thin adaptor over `provenance_min.template_identity()` so there is exactly ONE resolution of
-    "which MD-templates is this" in the package. Kept as a name because the contract code and its
+    "which MD-tools is this" in the package. Kept as a name because the contract code and its
     tests speak in terms of the generating commit.
     """
     from .provenance_min import template_identity
@@ -122,21 +122,21 @@ def check_templates_commit(claimed: str) -> dict[str, Any]:
     registered, archived and cited it is a FALSE provenance rather than an imprecise one, so
     contract-managed generation stops here -- before the System is built, so the refusal is cheap.
     """
-    from .defaults import MD_TEMPLATES_REPOSITORY
+    from .defaults import MD_TOOLS_REPOSITORY
 
     established = generator_commit()
     if established["commit"] is None:
         raise ContractError(
-            f"dataset.templates.commit is {claimed!r}, but this MD-templates cannot establish its "
+            f"dataset.templates.commit is {claimed!r}, but this MD-tools cannot establish its "
             f"own exact commit, so the claim cannot be verified.\n"
             f"  {established['detail']}.\n"
             f"  Contract-managed generation refuses rather than record an unverified pin. Run "
             f"from a clean Git checkout, or install with "
-            f"`pip install 'md-templates @ git+{MD_TEMPLATES_REPOSITORY}.git@<commit>'`, or set "
+            f"`pip install 'md-tools @ git+{MD_TOOLS_REPOSITORY}.git@<commit>'`, or set "
             f"dataset.enabled false for an unregistered local project.")
     if established["dirty"]:
         raise ContractError(
-            f"the MD-templates generating this dataset is a Git checkout at "
+            f"the MD-tools generating this dataset is a Git checkout at "
             f"{established['commit'][:12]} with UNCOMMITTED CHANGES, so that commit does not "
             f"describe the code that would run.\n"
             f"  A registered dataset records templates.commit as the way to reproduce it. "
@@ -147,7 +147,7 @@ def check_templates_commit(claimed: str) -> dict[str, Any]:
             f"not reproduce it.")
     if str(claimed).strip().lower() != established["commit"].lower():
         raise ContractError(
-            f"dataset.templates.commit is {claimed!r}, but the MD-templates actually generating "
+            f"dataset.templates.commit is {claimed!r}, but the MD-tools actually generating "
             f"this dataset is at {established['commit']!r} ({established['route']}: "
             f"{established['detail']}).\n"
             f"  A 40-hex string that is not the generating commit is worse than none: it records "
@@ -341,7 +341,7 @@ def build_manifest(*, dataset_block: dict[str, Any], location: dict[str, Any],
                                      what="originating project"),
         "templates": {
             **_pinned_repository(dict(block.get("templates") or {}), f"{where}.templates",
-                                 what="MD-templates"),
+                                 what="MD-tools"),
             "version": str(templates_version),
         },
         "components": components,

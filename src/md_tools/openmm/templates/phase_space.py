@@ -38,7 +38,7 @@ from pathlib import Path
 import numpy as np
 
 #: Bumped when the meaning of the schema changes.
-PHASE_SPACE_FORMAT = "md-templates-phase-space/v1"
+PHASE_SPACE_FORMAT = "md-tools-phase-space/v1"
 
 #: Units, stated in the file rather than assumed by every reader.
 POSITION_UNIT = "nanometer"

@@ -18,7 +18,7 @@ import numpy as np
 import pytest
 import yaml
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_templates" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 openmm = pytest.importorskip("openmm")
@@ -57,8 +57,16 @@ def test_no_source_file_still_advertises_openmm_rest2():
 
 
 def test_the_packaged_console_scripts_do_not_add_a_method_command():
+    """`md-openmm` is the ONLY executable this distribution installs.
+
+    The migration to MD-tools retired `md-template` (the environment installer) and never
+    introduced `openmm-md`; a method-named executable would put the protocol in the command
+    surface instead of in the configuration, which is what this has always guarded against.
+    """
     pyproject = (Path(__file__).parents[1] / "pyproject.toml").read_text()
-    assert "md-template =" in pyproject and "md-openmm =" in pyproject
+    assert "md-openmm =" in pyproject
+    assert "md-template =" not in pyproject
+    assert "openmm-md" not in pyproject
     assert "openmm-rest2" not in pyproject
 
 
@@ -800,8 +808,8 @@ def test_the_run_state_sidecar_sits_beside_the_storage():
 def test_generated_replica_inputs_contain_no_concrete_path():
     """The science is path-independent; the group file owns the paths."""
     sys.path.insert(0, str(SRC))
-    from md_templates.openmm import emit
-    from md_templates.openmm.simple import SetupRequest, resolve
+    from md_tools.openmm import emit
+    from md_tools.openmm.simple import SetupRequest, resolve
 
     for method, extra in (("REST2", {}), ("rREST2", {})):
         resolved = resolve(SetupRequest(

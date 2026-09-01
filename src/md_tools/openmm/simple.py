@@ -2,7 +2,7 @@
 
 The generated directory is the point of this module. It looks like an Amber or GROMACS run
 directory -- one readable input per stage, run directly, writing a `.out` beside it -- and it is
-**detached**: no `md_templates` import, no YAML read at run time, no Git, no component checkout.
+**detached**: no `md_tools` import, no YAML read at run time, no Git, no component checkout.
 Delete this package after generating and every stage still runs.
 
 That is the whole trade. Everything the old generated scripts did at run time -- resolving force
@@ -280,7 +280,7 @@ def _resolve_reservoir(block: dict, replica: dict, production_ps: float) -> dict
             f"`stored` installs the recorded momentum and is what the probability-one rule "
             f"assumes; `maxwell` redraws and must be asked for explicitly.")
     return {
-        "format": "md-templates-reservoir-request/v2",
+        "format": "md-tools-reservoir-request/v2",
         "phase_space": block.get("phase_space") or f"{directory}/cmd.phase_space.nc",
         "velocity_policy": policy,
         "start_time_ps": float(block.get("start_time_ps") or 0.0),
@@ -587,7 +587,7 @@ def format_preset(resolved: dict[str, Any]) -> str:
 
 
 def origin_commit() -> Optional[str]:
-    """The MD-templates commit generating this directory, read ONCE, at generation.
+    """The MD-tools commit generating this directory, read ONCE, at generation.
 
     Recorded as a literal in `config.yaml`. No generated script ever runs `git`.
     """
@@ -656,7 +656,7 @@ def resolve_output_root(output: Optional[str]) -> tuple[Path, str]:
             f"not protection, because it is one `git add -f` from being wrong.\n"
             f"  A project-local STAGING area, the kind `md-data-register` later moves out, is the "
             f"one exception: create {root}/.md-staging, make sure `git check-ignore` agrees "
-            f"that paths beneath it are ignored, and set MD_TEMPLATES_ALLOW_STAGING=1.")
+            f"that paths beneath it are ignored, and set MD_TOOLS_ALLOW_STAGING=1.")
     if worktree:
         print(f"# staging            : {root} is inside {worktree} and is a declared staging "
               f"area. It is git-ignored and MUST be registered out before it is cited.")
@@ -674,7 +674,7 @@ def _staging_opt_in(root: Path) -> bool:
 
     So the exception is narrow and it is CHECKED rather than asserted. All three must hold:
 
-      * the caller opted in for this run, by setting MD_TEMPLATES_ALLOW_STAGING=1;
+      * the caller opted in for this run, by setting MD_TOOLS_ALLOW_STAGING=1;
       * a marker file `.md-staging` sits in the directory, so the intent is visible to anyone who
         looks at the tree and does not depend on the environment of whoever ran the command;
       * `git check-ignore` agrees that what is created beneath the root is actually ignored --
@@ -683,7 +683,7 @@ def _staging_opt_in(root: Path) -> bool:
 
     A directory that is merely inside a repository still fails, which is the case the rule is for.
     """
-    if os.environ.get("MD_TEMPLATES_ALLOW_STAGING") != "1":
+    if os.environ.get("MD_TOOLS_ALLOW_STAGING") != "1":
         return False
     if not (root / ".md-staging").is_file():
         return False
@@ -759,7 +759,7 @@ def package_version() -> Optional[str]:
         from importlib.metadata import PackageNotFoundError, version
     except ImportError:                                            # pragma: no cover
         return None
-    for name in ("md-templates", "md_templates"):
+    for name in ("md-tools", "md_tools"):
         try:
             return version(name)
         except PackageNotFoundError:
@@ -968,7 +968,7 @@ def _system_config(resolved: dict[str, Any], input_path: Path, contributor: dict
     version = package_version()
     if not commit and not version:
         raise ConfigError(
-            "neither an MD-templates commit nor an installed package version could be determined, "
+            "neither an MD-tools commit nor an installed package version could be determined, "
             "so the generated system could not say what produced it.")
     document = {
         "schema_version": 1,
@@ -992,10 +992,10 @@ def _system_config(resolved: dict[str, Any], input_path: Path, contributor: dict
         "protocol": resolved["protocol"],
         "generated_by": {
             "tool": "md-openmm setup",
-            "md_templates_version": version,
+            "md_tools_version": version,
             # null only when the package version is present: a wheel install legitimately has no
             # checkout, but something concrete must identify the generator.
-            "md_templates_commit": commit,
+            "md_tools_commit": commit,
         },
         "random_seed_base": resolved["seeds"]["base"]["seed"],
     }

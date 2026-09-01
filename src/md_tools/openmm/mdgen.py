@@ -53,7 +53,7 @@ def _template_module():
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
-        "_md_templates_stage_helpers", TEMPLATES / "md_stages.py")
+        "_md_tools_stage_helpers", TEMPLATES / "md_stages.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -122,7 +122,7 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
     # Recorded once, read by every generated script. REST2's per-tau equilibration used to look
     # for a key that was never written and recorded null.
     # Carried INTO the project so runtime records can name the implementation that wrote them.
-    # The scripts cannot import md_templates to ask, and a run months later should not have to
+    # The scripts cannot import md_tools to ask, and a run months later should not have to
     # guess which version produced it.
     # Whether this project belongs to a contract-managed dataset, recorded WITHOUT the absolute
     # value of MD_DATA: the generated tree must survive being moved and the variable changing.
@@ -266,7 +266,7 @@ def generate_md(*, input_folder: Path, config_path: Path, output_folder: Path) -
             "common_stages": [stage["path"] for stage in plan], "dataset": dataset}
 
 
-MD_PROVENANCE_FORMAT = "md-templates-md-provenance/v1"
+MD_PROVENANCE_FORMAT = "md-tools-md-provenance/v1"
 #: What `md-gen` itself wrote. NOT the dataset checksum manifest: trajectories, checkpoints and
 #: final states do not exist yet when this is written, and MD-data computes those at archival.
 GENERATED_MANIFEST = "generated-files.sha256"
@@ -400,7 +400,7 @@ def write_generated_manifest(out: Path) -> Path:
 
 
 def _template_commit() -> str | None:
-    """The exact commit of the MD-templates that wrote this project, or None.
+    """The exact commit of the MD-tools that wrote this project, or None.
 
     From the canonical resolution, so a VCS install records the commit `direct_url.json` proves
     rather than the null a checkout-only lookup returns.
@@ -415,7 +415,7 @@ def _template_provenance() -> dict[str, Any]:
         "template_commit": identity["commit"],
         "template_commit_evidence": identity["evidence"],
         "template_repository": identity["repository"],
-        "md_templates_version": identity["version"],
+        "md_tools_version": identity["version"],
         "installed_fingerprint": identity["installed_fingerprint"],
         "git_dirty": identity["dirty"],
         # Spelled out where an unregistered project records it, because a commit beside a dirty
@@ -543,7 +543,7 @@ def _ais_path_definition(resolved: dict[str, Any], *, implicit: bool) -> dict[st
         number_of_observations=int(block["output"]["number_of_observations"]),
         timestep_fs=float(common["timestep_fs"]))
     return {
-        "format": "md-templates-ais-path/v1",
+        "format": "md-tools-ais-path/v1",
         "path": path,
         "scaling": {
             # tau is the SOURCE parameter; the other two are labelled derived and are never read

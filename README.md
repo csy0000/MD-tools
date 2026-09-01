@@ -1,4 +1,4 @@
-# MD-templates
+# MD-tools
 
 Generates OpenMM input files and run scripts for conventional MD and REST2. It does not run your
 science for you: it produces a small directory of ordinary OpenMM scripts that you can read, edit
@@ -123,7 +123,7 @@ Four pieces, deliberately separate: the `.py` holds the science, `paths.sh` the 
 `.sh` every concrete path, and `bin/openmm-md` the generic file handling.
 
 Each script is ordinary OpenMM application code with every parameter as a literal — 39 to 60
-non-blank lines, no `md_templates` import, no YAML parsing, no Git, no absolute paths. **The
+non-blank lines, no `md_tools` import, no YAML parsing, no Git, no absolute paths. **The
 directory is detached**: delete this package and every stage still runs.
 
 ```bash
@@ -336,7 +336,7 @@ tau a state holds is in the file's own validated metadata, where it can be check
 a name anyone can rename. Nothing sorts these files lexicographically or parses a number back out
 of a path.
 
-**`rest2.nc` is the authoritative record**, schema `md-templates-replica-exchange/v3`. It holds
+**`rest2.nc` is the authoritative record**, schema `md-tools-replica-exchange/v3`. It holds
 the reduced-potential matrix, the state-to-walker mapping, the exchange statistics, the scientific
 identity and one committed-frame marker. The state trajectories are written and synced *before*
 that marker advances, so a crash leaves rows the marker does not count -- uncommitted rows a
@@ -501,7 +501,7 @@ A later rule -- a non-Boltzmann or kinetic reservoir -- is a new rule file and c
 A generated system is not a registered dataset, and **this repository does not register anything**.
 The boundary as implemented:
 
-- **MD-templates** generates a *detached simulation bundle* — the prepared system, the stage
+- **MD-tools** generates a *detached simulation bundle* — the prepared system, the stage
   launchers, and the authoritative run records those runs write. It knows nothing about datasets,
   namespaces or a managed root.
 - **The project** runs that bundle first in its own ignored local staging area, typically
@@ -522,7 +522,7 @@ root it is given. It also **refuses an output inside a Git working tree**, becau
 is one `git add -f` from being wrong.
 
 The staging area the project uses is the one narrow exception, and it is checked rather than
-asserted: the directory must carry a `.md-staging` marker, `MD_TEMPLATES_ALLOW_STAGING=1` must be
+asserted: the directory must carry a `.md-staging` marker, `MD_TOOLS_ALLOW_STAGING=1` must be
 set, and `git check-ignore` must agree that what is created beneath it is actually ignored. Any one
 missing and the refusal stands.
 
@@ -610,12 +610,12 @@ The environment is a normal conda prefix. Activate it, then install this package
 
 ```bash
 conda activate $MD_STACK/envs/openmm-8.6.0     # or: micromamba activate $MD_STACK/envs/openmm-8.6.0
-pip install --no-deps md-templates             # or: pip install --no-deps -e /path/to/MD-templates
+pip install --no-deps md-tools             # or: pip install --no-deps -e /path/to/MD-tools
 ```
 
 `--no-deps` is deliberate: the scientific stack is already there from conda, and letting pip
 re-resolve it would pull a second, pip-built OpenMM alongside the conda one. Check it landed in the
-right place with `python -c "import md_templates, openmm; print(md_templates.__file__)"`.
+right place with `python -c "import md_tools, openmm; print(md_tools.__file__)"`.
 
 ### 2. Write the configuration
 
@@ -1026,7 +1026,7 @@ count. An incomplete one is **replaced**, never appended to.
 
 Copy `inputs/` and `MD/` together, keeping them siblings. Nothing else is needed: the scripts
 address `inputs/` relatively, contain no path into this repository, and do not import
-`md_templates`. On the target machine you need OpenMM (and, for a non-peptide system you intend to
+`md_tools`. On the target machine you need OpenMM (and, for a non-peptide system you intend to
 rebuild, the OpenFF stack) — the same environment `md-template install` creates.
 
 If the recorded interpreter is missing, `run.sh` falls back to whatever `python3` provides.
@@ -1058,7 +1058,7 @@ $MD_DATA/{namespace}/{yyyy-mm}/{dataset_name}/
 
 ### Installing the validator
 
-MD-templates never carries a copy of MD-data's schema, so contract-managed generation needs the
+MD-tools never carries a copy of MD-data's schema, so contract-managed generation needs the
 validator itself. It is pinned to an exact commit over **HTTPS**, in one maintained place
 (`md_data_contract.MD_DATA_REPOSITORY` / `MD_DATA_COMMIT`):
 
@@ -1124,7 +1124,7 @@ in `sys.config.yaml`, and never retyped.
 
 `md-openmm show-default dataset` prints the block with every required field `null`:
 
-`templates.commit` is additionally **checked against the MD-templates that is actually running**,
+`templates.commit` is additionally **checked against the MD-tools that is actually running**,
 established once and used everywhere — from a clean Git checkout, or from a PEP 610
 `direct_url.json` when the package was installed from a VCS URL and there is no checkout to read.
 That one resolved identity is written into `dataset.yaml`, both `provenance.yaml` files,
@@ -1152,7 +1152,7 @@ works.
 | `role`, `system` | what this data *is*. Only you know. |
 | `created_by.person_id`, `.name` | attribution. Never inferred from a git config or a shell user. |
 | `origin.repository`, `origin.commit` | the project this run belongs to. The commit must be an exact 40-hex SHA — never fabricated, never abbreviated, never `HEAD`. |
-| `templates.commit` | which MD-templates checkout generated this. Same rule. |
+| `templates.commit` | which MD-tools checkout generated this. Same rule. |
 
 Leave `enabled: false` and none of it applies. Set `enabled: true` and every field above must be
 present, or `sys-gen` stops **before building anything**.
@@ -1218,7 +1218,7 @@ cost grows with the size of the archive is a preflight people learn to disable.
 
 ### Lifecycle stays with MD-data
 
-MD-templates writes `status: active` once, at creation. Moving a dataset to `complete` or
+MD-tools writes `status: active` once, at creation. Moving a dataset to `complete` or
 `archived`, minting aliases, registering extensions and computing archival checksums are MD-data
 operations, performed deliberately. This repository refuses to write into a dataset that is already
 `complete` or `archived` rather than quietly reopening it.
@@ -1416,7 +1416,7 @@ commit.
 
 ## Where this sits
 
-MD-templates is one of three repositories. It makes simulation data **FAIR-ready**; it does not
+MD-tools is one of three repositories. It makes simulation data **FAIR-ready**; it does not
 make it FAIR. It never assigns a dataset identifier. It may write a run's own files and a
 contract-valid `dataset.yaml` into the one active dataset directory you explicitly select — see
 [Contract-managed datasets](#contract-managed-datasets) — and it never touches any other part of
@@ -1424,7 +1424,7 @@ contract-valid `dataset.yaml` into the one active dataset directory you explicit
 
 | repository | owns |
 |---|---|
-| [MD-templates](https://github.com/csy0000/MD-templates) | system construction, force-field record, resolved protocol, seeds, generated scripts, execution provenance |
+| [MD-tools](https://github.com/csy0000/MD-tools) | system construction, force-field record, resolved protocol, seeds, generated scripts, execution provenance |
 | [MD-data](https://github.com/csy0000/MD-data) | permanent dataset ID, immutable `$MD_DATA` storage, complete archive checksums, metadata, retention and access |
 | [MD-analysis](https://github.com/csy0000/MD-analysis) | analysis configuration, software identity, consumed dataset IDs and checksums, derived-result lineage |
 | project-template | project inputs, configs, workflows and component locks — **not yet available** |

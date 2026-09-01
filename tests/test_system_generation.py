@@ -31,7 +31,7 @@ def explicit_inputs(tmp_path_factory):
 
 
 def test_the_expected_files_are_written_and_nothing_else(explicit_inputs):
-    from md_templates.openmm.sysgen import OUTPUT_FILES
+    from md_tools.openmm.sysgen import OUTPUT_FILES
 
     present = sorted(p.name for p in explicit_inputs.iterdir() if p.is_file())
     assert present == sorted(OUTPUT_FILES), present
@@ -68,7 +68,7 @@ def test_solute_yaml_records_the_indices_and_the_rest2_region(explicit_inputs):
 def test_provenance_is_recorded_without_blocking_on_git(explicit_inputs):
     """Git metadata is often absent; the record must still identify the implementation."""
     document = yaml.safe_load((explicit_inputs / "provenance.yaml").read_text())
-    assert document["format"] == "md-templates-system-provenance/v1"
+    assert document["format"] == "md-tools-system-provenance/v1"
     assert document["environment"]["openmm"]
     assert isinstance(document["command"], list), "the command is an argument list, not a string"
 
@@ -87,7 +87,7 @@ def test_provenance_is_recorded_without_blocking_on_git(explicit_inputs):
 
 def test_the_original_input_is_kept_byte_for_byte(explicit_inputs):
     """A bundle you cannot rebuild from is a bundle you can only rerun."""
-    from md_templates.openmm.provenance_min import sha256_file
+    from md_tools.openmm.provenance_min import sha256_file
 
     document = yaml.safe_load((explicit_inputs / "provenance.yaml").read_text())
     kept = explicit_inputs / document["original_input"]["path"]
@@ -96,7 +96,7 @@ def test_the_original_input_is_kept_byte_for_byte(explicit_inputs):
 
 
 def test_the_checksum_manifest_covers_the_bundle_and_verifies(explicit_inputs):
-    from md_templates.openmm.sysgen import verify_checksum_manifest
+    from md_tools.openmm.sysgen import verify_checksum_manifest
 
     result = verify_checksum_manifest(explicit_inputs)
     assert result["ok"] is True, result
@@ -110,7 +110,7 @@ def test_the_forcefield_record_is_written(explicit_inputs):
     import json
 
     record = json.loads((explicit_inputs / "forcefield.json").read_text())
-    assert record["format"] == "md-templates-forcefield/v1"
+    assert record["format"] == "md-tools-forcefield/v1"
     # The fixture asked for no solvent, so this is the DEFAULT pairing: ff14SB with TIP3P. The
     # protein force field and the water model are one selection, so this record is also the
     # assertion that the default did not drift into a crossed combination.

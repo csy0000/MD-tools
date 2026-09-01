@@ -35,7 +35,7 @@ SMOKE_TRAJECTORIES = 2
 # --- the schedule, with nothing built -------------------------------------------------------
 
 def test_the_default_path_is_linear_tau_from_half_to_zero_with_21_observations():
-    from md_templates.openmm.defaults import default_document
+    from md_tools.openmm.defaults import default_document
 
     block = default_document("AIS")["AIS"]
     path, output = block["path"], block["output"]
@@ -55,7 +55,7 @@ def test_the_default_path_is_linear_tau_from_half_to_zero_with_21_observations()
 
 def test_the_schedule_is_evenly_spaced_endpoint_inclusive_and_exact():
     """21 observations are 20 equal intervals in tau, and both endpoints are exact."""
-    from md_templates.openmm import ais
+    from md_tools.openmm import ais
 
     schedule = ais.switching_schedule(
         tau_start=0.5, tau_end=0.0, switching_duration_ps=0.08,
@@ -86,7 +86,7 @@ def test_the_schedule_is_evenly_spaced_endpoint_inclusive_and_exact():
 ])
 def test_a_schedule_that_would_have_to_be_rounded_is_refused(duration, interval, observations,
                                                              expected):
-    from md_templates.openmm import ais
+    from md_tools.openmm import ais
 
     with pytest.raises(ValueError) as error:
         ais.switching_schedule(tau_start=0.5, tau_end=0.0, switching_duration_ps=duration,
@@ -96,7 +96,7 @@ def test_a_schedule_that_would_have_to_be_rounded_is_refused(duration, interval,
 
 
 def _protocol(**patch):
-    from md_templates.openmm.defaults import md_defaults
+    from md_tools.openmm.defaults import md_defaults
 
     document = md_defaults(methods=["AIS"])
     document["AIS"]["path"]["switching_duration_ps"] = SMOKE_SWITCHING_PS
@@ -110,7 +110,7 @@ def _protocol(**patch):
 
 
 def test_a_complete_ais_protocol_resolves():
-    from md_templates.openmm.config import resolve_md_config
+    from md_tools.openmm.config import resolve_md_config
 
     resolved = resolve_md_config(_protocol(), implicit=False)
     assert resolved["AIS"]["path"]["tau_start"] == 0.5
@@ -134,7 +134,7 @@ def test_a_complete_ais_protocol_resolves():
     ({"execution.gpu_devices": "all"}, "'auto' or a non-empty list"),
 ])
 def test_an_unusable_ais_configuration_is_refused_by_name(patch, expected):
-    from md_templates.openmm.config import ConfigError, resolve_md_config
+    from md_tools.openmm.config import ConfigError, resolve_md_config
 
     with pytest.raises(ConfigError) as error:
         resolve_md_config(_protocol(**patch), implicit=False)
@@ -216,12 +216,12 @@ def test_the_generated_ais_project_imports_nothing_from_this_package(ais_project
     """Portable: an AIS project needs OpenMM, PyYAML, NumPy and MDTraj, and nothing else.
 
     The rule is the one the rest of the generated tree follows -- an IMPORT of the package, not any
-    mention of it. `md_templates_version` in `path_definition.yaml` is a provenance field naming
+    mention of it. `md_tools_version` in `path_definition.yaml` is a provenance field naming
     which implementation wrote the file, which is the point of recording it.
     """
     import re
 
-    from md_templates.openmm.mdgen import TEMPLATES
+    from md_tools.openmm.mdgen import TEMPLATES
 
     checkout = str(TEMPLATES.parents[3])
     offenders = {}
@@ -229,9 +229,9 @@ def test_the_generated_ais_project_imports_nothing_from_this_package(ais_project
         if not path.is_file() or path.suffix not in (".py", ".sh", ".yaml"):
             continue
         text = path.read_text(encoding="utf-8")
-        if path.suffix == ".py" and re.search(r"^\s*(import|from)\s+md_templates\b", text,
+        if path.suffix == ".py" and re.search(r"^\s*(import|from)\s+md_tools\b", text,
                                               re.MULTILINE):
-            offenders[path.name] = "imports md_templates"
+            offenders[path.name] = "imports md_tools"
         if checkout in text:
             offenders[path.name] = "contains a path into the checkout"
     assert not offenders, offenders
@@ -742,7 +742,7 @@ def test_running_more_paths_is_still_allowed(ais_run):
     fingerprint and not the invariant one. If this fails, the contract above has forbidden the
     legitimate way to add sampling in order to catch an illegitimate edit.
     """
-    from md_templates.openmm.templates import md_stages
+    from md_tools.openmm.templates import md_stages
 
     stage = yaml.safe_load((ais_run / "stage.yaml").read_text())
     written = yaml.safe_load((ais_run / "resolved_stage.yaml").read_text())

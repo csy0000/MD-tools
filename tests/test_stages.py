@@ -309,7 +309,7 @@ def test_both_rest2_scripts_schedule_through_the_same_helper():
     """One policy, not two that can drift apart."""
     from .conftest import REPO_ROOT
 
-    templates = REPO_ROOT / "src" / "md_templates" / "openmm" / "templates"
+    templates = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
     for name in ("rest2_equilibrate.py", "rest2_run.py"):
         source = (templates / name).read_text()
         assert "device_groups(" in source, name

@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_templates" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
 sys.path.insert(0, str(TEMPLATES))
 
 import rem_log                                                     # noqa: E402

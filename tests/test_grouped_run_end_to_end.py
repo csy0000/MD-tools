@@ -26,7 +26,7 @@ import pytest
 
 from .conftest import EXCHANGES, TAUS    # noqa: F401 - re-exported for readers
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_templates" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
 netCDF4 = pytest.importorskip("netCDF4")
 pytest.importorskip("openmm")
 sys.path.insert(0, str(TEMPLATES))

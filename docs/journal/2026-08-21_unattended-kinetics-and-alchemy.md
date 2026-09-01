@@ -1,7 +1,7 @@
-# Unattended kinetics and alchemy campaign — MD-templates handoff
+# Unattended kinetics and alchemy campaign — MD-tools handoff
 
 **2026-08-22.** A two-day unattended campaign runs against this repository at commit **`b3fc8fb`**
-(`dev`). This note records only what concerns `MD-templates`: what was generated with it, how it
+(`dev`). This note records only what concerns `MD-tools`: what was generated with it, how it
 behaved at production scale, and where the work lives. No data and no analysis code is committed
 here.
 

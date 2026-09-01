@@ -3,9 +3,9 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "md-templates"
-version = "0.4.0.dev0"
-description = "Reusable OpenMM templates for explicit-water molecular dynamics and omega-selective REST2."
+name = "md-tools"
+version = "0.5.0.dev0"
+description = "Standalone OpenMM tooling: topology construction, MD script generation, and transactional dataset registration."
 readme = "README.md"
 requires-python = ">=3.11"
 # The scientific stack -- openmm, openff-toolkit, openmmforcefields, ambertools, parmed, rdkit --
@@ -20,21 +20,20 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "pytest-xdist", "build"]
 
-# The entry point. Installing the wheel puts `md-openmm` on PATH, which is what lets a
-# consuming project run the pipeline without a source checkout.
+# The ONLY entry point. Installing the wheel puts `md-openmm` on PATH, which is what lets a
+# consuming project run the whole pipeline with no source checkout and no component lock.
 [project.scripts]
-md-template = "md_templates.cli.md_template:main"
-md-openmm = "md_templates.cli.md_openmm:main"
+md-openmm = "md_tools.cli.md_openmm:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["md_templates*"]
+include = ["md_tools*"]
 
 [tool.setuptools.package-data]
 # `md-gen` writes a generated project by COPYING these files. A wheel without them installs an
 # md-gen that cannot write anything, which is why tests/test_wheel.py checks the built wheel
 # rather than trusting this glob.
-"md_templates.openmm" = ["templates/*.py", "templates/*.sh"]
+"md_tools.openmm" = ["templates/*.py", "templates/*.sh"]
 
 [tool.pytest.ini_options]
 # The MD smoke tests build systems and integrate them, so they are marked slow and run before a

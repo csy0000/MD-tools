@@ -148,7 +148,7 @@ def test_a_longer_rest2_run_is_still_allowed(explicit_run):
     the documented way to continue a REST2 dataset in order to catch an unsafe edit.
     """
     written = yaml.safe_load((explicit_run / "REST2" / "resolved_stage.yaml").read_text())
-    from md_templates.openmm.templates import md_stages  # the shared derivation
+    from md_tools.openmm.templates import md_stages  # the shared derivation
     stage = yaml.safe_load((explicit_run / "REST2" / "stage.yaml").read_text())
     longer = dict(stage, number_of_exchanges=int(stage["number_of_exchanges"]) + 5)
     assert md_stages.stage_invariant_sha256(longer) == written["stage_invariant_sha256"], (
@@ -331,11 +331,11 @@ def test_no_generated_file_names_this_checkout_or_imports_the_package(explicit):
         if not path.is_file():
             continue
         text = path.read_text(errors="ignore")
-        # An IMPORT of the package, not any mention of it: `md_templates_version` is a field
+        # An IMPORT of the package, not any mention of it: `md_tools_version` is a field
         # name in a runtime record and is not a dependency.
-        if path.suffix == ".py" and re.search(r"^\s*(import|from)\s+md_templates\b", text,
+        if path.suffix == ".py" and re.search(r"^\s*(import|from)\s+md_tools\b", text,
                                               re.MULTILINE):
-            offenders[str(path.relative_to(explicit))] = "imports md_templates"
+            offenders[str(path.relative_to(explicit))] = "imports md_tools"
         elif path.suffix == ".py" and str(REPO_ROOT) in text:
             offenders[str(path.relative_to(explicit))] = "names the checkout"
     assert not offenders, offenders
@@ -637,12 +637,12 @@ def test_every_common_stage_records_what_ran_at_runtime(explicit_run):
     """The record is written only after the final state exists, so `completed` cannot be early."""
     for name in EXPLICIT_STAGES:
         record = yaml.safe_load((explicit_run / name / "resolved_stage.yaml").read_text())
-        assert record["format"] == "md-templates-runtime-record/v1"
+        assert record["format"] == "md-tools-runtime-record/v1"
         assert record["record_kind"] == "common_stage"
         assert record["status"] == "completed"
         assert record["started_utc"] and record["finished_utc"]
         assert record["platform"] == "CUDA", f"{name} did not run on CUDA"
-        assert record["implementation"]["md_templates_version"], name
+        assert record["implementation"]["md_tools_version"], name
         assert record["outputs"]["final_state.xml"]["sha256"], name
         assert record["outputs"]["final_state.xml"]["bytes"] > 0
         if name != "minimization":

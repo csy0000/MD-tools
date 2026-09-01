@@ -20,7 +20,7 @@ import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
-TEMPLATES = REPO / "src" / "md_templates" / "openmm" / "templates"
+TEMPLATES = REPO / "src" / "md_tools" / "openmm" / "templates"
 
 
 def _md_stages():
@@ -37,7 +37,7 @@ def _md_stages():
 
 def test_the_nagl_resolver_runs_rather_than_failing_to_import():
     """The defect was an internal import of a module that does not exist."""
-    from md_templates.openmm.system import resolve_nagl_am1bcc_model
+    from md_tools.openmm.system import resolve_nagl_am1bcc_model
 
     pytest.importorskip("openff.nagl_models",
                         reason="the optional dependency is genuinely absent here")
@@ -50,18 +50,18 @@ def test_the_nagl_resolver_runs_rather_than_failing_to_import():
 
 def test_no_module_named_hashing_is_imported_anywhere():
     """The narrowest statement of the defect, so a regression is obvious."""
-    source = (REPO / "src/md_templates/openmm/system.py").read_text(encoding="utf-8")
-    assert "md_templates.openmm.hashing" not in source
-    assert not (REPO / "src/md_templates/openmm/hashing.py").exists(), (
+    source = (REPO / "src/md_tools/openmm/system.py").read_text(encoding="utf-8")
+    assert "md_tools.openmm.hashing" not in source
+    assert not (REPO / "src/md_tools/openmm/hashing.py").exists(), (
         "the fix is to use provenance_min.sha256_file, not to add a second hashing module"
     )
 
 
 def test_a_missing_optional_dependency_is_reported_as_such(monkeypatch):
-    """An absent optional package must not look like a broken MD-templates."""
+    """An absent optional package must not look like a broken MD-tools."""
     import builtins
 
-    from md_templates.openmm import system
+    from md_tools.openmm import system
 
     real_import = builtins.__import__
 
@@ -79,16 +79,16 @@ def test_a_missing_optional_dependency_is_reported_as_such(monkeypatch):
 
 
 def test_an_internal_import_error_is_not_disguised_as_a_missing_dependency(monkeypatch):
-    """A broken MD-templates import must propagate, not be relabelled as a user problem."""
+    """A broken MD-tools import must propagate, not be relabelled as a user problem."""
     import builtins
 
-    from md_templates.openmm import system
+    from md_tools.openmm import system
 
     real_import = builtins.__import__
 
     def fake(name, *args, **kwargs):
         if "provenance_min" in name:
-            raise ModuleNotFoundError("No module named 'md_templates.openmm.provenance_min'")
+            raise ModuleNotFoundError("No module named 'md_tools.openmm.provenance_min'")
         return real_import(name, *args, **kwargs)
 
     pytest.importorskip("openff.nagl_models")
@@ -103,7 +103,7 @@ def test_an_internal_import_error_is_not_disguised_as_a_missing_dependency(monke
 
 
 def test_the_ligand_record_carries_the_scheme_the_builder_reported():
-    from md_templates.openmm.forcefield_record import _ligand_record
+    from md_tools.openmm.forcefield_record import _ligand_record
 
     record = _ligand_record(
         is_ligand=True,
@@ -121,7 +121,7 @@ def test_the_ligand_record_carries_the_scheme_the_builder_reported():
 
 def test_an_unreported_scheme_is_null_rather_than_the_requested_label():
     """Absent means the builder did not report one. Substituting the label invents provenance."""
-    from md_templates.openmm.forcefield_record import _ligand_record
+    from md_tools.openmm.forcefield_record import _ligand_record
 
     record = _ligand_record(
         is_ligand=True,
@@ -134,7 +134,7 @@ def test_an_unreported_scheme_is_null_rather_than_the_requested_label():
 
 def test_the_nagl_model_identity_reaches_the_record():
     """`nagl_model_file` is the key the builder writes; the record looked for `nagl_model`."""
-    from md_templates.openmm.forcefield_record import _ligand_record
+    from md_tools.openmm.forcefield_record import _ligand_record
 
     record = _ligand_record(
         is_ligand=True,
@@ -151,10 +151,10 @@ def test_the_nagl_model_identity_reaches_the_record():
 
 
 def test_an_unsupported_charge_method_fails_rather_than_being_recorded():
-    from md_templates.openmm.system import NAGL_AM1BCC_METHODS
+    from md_tools.openmm.system import NAGL_AM1BCC_METHODS
 
     assert "am1bcc" not in NAGL_AM1BCC_METHODS
-    source = (REPO / "src/md_templates/openmm/system.py").read_text(encoding="utf-8")
+    source = (REPO / "src/md_tools/openmm/system.py").read_text(encoding="utf-8")
     assert "unsupported ligand_charge_method" in source
 
 
@@ -165,7 +165,7 @@ def test_the_charged_molecule_itself_reaches_the_record():
     were dropped with the scheme. They are what lets a reader check that two builds of the same
     input got the same charges -- the question a charge cache would eventually have to answer.
     """
-    from md_templates.openmm.forcefield_record import _ligand_record
+    from md_tools.openmm.forcefield_record import _ligand_record
 
     record = _ligand_record(
         is_ligand=True,
@@ -181,7 +181,7 @@ def test_the_charged_molecule_itself_reaches_the_record():
 
 
 def test_the_null_ligand_record_declares_every_charge_key():
-    from md_templates.openmm.forcefield_record import _null_ligand
+    from md_tools.openmm.forcefield_record import _null_ligand
 
     for key in ("charge_method", "charge_scheme", "charge_model", "charge_model_sha256",
                 "net_charge_e", "formal_charge", "n_atoms"):
@@ -224,7 +224,7 @@ def test_every_extendable_field_is_excluded_and_nothing_else_is():
 
 def test_the_production_stage_document_is_derived_once():
     """md-gen and the launcher must not derive the request separately."""
-    mdgen = (REPO / "src/md_templates/openmm/mdgen.py").read_text(encoding="utf-8")
+    mdgen = (REPO / "src/md_tools/openmm/mdgen.py").read_text(encoding="utf-8")
     assert "_template_module().production_stage_document(" in mdgen, (
         "md-gen must use the same derivation it copies into the project"
     )
@@ -282,7 +282,7 @@ def generated(tmp_path_factory):
     if not (REPO / "tests" / "data" / "ALA.pdb").is_file():
         pytest.skip("no ALA fixture")
     work = tmp_path_factory.mktemp("gen")
-    run = lambda *a: subprocess.run([sys.executable, "-m", "md_templates.cli.md_openmm", *a],
+    run = lambda *a: subprocess.run([sys.executable, "-m", "md_tools.cli.md_openmm", *a],
                                     cwd=work, capture_output=True, text=True, timeout=1800)
     assert run("sys-config", "--method", "cMD", "--peptide", "true",
                "--solvent", "TIP3P", "--output-dir", ".").returncode == 0

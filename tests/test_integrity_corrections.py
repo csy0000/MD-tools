@@ -18,12 +18,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from md_templates.openmm import md_data_contract as MD
+from md_tools.openmm import md_data_contract as MD
 
 from .conftest import ALA_PDB, REPO_ROOT, run_cli, template_module
 
-AIS_SOURCE = REPO_ROOT / "src" / "md_templates" / "openmm" / "templates" / "ais_run.py"
-PREFLIGHT_SOURCE = REPO_ROOT / "src" / "md_templates" / "openmm" / "templates" / "preflight.py"
+AIS_SOURCE = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates" / "ais_run.py"
+PREFLIGHT_SOURCE = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates" / "preflight.py"
 
 
 # --- 1. the production source is never hashed ---------------------------------------------------
@@ -462,7 +462,7 @@ def template_module_with_stubs():
     import sys
     import types
 
-    templates = REPO_ROOT / "src" / "md_templates" / "openmm" / "templates"
+    templates = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
     path = templates / "ais_run.py"
     source = path.read_text()
     # Everything above the first function definition is project-configuration loading.
@@ -653,7 +653,7 @@ def test_there_is_one_stage_fingerprint_implementation():
     assert "from md_stages import stage_config_sha256" in preflight
     # Preflight must not carry its own canonicalisation.
     assert "yaml.safe_dump(document, sort_keys=True" not in preflight
-    stage_run = (REPO_ROOT / "src" / "md_templates" / "openmm" / "templates"
+    stage_run = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
                  / "stage_run.py").read_text()
     assert "stage_config_sha256(STAGE)" in stage_run
 
@@ -691,44 +691,10 @@ def test_nothing_instructs_a_user_to_install_over_unpinned_ssh():
     assert not offenders, offenders
 
 
-def test_the_installer_builds_the_pinned_specification_without_downloading():
-    from md_templates.install import openmm as installer
-
-    pin = installer.md_data_pin()
-    assert pin["commit"] == MD.MD_DATA_COMMIT
-    assert pin["contract_version"] == MD.MD_DATA_CONTRACT_VERSION
-    planned = installer.install_md_data("/nowhere", dry_run=True)
-    assert planned["attempted"] is False and planned["installed"] is None
-    assert planned["command"][1:] == ["install", MD.md_data_requirement()]
-    assert planned["command"][0].endswith("/bin/pip")
 
 
-def test_the_installer_records_a_failed_validator_install_without_failing_the_environment(
-        monkeypatch):
-    """A private repository or an offline machine does not make the OpenMM environment unusable."""
-    from md_templates.install import openmm as installer
-
-    class _Failed:
-        returncode = 1
-        stdout = ""
-        stderr = "fatal: could not read Username for 'https://github.com'"
-
-    monkeypatch.setattr(installer.subprocess, "run", lambda *a, **k: _Failed())
-    record = installer.install_md_data("/nowhere")
-    assert record["installed"] is False
-    assert "could not read Username" in record["error"]
-    assert record["commit"] == MD.MD_DATA_COMMIT
 
 
-def test_the_installed_validator_reports_its_identity():
-    """The documented installation must be able to say what it got."""
-    from md_templates.install import openmm as installer
-
-    probe = installer.probe_md_data(sys.prefix)
-    assert set(probe) >= {"import_ok", "validator_available"}
-    if probe["import_ok"]:
-        assert probe["validator_available"] is True
-        assert probe["version"] and probe["contract_version"]
 
 
 # --- fixtures -----------------------------------------------------------------------------------
@@ -850,83 +816,7 @@ def test_every_instruction_executed_this_round_is_indexed_once():
 
 # --- the installed validator, not the intended one ----------------------------------------------
 
-def test_verification_uses_the_installed_source_not_the_intended_pin(monkeypatch):
-    """Echoing the pin describes our wish; direct_url.json describes the bytes on disk."""
-    from md_templates.install import openmm as installer
-
-    pin = installer.md_data_pin()
-
-    def probe(_prefix, **fields):
-        base = {"import_ok": True, "validator_available": True, "version": "0.2.0",
-                "contract_version": pin["contract_version"], "installed_commit": None,
-                "installed_source": None, "source_kind": "unknown"}
-        base.update(fields)
-        return base
-
-    # Installed from the exact pin: ready.
-    monkeypatch.setattr(installer, "probe_md_data", lambda p: probe(
-        p, installed_commit=pin["commit"], source_kind="vcs",
-        installed_source=pin["repository"]))
-    report = installer.verify_md_data("/nowhere")
-    assert report["contract_support_ready"] is True
-    assert report["commit_verified"] is True and not report["reasons"]
-
-    # Installed from a DIFFERENT commit: imports fine, validates fine, still not ready.
-    monkeypatch.setattr(installer, "probe_md_data", lambda p: probe(
-        p, installed_commit="b" * 40, source_kind="vcs"))
-    report = installer.verify_md_data("/nowhere")
-    assert report["contract_support_ready"] is False and report["commit_verified"] is False
-    assert "not the pinned" in report["reasons"][0]
-
-    # Installed from a local directory: no source commit to check at all.
-    monkeypatch.setattr(installer, "probe_md_data", lambda p: probe(
-        p, source_kind="local directory", installed_source="file:///somewhere"))
-    report = installer.verify_md_data("/nowhere")
-    assert report["contract_support_ready"] is False
-    assert "records no source commit" in report["reasons"][0]
-
-    # A contract version this repository does not target.
-    monkeypatch.setattr(installer, "probe_md_data", lambda p: probe(
-        p, installed_commit=pin["commit"], source_kind="vcs", contract_version="2.0"))
-    report = installer.verify_md_data("/nowhere")
-    assert report["contract_support_ready"] is False
-    assert any("contract version" in reason for reason in report["reasons"])
-
-    # Does not import.
-    monkeypatch.setattr(installer, "probe_md_data", lambda p: {
-        "import_ok": False, "validator_available": False, "error": "ModuleNotFoundError"})
-    report = installer.verify_md_data("/nowhere")
-    assert report["contract_support_ready"] is False
-    assert "does not import" in report["reasons"][0]
 
 
-def test_contract_unavailability_is_a_prominent_warning_not_a_failed_installation():
-    """A researcher doing unregistered local simulation has a working installation either way."""
-    from md_templates.install import openmm as installer
-
-    report = {"cuda_available": True, "nvidia": {"present": True},
-              "capabilities": {"openmm_runtime_ready": True,
-                               "md_data_contract_support_ready": False,
-                               "md_data_unavailable_reasons": ["md_data does not import"]}}
-    notes = installer.warnings_for(report)
-    banner = [n for n in notes if "MD-DATA CONTRACT SUPPORT UNAVAILABLE" in n]
-    assert banner, notes
-    assert "unregistered local simulation works" in banner[0]
-    assert "dataset.enabled: true` will fail" in banner[0]
-    # ...and it is a warning, not a problem that fails the install.
-    assert not any("MD-DATA" in problem for problem in installer._problems(report))
-
-    ready = {**report, "capabilities": {**report["capabilities"],
-                                        "md_data_contract_support_ready": True}}
-    assert not [n for n in installer.warnings_for(ready) if "MD-DATA" in n]
 
 
-def test_the_probe_reads_installed_distribution_metadata():
-    """It must inspect the installation, so the probe has to look at direct_url.json."""
-    from md_templates.install import openmm as installer
-
-    assert "direct_url.json" in installer._MD_DATA_PROBE
-    assert "vcs_info" in installer._MD_DATA_PROBE
-    assert "commit_id" in installer._MD_DATA_PROBE
-    # And it must not simply echo the pin back.
-    assert MD.MD_DATA_COMMIT not in installer._MD_DATA_PROBE

@@ -23,7 +23,7 @@ import sys
 import pytest
 import yaml
 
-from md_templates.openmm import md_data_contract as MD
+from md_tools.openmm import md_data_contract as MD
 
 from .conftest import ALA_PDB, REPO_ROOT, run_cli
 import datetime
@@ -35,7 +35,7 @@ md_data = pytest.importorskip("md_data", reason="the authoritative MD-data valid
 FAKE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 
 
-#: The commit this MD-templates can actually establish for itself. A fixture that claimed an
+#: The commit this MD-tools can actually establish for itself. A fixture that claimed an
 #: arbitrary 40-hex value would be refused now, and rightly: `templates.commit` must be the commit
 #: that generated the dataset, not a syntactically valid string.
 GENERATOR_COMMIT = MD.generator_commit()["commit"]
@@ -62,7 +62,7 @@ def _dataset_block(namespace="my-project", name="ALA-explicit", role="project"):
                        "affiliation": "University of Basel", "orcid": None},
         "origin": {"repository": "https://github.com/csy0000/example-project",
                    "commit": FAKE_COMMIT},
-        "templates": {"repository": "https://github.com/csy0000/MD-templates",
+        "templates": {"repository": "https://github.com/csy0000/MD-tools",
                       "commit": GENERATOR_COMMIT or FAKE_COMMIT},
         "derived_from": [],
         "notes": None,
@@ -118,7 +118,7 @@ def test_no_fixture_hardcodes_a_dated_path_segment():
 # --- the manifest, against MD-data's own validator ---------------------------------------------
 
 def test_a_generated_manifest_passes_the_authoritative_validator(tmp_path):
-    from md_templates.openmm import md_data_contract as MD
+    from md_tools.openmm import md_data_contract as MD
 
     root, local = _roots(tmp_path)
     (local / "common").mkdir()
@@ -148,7 +148,7 @@ def test_a_generated_manifest_passes_the_authoritative_validator(tmp_path):
 
 def test_the_manifest_the_cli_writes_passes_md_datas_own_command(tmp_path):
     """End to end through the published CLI, which is what a user would run."""
-    from md_templates.openmm import md_data_contract as MD
+    from md_tools.openmm import md_data_contract as MD
 
     root, local = _roots(tmp_path)
     (local / "common").mkdir()
@@ -179,7 +179,7 @@ def test_the_manifest_the_cli_writes_passes_md_datas_own_command(tmp_path):
 ])
 def test_a_field_this_package_must_not_guess_fails_by_name(tmp_path, patch, expected):
     """A version or an installed fingerprint is provenance; it is not a pin."""
-    from md_templates.openmm import md_data_contract as MD
+    from md_tools.openmm import md_data_contract as MD
 
     root, local = _roots(tmp_path)
     (local / "common").mkdir()
@@ -199,7 +199,7 @@ def test_a_field_this_package_must_not_guess_fails_by_name(tmp_path, patch, expe
     ("baseline", "ALA-explicit", "project", "reserved `baseline` namespace"),
 ])
 def test_role_and_namespace_must_agree(tmp_path, namespace, name, role, expected):
-    from md_templates.openmm import md_data_contract as MD
+    from md_tools.openmm import md_data_contract as MD
 
     root, local = _roots(tmp_path, namespace=namespace, name=name)
     (local / "common").mkdir()
@@ -215,7 +215,7 @@ def test_role_and_namespace_must_agree(tmp_path, namespace, name, role, expected
 
 def test_the_declared_identity_must_agree_with_where_the_dataset_actually_is(tmp_path):
     """The location on disk is the truth, and the manifest has to match it."""
-    from md_templates.openmm import md_data_contract as MD
+    from md_tools.openmm import md_data_contract as MD
 
     root, local = _roots(tmp_path)
     (local / "common").mkdir()
@@ -237,7 +237,7 @@ def test_the_declared_identity_must_agree_with_where_the_dataset_actually_is(tmp
     ({"MD_DATA": "__root__", "MD_DATA_LOCAL": "__root__/ns/not-a-month/name"}, "not a real"),
 ])
 def test_a_root_that_is_not_the_canonical_dataset_path_is_refused(tmp_path, environ, expected):
-    from md_templates.openmm import md_data_contract as MD
+    from md_tools.openmm import md_data_contract as MD
 
     root = tmp_path / "MD_DATA"
     root.mkdir()
@@ -260,7 +260,7 @@ def test_a_root_that_is_not_the_canonical_dataset_path_is_refused(tmp_path, envi
 def test_a_symlinked_dataset_root_is_refused_as_an_alias(tmp_path):
     """A symlink into another dataset is an ALIAS, and an alias resolves to somebody else's
     authoritative manifest. New output belongs in a dataset this project owns."""
-    from md_templates.openmm import md_data_contract as MD
+    from md_tools.openmm import md_data_contract as MD
 
     root = tmp_path / "MD_DATA"
     real = root / "owner" / current_month() / "ALA"
@@ -276,7 +276,7 @@ def test_a_symlinked_dataset_root_is_refused_as_an_alias(tmp_path):
 
 
 def test_a_complete_dataset_is_never_overwritten(tmp_path):
-    from md_templates.openmm import md_data_contract as MD
+    from md_tools.openmm import md_data_contract as MD
 
     root, local = _roots(tmp_path)
     (local / "dataset.yaml").write_text(yaml.safe_dump({
@@ -293,7 +293,7 @@ def test_a_complete_dataset_is_never_overwritten(tmp_path):
 
 def test_a_different_identity_never_replaces_an_existing_manifest(tmp_path):
     """Everything that referenced the old ID would silently resolve to something else."""
-    from md_templates.openmm import md_data_contract as MD
+    from md_tools.openmm import md_data_contract as MD
 
     root, local = _roots(tmp_path)
     (local / "dataset.yaml").write_text(yaml.safe_dump({
@@ -313,8 +313,8 @@ def test_equilibration_stages_are_not_declared_as_components():
     Declaring one component per stage would turn one equilibration into four datasets, which is
     exactly the nesting the contract forbids.
     """
-    from md_templates.openmm.mdgen import COMPONENT_OF_METHOD
-    from md_templates.openmm.templates import __name__ as _   # noqa: F401
+    from md_tools.openmm.mdgen import COMPONENT_OF_METHOD
+    from md_tools.openmm.templates import __name__ as _   # noqa: F401
 
     assert set(COMPONENT_OF_METHOD) == {"cMD", "REST2", "AIS"}
     assert all("/" not in name for name in COMPONENT_OF_METHOD.values())
@@ -339,7 +339,7 @@ def test_an_unregistered_project_says_so_rather_than_pretending(tmp_path):
 def test_preflight_never_walks_the_storage_root_or_hashes_a_trajectory():
     """A bounded check is a safety property: pointing a recursive tool at production storage is
     the accident this must not enable."""
-    source = (REPO_ROOT / "src" / "md_templates" / "openmm" / "templates"
+    source = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
               / "preflight.py").read_text()
     for forbidden in ("rglob", "os.walk", "glob.glob", "iterdir()"):
         assert forbidden not in source, f"preflight uses {forbidden}"
@@ -368,8 +368,8 @@ def test_each_generated_directory_maps_to_its_declared_component(tmp_path, direc
 
 def test_an_explicit_source_tau_is_required_when_there_is_no_companion_record():
     """An external trajectory has no runtime record, so the user has to say what it is."""
-    from md_templates.openmm.config import ConfigError, resolve_md_config
-    from md_templates.openmm.defaults import md_defaults
+    from md_tools.openmm.config import ConfigError, resolve_md_config
+    from md_tools.openmm.defaults import md_defaults
 
     document = md_defaults(methods=["AIS"])
     document["AIS"]["path"]["switching_duration_ps"] = 0.08
@@ -385,8 +385,8 @@ def test_an_explicit_source_tau_is_required_when_there_is_no_companion_record():
 
 
 def test_a_declared_source_tau_must_equal_the_path_start():
-    from md_templates.openmm.config import ConfigError, resolve_md_config
-    from md_templates.openmm.defaults import md_defaults
+    from md_tools.openmm.config import ConfigError, resolve_md_config
+    from md_tools.openmm.defaults import md_defaults
 
     document = md_defaults(methods=["AIS"])
     document["AIS"]["path"]["switching_duration_ps"] = 0.08
@@ -405,7 +405,7 @@ def test_a_declared_source_tau_must_equal_the_path_start():
 
 def test_the_ais_runtime_never_calls_mdtraj_load():
     """`mdtraj.load` reads an entire trajectory into memory. An AIS source is a production run."""
-    source = (REPO_ROOT / "src" / "md_templates" / "openmm" / "templates"
+    source = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
               / "ais_run.py").read_text()
     import re
 
@@ -416,7 +416,7 @@ def test_the_ais_runtime_never_calls_mdtraj_load():
 
 def test_the_plan_json_carries_no_coordinates():
     """A JSON array of a solvated system's coordinates is enormous, and every worker reads it."""
-    source = (REPO_ROOT / "src" / "md_templates" / "openmm" / "templates"
+    source = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
               / "ais_run.py").read_text()
     assert '"positions_nm"' not in source
     # Coordinates live in the prepared inputs; the plan carries only the index into them.
@@ -425,7 +425,7 @@ def test_the_plan_json_carries_no_coordinates():
 
 def test_the_prepared_inputs_never_claim_to_hold_velocities():
     """A directory of starting configurations is where someone would look for velocities."""
-    source = (REPO_ROOT / "src" / "md_templates" / "openmm" / "templates"
+    source = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
               / "ais_run.py").read_text()
     assert '"stored": False' in source
     assert "NOT restart states" in source
@@ -436,7 +436,7 @@ def test_the_prepared_inputs_never_claim_to_hold_velocities():
 # --- the default force-field selection ----------------------------------------------------------
 
 def test_the_generated_default_names_ff14sb_sage_221_and_tip3p():
-    from md_templates.openmm.defaults import sys_defaults
+    from md_tools.openmm.defaults import sys_defaults
 
     document = sys_defaults()
     assert document["forcefield"]["protein"] == "amber14-all.xml"
@@ -576,7 +576,7 @@ def clean_checkout():
     repository's actual HEAD, which is what `_dataset_block` claims, so the records still have to
     agree with each other for anything to pass.
     """
-    from md_templates.openmm import provenance_min
+    from md_tools.openmm import provenance_min
 
     real = provenance_min.implementation_identity
 
@@ -596,7 +596,7 @@ def clean_checkout():
 
 def _generate_in_process(build, local, *, methods, stage):
     """`sys-gen` or `md-gen`, called directly so the patched identity applies."""
-    from md_templates.openmm import mdgen, sysgen
+    from md_tools.openmm import mdgen, sysgen
 
     environment = dict(os.environ)
     os.environ.update({"MD_DATA": str(local.parents[2]), "MD_DATA_LOCAL": str(local)})
@@ -626,7 +626,7 @@ def managed(tmp_path_factory):
     environment = dict(os.environ, MD_DATA=str(root), MD_DATA_LOCAL=str(local))
 
     def cli(*args):
-        return subprocess.run([sys.executable, "-m", "md_templates.cli.md_openmm", *args],
+        return subprocess.run([sys.executable, "-m", "md_tools.cli.md_openmm", *args],
                               capture_output=True, text=True, cwd=str(build), env=environment)
 
     assert cli("sys-config", "--method", "cMD", "AIS").returncode == 0
@@ -706,9 +706,9 @@ def test_generated_scripts_are_portable_and_carry_no_storage_root(managed):
         relative = str(path.relative_to(local))
         if str(root) in text:
             offenders[relative] = "contains the absolute MD_DATA root"
-        if path.suffix == ".py" and re.search(r"^\s*(import|from)\s+md_templates\b", text,
+        if path.suffix == ".py" and re.search(r"^\s*(import|from)\s+md_tools\b", text,
                                               re.MULTILINE):
-            offenders[relative] = "imports md_templates"
+            offenders[relative] = "imports md_tools"
         if str(REPO_ROOT) in text:
             offenders[relative] = "names this checkout"
     assert not offenders, offenders

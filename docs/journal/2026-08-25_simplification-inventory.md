@@ -37,7 +37,7 @@ never asked to provide.
 
 ## Consequence for generated projects
 
-Generated `run.py` must not import `md_templates` at simulation time. So the classification work --
+Generated `run.py` must not import `md_tools` at simulation time. So the classification work --
 solute indices, the REST2 enhanced region, omega-excluded bonds -- is done ONCE at `sys-gen` time
 and written to `solute.yaml`. The generated script reads that file and applies the scaling
 arithmetic directly, which is about thirty lines. The chemistry stays in the package where it is

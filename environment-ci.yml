@@ -1,11 +1,11 @@
 # The documented CPU preparation environment, for release validation.
 #
 #   micromamba create -f environment-ci.yml
-#   micromamba activate md-templates-ci
-#   pip install --no-deps dist/md_templates-*.whl
+#   micromamba activate md-tools-ci
+#   pip install --no-deps dist/md_tools-*.whl
 #
 # This mirrors the package list `md-template install` solves for -- see CONDA_PACKAGES in
-# src/md_templates/install/openmm.py -- with the CUDA pin removed, because CI runners have no GPU.
+# src/md_tools/install/openmm.py -- with the CUDA pin removed, because CI runners have no GPU.
 # `tests/test_install.py` asserts the two agree, so an environment that CI validates and one a user
 # installs cannot drift apart silently.
 #
@@ -19,7 +19,7 @@
 #
 # NOT A LOCK FILE. Primary packages only; transitive dependencies and build strings are free.
 
-name: md-templates-ci
+name: md-tools-ci
 
 channels:
   - conda-forge

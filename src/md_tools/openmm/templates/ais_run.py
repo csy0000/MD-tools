@@ -42,7 +42,7 @@ estimate is somebody else's job and this file does not pretend to do it.
 Every path is stored in its own directory with its own DCD. They are independent realisations and
 concatenating them would produce a file that looks like one continuous trajectory and is not.
 
-This script imports OpenMM, PyYAML, NumPy and MDTraj -- never `md_templates`.
+This script imports OpenMM, PyYAML, NumPy and MDTraj -- never `md_tools`.
 """
 import argparse
 import csv
@@ -104,7 +104,7 @@ BETA = 1.0 / (KB_KJ * TEMPERATURE_K)
 
 SCHEDULE = PATH_DEFINITION["schedule"]
 OBSERVATIONS = SCHEDULE["observations"]
-RECORD_FORMAT = "md-templates-runtime-record/v1"
+RECORD_FORMAT = "md-tools-runtime-record/v1"
 
 
 def utc_now():
@@ -659,7 +659,7 @@ SOURCE_CHUNK_FRAMES = 50
 SOURCES_DIR = "inputs"
 SOURCES_DCD = "sources.dcd"
 SOURCES_RECORD = "sources.yaml"
-SOURCES_FORMAT = "md-templates-ais-sources/v1"
+SOURCES_FORMAT = "md-tools-ais-sources/v1"
 
 #: Why the prepared inputs hold coordinates and no momenta. Recorded in `sources.yaml`, because a
 #: directory of starting configurations is exactly where someone would expect to find velocities
@@ -1290,7 +1290,7 @@ def main(argv=None):
             encoding="utf-8")
 
     provenance = {
-        "format": "md-templates-ais-provenance/v1",
+        "format": "md-tools-ais-provenance/v1",
         "created_utc": utc_now(),
         "implementation": CONFIG.get("provenance"),
         "environment": environment_versions(),

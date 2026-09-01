@@ -22,7 +22,7 @@ RETROFIT = REPO_ROOT / "scripts" / "retrofit_fair_v030.py"
 
 def test_the_installed_fingerprint_is_deterministic_and_content_addressed():
     """`git_commit` is null from a wheel, so something else must identify the implementation."""
-    from md_templates.openmm.provenance_min import installed_fingerprint
+    from md_tools.openmm.provenance_min import installed_fingerprint
 
     first, second = installed_fingerprint(), installed_fingerprint()
     assert first == second, "the fingerprint must not depend on filesystem ordering"
@@ -32,9 +32,9 @@ def test_the_installed_fingerprint_is_deterministic_and_content_addressed():
 
 def test_the_fingerprint_changes_when_the_implementation_changes(tmp_path, monkeypatch):
     """A single edited line must produce a different fingerprint, or it identifies nothing."""
-    import md_templates.openmm.provenance_min as module
+    import md_tools.openmm.provenance_min as module
 
-    package = tmp_path / "md_templates" / "openmm"
+    package = tmp_path / "md_tools" / "openmm"
     package.mkdir(parents=True)
     (package / "a.py").write_text("x = 1\n")
     fake = package / "provenance_min.py"
@@ -47,7 +47,7 @@ def test_the_fingerprint_changes_when_the_implementation_changes(tmp_path, monke
 
 def test_identity_is_never_entirely_null():
     """Git metadata is often unavailable; the record must still say which code this is."""
-    from md_templates.openmm.provenance_min import implementation_identity
+    from md_tools.openmm.provenance_min import implementation_identity
 
     identity = implementation_identity()
     assert identity["installed_fingerprint"]["value"], "fingerprint must always be present"
@@ -56,7 +56,7 @@ def test_identity_is_never_entirely_null():
 
 def test_environment_records_absent_packages_as_null_not_missing():
     """Null distinguishes 'not installed' from 'nobody looked'."""
-    from md_templates.openmm.provenance_min import environment_versions
+    from md_tools.openmm.provenance_min import environment_versions
 
     versions = environment_versions()
     for name in ("python", "openmm", "openff_toolkit", "parmed", "rdkit"):
@@ -66,7 +66,7 @@ def test_environment_records_absent_packages_as_null_not_missing():
 # --- checksum manifests ------------------------------------------------------
 
 def test_the_checksum_manifest_is_deterministic_and_detects_mutation(tmp_path):
-    from md_templates.openmm.sysgen import verify_checksum_manifest, write_checksum_manifest
+    from md_tools.openmm.sysgen import verify_checksum_manifest, write_checksum_manifest
 
     (tmp_path / "sub").mkdir()
     (tmp_path / "b.txt").write_text("beta")
@@ -92,9 +92,9 @@ def test_the_checksum_manifest_is_deterministic_and_detects_mutation(tmp_path):
 # --- forcefield.json ---------------------------------------------------------
 
 def _record_for(solvent, route, reported=None, implicit_report=None):
-    from md_templates.openmm.config import resolve_sys_config
-    from md_templates.openmm.defaults import sys_defaults
-    from md_templates.openmm.forcefield_record import build_forcefield_record
+    from md_tools.openmm.config import resolve_sys_config
+    from md_tools.openmm.defaults import sys_defaults
+    from md_tools.openmm.forcefield_record import build_forcefield_record
 
     resolved = resolve_sys_config(sys_defaults(solvent=solvent, peptide=(route == "peptide")))
     record = {}
@@ -192,8 +192,8 @@ def test_implicit_ligand_records_the_openff_provenance_used_before_parmed():
 
 def test_a_retained_artifact_collision_is_refused(tmp_path):
     """Two routes can both produce `solute.sdf`; flattening them would mis-checksum one."""
-    from md_templates.openmm.config import ConfigError
-    from md_templates.openmm.sysgen import _keep_preparation_artifacts
+    from md_tools.openmm.config import ConfigError
+    from md_tools.openmm.sysgen import _keep_preparation_artifacts
 
     staging = tmp_path / "_work"
     (staging / "structure").mkdir(parents=True)
@@ -235,7 +235,7 @@ def _legacy_fixture(root: Path, *, with_hash: bool = True) -> Path:
         "constraints": {"type": "HBonds", "rigid_water": True},
         "solute": {"peptide": True}}))
     (root / "inputs" / "provenance.yaml").write_text(yaml.safe_dump({
-        "md_templates": {"version": "0.3.1", "git_commit": None},
+        "md_tools": {"version": "0.3.1", "git_commit": None},
         "generated": {"timestamp": "2026-08-20T10:00:00Z",
                       "input_hashes": ({original.name: digest} if with_hash else {})}}))
     (root / "MD" / "md.config.yaml").write_text(yaml.safe_dump({
@@ -249,7 +249,7 @@ def _complete_fixture(root: Path) -> Path:
     """A 0.3.x tree that genuinely earns grade A: exact identity and every required record."""
     original = _legacy_fixture(root)
     provenance = yaml.safe_load((root / "inputs" / "provenance.yaml").read_text())
-    provenance["md_templates"].update({
+    provenance["md_tools"].update({
         "git_commit": "0" * 40,
         "installed_fingerprint": "a" * 64,
     })
@@ -530,6 +530,6 @@ def test_the_reconstructed_command_is_never_called_the_original(tmp_path):
 def test_the_retrofit_needs_only_python_and_pyyaml():
     """It must run where OpenMM, CUDA and the checkout are absent."""
     source = RETROFIT.read_text()
-    for forbidden in ("import openmm", "from openmm", "import md_templates", "from md_templates",
+    for forbidden in ("import openmm", "from openmm", "import md_tools", "from md_tools",
                       "requests", "urllib"):
         assert forbidden not in source, forbidden

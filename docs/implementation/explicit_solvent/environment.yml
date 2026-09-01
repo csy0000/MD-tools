@@ -4,13 +4,13 @@
 # Environment for the explicit-solvent baseline.
 #
 #   conda env create -f docs/implementation/explicit_solvent/environment.yml
-#   conda activate md-templates
+#   conda activate md-tools
 #
 # then EITHER build and install a wheel (the portable route, and what a consuming repository
 # does -- no source checkout required afterwards):
 #
-#   python -m build                       # from the repository root; writes dist/md_templates-*.whl
-#   python -m pip install dist/md_templates-*.whl --no-deps
+#   python -m build                       # from the repository root; writes dist/md_tools-*.whl
+#   python -m pip install dist/md_tools-*.whl --no-deps
 #
 # OR install the checkout in place, for development:
 #
@@ -33,7 +33,7 @@
 # toolkit registry, and AM1BCC becomes unavailable.  build_forcefield() checks and fails loudly
 # rather than letting the charges fall back to another method under an AM1BCC label.
 
-name: md-templates
+name: md-tools
 
 channels:
   - conda-forge

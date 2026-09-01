@@ -147,7 +147,7 @@ the environment probe behaving correctly, not a regression from this change.
 
 ### Scope
 
-Changed: `src/md_templates/install/openmm.py`, `src/md_templates/cli/md_template.py`,
+Changed: `src/md_tools/install/openmm.py`, `src/md_tools/cli/md_template.py`,
 `tests/test_installer_capability.py`, `claudecode-instructions/README.md`, and this journal. A grep
 of the diff for `ais_run`, `rest2`, `sysgen`, `mdgen`, `stage_run`, `md_stages`, `system.py`,
 `solvation`, `forcefield_record`, `implicit`, `preflight`, `config.py` and `defaults.py` returns

@@ -1,4 +1,4 @@
 # The run-script templates are the generated projects: a distribution without them has an md-gen
 # that cannot write anything.
-recursive-include src/md_templates/openmm/templates *.py *.sh
+recursive-include src/md_tools/openmm/templates *.py *.sh
 include README.md

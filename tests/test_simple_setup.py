@@ -2,7 +2,7 @@
 
 The properties these tests defend are the ones that make a generated directory worth having:
 it runs without this package, every number in it is a literal, and nothing about one machine
-leaks into it. A generated script that quietly re-acquired a `md_templates` import or an absolute
+leaks into it. A generated script that quietly re-acquired a `md_tools` import or an absolute
 path would still run here and be useless on anyone else's machine.
 
 Bounded and CPU-only unless marked `gpu`. The scientific defaults are asserted, not chosen, so a
@@ -23,8 +23,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from md_templates.openmm.config import ConfigError
-from md_templates.openmm.simple import (SetupRequest, derive_seeds, format_preset, generate,
+from md_tools.openmm.config import ConfigError
+from md_tools.openmm.simple import (SetupRequest, derive_seeds, format_preset, generate,
                                         origin_commit, package_version, refuse_unsafe_output, resolve,
                                         resolve_contributor, resolve_output_root)
 
@@ -184,10 +184,10 @@ def test_the_layout_is_the_documented_one(generated):
     assert (generated / "cMD" / "cmd.py").is_file()
 
 
-def test_no_generated_script_imports_md_templates(generated):
+def test_no_generated_script_imports_md_tools(generated):
     """The property the whole design rests on: the directory outlives this package."""
     for script in _stage_scripts(generated):
-        assert "md_templates" not in script.read_text(), script
+        assert "md_tools" not in script.read_text(), script
 
 
 def test_no_protocol_parses_configuration_or_asks_git(generated):
@@ -206,7 +206,7 @@ def test_no_protocol_parses_configuration_or_asks_git(generated):
                 imported.update(alias.name.split(".")[0] for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported.add(node.module.split(".")[0])
-        for forbidden in ("yaml", "subprocess", "md_templates"):
+        for forbidden in ("yaml", "subprocess", "md_tools"):
             assert forbidden not in imported, f"{script.name} imports {forbidden}"
 
 
@@ -274,7 +274,7 @@ def test_the_system_config_is_small_and_records_its_origin(generated):
     generated_by = document["generated_by"]
     # A wheel install legitimately has no checkout, but SOMETHING concrete must identify the
     # generator: a null commit is acceptable only beside a real package version.
-    assert generated_by["md_templates_commit"] or generated_by["md_templates_version"]
+    assert generated_by["md_tools_commit"] or generated_by["md_tools_version"]
     assert document["random_seed_base"]
     # It must not become a second copy of every parameter.
     assert "timestep_fs" not in yaml.safe_dump(document)
@@ -335,11 +335,11 @@ def test_paths_sh_contains_no_machine_path(generated):
 # --- running it ----------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def without_md_templates(tmp_path_factory) -> Path:
-    """A directory whose `md_templates` raises, so a stage that needs it cannot pass."""
+def without_md_tools(tmp_path_factory) -> Path:
+    """A directory whose `md_tools` raises, so a stage that needs it cannot pass."""
     blocker = tmp_path_factory.mktemp("blocked")
-    (blocker / "md_templates.py").write_text(
-        'raise ImportError("md_templates is deliberately unavailable in this test")')
+    (blocker / "md_tools.py").write_text(
+        'raise ImportError("md_tools is deliberately unavailable in this test")')
     return blocker
 
 
@@ -377,10 +377,10 @@ def _run_stage(runnable, relative, blocker, extra=()):
 
 
 @pytest.mark.slow
-def test_a_stage_runs_with_md_templates_unavailable(runnable, without_md_templates):
+def test_a_stage_runs_with_md_tools_unavailable(runnable, without_md_tools):
     """The claim, tested the only way it can be: make the import fail and run anyway."""
     _, system_dir = runnable
-    result = _run_stage(runnable, "min/min.sh", without_md_templates)
+    result = _run_stage(runnable, "min/min.sh", without_md_tools)
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
     report = (system_dir / "min" / "min.out").read_text()
     assert "run_status: completed" in report
@@ -388,11 +388,11 @@ def test_a_stage_runs_with_md_templates_unavailable(runnable, without_md_templat
 
 
 @pytest.mark.slow
-def test_the_out_header_is_versioned_and_parses_as_key_value(runnable, without_md_templates):
+def test_the_out_header_is_versioned_and_parses_as_key_value(runnable, without_md_tools):
     _, system_dir = runnable
     report_path = system_dir / "min" / "min.out"
     if not report_path.exists():
-        assert _run_stage(runnable, "min/min.sh", without_md_templates).returncode == 0
+        assert _run_stage(runnable, "min/min.sh", without_md_tools).returncode == 0
     lines = report_path.read_text().splitlines()
     assert lines[0] == "MD-OPENMM OUTPUT VERSION: 1"
     header = {}
@@ -410,7 +410,7 @@ def test_the_out_header_is_versioned_and_parses_as_key_value(runnable, without_m
 
 
 @pytest.mark.slow
-def test_paths_sh_is_portable_under_a_moved_md_data(runnable, without_md_templates, tmp_path):
+def test_paths_sh_is_portable_under_a_moved_md_data(runnable, without_md_tools, tmp_path):
     """Copy the managed root elsewhere, export the new $MD_DATA, and the same launcher works.
 
     This is what "no machine path" buys: a generated system can be archived and restored under a
@@ -427,7 +427,7 @@ def test_paths_sh_is_portable_under_a_moved_md_data(runnable, without_md_templat
             stale.unlink()
 
     environment = dict(os.environ)
-    environment["PYTHONPATH"] = str(without_md_templates)
+    environment["PYTHONPATH"] = str(without_md_tools)
     environment["MD_DATA"] = str(moved)
     result = subprocess.run(["bash", str(system_dir / "min" / "min.sh")], capture_output=True,
                             text=True, timeout=1800, env=environment)
@@ -436,19 +436,19 @@ def test_paths_sh_is_portable_under_a_moved_md_data(runnable, without_md_templat
 
 
 @pytest.mark.slow
-def test_one_protocol_file_serves_two_different_path_sets(runnable, without_md_templates, tmp_path):
+def test_one_protocol_file_serves_two_different_path_sets(runnable, without_md_tools, tmp_path):
     """The protocol is reusable: change only the invocation, not the file.
 
     Same min.py, a second system's inputs, and outputs somewhere else entirely.
     """
     managed, system_dir = runnable
     if not (system_dir / "min" / "min.state.xml").exists():
-        assert _run_stage(runnable, "min/min.sh", without_md_templates).returncode == 0
+        assert _run_stage(runnable, "min/min.sh", without_md_tools).returncode == 0
 
     elsewhere = tmp_path / "second"
     elsewhere.mkdir()
     environment = dict(os.environ)
-    environment["PYTHONPATH"] = str(without_md_templates)
+    environment["PYTHONPATH"] = str(without_md_tools)
     result = subprocess.run(
         [sys.executable, str(system_dir / "bin" / "openmm-md"),
          "-i", str(system_dir / "min" / "min.py"),
@@ -464,12 +464,12 @@ def test_one_protocol_file_serves_two_different_path_sets(runnable, without_md_t
 
 
 @pytest.mark.slow
-def test_the_trajectory_and_restart_output_are_readable(runnable, without_md_templates):
+def test_the_trajectory_and_restart_output_are_readable(runnable, without_md_tools):
     """A stage writing an unreadable DCD or unloadable state has produced no result."""
     managed, system_dir = runnable
     if not (system_dir / "min" / "min.state.xml").exists():
-        assert _run_stage(runnable, "min/min.sh", without_md_templates).returncode == 0
-    result = _run_stage(runnable, "eq/nvt_1kcal/nvt_1kcal.sh", without_md_templates)
+        assert _run_stage(runnable, "min/min.sh", without_md_tools).returncode == 0
+    result = _run_stage(runnable, "eq/nvt_1kcal/nvt_1kcal.sh", without_md_tools)
     assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
 
     stage = system_dir / "eq" / "nvt_1kcal"
@@ -487,20 +487,20 @@ def test_the_trajectory_and_restart_output_are_readable(runnable, without_md_tem
 
 
 @pytest.mark.slow
-def test_rerunning_a_finished_stage_is_refused_and_changes_nothing(runnable, without_md_templates):
+def test_rerunning_a_finished_stage_is_refused_and_changes_nothing(runnable, without_md_tools):
     """The launcher passes --force through, so a deliberate replacement is still possible."""
     managed, system_dir = runnable
     if not (system_dir / "min" / "min.out").exists():
-        assert _run_stage(runnable, "min/min.sh", without_md_templates).returncode == 0
+        assert _run_stage(runnable, "min/min.sh", without_md_tools).returncode == 0
     report = system_dir / "min" / "min.out"
     before = report.read_bytes()
 
-    refused = _run_stage(runnable, "min/min.sh", without_md_templates)
+    refused = _run_stage(runnable, "min/min.sh", without_md_tools)
     assert refused.returncode != 0
     assert "already exist" in refused.stderr
     assert report.read_bytes() == before, "a refused rerun changed the .out"
 
-    forced = _run_stage(runnable, "min/min.sh", without_md_templates, extra=("--force",))
+    forced = _run_stage(runnable, "min/min.sh", without_md_tools, extra=("--force",))
     assert forced.returncode == 0, forced.stderr[-1500:]
 
 
@@ -522,7 +522,7 @@ def test_the_ligand_route_generates_from_a_smiles_file(tmp_path):
     assert configuration["solute"]["ligand_forcefield"] == "sage-2.2.1"
     assert not (configuration.get("forcefield") or {}).get("protein")
     for script in _stage_scripts(system_dir):
-        assert "md_templates" not in script.read_text()
+        assert "md_tools" not in script.read_text()
 
 
 # --- the corrections this pass was for -----------------------------------------
@@ -610,7 +610,7 @@ def test_the_seeds_are_shown_in_the_resolved_preset():
 
 
 def test_a_package_version_is_available_even_without_git():
-    """`md_templates_commit: null` is acceptable only beside a concrete version."""
+    """`md_tools_commit: null` is acceptable only beside a concrete version."""
     assert package_version() or origin_commit()
 
 
@@ -636,7 +636,7 @@ def test_the_default_explicit_selection_is_the_coupled_tip3p_set():
 
 def test_the_setup_default_matches_the_libraries_default_solvent():
     """`setup` and the older sys-config path must not disagree about the default force field."""
-    from md_templates.openmm import defaults as D
+    from md_tools.openmm import defaults as D
 
     assert D.canonical_solvent(SetupRequest.__dataclass_fields__["water"].default) == \
         D.DEFAULT_SOLVENT

@@ -239,7 +239,7 @@ openff-interchange 0.5.4, openff-nagl 0.5.5, openff-nagl-models 2025.9.0. AmberT
 R=/path/to/MD-analysis-data/20260824_cmd_2nm
 
 # regenerate a run project from its bundle (does not re-derive charges)
-PYTHONPATH=/path/to/MD-templates/src \
+PYTHONPATH=/path/to/MD-tools/src \
   python MD_input_gen.py --system $R/bundles/rgdfv_explicit/system_manifest.json \
                          -o $R/explicit/rgdfv/replicate_01/run \
                          --config $R/configs/rgdfv_explicit_md.json

@@ -48,7 +48,7 @@ import yaml
 DEFAULT_CHUNK_FRAMES = 256
 
 #: The manifest format written beside a prepared ensemble.
-PREPARED_FORMAT = "md-templates-prepared-source/v1"
+PREPARED_FORMAT = "md-tools-prepared-source/v1"
 
 #: Per-atom identity fields, in the order `atom_identity` returns them.
 ATOM_FIELDS = ("chain id", "chain index", "residue index", "residue id", "residue name",

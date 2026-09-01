@@ -23,7 +23,7 @@ import json
 from pathlib import Path
 
 #: Bumped when the meaning of the record changes.
-RESOLVED_RUN_FORMAT = "md-templates-resolved-run/v1"
+RESOLVED_RUN_FORMAT = "md-tools-resolved-run/v1"
 
 #: The file every consumer looks for beside, or above, a trajectory.
 RESOLVED_RUN_NAME = "resolved_run.yaml"

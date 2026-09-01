@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-RUNNER = Path(__file__).resolve().parents[1] / "src" / "md_templates" / "openmm" / "templates" / "openmm_md.py"
+RUNNER = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates" / "openmm_md.py"
 
 TRIVIAL = textwrap.dedent('''
     from pathlib import Path
@@ -212,7 +212,7 @@ def test_output_directories_are_created_only_after_validation(workspace):
 def test_the_runner_imports_nothing_beyond_the_standard_library_and_openmm():
     """Checked on the parsed imports, not on the text.
 
-    A prose mention of `md_templates` in the docstring -- saying it deliberately does not use it --
+    A prose mention of `md_tools` in the docstring -- saying it deliberately does not use it --
     is not a dependency, and a test that cannot tell the difference would force the explanation
     out of the file.
     """
@@ -240,9 +240,9 @@ def test_the_runner_imports_nothing_beyond_the_standard_library_and_openmm():
                "pathlib", "types", "__future__", "openmm"}
     assert module_level <= allowed, (
         f"openmm-md imports beyond the standard library and OpenMM at module level: "
-        f"{module_level - allowed}. A single generated stage must still run once md_templates is "
+        f"{module_level - allowed}. A single generated stage must still run once md_tools is "
         f"gone, so anything else has to be deferred into the path that needs it.")
-    assert "md_templates" not in module_level | deferred
+    assert "md_tools" not in module_level | deferred
     # Grouped mode legitimately imports the runtime modules copied beside the protocol -- but only
     # inside the grouped path, so a single-stage run never touches them.
     assert "yaml" not in module_level, "yaml is a grouped-mode dependency and must stay deferred"

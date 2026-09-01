@@ -36,7 +36,7 @@ to the workflow matrix and seeing it pass first.
 
 2. **The generated scripts do not depend on this package.** They import OpenMM, PyYAML and the two
    modules copied in beside them. A project keeps working after the checkout is deleted; a test
-   asserts no generated file names the checkout or imports `md_templates`.
+   asserts no generated file names the checkout or imports `md_tools`.
 
 3. **Binary checkpoints are environment-specific.** They give exact same-environment continuation
    and must never be described as portable. Moving a run directory between machines or OpenMM

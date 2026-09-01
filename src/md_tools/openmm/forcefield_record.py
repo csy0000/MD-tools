@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-FORMAT = "md-templates-forcefield/v1"
+FORMAT = "md-tools-forcefield/v1"
 
 
 def build_forcefield_record(*, resolved: dict[str, Any], route: str, record: dict[str, Any],

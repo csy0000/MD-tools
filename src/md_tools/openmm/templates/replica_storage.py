@@ -45,7 +45,7 @@ import numpy as np
 #: missing
 #: a feature -- it holds its coordinates somewhere else entirely -- so it is refused rather than
 #: reinterpreted.
-SCHEMA_VERSION = "md-templates-replica-exchange/v3"
+SCHEMA_VERSION = "md-tools-replica-exchange/v3"
 
 #: Fields on the `exchange` dimension that were added to v2 AFTER v2 was first published.
 #:
@@ -92,7 +92,7 @@ MIGRATION_HISTORY_ATTRIBUTE = "storage_migrations_json"
 MIGRATION_PENDING_ATTRIBUTE = "storage_migration_pending_json"
 
 #: The pending record's own format. Bumped only when its KEYS or their meaning change.
-MIGRATION_TRANSACTION_FORMAT = "md-templates-migration-transaction/v1"
+MIGRATION_TRANSACTION_FORMAT = "md-tools-migration-transaction/v1"
 
 #: Exactly the keys a v1 pending record has. Not a minimum: an unexpected key means the record was
 #: written by something this build does not understand, and finishing a transaction described in
@@ -129,7 +129,7 @@ def _normalised_dtype(value):
 #: A test-only seam for hard-killing the transaction at a named point. Read from the environment
 #: because crash tests must run in a separate process. It is inert unless set, is not a CLI option,
 #: and is not documented for users.
-_MIGRATION_FAULT_ENV = "MD_TEMPLATES_MIGRATION_FAULT_POINT"
+_MIGRATION_FAULT_ENV = "MD_TOOLS_MIGRATION_FAULT_POINT"
 
 #: The points a fault may be injected at, in transaction order.
 #:
@@ -225,14 +225,14 @@ def merge_migration_histories(*histories):
 
 #: Schemas this build can identify but must not continue, with the reason attached.
 SUPERSEDED_SCHEMAS = {
-    "md-templates-replica-exchange/v2": (
+    "md-tools-replica-exchange/v2": (
         "v2 stored coordinates inside this file as positions[frame, walker, atom, spatial], "
         "walker-indexed. v3 stores them as one Amber NetCDF trajectory per fixed thermodynamic "
         "state, state-indexed. Those are different layouts of different things, and no migration "
         "is offered: reindexing walkers into states after the fact would require the mapping "
         "history to be replayed, and a mistake there would silently attribute a configuration to "
         "the wrong Hamiltonian."),
-    "md-templates-replica-exchange/v1": (
+    "md-tools-replica-exchange/v1": (
         "v1 predates the independent event schedules and the separate solute stream."),
 }
 
@@ -252,10 +252,10 @@ def refuse_superseded_schema(schema, *, path=None, what="this run"):
 
 
 #: The completed-run manifest format.
-MANIFEST_FORMAT = "md-templates-replica-restart/v2"
+MANIFEST_FORMAT = "md-tools-replica-restart/v2"
 
 #: The atomic run-state sidecar format.
-RUN_STATE_FORMAT = "md-templates-replica-runstate/v2"
+RUN_STATE_FORMAT = "md-tools-replica-runstate/v2"
 
 #: The exact line a completed run prints, and nothing else on that line.
 COMPLETION_MARKER = "run_status: completed"

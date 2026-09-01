@@ -117,7 +117,7 @@ def test_the_audit_accepts_a_system_made_only_of_known_forces():
 
 @pytest.mark.parametrize("tau", [-0.1, 1.0, 1.5, "warm"])
 def test_a_tau_outside_the_ladder_is_refused_by_the_config(tau):
-    from md_templates.openmm.config import ConfigError, resolve_md_config
+    from md_tools.openmm.config import ConfigError, resolve_md_config
 
     document = {"methods": ["cMD"], "common": {"timestep_fs": 2.0, "pressure_bar": None},
                 "cMD": {"ensemble": "NVT", "tau": tau, "duration_ns": 1}}
@@ -127,7 +127,7 @@ def test_a_tau_outside_the_ladder_is_refused_by_the_config(tau):
 
 def test_the_default_cmd_block_is_ordinary_conventional_md():
     """tau must default to 0: a default that scaled the Hamiltonian would be a silent change."""
-    from md_templates.openmm.defaults import md_defaults
+    from md_tools.openmm.defaults import md_defaults
 
     assert md_defaults(methods=["cMD"])["cMD"]["tau"] == 0.0
 

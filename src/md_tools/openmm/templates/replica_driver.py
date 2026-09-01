@@ -200,7 +200,7 @@ class ReplicaRun:
         """Everything a continuation must agree with, fixed before propagation begins."""
         payload = dict(self.protocol.describe())
         payload.update({
-            "format": "md-templates-replica-identity/v2",
+            "format": "md-tools-replica-identity/v2",
             "solute_atoms": len(self.solute_indices),
             # The UNSCALED reference every rung is derived from, recorded as such. Labelling this
             # digest with tau_max would describe one object with another object's tau: the ladder
@@ -382,7 +382,7 @@ class ReplicaRun:
                 Path(self.files.trajectory).parent,
                 taus=self.protocol.tau, n_atoms=configurations[0].n_atoms,
                 temperature_k=self.protocol.temperature_k, periodic=self._periodic,
-                program_version=environment_versions().get("md_templates", "0"))
+                program_version=environment_versions().get("md_tools", "0"))
         self.coordinator.barrier()
 
         state = {
@@ -615,7 +615,7 @@ class ReplicaRun:
                 taus=self.protocol.tau,
                 n_atoms=checkpoint["configurations"][0].n_atoms,
                 temperature_k=self.protocol.temperature_k, periodic=self._periodic,
-                program_version=environment_versions().get("md_templates", "0"))
+                program_version=environment_versions().get("md_tools", "0"))
 
             print(f"# extending          : {parent}")
             print(f"#   parent           : {inherited['steps_completed']} step(s), "
@@ -1164,7 +1164,7 @@ class ReplicaRun:
                  "acceptance": (accepted / proposed) if proposed else None,
                  "complete": bool(parent_overall)}
         return {
-            "format": "md-templates-extension/v1",
+            "format": "md-tools-extension/v1",
             "parent": parent,
             "segment": {
                 "steps": int(state["step"]) - int(parent["steps_completed"]),

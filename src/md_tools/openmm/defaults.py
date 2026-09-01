@@ -198,7 +198,7 @@ def ais_defaults() -> dict[str, Any]:
 
 #: The MD-data repository, named once. Its exact commit is NEVER filled in here: a commit this
 #: package could guess is not a pin, and MD-data's contract exists to prevent exactly that.
-MD_TEMPLATES_REPOSITORY = "https://github.com/csy0000/MD-templates"
+MD_TOOLS_REPOSITORY = "https://github.com/csy0000/MD-tools"
 
 
 def dataset_defaults() -> dict[str, Any]:
@@ -252,7 +252,7 @@ def dataset_defaults() -> dict[str, Any]:
         # This repository. The commit is required and is never filled in automatically: an
         # installed wheel has no checkout to read one from, and inventing one would defeat the pin.
         "templates": {
-            "repository": MD_TEMPLATES_REPOSITORY,
+            "repository": MD_TOOLS_REPOSITORY,
             "commit": None,
         },
         "derived_from": [],

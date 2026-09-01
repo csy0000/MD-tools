@@ -91,7 +91,7 @@ triggers the single initialisation; writing zeros would read as inherited veloci
 `20260820` was compiled into the integrator and into the velocity draw. New `seeds.py`:
 
 ```
-seed(purpose) = 1 + sha256("md-templates/seed/v1|<master>|<purpose>") mod (2**31 - 2)
+seed(purpose) = 1 + sha256("md-tools/seed/v1|<master>|<purpose>") mod (2**31 - 2)
 ```
 
 SHA-256 rather than `hash()`, which PEP 456 randomises per process; nonzero, because OpenMM reads 0
@@ -299,7 +299,7 @@ parameter-level check.
 
 ## Files added
 
-`src/md_templates/openmm/`: `seeds.py`, `reporting.py`, `solvation_mode.py`, `implicit.py`
+`src/md_tools/openmm/`: `seeds.py`, `reporting.py`, `solvation_mode.py`, `implicit.py`
 `tests/`: `test_implicit_gbn2.py`
 `test/ala/implicit/`, `test/ala/implicit/extension/`, `test/rgd/implicit/`,
 `test/rgd/implicit/extension/`
@@ -338,7 +338,7 @@ examples were in neither. A public entry point that exists only in a source tree
 a consuming project could import the library and still have no way to run the generators, which is
 most of what this repository offers.
 
-Their implementations moved to `md_templates.openmm.cli_system_gen` and `cli_input_gen`, with the
+Their implementations moved to `md_tools.openmm.cli_system_gen` and `cli_input_gen`, with the
 root scripts reduced to shims — a shim rather than a copy, because two implementations of an entry
 point drift and the drift is invisible until they disagree. Console scripts `md-system-gen` and
 `md-input-gen` are registered, and `MANIFEST.in` carries the entry points and `test/` into the sdist.

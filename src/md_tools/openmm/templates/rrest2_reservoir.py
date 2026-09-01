@@ -70,7 +70,7 @@ import phase_space
 import source_ensemble
 
 #: The declaration format `--reservoir` points at.
-DECLARATION_FORMAT = "md-templates-reservoir-request/v2"
+DECLARATION_FORMAT = "md-tools-reservoir-request/v2"
 
 #: The only weighting v1 implements. Anything else is refused, not approximated.
 SUPPORTED_WEIGHTING = ("boltzmann",)
@@ -296,7 +296,7 @@ class PreparedReservoir:
             selected_times = [float(times[i]) for i in selected]
 
         manifest = {
-            "format": "md-templates-prepared-reservoir/v1",
+            "format": "md-tools-prepared-reservoir/v1",
             "reservoir": {
                 "file": prepared.name,
                 "frames": len(selected),

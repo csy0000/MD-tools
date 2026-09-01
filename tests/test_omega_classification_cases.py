@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from md_templates.openmm.system import classify_omega_bonds
+from md_tools.openmm.system import classify_omega_bonds
 
 app = pytest.importorskip("openmm.app")
 elem = pytest.importorskip("openmm.app.element")
@@ -186,7 +186,7 @@ def test_a_ligand_amide_is_matched_by_bond_order_and_not_by_residue_name():
     """A SMILES-built solute is one UNL residue with no residue evidence at all, so the ligand
     route reads bond orders from the retained SDF instead."""
     rdkit = pytest.importorskip("rdkit.Chem")
-    from md_templates.openmm.system import _ligand_ring_nitrogens     # noqa: PLC2701
+    from md_tools.openmm.system import _ligand_ring_nitrogens     # noqa: PLC2701
 
     molecule = rdkit.AddHs(rdkit.MolFromSmiles("CC(=O)NC"))
     assert molecule is not None
