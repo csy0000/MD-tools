@@ -1,0 +1,544 @@
+"""`md-openmm build-md` -- a protocol configuration to readable run scripts.
+
+The generated directory is self-contained and portable: every script is a small entry point that
+imports the *installed* `md_tools` runtime, declares its resolved settings as a literal dict, and
+calls into the runtime. No script contains an absolute path, a reference to a source checkout, or
+a copy of the physics.
+
+Durations are **integer step counts**, everywhere, because a step count is exact and a duration in
+picoseconds is not: 5 ns at 2 fs is 2,500,000 steps, and a configuration that stores 5.0 and
+multiplies by a timestep it may not have been written against will happily run a different length.
+Each stage's log prints both the step count and the physical time it works out to under the
+timestep actually used, so the reader never has to do the arithmetic and the record never loses
+the exact count.
+
+Two shapes, same physics:
+
+  split       min.py, the equilibration chain, then the production script, plus run.sh
+  all-in-one  md.py running the identical stages in one process, plus run.sh
+
+The stage boundaries, resolved settings, seeds, logs, checkpoints and restart semantics are the
+same in both; `--all-in-one` changes how many processes run them, not what is run.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import stat
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from .record import LogWriter
+from .strict import ConfigError, Field, Schema, Section
+
+PROTOCOLS = ("cMD", "REST2", "rREST2")
+
+MD_SCHEMA = Schema(
+    "cMD.config / REST2.config / rREST2.config",
+    doc="Protocol, stage lengths in steps, and reporting intervals for `md-openmm build-md`.",
+    fields=[
+        Field("protocol", str, default="cMD", enum=PROTOCOLS,
+              doc="cMD is plain molecular dynamics. REST2 adds a replica-exchange ladder in which "
+                  "only the solute's Hamiltonian is scaled. rREST2 adds a Boltzmann reservoir "
+                  "refresh of the hottest rung."),
+        Field("solvent", str, default="explicit", enum=("explicit", "implicit"),
+              doc="Must match the System `build-top` produced. Under implicit solvent there is no "
+                  "box and no barostat, so the pressure-coupled equilibration stages are replaced "
+                  "by honest NVT equivalents with different file names -- they are NOT NPT stages "
+                  "with the pressure quietly ignored."),
+    ],
+    sections=[
+        Section("dynamics", [
+            Field("timestep_fs", float, default=2.0, minimum=0.1, maximum=5.0, unit="fs",
+                  doc="2.0 fs is the baseline with HBonds constraints and unmodified hydrogen "
+                      "masses. 4.0 fs requires hydrogen mass repartitioning, which is a property "
+                      "of the System built by `build-top`, not something this file can grant."),
+            Field("temperature_K", float, default=300.0, minimum=1.0, maximum=1000.0, unit="K",
+                  doc="Thermostat temperature. Under REST2 every replica runs at this same "
+                      "physical temperature; the ladder scales the Hamiltonian, not the bath."),
+            Field("pressure_bar", float, default=1.0, minimum=0.0, maximum=1000.0, unit="bar",
+                  doc="Barostat pressure. Ignored -- and refused if a stage claims NPT -- under "
+                      "implicit solvent, which has no volume."),
+            Field("friction_per_ps", float, default=1.0, minimum=0.01, maximum=100.0, unit="1/ps",
+                  doc="LangevinMiddleIntegrator collision rate."),
+            Field("barostat_interval_steps", int, default=25, minimum=1, unit="steps",
+                  doc="MonteCarloBarostat volume-move attempt interval, in STEPS. It is the "
+                      "frequency, not the barostat's presence, that makes a stage NPT."),
+            Field("restraint_kcal_per_mol_A2", float, default=1.0, minimum=0.0, maximum=1000.0,
+                  unit="kcal/mol/A^2",
+                  doc="Positional restraint on solute heavy atoms during the restrained "
+                      "equilibration stages. A physical constant with real units: the statement "
+                      "that stage LENGTHS are step counts does not make force constants unitless."),
+            Field("tau", float, default=0.0, minimum=0.0, maximum=0.95,
+                  doc="Fixed REST2 scaling for a cMD run. 0.0 (the default) is the unmodified "
+                      "physical Hamiltonian. A non-zero value runs cMD at ONE rung of the REST2 "
+                      "ladder -- the same scaling the ladder applies, held fixed -- which is how "
+                      "a Boltzmann reservoir for rREST2 is generated, and how a hot ensemble is "
+                      "produced without running an exchange. A scaled run is NVT by "
+                      "construction: it must sample the top rung's fixed-volume ensemble, so a "
+                      "barostat would sample the wrong distribution and is refused."),
+            Field("phase_space_printout", int, default=0, minimum=0, unit="steps",
+                  doc="Write a phase-space stream (positions, VELOCITIES and box) every N steps. "
+                      "0 disables it. A reservoir needs complete samples including velocities, "
+                      "which a trajectory does not carry, so this is what a reservoir source is "
+                      "generated with."),
+            Field("seed", int, default=1, minimum=0,
+                  doc="Base random seed. Each stage derives its own from this plus the stage "
+                      "name, so stages are independent and the whole chain is reproducible."),
+            Field("platform", str, default=None, nullable=True,
+                  enum=("CUDA", "OpenCL", "CPU", "Reference"),
+                  doc="Force an OpenMM platform. Null lets OpenMM choose the fastest available."),
+        ], doc="Physical constants and integrator settings. These carry real units."),
+        Section("stages", [
+            Field("minimization_iterations", int, default=1000, minimum=0,
+                  doc="Minimiser ITERATIONS, not a time interval: minimisation does not integrate "
+                      "and has no timestep. 0 skips minimisation."),
+            Field("restrained_nvt_steps", int, default=5000, minimum=0, unit="steps",
+                  doc="Restrained NVT heating/settling. 5000 steps = 10 ps at 2 fs."),
+            Field("restrained_npt_steps", int, default=5000, minimum=0, unit="steps",
+                  doc="Restrained NPT density equilibration. 5000 steps = 10 ps at 2 fs. Under "
+                      "implicit solvent this becomes a second restrained NVT stage instead."),
+            Field("unrestrained_npt_steps", int, default=5000, minimum=0, unit="steps",
+                  doc="Unrestrained NPT, the last stage before production. 5000 steps = 10 ps at "
+                      "2 fs. Under implicit solvent this becomes unrestrained NVT."),
+            Field("production_steps", int, default=2_500_000, minimum=0, unit="steps",
+                  doc="Production length. 2,500,000 steps = 5 ns at 2 fs. This is the "
+                      "authoritative number; the log prints the derived ps and ns beside it."),
+        ], doc="Stage lengths, as exact integer step counts."),
+        Section("reporting", [
+            Field("solute_printout", int, default=1000, minimum=0, unit="steps",
+                  doc="Trajectory output interval. 1000 steps = 2 ps at 2 fs."),
+            Field("system_printout", int, default=10000, minimum=0, unit="steps",
+                  doc="Scalar state (energy, temperature, volume, density) interval, written to a "
+                      "CSV beside the log."),
+            Field("checkpoint_printout", int, default=10000, minimum=0, unit="steps",
+                  doc="Checkpoint interval. A checkpoint is what an interrupted stage resumes "
+                      "from, and it is written with a fingerprint of the configuration that "
+                      "produced it so it cannot be resumed under different settings."),
+        ], doc="Output intervals, in steps."),
+        Section("rest2", [
+            Field("number_of_replicas", int, default=4, minimum=2, maximum=64,
+                  doc="States in the ladder. Every state runs at the same physical temperature."),
+            Field("tau_max", float, default=0.5, minimum=0.0, maximum=0.95,
+                  doc="The hottest rung's tau. The ladder is linear from 0.0 to this value. "
+                      "tau = 0 is the unscaled physical Hamiltonian."),
+            Field("exchange_interval_steps", int, default=5000, minimum=1, unit="steps",
+                  doc="Steps of dynamics between exchange attempts. 5000 steps = 10 ps at 2 fs."),
+            Field("number_of_exchanges", int, default=500, minimum=1,
+                  doc="Exchange attempts. Total production per state is this times "
+                      "exchange_interval_steps."),
+            Field("state_trajectory", bool, default=True,
+                  doc="Write one trajectory per fixed thermodynamic STATE (remd0.nc .. remdN.nc). "
+                      "A state trajectory follows a state, not a walker; the filename carries the "
+                      "state index and never the tau value."),
+            Field("rem_log", bool, default=True,
+                  doc="Write an Amber-style rem.log projection of the exchange history."),
+            Field("neighbour_acceptance_report", bool, default=True,
+                  doc="Report acceptance for each neighbouring pair. A single averaged acceptance "
+                      "hides a ladder with one impassable gap."),
+        ], doc="The REST2 ladder. Ignored when protocol is cMD. The Hamiltonian scaling itself -- "
+               "bonds and angles unscaled, ordinary amide omega unscaled, eligible solute torsions "
+               "and CMAP by (1-tau)^2, solute-solute nonbonded and 1-4 by (1-tau)^2, "
+               "solute-environment by (1-tau), GB by (1-tau) -- is a property of the validated "
+               "implementation and is not configurable here."),
+        Section("reservoir", [
+            Field("enabled", bool, default=False,
+                  doc="rREST2 only. Refresh the hottest rung from a pre-generated Boltzmann "
+                      "reservoir instead of propagating it."),
+            Field("path", str, default=None, nullable=True,
+                  doc="Reservoir directory. Required when enabled."),
+            Field("refresh_interval_exchanges", int, default=1, minimum=1,
+                  doc="How often the hottest rung is refreshed from the reservoir, in exchange "
+                      "attempts."),
+            Field("velocities", str, default="resample", enum=("resample", "inherit"),
+                  doc="Where a refreshed configuration's velocities come from. `resample` draws "
+                      "them from the Maxwell-Boltzmann distribution at the run temperature; "
+                      "`inherit` keeps the reservoir's own. Recorded explicitly because it is a "
+                      "provenance question, not a tuning knob."),
+        ], doc="rREST2 reservoir. Ignored unless protocol is rREST2."),
+    ],
+)
+
+
+def _check_protocol(resolved: dict[str, Any]) -> None:
+    protocol = resolved["protocol"]
+    if protocol == "rREST2" and not resolved["reservoir"]["enabled"]:
+        raise ConfigError("protocol is rREST2 but reservoir.enabled is false. rREST2 IS the "
+                          "reservoir variant; without one it is plain REST2.")
+    if resolved["reservoir"]["enabled"] and not resolved["reservoir"]["path"]:
+        raise ConfigError("reservoir.enabled is true but reservoir.path is null")
+    if resolved["reservoir"]["enabled"] and protocol != "rREST2":
+        raise ConfigError(f"reservoir.enabled is true but protocol is {protocol}. A reservoir "
+                          f"only has meaning for rREST2.")
+    if resolved["dynamics"]["tau"] > 0.0 and resolved["protocol"] != "cMD":
+        raise ConfigError(
+            f"dynamics.tau is {resolved['dynamics']['tau']} but protocol is "
+            f"{resolved['protocol']}. A REST2 or rREST2 ladder sets its own tau per rung; a fixed "
+            f"tau belongs to a cMD run held at one rung.")
+    if resolved["dynamics"]["phase_space_printout"] and resolved["dynamics"]["tau"] == 0.0:
+        raise ConfigError(
+            "dynamics.phase_space_printout is set but dynamics.tau is 0.0. A phase-space stream "
+            "exists to seed a reservoir at the ladder's TOP rung; writing one from the unscaled "
+            "Hamiltonian would produce a reservoir for a rung nothing runs at.")
+
+
+MD_SCHEMA.checks = (_check_protocol,)
+
+
+def resolve_md_config(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return MD_SCHEMA.resolve({})
+    return MD_SCHEMA.load(Path(path))
+
+
+# ---------------------------------------------------------------------------------------------
+# the stage plan
+# ---------------------------------------------------------------------------------------------
+
+def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ordered stages, each fully resolved.
+
+    Under implicit solvent the two pressure-coupled stages become NVT and are RENAMED, so nothing
+    downstream can read `eq_npt_free` and believe a barostat was involved.
+    """
+    dyn, stages, rep = resolved["dynamics"], resolved["stages"], resolved["reporting"]
+    implicit = resolved["solvent"] == "implicit"
+    common = {
+        "tau": dyn["tau"],
+        # Deliberately NOT in `common`: a reservoir must be a Boltzmann sample of the ensemble the
+        # ladder's top rung actually samples, and the equilibration stages are restrained and not
+        # yet at equilibrium. Streaming phase space from them would fill a reservoir with
+        # configurations drawn from the wrong distribution. Only production gets it.
+        "phase_space_interval_steps": 0,
+        "timestep_fs": dyn["timestep_fs"],
+        "temperature_K": dyn["temperature_K"],
+        "pressure_bar": dyn["pressure_bar"],
+        "friction_per_ps": dyn["friction_per_ps"],
+        "barostat_interval_steps": dyn["barostat_interval_steps"],
+        "seed": dyn["seed"],
+        "platform": dyn["platform"],
+    }
+    plan: list[dict[str, Any]] = []
+    plan.append({**common, "name": "min", "ensemble": "NVT",
+                 "minimization_iterations": stages["minimization_iterations"], "steps": 0,
+                 "restraint_kcal_per_mol_A2": dyn["restraint_kcal_per_mol_A2"],
+                 "trajectory_interval_steps": 0, "state_interval_steps": 0,
+                 "checkpoint_interval_steps": 0,
+                 "description": "Restrained energy minimisation of the built system."})
+    plan.append({**common, "name": "eq_nvt_posres", "ensemble": "NVT",
+                 "steps": stages["restrained_nvt_steps"],
+                 "restraint_kcal_per_mol_A2": dyn["restraint_kcal_per_mol_A2"],
+                 "trajectory_interval_steps": rep["solute_printout"],
+                 "state_interval_steps": rep["system_printout"],
+                 "checkpoint_interval_steps": rep["checkpoint_printout"],
+                 "description": "Restrained NVT: settle the solvent around a held solute."})
+    if implicit:
+        plan.append({**common, "name": "eq_nvt_posres_2", "ensemble": "NVT",
+                     "steps": stages["restrained_npt_steps"],
+                     "restraint_kcal_per_mol_A2": dyn["restraint_kcal_per_mol_A2"],
+                     "trajectory_interval_steps": rep["solute_printout"],
+                     "state_interval_steps": rep["system_printout"],
+                     "checkpoint_interval_steps": rep["checkpoint_printout"],
+                     "description": "Second restrained NVT stage. This REPLACES the restrained "
+                                    "NPT stage of an explicit-solvent run: implicit solvent has "
+                                    "no box, so there is no volume to equilibrate."})
+        plan.append({**common, "name": "eq_nvt_free", "ensemble": "NVT",
+                     "steps": stages["unrestrained_npt_steps"],
+                     "restraint_kcal_per_mol_A2": 0.0,
+                     "trajectory_interval_steps": rep["solute_printout"],
+                     "state_interval_steps": rep["system_printout"],
+                     "checkpoint_interval_steps": rep["checkpoint_printout"],
+                     "description": "Unrestrained NVT. This REPLACES the unrestrained NPT stage "
+                                    "of an explicit-solvent run."})
+    else:
+        plan.append({**common, "name": "eq_npt_posres", "ensemble": "NPT",
+                     "steps": stages["restrained_npt_steps"],
+                     "restraint_kcal_per_mol_A2": dyn["restraint_kcal_per_mol_A2"],
+                     "trajectory_interval_steps": rep["solute_printout"],
+                     "state_interval_steps": rep["system_printout"],
+                     "checkpoint_interval_steps": rep["checkpoint_printout"],
+                     "description": "Restrained NPT: equilibrate the density with the solute held."})
+        plan.append({**common, "name": "eq_npt_free", "ensemble": "NPT",
+                     "steps": stages["unrestrained_npt_steps"],
+                     "restraint_kcal_per_mol_A2": 0.0,
+                     "trajectory_interval_steps": rep["solute_printout"],
+                     "state_interval_steps": rep["system_printout"],
+                     "checkpoint_interval_steps": rep["checkpoint_printout"],
+                     "description": "Unrestrained NPT, the last stage before production."})
+
+    if resolved["protocol"] == "cMD":
+        # A scaled run must sample the fixed-volume ensemble the ladder's rung samples, so it is
+        # NVT whatever the solvent. This is a consequence of what tau means, not a preference.
+        scaled = float(dyn["tau"]) > 0.0
+        plan.append({**common, "name": "cMD",
+                     "ensemble": "NVT" if (implicit or scaled) else "NPT",
+                     "steps": stages["production_steps"],
+                     "restraint_kcal_per_mol_A2": 0.0,
+                     "phase_space_interval_steps": dyn["phase_space_printout"],
+                     "trajectory_interval_steps": rep["solute_printout"],
+                     "state_interval_steps": rep["system_printout"],
+                     "checkpoint_interval_steps": rep["checkpoint_printout"],
+                     "description": "Production molecular dynamics."})
+    return plan
+
+
+# ---------------------------------------------------------------------------------------------
+# emission
+# ---------------------------------------------------------------------------------------------
+
+_HEADER = '''#!/usr/bin/env python
+"""{description}
+
+Generated by `md-openmm build-md`. Do not edit by hand: regenerate from the configuration so the
+record and the script cannot disagree.
+
+The physics is in the installed md_tools runtime, not in this file. This script declares what was
+resolved and calls it.
+
+    python {name}.py -p built.pdb -s built.xml {extra}-log {name}.log
+"""
+from md_tools.runtime.stage import stage_main
+
+# The resolved settings for this stage. Every length is an exact step count; the log prints the
+# physical time each one works out to under the timestep below.
+STAGE = {stage!r}
+
+if __name__ == "__main__":
+    raise SystemExit(stage_main(STAGE))
+'''
+
+
+def _stage_script(stage: dict[str, Any], *, first: bool) -> str:
+    extra = "" if first else "-c PREVIOUS.xml "
+    return _HEADER.format(description=stage["description"], name=stage["name"],
+                          stage=stage, extra=extra)
+
+
+_ALL_IN_ONE = '''#!/usr/bin/env python
+"""Every stage of this protocol, in one process.
+
+Generated by `md-openmm build-md --all-in-one`. This runs exactly the stages the split scripts
+run, with the same resolved settings, the same stage boundaries, the same seeds, the same logs and
+checkpoints, and the same restart semantics. The only difference is the number of processes.
+
+    python md.py -p built.pdb -s built.xml
+"""
+import argparse
+import sys
+
+from md_tools.runtime.stage import stage_main
+
+# The ordered stages, identical to the split scripts.
+STAGES = {stages!r}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="run every stage in order")
+    parser.add_argument("-p", "--topology", required=True)
+    parser.add_argument("-s", "--system", required=True)
+    parser.add_argument("--platform", default=None)
+    parser.add_argument("--device", default=None)
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args(argv)
+
+    previous = None
+    for stage in STAGES:
+        name = stage["name"]
+        argv_stage = ["-p", args.topology, "-s", args.system,
+                      "-log", f"{{name}}.log", "-x", f"{{name}}.dcd",
+                      "-r", f"{{name}}.xml", "-chk", f"{{name}}.chk"]
+        if previous is not None:
+            argv_stage += ["-c", previous]
+        if args.platform:
+            argv_stage += ["--platform", args.platform]
+        if args.device is not None:
+            argv_stage += ["--device", str(args.device)]
+        if args.check:
+            argv_stage += ["--check"]
+        code = stage_main(stage, argv_stage)
+        if code != 0:
+            print(f"md.py: stage {{name}} failed with exit code {{code}}", file=sys.stderr)
+            return code
+        previous = f"{{name}}.xml"
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+
+def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str) -> str:
+    lines = ['#!/usr/bin/env bash',
+             '# Run this protocol, in order.',
+             '#',
+             '# Generated by `md-openmm build-md`. Every path is explicit and relative to this',
+             '# directory, so the whole directory can be moved. A stage that already reports',
+             '# completion in its own machine record is skipped rather than silently rerun; an',
+             '# interrupted stage resumes from its checkpoint only if the checkpoint matches the',
+             '# configuration that produced it.',
+             '#',
+             '#   ./run.sh                 run from the built system in the parent directory',
+             '#   ./run.sh ../built.pdb ../built.xml    or name them explicitly',
+             'set -euo pipefail',
+             '',
+             'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+             'TOPOLOGY="${1:-${HERE}/../built.pdb}"',
+             'SYSTEM="${2:-${HERE}/../built.xml}"',
+             '# Consume the two positional arguments if they were given, so that a path this',
+             '# script has already used is not forwarded on as though it were a flag.',
+             '# An `if` rather than `[[ ... ]] && shift`: under `set -e` a false test in the',
+             '# latter form is a failing command, so calling run.sh with no arguments would exit.',
+             'if [[ $# -ge 1 ]]; then shift; fi',
+             'if [[ $# -ge 1 ]]; then shift; fi',
+             'cd "${HERE}"',
+             '',
+             'if [[ ! -f "${TOPOLOGY}" ]]; then',
+             '  echo "run.sh: no topology at ${TOPOLOGY}" >&2; exit 2',
+             'fi',
+             'if [[ ! -f "${SYSTEM}" ]]; then',
+             '  echo "run.sh: no system at ${SYSTEM}" >&2; exit 2',
+             'fi',
+             '']
+    if all_in_one:
+        lines += ['python md.py -p "${TOPOLOGY}" -s "${SYSTEM}"', '']
+    else:
+        previous = None
+        for stage in plan:
+            name = stage["name"]
+            call = [f'python {name}.py \\',
+                    f'  -p "${{TOPOLOGY}}" -s "${{SYSTEM}}" \\',
+                    f'  -x {name}.dcd -r {name}.xml -chk {name}.chk -log {name}.log \\']
+            if previous:
+                call.insert(2, f'  -c {previous}.xml \\')
+            call[-1] = call[-1].rstrip(" \\")
+            lines += [f'echo "== {name} =="'] + call + ['']
+            previous = name
+        if protocol in ("REST2", "rREST2"):
+            lines += ['# Anything left in "$@" is passed to the ladder: --resume to finish an',
+                      '# interrupted run, --verify-only to check stored output without running.',
+                      f'echo "== {protocol} =="',
+                      f'python {protocol}.py -p "${{TOPOLOGY}}" -s "${{SYSTEM}}" \\',
+                      f'  -c {previous}.xml -log {protocol}.log "$@"',
+                      '']
+    lines += ['echo "run.sh: all stages reported completion"']
+    return "\n".join(lines) + "\n"
+
+
+_REPLICA_SCRIPT = '''#!/usr/bin/env python
+"""{protocol}: one coordinated replica-exchange ladder.
+
+Generated by `md-openmm build-md`. The Hamiltonian scaling, the exchange algorithm, the fixed
+state trajectories and the restart semantics are the validated implementation in the installed
+md_tools runtime; this file only says which ladder to run.
+
+    python {protocol}.py -p built.pdb -s built.xml -c eq_npt_free.xml
+    mpiexec -n {states} python {protocol}.py -p built.pdb -s built.xml -c eq_npt_free.xml
+
+One rank per state, or a single process driving every state in turn. Any other world size is
+refused rather than silently reinterpreted.
+"""
+from md_tools.runtime.replica import replica_main
+
+LADDER = {ladder!r}
+
+if __name__ == "__main__":
+    raise SystemExit(replica_main(LADDER))
+'''
+
+
+def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool = False,
+                  overwrite: bool = False, echo: bool = True) -> dict[str, Any]:
+    """Generate the run scripts. Returns the machine record written beside them."""
+    resolved = resolve_md_config(config_path)
+    out_dir = Path(out_dir)
+    if out_dir.exists() and any(out_dir.iterdir()) and not overwrite:
+        raise ConfigError(
+            f"{out_dir} exists and is not empty. Pass --overwrite to regenerate into it. "
+            f"Regenerating over a directory that already holds run output would leave scripts "
+            f"and results that were produced by different settings side by side.")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    plan = stage_plan(resolved)
+    protocol = resolved["protocol"]
+    log = LogWriter(out_dir / "build-md.log", record_type="build-md", echo=echo)
+    log("md-openmm build-md")
+    log("=" * 68)
+    log.heading("Resolved configuration")
+    log.field("protocol", protocol)
+    log.field("solvent", resolved["solvent"])
+    log.field("shape", "all-in-one" if all_in_one else "split")
+    timestep = resolved["dynamics"]["timestep_fs"]
+    log.heading("Stages")
+    for stage in plan:
+        ps = stage["steps"] * timestep / 1000.0
+        detail = (f"{stage['minimization_iterations']} iterations"
+                  if stage["name"] == "min" else
+                  f"{stage['steps']} steps = {ps:g} ps ({ps / 1000.0:g} ns), {stage['ensemble']}")
+        log.field(stage["name"], detail)
+
+    written: list[str] = []
+    if all_in_one:
+        (out_dir / "md.py").write_text(_ALL_IN_ONE.format(stages=plan), encoding="utf-8")
+        written.append("md.py")
+    else:
+        for index, stage in enumerate(plan):
+            path = out_dir / f"{stage['name']}.py"
+            path.write_text(_stage_script(stage, first=index == 0), encoding="utf-8")
+            written.append(path.name)
+
+    if protocol in ("REST2", "rREST2"):
+        ladder = {
+            "protocol": protocol,
+            "solvent": resolved["solvent"],
+            "n_states": resolved["rest2"]["number_of_replicas"],
+            "tau_max": resolved["rest2"]["tau_max"],
+            "exchange_interval_steps": resolved["rest2"]["exchange_interval_steps"],
+            "number_of_exchanges": resolved["rest2"]["number_of_exchanges"],
+            "state_trajectory": resolved["rest2"]["state_trajectory"],
+            "rem_log": resolved["rest2"]["rem_log"],
+            "neighbour_acceptance_report": resolved["rest2"]["neighbour_acceptance_report"],
+            "reservoir": dict(resolved["reservoir"]),
+            "dynamics": dict(resolved["dynamics"]),
+        }
+        path = out_dir / f"{protocol}.py"
+        path.write_text(_REPLICA_SCRIPT.format(protocol=protocol, ladder=ladder,
+                                               states=ladder["n_states"]), encoding="utf-8")
+        written.append(path.name)
+        log.heading(protocol)
+        log.field("states", ladder["n_states"])
+        log.field("tau ladder", f"0.0 .. {ladder['tau_max']} (linear)")
+        log.field("exchange every", f"{ladder['exchange_interval_steps']} steps = "
+                                    f"{ladder['exchange_interval_steps'] * timestep / 1000.0:g} ps")
+        log.field("attempts", ladder["number_of_exchanges"])
+        production = (ladder["number_of_exchanges"] * ladder["exchange_interval_steps"]
+                      * timestep / 1000.0)
+        log.field("production per state", f"{production:g} ps ({production / 1000.0:g} ns)")
+
+    run_sh = out_dir / "run.sh"
+    run_sh.write_text(_run_sh(plan, all_in_one=all_in_one, protocol=protocol), encoding="utf-8")
+    run_sh.chmod(run_sh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    written.append("run.sh")
+
+    (out_dir / "resolved.config").write_text(
+        "# The configuration these scripts were generated from, fully resolved.\n"
+        "# Every default is written out, so this file alone reproduces the generation.\n"
+        + yaml.safe_dump(resolved, sort_keys=False, default_flow_style=False), encoding="utf-8")
+    written.append("resolved.config")
+
+    log.heading("Outputs")
+    for name in written:
+        log.field(name, out_dir / name)
+    log.update(protocol=protocol, solvent=resolved["solvent"],
+               all_in_one=bool(all_in_one), resolved_config=resolved,
+               stages=[{k: v for k, v in s.items()} for s in plan],
+               files=written)
+    log.complete()
+    log.heading("Summary")
+    log(f"  generated {len(written)} files in {out_dir}")
+    log("  status: completed")
+    log.save()
+    return log.record

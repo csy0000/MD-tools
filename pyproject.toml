@@ -41,10 +41,26 @@ include = ["md_tools*"]
 # assuming a source checkout, so they must be inside the package. The repository-level `configs/`
 # path named in the documentation is a symlink to this directory -- one copy, so the example and
 # the schema that enforces it cannot drift apart.
-"md_tools" = ["configs/*.example", "configs/openmm/*.config"]
+# NOTE: the configuration examples are NOT package data. They are wheel data files, declared in
+# [tool.setuptools.data-files] below, so that the repository root keeps exactly one browsable copy
+# instead of a symlink or a second hand-edited mirror inside the package.
 # The generated JSON schema and the v1-to-v2 migration note travel with the contract they
 # describe, so an installed wheel can be checked against them without the repository.
 "md_tools.data_contract" = ["schemas/*.json", "*.md"]
+
+# The configuration examples ship as wheel data files: pip unpacks them under <prefix>/share/,
+# and `md_tools.configs.example_root()` asks the installed distribution's metadata where they went.
+# One copy, at the repository root, browsable on GitHub as an ordinary directory.
+[tool.setuptools.data-files]
+"share/md-tools/configs/machine" = ["configs/machine/user.config.example"]
+"share/md-tools/configs/sys" = ["configs/sys/build-top.config"]
+"share/md-tools/configs/md" = [
+    "configs/md/cMD.config",
+    "configs/md/REST2.config",
+    "configs/md/rREST2.config",
+    # configs/md/AIS.config joins here when AIS becomes a build-md protocol; listing a file that
+    # does not exist yet would break the build, and every commit here has to build.
+]
 
 [tool.pytest.ini_options]
 # The MD smoke tests build systems and integrate them, so they are marked slow and run before a

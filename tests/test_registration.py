@@ -445,9 +445,9 @@ def test_the_exported_schema_describes_the_year_first_path():
 
 def test_the_user_configuration_example_is_shipped_and_carries_no_secret():
     """It must be shipped, and it must be safe to ship."""
-    from importlib.resources import files
+    from md_tools.configs import example
 
-    path = Path(str(files("md_tools").joinpath("configs", "user.config.example")))
+    path = example("machine/user.config.example")
     assert path.is_file(), f"{path} is not shipped"
     text = path.read_text(encoding="utf-8")
     assert "schema_version" in text and "md_data" in text and "person_id" in text
@@ -458,16 +458,15 @@ def test_the_user_configuration_example_is_shipped_and_carries_no_secret():
 
 def test_the_shipped_example_is_what_init_actually_writes(tmp_path, monkeypatch):
     """The example must describe the file that gets created, not an older idea of it."""
-    from importlib.resources import files
-
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     monkeypatch.delenv("MD_TOOLS_CONFIG", raising=False)
     root = tmp_path / "MD_DATA"; root.mkdir()
     written = yaml.safe_load(init_user_config(
         noninteractive=True, person_id="a-person", name="A Person",
         md_data=str(root)).read_text(encoding="utf-8"))
-    example = yaml.safe_load(
-        Path(str(files("md_tools").joinpath("configs", "user.config.example"))).read_text())
+    from md_tools.configs import example as shipped_example
+
+    example = yaml.safe_load(shipped_example("machine/user.config.example").read_text())
     assert set(written) == set(example), (set(written), set(example))
     assert set(written["user"]) == set(example["user"])
     assert set(written["machine"]) == set(example["machine"])

@@ -48,3 +48,44 @@ def test_subprocesses_run_the_checkout_under_test():
         f"subprocesses in this suite import md_tools from {resolved}, not from the checkout "
         f"under test. Every generated project below would be built by different code."
     )
+
+
+def test_no_source_file_is_hidden_from_git_by_an_ignore_rule():
+    """Every file under src/, tests/ and configs/ must be visible to git.
+
+    This exists because it happened. `.gitignore` carried a bare `build/` rule for Python build
+    artifacts, and a bare pattern matches a directory of that name at ANY depth -- so the whole of
+    `src/md_tools/build/`, the package implementing `build-top` and `build-md`, was silently
+    excluded from every commit. It passed every test on the machine that wrote it, because the
+    files were there; a clone of the repository did not contain the two commands the project is
+    for.
+
+    Anchoring the rule (`/build/`) fixed it. This test makes the class of failure impossible to
+    reintroduce quietly: an ignore pattern that swallows source now fails here rather than in
+    somebody else's clone.
+    """
+    import subprocess
+
+    repo = Path(__file__).resolve().parents[1]
+    tracked_roots = [d for d in ("src", "tests", "configs") if (repo / d).is_dir()]
+    candidates = []
+    for root in tracked_roots:
+        for path in (repo / root).rglob("*"):
+            if not path.is_file():
+                continue
+            parts = set(path.relative_to(repo).parts)
+            if "__pycache__" in parts or path.suffix == ".pyc":
+                continue
+            if any(part.endswith(".egg-info") for part in parts):
+                continue
+            candidates.append(path.relative_to(repo))
+
+    assert candidates, "found no source files to check, which means this test is not testing"
+    result = subprocess.run(["git", "check-ignore", "--stdin"], cwd=repo, text=True,
+                            input="\n".join(str(c) for c in candidates),
+                            capture_output=True)
+    ignored = [line for line in result.stdout.splitlines() if line.strip()]
+    assert not ignored, (
+        "these source files are invisible to git because an ignore rule matches them:\n  "
+        + "\n  ".join(ignored)
+        + "\n\nAnchor the rule to the repository root (`/build/`, not `build/`).")

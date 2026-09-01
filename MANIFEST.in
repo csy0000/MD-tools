@@ -1,7 +1,8 @@
 # The runtime modules a generated replica script imports from the installed distribution.
 recursive-include src/md_tools/openmm/templates *.py *.sh
-# The shipped configuration examples, resolved with importlib.resources.
-recursive-include src/md_tools/configs *.config *.example
+# The shipped configuration examples. They live at the repository root as ordinary
+# files and reach the wheel as data files; the sdist needs them explicitly.
+recursive-include configs *.config *.example
 # The contract's generated schema and its migration note.
 recursive-include src/md_tools/data_contract *.json *.md
 include README.md

@@ -1,0 +1,18 @@
+[smoke] preparing ace_ala_nme (smoke) ...
+[equil] initial            U =       6219.7 kJ/mol  V =     9.84 nm^3  solute RMSD = 0.000 nm
+[equil] min_free           U =     -14825.8 kJ/mol  V =     9.84 nm^3  solute RMSD = 0.024 nm
+[equil] nvt                U =     -14151.5 kJ/mol  V =     9.84 nm^3  solute RMSD = 0.047 nm
+[equil] npt_free           U =     -14085.6 kJ/mol  V =     9.57 nm^3  solute RMSD = 0.062 nm
+[equil] box handoff: sample 15/20 at 9.520 nm^3, -0.05 % from the tail mean 9.526 nm^3
+[smoke] bundle: /path/to/explicit-test-20260815/ff19sb_probe/runs_fixed/20260815T214350Z__ace_ala_nme__bundle__dad2e5f8f0ff
+[smoke] running REST2 ...
+[remd] relax replica 00 s=1.0000: U -14130.1 -> -14030.5 kJ/mol
+[remd] relax replica 01 s=0.5625: U -14033.7 -> -14093.3 kJ/mol
+[remd] relax replica 02 s=0.2500: U -13951.3 -> -13811.5 kJ/mol
+[remd] 3 replicas, s = [1.0, 0.5625, 0.25], T_eff = [300, 533, 1200] K, exchange every 0.5 ps, 2 chunk(s) of 0.001 ns to go
+[remd] chunk 1/2 in 0.00 h; acceptance 0.000
+[remd] chunk 2/2 in 0.00 h; acceptance 0.000
+[smoke] run: /path/to/explicit-test-20260815/ff19sb_probe/runs_fixed/20260815T214429Z__ace_ala_nme__rest2__dad2e5f8f0ff
+[smoke] status: completed  exchange rounds 4/4
+[smoke] OK — installable and mechanically executable on this machine.
+[smoke] This says nothing about a macrocycle ladder; see PORTABLE_REST2.md.

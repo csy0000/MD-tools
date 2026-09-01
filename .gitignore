@@ -1,13 +1,13 @@
 # --- generated data / outputs ---
 # data/ includes data/runs/ (relocated from the old top-level runs/)
-data/
+/data/
 # ...but the test fixture is source, not data. `data/` matches at any depth, so tests/data/
 # was silently never committed: the suite passed on machines that happened to have ALA.pdb and
 # could not run at all from a fresh clone. Negated explicitly rather than relying on -f.
 !tests/data/
 !tests/data/**
 graphify-out/
-logs/
+/logs/
 # claudecode-instructions/
 
 # --- python bytecode ---
@@ -65,11 +65,15 @@ campaigns/*/blocked_ais/
 campaigns/*/blocked_ais_rgd/
 campaigns/*/phase1_controls/
 
-# Python build artifacts. `python -m build` is part of the documented explicit-solvent workflow
-# (docs/implementation/explicit_solvent/PORTABLE_REST2.md), so the wheel and sdist land here on
-# any machine that follows it; they are rebuildable and must not be committed.
-build/
-dist/
+# Python build artifacts, rebuildable and never committed.
+#
+# ANCHORED TO THE ROOT, and that leading slash is load-bearing. A bare `build/` matches a directory
+# called `build` at ANY depth, which silently swallowed the whole of `src/md_tools/build/` -- the
+# package implementing `build-top` and `build-md`. It was absent from every clone of this
+# repository while passing every local test, because the files existed on the machine that wrote
+# them. `data/` and `logs/` below are anchored for the same reason.
+/build/
+/dist/
 *.egg-info/
 
 # Generated at build time by build_backend/md_tools_build.py: the git identity of the tree the

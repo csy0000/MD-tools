@@ -1,0 +1,26 @@
+-I: Adding /path/to/miniforge3/envs/escort-ais-explicit-target/dat/leap/prep to search path.
+-I: Adding /path/to/miniforge3/envs/escort-ais-explicit-target/dat/leap/lib to search path.
+-I: Adding /path/to/miniforge3/envs/escort-ais-explicit-target/dat/leap/parm to search path.
+-I: Adding /path/to/miniforge3/envs/escort-ais-explicit-target/dat/leap/cmd to search path.
+-f: Source build.leap.
+
+Welcome to LEaP!
+(no leaprc in search path)
+Sourcing: ./build.leap
+----- Source: /path/to/miniforge3/envs/escort-ais-explicit-target/dat/leap/cmd/leaprc.protein.ff19SB
+----- Source of /path/to/miniforge3/envs/escort-ais-explicit-target/dat/leap/cmd/leaprc.protein.ff19SB done
+Log file: ./leap.log
+Loading parameters: /path/to/miniforge3/envs/escort-ais-explicit-target/dat/leap/parm/parm19.dat
+Reading title:
+PARM99 + frcmod.ff99SB + frcmod.parmbsc0 + OL3 for RNA + ff19SB
+Loading parameters: /path/to/miniforge3/envs/escort-ais-explicit-target/dat/leap/parm/frcmod.ff19SB
+Reading force field modification type file (frcmod)
+Reading title:
+ff19SB AA-specific backbone CMAPs for protein 07/25/2019
+Loading library: /path/to/miniforge3/envs/escort-ais-explicit-target/dat/leap/lib/amino19.lib
+Loading library: /path/to/miniforge3/envs/escort-ais-explicit-target/dat/leap/lib/aminoct12.lib
+Loading library: /path/to/miniforge3/envs/escort-ais-explicit-target/dat/leap/lib/aminont12.lib
+Writing pdb file: ace_ala_nme.pdb
+	Quit
+
+Exiting LEaP: Errors = 0; Warnings = 0; Notes = 0.

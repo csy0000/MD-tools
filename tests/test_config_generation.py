@@ -491,25 +491,97 @@ def test_a_value_outside_the_declared_set_is_refused(block, key, value):
         resolve_build_config(_written({block: {key: value}}))
 
 
-def test_the_shipped_examples_are_exactly_what_the_schemas_render():
-    """No drift: the committed examples and the schemas have one source, and this proves it."""
-    from md_tools.build.examples import packaged_directory, render_all
 
-    directory = packaged_directory()
-    for relative, expected in render_all().items():
-        path = directory / relative
+
+
+
+# --- the shipped examples: canonical files, checked against the models --------------------------
+#
+# The examples are no longer GENERATED from the schemas. They are ordinary, browsable, hand-editable
+# files at the repository root -- which is what makes GitHub show them as a directory rather than a
+# symlink blob, and what lets a user read a complete example without installing anything.
+#
+# The guarantee that replaces "the file is exactly what the renderer emits" is stronger and is what
+# actually matters: EVERY example RESOLVES, THROUGH THE REAL RESOLVER, TO THE MODEL'S OWN DEFAULTS.
+# An example may therefore be reworded, reordered or better commented freely; it may not drift into
+# describing a default that the code does not apply.
+
+def _configs_root():
+    from md_tools.configs import example_root
+    return example_root()
+
+
+def test_the_configs_root_has_the_documented_shape():
+    root = _configs_root()
+    assert (root / "machine").is_dir() and (root / "sys").is_dir() and (root / "md").is_dir()
+    assert not root.is_symlink(), "the configs root must be a real directory, not a symlink"
+
+
+def test_every_shipped_example_is_a_real_file_not_a_link():
+    from md_tools.configs import EXAMPLES
+
+    root = _configs_root()
+    for relative in EXAMPLES:
+        path = root / relative
         assert path.is_file(), f"{relative} is not shipped"
-        assert path.read_text(encoding="utf-8") == expected, (
-            f"{relative} differs from what the schema renders. Regenerate it with "
-            f"md_tools.build.examples.write_all() rather than editing it by hand.")
+        assert not path.is_symlink(), f"{relative} is a symlink; there must be exactly one copy"
 
 
-def test_every_shipped_example_validates_against_its_own_schema():
-    """A shipped example that its own validator rejects is worse than no example."""
-    from md_tools.build.examples import packaged_directory
+def test_the_build_top_example_resolves_to_the_model_defaults():
+    """The example documents the model. If they disagree, the example is lying to the reader."""
+    from md_tools.configs import example
 
-    directory = packaged_directory()
-    resolve_build_config(directory / "openmm" / "md_build.config")
-    for name in ("cMD.config", "REST2.config", "rREST2.config"):
-        resolved = resolve_md_config(directory / "openmm" / name)
-        assert resolved["protocol"] == name.removesuffix(".config")
+    # `_stated` records WHICH keys the file wrote out, which is exactly the difference between a
+    # file that states a default and one that omits it. Comparing it would compare the question
+    # rather than the answer.
+    documented = {k: v for k, v in resolve_build_config(example("sys/build-top.config")).items()
+                  if k != "_stated"}
+    defaults = {k: v for k, v in resolve_build_config(None).items() if k != "_stated"}
+    assert documented == defaults, (
+        "configs/sys/build-top.config resolves to something other than the built-in defaults. "
+        "Either the example states a value the model does not apply, or a default changed and the "
+        "example was not updated.")
+
+
+@pytest.mark.parametrize("name, protocol", [
+    ("cMD.config", "cMD"), ("REST2.config", "REST2"), ("rREST2.config", "rREST2"),
+])
+def test_each_protocol_example_resolves_and_selects_its_protocol(name, protocol):
+    from md_tools.configs import example
+
+    resolved = resolve_md_config(example(f"md/{name}"))
+    assert resolved["protocol"] == protocol
+
+
+@pytest.mark.parametrize("name", ["cMD.config", "REST2.config", "rREST2.config"])
+def test_a_protocol_example_differs_from_the_defaults_only_where_it_says_so(name):
+    """Everything an example states must either BE the default or be a documented protocol choice.
+
+    This is what keeps the examples honest without freezing their wording: a key that silently
+    disagrees with the model is caught, while comments and ordering stay free.
+    """
+    from md_tools.configs import example
+
+    resolved = resolve_md_config(example(f"md/{name}"))
+    defaults = resolve_md_config(None)
+    differing = {key for key in defaults
+                 if key not in ("protocol", "rest2", "reservoir") and resolved[key] != defaults[key]}
+    assert not differing, (
+        f"{name} changes {sorted(differing)} away from the model defaults without being a "
+        f"protocol-specific section. Either it is documenting a value the code does not apply, or "
+        f"the default moved.")
+
+
+def test_the_hmr_reasoning_survived_the_move_out_of_docs_examples():
+    """docs/examples/hmr-4fs.yaml was deleted; its content is required to be here instead."""
+    from md_tools.configs import example
+
+    system = example("sys/build-top.config").read_text(encoding="utf-8")
+    assert "hydrogen_mass_amu" in system
+    for phrase in ("rigid_water", "HBonds", "3.024", "no longer physical",
+                   "configurational averages are unchanged".replace(
+                       "configurational", "CONFIGURATIONAL")):
+        assert phrase in system, f"the HMR example lost {phrase!r} in the move"
+    protocol = example("md/cMD.config").read_text(encoding="utf-8")
+    assert "build-top.config" in protocol, (
+        "the protocol example must point at where HMR is actually set")

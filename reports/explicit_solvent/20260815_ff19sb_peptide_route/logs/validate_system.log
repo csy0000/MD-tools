@@ -1,0 +1,8 @@
+valid: /path/to/explicit-test-20260815/ff19sb_probe/ace_ala_nme.yaml
+  system_id     ace_ala_nme   (ACE-ALA-NME (alanine dipeptide), ff19SB peptide route)
+  route         pdb
+  molecule      dd50bd9cb68713d7705e204fbc84897e2c3a9b33c135fd3574bda0edebaa3bd4
+  forcefields   small_molecule=None protein=amber19/protein.ff19SB.xml water=amber19/tip3pfb.xml
+  solvation     box_shape=cube padding_nm=1.2 ionic_strength_molar=0.0 water_model=tip3p
+  experiment    smoke   3 rungs   ladder_status=unvalidated
+                (no system-specific pilot evidence stands behind this ladder)
