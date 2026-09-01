@@ -711,15 +711,22 @@ def tiny_ais_project(tmp_path_factory):
     environment = dict(os.environ)
     environment.pop("MD_PLATFORM", None)
 
-    assert run_cli("md_openmm", "sys-config", "--method", "cMD", "AIS",
-                   cwd=work).returncode == 0
+    # AIS has no public command in this phase of MD-tools -- the CLI is build-top, build-md and
+    # data-register -- but its runtime and these integrity checks remain. The fixture therefore
+    # calls the generator API directly, which is what it was always exercising.
+    from md_tools.openmm.config import write_yaml
+    from md_tools.openmm.defaults import md_defaults, sys_defaults
+    from md_tools.openmm.mdgen import generate_md
+    from md_tools.openmm.sysgen import generate_system
+
+    write_yaml(work / "sys.config.yaml", sys_defaults(peptide=True))
+    write_yaml(work / "md.config.yaml", md_defaults(methods=("cMD", "AIS")))
     path = work / "sys.config.yaml"
     document = yaml.safe_load(path.read_text())
     document["solvent"].update({"padding_nm": 0.5, "cutoff_nm": 0.5})
     path.write_text(yaml.safe_dump(document, sort_keys=False))
-    built = run_cli("md_openmm", "sys-gen", "-i", "./ALA.pdb", "--config", "sys.config.yaml",
-                    "-of", "./inputs/", cwd=work)
-    assert built.returncode == 0, built.stdout + built.stderr
+    generate_system(input_path=work / "ALA.pdb", config_path=path,
+                    output_folder=work / "inputs", echo=False)
 
     protocol_path = work / "md.config.yaml"
     protocol = yaml.safe_load(protocol_path.read_text())
@@ -734,9 +741,8 @@ def tiny_ais_project(tmp_path_factory):
                                       "start_time_ps": 0.002, "end_time_ps": 0.24,
                                       "number_of_trajectories": 2})
     protocol_path.write_text(yaml.safe_dump(protocol, sort_keys=False))
-    generated = run_cli("md_openmm", "md-gen", "-if", "./inputs/", "--config", "md.config.yaml",
-                        "-of", "./MD/", cwd=work)
-    assert generated.returncode == 0, generated.stdout + generated.stderr
+    generate_md(input_folder=work / "inputs", config_path=protocol_path,
+                output_folder=work / "MD")
 
     project = work / "MD"
     for stage in ("minimization", "eq/nvt_1kcal", "eq/npt_1kcal", "eq/npt_free", "cMD", "AIS"):

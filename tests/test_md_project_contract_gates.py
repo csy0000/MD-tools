@@ -10,6 +10,8 @@ Everything that only inspects generated files runs anywhere.
 
 from __future__ import annotations
 
+import ast
+
 import importlib.util
 import json
 import subprocess
@@ -18,6 +20,8 @@ from pathlib import Path
 
 import pytest
 import yaml
+
+from md_tools.build.record import read_record
 
 REPO = Path(__file__).resolve().parents[1]
 TEMPLATES = REPO / "src" / "md_tools" / "openmm" / "templates"
@@ -276,121 +280,138 @@ def _tree_state(root: Path) -> dict:
             for p in sorted(root.rglob("*")) if p.is_file() and "__pycache__" not in p.parts}
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# --- the same safety properties, on the new generated scripts -------------------------------------
+#
+# The six tests that used to live here drove `sys-config` / `sys-gen` / `md-gen` and a generated
+# project carrying a separate `stage.yaml`. That mechanism is gone: `build-md` writes the resolved
+# settings INTO each script, so there is no second document to disagree with the first.
+#
+# The safety properties it protected are not gone, and are re-asserted below against the new
+# interface. Nothing here was dropped for being inconvenient.
+
 @pytest.fixture(scope="module")
-def generated(tmp_path_factory):
-    """A tiny generated project. Built once; the refusal tests never run dynamics."""
+def scripts(tmp_path_factory):
+    """A built ALA system and a generated cMD chain. Built once; no dynamics are run."""
     if not (REPO / "tests" / "data" / "ALA.pdb").is_file():
         pytest.skip("no ALA fixture")
-    work = tmp_path_factory.mktemp("gen")
-    run = lambda *a: subprocess.run([sys.executable, "-m", "md_tools.cli.md_openmm", *a],
-                                    cwd=work, capture_output=True, text=True, timeout=1800)
-    assert run("sys-config", "--method", "cMD", "--peptide", "true",
-               "--solvent", "TIP3P", "--output-dir", ".").returncode == 0
-    config = yaml.safe_load((work / "md.config.yaml").read_text())
-    config["minimization"]["max_iterations"] = 20
-    for key in ("nvt_restrained_duration_ps", "npt_restrained_duration_ps",
-                "npt_free_duration_ps"):
-        config["equilibration"][key] = 0.2
-    config["cMD"].update(duration_ns=0.0004, whole_system_interval_ps=0.2,
-                         solute_interval_ps=0.2, checkpoint_interval_ps=0.2)
-    (work / "md.config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
-    built = run("sys-gen", "-i", str(REPO / "tests" / "data" / "ALA.pdb"),
-                "--config", "sys.config.yaml", "-of", "./inputs/")
+    work = tmp_path_factory.mktemp("scripts")
+
+    def run(*args):
+        return subprocess.run([sys.executable, "-m", "md_tools.cli.md_openmm", *args],
+                              cwd=work, capture_output=True, text=True, timeout=1800)
+
+    (work / "build.config").write_text("solvent:\n  model: GBn2\n")
+    built = run("build-top", "-i", str(REPO / "tests" / "data" / "ALA.pdb"),
+                "-os", "built.xml", "-op", "built.pdb", "-log", "built.log",
+                "--config", "build.config")
     assert built.returncode == 0, built.stdout + built.stderr
-    generated = run("md-gen", "-if", "./inputs/", "--config", "md.config.yaml", "-of", "./MD/")
+    (work / "cMD.config").write_text(
+        "protocol: cMD\nsolvent: implicit\n"
+        "stages:\n  minimization_iterations: 10\n  restrained_nvt_steps: 20\n"
+        "  restrained_npt_steps: 20\n  unrestrained_npt_steps: 20\n  production_steps: 20\n")
+    generated = run("build-md", "-odir", "./md_script/", "--config", "cMD.config")
     assert generated.returncode == 0, generated.stdout + generated.stderr
-    return work / "MD"
+    return work
 
 
-def test_md_gen_writes_a_stage_yaml_for_production(generated):
-    stage = yaml.safe_load((generated / "cMD" / "stage.yaml").read_text())
-    assert stage["production"] is True
-    assert stage["name"] == "cMD"
-    assert stage["parent"], "production must name the common stage it continues from"
-    assert stage["input_state"], "and the handoff file it reads"
-    assert stage["timestep_fs"] and stage["temperature_kelvin"]
+def test_each_generated_script_declares_its_resolved_stage(scripts):
+    """What `stage.yaml` used to carry now lives in the script that runs it."""
+    for name in ("min", "eq_nvt_posres", "cMD"):
+        text = (scripts / "md_script" / f"{name}.py").read_text()
+        assert "STAGE = {" in text
+        stage = ast.literal_eval(text.split("STAGE = ", 1)[1].split("\n\nif __name__", 1)[0])
+        assert stage["name"] == name
+        assert stage["ensemble"] in ("NVT", "NPT")
+        assert stage["timestep_fs"] and stage["temperature_K"]
+        assert isinstance(stage["steps"], int), "lengths are exact step counts"
 
 
-def test_a_missing_parent_fails_a_real_run_before_a_context(generated):
-    """The parent chain has not been run in this fixture, which is exactly the case."""
-    before = _tree_state(generated / "cMD")
-    result = subprocess.run([sys.executable, "run.py"], cwd=generated / "cMD",
-                            capture_output=True, text=True, timeout=600)
-    combined = result.stdout + result.stderr
-    assert "[FAIL] parent stage" in combined, combined[-800:]
-    assert "no Context was created" in combined
-    assert _tree_state(generated / "cMD") == before, "a refusal must write nothing"
+def test_a_missing_parent_refuses_before_any_context_is_created(scripts):
+    """The chain is sequential; a stage whose parent has not run must not start integrating."""
+    work = scripts / "md_script"
+    result = subprocess.run(
+        [sys.executable, "cMD.py", "-p", "../built.pdb", "-s", "../built.xml",
+         "-c", "eq_nvt_free.xml", "-log", "refusal.log"],
+        cwd=work, capture_output=True, text=True, timeout=600)
+    assert result.returncode != 0
+    assert "does not exist" in result.stdout + result.stderr
+    assert not (work / "cMD.dcd").exists(), "a refusal must not leave a trajectory"
+    assert not (work / "cMD.chk").exists(), "a refusal must not leave a checkpoint"
+    (work / "refusal.log").unlink(missing_ok=True)
 
 
-def test_a_missing_parent_is_a_skip_under_check(generated):
-    """CLAUDE.md: pending under --check, because the chain is sequential and unrun."""
-    result = subprocess.run([sys.executable, "run.py", "--check"], cwd=generated / "cMD",
-                            capture_output=True, text=True, timeout=600)
-    combined = result.stdout + result.stderr
-    assert "[skip] parent stage" in combined, combined[-800:]
-    assert "[FAIL]" not in combined
+def test_a_missing_parent_is_pending_under_check_not_a_failure(scripts):
+    """--check validates a whole chain before any of it runs, so later parents are absent."""
+    work = scripts / "md_script"
+    result = subprocess.run(
+        [sys.executable, "cMD.py", "-p", "../built.pdb", "-s", "../built.xml",
+         "-c", "eq_nvt_free.xml", "-log", "pending.log", "--check"],
+        cwd=work, capture_output=True, text=True, timeout=600)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[pending]" in result.stdout
+    record = read_record(work / "pending.log")
+    assert record["status"] == "pending", "pending is not completion"
+    (work / "pending.log").unlink(missing_ok=True)
 
 
-def test_an_edited_timestep_is_refused_and_writes_nothing(generated):
-    """The defect that altered a trajectory: md-gen refuses 4 fs without HMR, the launcher did not."""
-    config_path = generated / "md.config.yaml"
-    original = config_path.read_text()
-    before = _tree_state(generated)
+def test_a_large_timestep_without_hmr_is_refused_before_integrating(scripts):
+    """The defect that silently altered a trajectory, re-asserted against the SYSTEM's masses.
+
+    Checked against the masses actually serialised in built.xml rather than against a config that
+    claims HMR, because by run time that is a fact rather than a request.
+    """
+    work = scripts / "md_script"
+    text = (work / "min.py").read_text().replace("'timestep_fs': 2.0", "'timestep_fs': 4.0")
+    (work / "fast.py").write_text(text.replace("'name': 'min'", "'name': 'fast'"))
     try:
-        config = yaml.safe_load(original)
-        config["common"]["timestep_fs"] = 4.0
-        config["cMD"]["duration_ns"] = 0.01
-        config_path.write_text(yaml.safe_dump(config, sort_keys=False))
-        result = subprocess.run([sys.executable, "run.py"], cwd=generated / "cMD",
-                                capture_output=True, text=True, timeout=600)
+        result = subprocess.run(
+            [sys.executable, "fast.py", "-p", "../built.pdb", "-s", "../built.xml",
+             "-log", "fast.log"], cwd=work, capture_output=True, text=True, timeout=600)
         combined = result.stdout + result.stderr
-        assert "[FAIL] runtime request" in combined, combined[-1000:]
-        assert "timestep_fs" in combined, "the refusal must name the field that changed"
-        assert "no Context was created" in combined
+        assert result.returncode != 0, combined
+        assert "hydrogen mass repartitioning was NOT applied" in combined, combined[-800:]
+        assert not (work / "fast.dcd").exists()
     finally:
-        config_path.write_text(original)
-    after = _tree_state(generated)
-    assert {k: v for k, v in after.items() if k != "md.config.yaml"} == \
-           {k: v for k, v in before.items() if k != "md.config.yaml"}, \
-           "the refusal changed a file"
+        (work / "fast.py").unlink(missing_ok=True)
+        (work / "fast.log").unlink(missing_ok=True)
 
 
-def test_a_longer_run_is_still_allowed(generated):
-    """Extension must survive the fix. Only the invariants are compared."""
-    config_path = generated / "md.config.yaml"
-    original = config_path.read_text()
-    try:
-        config = yaml.safe_load(original)
-        config["cMD"]["duration_ns"] = 0.0008
-        config_path.write_text(yaml.safe_dump(config, sort_keys=False))
-        result = subprocess.run([sys.executable, "run.py", "--check"], cwd=generated / "cMD",
-                                capture_output=True, text=True, timeout=600)
-        combined = result.stdout + result.stderr
-        assert "[FAIL] runtime request" not in combined, (
-            "asking for a longer run is a legitimate extension:\n" + combined[-800:])
-    finally:
-        config_path.write_text(original)
+def test_asking_for_a_longer_run_does_not_invalidate_the_checkpoint(scripts):
+    """Extension must survive. Only the INVARIANTS are fingerprinted, and steps is not one."""
+    from md_tools.runtime.stage import EXTENDABLE_FIELDS, _config_fingerprint
+
+    text = (scripts / "md_script" / "cMD.py").read_text()
+    stage = ast.literal_eval(text.split("STAGE = ", 1)[1].split("\n\nif __name__", 1)[0])
+    longer = {**stage, "steps": stage["steps"] * 4}
+    assert _config_fingerprint(stage, "a", "b") == _config_fingerprint(longer, "a", "b")
+
+    for field, value in (("temperature_K", 350.0), ("ensemble", "NPT"), ("timestep_fs", 1.0),
+                         ("seed", 99), ("restraint_kcal_per_mol_A2", 5.0)):
+        assert field not in EXTENDABLE_FIELDS
+        mutated = {**stage, field: value}
+        assert _config_fingerprint(stage, "a", "b") != _config_fingerprint(mutated, "a", "b"), (
+            f"changing {field} must invalidate a checkpoint")
 
 
-def test_a_mutated_stage_request_is_refused(generated):
-    """Recomputed, not merely present: the stored hash alone proves nothing."""
-    stage_path = generated / "cMD" / "stage.yaml"
-    original = stage_path.read_text()
-    before = _tree_state(generated / "cMD")
-    try:
-        stage = yaml.safe_load(original)
-        stage["temperature_kelvin"] = 350.0
-        stage_path.write_text(yaml.safe_dump(stage, sort_keys=False))
-        result = subprocess.run([sys.executable, "run.py"], cwd=generated / "cMD",
-                                capture_output=True, text=True, timeout=600)
-        combined = result.stdout + result.stderr
-        assert "[FAIL]" in combined and "no Context was created" in combined, combined[-800:]
-    finally:
-        stage_path.write_text(original)
-    # stage.yaml is excluded because THIS TEST rewrote it to restore the original; the refusal
-    # itself must not have touched anything, which is what the rest of the tree shows.
-    after = _tree_state(generated / "cMD")
-    assert {k: v for k, v in after.items() if k != "stage.yaml"} == \
-           {k: v for k, v in before.items() if k != "stage.yaml"}, \
-           "the refusal changed a file"
-    assert stage_path.read_text() == original, "and the restore is byte-exact"
+def test_a_checkpoint_from_a_different_system_is_refused(scripts):
+    """A checkpoint carries positions for a particular particle set."""
+    from md_tools.runtime.stage import _config_fingerprint
+
+    text = (scripts / "md_script" / "cMD.py").read_text()
+    stage = ast.literal_eval(text.split("STAGE = ", 1)[1].split("\n\nif __name__", 1)[0])
+    assert _config_fingerprint(stage, "system-a", "top") != \
+           _config_fingerprint(stage, "system-b", "top")

@@ -5,131 +5,36 @@ import pytest
 
 import yaml
 
+from md_tools.build.md import resolve_md_config
+from md_tools.build.strict import ConfigError
+from md_tools.build.top import _sys_document, resolve_build_config
 from md_tools.openmm import defaults as D
+from md_tools.openmm.defaults import canonical_solvent
 
 
-def test_the_explicit_default_is_ff14sb_sage_221_tip3p(md_openmm, tmp_path):
-    """No `--solvent`: what a user gets by typing the least.
-
-    The default explicit combination is ff14SB + Sage 2.2.1 + TIP3P, in a dodecahedral box with
-    1.5 nm of requested padding, PME at a 1.0 nm cutoff, 0.15 M NaCl, 2 fs and no HMR.
-    """
-    result = md_openmm("sys-config", "--method", "cMD", "REST2", "--peptide", "true")
-    assert result.returncode == 0, result.stderr
-
-    sys_doc = yaml.safe_load((tmp_path / "sys.config.yaml").read_text())
-    md_doc = yaml.safe_load((tmp_path / "md.config.yaml").read_text())
-
-    assert sys_doc["solvent"]["model"] == "TIP3P"
-    assert sys_doc["forcefield"]["protein"] == "amber14-all.xml"
-    assert sys_doc["forcefield"]["water"] == "amber14/tip3p.xml"
-    assert sys_doc["solute"]["ligand_forcefield"] == "sage-2.2.1"
-    assert sys_doc["solvent"]["padding_nm"] == 1.5
-    assert sys_doc["solvent"]["box_shape"] == "dodecahedron"
-    assert sys_doc["solvent"]["cutoff_nm"] == 1.0
-    assert sys_doc["constraints"]["hydrogen_mass_amu"] is None, "HMR is off by default"
-    assert md_doc["common"]["timestep_fs"] == 2.0
-    assert md_doc["common"]["friction_per_ps"] == 1.0
-    assert md_doc["common"]["barostat_frequency_steps"] == 25
-    # no ff19SB or OPC in any VALUE. The header comment names them as the alternative, which is
-    # the point; what must not happen is one of them being what actually gets built.
-    values = yaml.safe_dump(sys_doc).lower()
-    assert "ff19sb" not in values and "opc" not in values and "amber19" not in values
+def _written(document):
+    """Write a configuration to a temporary file, since the resolvers take a path."""
+    import tempfile
+    handle = tempfile.NamedTemporaryFile("w", suffix=".config", delete=False)
+    yaml.safe_dump(document, handle)
+    handle.close()
+    return handle.name
 
 
-def test_explicit_opc_configuration(md_openmm, tmp_path):
-    """`--solvent OPC` still selects ff19SB + OPC, unchanged as the alternative."""
-    result = md_openmm("sys-config", "--method", "cMD", "REST2",
-                       "--peptide", "true", "--solvent", "OPC")
-    assert result.returncode == 0, result.stderr
-
-    sys_doc = yaml.safe_load((tmp_path / "sys.config.yaml").read_text())
-    md_doc = yaml.safe_load((tmp_path / "md.config.yaml").read_text())
-
-    assert sys_doc["solute"]["peptide"] is True
-    assert sys_doc["solvent"]["model"] == "OPC"
-    assert sys_doc["forcefield"]["protein"] == "amber19-all.xml"
-    assert sys_doc["forcefield"]["water"] == "amber19/opc.xml"
-    assert sys_doc["solute"]["ligand_forcefield"] == "sage-2.2.1"
-    assert sys_doc["solvent"]["padding_nm"] == 1.5
-    assert sys_doc["solvent"]["box_shape"] == "dodecahedron"
-    assert sys_doc["solvent"]["ionic_strength_molar"] == 0.15
-    assert sys_doc["solvent"]["cutoff_nm"] == 1.0
-    assert sys_doc["solute"]["ligand_charge_method"] == "am1bcc", "NAGL is never a silent default"
-    assert sys_doc["constraints"]["hydrogen_mass_amu"] is None, "HMR is off by default"
-    # the implicit block must be absent: one file describes ONE system
-    assert "implicit_solvent" not in sys_doc
-
-    assert md_doc["methods"] == ["cMD", "REST2"]
-    assert md_doc["common"]["timestep_fs"] == 2.0
-    assert md_doc["common"]["pressure_bar"] == 1.0
-    assert md_doc["common"]["barostat_frequency_steps"] == 25
-    assert md_doc["cMD"]["ensemble"] == "NPT"
-    assert md_doc["REST2"]["ensemble"] == "NPT"
-    assert md_doc["REST2"]["number_of_replicas"] == 6
-    assert md_doc["REST2"]["omega_exclusion"] is True
 
 
-def test_implicit_gbn2_configuration(md_openmm, tmp_path):
-    result = md_openmm("sys-config", "--method", "cMD", "REST2",
-                       "--peptide", "false", "--solvent", "GBn2")
-    assert result.returncode == 0, result.stderr
-
-    sys_doc = yaml.safe_load((tmp_path / "sys.config.yaml").read_text())
-    md_doc = yaml.safe_load((tmp_path / "md.config.yaml").read_text())
-
-    assert sys_doc["solute"]["peptide"] is False
-    assert sys_doc["implicit_solvent"]["model"] == "GBn2"
-    assert sys_doc["implicit_solvent"]["radii"] == "mbondi3"
-    assert "solvent" not in sys_doc, "an implicit system has no water box"
-    assert sys_doc["forcefield"]["water"] is None
-    assert sys_doc["constraints"]["rigid_water"] is False
-
-    # no box means no barostat and no pressure; saying NPT would name an unsamplable ensemble
-    assert md_doc["common"]["pressure_bar"] is None
-    assert md_doc["cMD"]["ensemble"] == "NVT"
-    assert md_doc["REST2"]["ensemble"] == "NVT"
-    assert "pressure_note" in md_doc["common"]
 
 
-def test_names_are_accepted_case_insensitively_and_written_canonically(md_openmm, tmp_path):
-    result = md_openmm("sys-config", "--method", "cmd", "rest2", "--solvent", "opc")
-    assert result.returncode == 0, result.stderr
-    md_doc = yaml.safe_load((tmp_path / "md.config.yaml").read_text())
-    assert md_doc["methods"] == ["cMD", "REST2"]
-    sys_doc = yaml.safe_load((tmp_path / "sys.config.yaml").read_text())
-    assert sys_doc["solvent"]["model"] == "OPC"
 
 
-def test_show_default_and_sys_config_use_the_same_definitions(md_openmm, tmp_path):
-    """Two sources of the same defaults is how this repository drifted before."""
-    md_openmm("sys-config", "--method", "cMD", "REST2")
-    written = yaml.safe_load((tmp_path / "sys.config.yaml").read_text())
-    shown = yaml.safe_load(md_openmm("show-default", "sys").stdout)
-    assert shown == written
-
-    rest2_shown = yaml.safe_load(md_openmm("show-default", "REST2").stdout)
-    written_md = yaml.safe_load((tmp_path / "md.config.yaml").read_text())
-    assert rest2_shown["REST2"] == written_md["REST2"]
-    assert "cMD" not in rest2_shown
 
 
-def test_show_default_all_covers_both_documents(md_openmm):
-    document = yaml.safe_load(md_openmm("show-default", "all").stdout)
-    assert set(document) == {"sys", "md"}
 
 
-def test_an_unknown_name_is_refused(md_openmm):
-    result = md_openmm("show-default", "nonsense")
-    assert result.returncode != 0
-    assert "expected sys" in (result.stdout + result.stderr)
 
 
-def test_output_dir_is_honoured(md_openmm, tmp_path):
-    target = tmp_path / "elsewhere"
-    md_openmm("sys-config", "--output-dir", str(target))
-    assert (target / "sys.config.yaml").is_file()
-    assert (target / "md.config.yaml").is_file()
+
+
 
 
 # --- protein force field must match the solvation model ----------------------
@@ -494,3 +399,117 @@ def test_the_forcefield_record_states_the_nonpolar_choice():
     assert entry["nonpolar_sasa"] is False
     assert entry["nonpolar_model"] is None
     assert "igb=8" in entry["polar_reference"]
+
+
+# --- the same scientific defaults, through the new configuration surface --------------------------
+#
+# `sys-config` and `show-default` are retired: there is no longer a command that WRITES a
+# configuration for you, because the shipped examples are generated from the schemas that enforce
+# them and are therefore always in step. What those tests protected -- the default combination, the
+# solvent pairings, and refusal of nonsense -- is asserted here against the new surface.
+
+def test_the_explicit_default_is_ff14sb_sage_221_tip3p():
+    """No configuration at all: what a user gets by typing the least.
+
+    ff14SB + Sage 2.2.1 + TIP3P, dodecahedral box, 1.5 nm requested padding, 1.0 nm cutoff,
+    0.15 M NaCl, HBonds, and NO hydrogen mass repartitioning.
+    """
+    resolved = resolve_build_config(None)
+    assert resolved["solvent"]["model"] == "TIP3P"
+    assert resolved["forcefield"]["protein"] == "ff14SB"
+    assert resolved["solute"]["ligand_forcefield"] == "sage-2.2.1"
+    assert resolved["solvent"]["padding_nm"] == 1.5
+    assert resolved["solvent"]["box_shape"] == "dodecahedron"
+    assert resolved["solvent"]["cutoff_nm"] == 1.0
+    assert resolved["solvent"]["ionic_strength_molar"] == 0.15
+    assert (resolved["solvent"]["positive_ion"], resolved["solvent"]["negative_ion"]) == \
+           ("Na+", "Cl-")
+    assert resolved["constraints"]["type"] == "HBonds"
+    assert resolved["constraints"]["hydrogen_mass_amu"] is None, "HMR is off by default"
+
+    document = _sys_document(resolved)
+    assert document["forcefield"]["protein"] == "amber14-all.xml"
+    assert document["forcefield"]["water"] == "amber14/tip3p.xml"
+    # Neither ff19SB nor OPC may be what actually gets built by default.
+    values = yaml.safe_dump(document).lower()
+    assert "ff19sb" not in values and "opc" not in values and "amber19" not in values
+
+
+def test_the_default_protocol_is_2fs_five_ns_without_hmr():
+    resolved = resolve_md_config(None)
+    assert resolved["dynamics"]["timestep_fs"] == 2.0
+    assert resolved["dynamics"]["friction_per_ps"] == 1.0
+    assert resolved["dynamics"]["barostat_interval_steps"] == 25
+    assert resolved["stages"]["production_steps"] == 2_500_000
+    assert resolved["stages"]["production_steps"] * 2.0 / 1e6 == 5.0, "5 ns at 2 fs"
+    assert resolved["reporting"] == {"solute_printout": 1000, "system_printout": 10000,
+                                     "checkpoint_printout": 10000}
+
+
+def test_opc_selects_ff19sb_and_tip3p_does_not():
+    """ff19SB was parameterised against OPC; the pairing is enforced, not documented."""
+    opc = resolve_build_config(_written({"solvent": {"model": "OPC"},
+                                         "forcefield": {"protein": "ff19SB"}}))
+    assert _sys_document(opc)["forcefield"]["protein"] == "amber19-all.xml"
+    with pytest.raises(ConfigError, match="ff19SB"):
+        resolve_build_config(_written({"solvent": {"model": "TIP3P"},
+                                       "forcefield": {"protein": "ff19SB"}}))
+
+
+def test_gbn2_is_implicit_and_carries_no_box_or_water():
+    resolved = resolve_build_config(_written({"solvent": {"model": "GBn2"}}))
+    document = _sys_document(resolved)
+    # No explicit-solvent block exists at all -- not one that is present and ignored. There is
+    # nothing for a box, a cutoff or salt to be written into.
+    assert "solvent" not in document, document.get("solvent")
+    assert document["implicit_solvent"] == {"model": "GBn2", "radii": "mbondi3",
+                                            "nonpolar_sasa": False}
+    from md_tools.openmm.config import resolve_sys_config
+    sys_resolved = resolve_sys_config(document)
+    assert sys_resolved["solvation"] == "implicit"
+    assert sys_resolved["forcefield"]["water"] is None, "no water model participates"
+    assert sys_resolved["constraints"]["rigid_water"] is False, "there is no water to hold rigid"
+
+
+def test_a_solvent_name_is_accepted_case_insensitively():
+    for spelling in ("TIP3P", "tip3p", "Tip3p"):
+        assert canonical_solvent(spelling) == "TIP3P"
+    for spelling in ("GBn2", "gbn2", "GBN2"):
+        assert canonical_solvent(spelling) == "GBn2"
+
+
+@pytest.mark.parametrize("block, key, value", [
+    ("solvent", "model", "TIP4P"),
+    ("solvent", "box_shape", "sphere"),
+    ("solvent", "padding_nm", 99.0),
+    ("constraints", "type", "SomeBonds"),
+    ("solute", "ligand_charge_method", "made-up"),
+    ("forcefield", "protein", "charmm36"),
+])
+def test_a_value_outside_the_declared_set_is_refused(block, key, value):
+    with pytest.raises(ConfigError):
+        resolve_build_config(_written({block: {key: value}}))
+
+
+def test_the_shipped_examples_are_exactly_what_the_schemas_render():
+    """No drift: the committed examples and the schemas have one source, and this proves it."""
+    from md_tools.build.examples import packaged_directory, render_all
+
+    directory = packaged_directory()
+    for relative, expected in render_all().items():
+        path = directory / relative
+        assert path.is_file(), f"{relative} is not shipped"
+        assert path.read_text(encoding="utf-8") == expected, (
+            f"{relative} differs from what the schema renders. Regenerate it with "
+            f"md_tools.build.examples.write_all() rather than editing it by hand.")
+
+
+def test_every_shipped_example_validates_against_its_own_schema():
+    """A shipped example that its own validator rejects is worse than no example."""
+    from md_tools.build.examples import packaged_directory
+
+    directory = packaged_directory()
+    resolve_build_config(directory / "openmm" / "md_build.config")
+    for name in ("cMD.config", "REST2.config", "rREST2.config"):
+        resolved = resolve_md_config(directory / "openmm" / name)
+        assert resolved["protocol"] == name.removesuffix(".config")

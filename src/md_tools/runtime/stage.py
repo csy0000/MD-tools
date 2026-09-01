@@ -80,6 +80,16 @@ def stage_parser(description: str) -> argparse.ArgumentParser:
     return parser
 
 
+#: Fields a continuation may legitimately change, and which are therefore NOT part of the
+#: fingerprint a checkpoint is matched against.
+#:
+#: `steps` is the whole point: asking for a longer run is an extension, and an extension must be
+#: able to resume from the checkpoint the shorter run left. Everything else -- the ensemble, the
+#: timestep, the temperature, the restraint, the seed, the System itself -- would make the
+#: continuation a different simulation wearing the same file names, so all of it is fingerprinted.
+EXTENDABLE_FIELDS = frozenset({"steps", "description"})
+
+
 def _config_fingerprint(stage: dict[str, Any], system_sha: str, topology_sha: str) -> str:
     """What a checkpoint has to match before it may be resumed from.
 
@@ -87,9 +97,41 @@ def _config_fingerprint(stage: dict[str, Any], system_sha: str, topology_sha: st
     velocities for a particular particle set; resuming it against a System that was rebuilt is how
     a run continues with the right-looking numbers and the wrong molecule.
     """
-    payload = {"stage": {k: v for k, v in sorted(stage.items()) if k != "description"},
+    payload = {"stage": {k: v for k, v in sorted(stage.items())
+                         if k not in EXTENDABLE_FIELDS},
                "system_sha256": system_sha, "topology_sha256": topology_sha}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def check_timestep_against_masses(timestep_fs: float, system, topology) -> None:
+    """Refuse a large timestep on hydrogens that were never repartitioned.
+
+    Checked against the MASSES IN THE SYSTEM, not against a configuration that claims HMR was
+    applied. HMR rewrites particle masses at build time; by the time a stage runs, the System
+    either has repartitioned hydrogens or it does not, and that is a fact rather than a request.
+
+    This is the combination nothing else catches: a 4 fs timestep is reasonable, a System built
+    without HMR is reasonable, and together they integrate a ~10 fs X-H angle motion with a 4 fs
+    step and silently produce a trajectory that is wrong rather than a run that fails.
+    """
+    if timestep_fs <= 3.0:
+        return
+    from openmm import unit
+
+    masses = []
+    for atom in topology.atoms():
+        if atom.element is not None and atom.element.symbol == "H":
+            masses.append(system.getParticleMass(atom.index).value_in_unit(unit.dalton))
+    if not masses:
+        return
+    heaviest = max(masses)
+    if heaviest < 2.0:
+        raise SystemExit(
+            f"the timestep is {timestep_fs} fs but the heaviest hydrogen in this System is "
+            f"{heaviest:.3f} amu, so hydrogen mass repartitioning was NOT applied when it was "
+            f"built. A timestep above ~3 fs needs HMR. Either rebuild with "
+            f"constraints.hydrogen_mass_amu set in the build configuration, or lower "
+            f"dynamics.timestep_fs to 2.0. Nothing has been integrated.")
 
 
 def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
@@ -166,6 +208,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                 f"stage {name} declares ensemble {stage['ensemble']}, but the System is not "
                 f"periodic. Implicit solvent has no volume to control, so there is no NPT here.")
         log.field("solvent", "implicit (no barostat possible)" if implicit else "explicit")
+        check_timestep_against_masses(timestep_fs, system, pdb.topology)
 
         # -- the Force layout, fixed before any state is loaded -----------------------------
         restrained = float(stage.get("restraint_kcal_per_mol_A2") or 0.0) > 0.0
@@ -225,6 +268,17 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         elif args.continue_from:
             parent = Path(args.continue_from)
             if not parent.is_file():
+                if args.check:
+                    # Not a failure. --check exists so a whole chain can be validated before any
+                    # of it runs, and in an unrun chain every parent after the first is missing
+                    # by construction. Calling that a failure would make --check useless exactly
+                    # when it is most useful.
+                    log.heading("Preflight")
+                    log(f"  [pending] parent state {parent} does not exist yet; stage "
+                        f"'{name}' is later in the chain. No Context was created.")
+                    log.record["status"] = "pending"
+                    log.save()
+                    return 0
                 raise SystemExit(f"-c {parent} does not exist: the previous stage writes it only "
                                  f"when it finishes")
             state = XmlSerializer.deserialize(parent.read_text(encoding="utf-8"))
