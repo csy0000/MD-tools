@@ -64,7 +64,7 @@ Combinations that are individually reasonable and jointly wrong are refused, not
 Sage is used only where a small molecule needs it. A peptide-only build records `ligand: null`,
 and a ligand-only build records `protein: null` — what **resolved**, not what was requested.
 
-The commented example is `configs/openmm/md_build.config`, and ships inside the wheel.
+The commented example is [`configs/sys/build-top.config`](configs/sys/build-top.config).
 
 ## `build-md`
 
@@ -111,7 +111,7 @@ checkpoint only if that checkpoint's fingerprint matches this stage's configurat
 written under a different ensemble, timestep, temperature, seed or System is refused. Asking for a
 longer run is the one change that does not invalidate a checkpoint, because extension is legitimate.
 
-Examples ship as `configs/openmm/cMD.config`, `REST2.config` and `rREST2.config`.
+Examples are [`configs/md/cMD.config`](configs/md/cMD.config), [`REST2.config`](configs/md/REST2.config) and [`rREST2.config`](configs/md/rREST2.config).
 
 ### REST2 and rREST2
 
@@ -191,9 +191,27 @@ place to keep somebody's paths.
 
 The storage root resolves separately, because it changes far more often than an identity:
 `--md-data`, then `$MD_DATA`, then `machine.md_data`. Which source supplied it is always printed.
-A commented example ships as `configs/user.config.example`.
+A commented example is [`configs/machine/user.config.example`](configs/machine/user.config.example).
 
 ---
+
+## Configuration examples
+
+Browse them here; they are ordinary files, not a symlink:
+
+```text
+configs/
+├── machine/user.config.example     identity and storage root, for `data-register --init`
+├── sys/build-top.config            force fields, solvent, box, ions, constraints, HMR
+└── md/
+    ├── cMD.config                  plain molecular dynamics
+    ├── REST2.config                the replica-exchange ladder
+    └── rREST2.config               REST2 with a Boltzmann reservoir
+```
+
+They install with the wheel as data files under `<prefix>/share/md-tools/configs/`, and
+`md_tools.configs.example_root()` finds them there through the distribution's own metadata. There
+is exactly one copy of each file: the one in this repository.
 
 ## Configuration files
 
