@@ -238,7 +238,7 @@ def test_unsafe_4fs_configurations_are_refused_with_a_specific_message(patch, ex
     ("OPC", "water", "amber14/tip3p.xml"),
 ])
 def test_a_crossed_explicit_pair_is_refused_however_it_was_spelled(solvent, field, value):
-    """`sys-config` writes a coupled selection; the file it writes is editable YAML.
+    """The defaults are a coupled selection; a configuration file is editable YAML.
 
     Generating the pair correctly is not the same as building it correctly. Changing one half by
     hand produces a System, runs to completion, and reports a Hamiltonian nobody validated -- so

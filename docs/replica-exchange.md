@@ -490,5 +490,6 @@ in storage.
   the analysis storage for writing, in any mode.
 - Implicit-solvent **ligand** REST2 remains scientifically unvalidated.
 - Smoke runs are picoseconds and validate neither ladder quality nor convergence.
-- The legacy `md-gen --method REST2` loop still exists for the contract-managed route and its
-  existing datasets; it is marked legacy and points at the executor.
+- Datasets registered before v0.5.0 were produced by a retired generator. Their provenance
+  records that, and is not rewritten; only the way a ladder is generated changed, not the
+  Hamiltonian it runs.

@@ -29,7 +29,7 @@ to the workflow matrix and seeing it pass first.
 
 **Precise claims, in descending strength.**
 
-1. **A generated project moves.** `sys-gen` writes `inputs/` and `md-gen` writes `MD/`, and `MD/`
+1. **A generated project moves.** `build-top` writes `inputs/` and `build-md` writes `MD/`, and `MD/`
    addresses `inputs/` by a relative path. Moving the two together to another machine needs no
    edit. The only absolute path written is the recorded interpreter in `run.sh`, which falls back
    to whatever `python3` provides.
@@ -50,7 +50,7 @@ to the workflow matrix and seeing it pass first.
 
 5. **Rebuilding from the original structure may be scientifically consistent without being bitwise
    identical.** Parameterisation depends on the toolkit versions recorded in each build record
-   in `machine.yaml` and by `sys-gen` in `inputs/provenance.yaml`. Reproducing a build exactly
+   in `machine.yaml` and by `build-top` in `inputs/provenance.yaml`. Reproducing a build exactly
    requires reproducing that environment; moving the already-built `inputs/` does not.
 
 **Not claimed:** cross-machine bitwise reproducibility of dynamics, in any configuration.

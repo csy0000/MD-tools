@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""REST2 exchange production for the contract-managed `md-gen` route. NOT the production engine.
+"""REST2 exchange production for the contract-managed `build-md` route. NOT the production engine.
 
     THE PRODUCTION REST2 ENGINE IS OPENMMTOOLS.
 
@@ -10,7 +10,7 @@ schedule and rules, its NetCDF storage, its restart and its walker-to-state mapp
 reservoir refresh (rREST2) through a generated exchange rule, and it supports MPI multi-GPU
 execution, which this loop does not.
 
-This custom loop remains ONLY because the older contract-managed `md-gen` route and the datasets
+This custom loop remains ONLY because the older contract-managed `build-md` route and the datasets
 already generated through it depend on its on-disk layout -- per-replica directories, its own
 `exchange_attempts.csv`, and the stage fingerprints the shared preflight checks. Removing it would
 invalidate existing dataset provenance, which is a worse outcome than keeping a legacy path that
@@ -106,7 +106,7 @@ def _barostat_frequency_steps():
         raise SystemExit(
             "md.config.yaml is missing common.barostat_frequency_steps, which explicit solvent "
             "needs to construct the MonteCarloBarostat. Regenerate the project with "
-            "`md-openmm md-gen`, or add the key (25 is OpenMM's own default).")
+            "`md-openmm build-md`, or add the key (25 is OpenMM's own default).")
     return int(value)
 
 
@@ -138,7 +138,7 @@ def required_steps(name):
     if method.get(name) is None:
         raise SystemExit(
             f"REST2.{name} is missing from md.config.yaml. Regenerate the protocol with "
-            f"`md-openmm sys-config` and reapply your edits, or add the key by hand.")
+            f"the build configuration and reapply your edits, or add the key by hand.")
     return steps_for(float(method[name]), TIMESTEP_FS)
 
 
@@ -214,7 +214,7 @@ def _starting_artifact(path, *, role):
 
 def main(argv=None):
     print("# NOTE: this is the legacy REST2 exchange loop of the contract-managed "
-          "md-gen route.")
+          "build-md route.")
     print("#       The production REST2 engine is OpenMMTools; see docs/openmmtools-rest2.md.")
     check_only = "--check" in (sys.argv[1:] if argv is None else argv)
     preflight.require(HERE, HERE.parent, INPUTS, CONFIG, stage=STAGE,

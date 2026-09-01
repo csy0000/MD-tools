@@ -384,7 +384,7 @@ def clean_checkout():
 
 
 def _generate_in_process(build, local, *, methods, stage):
-    """`sys-gen` or `md-gen`, called directly so the patched identity applies."""
+    """The builder, called directly so the patched identity applies."""
     from md_tools.openmm import mdgen, sysgen
 
     environment = dict(os.environ)

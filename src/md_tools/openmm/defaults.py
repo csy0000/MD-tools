@@ -1,6 +1,6 @@
 """The default system and protocol settings, defined once.
 
-`sys-config`, `md-config` and `show-default` all read these. There is no second copy: the reason
+the build configuration, `md-config` and the shipped examples all read these. There is no second copy: the reason
 this repository accumulated drift guards is that the same fact used to be declared in five places,
 and a change would update two of them.
 
@@ -75,7 +75,7 @@ EXPLICIT_PROTEIN_FORCEFIELD = EXPLICIT_COMBINATIONS["OPC"]["protein"]
 
 #: Substrings that identify which supported family a hand-written resource name belongs to.
 #:
-#: `sys-config` writes the qualified resource, but the file is editable YAML and a user may write
+#: the build configuration writes the qualified resource, but the file is editable YAML and a user may write
 #: `amber14/protein.ff14SB.xml`, `ff14SB.xml` or `amber/ff14SB.xml` instead. Matching on family
 #: markers rather than on an exact string means `config._check_explicit_pairing` catches a crossed
 #: pair however it was spelled, while a name belonging to NEITHER family is left alone -- somebody
@@ -130,7 +130,7 @@ def ais_defaults() -> dict[str, Any]:
 
     The `null` fields are REQUIRED USER INPUT, not silent defaults. AIS starts from an existing
     equilibrium trajectory, and there is no defensible guess for which one, which part of it, or how
-    long the switch should take. `md-gen` names the missing field rather than choosing.
+    long the switch should take. `build-md` names the missing field rather than choosing.
     """
     return {
         "path": {
@@ -205,9 +205,9 @@ def dataset_defaults() -> dict[str, Any]:
     """The MD-data dataset identity, as editable YAML with every unguessable field left null.
 
     MD-data owns the dataset contract (`csy0000/MD-data`, `docs/contracts/dataset-v1.md`); this
-    block is the smallest input `sys-gen` needs to WRITE a manifest that its validator accepts. It
+    block is the smallest input `build-top` needs to WRITE a manifest that its validator accepts. It
     lives in `sys.config.yaml` rather than in both files because a dataset has one identity, and
-    `md-gen` reads it back from `common/resolved_sys.config.yaml`.
+    `build-md` reads it back from `common/resolved_sys.config.yaml`.
 
     Every `null` is a required value that this package must not invent:
 
@@ -307,7 +307,7 @@ def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT) -> dic
             "model": solvent if not implicit else DEFAULT_SOLVENT,
             # OpenMM's padding semantics: width = max(2R + padding, 2 * padding), so this is a
             # requested solute-to-BOX clearance, not the box width and not the solute-to-periodic-
-            # copy distance. `sys-gen` records all four quantities; raise this to 2.0 for an
+            # copy distance. `build-top` records all four quantities; raise this to 2.0 for an
             # unfolded or unusually flexible solute, or when enhanced sampling is expected to
             # expand it.
             "padding_nm": DEFAULT_PADDING_NM,
@@ -508,7 +508,7 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> 
 
 
 def default_document(name: str) -> dict[str, Any]:
-    """`show-default <name>` -- the same definitions `sys-config` writes."""
+    """`the shipped examples <name>` -- the same definitions the build configuration writes."""
     key = str(name).lower()
     if key == "sys":
         return sys_defaults()
@@ -520,7 +520,7 @@ def default_document(name: str) -> dict[str, Any]:
         return {k: v for k, v in md_defaults(methods=["AIS"]).items()
                 if k not in ("cMD", "REST2")}
     if key == "dataset":
-        # The MD-data identity block on its own, which is how you read it: `sys-config` buries it
+        # The MD-data identity block on its own, which is how you read it: the build configuration buries it
         # at the bottom of a long file, and every required field in it is null on purpose.
         return {"dataset": sys_defaults()["dataset"]}
     if key == "all":

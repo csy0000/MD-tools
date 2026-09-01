@@ -79,7 +79,7 @@ def _ais_solute_solute_scale(tau):
 PROJECT = HERE.parent
 CONFIG = yaml.safe_load((PROJECT / "md.config.yaml").read_text())
 PATH_DEFINITION = yaml.safe_load((HERE / "path_definition.yaml").read_text())
-#: The resolved production request, written by `md-gen`. The shared preflight recomputes it from
+#: The resolved production request, written by `build-md`. The shared preflight recomputes it from
 #: the current configuration and refuses a changed one before any Context exists. Absent in a
 #: project generated before AIS carried a stage document, and the preflight skips rather than
 #: guessing in that case.

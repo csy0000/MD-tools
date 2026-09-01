@@ -1,6 +1,6 @@
 """The validated OpenMM system builders.
 
-Extracted verbatim from the retired `sysgen.py` when the `sys-gen`/`md-gen` route was removed.
+Extracted verbatim from the retired `sysgen.py` when the `build-top`/`build-md` route was removed.
 These are the functions `build-top` and the replica runtime actually use -- protonation, solvation,
 the GBn2/mbondi3 implicit path, the omega classification and the solute record -- and they are the
 code the scientific tests have always covered. Nothing here was rewritten in the move.

@@ -112,7 +112,7 @@ def openff_resource(name):
 def _check_explicit_pairing(resolved: dict[str, Any]) -> None:
     """Refuse a hand-edited explicit configuration that crosses the two supported pairs.
 
-    `sys-config` writes a coupled selection -- ff14SB with TIP3P, ff19SB with OPC -- but the file it
+    the build configuration writes a coupled selection -- ff14SB with TIP3P, ff19SB with OPC -- but the file it
     writes is ordinary editable YAML, so generating it correctly is not the same as building it
     correctly. Changing `solvent.model` to OPC and leaving `forcefield.protein` at ff14SB produces
     a System, runs to completion, and reports a Hamiltonian nobody validated.

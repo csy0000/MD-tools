@@ -28,7 +28,7 @@ RESTRAINT_PARAMETER = "restraint_k"
 MAX_SEED = 2 ** 31 - 1
 
 # The barostat attempt interval is NOT declared here. It is `common.barostat_frequency_steps` in
-# md.config.yaml, copied into every stage.yaml by md-gen, and passed in by the caller. A constant
+# md.config.yaml, copied into every stage.yaml by build-md, and passed in by the caller. A constant
 # in this file would be a second declaration of a public default, and the one that silently wins
 # when the two disagree.
 
@@ -402,7 +402,7 @@ def production_stage_document(config, method_name, *, parent_stage, parent_path,
                               seeds, template_commit, omega_excluded=()):
     """The resolved request for one production stage.
 
-    ONE derivation, used by `md-gen` when it writes `stage.yaml` and by the generated launcher
+    ONE derivation, used by `build-md` when it writes `stage.yaml` and by the generated launcher
     when it recomputes the current request. If the two derived it separately they would drift,
     and the check would compare a hash of one thing against a hash of another.
     """

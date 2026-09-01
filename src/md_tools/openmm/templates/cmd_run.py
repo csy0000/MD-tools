@@ -86,7 +86,7 @@ def _barostat_frequency_steps():
 BAROSTAT_FREQUENCY_STEPS = _barostat_frequency_steps()
 SOLUTE_INDICES = list(range(int(SOLUTE["n_solute_atoms"])))
 TAU = float(method.get("tau", 0.0) or 0.0)
-# Read from solute.yaml, which sys-gen wrote from the topology: the same list REST2 uses, so the
+# Read from solute.yaml, which build-top wrote from the topology: the same list REST2 uses, so the
 # two cannot disagree about which torsions are omega.
 OMEGA_EXCLUDED = (SOLUTE["rest2"]["omega_excluded_bonds"]
                   if method.get("omega_exclusion", True) else [])

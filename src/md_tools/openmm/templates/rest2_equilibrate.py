@@ -72,7 +72,7 @@ def _barostat_frequency_steps():
         raise SystemExit(
             "md.config.yaml is missing common.barostat_frequency_steps, which explicit solvent "
             "needs to construct the MonteCarloBarostat. Regenerate the project with "
-            "`md-openmm md-gen`, or add the key (25 is OpenMM's own default).")
+            "`md-openmm build-md`, or add the key (25 is OpenMM's own default).")
     return int(value)
 
 

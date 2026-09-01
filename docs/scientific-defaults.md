@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Repository | MD-tools (`csy0000/MD-tools`), version 0.4.0.dev0 |
-| Applies to | the values `md-openmm sys-config` and `md-openmm show-default` write |
+| Applies to | the defaults `md-openmm build-top` and `md-openmm build-md` apply |
 | Date | 2026-08-27 |
 | References | `docs/md-defaults-references.bib` |
 
@@ -153,7 +153,7 @@ extrapolation from the 2.x benchmarks is small, but it is an extrapolation and i
 
 ### 3.4 Keeping ff19SB + OPC available
 
-`md-openmm sys-config --solvent OPC` selects ff19SB + OPC, unchanged. It is the right choice when
+Setting `forcefield.protein: ff19SB` and `solvent.model: OPC` selects ff19SB + OPC, unchanged. It is the right choice when
 the science depends on the water model — conformational ensembles of intrinsically disordered or
 marginally stable peptides, where ff14SB's helicity bias and TIP3P's compactness both matter, and
 where ff19SB was specifically shown to improve on ff14SB [@tian2020ff19sb]. It is selected by one
@@ -171,7 +171,7 @@ pairing has training-set support and this one does not.
 
 Sage is pinned by the resource the toolkit actually loads, `openff-2.2.1`, resolved from the
 `sage-2.2.1` label a user writes. The installed `openforcefields` package ships
-`openff-2.2.1.offxml`, dated 2024-09-11; `md-openmm sys-gen` records the resolved resource name in
+`openff-2.2.1.offxml`, dated 2024-09-11; `md-openmm build-top` records the resolved resource name in
 `inputs/forcefield.json` rather than the label.
 
 Charges are **standard AM1-BCC** through AmberTools' `sqm`, via the OpenFF toolkit registry, which
@@ -223,7 +223,7 @@ This is the sharpest limitation in the repository and it is measured, not assert
 `mbondi3` is `mbondi2` plus adjustments keyed on **residue names** — GLU, ASP, GL4, AS4 carboxylate
 oxygens to 1.4 Å, ARG HH/HE hydrogens to 1.17 Å — and on the **atom name** `OXT`. A
 Sage-parameterised small molecule is a single `UNL` residue with no such names, so no adjustment can
-match and mbondi3 is *exactly* mbondi2 for it. `sys-gen` measures this and records
+match and mbondi3 is *exactly* mbondi2 for it. `build-top` measures this and records
 `mbondi3_reduces_to_mbondi2` in `forcefield.json`.
 
 ### 6.2 Elements outside the GB-Neck2 fit get unfitted parameters, silently
@@ -243,7 +243,7 @@ itself flags the boundary — "extension to non-protein systems will be explored
 
 ### 6.3 What this repository does about it
 
-`sys-gen` reads the per-particle parameters back off the built `CustomGBForce`, counts how many
+`build-top` reads the per-particle parameters back off the built `CustomGBForce`, counts how many
 atoms carry the unfitted triple, and publishes the result:
 
 ```json
@@ -270,7 +270,7 @@ The rules, implemented in `forcefield_record._implicit_support_status`:
   `support_status: "experimental"`. The elements are in the fit but the *chemistry* was not: GBn2
   was trained on peptides and proteins, and nothing published validates it for drug-like scaffolds
   with OpenFF valence and vdW parameters.
-* **any atom outside the fit** → `support_status: "experimental"`, and `sys-gen` prints a warning
+* **any atom outside the fit** → `support_status: "experimental"`, and `build-top` prints a warning
   naming the atomic numbers.
 
 Exact Amber `igb=8`/`mbondi3`/`gbsa=0` parity is claimed **only** in the first case, and the record
@@ -300,7 +300,7 @@ keep them apart under names that say which is which:
    OpenMM's own check refuses a cutoff larger than half the reduced-box height; this repository adds
    a 0.1 nm margin on top so the NPT contraction that immediately follows does not cross it.
 
-`sys-gen` records all four, plus whether the box had to be grown, in
+`build-top` records all four, plus whether the box had to be grown, in
 `forcefield.json → explicit_solvent.box_geometry` and in `provenance.yaml → forcefield_summary.box`.
 
 ### 7.2 Why 1.5 nm, and what it is not
@@ -583,7 +583,7 @@ choices — rather than predicting a number:
    relaxation time or a diffusion constant, keep every arm at 2 fs with unmodified masses.
 3. **Raise padding to 2.0 nm for every arm if any arm expands the solute.** A REST2 ladder and a
    cMD walker compared in differently sized boxes are not the same comparison. Set it once, in
-   `sys.config.yaml`, before `sys-gen`.
+   `configs/sys/build-top.config`, before `build-top`.
 4. **Switch to ff19SB + OPC when the water model is the variable**, or when the science is a
    conformational ensemble of a disordered or marginally stable peptide — and switch every arm.
 5. **Archive `inputs/` with the trajectories.** `system.xml` records what was built; the
@@ -613,9 +613,9 @@ explicitly; `unknown` means "not recorded" and is never upgraded to a guess.
 | every package version that could change a parameter | `forcefield.json → package_versions`; `provenance.yaml → environment` |
 | what was built, as one summary beside the lineage hashes | `inputs/provenance.yaml → forcefield_summary` |
 
-`sys-gen` additionally keeps the user's original input byte-for-byte under `original_inputs/`, keeps
+`build-top` additionally keeps the user's original input byte-for-byte under `original_inputs/`, keeps
 the construction artifacts that carry science under `preparation/`, and writes `SHA256SUMS` over the
-whole directory. `md-gen` records the parent system's hashes, the stage plan, every seed and
+whole directory. `build-md` records the parent system's hashes, the stage plan, every seed and
 `generated-files.sha256`.
 
 **0.3.x data is not retrofitted.** The defaults changed in 0.4; what 0.3.x ran did not. The

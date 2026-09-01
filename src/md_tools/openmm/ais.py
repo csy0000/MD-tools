@@ -6,9 +6,9 @@ REST2 uses -- `s = (1 - tau)^2` for solute-solute terms, `sqrt(s) = 1 - tau` for
 terms, torsions about an omega bond left alone -- driven through the parameters of a live Context
 instead of built once per rung.
 
-What lives here is the arithmetic that both `md-gen` and the generated runtime have to agree on:
+What lives here is the arithmetic that both `build-md` and the generated runtime have to agree on:
 which taus the path visits, when the parameters change, and which of those points are observed. The
-generated project cannot import this module, so `md-gen` writes the resulting schedule into
+generated project cannot import this module, so `build-md` writes the resulting schedule into
 `AIS/path_definition.yaml` and the runtime reads it. Computing it once and recording it, rather than
 recomputing it at both ends, is what stops a project from observing a schedule its own record does
 not describe.

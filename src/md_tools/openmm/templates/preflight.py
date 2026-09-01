@@ -41,7 +41,7 @@ COMPONENT_OF_DIRECTORY = {
     "AIS": "AIS",
 }
 
-#: What `sys-gen` writes and every generated script needs. A missing one is named here rather than
+#: What `build-top` writes and every generated script needs. A missing one is named here rather than
 #: discovered halfway through a build.
 REQUIRED_COMMON = ("system.xml", "topology.pdb", "solute.pdb", "initial_state.xml", "solute.yaml",
                    "resolved_sys.config.yaml")
@@ -219,7 +219,7 @@ def check_common(inputs, config):
     if missing:
         return [_no("prepared inputs",
                     f"{inputs} is missing {', '.join(missing)} -- build the system with "
-                    f"`md-openmm sys-gen`")]
+                    f"`md-openmm build-top`")]
     results.append(_ok("prepared inputs", f"{len(REQUIRED_COMMON)} required file(s) in "
                                           f"{inputs.name}/"))
 
@@ -666,7 +666,7 @@ def check_runtime_request(here, stage, config):
 
     Generated launchers reread `md.config.yaml` at run time, which is what makes extension work:
     raise the requested length and the stage runs longer from its own checkpoint. The same
-    reread is what let an edited timestep through -- `md-gen` refuses 4 fs without hydrogen mass
+    reread is what let an edited timestep through -- `build-md` refuses 4 fs without hydrogen mass
     repartitioning, but nothing re-applied that at run time, so editing the file after generation
     and rerunning appended dynamics at the new timestep to a trajectory produced at the old one.
 

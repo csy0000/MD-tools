@@ -1,6 +1,6 @@
 """The common equilibration stages, and the order they depend on each other in.
 
-One place derives the stage list, the directory names and the parent of every stage. `md-gen`
+One place derives the stage list, the directory names and the parent of every stage. `build-md`
 writes directories from it and the tests assert against it, so a generated tree and the contract
 it is supposed to satisfy cannot disagree.
 
@@ -140,7 +140,7 @@ def stage_plan(config: dict[str, Any], *, implicit: bool) -> list[dict[str, Any]
         if index == 0:
             stage["parent"] = None
             stage["parent_path"] = None
-            stage["input_state"] = None      # md-gen fills this from the inputs folder
+            stage["input_state"] = None      # build-md fills this from the inputs folder
         else:
             parent = plan[index - 1]
             stage["parent"] = parent["name"]

@@ -37,7 +37,7 @@ def _project_root(start):
         if (candidate / "md.config.yaml").is_file():
             return candidate
     raise SystemExit(f"no md.config.yaml above {start}; this script must live inside a project "
-                     f"written by `md-openmm md-gen`.")
+                     f"written by `md-openmm build-md`.")
 
 
 PROJECT = _project_root(HERE)
@@ -197,7 +197,7 @@ def main(argv=None):
     else:
         parent_state = require_parent_state(
             (HERE / STAGE["input_state"]).resolve(),
-            stage_name=STAGE.get("parent") or "sys-gen",
+            stage_name=STAGE.get("parent") or "build-top",
             command=STAGE.get("parent_path") or "..")
         simulation.context.setState(parent_state)
         simulation.context.setStepCount(0)
