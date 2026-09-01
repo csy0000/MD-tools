@@ -280,19 +280,6 @@ def test_a_marker_ahead_of_its_data_is_refused(tmp_path):
 
 # --- a stated platform must reach the runtime -------------------------------------------------
 
-def test_the_generated_replica_protocol_states_its_platform():
-    """The defect: `platform: CPU` was accepted at setup and printed in the preset, but the
-    generated replica protocol carried no platform at all, so the runtime fell back to
-    `automatic` and every replica run silently took whatever OpenMM picked."""
-    from md_tools.openmm import emit
-    from md_tools.openmm.simple import SetupRequest, resolve
-
-    resolved = resolve(SetupRequest(system="A", input="x.pdb", solvent="implicit",
-                                    protocol="REST2", production="20 ps",
-                                    output_interval="1 ps", platform="CPU"))
-    resolved.update(solute_range=(0, 21), provenance_hint="p.yaml")
-    text = emit.replica_protocol_file(resolved, method="REST2")
-    assert "platform='CPU'" in text or 'platform="CPU"' in text
 
 
 def test_the_platform_is_not_part_of_the_scientific_identity():
@@ -302,3 +289,25 @@ def test_the_platform_is_not_part_of_the_scientific_identity():
                              exchange_interval_ps=2.0, number_of_exchanges=2, platform="CPU")
     assert protocol.platform == "CPU"
     assert "platform" not in protocol.describe()
+
+
+def test_the_generated_replica_protocol_states_its_platform():
+    """The requested platform must actually reach the runtime.
+
+    Ported from the retired `emit.replica_protocol_file`. It is carried but never compared:
+    resuming on another machine's platform is legitimate, so it is not part of the scientific
+    identity -- which the test below this one asserts.
+    """
+    from md_tools.runtime.replica import protocol_file_text
+
+    ladder = {"protocol": "REST2", "solvent": "implicit", "n_states": 2, "tau_max": 0.5,
+              "exchange_interval_steps": 1000, "number_of_exchanges": 10,
+              "state_trajectory": True, "rem_log": True, "neighbour_acceptance_report": True,
+              "reservoir": {"enabled": False, "path": None, "velocities": "resample",
+                            "refresh_interval_exchanges": 1},
+              "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "pressure_bar": 1.0,
+                           "friction_per_ps": 1.0, "barostat_interval_steps": 25,
+                           "restraint_kcal_per_mol_A2": 1.0, "seed": 1, "platform": "CPU",
+                           "tau": 0.0, "phase_space_printout": 0}}
+    text = protocol_file_text(ladder)
+    assert "platform='CPU'" in text or 'platform="CPU"' in text

@@ -14,7 +14,7 @@
     )
 
 That is the whole contract. The generated input names a protocol and nothing else: no path, no
-exchange loop, no NetCDF, no MPI, no source parsing. `openmm-md` reads `protocol` out of the file
+exchange loop, no NetCDF, no MPI, no source parsing. The executor reads `protocol` out of the file
 and runs it.
 """
 from replica_protocol import KB_KJ_PER_MOL_K, ProtocolError, REST2Protocol   # noqa: F401

@@ -114,10 +114,9 @@ print(md_tools.__file__)
 
 @pytest.mark.parametrize("command", [
     ("md_tools.cli.md_openmm", "--help"),
-    ("md_tools.cli.md_openmm", "sys-config", "--help"),
-    ("md_tools.cli.md_openmm", "sys-gen", "--help"),
-    ("md_tools.cli.md_openmm", "md-gen", "--help"),
-    ("md_tools.cli.md_openmm", "show-default", "sys"),
+    ("md_tools.cli.md_openmm", "build-top", "--help"),
+    ("md_tools.cli.md_openmm", "build-md", "--help"),
+    ("md_tools.cli.md_openmm", "data-register", "--help"),
 ])
 def test_each_public_command_runs_from_outside_the_checkout(installed, command):
     site, work = installed
@@ -146,4 +145,8 @@ def test_the_console_scripts_are_installed(installed):
     site, _ = installed
     scripts = {path.name for path in (site.parent / "site" / "bin").iterdir()} \
         if (site.parent / "site" / "bin").is_dir() else set()
-    assert {"md-openmm", "md-template"} <= scripts, scripts
+    # `md-openmm` is the ONLY executable this distribution installs. `md-template` was the
+    # environment installer and is retired; a second entry point would be a second way in.
+    assert "md-openmm" in scripts, scripts
+    assert "md-template" not in scripts, scripts
+    assert "openmm-md" not in scripts, scripts

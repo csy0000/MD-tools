@@ -61,16 +61,14 @@ jobs:
           rm -rf dist && python -m build --wheel --outdir dist
           python -m pip install --no-deps dist/*.whl
 
-      - name: validate the environment the way md-template install does
+      - name: validate the installed distribution
         run: |
-          md-template init --target-dir "${RUNNER_TEMP}/stack"
-          md-template install --target-dir "${RUNNER_TEMP}/stack" --validate "${CONDA_PREFIX}"
+          python -c "import md_tools, openmm; print(md_tools.__version__, openmm.__version__)"
 
       - name: the six public commands and project generation, from outside the checkout
         # Generation only. `md-gen` writes scripts; it does not run them.
         working-directory: ${{ runner.temp }}
         run: |
-          md-template --help > /dev/null
           md-openmm --help > /dev/null
           md-openmm show-default all > /dev/null
           md-openmm sys-config --method cMD REST2 --solvent OPC

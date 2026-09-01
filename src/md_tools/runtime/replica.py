@@ -174,6 +174,27 @@ def write_reservoir_declaration(ladder: dict[str, Any], out: Path) -> Path:
     return path
 
 
+def protocol_file_text(ladder: dict[str, Any]) -> str:
+    """The protocol module a ladder is described by, as text.
+
+    Exposed separately from `replica_main` so the portability properties can be checked without
+    running anything: the body must name no path, so that a generated directory is movable and
+    carries no machine-specific string.
+    """
+    dynamics = ladder["dynamics"]
+    timestep = float(dynamics["timestep_fs"])
+    states = int(ladder["n_states"])
+    taus = tau_ladder(states, float(ladder["tau_max"]))
+    exchange_ps = int(ladder["exchange_interval_steps"]) * timestep / 1000.0
+    return PROTOCOL_TEMPLATE.format(
+        protocol=ladder["protocol"], n_states=states, tau_max=ladder["tau_max"],
+        temperature=float(dynamics["temperature_K"]), ladder=taus, timestep=timestep,
+        exchange_ps=exchange_ps, whole_ps=exchange_ps, solute_ps=exchange_ps,
+        exchanges=int(ladder["number_of_exchanges"]),
+        friction=float(dynamics["friction_per_ps"]), equilibration_ps=0.0,
+        seed=int(dynamics["seed"]), platform=dynamics.get("platform"))
+
+
 def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     """Prepare the ladder's inputs and hand them to the validated executor."""
     import argparse
@@ -213,15 +234,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
                               route=args.route)
 
     protocol_file = out / "_protocol.py"
-    protocol_file.write_text(PROTOCOL_TEMPLATE.format(
-        protocol=protocol_name, n_states=states, tau_max=ladder["tau_max"],
-        temperature=float(dynamics["temperature_K"]), ladder=taus, timestep=timestep,
-        exchange_ps=exchange_ps, whole_ps=exchange_ps, solute_ps=exchange_ps,
-        exchanges=int(ladder["number_of_exchanges"]),
-        friction=float(dynamics["friction_per_ps"]),
-        equilibration_ps=0.0, seed=int(dynamics["seed"]),
-        platform=dynamics.get("platform"),
-    ), encoding="utf-8")
+    protocol_file.write_text(protocol_file_text(ladder), encoding="utf-8")
 
     group_file = out / f"{protocol_name}.group"
     lines = [f"# {protocol_name}: {states} states, tau 0.0 to {ladder['tau_max']}.",

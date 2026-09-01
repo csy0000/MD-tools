@@ -3,7 +3,7 @@
 
 Copied verbatim into a generated rREST2 project and selected with
 
-    openmm-md ... --exchange-rule rREST2/rrest2_exchange.py --reservoir rREST2/reservoir.yaml
+    the executor, with --exchange-rule rrest2_exchange.py and --reservoir reservoir.yaml
 
 It carries no path and no parameter of its own: the refresh schedule comes from the reservoir
 declaration `--reservoir` names, and everything else comes from the protocol. That is what lets

@@ -1,4 +1,22 @@
-"""Write and validate a dataset manifest that MD-data's own validator accepts.
+"""LEGACY -- contract v1, and NOT the contract registration uses.
+
+MD-tools owns the dataset contract in `md_tools.data_contract`, which is version 2:
+a year-first canonical path with no month segment. THAT is what
+`md-openmm data-register` validates against.
+
+This module implements version 1 -- the `{namespace}/{yyyy-mm}/{dataset_name}` shape --
+and survives only because the internal `sys-gen`/`md-gen` route, which AIS still uses,
+can embed a `dataset:` block in its configuration. No public command reaches it:
+`build-top` removes that block before building, and `data-register` does not import
+this module at all.
+
+It is kept rather than deleted because deleting it would remove validated behaviour
+and 53 passing tests for a route that still works. It should go when AIS gets a
+public command of its own.
+
+Original documentation follows.
+
+Write and validate a dataset manifest that MD-data's own validator accepts.
 
 MD-data owns the contract, the schema, the identity rules, the lifecycle, the catalogue, aliases,
 extensions and archival policy (`csy0000/MD-data`, `docs/contracts/dataset-v1.md`). This module

@@ -4,7 +4,7 @@
 #   micromamba activate md-tools-ci
 #   pip install --no-deps dist/md_tools-*.whl
 #
-# This mirrors the package list `md-template install` solves for -- see CONDA_PACKAGES in
+# This is the package list MD-tools is developed and tested against -- see
 # src/md_tools/install/openmm.py -- with the CUDA pin removed, because CI runners have no GPU.
 # `tests/test_install.py` asserts the two agree, so an environment that CI validates and one a user
 # installs cannot drift apart silently.
@@ -47,7 +47,7 @@ dependencies:
   - netcdf4                   # the multistate NetCDF storage a REST2 run writes and restarts from
   # mpi4py is deliberately ABSENT: single-process and single-GPU REST2 are fully supported, and a
   # CI runner has no second device to bind a second rank to. Multi-GPU REST2 needs `mpi4py` and a
-  # working MPI, installed alongside; `md-template install --validate` reports whether it is there.
+  # working MPI, installed alongside. A replica ladder needs one rank per state.
 
   # cuda-version is deliberately ABSENT: the runners are CPU-only. OpenMM still provides the
   # Reference and CPU platforms, which is what the smoke tests use.

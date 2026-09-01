@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """The authoritative replica-exchange output validator. ONE implementation, copied into projects.
 
-`MD-project` calls this through `openmm-md --verify-only`. It does not reimplement the schema and
+A generated replica script calls this through `--verify-only`. It does not reimplement the schema and
 it does not check file existence: a file that exists is exactly what a crashed run leaves behind.
 Every check below OPENS the storage and reads it.
 """

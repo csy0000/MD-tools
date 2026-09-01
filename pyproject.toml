@@ -9,12 +9,15 @@ description = "Standalone OpenMM tooling: topology construction, MD script gener
 readme = "README.md"
 requires-python = ">=3.11"
 # The scientific stack -- openmm, openff-toolkit, openmmforcefields, ambertools, parmed, rdkit --
-# comes from the conda environment `md-template install` creates (see environment-ci.yml for the
-# same list). Install this package into that environment with `--no-deps`, or pip will resolve a
+# comes from your conda environment (see environment-ci.yml for the list this is developed
+# against). Install this package into that environment with `--no-deps`, or pip will resolve a
 # second, pip-built OpenMM alongside the conda one. Only the pure-Python core is declared here.
 dependencies = [
     "pyyaml",
     "numpy",
+    # The dataset contract is a pydantic model, and the published JSON schema is generated FROM
+    # that model, so the validator that runs and the schema that is published cannot drift apart.
+    "pydantic>=2.7,<3",
 ]
 
 [project.optional-dependencies]

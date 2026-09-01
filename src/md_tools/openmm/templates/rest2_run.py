@@ -5,7 +5,7 @@
 
 `md-openmm setup --config <setup.yaml>` with `protocol: REST2` generates a ladder that runs on
 `openmmtools.multistate.ReplicaExchangeSampler` with `MultiStateReporter` NetCDF storage, launched
-by `openmm-md -ng N --groupfile ...`. That is what new work should use: it owns its exchange
+by the executor with a group file. That is what new work should use: it owns its exchange
 schedule and rules, its NetCDF storage, its restart and its walker-to-state mapping, it supports a
 reservoir refresh (rREST2) through a generated exchange rule, and it supports MPI multi-GPU
 execution, which this loop does not.

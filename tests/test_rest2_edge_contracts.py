@@ -428,16 +428,6 @@ def test_the_prepared_manifest_names_the_policy_it_was_materialised_under():
 
 # --- the co-generated source stage is not append-safe cMD -------------------------------------
 
-def test_the_generated_cmd_launcher_passes_no_continuation_flag():
-    """The fixed-tau stage an rREST2 project generates is an ordinary single-protocol cMD run. It
-    must never be launched as though it could be continued."""
-    from md_tools.openmm import emit
-
-    launcher = emit.launcher("cmd", directory_var="CMD_TAU0P5_DIR", depth=1,
-                             parent_restart="eq/nvt_free/nvt_free.state.xml",
-                             trajectory=True, checkpoint=True)
-    assert "--resume" not in launcher
-    assert "--extend" not in launcher
 
 
 def test_continuing_the_source_stage_is_refused_like_any_other_cmd(tmp_path):
@@ -489,3 +479,26 @@ def test_the_identity_budget_is_a_floor_not_an_equality(tmp_path):
     assert 'stats["exchanges_committed"] != int(\n                expected)' not in block, (
         "the original request is still compared for equality")
     assert "< int(" in block, "the identity count is not treated as a floor"
+
+
+def test_the_generated_cmd_launcher_passes_no_continuation_flag(tmp_path):
+    """A fixed-tau cMD stage is an ordinary run and must never be launched as continuable.
+
+    Ported from the retired `emit.launcher`. `build-md` now generates the stage scripts and
+    run.sh, so the property is asserted against what it actually writes.
+    """
+    from md_tools.build.md import build_scripts
+
+    config = tmp_path / "hot.config"
+    config.write_text("protocol: cMD\nsolvent: implicit\n"
+                      "dynamics:\n  tau: 0.5\n"
+                      "stages:\n  production_steps: 1000\n", encoding="utf-8")
+    out = tmp_path / "md_script"
+    build_scripts(config_path=config, out_dir=out, echo=False)
+
+    run_sh = (out / "run.sh").read_text()
+    assert "--resume" not in run_sh
+    assert "--extend" not in run_sh
+    cmd = (out / "cMD.py").read_text()
+    assert "--resume" not in cmd and "--extend" not in cmd
+    assert "'tau': 0.5" in cmd, "the fixed tau must reach the stage it scales"

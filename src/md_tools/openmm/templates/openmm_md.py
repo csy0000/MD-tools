@@ -1,18 +1,22 @@
 #!/usr/bin/env python
-"""`openmm-md` -- the ONE simulation executor for a generated project.
+"""The ONE simulation executor a generated replica script drives.
+
+Called as a function by `md_tools.runtime.replica`, not as a command: MD-tools
+installs exactly one executable, `md-openmm`, and this is reached through the
+`REST2.py` / `rREST2.py` that `md-openmm build-md` generates.
 
 Amber has `pmemd -i in -p prmtop -c rst -o out -x nc -r rst` for a single system and
 `pmemd.MPI -ng N -groupfile groups` for a coordinated set of them. This is the same idea with the
 same executable:
 
-    openmm-md -i INPUT.py -p topology.pdb -s system.xml -c start.xml \\
+    python REST2.py -p built.pdb -s built.xml -c eq_npt_free.xml \\
               -o stage.out -x trajectory.dcd -r final_state.xml --checkpoint stage.chk
 
-    mpiexec -n 6 openmm-md -ng 6 --groupfile REST2/rest2.group \\
+    mpiexec -n 6 python REST2.py -p built.pdb -s built.xml \\
               -o REST2/rest2.out -x REST2/rest2.nc -r REST2/restart.json \\
               --checkpoint REST2/rest2_checkpoint.nc
 
-    mpiexec -n 6 openmm-md -ng 6 --groupfile rREST2/rrest2.group \\
+    mpiexec -n 6 python rREST2.py -p built.pdb -s built.xml \\
               --exchange-rule rREST2/rrest2_exchange.py --reservoir rREST2/reservoir.yaml \\
               -o rREST2/rrest2.out -x rREST2/rrest2.nc -r rREST2/restart.json \\
               --checkpoint rREST2/rrest2_checkpoint.nc
@@ -165,7 +169,7 @@ def _parse_group_line(path, number, tokens):
         if token in RUN_LEVEL_FLAGS:
             raise GroupFileError(
                 f"{path}:{number}: {token} describes the coordinated run and belongs on the outer "
-                f"openmm-md command, not on a group line. A per-group output would give every "
+                f"executor call, not on a group line. A per-group output would give every "
                 f"replica its own file and there would be no single authoritative record.")
         if token not in GROUP_FIELDS:
             raise GroupFileError(
@@ -209,7 +213,7 @@ def _check_group_indices(path, groups):
 
 def _parse(argv):
     parser = argparse.ArgumentParser(
-        prog="openmm-md",
+        prog="replica-executor",
         description="Run one OpenMM protocol against explicit paths, or a coordinated set of "
                     "replicas from an Amber-like group file.")
     for name, short, long, environment, _must_exist, _required in SPEC:
@@ -498,7 +502,7 @@ def verify_only(arguments):
     """Validate an existing run. Writes nothing; the exit status is the answer."""
     storage = arguments.trajectory or os.environ.get("OPENMM_TRAJECTORY")
     if not storage:
-        print("openmm-md: --verify-only needs -x/--trajectory (the stored output)",
+        print("replica executor: --verify-only needs -x/--trajectory (the stored output)",
               file=sys.stderr)
         return 2
     storage_path = Path(storage).expanduser()
@@ -508,7 +512,7 @@ def verify_only(arguments):
     try:
         import replica_validate
     except ImportError as failure:
-        print(f"openmm-md: cannot import replica_validate from {directory} ({failure}). "
+        print(f"replica executor: cannot import replica_validate from {directory} ({failure}). "
               f"--verify-only reads the copy that belongs to the run being checked.",
               file=sys.stderr)
         return 2
@@ -649,15 +653,15 @@ def main(argv=None):
         try:
             groups = parse_group_file(arguments.groupfile)
         except GroupFileError as failure:
-            print(f"openmm-md: {failure}", file=sys.stderr)
+            print(f"replica executor: {failure}", file=sys.stderr)
             return 2
 
     files, problems = resolve(arguments)
     problems += validate(files, arguments, rank=rank, groups=groups)
     if problems:
         for problem in problems:
-            print(f"openmm-md: [rank {rank}] {problem}" if size > 1
-                  else f"openmm-md: {problem}", file=sys.stderr)
+            print(f"replica executor: [rank {rank}] {problem}" if size > 1
+                  else f"replica executor: {problem}", file=sys.stderr)
         return 2
 
     for value in _outputs(files).values():
@@ -682,7 +686,7 @@ def main(argv=None):
                 status = 1
 
     if status == INTERRUPTED_STATUS:
-        print(f"openmm-md: interrupted at an event boundary; the checkpoint is complete and "
+        print(f"replica executor: interrupted at an event boundary; the checkpoint is complete and "
               f"--resume continues it. See {report}", file=sys.stderr)
         return status
 
@@ -691,23 +695,23 @@ def main(argv=None):
         missing = [f"--{name} {value}" for name, value in promised.items()
                    if not Path(value).exists()]
         if missing:
-            message = "openmm-md: the protocol finished but did not write: " + ", ".join(missing)
+            message = "replica executor: the protocol finished but did not write: " + ", ".join(missing)
             with open(report, "a", encoding="utf-8") as handle:
                 handle.write(message + "\n")
             print(message, file=sys.stderr)
             status = 1
         elif not _has_completion_line(report):
-            print(f"openmm-md: {report} has no '{COMPLETION_MARKER}' line; treating as incomplete",
+            print(f"replica executor: {report} has no '{COMPLETION_MARKER}' line; treating as incomplete",
                   file=sys.stderr)
             status = 1
 
     if status != 0:
-        print(f"openmm-md: run failed; see {report}", file=sys.stderr)
+        print(f"replica executor: run failed; see {report}", file=sys.stderr)
     return status
 
 
 def _announce(arguments, files, groups, rank, size):
-    print(f"# openmm-md, grouped mode: {len(groups)} group(s) from "
+    print(f"# replica executor, grouped mode: {len(groups)} group(s) from "
           f"{Path(arguments.groupfile).name}")
     print(f"# mpi                : rank {rank}/{size}")
     print(f"# exchange rule      : "

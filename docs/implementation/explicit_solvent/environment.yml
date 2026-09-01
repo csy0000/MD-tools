@@ -1,6 +1,6 @@
 # HISTORICAL. The environment for the pre-CLI explicit-solvent baseline, kept to
 # interpret reports/explicit_solvent/. The current environment is environment-ci.yml
-# at the repository root, which mirrors what `md-template install` solves for.
+# at the repository root, which is the environment MD-tools is tested against.
 # Environment for the explicit-solvent baseline.
 #
 #   conda env create -f docs/implementation/explicit_solvent/environment.yml

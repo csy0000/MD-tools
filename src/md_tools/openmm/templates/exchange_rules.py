@@ -4,7 +4,7 @@
 A transition rule receives a bounded view of the ladder and returns explicit proposals and
 decisions. It never propagates, never opens storage, never touches MPI and never parses a command
 line. That is the whole point: a later method -- a non-Boltzmann reservoir, a kinetic reservoir --
-becomes a new rule file and changes nothing in `openmm-md`.
+becomes a new rule file and changes nothing in the executor.
 
 This is a CONTRACT, not a framework. There is no registry, no plugin discovery, no dependency
 injection and no method database. `--exchange-rule FILE.py` loads one file by location and takes

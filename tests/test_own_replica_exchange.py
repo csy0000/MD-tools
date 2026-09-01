@@ -805,22 +805,35 @@ def test_the_run_state_sidecar_sits_beside_the_storage():
     assert storage.run_state_path("/a/b/run.nc").name == "run.runstate.json"
 
 
-def test_generated_replica_inputs_contain_no_concrete_path():
-    """The science is path-independent; the group file owns the paths."""
-    sys.path.insert(0, str(SRC))
-    from md_tools.openmm import emit
-    from md_tools.openmm.simple import SetupRequest, resolve
 
-    for method, extra in (("REST2", {}), ("rREST2", {})):
-        resolved = resolve(SetupRequest(
-            system="ALA", input="x.pdb", protocol=method, production="20 ps",
-            output_interval="1 ps",
-            advanced={"REST2.exchange_interval_ps": 2.0,
-                      "REST2.whole_system_interval_ps": 2.0,
-                      "REST2.equilibration_duration_ps": 1.0}))
-        text = emit.replica_protocol_file(resolved, method=method)
-        ast.parse(text)
-        for forbidden in ("/", "$MD_DATA", "..", "topology.pdb", "system.xml"):
-            assert forbidden not in text.split('"""')[2], (
-                f"{method} protocol body names a path: {forbidden}")
+
+def _ladder(protocol="REST2", platform=None, states=4, tau_max=0.5):
+    """A ladder description of the shape `build-md` writes into a generated script."""
+    return {"protocol": protocol, "solvent": "explicit", "n_states": states,
+            "tau_max": tau_max, "exchange_interval_steps": 1000, "number_of_exchanges": 10,
+            "state_trajectory": True, "rem_log": True, "neighbour_acceptance_report": True,
+            "reservoir": {"enabled": False, "path": None, "velocities": "resample",
+                          "refresh_interval_exchanges": 1},
+            "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "pressure_bar": 1.0,
+                         "friction_per_ps": 1.0, "barostat_interval_steps": 25,
+                         "restraint_kcal_per_mol_A2": 1.0, "seed": 1, "platform": platform,
+                         "tau": 0.0, "phase_space_printout": 0}}
+
+
+def test_generated_replica_inputs_contain_no_concrete_path():
+    """A generated protocol file must name no path, so the directory it sits in can be moved.
+
+    Ported from the retired `emit.replica_protocol_file`: `build-md` writes the ladder, and
+    `md_tools.runtime.replica` renders the protocol module the executor loads.
+    """
+    import ast as _ast
+
+    from md_tools.runtime.replica import protocol_file_text
+
+    for protocol in ("REST2", "rREST2"):
+        text = protocol_file_text(_ladder(protocol=protocol))
+        _ast.parse(text)
+        body = text.split('"""')[2]
+        for forbidden in ("/", "$MD_DATA", "..", "topology.pdb", "system.xml", "built.pdb"):
+            assert forbidden not in body, f"{protocol} protocol body names a path: {forbidden}"
         assert "REST2Protocol(" in text

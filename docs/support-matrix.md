@@ -12,7 +12,7 @@ push — so "gated" here means gated at release, not continuously.
 | Python | 3.12 | pinned by `environment-ci.yml`; gated by `release-validation`; locally verified on 3.12.13 |
 | OpenMM | 8.6.0 | pinned by `environment-ci.yml`; gated by `release-validation`; acceptance run on the conda-forge **release** package `openmm 8.6.0 py312hdfcc665_0`, which reports `openmm.version.version` as `8.6.0.dev-c6173db` — the release identity comes from the package, not that string |
 | MDTraj | 1.11.1 locally | reads the AIS source DCD and its box vectors; installed and import-checked |
-| OpenFF toolkit | 0.19.0 locally | installed and import-checked by `md-template install`; unpinned in the solve |
+| OpenFF toolkit | 0.19.0 locally | installed from the conda environment; unpinned in the solve |
 | openmmforcefields | 0.16.0 locally | as above |
 | AmberTools | `sqm`, `antechamber`, `tleap` on PATH | presence and AM1-BCC readiness checked at install and in CI |
 | ParmEd / RDKit | 4.3.1 / 2026.03.1 locally | installed and import-checked |
@@ -49,7 +49,7 @@ to the workflow matrix and seeing it pass first.
    announced on use and recorded in the run summary.
 
 5. **Rebuilding from the original structure may be scientifically consistent without being bitwise
-   identical.** Parameterisation depends on the toolkit versions recorded by `md-template install`
+   identical.** Parameterisation depends on the toolkit versions recorded in each build record
    in `machine.yaml` and by `sys-gen` in `inputs/provenance.yaml`. Reproducing a build exactly
    requires reproducing that environment; moving the already-built `inputs/` does not.
 

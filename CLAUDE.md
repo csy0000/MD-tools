@@ -17,7 +17,7 @@ Reliability, reproducibility and explicit failure matter more than convenience.
 Six public commands, and no seventh. AIS is a `--method`, not a command:
 
 ```
-md-template init      md-template install
+md-openmm build-top   md-openmm build-md   md-openmm data-register
 md-openmm show-default    md-openmm sys-config    md-openmm sys-gen    md-openmm md-gen
 ```
 
@@ -61,7 +61,7 @@ Optional, off by default, and when on it is MD-data's contract v1 — not a sche
 
 - Import `md_data.validate_dataset` and `md_data.storage.check_dataset_tree`. Never vendor, copy
   or reimplement them, and never add a field the contract does not define.
-- The canonical path is `{namespace}/{yyyy-mm}/{dataset_name}` relative to `$MD_DATA`. Components
+- The canonical path is `{year}/{project_name}/{data_name}` relative to `$MD_DATA`. Components
   are top level and a component's `path` equals its `name`. `eq/nvt_1kcal` is a STAGE inside the
   `eq` component, never a component.
 - `MD_DATA_LOCAL` names the ONE dataset this invocation may write into. Refuse a symlink (aliases
