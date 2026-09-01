@@ -11,8 +11,11 @@ can embed a `dataset:` block in its configuration. No public command reaches it:
 this module at all.
 
 It is kept rather than deleted because deleting it would remove validated behaviour
-and 53 passing tests for a route that still works. It should go when AIS gets a
-public command of its own.
+and the tests that cover it, for a route that still works. It goes when AIS gets a
+public command of its own. The removal plan, the affected test files, and an honest
+statement of how the five lazy `md_data` imports here and in preflight.py deviate
+from the migration instruction, are in
+docs/journal/2026-09-01_md-tools-standalone.md, section 9.1.
 
 Original documentation follows.
 

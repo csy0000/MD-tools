@@ -19,6 +19,14 @@ project is an unregistered local `inputs/ + MD/` tree the dataset checks are ski
 such a tree is not MD-data compliant and is not treated as though it were.
 
 This module imports OpenMM, PyYAML and optionally `md_data`. Never `md_tools`.
+
+
+NOTE: the `md_data` import below is a known deviation from the MD-tools migration,
+which forbids importing md_data at runtime. It is lazy and guarded, md-data is not a
+declared dependency, and no public command reaches this branch -- it fires only for a
+contract-managed dataset on the internal route AIS uses. It is removed together with
+md_data_contract.py when AIS gets a public command; see
+docs/journal/2026-09-01_md-tools-standalone.md, section 9.1.
 """
 import json
 import os

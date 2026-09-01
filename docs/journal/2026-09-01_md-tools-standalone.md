@@ -105,10 +105,9 @@ relative-only paths, explicit role consistent with path shape, creator identity,
 timestamps, dataset and component status, exact repository provenance, component uniqueness,
 non-nesting and method identity, linked/read-only rules, and immutability of complete data.
 
-`src/md_tools/openmm/md_data_contract.py` still implements v1. It is reached only by the internal
-`sys-gen`/`md-gen` route that AIS uses, is marked LEGACY in its docstring, and is imported by
-neither `build-top`'s path nor `data-register`. **Remaining work**: it should go when AIS gets a
-public command.
+`src/md_tools/openmm/md_data_contract.py` still implements v1, and five lazy `md_data` imports
+survive with it. Both are deviations, both are deliberate, and both are written up with their
+removal plan in §9.1.
 
 ## 6. Tests
 
@@ -196,8 +195,79 @@ absence, for: `MD-templates`, `md_templates`, `md-template`, `md-data-register`,
 `components.lock.yaml`.
 
 Three `openmm-md` hits remain and all three are sentences saying the command **does not exist**.
-Seven `yyyy-mm` hits remain: two in `data_contract/` explaining what v1 was, five in the
-LEGACY v1 module described in §5.
+Seven `yyyy-mm` hits remain: two in `data_contract/` explaining what v1 was, five in the LEGACY v1
+module. Those five, and the `md_data` imports beside them, are the subject of §9.1 — they are not
+passing the gate, they are recorded as failing it.
+
+## 9.1 Two remnants, one root cause — to be removed together
+
+Both survive the migration deliberately, both are recorded here rather than left to be
+rediscovered, and both disappear in the same piece of work: **giving AIS a public command.**
+
+### What they are
+
+**(a) `src/md_tools/openmm/md_data_contract.py` — dataset contract v1.**
+MD-tools owns v2 in `md_tools.data_contract`. This module is the v1 implementation, kept because
+the internal `sys-gen`/`md-gen` route can embed a `dataset:` block in its configuration. It is
+marked LEGACY in its own docstring.
+
+**(b) five runtime imports of `md_data`**, which the instruction forbids outright:
+
+```text
+src/md_tools/openmm/md_data_contract.py:65    import md_data
+src/md_tools/openmm/md_data_contract.py:103   import md_data
+src/md_tools/openmm/md_data_contract.py:408   from md_data.storage import check_dataset_tree
+src/md_tools/openmm/templates/preflight.py:131  import md_data
+src/md_tools/openmm/templates/preflight.py:148  from md_data.storage import check_dataset_tree
+```
+
+### Stating the deviation accurately
+
+The instruction says "Do not import `md_data` at runtime." That is not satisfied. What *is* true:
+
+* `md-data` is **not** a declared dependency — it is absent from `pyproject.toml`, and every one of
+  the five imports is lazy and guarded, so the package installs and runs without it;
+* the path is **unreachable from all three public commands**: `build-top` pops the `dataset:` block
+  before building, `build-md` never touches it, and `data-register` validates against v2 and does
+  not import this module at all;
+* it fires only when a `sys.config.yaml` sets `dataset.enabled: true`, on the route AIS uses.
+
+So the intent holds — MD-data is not required, and nothing a user runs reaches it — while the
+letter does not. That is a deviation, not a technicality, and it is written down as one.
+
+### Why they were not removed now
+
+Removing them is not deleting dead code. `mdgen.py` calls this module a dozen times to resolve
+roots, build component entries, merge them, write the manifest and validate it, and `preflight.py`
+uses it to check a dataset tree before a run. Tearing that out would delete working, tested
+behaviour and take a large number of tests with it:
+
+| test file | tests | what would need doing |
+|---|---:|---|
+| `tests/test_md_data_contract.py` | 35 | rewritten against contract v2, or removed with the feature |
+| `tests/test_template_provenance.py` | 16 | partially — the provenance half survives |
+| `tests/test_integrity_corrections.py` | 28 | partially — most do not touch the contract |
+
+Doing that as a side effect of a packaging migration would have been the wrong trade: the
+capability still works, and nothing a user can type reaches the part that is wrong.
+
+### The shape of the fix
+
+AIS is the only reason the internal route still exists. When it gets a public command — `md-openmm
+build-ais`, or an `AIS` protocol in `build-md` — the whole chain falls out together:
+
+1. give AIS a public command that generates through `build-top` + the `md_tools.runtime` stage
+   machinery, as cMD/REST2/rREST2 already do;
+2. retire `sysgen.generate_system` and `mdgen.generate_md`, which then have no caller;
+3. delete `md_data_contract.py` and the `dataset:` block it serves — registration has been a
+   separate command since this migration, so an embedded manifest has nothing left to do;
+4. drop the `md_data` branch of `preflight.py`; a generated run does not need to revalidate the
+   dataset it is being written into, because `data-register` validates before it commits;
+5. rewrite `test_md_data_contract.py` against contract v2, and remove the conftest shim that routes
+   the three retired subcommand names to the generator API — it exists only for these callers.
+
+Afterwards the search gate for `yyyy-mm` is clean in maintained code, `md_data` appears nowhere at
+runtime, and MD-tools carries exactly one dataset contract.
 
 ## 10. The rename
 
