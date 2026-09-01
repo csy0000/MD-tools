@@ -193,7 +193,7 @@ R=/path/to/data/MD-analysis-data/20260824_openmm860_ala_validation
 E=/path/to/software/md-stack/conda/openfftools860
 
 PYTHONPATH=src $E/bin/python MD_system_gen.py \
-  -i src/md_tools/openmm/manifests/systems/ace_ala_nme.pdb \
+  -i src/md_templates/openmm/manifests/systems/ace_ala_nme.pdb \
   -o $R/bundles/ala_explicit --config $R/configs/ala_explicit_system.json
 PYTHONPATH=src $E/bin/python MD_input_gen.py \
   --system $R/bundles/ala_explicit/system_manifest.json \

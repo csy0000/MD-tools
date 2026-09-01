@@ -22,7 +22,7 @@ and omega exclusion as the default implementation branch.
 
 ## Requirement 6 — identity and layout (done)
 
-The distribution, import package and console script are now `md-tools`, `md_tools` and
+The distribution, import package and console script are now `md-templates`, `md_templates` and
 `md-openmm`. No compatibility alias, shim or deprecated entry point: the instruction forbids them,
 and they would keep a research project's name alive inside a general template.
 
@@ -168,7 +168,7 @@ recreated a missing-citation defect that had been found and closed the day befor
     compileall              clean
     pytest -m "not slow"    209 passed, 2 deselected
     keyword acceptance      0 matches, and no old name in any path
-    md-openmm --version     md-tools 0.1.0
+    md-openmm --version     md-templates 0.1.0
     both routes             ligand and peptide, rc=0, completed, 4/4 rounds,
                             run from /tmp with no source checkout on the path
 

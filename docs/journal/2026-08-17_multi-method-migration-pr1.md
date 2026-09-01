@@ -14,8 +14,8 @@ template identity from a full Git commit SHA plus the exact template path, compa
 captured before any structural edit, the tests, and this journal.
 
 Everything in the instruction's forbidden list was left alone: no module under
-`src/md_tools/openmm/` was moved, renamed or behaviourally changed; no
-`src/md_tools/engines/openmm/` was created; `md-openmm` gained no command and changed no
+`src/md_templates/openmm/` was moved, renamed or behaviourally changed; no
+`src/md_templates/engines/openmm/` was created; `md-openmm` gained no command and changed no
 behaviour; nothing routes `prepare`, `md` or `rest2` through a descriptor; the canonical
 configuration models, resolution precedence and hash projections are untouched; profiles, profile
 IDs, default selection and scientific defaults are untouched; bundle schemas 1 and 2 are untouched;
@@ -44,7 +44,7 @@ Twenty-one files added, two edited.
 registry.yaml
 templates/conventional-md/openmm/explicit-water/template.yaml
 templates/rest2/openmm/explicit-water/template.yaml
-src/md_tools/core/{__init__,paths,template,registry,identity}.py
+src/md_templates/core/{__init__,paths,template,registry,identity}.py
 scripts/capture_goldens.py
 tests/goldens/{README.md,configuration_hashes,profiles,format_equivalence,
                seed_derivation,bundle_contract,runstate_contract,rest2_defaults}.json
@@ -54,7 +54,7 @@ CHANGELOG.md      (edited: an Unreleased entry)
 README.md         (edited: a "Template catalog" section)
 ```
 
-Nothing else. `git diff 4d21838..HEAD -- src/md_tools/openmm/` is **zero lines**, and
+Nothing else. `git diff 4d21838..HEAD -- src/md_templates/openmm/` is **zero lines**, and
 `git diff --find-renames --diff-filter=RD` over the same range reports nothing, so no file was moved
 or deleted anywhere in the repository.
 
@@ -136,7 +136,7 @@ repository. Backslashes are refused rather than converted, since `os.path.normpa
 into one component on POSIX and two on Windows — a registry validated on one platform would describe
 a different tree on the other.
 
-**Dependency floor: YAML and pydantic.** Nothing in `md_tools.core` imports OpenMM, OpenFF,
+**Dependency floor: YAML and pydantic.** Nothing in `md_templates.core` imports OpenMM, OpenFF,
 RDKit, mdtraj, numpy or scipy, so listing and validating the catalog works in a minimal environment
 on a machine that could never run a simulation. Two tests hold the boundary: a source scan, and a
 subprocess that imports the package, loads the catalog, and asserts none of those top-level modules
@@ -151,7 +151,7 @@ Identity is the tuple `(canonical repository URL, full 40-character Git commit S
 template path)`, canonically
 
 ```
-https://github.com/csy0000/MD-tools@<40 hex>#templates/<method>/<engine>/<variant>/template.yaml
+https://github.com/csy0000/MD-templates@<40 hex>#templates/<method>/<engine>/<variant>/template.yaml
 ```
 
 Both the structured fields and the string are kept: the string is what gets quoted in a report, the
@@ -199,7 +199,7 @@ runs in a subprocess with `socket.socket`, `create_connection` and `getaddrinfo`
 stubs.
 
 Template identity is **not** part of any scientific or continuity hash in PR 1, and a test asserts
-that no runtime module under `src/md_tools/openmm/` references `md_tools.core` at all.
+that no runtime module under `src/md_templates/openmm/` references `md_templates.core` at all.
 
 **Catalog loading refuses symlinks.** `is_file()`, `read_text()` and `exists()` all follow symlinks
 silently, so a committed `template.yaml` *symlink* could point at mutable bytes outside the checkout
@@ -257,14 +257,14 @@ writing, for CI.
 ## Confirmations the instruction asks for explicitly
 
 **Template identity is not yet written into bundles or runs.** Nothing in
-`src/md_tools/openmm/` imports `md_tools.core`; a test scans every runtime module for that
+`src/md_templates/openmm/` imports `md_templates.core`; a test scans every runtime module for that
 import and for the string `template_identity`. No bundle manifest, run manifest, checksum domain,
 continuity path or hash projection gained a template field, and a golden test asserts the string
 `template` appears in none of the frozen configuration projections.
 
 **Runtime dispatch remains legacy.** `md-openmm` is unchanged and both descriptors record
 `implementation.dispatch: legacy-direct`, `implementation.binding: current-openmm-implementation`,
-`python_namespace: md_tools.openmm`, `cli_command: md-openmm`. `--help` output for the root
+`python_namespace: md_templates.openmm`, `cli_command: md-openmm`. `--help` output for the root
 command and for `prepare`, `md`, `rest2`, `bundle` and `config` was captured from a worktree at
 `4d21838` and from the branch head and diffed: **identical, all six.**
 
@@ -319,7 +319,7 @@ CPU integration: PASSED
 ```
 
 The full gate is the meaningful one: it runs against the **installed wheel** with no checkout on the
-path, and it refuses to start if `md_tools` resolves into the repository. It passing after PR 1
+path, and it refuses to start if `md_templates` resolves into the repository. It passing after PR 1
 is what shows the catalog changed no runtime behaviour — the same prepare, relocate, run, resume and
 offline-validate sequence produces the same result it did before.
 
@@ -327,7 +327,7 @@ The 151 new tests are 87 catalog + 44 identity + 20 compatibility. No existing t
 skipped, weakened or rewritten; the non-slow count moves by exactly the number added (293 → 444).
 
 The slow gate and `integration_cpu.sh` were run before the review fixes and not rerun after. Both
-exercise `md_tools.openmm` only — the review fixes touch `md_tools.core` exclusively, which
+exercise `md_templates.openmm` only — the review fixes touch `md_templates.core` exclusively, which
 no runtime module imports, and the 0-line runtime diff below still holds. The four gates the review
 asked to rerun were all rerun.
 
@@ -397,7 +397,7 @@ local and CI behaviour cannot drift, but their remote status is unknown to me.
 
 The REST2 descriptor records that omega exclusion is supported, enabled by default and explicitly
 disableable. That field *records* the runtime default; it does not set it. The default lives in
-`md_tools.openmm.config.DEFAULTS` and in the shipped REST2 profiles, PR 1 changes neither, and a
+`md_templates.openmm.config.DEFAULTS` and in the shipped REST2 profiles, PR 1 changes neither, and a
 test asserts the descriptor and the runtime agree with the runtime as the authority.
 
 ## Deviations from the instruction
@@ -419,7 +419,7 @@ No other deviation.
   is what records a clean build's full commit SHA into the wheel so an installed copy can resolve an
   identity without `.git`. Until then an installed copy correctly raises `NoProvenanceError`.
 * Generic execution dispatch, the general CLI, and routing `prepare`/`md`/`rest2` through descriptors.
-* Relocating the OpenMM implementation under `src/md_tools/engines/openmm/`.
+* Relocating the OpenMM implementation under `src/md_templates/engines/openmm/`.
 * Template-local profiles, which is why `profiles.template_local` is `false` and the model refuses
   `true`.
 * Writing template identity into bundles and run manifests.

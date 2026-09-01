@@ -118,7 +118,7 @@ present on the remote branch), the runs were queried three ways:
 ```console
 $ gh run list                       gh CLI is not installed
 $ curl .../actions/runs             HTTP 404
-$ curl .../repos/csy0000/MD-tools   HTTP 404 -- the repository is private
+$ curl .../repos/csy0000/MD-templates   HTTP 404 -- the repository is private
 $ echo $GH_TOKEN $GITHUB_TOKEN      both unset
 ```
 

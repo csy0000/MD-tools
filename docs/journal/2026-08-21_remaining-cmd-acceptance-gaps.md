@@ -90,7 +90,7 @@ stochastic continuation; checkpoint preference is unchanged.
 ## 4. The five commit boundaries are interrupted deliberately
 
 A timed `kill -9` proves some interruption is survivable but cannot say which boundary it hit.
-`faults.crash_point` makes the boundary selectable from `MD_TOOLS_CRASH_AT` and is inert
+`faults.crash_point` makes the boundary selectable from `MD_TEMPLATES_CRASH_AT` and is inert
 otherwise — unset, it is one `os.environ.get`. It uses `os._exit`, so no `finally` block, `atexit`
 handler or buffer flush runs: the conditions a real kill produces.
 
@@ -194,8 +194,8 @@ Both workflows trigger on pushes to `dev` and both are green.
 
 | SHA | workflow | run | id | conclusion | URL |
 |---|---|---|---|---|---|
-| `25f7832` (code + journal) | `fast` | #36 | 32524723711 | **success** | https://github.com/csy0000/MD-tools/actions/runs/32524723711 |
-| `25f7832` | `integration-cpu` | #36 | 32524723755 | **success** | https://github.com/csy0000/MD-tools/actions/runs/32524723755 |
+| `25f7832` (code + journal) | `fast` | #36 | 32524723711 | **success** | https://github.com/csy0000/MD-templates/actions/runs/32524723711 |
+| `25f7832` | `integration-cpu` | #36 | 32524723755 | **success** | https://github.com/csy0000/MD-templates/actions/runs/32524723755 |
 
 `25f7832` carries every code change in this round. This commit adds only the table above, so its own
 runs cannot be listed inside itself; the final SHA and its two green runs are recorded in the task

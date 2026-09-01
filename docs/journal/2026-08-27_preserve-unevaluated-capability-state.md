@@ -123,7 +123,7 @@ pytest tests/ -q -p no:randomly -m "not gpu"                              327 pa
 
 ### Scope
 
-Changed: `src/md_tools/install/openmm.py` (+27) and `tests/test_installer_capability.py`
+Changed: `src/md_templates/install/openmm.py` (+27) and `tests/test_installer_capability.py`
 (+90), plus the index and this journal. A grep of the diff for `ais_run`, `rest2`, `sysgen`,
 `mdgen`, `stage_run`, `md_stages`, `system.py`, `solvation`, `forcefield_record`, `implicit`,
 `preflight`, `openmm/config.py`, `openmm/defaults.py`, `md_data_contract` and `provenance_min`

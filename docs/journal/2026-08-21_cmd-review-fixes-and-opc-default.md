@@ -176,12 +176,12 @@ for **`b1ab424`, the final SHA** (#31).
 
 | workflow | run | conclusion | duration | URL |
 |---|---|---|---|---|
-| `fast` | #28 | **success** | 2 m 04 s | https://github.com/csy0000/MD-tools/actions/runs/32476211126 |
-| `integration-cpu` | #28 | **success** | 3 m 57 s | https://github.com/csy0000/MD-tools/actions/runs/32476210988 |
-| `fast` | #29 | **success** | — | https://github.com/csy0000/MD-tools/actions/runs/32491770318 |
-| `integration-cpu` | #29 | **success** | — | https://github.com/csy0000/MD-tools/actions/runs/32491770319 |
-| `fast` | #31 | **success** | — | https://github.com/csy0000/MD-tools/actions/runs/32497458186 |
-| `integration-cpu` | #31 | **success** | — | https://github.com/csy0000/MD-tools/actions/runs/32497458036 |
+| `fast` | #28 | **success** | 2 m 04 s | https://github.com/csy0000/MD-templates/actions/runs/32476211126 |
+| `integration-cpu` | #28 | **success** | 3 m 57 s | https://github.com/csy0000/MD-templates/actions/runs/32476210988 |
+| `fast` | #29 | **success** | — | https://github.com/csy0000/MD-templates/actions/runs/32491770318 |
+| `integration-cpu` | #29 | **success** | — | https://github.com/csy0000/MD-templates/actions/runs/32491770319 |
+| `fast` | #31 | **success** | — | https://github.com/csy0000/MD-templates/actions/runs/32497458186 |
+| `integration-cpu` | #31 | **success** | — | https://github.com/csy0000/MD-templates/actions/runs/32497458036 |
 
 Every step succeeded in both jobs; the only skipped steps are the `if: failure()` diagnostic
 uploads. `integration-cpu` ran the full 13-step gate, the real subprocess crash-recovery slow tests

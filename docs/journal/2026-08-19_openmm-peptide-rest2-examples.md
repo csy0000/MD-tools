@@ -37,7 +37,7 @@ worktree clean                                                    yes (one stray
 
 What blocks it: GitHub's branch-rename is an API operation. On this machine `gh` is not installed,
 the remote is SSH, no token is present in the environment or in a credential helper, and
-`api.github.com/repos/csy0000/MD-tools` returns 404 unauthenticated because the repository is
+`api.github.com/repos/csy0000/MD-templates` returns 404 unauthenticated because the repository is
 private. Open pull requests and branch-protection settings could not be inspected for the same
 reason, so item 3 of Phase 0 is also unverified.
 
@@ -151,7 +151,7 @@ indexes particles should still use the resolved indices from the bundle, but not
 
 The instruction's shared-preparation block specifies ff19SB, OPC water, and a truncated-octahedral
 box. For cyclo-RGDfV the vetted manifest
-(`src/md_tools/openmm/manifests/systems/cyclo_rgdfv.yaml`) specifies otherwise, and the vetted
+(`src/md_templates/openmm/manifests/systems/cyclo_rgdfv.yaml`) specifies otherwise, and the vetted
 definition was followed:
 
 | | instruction | used | reason |
@@ -169,22 +169,22 @@ decision.
 ## Files changed
 
 ```
-new   src/md_tools/openmm/tau.py                 tau -> s/sqrt(s), ladders, device mapping
-new   src/md_tools/openmm/segments.py            exact step and exchange arithmetic
+new   src/md_templates/openmm/tau.py                 tau -> s/sqrt(s), ladders, device mapping
+new   src/md_templates/openmm/segments.py            exact step and exchange arithmetic
 new   tests/test_tau_and_segments.py                 48 tests
 new   tests/test_worked_examples.py                  46 tests
 new   test/ala/REST2/{README.md,alanine_rest2.json,run_all.sh,.gitignore}
 new   test/ala/REST2/extension/{README.md,extend.sh}
 new   test/rgd/REST2/{README.md,rgdfv_rest2.json,run_all.sh,.gitignore}
 new   test/rgd/REST2/extension/{README.md,extend.sh}
-edit  src/md_tools/openmm/spec/models.py         SegmentedProduction, TauLadderSpec,
+edit  src/md_templates/openmm/spec/models.py         SegmentedProduction, TauLadderSpec,
                                                      ExchangeSpec, SelectionSpec, OmegaExclusionSpec
-edit  src/md_tools/openmm/spec/resolve.py        retired-input refusals with migrations
-edit  src/md_tools/openmm/spec/adapter.py        segment/tau projection onto the runtime tree
-edit  src/md_tools/openmm/spec/migrate.py        legacy manifests -> tau ladder, or refusal
-edit  src/md_tools/openmm/spec/canonical.py      EXTENSION_ONLY emptied
-edit  src/md_tools/openmm/spec/diffs.py          field explanations for the new contract
-edit  src/md_tools/openmm/spec/profiles/*.json   5 profiles, schema 2
+edit  src/md_templates/openmm/spec/resolve.py        retired-input refusals with migrations
+edit  src/md_templates/openmm/spec/adapter.py        segment/tau projection onto the runtime tree
+edit  src/md_templates/openmm/spec/migrate.py        legacy manifests -> tau ladder, or refusal
+edit  src/md_templates/openmm/spec/canonical.py      EXTENSION_ONLY emptied
+edit  src/md_templates/openmm/spec/diffs.py          field explanations for the new contract
+edit  src/md_templates/openmm/spec/profiles/*.json   5 profiles, schema 2
 edit  scripts/capture_goldens.py                     capture tau and derived s
 edit  tests/goldens/*.json                           4 regenerated (3 unchanged)
 edit  tests/test_spec_config.py, test_compat_goldens.py, test_template_catalog.py
@@ -214,7 +214,7 @@ after the full spec change     577 passed
 final                          623 passed, 17 deselected, 1 warning   (39.6 s)
 
 python scripts/capture_goldens.py --check     exit 0, all 7 goldens ok
-python -m build --wheel --no-isolation        Successfully built md_tools-0.1.0-py3-none-any.whl
+python -m build --wheel --no-isolation        Successfully built md_templates-0.1.0-py3-none-any.whl
 ```
 
 Goldens: `configuration_hashes`, `format_equivalence`, `profiles` and `rest2_defaults` moved by
