@@ -134,74 +134,11 @@ def dcd_header(path: Path) -> dict:
 
 #: A smoke protocol: picoseconds of dynamics and a box as small as the cutoff allows. What these
 #: sizes test is the stage chain and the bookkeeping, not any scientific quantity.
-SMOKE_STAGE_PS = 0.02
-SMOKE_MIN_ITERATIONS = 25
 
 
-def tiny_project(work: Path, *, solvent: str = "TIP3P", methods=("cMD", "REST2"),
-                 replicas: int = 2, exchanges: int = 3, edit=None) -> Path:
-    """Build inputs/ and MD/ for a project small enough to run through every stage on CUDA.
-
-    Small means picoseconds and a box at the cutoff -- not a different platform. Shared by the
-    layout, cMD and REST2 tests so they exercise one generator call each rather than three
-    slightly different hand-written configurations.
-
-    TIP3P by default, because that is the method-development default: ff14SB + TIP3P for a peptide,
-    Sage 2.2.1 + TIP3P for a ligand. CUDA acceptance runs on the combination users get, not on the
-    optional ff19SB + OPC selection -- which stays available and is exercised by configuration
-    tests that build no System.
-    """
-    import shutil
-
-    import yaml
-
-    from md_tools.openmm.config import write_yaml
-    from md_tools.openmm.defaults import md_defaults, sys_defaults
-
-    shutil.copy2(ALA_PDB, work / "ALA.pdb")
-    # `sys-config`, `sys-gen` and `md-gen` were retired from the public CLI by the MD-tools
-    # migration; the modules behind them were not. These fixtures call that API directly, which
-    # is what they were always really exercising -- the generator, not the argument parser.
-    write_yaml(work / "sys.config.yaml", sys_defaults(peptide=True, solvent=solvent))
-    write_yaml(work / "md.config.yaml", md_defaults(methods=tuple(methods), solvent=solvent))
-
-    system_config = work / "sys.config.yaml"
-    document = yaml.safe_load(system_config.read_text())
-    if solvent in ("TIP3P", "OPC"):
-        document["solvent"]["padding_nm"] = 0.5
-        document["solvent"]["cutoff_nm"] = 0.5
-    system_config.write_text(yaml.safe_dump(document, sort_keys=False))
-    from md_tools.openmm.sysgen import generate_system
-
-    generate_system(input_path=work / "ALA.pdb", config_path=system_config,
-                    output_folder=work / "inputs", echo=False)
-
-    protocol_path = work / "md.config.yaml"
-    protocol = yaml.safe_load(protocol_path.read_text())
-    protocol["minimization"]["max_iterations"] = SMOKE_MIN_ITERATIONS
-    for key, value in list((protocol["equilibration"] or {}).items()):
-        if key.endswith("_duration_ps") and value is not None:
-            protocol["equilibration"][key] = SMOKE_STAGE_PS
-    if "cMD" in protocol:
-        protocol["cMD"].update({"duration_ns": 0.00004, "checkpoint_interval_ps": 0.02,
-                                "whole_system_interval_ps": 0.02, "solute_interval_ps": 0.01})
-    if "REST2" in protocol:
-        protocol["REST2"].update({"number_of_replicas": replicas,
-                                  "equilibration_duration_ps": SMOKE_STAGE_PS,
-                                  "exchange_interval_ps": SMOKE_STAGE_PS,
-                                  "number_of_exchanges": exchanges, "tau_max": 0.05,
-                                  "checkpoint_interval_ps": 0.02,
-                                  "whole_system_interval_ps": 0.04,
-                                  "solute_interval_ps": 0.02})
-    if edit is not None:
-        edit(protocol)
-    protocol_path.write_text(yaml.safe_dump(protocol, sort_keys=False))
-
-    from md_tools.openmm.mdgen import generate_md
-
-    generate_md(input_folder=work / "inputs", config_path=protocol_path,
-                output_folder=work / "MD")
-    return work / "MD"
+# `tiny_project` is gone with `openmm/sysgen.py` and `openmm/mdgen.py`, which it called
+# directly. It had no callers left, so it was scaffolding that could only have failed. Tests
+# that need a real project build one through the public commands.
 
 
 def run_stage(directory: Path, script: str = "run.py", platform: str | None = None,

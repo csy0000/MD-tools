@@ -396,30 +396,13 @@ def clean_checkout():
         patch.undo()
 
 
-def _generate_in_process(build, local, *, methods, stage):
-    """The builder, called directly so the patched identity applies."""
-    from md_tools.openmm import mdgen, sysgen
-
-    environment = dict(os.environ)
-    os.environ.update({"MD_DATA": str(local.parents[2]), "MD_DATA_LOCAL": str(local)})
-    try:
-        if stage == "system":
-            sysgen.generate_system(input_path=build / "ALA.pdb",
-                                   config_path=build / "sys.config.yaml",
-                                   output_folder=local / "common", echo=False)
-        else:
-            mdgen.generate_md(input_folder=local / "common",
-                              config_path=build / "md.config.yaml", output_folder=local)
-    finally:
-        os.environ.clear()
-        os.environ.update(environment)
 
 
 
 
-def _launch(directory, script, environment, *args):
-    return subprocess.run(["bash", script, *args], cwd=str(directory), capture_output=True,
-                          text=True, env=environment, timeout=1800)
+# `_generate_in_process` and `_launch` are gone with `openmm/sysgen.py` and `openmm/mdgen.py`.
+# Nothing called them: they would have raised ImportError on the first use. The fixtures that
+# build a real system go through `md-openmm build-top` and `build-md`.
 
 
 
