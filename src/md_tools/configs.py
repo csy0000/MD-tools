@@ -34,7 +34,7 @@ EXAMPLES = (
     Path("md") / "cMD.config",
     Path("md") / "REST2.config",
     Path("md") / "rREST2.config",
-    # Path("md") / "AIS.config" joins here when AIS becomes a build-md protocol.
+    Path("md") / "AIS.config",
 )
 
 

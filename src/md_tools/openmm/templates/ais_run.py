@@ -574,8 +574,10 @@ def run_one_path(index, plan):
             "protocol_step": observation["protocol_step"],
             "switching_time_ps": observation["switching_time_ps"],
             "tau": observation["tau"],
-            "s": observation["s"],
-            "sqrt_s": observation["sqrt_s"],
+            # Derived here from tau rather than read back from the schedule: tau is the one
+            # persisted protocol coordinate, and a second stored coordinate could disagree with it.
+            "s": _ais_solute_solute_scale(observation["tau"]),
+            "sqrt_s": 1.0 - observation["tau"],
             "incremental_work_kj_mol": incremental,
             "cumulative_work_kj_mol": cumulative,
             "cumulative_reduced_work": BETA * cumulative,
@@ -621,7 +623,7 @@ def run_one_path(index, plan):
     say(f"observation {rows[-1]['observation_index']}: tau {rows[-1]['tau']:g}, "
         f"cumulative work {cumulative:.6f} kJ/mol "
         f"(reduced {BETA * cumulative:.6f})")
-    say(f"complete: {len(rows)} observations, {SCHEDULE['total_steps']} integration steps")
+    say(f"complete: {len(rows)} observations, {SCHEDULE['switching_steps']} integration steps")
     (directory / "stdout.log").write_text("\n".join(log) + "\n", encoding="utf-8")
 
     completion = {
@@ -1186,7 +1188,7 @@ def main(argv=None):
     print(f"[AIS] {count} independent path(s), tau {PATH_DEFINITION['path']['tau_start']} -> "
           f"{PATH_DEFINITION['path']['tau_end']}, "
           f"{SCHEDULE['number_of_updates']} switching update(s) over "
-          f"{SCHEDULE['total_steps']} steps, {SCHEDULE['number_of_observations']} observations",
+          f"{SCHEDULE['switching_steps']} steps, {SCHEDULE['number_of_observations']} observations",
           flush=True)
     print(f"[AIS] source {plan['source']['trajectory_configured']} at tau {plan['source']['tau']}, "
           f"{plan['source']['eligible_frames']} eligible frame(s) in "
@@ -1234,7 +1236,7 @@ def main(argv=None):
         "gpu_devices": devices,
         "path": PATH_DEFINITION["path"],
         "schedule": {key: SCHEDULE[key] for key in
-                     ("total_steps", "number_of_updates", "number_of_observations",
+                     ("switching_steps", "number_of_updates", "number_of_observations",
                       "updates_per_observation", "steps_per_observation",
                       "parameter_update_interval_steps", "timestep_fs")},
         "work_convention": PATH_DEFINITION["work_convention"],

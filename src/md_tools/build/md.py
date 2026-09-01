@@ -34,7 +34,7 @@ import yaml
 from .record import LogWriter
 from .strict import ConfigError, Field, Schema, Section
 
-PROTOCOLS = ("cMD", "REST2", "rREST2")
+PROTOCOLS = ("cMD", "REST2", "rREST2", "AIS")
 
 MD_SCHEMA = Schema(
     "cMD.config / REST2.config / rREST2.config",
@@ -43,7 +43,10 @@ MD_SCHEMA = Schema(
         Field("protocol", str, default="cMD", enum=PROTOCOLS,
               doc="cMD is plain molecular dynamics. REST2 adds a replica-exchange ladder in which "
                   "only the solute's Hamiltonian is scaled. rREST2 adds a Boltzmann reservoir "
-                  "refresh of the hottest rung."),
+                  "refresh of the hottest rung. AIS runs non-equilibrium switching paths from an "
+                  "EXISTING equilibrium source ensemble -- it has no minimisation or "
+                  "equilibration chain of its own, because its input is a trajectory you have "
+                  "already produced."),
         Field("solvent", str, default="explicit", enum=("explicit", "implicit"),
               doc="Must match the System `build-top` produced. Under implicit solvent there is no "
                   "box and no barostat, so the pressure-coupled equilibration stages are replaced "
@@ -144,6 +147,58 @@ MD_SCHEMA = Schema(
                "and CMAP by (1-tau)^2, solute-solute nonbonded and 1-4 by (1-tau)^2, "
                "solute-environment by (1-tau), GB by (1-tau) -- is a property of the validated "
                "implementation and is not configurable here."),
+        Section("ais", [
+            Field("number_of_paths", int, default=100, minimum=1,
+                  doc="How many independent switching paths to run. Each gets its own directory, "
+                      "its own trajectory, and its own deterministic seeds."),
+            Field("tau_start", float, default=0.5, minimum=0.0, maximum=0.95,
+                  doc="The tau the path starts at. It must equal the tau of the source ensemble: "
+                      "the path begins in the ensemble it anneals away from, and the source's own "
+                      "record is checked against this rather than assumed."),
+            Field("tau_end", float, default=0.0, minimum=0.0, maximum=0.95,
+                  doc="The tau the path ends at. 0.0 is the unmodified physical Hamiltonian. "
+                      "tau_start and tau_end must differ, or the Hamiltonian never changes and "
+                      "every work value would be zero."),
+            Field("switching_steps", int, default=50_000, minimum=1, unit="steps",
+                  doc="The length of the switching path, as an exact step count. 50000 steps is "
+                      "100 ps at 2 fs. WORK IS PATH-LENGTH DEPENDENT: a faster switch does more "
+                      "dissipative work, so this is a scientific choice and not a performance "
+                      "knob. The log states the derived ps."),
+            Field("observation_interval_steps", int, default=2_500, minimum=1, unit="steps",
+                  doc="How often a path is observed: one coordinate frame and one work row. "
+                      "switching_steps must divide by this exactly, so the last observation lands "
+                      "at tau_end. 50000/2500 gives 20 intervals and therefore 21 observations, "
+                      "counting both endpoints. AN OBSERVATION IS NOT A STEP."),
+            Field("parameter_update_interval_steps", int, default=1, minimum=1, unit="steps",
+                  doc="How often tau moves. 1 changes the Hamiltonian every step -- 50000 "
+                      "parameter changes over the path above. observation_interval_steps must "
+                      "divide by this, or observations would not sit on the update grid."),
+        ], doc="The switching path. Ignored unless protocol is AIS. Every length is an exact "
+               "integer step count; nothing here is a duration that has to divide by a timestep."),
+        Section("ais_source", [
+            Field("trajectory", str, default=None, nullable=True,
+                  doc="REQUIRED for AIS. The equilibrium trajectory the paths start from, "
+                      "typically a fixed-tau cMD run at tau = ais.tau_start. Resolved relative to "
+                      "the directory run.sh is invoked from."),
+            Field("topology", str, default=None, nullable=True,
+                  doc="Topology for reading that trajectory. Null uses the -p topology the run "
+                      "was given, which is the usual case. The resolved choice is recorded."),
+            Field("first_frame", int, default=0, minimum=0,
+                  doc="First eligible frame, INCLUSIVE, as a 0-based index into the trajectory "
+                      "file. A frame index, never a time: the two are interchangeable only when "
+                      "the frame interval is known, and it is not always. Use this to discard "
+                      "equilibration."),
+            Field("last_frame", int, default=None, nullable=True, minimum=0,
+                  doc="Last eligible frame, INCLUSIVE. Null means the final frame in the file."),
+            Field("selection", str, default="uniform_random",
+                  enum=("uniform_random", "evenly_spaced"),
+                  doc="How starting frames are drawn from the eligible window. uniform_random "
+                      "draws with the run's seed; evenly_spaced takes them at a fixed stride."),
+            Field("allow_repeated_frames", bool, default=False,
+                  doc="Whether two paths may start from the SAME frame. False by default: two "
+                      "paths from one configuration are not two independent realisations, and "
+                      "treating them as such understates the spread of the work distribution."),
+        ], doc="Where the starting configurations come from. Ignored unless protocol is AIS."),
         Section("reservoir", [
             Field("enabled", bool, default=False,
                   doc="rREST2 only. Refresh the hottest rung from a pre-generated Boltzmann "
@@ -165,6 +220,12 @@ MD_SCHEMA = Schema(
 
 def _check_protocol(resolved: dict[str, Any]) -> None:
     protocol = resolved["protocol"]
+    if protocol == "AIS":
+        _check_ais(resolved)
+    elif resolved["ais_source"]["trajectory"]:
+        raise ConfigError(
+            f"ais_source.trajectory is set but protocol is {protocol}. A source ensemble is only "
+            f"consumed by AIS; cMD, REST2 and rREST2 generate their own starting state.")
     if protocol == "rREST2" and not resolved["reservoir"]["enabled"]:
         raise ConfigError("protocol is rREST2 but reservoir.enabled is false. rREST2 IS the "
                           "reservoir variant; without one it is plain REST2.")
@@ -183,6 +244,45 @@ def _check_protocol(resolved: dict[str, Any]) -> None:
             "dynamics.phase_space_printout is set but dynamics.tau is 0.0. A phase-space stream "
             "exists to seed a reservoir at the ladder's TOP rung; writing one from the unscaled "
             "Hamiltonian would produce a reservoir for a rung nothing runs at.")
+
+
+def _check_ais(resolved: dict[str, Any]) -> None:
+    """Everything about an AIS run that is decidable before a path is written.
+
+    Refused here rather than inside a generated script, because an AIS run starts from somebody
+    else's trajectory and the mistakes worth catching -- a schedule whose observations do not
+    divide, endpoints that never move -- are all visible in the configuration.
+    """
+    from ..openmm.ais import switching_schedule
+
+    ais = resolved["ais"]
+    source = resolved["ais_source"]
+
+    if abs(float(ais["tau_start"]) - float(ais["tau_end"])) < 1e-12:
+        raise ConfigError(
+            f"ais.tau_start and ais.tau_end are both {ais['tau_start']}, so the Hamiltonian never "
+            f"changes and every work value would be zero. A switching path needs distinct "
+            f"endpoints; the usual choice is 0.5 -> 0.0.")
+    if not source["trajectory"]:
+        raise ConfigError(
+            "ais_source.trajectory is required for AIS. It is the equilibrium ensemble the "
+            "switching paths start from -- there is no default, because it is data you produced.")
+    if (source["last_frame"] is not None
+            and int(source["last_frame"]) < int(source["first_frame"])):
+        raise ConfigError(
+            f"ais_source.last_frame ({source['last_frame']}) is before first_frame "
+            f"({source['first_frame']}); the eligible window would be empty.")
+
+    # The schedule's own arithmetic, refused with the numbers that would fix it.
+    try:
+        switching_schedule(
+            tau_start=float(ais["tau_start"]), tau_end=float(ais["tau_end"]),
+            switching_steps=int(ais["switching_steps"]),
+            parameter_update_interval_steps=int(ais["parameter_update_interval_steps"]),
+            observation_interval_steps=int(ais["observation_interval_steps"]),
+            timestep_fs=float(resolved["dynamics"]["timestep_fs"]))
+    except ValueError as error:
+        raise ConfigError(str(error)) from None
 
 
 MD_SCHEMA.checks = (_check_protocol,)
@@ -222,6 +322,11 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
         "platform": dyn["platform"],
     }
     plan: list[dict[str, Any]] = []
+    if resolved["protocol"] == "AIS":
+        # Deliberately empty. AIS consumes an equilibrium ensemble that already exists; giving it
+        # a minimisation and equilibration chain would run those BEFORE its own input existed, and
+        # would quietly suggest the source is something this run produces.
+        return plan
     plan.append({**common, "name": "min", "ensemble": "NVT",
                  "minimization_iterations": stages["minimization_iterations"], "steps": 0,
                  "restraint_kcal_per_mol_A2": dyn["restraint_kcal_per_mol_A2"],
@@ -388,12 +493,15 @@ def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str) -> s
              'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
              'TOPOLOGY="${1:-${HERE}/../built.pdb}"',
              'SYSTEM="${2:-${HERE}/../built.xml}"',
+             '# Captured before the shifts below consume the positional arguments.',
+             'SOURCE="${3:-}"',
              '# Consume the two positional arguments if they were given, so that a path this',
              '# script has already used is not forwarded on as though it were a flag.',
              '# An `if` rather than `[[ ... ]] && shift`: under `set -e` a false test in the',
              '# latter form is a failing command, so calling run.sh with no arguments would exit.',
              'if [[ $# -ge 1 ]]; then shift; fi',
              'if [[ $# -ge 1 ]]; then shift; fi',
+             'if [[ $# -ge 1 && "${1:-}" != -* ]]; then shift; fi',
              'cd "${HERE}"',
              '',
              'if [[ ! -f "${TOPOLOGY}" ]]; then',
@@ -403,7 +511,27 @@ def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str) -> s
              '  echo "run.sh: no system at ${SYSTEM}" >&2; exit 2',
              'fi',
              '']
-    if all_in_one:
+    if protocol == "AIS":
+        lines += [
+            '# AIS starts from an equilibrium ensemble you have ALREADY produced. There is no',
+            '# default for it: a wrong source is not a slower run, it is a different measurement.',
+            'if [[ -z "${SOURCE}" ]]; then',
+            '  echo "usage: ./run.sh TOPOLOGY SYSTEM SOURCE_TRAJECTORY" >&2',
+            '  echo "" >&2',
+            '  echo "AIS anneals away from an equilibrium ensemble and cannot generate one." >&2',
+            '  echo "Give it a finished fixed-tau run, for example ../hot/cMD.dcd." >&2',
+            '  exit 2',
+            'fi',
+            'if [[ ! -f "${SOURCE}" ]]; then',
+            '  echo "run.sh: no source trajectory at ${SOURCE}" >&2; exit 2',
+            'fi',
+            '',
+            'echo "== AIS =="',
+            f'python {protocol}.py \\',
+            '  -p "${TOPOLOGY}" -s "${SYSTEM}" -src "${SOURCE}" \\',
+            f'  -log {protocol}.log "$@"',
+            '']
+    elif all_in_one:
         lines += ['python md.py -p "${TOPOLOGY}" -s "${SYSTEM}"', '']
     else:
         previous = None
@@ -426,6 +554,33 @@ def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str) -> s
                       '']
     lines += ['echo "run.sh: all stages reported completion"']
     return "\n".join(lines) + "\n"
+
+
+_AIS_SCRIPT = '''#!/usr/bin/env python
+"""AIS: {paths} independent switching paths, tau {tau_start} -> {tau_end}.
+
+Generated by `md-openmm build-md`. The switching, the work convention and the tau scaling are the
+validated implementation in the installed md_tools runtime; this file only says which path to run.
+
+AIS CONSUMES AN EQUILIBRIUM ENSEMBLE THAT ALREADY EXISTS. It has no minimisation or equilibration
+chain, because running one would produce a starting state that is not the ensemble the path is
+defined to begin in. Point -src at a finished fixed-tau run at tau = {tau_start}.
+
+    python AIS.py -p built.pdb -s built.xml -src ../hot/cMD.dcd
+    python AIS.py -p built.pdb -s built.xml -src ../hot/cMD.dcd --check     # validate only
+    python AIS.py -p built.pdb -s built.xml -src ../hot/cMD.dcd --paths 0-9
+
+Each path is independent and has its own seeds. A completed path is skipped and never appended to;
+an interrupted one is rerun from its source frame, because the work integral is only defined along
+a whole path.
+"""
+from md_tools.runtime.ais import ais_main
+
+RUN = {run!r}
+
+if __name__ == "__main__":
+    raise SystemExit(ais_main(RUN))
+'''
 
 
 _REPLICA_SCRIPT = '''#!/usr/bin/env python
@@ -489,6 +644,30 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
             path = out_dir / f"{stage['name']}.py"
             path.write_text(_stage_script(stage, first=index == 0), encoding="utf-8")
             written.append(path.name)
+
+    if protocol == "AIS":
+        run = {
+            "protocol": "AIS",
+            "description": f"AIS: {resolved['ais']['number_of_paths']} switching paths",
+            "ais": dict(resolved["ais"]),
+            "ais_source": dict(resolved["ais_source"]),
+            "dynamics": dict(resolved["dynamics"]),
+        }
+        path = out_dir / "AIS.py"
+        path.write_text(_AIS_SCRIPT.format(
+            paths=resolved["ais"]["number_of_paths"],
+            tau_start=resolved["ais"]["tau_start"], tau_end=resolved["ais"]["tau_end"],
+            run=run), encoding="utf-8")
+        written.append(path.name)
+        observations = (resolved["ais"]["switching_steps"]
+                        // resolved["ais"]["observation_interval_steps"] + 1)
+        log.heading("AIS")
+        log.field("paths", resolved["ais"]["number_of_paths"])
+        log.field("tau", f"{resolved['ais']['tau_start']} -> {resolved['ais']['tau_end']}")
+        log.field("switching", f"{resolved['ais']['switching_steps']} steps = "
+                               f"{resolved['ais']['switching_steps'] * timestep / 1000.0:g} ps")
+        log.field("observations", f"{observations} (both endpoints included)")
+        log.field("source", resolved["ais_source"]["trajectory"])
 
     if protocol in ("REST2", "rREST2"):
         ladder = {

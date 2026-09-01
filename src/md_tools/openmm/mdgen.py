@@ -536,12 +536,18 @@ def _ais_path_definition(resolved: dict[str, Any], *, implicit: bool) -> dict[st
     block = resolved["AIS"]
     path = dict(block["path"])
     common = resolved["common"]
+    # Step-based schedule. This retired route still speaks picoseconds, so it converts here; the
+    # arithmetic itself has one implementation, in ais.switching_schedule.
+    _timestep = float((resolved.get("common") or {}).get("timestep_fs", 2.0))
+    _total = A.exact_steps(float(path["switching_duration_ps"]), _timestep,
+                           field="AIS.path.switching_duration_ps")
+    _intervals = int(block["output"]["number_of_observations"]) - 1
     schedule = A.switching_schedule(
         tau_start=float(path["tau_start"]), tau_end=float(path["tau_end"]),
-        switching_duration_ps=float(path["switching_duration_ps"]),
+        switching_steps=_total,
         parameter_update_interval_steps=int(path["parameter_update_interval_steps"]),
-        number_of_observations=int(block["output"]["number_of_observations"]),
-        timestep_fs=float(common["timestep_fs"]))
+        observation_interval_steps=_total // _intervals,
+        timestep_fs=_timestep)
     return {
         "format": "md-tools-ais-path/v1",
         "path": path,

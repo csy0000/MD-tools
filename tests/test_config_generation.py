@@ -545,6 +545,7 @@ def test_the_build_top_example_resolves_to_the_model_defaults():
 
 @pytest.mark.parametrize("name, protocol", [
     ("cMD.config", "cMD"), ("REST2.config", "REST2"), ("rREST2.config", "rREST2"),
+    ("AIS.config", "AIS"),
 ])
 def test_each_protocol_example_resolves_and_selects_its_protocol(name, protocol):
     from md_tools.configs import example

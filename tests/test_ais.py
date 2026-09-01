@@ -57,11 +57,12 @@ def test_the_schedule_is_evenly_spaced_endpoint_inclusive_and_exact():
     """21 observations are 20 equal intervals in tau, and both endpoints are exact."""
     from md_tools.openmm import ais
 
+    # 40 steps, observed every 2 -> 21 observations counting both endpoints.
     schedule = ais.switching_schedule(
-        tau_start=0.5, tau_end=0.0, switching_duration_ps=0.08,
-        parameter_update_interval_steps=1, number_of_observations=21, timestep_fs=2.0)
+        tau_start=0.5, tau_end=0.0, switching_steps=40,
+        parameter_update_interval_steps=1, observation_interval_steps=2, timestep_fs=2.0)
 
-    assert schedule["total_steps"] == 40
+    assert schedule["switching_steps"] == 40
     assert schedule["number_of_updates"] == 40
     assert schedule["updates_per_observation"] == 2
     observations = schedule["observations"]
@@ -73,25 +74,43 @@ def test_the_schedule_is_evenly_spaced_endpoint_inclusive_and_exact():
 
     spacing = [observations[i + 1]["tau"] - observations[i]["tau"] for i in range(20)]
     assert all(abs(step - spacing[0]) < 1e-12 for step in spacing), "tau steps are not equal"
-    # s is quadratic in tau while sqrt(s) is linear -- the relation the path is defined by.
+
+    # tau is the ONE persisted protocol coordinate. The scale factors are derived inside the
+    # scaler; persisting them too would offer a reader a second coordinate to take as
+    # authoritative, and s and tau disagreeing would then be a real possibility.
     for entry in observations:
-        assert entry["s"] == pytest.approx((1.0 - entry["tau"]) ** 2)
-        assert entry["sqrt_s"] == pytest.approx(1.0 - entry["tau"])
+        assert "s" not in entry and "sqrt_s" not in entry
+
+    # Observation 0 is the source configuration before any parameter change and before any
+    # propagation, which is what makes its work exactly zero rather than nearly zero.
+    assert schedule["observation_zero_precedes_all_work"] is True
+
+    # The step counts are what run; ps is derived for the reader.
+    assert schedule["switching_ps"] == pytest.approx(0.08)
 
 
-@pytest.mark.parametrize("duration, interval, observations, expected", [
-    (0.03, 1, 21, "cannot be divided"),          # 15 updates, 20 intervals
-    (0.04, 3, 21, "not a whole number of"),      # 20 steps, updates every 3
-    (0.0301, 1, 21, "whole number of"),          # not a whole number of steps at all
+@pytest.mark.parametrize("steps, update_interval, observe_interval, expected", [
+    # Each case isolates ONE rule: the inputs satisfy every earlier check so that the message
+    # under test is the one that fires.
+    #
+    # 15 steps, update every 1 (15 % 1 == 0), observe every 2 -> 15 % 2 != 0, so the last
+    # observation would not land at tau_end.
+    (15, 1, 2, "observation_interval_steps"),
+    # 20 steps, update every 3 -> 20 % 3 != 0, so the final parameter change lands mid-interval.
+    (20, 3, 5, "parameter_update_interval_steps"),
+    # 12 steps, update every 2 (12 % 2 == 0), observe every 3 (12 % 3 == 0), but 3 % 2 != 0, so
+    # observations would not sit on the parameter-update grid.
+    (12, 2, 3, "would not land on the"),
 ])
-def test_a_schedule_that_would_have_to_be_rounded_is_refused(duration, interval, observations,
-                                                             expected):
+def test_a_schedule_that_would_have_to_be_rounded_is_refused(steps, update_interval,
+                                                             observe_interval, expected):
+    """Every inexact division is refused with the arithmetic that would fix it, never rounded."""
     from md_tools.openmm import ais
 
     with pytest.raises(ValueError) as error:
-        ais.switching_schedule(tau_start=0.5, tau_end=0.0, switching_duration_ps=duration,
-                               parameter_update_interval_steps=interval,
-                               number_of_observations=observations, timestep_fs=2.0)
+        ais.switching_schedule(tau_start=0.5, tau_end=0.0, switching_steps=steps,
+                               parameter_update_interval_steps=update_interval,
+                               observation_interval_steps=observe_interval, timestep_fs=2.0)
     assert expected in str(error.value)
 
 

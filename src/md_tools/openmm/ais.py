@@ -68,48 +68,66 @@ def exact_steps(duration_ps: float, timestep_fs: float, *, field: str) -> int:
     return int(round(exact))
 
 
-def switching_schedule(*, tau_start: float, tau_end: float, switching_duration_ps: float,
-                       parameter_update_interval_steps: int, number_of_observations: int,
+def switching_schedule(*, tau_start: float, tau_end: float, switching_steps: int,
+                       parameter_update_interval_steps: int, observation_interval_steps: int,
                        timestep_fs: float) -> dict[str, Any]:
     """Every tau the path visits, and which of them are observed.
 
-    The three quantities have to divide exactly into one another:
+    EVERY LENGTH HERE IS AN INTEGER STEP COUNT. A step count is exact; a duration in picoseconds is
+    a number that has to divide by a timestep the file may not have been written against, and work
+    is path-length dependent, so a rounded path silently reports the work of a different protocol.
+    The log derives ps and ns from the resolved timestep for the reader.
 
-        total_steps            = switching_duration_ps at this timestep
-        number_of_updates      = total_steps / parameter_update_interval_steps
-        updates_per_observation = number_of_updates / (number_of_observations - 1)
+    Three counts have to divide exactly into one another, and each failure is refused with the
+    arithmetic that would fix it rather than rounded away:
 
-    If the second division is inexact the last parameter change lands mid-interval; if the third is
-    inexact the observation points are not evenly spaced in tau and 21 "evenly spaced" observations
-    would be 21 rounded ones. Both are refused rather than rounded, which is why the configuration
-    asks for a duration that fits rather than for a number of updates.
+        switching_steps % parameter_update_interval_steps == 0
+            otherwise the final parameter change lands mid-interval;
+        switching_steps % observation_interval_steps == 0
+            otherwise the last observation is not at tau_end;
+        observation_interval_steps % parameter_update_interval_steps == 0
+            otherwise observations are not on the update grid and "evenly spaced in tau" would be
+            evenly spaced only after rounding.
 
     `taus[j]` is the Hamiltonian in force during the j-th propagation interval, so `taus[0]` is
-    tau_start (the source Hamiltonian, before any change) and `taus[number_of_updates]` is tau_end.
-    """
-    total_steps = exact_steps(switching_duration_ps, timestep_fs,
-                             field="AIS.path.switching_duration_ps")
-    interval = int(parameter_update_interval_steps)
-    if total_steps % interval:
-        raise ValueError(
-            f"AIS.path.switching_duration_ps = {switching_duration_ps} ps is {total_steps} steps "
-            f"at {timestep_fs} fs, which is not a whole number of "
-            f"parameter_update_interval_steps = {interval}. The final parameter change would land "
-            f"mid-interval. Choose a duration whose step count is divisible by {interval}.")
-    updates = total_steps // interval
+    tau_start -- the source Hamiltonian, before any change -- and `taus[number_of_updates]` is
+    tau_end.
 
-    intervals = int(number_of_observations) - 1
-    if updates % intervals:
+    OBSERVATION 0 PRECEDES ALL WORK. It is the source configuration under the source Hamiltonian,
+    before any parameter change and before any propagation, and its cumulative work is exactly zero
+    by definition. Both endpoints are always included: the first row pairs tau_start with zero work,
+    the last pairs tau_end with the total.
+    """
+    steps = int(switching_steps)
+    interval = int(parameter_update_interval_steps)
+    observe_every = int(observation_interval_steps)
+    for label, value in (("switching_steps", steps),
+                         ("parameter_update_interval_steps", interval),
+                         ("observation_interval_steps", observe_every)):
+        if value < 1:
+            raise ValueError(f"ais.{label} must be a positive whole number of steps; got {value}")
+
+    if steps % interval:
         raise ValueError(
-            f"AIS: {updates} switching updates cannot be divided into "
-            f"{intervals} equal observation intervals "
-            f"(number_of_observations = {number_of_observations}, both endpoints included). "
-            f"The {number_of_observations} observations would be rounded onto the update grid "
-            f"instead of evenly spaced in tau. Choose a switching_duration_ps whose update count "
-            f"is divisible by {intervals} -- at {timestep_fs} fs and an update every "
-            f"{interval} step(s) that is a multiple of "
-            f"{intervals * interval * timestep_fs / 1000.0:g} ps.")
-    per_observation = updates // intervals
+            f"ais.switching_steps = {steps} is not a whole number of "
+            f"parameter_update_interval_steps = {interval}. The final parameter change would land "
+            f"mid-interval. Choose a step count divisible by {interval}; the nearest are "
+            f"{steps - steps % interval} and {steps - steps % interval + interval}.")
+    if steps % observe_every:
+        raise ValueError(
+            f"ais.switching_steps = {steps} is not a whole number of "
+            f"observation_interval_steps = {observe_every}, so the last observation would not fall "
+            f"at tau_end. Choose a step count divisible by {observe_every}; the nearest are "
+            f"{steps - steps % observe_every} and {steps - steps % observe_every + observe_every}.")
+    if observe_every % interval:
+        raise ValueError(
+            f"ais.observation_interval_steps = {observe_every} is not a whole number of "
+            f"parameter_update_interval_steps = {interval}, so observations would not land on the "
+            f"parameter-update grid and would be evenly spaced only after rounding.")
+
+    updates = steps // interval
+    per_observation = observe_every // interval
+    number_of_observations = steps // observe_every + 1
 
     span = float(tau_end) - float(tau_start)
     taus = [float(tau_start) + span * j / updates for j in range(updates + 1)]
@@ -120,31 +138,37 @@ def switching_schedule(*, tau_start: float, tau_end: float, switching_duration_p
     taus[-1] = float(tau_end)
 
     observations = []
-    for index in range(int(number_of_observations)):
+    for index in range(number_of_observations):
         update_index = index * per_observation          # 0 is the source, before any update
         observations.append({
             "observation_index": index,
             "updates_completed": update_index,
             "protocol_step": update_index * interval,
+            # Derived from the step count and the resolved timestep, for the reader. The step
+            # count above is what runs.
             "switching_time_ps": round(update_index * interval * float(timestep_fs) / 1000.0, 9),
             "tau": taus[update_index],
-            "s": scale_factor_for_tau(taus[update_index]),
-            "sqrt_s": 1.0 - taus[update_index],
+            # Deliberately NOT recording s or sqrt(s). tau is the one public, persisted protocol
+            # coordinate; the scale factors are derived from it inside the scaler and are not an
+            # alternative coordinate a reader could take as authoritative.
         })
 
     return {
         "timestep_fs": float(timestep_fs),
-        "total_steps": total_steps,
+        "switching_steps": steps,
         "parameter_update_interval_steps": interval,
+        "observation_interval_steps": observe_every,
         "number_of_updates": updates,
-        "number_of_observations": int(number_of_observations),
+        "number_of_observations": number_of_observations,
         "updates_per_observation": per_observation,
-        "steps_per_observation": per_observation * interval,
+        "steps_per_observation": observe_every,
         "taus": taus,
         "observations": observations,
-        # Stated because "21 observations" and "21 steps" are different numbers and the difference
-        # is the whole point of a switching path.
-        "note": (f"{updates} parameter changes over {total_steps} integration steps, observed at "
+        # Derived for the reader; the step counts above are what runs.
+        "switching_ps": steps * float(timestep_fs) / 1000.0,
+        "observation_interval_ps": observe_every * float(timestep_fs) / 1000.0,
+        "observation_zero_precedes_all_work": True,
+        "note": (f"{updates} parameter changes over {steps} integration steps, observed at "
                  f"{number_of_observations} points including both endpoints. An observation is a "
                  f"coordinate frame, not an integration step."),
     }

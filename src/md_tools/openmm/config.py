@@ -345,12 +345,23 @@ def _check_ais(resolved: dict[str, Any]) -> None:
             f"{output.get('coordinates')!r}.")
     try:
         # Raises with a message that names the divisibility that failed and what would fix it.
+        # The schedule is step-based now. This retired route still speaks picoseconds, so it
+        # converts here -- one implementation of the arithmetic, not two. The route is deleted
+        # once AIS runs through `build-md`.
+        timestep = float(common.get("timestep_fs", 2.0))
+        total = A.exact_steps(float(duration), timestep,
+                              field="AIS.path.switching_duration_ps")
+        intervals = int(observations) - 1
+        if total % intervals:
+            raise ConfigError(
+                f"AIS: {total} switching steps cannot be divided into {intervals} equal "
+                f"observation intervals (number_of_observations = {observations}).")
         A.switching_schedule(
             tau_start=path["tau_start"], tau_end=path["tau_end"],
-            switching_duration_ps=float(duration),
+            switching_steps=total,
             parameter_update_interval_steps=int(interval),
-            number_of_observations=int(observations),
-            timestep_fs=float(common.get("timestep_fs", 2.0)))
+            observation_interval_steps=total // intervals,
+            timestep_fs=timestep)
     except ValueError as error:
         raise ConfigError(str(error)) from None
 

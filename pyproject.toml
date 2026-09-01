@@ -58,8 +58,7 @@ include = ["md_tools*"]
     "configs/md/cMD.config",
     "configs/md/REST2.config",
     "configs/md/rREST2.config",
-    # configs/md/AIS.config joins here when AIS becomes a build-md protocol; listing a file that
-    # does not exist yet would break the build, and every commit here has to build.
+    "configs/md/AIS.config",
 ]
 
 [tool.pytest.ini_options]
