@@ -28,6 +28,18 @@ executable and three commands. Every detail, with the tests that verify it, is i
 - `dataset-v2.0` and `extension-v2.0` schemas generated from the models and drift-checked
 - **`md_data` is no longer imported at runtime**, and contract v1 is gone
 
+### One current MD configuration model
+
+- `md_tools.build.md` is the only authority for MD workflow configuration. The retired `methods:`
+  model — `md_defaults`, `ais_defaults`, a second `resolve_md_config` and a second `stage_plan`,
+  in `duration_ns` and `switching_duration_ps` — is gone from `openmm/`
+- `openmm/config.py` → `openmm/system_config.py` (the `build-top` system resolver),
+  `openmm/defaults.py` → `openmm/system_defaults.py`, `write_yaml` → `openmm/yaml_io.py`;
+  `openmm/stages.py` deleted, having had no importer
+- `templates/openmm_md.py` → `templates/replica_executor.py`: an internal module must not be named
+  after a retired executable
+- one `ConfigError`, not two, so a refusal from the builders is the one the CLI handles
+
 ### Fixed
 
 - `src/md_tools/build/` — the package implementing `build-top` and `build-md` — had never been
