@@ -30,10 +30,15 @@ where = ["src"]
 include = ["md_tools*"]
 
 [tool.setuptools.package-data]
-# `md-gen` writes a generated project by COPYING these files. A wheel without them installs an
-# md-gen that cannot write anything, which is why tests/test_wheel.py checks the built wheel
-# rather than trusting this glob.
+# The runtime modules a generated REST2/rREST2 script reaches through `md_tools.runtime.replica`,
+# which puts this directory on sys.path so the executor's bare imports resolve from the WHEEL
+# rather than from copies scattered into every generated project.
 "md_tools.openmm" = ["templates/*.py", "templates/*.sh"]
+# The shipped configuration examples. They are located with importlib.resources, never by
+# assuming a source checkout, so they must be inside the package. The repository-level `configs/`
+# path named in the documentation is a symlink to this directory -- one copy, so the example and
+# the schema that enforces it cannot drift apart.
+"md_tools" = ["configs/*.example", "configs/openmm/*.config"]
 
 [tool.pytest.ini_options]
 # The MD smoke tests build systems and integrate them, so they are marked slow and run before a

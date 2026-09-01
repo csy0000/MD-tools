@@ -1,4 +1,5 @@
-# The run-script templates are the generated projects: a distribution without them has an md-gen
-# that cannot write anything.
+# The runtime modules a generated replica script imports from the installed distribution.
 recursive-include src/md_tools/openmm/templates *.py *.sh
+# The shipped configuration examples, resolved with importlib.resources.
+recursive-include src/md_tools/configs *.config *.example
 include README.md
