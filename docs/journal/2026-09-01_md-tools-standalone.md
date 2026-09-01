@@ -199,16 +199,57 @@ Three `openmm-md` hits remain and all three are sentences saying the command **d
 Seven `yyyy-mm` hits remain: two in `data_contract/` explaining what v1 was, five in the
 LEGACY v1 module described in §5.
 
-## 10. Remaining manual action
+## 10. Remaining manual actions
 
-**The GitHub repository has not been renamed.** Everything else is done. Renaming
-`csy0000/MD-templates` to `csy0000/MD-tools` needs repository-administration permission, which this
-environment does not have. It is one action in GitHub's settings, and afterwards:
+Two, and both are precise. Everything else in the migration is done and pushed.
+
+### 10.1 Rename the GitHub repository
+
+`csy0000/MD-templates` -> `csy0000/MD-tools`.
+
+The credentials are sufficient: the token in `~/.config/gh/hosts.yml` reports
+`permissions.admin: true` on the repository, so this is **not** a lack of GitHub rights. The
+`PATCH /repos/csy0000/MD-templates` call was refused by this environment's own permission layer,
+which blocks outward-facing repository administration. That is the correct place for it to be
+refused, and it is not worked around.
+
+Do it in GitHub's settings, or with an authenticated client:
+
+```bash
+gh repo rename MD-tools --repo csy0000/MD-templates
+```
+
+Then, in this checkout, and without relying on GitHub's old-name redirect:
 
 ```bash
 git remote set-url origin git@github.com:csy0000/MD-tools.git
 git remote -v
 ```
 
-The local checkout directory should be renamed from `MD-template` to `MD-tools` at the same time.
+### 10.2 Rename the local checkout directory — carefully
+
+`/path/to/scheme/MD-template` -> `/path/to/scheme/MD-tools`.
+
+**This one is not a plain `mv`, and I deliberately did not do it.** This directory is the main
+repository, and two OTHER projects hold worktrees of it:
+
+```text
+/path/to/projects/krREST2/components/MD-templates   (detached, f47505f)
+/path/to/projects/pBGF/components/MD-templates      (detached, e15071e)
+```
+
+Those worktrees record an absolute path back to this `.git`. Moving the directory breaks both, and
+neither project is part of this migration. The safe sequence is:
+
+```bash
+mv /path/to/scheme/MD-template /path/to/scheme/MD-tools
+cd /path/to/scheme/MD-tools && git worktree repair
+git -C /path/to/projects/krREST2/components/MD-templates worktree repair
+git -C /path/to/projects/pBGF/components/MD-templates    worktree repair
+git worktree list          # confirm all three resolve
+```
+
+A fourth worktree, `MD-projects/components-dev/MD-templates`, is already listed as prunable: this
+migration removed it. `git worktree prune` clears the entry.
+
 Nothing in the code, tests, packaging or documentation depends on either name.
