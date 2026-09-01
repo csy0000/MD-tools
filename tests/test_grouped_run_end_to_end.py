@@ -7,7 +7,7 @@ WHY THIS EXISTS
     ever creates. Both are invisible until the loop actually runs.
 
     So this runs it. Two states, a handful of exchanges, alanine dipeptide in vacuum on the CPU
-    platform -- a few seconds -- through the real `openmm-md` entry point with a real group file.
+    platform -- a few seconds -- through the real replica executor with a real group file.
     It is the cheapest thing that executes `_loop`, the frame commit, the completion record and
     the summary at once.
 
@@ -37,7 +37,7 @@ import amber_trajectory as amber                                   # noqa: E402
 def _run(work, *extra):
     environment = dict(os.environ, PYTHONPATH=str(TEMPLATES), OPENMM_CPU_THREADS="1")
     return subprocess.run(
-        [sys.executable, str(TEMPLATES / "openmm_md.py"),
+        [sys.executable, str(TEMPLATES / "replica_executor.py"),
          "--groupfile", "ladder.group", "-ng", str(len(TAUS)),
          "-x", "exchange.nc", "-r", "restart.json", "--checkpoint", "checkpoint.nc",
          "-o", "run.out", "--rem", "rem.log", *extra],

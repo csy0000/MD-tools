@@ -1,4 +1,8 @@
-"""The `openmm-md` file interface: flags, precedence, refusals, and what it must never do.
+"""The replica executor's file interface: flags, precedence, refusals, and what it must never do.
+
+This is `templates/replica_executor.py`, reached as a FUNCTION from `md_tools.runtime.replica`.
+It was once installed as a separate `openmm-md` executable and the file was named after it; both
+are retired, and the package installs exactly one executable, `md-openmm`.
 
 The runner is generic on purpose. It resolves paths, refuses to destroy results, runs one protocol
 with its output captured, and reports. It decides nothing scientific, and these tests are largely
@@ -19,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-RUNNER = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates" / "openmm_md.py"
+RUNNER = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates" / "replica_executor.py"
 
 TRIVIAL = textwrap.dedent('''
     from pathlib import Path
@@ -239,7 +243,7 @@ def test_the_runner_imports_nothing_beyond_the_standard_library_and_openmm():
     allowed = {"argparse", "contextlib", "importlib", "json", "os", "shlex", "sys", "traceback",
                "pathlib", "types", "__future__", "openmm"}
     assert module_level <= allowed, (
-        f"openmm-md imports beyond the standard library and OpenMM at module level: "
+        f"the replica executor imports beyond the standard library and OpenMM at module level: "
         f"{module_level - allowed}. A single generated stage must still run once md_tools is "
         f"gone, so anything else has to be deferred into the path that needs it.")
     assert "md_tools" not in module_level | deferred

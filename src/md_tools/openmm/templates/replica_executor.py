@@ -467,7 +467,7 @@ def load_module(path, name):
 
 def load_protocol(path):
     """A single-run protocol file: one `run(files)` function."""
-    module = load_module(path, "openmm_md_protocol")
+    module = load_module(path, "md_tools_protocol")
     if not hasattr(module, "run"):
         raise RuntimeError(
             f"{path} defines no run(files). A single-run protocol file is one function taking the "
@@ -477,7 +477,7 @@ def load_protocol(path):
 
 def load_grouped_protocol(path):
     """A grouped protocol file: one `protocol` object describing the ladder."""
-    module = load_module(path, "openmm_md_grouped_protocol")
+    module = load_module(path, "md_tools_grouped_protocol")
     protocol = getattr(module, "protocol", None)
     if protocol is None and hasattr(module, "make_protocol"):
         protocol = module.make_protocol()

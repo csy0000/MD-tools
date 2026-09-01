@@ -15,8 +15,13 @@ md-openmm data-register  a finished tree   -> a verified dataset under $MD_DATA
 AIS is `protocol: AIS` in a `build-md` configuration. **Do not add a fourth command.**
 
 These do not exist and must never be suggested: `sys-config`, `sys-gen`, `md-gen`, `setup`,
-`show-default`, `openmm-md`, `md-template`, `md-data-finish`, `md-data-register`. If you find one
-named anywhere outside a release note explaining the change, it is stale text, not an interface.
+`show-default`, `openmm-md`, `md-template`, `md-data-finish`, `md-data-register`.
+
+They may still be NAMED, in exactly two places: a test that asserts one is refused, and
+release or migration history that says it is retired. Both are how the guarantee is kept. Anywhere
+else — a docstring, a comment, a module name, an example — naming one as if it works is stale text,
+not an interface. An internal module may not be named after a retired executable either: the
+executor lives at `templates/replica_executor.py` because `openmm_md.py` read as the command.
 
 ## Configuration
 
@@ -25,6 +30,10 @@ configs/machine/user.config.example   identity and $MD_DATA, for `data-register 
 configs/sys/build-top.config          force fields, solvent, box, ions, constraints, HMR
 configs/md/{cMD,REST2,rREST2,AIS}.config   protocol, stage lengths, reporting
 ```
+
+`md_tools.build.md` is the ONE authority for MD workflow configuration — protocol, stage lengths,
+reporting. `md_tools.openmm.system_config` and `system_defaults` cover the `build-top` system half
+and nothing else. If you find a second function resolving an MD configuration, it is residue.
 
 Ordinary browsable files at the repository root, one copy each, shipped as **wheel data files**
 and found through `md_tools.configs.example_root()`. Never add a symlink or a second hand-edited

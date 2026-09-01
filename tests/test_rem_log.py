@@ -233,7 +233,7 @@ def test_cpptraj_reconstructs_the_exchange_history_we_recorded(tmp_path):
 
 def test_rem_is_a_coordinated_flag_and_needs_a_groupfile():
     """Like --exchange-rule and --reservoir: it describes a ladder, not a single protocol."""
-    import openmm_md
+    import replica_executor
 
     class _Files:
         def __init__(self, rem):
@@ -251,15 +251,15 @@ def test_rem_is_a_coordinated_flag_and_needs_a_groupfile():
         reservoir = None
         force = False
 
-    problems = openmm_md.validate(_Files("rem.log"), _Arguments(), rank=0, groups=None)
+    problems = replica_executor.validate(_Files("rem.log"), _Arguments(), rank=0, groups=None)
     assert any("--rem" in p and "groupfile" in p for p in problems), problems
 
-    assert not [p for p in openmm_md.validate(_Files(None), _Arguments(), rank=0, groups=None)
+    assert not [p for p in replica_executor.validate(_Files(None), _Arguments(), rank=0, groups=None)
                 if "--rem" in p], "no --rem, no complaint"
 
 
 def test_the_flag_is_spelled_exactly_as_documented():
-    source = (TEMPLATES / "openmm_md.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "replica_executor.py").read_text(encoding="utf-8")
     assert '"--rem"' in source
     assert '"OPENMM_REM"' in source
 

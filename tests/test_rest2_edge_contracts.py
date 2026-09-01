@@ -24,7 +24,7 @@ openmm = pytest.importorskip("openmm")
 sys.path.insert(0, str(TEMPLATES))
 sys.path.insert(0, str(SRC))
 
-import openmm_md                                                   # noqa: E402
+import replica_executor                                                   # noqa: E402
 import phase_space                                                 # noqa: E402
 import hamiltonian_identity                                        # noqa: E402
 import replica_storage as storage                                  # noqa: E402
@@ -270,17 +270,17 @@ def test_non_grouped_resume_is_refused(tmp_path):
     """Only the grouped replica runtime consumes these flags. The conventional protocol path
     builds a fresh run -- it resets time and step state and creates its reporters from scratch --
     so accepting `--resume` there promised a continuation nothing implements."""
-    problems = openmm_md.validate(_Files(tmp_path, resume=True), _Arguments(), rank=0, groups=None)
+    problems = replica_executor.validate(_Files(tmp_path, resume=True), _Arguments(), rank=0, groups=None)
     assert _refusal(problems), problems
 
 
 def test_non_grouped_extend_is_refused(tmp_path):
-    problems = openmm_md.validate(_Files(tmp_path, extend=5), _Arguments(), rank=0, groups=None)
+    problems = replica_executor.validate(_Files(tmp_path, extend=5), _Arguments(), rank=0, groups=None)
     assert _refusal(problems), problems
 
 
 def test_the_refusal_never_suggests_deleting_data(tmp_path):
-    problems = openmm_md.validate(_Files(tmp_path, resume=True), _Arguments(), rank=0, groups=None)
+    problems = replica_executor.validate(_Files(tmp_path, resume=True), _Arguments(), rank=0, groups=None)
     assert _refusal(problems), "there is no refusal to inspect"
     text = " ".join(problems).lower()
     assert "rm " not in text and "delete" not in text and "overwrite" not in text
@@ -295,11 +295,11 @@ def test_grouped_resume_and_extend_are_still_accepted(tmp_path):
     files.trajectory = str(trajectory)
     arguments = _Arguments(groupfile=str(tmp_path / "rest2.group"), number_of_groups=2)
     groups = [{"group_index": 0}, {"group_index": 1}]
-    assert not _refusal(openmm_md.validate(files, arguments, rank=0, groups=groups))
+    assert not _refusal(replica_executor.validate(files, arguments, rank=0, groups=groups))
 
     files = _Files(tmp_path, extend=20)
     files.trajectory = str(trajectory)
-    assert not _refusal(openmm_md.validate(files, arguments, rank=0, groups=groups))
+    assert not _refusal(replica_executor.validate(files, arguments, rank=0, groups=groups))
 
 
 def test_validation_happens_before_any_output_is_touched(tmp_path):
@@ -311,10 +311,10 @@ def test_validation_happens_before_any_output_is_touched(tmp_path):
     files.output = str(outputs / "run.out")
     files.trajectory = str(outputs / "run.dcd")
 
-    assert _refusal(openmm_md.validate(files, _Arguments(), rank=0, groups=None))
+    assert _refusal(replica_executor.validate(files, _Arguments(), rank=0, groups=None))
     assert not outputs.exists(), "validation created an output directory"
 
-    source = (TEMPLATES / "openmm_md.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "replica_executor.py").read_text(encoding="utf-8")
     refusal_index = source.index("def validate(")
     mkdir_index = source.index("Path(value).parent.mkdir")
     import_index = source.index("load_protocol(files.input)")
@@ -329,7 +329,7 @@ def test_an_existing_output_is_untouched_by_a_refused_continuation(tmp_path):
 
     files = _Files(tmp_path, resume=True)
     files.trajectory = str(sentinel)
-    assert _refusal(openmm_md.validate(files, _Arguments(), rank=0, groups=None))
+    assert _refusal(replica_executor.validate(files, _Arguments(), rank=0, groups=None))
     assert hashlib.sha256(sentinel.read_bytes()).hexdigest() == before
 
 
@@ -435,7 +435,7 @@ def test_continuing_the_source_stage_is_refused_like_any_other_cmd(tmp_path):
     mode boundary applies to it unchanged."""
     files = _Files(tmp_path, resume=True)
     files.trajectory = str(tmp_path / "cMD_tau0p5" / "cmd.dcd")
-    problems = openmm_md.validate(files, _Arguments(), rank=0, groups=None)
+    problems = replica_executor.validate(files, _Arguments(), rank=0, groups=None)
     assert _refusal(problems), problems
 
 

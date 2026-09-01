@@ -25,7 +25,7 @@ openmm = pytest.importorskip("openmm")
 sys.path.insert(0, str(TEMPLATES))
 
 import exchange_rules                     # noqa: E402
-import openmm_md                          # noqa: E402
+import replica_executor                          # noqa: E402
 import replica_statistics as statistics   # noqa: E402
 import replica_storage as storage         # noqa: E402
 import replica_validate as validate       # noqa: E402
@@ -83,7 +83,7 @@ def test_a_group_file_is_parsed_with_shlex_and_never_evaluated(tmp_path):
     marker = tmp_path / "should_not_exist"
     path = _group_file(tmp_path, [
         f'-i "a b.py" -p t.pdb -s s.xml -c "$(touch {marker})" --group-index 0'])
-    groups = openmm_md.parse_group_file(path)
+    groups = replica_executor.parse_group_file(path)
     assert groups[0]["input"] == "a b.py", "quoted values must survive parsing"
     # shlex leaves the substitution as literal text; a shell would have run it.
     assert "$(touch" in groups[0]["coordinates"]
@@ -91,7 +91,7 @@ def test_a_group_file_is_parsed_with_shlex_and_never_evaluated(tmp_path):
 
 
 def test_group_parsing_uses_shlex_in_the_source():
-    source = (TEMPLATES / "openmm_md.py").read_text()
+    source = (TEMPLATES / "replica_executor.py").read_text()
     tree = ast.parse(source)
     imported = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
     imported |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
@@ -106,7 +106,7 @@ def test_comments_and_blank_lines_are_ignored(tmp_path):
         "-i a.py -p t.pdb -s s.xml -c c.xml --group-index 0",
         "   ",
         "-i a.py -p t.pdb -s s.xml -c c.xml --group-index 1"])
-    assert len(openmm_md.parse_group_file(path)) == 2
+    assert len(replica_executor.parse_group_file(path)) == 2
 
 
 @pytest.mark.parametrize("line,fragment", [
@@ -120,8 +120,8 @@ def test_comments_and_blank_lines_are_ignored(tmp_path):
 ])
 def test_a_bad_group_line_is_refused_by_line_number(tmp_path, line, fragment):
     path = _group_file(tmp_path, [line])
-    with pytest.raises(openmm_md.GroupFileError) as raised:
-        openmm_md.parse_group_file(path)
+    with pytest.raises(replica_executor.GroupFileError) as raised:
+        replica_executor.parse_group_file(path)
     message = str(raised.value)
     assert fragment in message
     assert ":1:" in message or str(path) in message
@@ -131,14 +131,14 @@ def test_group_indices_must_be_unique_and_contiguous(tmp_path):
     path = _group_file(tmp_path, [
         "-i a.py -p t.pdb -s s.xml -c c.xml --group-index 0",
         "-i a.py -p t.pdb -s s.xml -c c.xml --group-index 2"])
-    with pytest.raises(openmm_md.GroupFileError, match="unique, contiguous and zero-based"):
-        openmm_md.parse_group_file(path)
+    with pytest.raises(replica_executor.GroupFileError, match="unique, contiguous and zero-based"):
+        replica_executor.parse_group_file(path)
 
 
 def test_an_empty_group_file_is_refused(tmp_path):
     path = _group_file(tmp_path, ["# nothing here"])
-    with pytest.raises(openmm_md.GroupFileError, match="no group lines"):
-        openmm_md.parse_group_file(path)
+    with pytest.raises(replica_executor.GroupFileError, match="no group lines"):
+        replica_executor.parse_group_file(path)
 
 
 # --- mode validation ---------------------------------------------------------------------------
@@ -159,39 +159,39 @@ def _arguments(**overrides):
 
 
 def test_a_groupfile_requires_ng():
-    problems = openmm_md.validate(_files(), _arguments(groupfile="g.group"), groups=[{}, {}])
+    problems = replica_executor.validate(_files(), _arguments(groupfile="g.group"), groups=[{}, {}])
     assert any("--groupfile requires -ng" in p for p in problems)
 
 
 def test_ng_without_a_groupfile_is_refused():
-    problems = openmm_md.validate(_files(input="a.py"), _arguments(number_of_groups=4))
+    problems = replica_executor.validate(_files(input="a.py"), _arguments(number_of_groups=4))
     assert any("-ng describes a group file" in p for p in problems)
 
 
 def test_ng_must_equal_the_number_of_group_lines():
     groups = [{"group_index": i, "input": "a.py"} for i in range(3)]
-    problems = openmm_md.validate(_files(), _arguments(groupfile="g", number_of_groups=6),
+    problems = replica_executor.validate(_files(), _arguments(groupfile="g", number_of_groups=6),
                                   groups=groups)
     assert any("but the group file has 3 group line(s)" in p for p in problems)
 
 
 def test_grouped_only_flags_are_refused_in_single_mode():
-    problems = openmm_md.validate(_files(input="a.py"), _arguments(exchange_rule="r.py"))
+    problems = replica_executor.validate(_files(input="a.py"), _arguments(exchange_rule="r.py"))
     assert any("--exchange-rule applies to a coordinated run" in p for p in problems)
-    problems = openmm_md.validate(_files(input="a.py"), _arguments(reservoir="r.yaml"))
+    problems = replica_executor.validate(_files(input="a.py"), _arguments(reservoir="r.yaml"))
     assert any("--reservoir applies to a coordinated run" in p for p in problems)
 
 
 def test_a_grouped_run_requires_the_analysis_storage():
     groups = [{"group_index": 0, "input": "a.py"}]
-    problems = openmm_md.validate(_files(trajectory=None), _arguments(groupfile="g",
+    problems = replica_executor.validate(_files(trajectory=None), _arguments(groupfile="g",
                                                                      number_of_groups=1),
                                   groups=groups)
     assert any("-x is required in grouped mode" in p for p in problems)
 
 
 def test_force_never_combines_with_a_continuation():
-    problems = openmm_md.validate(_files(resume=True), _arguments(groupfile="g",
+    problems = replica_executor.validate(_files(resume=True), _arguments(groupfile="g",
                                                                   number_of_groups=1, force=True),
                                   groups=[{"group_index": 0}])
     assert any("--force replaces a new run's outputs" in p for p in problems)
@@ -200,14 +200,14 @@ def test_force_never_combines_with_a_continuation():
 def test_a_group_input_that_is_also_an_output_is_refused(tmp_path):
     shared = str(tmp_path / "same.nc")
     groups = [{"group_index": 0, "input": "a.py", "topology": shared}]
-    problems = openmm_md.validate(_files(trajectory=shared),
+    problems = replica_executor.validate(_files(trajectory=shared),
                                   _arguments(groupfile="g", number_of_groups=1), groups=groups)
     assert any("are the same file" in p for p in problems)
 
 
 def test_two_outputs_may_not_be_the_same_file(tmp_path):
     shared = str(tmp_path / "same.nc")
-    problems = openmm_md.validate(_files(trajectory=shared, checkpoint=shared),
+    problems = replica_executor.validate(_files(trajectory=shared, checkpoint=shared),
                                   _arguments(groupfile="g", number_of_groups=1),
                                   groups=[{"group_index": 0}])
     assert any("are the same file" in p for p in problems)
@@ -217,7 +217,7 @@ def test_the_mpi_world_must_match_the_group_count(monkeypatch):
     monkeypatch.setenv("OMPI_COMM_WORLD_SIZE", "4")
     monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "0")
     groups = [{"group_index": i} for i in range(6)]
-    problems = openmm_md.validate(_files(), _arguments(groupfile="g", number_of_groups=6),
+    problems = replica_executor.validate(_files(), _arguments(groupfile="g", number_of_groups=6),
                                   groups=groups)
     assert any("one rank per group" in p for p in problems)
 

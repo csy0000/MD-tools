@@ -31,7 +31,7 @@ from typing import Any
 def templates_directory() -> Path:
     """The installed runtime modules the executor imports by bare name.
 
-    `openmm_md.run_grouped` does `from replica_driver import ReplicaRun`, a bare import that the
+    `replica_executor.run_grouped` does `from replica_driver import ReplicaRun`, a bare import that the
     copy-based generated projects satisfied by having the modules beside the script. Putting the
     INSTALLED directory on `sys.path` satisfies the same import from the wheel, which is what lets
     a generated directory hold one file instead of a dozen copies.
@@ -273,7 +273,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
         executor_argv += ["--extend-from", args.extend_from]
 
     from ..build.record import LogWriter, file_facts
-    from ..openmm.templates import openmm_md
+    from ..openmm.templates import replica_executor
 
     log_path = Path(args.log) if args.log else out / f"{protocol_name}.log"
     log = LogWriter(log_path, record_type=f"md-replica:{protocol_name}", echo=False)
@@ -289,7 +289,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
                inputs={"topology": file_facts(Path(args.topology)),
                        "system": file_facts(Path(args.system))})
 
-    code = int(openmm_md.main(executor_argv) or 0)
+    code = int(replica_executor.main(executor_argv) or 0)
 
     # The executor owns the run and writes its own authoritative records. This log exists so that
     # every artefact this package produces carries the SAME machine record, and so registration

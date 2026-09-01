@@ -264,7 +264,7 @@ def test_the_cold_rung_is_the_unmodified_system():
 def test_the_same_device_policy_serves_equilibration_and_production():
     """One policy, not two that can drift apart.
 
-    Equilibration and production are the same ladder under `openmm_md`, so they cannot disagree
+    Equilibration and production are the same ladder under `replica_executor`, so they cannot disagree
     about placement by construction. This asserts the single decision point still exists and that
     nothing has grown a second one.
     """

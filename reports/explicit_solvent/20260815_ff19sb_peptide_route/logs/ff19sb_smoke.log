@@ -1,9 +1,0 @@
-[smoke] preparing ace_ala_nme (smoke) ...
-[equil] initial            U =       8676.4 kJ/mol  V =    10.01 nm^3  solute RMSD = 0.000 nm
-[equil] min_free           U =     -15267.1 kJ/mol  V =    10.01 nm^3  solute RMSD = 0.025 nm
-[equil] nvt                U =     -14361.8 kJ/mol  V =    10.01 nm^3  solute RMSD = 0.109 nm
-[equil] npt_free           U =     -14594.9 kJ/mol  V =     9.52 nm^3  solute RMSD = 0.101 nm
-[equil] box handoff: sample 11/20 at 9.605 nm^3, +0.25 % from the tail mean 9.581 nm^3
-manifest error: /path/to/explicit-test-20260815/ff19sb_probe/runs/20260815T214138Z__ace_ala_nme__bundle__dad2e5f8f0ff/system.yaml: input.pdb does not exist: /path/to/explicit-test-20260815/ff19sb_probe/runs/20260815T214138Z__ace_ala_nme__bundle__dad2e5f8f0ff/ace_ala_nme.pdb
-[smoke] bundle: /path/to/explicit-test-20260815/ff19sb_probe/runs/20260815T214138Z__ace_ala_nme__bundle__dad2e5f8f0ff
-[smoke] running REST2 ...

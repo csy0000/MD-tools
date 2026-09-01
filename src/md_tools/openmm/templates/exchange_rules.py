@@ -180,7 +180,7 @@ def load_rule(path):
     path = Path(path)
     if not path.is_file():
         raise ExchangeRuleError(f"--exchange-rule {path} does not exist")
-    spec = importlib.util.spec_from_file_location("openmm_md_exchange_rule", str(path))
+    spec = importlib.util.spec_from_file_location("md_tools_exchange_rule", str(path))
     if spec is None or spec.loader is None:
         raise ExchangeRuleError(f"{path} could not be loaded as a Python file")
     module = importlib.util.module_from_spec(spec)

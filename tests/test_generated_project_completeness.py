@@ -27,7 +27,7 @@ TEMPLATES = templates_directory()
 LOCAL = {path.name for path in TEMPLATES.glob("*.py")}
 
 #: What the executor imports by bare name, and therefore what must sit beside it on sys.path.
-ROOTS = ("openmm_md.py", "replica_driver.py", "replica_runtime.py")
+ROOTS = ("replica_executor.py", "replica_driver.py", "replica_runtime.py")
 
 
 def _module_level_imports(name):

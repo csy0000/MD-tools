@@ -327,7 +327,7 @@ def test_the_transaction_id_is_computed_by_one_function():
 
 # --- the REAL continuation route, not just the storage layer -------------------------------------
 #
-# These drive `ReplicaRun.run(resume=True)` -- the same entry point `openmm-md --resume` uses --
+# These drive `ReplicaRun.run(resume=True)` -- the entry point a generated script's `--resume` uses --
 # so the driver's read-only probe, its refusal checks and its reconciliation all actually execute.
 # The storage-layer crash tests remain, but they cannot show that the DRIVER reaches reconciliation.
 

@@ -1,4 +1,0 @@
-source leaprc.protein.ff19SB
-pep = sequence { ACE ALA NME }
-savepdb pep ace_ala_nme.pdb
-quit

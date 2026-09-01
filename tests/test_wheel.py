@@ -23,7 +23,7 @@ def _template_files() -> set[str]:
 
     templates = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
     local = {p.name for p in templates.glob("*.py")}
-    seen, queue = set(), ["openmm_md.py", "replica_driver.py", "replica_runtime.py"]
+    seen, queue = set(), ["replica_executor.py", "replica_driver.py", "replica_runtime.py"]
     while queue:
         name = queue.pop()
         if name in seen or name not in local:
