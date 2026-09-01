@@ -327,7 +327,8 @@ def run(files):
         timestep_fs={r["timestep_fs"]}, friction_per_ps={r["friction_per_ps"]},
         steps={r["production_steps"]}, duration_ps={r["production_ps"]},
         trajectory_name=Path(files.trajectory).name if files.trajectory else None,
-        frames={frames}, interval_ps={r["output_interval_ps"]})
+        frames={frames}, interval_ps={r["output_interval_ps"]},
+        rest2_implementation={"dict(REST2_IMPLEMENTATION)" if tau else "None"})
     print("run_status: completed")
 '''
 

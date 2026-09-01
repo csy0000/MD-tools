@@ -45,8 +45,16 @@ def frame_time_map(interval_ps):
 
 def write_resolved_run(directory, *, method, tau, temperature_kelvin, ensemble, timestep_fs,
                        friction_per_ps, steps, duration_ps, trajectory_name, frames,
-                       interval_ps, extra=None):
-    """Write the record. Returns it, so a caller may also print or embed it."""
+                       interval_ps, rest2_implementation=None, extra=None):
+    """Write the record. Returns it, so a caller may also print or embed it.
+
+    `rest2_implementation` is the scaling identity this run was propagated under. It matters
+    whenever `tau != 0`: v1 and v2 differ in the generalized-Born term, so two fixed-tau walkers
+    carrying the same tau can be different energy functions. The identity used to reach only
+    `resolved_stage.yaml`, which the `setup` route never writes -- so a fixed-tau walker generated
+    that way recorded no identity anywhere, and a downstream gate could not tell which Hamiltonian
+    produced it. It belongs in the record that always exists.
+    """
     record = {
         "format": RESOLVED_RUN_FORMAT,
         "method": method,
@@ -65,6 +73,8 @@ def write_resolved_run(directory, *, method, tau, temperature_kelvin, ensemble, 
             },
         },
     }
+    if rest2_implementation is not None:
+        record["rest2_implementation"] = dict(rest2_implementation)
     if extra:
         record.update(extra)
     # JSON is valid YAML, and writing it this way keeps the generated protocol free of a YAML
