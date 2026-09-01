@@ -313,7 +313,8 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     document = _sys_document(resolved)
 
     from ..openmm.config import resolve_sys_config
-    from ..openmm.sysgen import Log as _BuilderLog, _build_explicit, _build_implicit, _legacy_cfg
+    from ..openmm.builders import (Log as _BuilderLog, _build_explicit, _build_implicit,
+                               _legacy_cfg)
 
     # Record what RESOLVES, not what was requested. `resolve_sys_config` nulls the force fields
     # that do not participate: a ligand-only build loads no protein force field, and an implicit
@@ -403,7 +404,21 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         _ions = record.get("ions") or {}
         log.field("ions", _ions.get("counts", _ions) if not implicit else "none")
 
+        # What was ACTUALLY loaded, not what the configuration asked for. The two differ in ways
+        # that matter: the water label is short but ForceField() is given the qualified resource
+        # that also carries the ion templates, `amber14-all.xml` is a manifest whose protein
+        # parameters come from `amber14/protein.ff14SB.xml`, and a ligand-only route loads no
+        # protein force field at all. Carried in the record since `forcefield.json` and the route
+        # that wrote it were retired.
+        from ..openmm.forcefield_record import build_forcefield_record
+        forcefield_record = build_forcefield_record(
+            resolved=sys_resolved, route=route, record=record, inputs_dir=out_pdb.parent,
+            artifacts={}, builder=cfg)
+        log.field("forcefield", forcefield_record["protein"]["openmm_resource"]
+                  or forcefield_record["ligand"]["openff_resource"])
+
         log.update(
+            forcefield_record=forcefield_record,
             counts={"atoms": n_pdb, "particles": n_sys, "residues": len(residues),
                     "solute_atoms": record["n_solute_atoms"], "waters": waters},
             periodic=bool(periodic),

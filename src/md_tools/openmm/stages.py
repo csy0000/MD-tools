@@ -167,7 +167,7 @@ def _duration(equilibration: dict[str, Any], key: str) -> float:
     if value is None:
         raise ValueError(
             f"equilibration.{key} is null, but this solvent needs that stage. Regenerate the "
-            f"protocol with `md-openmm sys-config` or set a duration.")
+            f"protocol in the build-md configuration, or set a duration.")
     return float(value)
 
 

@@ -114,7 +114,7 @@ def test_the_default_ligand_forcefield_resource_loads():
 def test_an_unqualified_water_label_that_openmm_does_not_ship_is_refused():
     """The old blanket `amber19/` prefix turned `tip3p.xml` into a file that does not exist."""
     from md_tools.openmm.config import ConfigError
-    from md_tools.openmm.sysgen import _water_xml
+    from md_tools.openmm.builders import _water_xml
 
     assert _water_xml("tip3p.xml") == "amber14/tip3p.xml"
     assert _water_xml("opc.xml") == "amber19/opc.xml"
@@ -372,14 +372,14 @@ def test_the_nonpolar_term_defaults_to_off_matching_amber_igb8_gbsa0():
 def test_the_choice_reaches_the_builder_and_is_not_a_library_default():
     import inspect
 
-    from md_tools.openmm import implicit, sysgen
+    from md_tools.openmm import builders, implicit
 
     assert inspect.signature(implicit.build_implicit_system).parameters[
         "nonpolar_sasa"].default is False
     assert "useSASA=bool(nonpolar_sasa)" in inspect.getsource(implicit.build_implicit_system), \
         "createSystem must be told explicitly, not left to ParmEd's default"
-    assert "nonpolar_sasa=bool(" in inspect.getsource(sysgen), \
-        "sys-gen must pass the configured value through"
+    assert "nonpolar_sasa=bool(" in inspect.getsource(builders), \
+        "the builder must pass the configured value through, not leave it to a library default"
 
 
 def test_the_forcefield_record_states_the_nonpolar_choice():
@@ -586,3 +586,41 @@ def test_the_hmr_reasoning_survived_the_move_out_of_docs_examples():
     protocol = example("md/cMD.config").read_text(encoding="utf-8")
     assert "build-top.config" in protocol, (
         "the protocol example must point at where HMR is actually set")
+
+
+# --- the generated stage files, explicit and implicit ---------------------------------------------
+
+def _generate(tmp_path, config: dict, odir="md_script"):
+    import subprocess
+    import sys
+
+    path = tmp_path / "p.config"
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", odir,
+         "--config", str(path)], cwd=tmp_path, capture_output=True, text=True, timeout=600)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return {p.name for p in (tmp_path / odir).iterdir()}
+
+
+def test_the_explicit_stage_files_are_the_documented_ones(tmp_path):
+    written = _generate(tmp_path, {"protocol": "cMD", "solvent": "explicit"})
+    assert {"min.py", "eq_nvt_posres.py", "eq_npt_posres.py", "eq_npt_free.py", "cMD.py",
+            "run.sh"} <= written, written
+
+
+def test_the_implicit_stages_are_renamed_not_silently_run_as_nvt(tmp_path):
+    """GBn2 has no box, so there is no NPT stage -- and the FILE NAMES say so.
+
+    An `eq_npt_free.py` that quietly ran NVT would be a stage whose name is a false claim about
+    the ensemble a trajectory was produced in.
+    """
+    written = _generate(tmp_path, {"protocol": "cMD", "solvent": "implicit"})
+    assert {"min.py", "eq_nvt_posres.py", "eq_nvt_posres_2.py", "eq_nvt_free.py", "cMD.py",
+            "run.sh"} <= written, written
+    assert not any("npt" in name for name in written), (
+        f"an implicit run generated a pressure-coupled stage name: {sorted(written)}")
+
+    from md_tools.build.md import resolve_md_config, stage_plan
+    plan = stage_plan(resolve_md_config(None) | {"solvent": "implicit"})
+    assert {s["ensemble"] for s in plan} == {"NVT"}, "an implicit stage claims NPT"

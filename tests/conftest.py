@@ -70,102 +70,24 @@ def _pin_this_process_to_the_checkout() -> None:
 _pin_this_process_to_the_checkout()
 
 
-#: Subcommands the MD-tools migration removed from the public CLI. The GENERATORS behind them
-#: are still part of the package -- `sysgen.generate_system`, `mdgen.generate_md` and the
-#: defaults module are all unchanged, and AIS is still reachable through them -- but they are no
-#: longer reachable as commands, because `build-top`, `build-md` and `data-register` are the
-#: whole public surface now.
-#:
-#: The tests below were written against those commands and are testing the GENERATOR, not the
-#: argument parser. Rewriting each of them to call the API would be a large mechanical diff over
-#: scientific tests that are currently passing, so `run_cli` routes the three retired
-#: subcommands to the API and returns the same CompletedProcess shape the callers assert on.
-#: Anything else still runs the real CLI, so a test that means to exercise the command surface
-#: -- test_cli.py, test_wheel.py -- is unaffected.
-RETIRED_SUBCOMMANDS = ("sys-config", "sys-gen", "md-gen")
 
 
 def run_cli(module: str, *args, cwd: Path | None = None):
-    """Invoke an entry point the way a user does. Pinned via os.environ, see above."""
-    if module == "md_openmm" and args and args[0] in RETIRED_SUBCOMMANDS:
-        return _retired_generator(args, cwd=Path(cwd or REPO_ROOT))
+    """Invoke an entry point the way a user does. Pinned via os.environ, see above.
+
+    There is no longer any routing here. The shim that mapped `sys-config`, `sys-gen` and `md-gen`
+    onto the generator API existed only while AIS still needed that route; AIS is a `build-md`
+    protocol now, the generators are deleted, and a test that names a retired subcommand should
+    fail exactly as a user's shell would.
+    """
     return subprocess.run([sys.executable, "-m", f"md_tools.cli.{module}", *args],
                           capture_output=True, text=True, cwd=str(cwd or REPO_ROOT))
 
 
-def _flags(args) -> dict:
-    """The `--flag value` pairs of a retired command line, plus its bare `--method` list."""
-    out, methods, index = {}, [], 1
-    while index < len(args):
-        token = str(args[index])
-        if token.startswith("-"):
-            values = []
-            index += 1
-            while index < len(args) and not str(args[index]).startswith("-"):
-                values.append(str(args[index])); index += 1
-            out[token] = values
-        else:
-            methods.append(token); index += 1
-    if methods:
-        out.setdefault("--method", []).extend(methods)
-    return out
 
 
-def _retired_generator(args, *, cwd: Path):
-    """Run what the retired subcommand used to run, and report it the same way."""
-    from md_tools.openmm.config import ConfigError, write_yaml
-    from md_tools.openmm.defaults import md_defaults, sys_defaults
-
-    command, flags = args[0], _flags(args)
-
-    def result(code: int, out: str = "", err: str = ""):
-        return subprocess.CompletedProcess(args=list(args), returncode=code, stdout=out,
-                                           stderr=err)
-
-    def one(flag, default=None):
-        values = flags.get(flag) or []
-        return values[0] if values else default
-
-    try:
-        if command == "sys-config":
-            methods = tuple(flags.get("--method") or ("cMD",))
-            solvent = one("--solvent", "TIP3P")
-            peptide = str(one("--peptide", "true")).lower() != "false"
-            out = Path(one("--output-dir", ".") or ".")
-            target = out if out.is_absolute() else cwd / out
-            target.mkdir(parents=True, exist_ok=True)
-            write_yaml(target / "sys.config.yaml",
-                       sys_defaults(peptide=peptide, solvent=solvent))
-            write_yaml(target / "md.config.yaml",
-                       md_defaults(methods=methods, solvent=solvent))
-            return result(0, f"wrote {target}/sys.config.yaml and md.config.yaml\n")
-
-        if command == "sys-gen":
-            from md_tools.openmm.sysgen import generate_system
-            generate_system(input_path=_at(cwd, one("-i") or one("--input")),
-                            config_path=_at(cwd, one("--config")),
-                            output_folder=_at(cwd, one("-of") or one("--output-folder")),
-                            echo=False)
-            return result(0)
-
-        from md_tools.openmm.mdgen import generate_md
-        generate_md(input_folder=_at(cwd, one("-if") or one("--input-folder")),
-                    config_path=_at(cwd, one("--config")),
-                    output_folder=_at(cwd, one("-of") or one("--output-folder")))
-        return result(0)
-    except ConfigError as exc:
-        return result(2, "", f"{command}: {exc}\n")
-    except SystemExit as exc:
-        return result(int(exc.code or 1), "", f"{command}: {exc}\n")
-    except Exception as exc:                       # reported, not raised, like a CLI would
-        return result(1, "", f"{command}: {type(exc).__name__}: {exc}\n")
 
 
-def _at(cwd: Path, value):
-    if value is None:
-        raise ValueError("a required path argument was not given")
-    path = Path(value)
-    return path if path.is_absolute() else cwd / path
 
 
 @pytest.fixture

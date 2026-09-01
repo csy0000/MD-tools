@@ -167,7 +167,7 @@ def _check_explicit_pairing(resolved: dict[str, Any]) -> None:
         + "  Crossing them combines a backbone with a water model it was not corrected for; both\n"
           "  run and neither is a combination anyone has validated. See\n"
           "  docs/md-defaults-scientific-rationale.md section 3.\n"
-          "  Regenerate with `md-openmm sys-config --solvent "
+          "  Set solvent.model in your build configuration: "
         + f"{model}` if you did not mean to change it.")
 
 
@@ -254,7 +254,7 @@ def _required(block: dict[str, Any], key: str, *, where: str, meaning: str) -> A
     if value is None:
         raise ConfigError(
             f"{where}.{key} is null and has no default. {meaning}\n"
-            f"  Set it in md.config.yaml and run `md-openmm md-gen` again.")
+            f"  Set it in the protocol configuration and run `md-openmm build-md` again.")
     return value
 
 
@@ -273,7 +273,7 @@ def _check_ais(resolved: dict[str, Any]) -> None:
     block = resolved.get("AIS")
     if not isinstance(block, dict):
         raise ConfigError("md.config.yaml lists AIS as a method but carries no AIS block. "
-                          "Run `md-openmm show-default AIS` for the shape it needs.")
+                          "See configs/md/AIS.config for the shape it needs.")
     path = block.get("path") or {}
     source = block.get("source") or {}
     output = block.get("output") or {}

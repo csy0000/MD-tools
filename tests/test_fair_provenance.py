@@ -65,28 +65,6 @@ def test_environment_records_absent_packages_as_null_not_missing():
 
 # --- checksum manifests ------------------------------------------------------
 
-def test_the_checksum_manifest_is_deterministic_and_detects_mutation(tmp_path):
-    from md_tools.openmm.sysgen import verify_checksum_manifest, write_checksum_manifest
-
-    (tmp_path / "sub").mkdir()
-    (tmp_path / "b.txt").write_text("beta")
-    (tmp_path / "a.txt").write_text("alpha")
-    (tmp_path / "sub" / "c.txt").write_text("gamma")
-
-    first = write_checksum_manifest(tmp_path).read_text()
-    second = write_checksum_manifest(tmp_path).read_text()
-    assert first == second, "the manifest must not depend on directory ordering"
-    assert "SHA256SUMS" not in first, "the manifest cannot hash itself"
-    assert [line.split("  ", 1)[1] for line in first.strip().splitlines()] == \
-        ["a.txt", "b.txt", "sub/c.txt"], "paths must be sorted relative POSIX paths"
-    assert verify_checksum_manifest(tmp_path)["ok"] is True
-
-    (tmp_path / "a.txt").write_text("tampered")
-    result = verify_checksum_manifest(tmp_path)
-    assert result["ok"] is False and result["mismatched"] == ["a.txt"]
-
-    (tmp_path / "a.txt").unlink()
-    assert verify_checksum_manifest(tmp_path)["missing"] == ["a.txt"]
 
 
 # --- forcefield.json ---------------------------------------------------------
@@ -190,25 +168,6 @@ def test_implicit_ligand_records_the_openff_provenance_used_before_parmed():
     assert record["implicit_solvent"]["radii"] == "mbondi3"
 
 
-def test_a_retained_artifact_collision_is_refused(tmp_path):
-    """Two routes can both produce `solute.sdf`; flattening them would mis-checksum one."""
-    from md_tools.openmm.config import ConfigError
-    from md_tools.openmm.sysgen import _keep_preparation_artifacts
-
-    staging = tmp_path / "_work"
-    (staging / "structure").mkdir(parents=True)
-    (staging / "structure" / "solute.sdf").write_text("first\n")
-    out = tmp_path / "inputs"
-
-    kept = _keep_preparation_artifacts(staging, out)
-    assert kept == ["preparation/structure/solute.sdf"], "the subpath must be preserved"
-
-    # an identical rerun is not a collision, and must still be listed
-    assert _keep_preparation_artifacts(staging, out) == kept
-
-    (staging / "structure" / "solute.sdf").write_text("DIFFERENT\n")
-    with pytest.raises(ConfigError, match="different content"):
-        _keep_preparation_artifacts(staging, out)
 
 
 # --- the 0.3.x retrofit ------------------------------------------------------
@@ -533,3 +492,50 @@ def test_the_retrofit_needs_only_python_and_pyyaml():
     for forbidden in ("import openmm", "from openmm", "import md_tools", "from md_tools",
                       "requests", "urllib"):
         assert forbidden not in source, forbidden
+
+
+# --- the inventory that replaced sys-gen's checksum manifest ---------------------------------------
+#
+# `write_checksum_manifest` / `verify_checksum_manifest` went with sys-gen. Every property they
+# guaranteed is now `md_tools.registry.inventory`'s to guarantee, because that is what writes the
+# SHA256SUMS a registered dataset carries. The assertions are preserved verbatim in meaning.
+
+def test_the_inventory_is_deterministic_and_detects_mutation(tmp_path):
+    from md_tools.registry import inventory
+    from md_tools.registry.errors import RegistrationError
+
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "b.txt").write_text("beta")
+    (tmp_path / "a.txt").write_text("alpha")
+    (tmp_path / "sub" / "c.txt").write_text("gamma")
+
+    entries = inventory.build(tmp_path)
+    assert inventory.build(tmp_path) == entries, "the inventory must not depend on directory order"
+    assert [e["path"] for e in entries] == ["a.txt", "b.txt", "sub/c.txt"], (
+        "paths must be sorted relative POSIX paths")
+
+    written = inventory.write(tmp_path, entries)
+    assert written.name == "SHA256SUMS"
+    assert "SHA256SUMS" not in written.read_text(), "the manifest cannot hash itself"
+    inventory.verify(tmp_path, entries)                      # clean: does not raise
+
+    (tmp_path / "a.txt").write_text("tampered")
+    with pytest.raises(RegistrationError, match="a.txt"):
+        inventory.verify(tmp_path, entries)
+
+    (tmp_path / "a.txt").unlink()
+    with pytest.raises(RegistrationError, match="missing: a.txt"):
+        inventory.verify(tmp_path, entries)
+
+
+def test_the_inventory_refuses_a_symlink_rather_than_following_it(tmp_path):
+    """`_keep_preparation_artifacts` refused a colliding retained artifact; the same class of
+    problem -- a file that is not what it appears to be -- is refused here, where the bytes that
+    will be moved are decided."""
+    from md_tools.registry import inventory
+    from md_tools.registry.errors import RegistrationError
+
+    (tmp_path / "real.txt").write_text("content")
+    (tmp_path / "link.txt").symlink_to(tmp_path / "real.txt")
+    with pytest.raises(RegistrationError, match="symlink"):
+        inventory.build(tmp_path)

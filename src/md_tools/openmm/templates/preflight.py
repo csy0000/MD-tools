@@ -13,20 +13,13 @@ directories, the small configuration and provenance files beside it, and specifi
 and output artifacts. It never walks `$MD_DATA`, never opens another dataset, never hashes a
 production trajectory, and never writes anything.
 
-MD-data owns the dataset contract. When this project is contract-managed the manifest is validated
-by `md_data`'s own validator, imported at runtime; there is no copy of its schema here. When the
-project is an unregistered local `inputs/ + MD/` tree the dataset checks are skipped and say so --
-such a tree is not MD-data compliant and is not treated as though it were.
+**No dataset validation happens here any more.** MD-tools owns the dataset contract, at version 2,
+in `md_tools.data_contract`; a generated run carries no manifest, and `md-openmm data-register`
+validates a finished directory against that contract before it commits anything. A run does not
+need to revalidate the dataset it is being written into: it is not registered yet, and registration
+checks it where the answer can still change what happens.
 
-This module imports OpenMM, PyYAML and optionally `md_data`. Never `md_tools`.
-
-
-NOTE: the `md_data` import below is a known deviation from the MD-tools migration,
-which forbids importing md_data at runtime. It is lazy and guarded, md-data is not a
-declared dependency, and no public command reaches this branch -- it fires only for a
-contract-managed dataset on the internal route AIS uses. It is removed together with
-md_data_contract.py when AIS gets a public command; see
-docs/journal/2026-09-01_md-tools-standalone.md, section 9.1.
+This module imports OpenMM and PyYAML. Never `md_tools`, and never `md_data`.
 """
 import json
 import os
@@ -84,119 +77,21 @@ def _skip(name, detail):
 # The dataset contract
 # ---------------------------------------------------------------------------------------------
 
-def _component_for(here, project):
-    """Which declared component this directory belongs to, from its path under the project."""
-    try:
-        relative = here.resolve().relative_to(project.resolve())
-    except ValueError:
-        return None
-    parts = relative.parts
-    return COMPONENT_OF_DIRECTORY.get(parts[0]) if parts else None
 
 
 def check_dataset(here, project, config, inputs=None):
-    """The MD-data half: roots, manifest, status, and this component's declaration.
+    """The v1 contract-managed dataset check, removed with contract v1.
 
-    Skipped entirely, and said to be skipped, when the project is not contract-managed.
+    This used to import `md_data`, resolve `MD_DATA_LOCAL`, and validate a `dataset.yaml` embedded
+    in the generated project against MD-data's v1 contract. All three are gone: MD-tools owns the
+    contract (v2, year-first, in `md_tools.data_contract`), a generated run no longer carries a
+    manifest, and `md-openmm data-register` validates a finished directory before it commits.
+
+    A run does not need to revalidate the dataset it is being written into. It is not registered
+    yet, and registration checks it -- with its own inventory and its own transaction -- at the
+    point where the answer can still change what happens.
     """
-    block = dict((config.get("dataset") or {}))
-    if not block.get("contract_managed"):
-        return [_skip("dataset contract",
-                      "unregistered local project: no dataset.yaml, not MD-data compliant")]
-
-    results = []
-    root = os.environ.get("MD_DATA")
-    local = os.environ.get("MD_DATA_LOCAL")
-    if not root:
-        return [_no("MD_DATA", "not set; it is the managed-storage root every canonical dataset "
-                               "path is relative to")]
-    if not local:
-        return [_no("MD_DATA_LOCAL", "not set; it is the one dataset root this run belongs to")]
-    root_path, local_path = Path(root).expanduser(), Path(local).expanduser()
-    if not root_path.is_dir():
-        return [_no("MD_DATA", f"{root!r} is not an existing directory")]
-    root_path, local_path = root_path.resolve(), local_path.resolve()
-    try:
-        relative = local_path.relative_to(root_path)
-    except ValueError:
-        return [_no("MD_DATA_LOCAL", f"{local!r} is not inside MD_DATA {root!r}")]
-    results.append(_ok("MD_DATA / MD_DATA_LOCAL", f"{relative.as_posix()} under {root_path}"))
-
-    # The dataset root this run is actually in must BE the selected one. Comparing the resolved
-    # project directory against MD_DATA_LOCAL is what stops a run in one dataset from validating
-    # another dataset's manifest and believing itself checked.
-    if project.resolve() != local_path:
-        return results + [_no(
-            "dataset root",
-            f"this project is at {project.resolve()} but MD_DATA_LOCAL is {local_path}")]
-    results.append(_ok("dataset root", "the running project is the selected dataset"))
-
-    manifest = project / "dataset.yaml"
-    if not manifest.is_file():
-        return results + [_no("dataset.yaml", f"{manifest} does not exist")]
-
-    try:
-        import md_data
-    except ImportError as error:
-        return results + [_no(
-            "md-data validator",
-            f"the md-data package is not installed ({type(error).__name__}), so this dataset "
-            f"cannot be validated against the contract that owns it")]
-
-    try:
-        document = yaml.safe_load(manifest.read_text(encoding="utf-8"))
-        dataset = md_data.validate_dataset(document)
-    except md_data.ContractViolation as error:
-        return results + [_no("md-data validator",
-                              f"{len(error.problems)} contract violation(s): "
-                              + "; ".join(error.problems[:3]))]
-    except Exception as error:
-        return results + [_no("md-data validator", f"{type(error).__name__}: {error}")]
-
-    from md_data.storage import check_dataset_tree
-
-    try:
-        problems = check_dataset_tree(root_path, dataset)
-    except md_data.ContractViolation as error:
-        problems = list(error.problems)
-    if problems:
-        return results + [_no("declared layout", "; ".join(problems[:3]))]
-    results.append(_ok("md-data validator",
-                       f"{dataset.dataset_id} valid, contract v{md_data.CONTRACT_VERSION}, "
-                       f"layout verified"))
-
-    if dataset.status != "active":
-        return results + [_no("dataset status",
-                              f"{dataset.status!r}: a complete or archived dataset is read-only, "
-                              f"and new output belongs in a new dated dataset")]
-    if dataset.role == "baseline" and dataset.namespace != "baseline":
-        return results + [_no("role/namespace", "role baseline outside the baseline namespace")]
-    if dataset.role != "baseline" and dataset.namespace == "baseline":
-        return results + [_no("role/namespace",
-                              "a project dataset in the reserved baseline namespace")]
-    results.append(_ok("dataset status", f"active, role {dataset.role}, writable"))
-
-    wanted = _component_for(here, project)
-    if wanted is None:
-        return results + [_no("component", f"{here} is not inside a known component of {project}")]
-    declared = {c.name: c for c in dataset.components}
-    component = declared.get(wanted)
-    if component is None:
-        return results + [_no("component",
-                              f"{wanted!r} is not declared in dataset.yaml (declared: "
-                              f"{', '.join(sorted(declared)) or 'none'})")]
-    if component.linked:
-        return results + [_no("component",
-                              f"{wanted!r} is linked: true -- a linked component is content "
-                              f"another dataset owns and is never writable")]
-    if component.status not in ("active",):
-        return results + [_no("component",
-                              f"{wanted!r} has status {component.status!r}; new output belongs in "
-                              f"an active component this dataset owns")]
-    results.append(_ok("component", f"{wanted!r} declared, owned, active, not linked"))
-    results += check_template_provenance(here, project, manifest=document, inputs=inputs,
-                                         contract_managed=True)
-    return results
+    return []
 
 
 #: Where a contract-managed project records the generator, and how to read it out of each.
@@ -233,7 +128,7 @@ def check_template_provenance(here, project, *, manifest=None, stage=None, input
     For a CONTRACT-MANAGED project every applicable record is required. Comparing only the fields
     that happen to be present meant a missing one was indistinguishable from an agreeing one.
 
-    This compares RECORDS. Establishing what the generator actually was is `md_data_contract`'s job
+    This compares RECORDS. Establishing what the generator actually was is the build record's job
     at generation time; a generated project deliberately cannot import `md_tools`, and nothing
     here inspects the original checkout.
     """

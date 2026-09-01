@@ -498,7 +498,7 @@ def run_one_path(index, plan):
     if barostats:
         raise SystemExit(
             f"the prepared System carries {barostats}, but AIS switches at FIXED VOLUME and adds "
-            f"no barostat. Remove it, or rebuild the system with `md-openmm sys-gen`.")
+            f"no barostat. Remove it, or rebuild the system with `md-openmm build-top`.")
 
     excluded = SOLUTE["rest2"]["omega_excluded_bonds"] if PATH_DEFINITION["path"][
         "omega_exclusion"] else []

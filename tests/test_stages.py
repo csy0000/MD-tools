@@ -340,19 +340,29 @@ def test_the_ace_nonpolar_term_is_a_real_energy_difference(tmp_path):
     from openmm import Context, Platform, VerletIntegrator, app, unit
     import parmed as pmd
 
-    from .conftest import ALA_PDB, run_cli
+    from .conftest import ALA_PDB
+
+    # The implicit builder is called DIRECTLY, because this test needs the AmberTools
+    # intermediates (prmtop/rst7) that `build-top` does not retain -- it keeps built.pdb and
+    # built.xml, and the preparation directory the retired route archived is gone. The builder
+    # itself is unchanged and maintained.
+    from md_tools.build.top import _sys_document, resolve_build_config
+    from md_tools.openmm.builders import Log, _build_implicit, _legacy_cfg
+    from md_tools.openmm.config import resolve_sys_config
 
     work = tmp_path
-    import shutil as _shutil
-    _shutil.copy2(ALA_PDB, work / "ALA.pdb")
-    run_cli("md_openmm", "sys-config", "--method", "cMD", "--solvent", "GBn2", cwd=work)
-    built = run_cli("md_openmm", "sys-gen", "-i", "./ALA.pdb", "--config", "sys.config.yaml",
-                    "-of", "./inputs/", cwd=work)
-    assert built.returncode == 0, built.stdout + built.stderr
+    staging = work / "_work"
+    staging.mkdir()
+    config = work / "gb.config"
+    config.write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
+    resolved = resolve_build_config(config)
+    resolved.pop("_stated", None)
+    cfg = _legacy_cfg(resolve_sys_config(_sys_document(resolved)))
+    record = _build_implicit(ALA_PDB, cfg, staging, route="peptide",
+                             log=Log(staging / "build.log", echo=False))
 
-    inputs = work / "inputs"
-    structure = pmd.load_file(str(inputs / "preparation" / "system.prmtop"),
-                              xyz=str(inputs / "preparation" / "system.rst7"))
+    structure = pmd.load_file(str(staging / "system.prmtop"),
+                              xyz=str(staging / "system.rst7"))
     pmd.tools.changeRadii(structure, "mbondi3").execute()
     platform = Platform.getPlatformByName("CUDA")
 
@@ -369,7 +379,7 @@ def test_the_ace_nonpolar_term_is_a_real_energy_difference(tmp_path):
     without = total(structure.createSystem(**common, useSASA=False))
     with_sasa = total(structure.createSystem(**common, useSASA=True))
     native = total(app.ForceField("amber14/protein.ff14SB.xml", "implicit/gbn2.xml").createSystem(
-        app.PDBFile(str(inputs / "topology.pdb")).topology,
+        app.PDBFile(str(record["topology_pdb"])).topology,
         nonbondedMethod=app.NoCutoff, constraints=app.HBonds, removeCMMotion=True))
 
     assert with_sasa - without == pytest.approx(16.05, abs=0.5), \

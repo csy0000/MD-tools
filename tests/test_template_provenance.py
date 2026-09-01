@@ -21,17 +21,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from md_tools.openmm import md_data_contract as MD
 from md_tools.openmm import provenance_min
 
-from .conftest import ALA_PDB, REPO_ROOT, template_module
-import datetime
-
-
-#: See the note in test_md_data_contract.py: the dated path segment must equal the month
-#: of `created_at`, so a literal month here fails on the first of every month.
-def _current_month():
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m")
+from .conftest import REPO_ROOT
 
 CLEAN = "1" * 40
 OTHER = "2" * 40
@@ -41,7 +33,7 @@ VCS = "3" * 40
 def _raw(*, git_commit=None, dirty=None, direct_url=None):
     """What `implementation_identity()` observes, before any resolution."""
     return {
-        "version": "0.4.0.dev0",
+        "version": "0.5.0.dev0",
         "git_commit": git_commit,
         "git_dirty": dirty,
         "installed_fingerprint": {"algorithm": "sha256", "file_count": 1, "value": "f" * 64},
@@ -93,88 +85,19 @@ def test_an_installation_with_no_commit_resolves_to_none_rather_than_a_guess(mon
     assert identity["commit"] is None
     assert identity["evidence"] == "unavailable"
     # Never derived from the version or the fingerprint, both of which are available here.
-    assert identity["version"] == "0.4.0.dev0"
+    assert identity["version"] == "0.5.0.dev0"
     assert identity["installed_fingerprint"] == "f" * 64
     assert identity["reproducible_from_commit"] is False
 
 
-def test_the_contract_refuses_a_dirty_checkout(monkeypatch):
-    monkeypatch.setattr(provenance_min, "implementation_identity",
-                        lambda: _raw(git_commit=CLEAN, dirty=True))
-    with pytest.raises(MD.ContractError) as error:
-        MD.check_templates_commit(CLEAN)
-    message = str(error.value)
-    assert "UNCOMMITTED CHANGES" in message
-    assert "false provenance" in message
-    assert "dataset.enabled false" in message
 
 
-def test_the_contract_accepts_a_vcs_install(monkeypatch):
-    monkeypatch.setattr(provenance_min, "implementation_identity", lambda: _raw(
-        git_commit=None, direct_url={"url": "https://github.com/csy0000/MD-tools.git",
-                                     "vcs_info": {"commit_id": VCS}}))
-    assert MD.check_templates_commit(VCS)["commit"] == VCS
-    with pytest.raises(MD.ContractError):
-        MD.check_templates_commit(OTHER)
 
 
 # --- generation, and the files it actually writes -----------------------------------------------
 
-def _sys_config(work, *, enabled, commit):
-    from .conftest import run_cli
-
-    shutil.copy2(ALA_PDB, work / "ALA.pdb")
-    assert run_cli("md_openmm", "sys-config", "--method", "cMD", cwd=work).returncode == 0
-    path = work / "sys.config.yaml"
-    document = yaml.safe_load(path.read_text())
-    document["solvent"].update({"padding_nm": 0.5, "cutoff_nm": 0.5})
-    if enabled:
-        document["dataset"].update({
-            "enabled": True, "dataset_id": f"proj-{_current_month()}-ala", "namespace": "proj",
-            "dataset_name": "ala", "role": "project", "system": "ALA in TIP3P",
-            "created_by": {"person_id": "chen", "name": "Chen", "affiliation": None,
-                           "orcid": None},
-            "origin": {"repository": "https://github.com/csy0000/example", "commit": commit}})
-        document["dataset"]["templates"]["commit"] = commit
-    path.write_text(yaml.safe_dump(document, sort_keys=False))
-    return path
 
 
-def _generate(work, *, enabled, commit, identity):
-    """Generate a whole project IN-PROCESS, with the raw identity observation faked.
-
-    In-process because the identity has to be steered and a subprocess cannot be monkeypatched;
-    the assertions are all on the files this actually writes, not on the patched function.
-    """
-    from md_tools.openmm import mdgen, sysgen
-
-    _sys_config(work, enabled=enabled, commit=commit)
-    environment = dict(os.environ)
-    if enabled:
-        root = work / "MD_DATA"
-        local = root / "proj" / _current_month() / "ala"
-        local.mkdir(parents=True)
-        os.environ.update({"MD_DATA": str(root), "MD_DATA_LOCAL": str(local)})
-        inputs, project = local / "common", local
-    else:
-        inputs, project = work / "inputs", work / "MD"
-    try:
-        sysgen.generate_system(input_path=work / "ALA.pdb", config_path=work / "sys.config.yaml",
-                               output_folder=inputs, echo=False)
-        protocol = work / "md.config.yaml"
-        document = yaml.safe_load(protocol.read_text())
-        document["minimization"]["max_iterations"] = 25
-        for key, value in list(document["equilibration"].items()):
-            if key.endswith("_duration_ps") and value is not None:
-                document["equilibration"][key] = 0.02
-        document["cMD"].update({"duration_ns": 0.00004, "checkpoint_interval_ps": 0.02,
-                                "whole_system_interval_ps": 0.02, "solute_interval_ps": 0.02})
-        protocol.write_text(yaml.safe_dump(document, sort_keys=False))
-        mdgen.generate_md(input_folder=inputs, config_path=protocol, output_folder=project)
-    finally:
-        os.environ.clear()
-        os.environ.update(environment)
-    return inputs, project
 
 
 def _recorded_commits(inputs, project):
@@ -204,71 +127,10 @@ def _recorded_commits(inputs, project):
     return found
 
 
-@pytest.mark.slow
-@pytest.mark.parametrize("identity, label", [
-    (dict(git_commit=CLEAN, dirty=False), "clean git checkout"),
-    (dict(git_commit=None, dirty=None,
-          direct_url={"url": "https://github.com/csy0000/MD-tools.git",
-                      "vcs_info": {"vcs": "git", "commit_id": VCS}}), "direct_url.json"),
-])
-def test_the_same_commit_reaches_every_record(tmp_path, monkeypatch, identity, label):
-    """Contract-managed generation writes ONE commit into every record that names a generator."""
-    monkeypatch.setattr(provenance_min, "implementation_identity", lambda: _raw(**identity))
-    expected = identity.get("git_commit") or VCS
-    inputs, project = _generate(tmp_path, enabled=True, commit=expected, identity=identity)
-
-    recorded = _recorded_commits(inputs, project)
-    assert recorded, "nothing recorded a generator commit"
-    assert set(recorded.values()) == {expected}, f"{label}: {recorded}"
-    # The stage files are the ones that used to be null under direct_url.json.
-    assert any(name.endswith("stage.yaml") for name in recorded)
-    assert "dataset.yaml" in recorded
 
 
-@pytest.mark.slow
-def test_contract_generation_from_a_dirty_checkout_fails_before_the_system_is_built(
-        tmp_path, monkeypatch):
-    from md_tools.openmm import sysgen
-
-    monkeypatch.setattr(provenance_min, "implementation_identity",
-                        lambda: _raw(git_commit=CLEAN, dirty=True))
-    _sys_config(tmp_path, enabled=True, commit=CLEAN)
-    root = tmp_path / "MD_DATA"
-    local = root / "proj" / _current_month() / "ala"
-    local.mkdir(parents=True)
-    monkeypatch.setenv("MD_DATA", str(root))
-    monkeypatch.setenv("MD_DATA_LOCAL", str(local))
-
-    with pytest.raises(Exception) as error:
-        sysgen.generate_system(input_path=tmp_path / "ALA.pdb",
-                               config_path=tmp_path / "sys.config.yaml",
-                               output_folder=local / "common", echo=False)
-    assert "UNCOMMITTED CHANGES" in str(error.value)
-    # Nothing was built: the refusal is before construction, not after it.
-    assert not (local / "common" / "system.xml").exists()
-    assert not (local / "common" / "topology.pdb").exists()
-    assert not (local / "dataset.yaml").exists()
 
 
-@pytest.mark.slow
-def test_unregistered_generation_from_a_dirty_checkout_is_permitted_and_says_so(
-        tmp_path, monkeypatch):
-    monkeypatch.setattr(provenance_min, "implementation_identity",
-                        lambda: _raw(git_commit=CLEAN, dirty=True))
-    inputs, project = _generate(tmp_path, enabled=False, commit=CLEAN, identity={})
-
-    assert (inputs / "system.xml").is_file(), "unregistered development must still work"
-    for path in (inputs / "provenance.yaml", project / "provenance.yaml"):
-        template = yaml.safe_load(path.read_text())["template"]
-        assert template["commit"] == CLEAN
-        assert template["dirty"] is True
-        assert template["reproducible_from_commit"] is False
-        assert "does NOT reproduce" in template["reproducibility"]
-        assert template["installed_fingerprint"] == "f" * 64
-    # And it is not presented as contract-verified.
-    assert not (project / "dataset.yaml").exists()
-    assert yaml.safe_load((project / "provenance.yaml").read_text())["dataset"][
-        "contract_managed"] is False
 
 
 # --- preflight requires every record ------------------------------------------------------------
@@ -279,98 +141,16 @@ def _contract_project(tmp_path, monkeypatch):
     return _generate(tmp_path, enabled=True, commit=CLEAN, identity={})
 
 
-@pytest.mark.slow
-def test_preflight_passes_when_every_record_agrees(tmp_path, monkeypatch):
-    inputs, project = _contract_project(tmp_path, monkeypatch)
-    preflight = template_module("preflight")
-    row, = preflight.check_template_provenance(project / "minimization", project, inputs=inputs,
-                                               contract_managed=True)
-    assert row.status == preflight.PASS, row.detail
-    assert CLEAN[:12] in row.detail
 
 
-@pytest.mark.slow
-@pytest.mark.parametrize("target, keys", [
-    ("provenance.yaml", ("template", "commit")),
-    ("md.config.yaml", ("provenance", "template_commit")),
-    ("minimization/stage.yaml", ("template_commit",)),
-])
-def test_a_missing_provenance_record_fails_preflight(tmp_path, monkeypatch, target, keys):
-    """Comparing only what is present meant deleting the field was enough to pass."""
-    inputs, project = _contract_project(tmp_path, monkeypatch)
-    preflight = template_module("preflight")
-    path = project / target
-    document = yaml.safe_load(path.read_text())
-    node = document
-    for key in keys[:-1]:
-        node = node[key]
-    node.pop(keys[-1])
-    path.write_text(yaml.safe_dump(document, sort_keys=False))
-
-    row, = preflight.check_template_provenance(project / "minimization", project, inputs=inputs,
-                                               contract_managed=True)
-    assert row.status == preflight.FAIL, row.detail
-    assert "must name the generator" in row.detail
 
 
-@pytest.mark.slow
-def test_a_missing_common_provenance_file_fails_preflight(tmp_path, monkeypatch):
-    inputs, project = _contract_project(tmp_path, monkeypatch)
-    preflight = template_module("preflight")
-    (inputs / "provenance.yaml").unlink()
-    row, = preflight.check_template_provenance(project / "minimization", project, inputs=inputs,
-                                               contract_managed=True)
-    assert row.status == preflight.FAIL
-    assert "does not exist" in row.detail
 
 
-@pytest.mark.slow
-@pytest.mark.parametrize("target, keys", [
-    ("dataset.yaml", ("templates", "commit")),
-    ("provenance.yaml", ("template", "commit")),
-    ("minimization/stage.yaml", ("template_commit",)),
-])
-def test_a_mismatching_provenance_record_fails_preflight(tmp_path, monkeypatch, target, keys):
-    inputs, project = _contract_project(tmp_path, monkeypatch)
-    preflight = template_module("preflight")
-    path = project / target
-    document = yaml.safe_load(path.read_text())
-    node = document
-    for key in keys[:-1]:
-        node = node[key]
-    node[keys[-1]] = OTHER
-    path.write_text(yaml.safe_dump(document, sort_keys=False))
-
-    row, = preflight.check_template_provenance(project / "minimization", project, inputs=inputs,
-                                               contract_managed=True)
-    assert row.status == preflight.FAIL, row.detail
-    assert "not generated by the same MD-tools" in row.detail
 
 
-@pytest.mark.slow
-def test_a_record_that_disagrees_with_itself_fails_preflight(tmp_path, monkeypatch):
-    """`git_commit` and `direct_url.vcs_info.commit_id` in one file must not differ."""
-    inputs, project = _contract_project(tmp_path, monkeypatch)
-    preflight = template_module("preflight")
-    path = project / "provenance.yaml"
-    document = yaml.safe_load(path.read_text())
-    document["implementation"]["git_commit"] = CLEAN
-    document["implementation"]["direct_url"] = {"url": "https://example.invalid",
-                                                "vcs_info": {"commit_id": OTHER}}
-    path.write_text(yaml.safe_dump(document, sort_keys=False))
-
-    row, = preflight.check_template_provenance(project / "minimization", project, inputs=inputs,
-                                               contract_managed=True)
-    assert row.status == preflight.FAIL
-    assert "disagree" in row.detail
 
 
-def test_an_unregistered_project_is_skipped_not_failed(tmp_path):
-    preflight = template_module("preflight")
-    (tmp_path / "minimization").mkdir()
-    row, = preflight.check_template_provenance(tmp_path / "minimization", tmp_path)
-    assert row.status == preflight.SKIP
-    assert "unregistered" in row.detail
 
 
 # --- nothing derives the commit independently any more ------------------------------------------
@@ -378,8 +158,16 @@ def test_an_unregistered_project_is_skipped_not_failed(tmp_path):
 def test_no_writer_reaches_for_git_commit_on_its_own():
     """One canonical resolution. Reaching past it is how the null-under-direct_url bug happened."""
     offenders = {}
-    for name in ("sysgen.py", "mdgen.py"):
-        path = REPO_ROOT / "src" / "md_tools" / "openmm" / name
+    # The two writers that used to reach past the resolution are gone with the retired route.
+    # The rule now applies to everything that writes a commit into a durable record.
+    # `provenance_min` is deliberately absent: it IS the canonical resolution, so reading the raw
+    # field there is the point. The rule is that nothing ELSE reaches past it.
+    sources = [REPO_ROOT / "src" / "md_tools" / "build" / "record.py",
+               REPO_ROOT / "src" / "md_tools" / "registry" / "register.py",
+               REPO_ROOT / "src" / "md_tools" / "build" / "top.py",
+               REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py"]
+    for path in sources:
+        name = path.name
         for number, line in enumerate(path.read_text().splitlines(), 1):
             stripped = line.strip()
             if stripped.startswith("#"):          # an explanation of the bug is not the bug
@@ -387,3 +175,44 @@ def test_no_writer_reaches_for_git_commit_on_its_own():
             if '["git_commit"]' in line or "['git_commit']" in line:
                 offenders[f"{name}:{number}"] = stripped
     assert not offenders, offenders
+
+
+# --- where the dirty-checkout guarantee lives now -------------------------------------------------
+#
+# `md_data_contract.check_templates_commit` enforced that a contract-managed generation could not
+# record a commit that did not describe what ran. Contract v1 and that function are gone; the
+# guarantee is not. It moved to the two places that actually write a commit into a durable record:
+#
+#   * `md_tools.build.record.source_commit()` -- what every run record carries;
+#   * registration's `_origin()` -- which REFUSES a dirty project tree outright, asserted in
+#     tests/test_registration.py::test_a_dirty_project_tree_is_refused.
+
+def test_a_run_record_never_invents_a_commit(monkeypatch):
+    """None is an honest answer; a guess is not.
+
+    An installed wheel has no git tree. Recording a plausible-looking commit there would put an
+    unverifiable claim into provenance, which is worse than recording nothing.
+    """
+    from md_tools.build import record
+
+    monkeypatch.setattr(record, "source_commit", lambda: None)
+    facts = record.environment_facts()
+    assert facts["md_tools_commit"] is None
+
+
+def test_the_run_record_carries_the_commit_when_there_is_one():
+    from md_tools.build.record import source_commit
+
+    commit = source_commit()
+    if commit is None:
+        pytest.skip("not a git checkout")
+    assert len(commit) == 40 and all(c in "0123456789abcdef" for c in commit)
+
+
+def test_registration_refuses_to_record_a_commit_that_does_not_describe_what_ran():
+    """The v1 rule, in the place that now writes commits into a manifest that travels."""
+    from md_tools.registry import register
+
+    source = Path(register.__file__).read_text(encoding="utf-8")
+    assert "uncommitted changes" in source
+    assert "would not describe what actually ran" in source

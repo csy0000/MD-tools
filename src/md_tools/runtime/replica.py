@@ -71,7 +71,7 @@ def write_solute_document(topology_path: Path, system_path: Path, out: Path, *,
 
     from ..openmm.config import write_yaml
     from ..openmm.system import classify_omega_bonds
-    from ..openmm.sysgen import _solute_document
+    from ..openmm.builders import _solute_document
     from .stage import solute_atom_indices
 
     topology = PDBFile(str(topology_path)).topology

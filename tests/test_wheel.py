@@ -14,18 +14,31 @@ from .conftest import REPO_ROOT
 
 pytestmark = pytest.mark.slow
 
-#: Every file `md-gen` copies into a generated project, plus the scripts themselves.
-#: Every file `md-gen` copies into a generated project. Derived from mdgen.py rather than kept by
-#: hand, because a stale list here passed for a whole release while the wheel was quietly picking
-#: up a deleted `run.sh` from a cached build tree.
+#: The runtime modules a generated replica script reaches through `md_tools.runtime.replica`,
+#: which puts this directory on sys.path so the executor's bare imports resolve FROM THE WHEEL.
+#: Derived from the driver's actual import closure rather than kept by hand, because a stale list
+#: here passed for a whole release while the wheel was quietly missing a module.
 def _template_files() -> set[str]:
-    import re
+    import ast
 
-    source = (REPO_ROOT / "src" / "md_tools" / "openmm" / "mdgen.py").read_text(
-        encoding="utf-8")
-    found = set(re.findall(r'TEMPLATES / "([A-Za-z0-9_.]+)"', source))
-    assert found, "mdgen.py copies no templates -- the pattern stopped matching"
-    return found
+    templates = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
+    local = {p.name for p in templates.glob("*.py")}
+    seen, queue = set(), ["openmm_md.py", "replica_driver.py", "rest2_run.py"]
+    while queue:
+        name = queue.pop()
+        if name in seen or name not in local:
+            continue
+        seen.add(name)
+        tree = ast.parse((templates / name).read_text(encoding="utf-8"))
+        for node in tree.body:
+            modules = []
+            if isinstance(node, ast.Import):
+                modules = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                modules = [node.module]
+            queue.extend(f"{m.split('.')[0]}.py" for m in modules)
+    assert seen, "the replica driver imports nothing -- the closure stopped resolving"
+    return seen
 
 
 TEMPLATE_FILES = _template_files()
@@ -96,14 +109,17 @@ def test_the_wheel_contains_every_generated_project_file(installed):
     assert present <= tracked, f"the wheel carries files not in the checkout: {present - tracked}"
 
 
-def test_both_generators_import_from_the_wheel_rather_than_the_checkout(installed):
-    """`sys-gen` and `md-gen` are the two scientifically central entry points."""
+def test_the_public_commands_import_from_the_wheel_rather_than_the_checkout(installed):
+    """`build-top`, `build-md` and `data-register` are the three public entry points."""
     site, work = installed
     result = _outside(site, work, "-c", """
 import md_tools
-from md_tools.openmm.sysgen import generate_system
-from md_tools.openmm.mdgen import generate_md
-assert callable(generate_system) and callable(generate_md)
+from md_tools.build.top import build_topology
+from md_tools.build.md import build_scripts
+from md_tools.registry.register import register_dataset
+from md_tools.runtime.ais import ais_main
+assert callable(build_topology) and callable(build_scripts)
+assert callable(register_dataset) and callable(ais_main)
 print(md_tools.__file__)
 """)
     assert result.returncode == 0, result.stdout + result.stderr

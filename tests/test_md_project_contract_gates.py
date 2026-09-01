@@ -226,14 +226,26 @@ def test_every_extendable_field_is_excluded_and_nothing_else_is():
         )
 
 
-def test_the_production_stage_document_is_derived_once():
-    """md-gen and the launcher must not derive the request separately."""
-    mdgen = (REPO / "src/md_tools/openmm/mdgen.py").read_text(encoding="utf-8")
-    assert "_template_module().production_stage_document(" in mdgen, (
-        "md-gen must use the same derivation it copies into the project"
-    )
-    ms = _md_stages()
-    assert hasattr(ms, "production_stage_document")
+def test_the_stage_request_is_derived_once_not_twice():
+    """The generator and the runtime must not derive the same request separately.
+
+    This used to say "md-gen and the launcher"; both are gone. The property survives between
+    `build-md`, which derives the stage plan and writes it into each script, and the runtime, which
+    READS that plan rather than recomputing it. Two derivations of one request is how a generated
+    script and the run it describes drift apart.
+    """
+    from md_tools.build import md as build_md
+    from md_tools.runtime import stage as runtime_stage
+
+    generator = Path(build_md.__file__).read_text(encoding="utf-8")
+    runtime = Path(runtime_stage.__file__).read_text(encoding="utf-8")
+
+    assert "def stage_plan(" in generator, "the generator no longer derives the plan"
+    assert "STAGE = {stage!r}" in generator, "the plan is not written into the script"
+    # The runtime consumes what it is given. If it started deriving stage lengths itself there
+    # would be two answers to one question.
+    assert "def stage_plan(" not in runtime
+    assert 'stage["steps"]' in runtime or 'stage.get("steps")' in runtime
 
 
 @pytest.mark.parametrize("launcher", ["cmd_run.py", "rest2_run.py", "rest2_equilibrate.py"])
@@ -415,3 +427,23 @@ def test_a_checkpoint_from_a_different_system_is_refused(scripts):
     stage = ast.literal_eval(text.split("STAGE = ", 1)[1].split("\n\nif __name__", 1)[0])
     assert _config_fingerprint(stage, "system-a", "top") != \
            _config_fingerprint(stage, "system-b", "top")
+
+
+def test_a_stage_records_the_parent_state_it_consumed_with_its_digest(scripts):
+    """The guarantee the retired preflight's parent check used to give, in its new home.
+
+    `check_parent` compared a recorded parent fingerprint before a Context existed. That preflight
+    branch went with the generated-project route. The property did not: a stage now records the
+    `-c` state it consumed WITH ITS SHA-256, and registration re-hashes every recorded input and
+    refuses a directory whose files no longer match its records -- so a parent rewritten after a
+    child consumed it is caught, at the point where it would otherwise become false ancestry.
+    """
+    from md_tools.runtime import stage as stage_module
+
+    source = Path(stage_module.__file__).read_text(encoding="utf-8")
+    assert '"continued_from"' in source, "the parent state is not recorded"
+    assert "file_facts(parent)" in source, "the parent is recorded without a digest"
+
+    from md_tools.registry import discovery
+    lineage = Path(discovery.__file__).read_text(encoding="utf-8")
+    assert "hashes to" in lineage, "registration does not re-hash recorded inputs"

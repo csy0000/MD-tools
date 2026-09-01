@@ -324,13 +324,37 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
             state = XmlSerializer.deserialize(parent.read_text(encoding="utf-8"))
             simulation.context.setState(state)
             set_restraint(simulation, float(stage.get("restraint_kcal_per_mol_A2") or 0.0))
-            log.field("started from", parent)
+            # The parent state is recorded WITH ITS DIGEST, not just its name. Registration
+            # re-hashes every recorded input and refuses a directory whose files no longer match
+            # the records, so a parent that was rewritten after this stage consumed it is caught
+            # rather than silently accepted as this run's ancestry.
+            log.record.setdefault("inputs", {})["continued_from"] = file_facts(parent)
+            log.field("started from", f"{parent}  "
+                                      f"(sha256 {log.record['inputs']['continued_from']['sha256'][:12]}...)")
         else:
             simulation.context.setPositions(pdb.positions)
             log.field("started from", f"{topology_path} coordinates")
 
         log.field("platform", simulation.context.getPlatform().getName())
-        log.update(platform=openmm_platform_facts(simulation.context))
+
+        # The barostat, counted on the SYSTEM THE CONTEXT WAS BUILT FROM. One is present in every
+        # explicit stage, so the Force layout -- and therefore the checkpoint layout -- does not
+        # change along the chain; what makes a stage NPT is its FREQUENCY, not its presence. A
+        # frequency changed after the Context exists is invisible until reinitialisation, which is
+        # the mistake this records against.
+        from ..openmm.templates.md_stages import active_barostat_count
+        barostats = {
+            "in_system": count_barostats(system),
+            "active": active_barostat_count(simulation),
+            "frequency_steps": (int(stage["barostat_interval_steps"])
+                                if stage["ensemble"] == "NPT" and not implicit else 0),
+        }
+        barostats["interval_ps"] = barostats["frequency_steps"] * timestep_fs / 1000.0
+        log.field("barostat", f"{barostats['in_system']} in system, {barostats['active']} active"
+                              + (f", every {barostats['frequency_steps']} steps "
+                                 f"({barostats['interval_ps']:g} ps)"
+                                 if barostats["active"] else ""))
+        log.update(platform=openmm_platform_facts(simulation.context), barostats=barostats)
 
         if args.check:
             log.heading("Preflight")

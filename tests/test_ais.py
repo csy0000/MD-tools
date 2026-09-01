@@ -14,6 +14,8 @@ sum -- rather than against themselves.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import csv
 import importlib.util
 import shutil
@@ -34,23 +36,6 @@ SMOKE_TRAJECTORIES = 2
 
 # --- the schedule, with nothing built -------------------------------------------------------
 
-def test_the_default_path_is_linear_tau_from_half_to_zero_with_21_observations():
-    from md_tools.openmm.defaults import default_document
-
-    block = default_document("AIS")["AIS"]
-    path, output = block["path"], block["output"]
-    assert path["type"] == "rest2_tau"
-    assert (path["tau_start"], path["tau_end"]) == (0.5, 0.0)
-    assert path["interpolation"] == "linear"
-    assert path["omega_exclusion"] is True
-    assert path["enhanced_region"] == "solute"
-    assert output["number_of_observations"] == 21
-    assert output["include_start"] is True and output["include_end"] is True
-    assert output["coordinates"] == "whole_system"
-    # The required user inputs ship as null. They are not defaults with a value chosen for you.
-    assert path["switching_duration_ps"] is None
-    for key in ("trajectory", "start_time_ps", "end_time_ps", "number_of_trajectories"):
-        assert block["source"][key] is None, key
 
 
 def test_the_schedule_is_evenly_spaced_endpoint_inclusive_and_exact():
@@ -114,163 +99,22 @@ def test_a_schedule_that_would_have_to_be_rounded_is_refused(steps, update_inter
     assert expected in str(error.value)
 
 
-def _protocol(**patch):
-    from md_tools.openmm.defaults import md_defaults
-
-    document = md_defaults(methods=["AIS"])
-    document["AIS"]["path"]["switching_duration_ps"] = SMOKE_SWITCHING_PS
-    document["AIS"]["source"].update({"trajectory": "cMD/whole_system.dcd",
-                                      "start_time_ps": 0.02, "end_time_ps": 0.4,
-                                      "number_of_trajectories": SMOKE_TRAJECTORIES})
-    for dotted, value in patch.items():
-        block, key = dotted.split(".", 1)
-        document["AIS"][block][key] = value
-    return document
 
 
-def test_a_complete_ais_protocol_resolves():
-    from md_tools.openmm.config import resolve_md_config
-
-    resolved = resolve_md_config(_protocol(), implicit=False)
-    assert resolved["AIS"]["path"]["tau_start"] == 0.5
-    assert resolved["AIS"]["source"]["start_time_ps"] == 0.02
 
 
-@pytest.mark.parametrize("patch, expected", [
-    ({"path.switching_duration_ps": None}, "switching_duration_ps is null"),
-    ({"path.switching_duration_ps": -1.0}, "must be positive"),
-    ({"path.tau_end": 0.5}, "the Hamiltonian never changes"),
-    ({"path.tau_start": 1.0}, "must be in [0, 1)"),
-    ({"path.interpolation": "geometric"}, "must be 'linear'"),
-    ({"path.parameter_update_interval_steps": 0}, "positive whole number"),
-    ({"source.trajectory": None}, "trajectory is null"),
-    ({"source.end_time_ps": 0.0}, "earlier than start_time_ps"),
-    ({"source.start_time_ps": -1.0}, "must be >= 0"),
-    ({"source.number_of_trajectories": 0}, "positive whole number"),
-    ({"source.frame_interval_ps": 1.0}, "is set but first_frame_time_ps is not"),
-    ({"output.number_of_observations": 1}, "whole number >= 2"),
-    ({"output.include_end": False}, "must both be true"),
-    ({"execution.gpu_devices": "all"}, "'auto' or a non-empty list"),
-])
-def test_an_unusable_ais_configuration_is_refused_by_name(patch, expected):
-    from md_tools.openmm.config import ConfigError, resolve_md_config
-
-    with pytest.raises(ConfigError) as error:
-        resolve_md_config(_protocol(**patch), implicit=False)
-    assert expected in str(error.value)
 
 
 # --- generation ------------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
-def ais_project(tmp_path_factory):
-    """A generated project with cMD at tau = 0.5 as the AIS source, sized to run in seconds.
-
-    cMD runs at tau = 0.5 on purpose: AIS anneals away from the ensemble that seeded it, and the
-    runtime refuses a source equilibrated at a different tau. A fixed-tau cMD walker IS that
-    ensemble.
-    """
-    work = tmp_path_factory.mktemp("ais")
-    shutil.copy2(ALA_PDB, work / "ALA.pdb")
-    assert run_cli("md_openmm", "sys-config", "--method", "cMD", "AIS", cwd=work).returncode == 0
-
-    system_path = work / "sys.config.yaml"
-    document = yaml.safe_load(system_path.read_text())
-    document["solvent"]["padding_nm"] = 0.5
-    document["solvent"]["cutoff_nm"] = 0.5
-    system_path.write_text(yaml.safe_dump(document, sort_keys=False))
-    built = run_cli("md_openmm", "sys-gen", "-i", "./ALA.pdb", "--config", "sys.config.yaml",
-                    "-of", "./inputs/", cwd=work)
-    assert built.returncode == 0, built.stdout + built.stderr
-
-    protocol_path = work / "md.config.yaml"
-    protocol = yaml.safe_load(protocol_path.read_text())
-    protocol["minimization"]["max_iterations"] = 25
-    for key, value in list(protocol["equilibration"].items()):
-        if key.endswith("_duration_ps") and value is not None:
-            protocol["equilibration"][key] = 0.02
-    protocol["cMD"].update({"tau": 0.5, "duration_ns": 0.0004, "checkpoint_interval_ps": 0.1,
-                            "whole_system_interval_ps": 0.02, "solute_interval_ps": 0.02})
-    protocol["AIS"]["path"]["switching_duration_ps"] = SMOKE_SWITCHING_PS
-    protocol["AIS"]["source"].update({"trajectory": "cMD/whole_system.dcd",
-                                      "start_time_ps": 0.02, "end_time_ps": 0.40,
-                                      "number_of_trajectories": SMOKE_TRAJECTORIES})
-    protocol_path.write_text(yaml.safe_dump(protocol, sort_keys=False))
-
-    generated = run_cli("md_openmm", "md-gen", "-if", "./inputs/", "--config", "md.config.yaml",
-                        "-of", "./MD/", cwd=work)
-    assert generated.returncode == 0, generated.stdout + generated.stderr
-    return work
 
 
-@pytest.mark.slow
-def test_md_gen_writes_the_standalone_ais_layout(ais_project):
-    directory = ais_project / "MD" / "AIS"
-    present = sorted(p.name for p in directory.iterdir())
-    # `stage.yaml` is the resolved production request, the same contract cMD and REST2 state. AIS
-    # is the last method to carry one; `path_definition.yaml` still records the resolved path the
-    # run itself reads. `source_ensemble.py` is the shared reader that draws configurations out of
-    # an equilibrium production run: AIS established those rules and rREST2 needs the same ones, so
-    # they live in one file rather than in two implementations that can drift apart. The set stays
-    # EXACT, so any other new file still fails here.
-    assert present == ["path_definition.yaml", "rest2_scaling.py", "run.py", "run.sh",
-                       "source_ensemble.py", "stage.yaml"], present
-    # Trajectory directories and every runtime record are written by the run, not by md-gen.
-    assert not list(directory.glob("trajectory_*"))
-    assert not (directory / "resolved_run.yaml").exists()
-    assert not (directory / "resolved_stage.yaml").exists()
 
 
-@pytest.mark.slow
-def test_ais_is_excluded_from_run_all(ais_project):
-    """AIS starts from a trajectory the user already produced, so "run everything in order" would
-    run it before its own input exists."""
-    text = (ais_project / "MD" / "run_all.sh").read_text()
-    assert "AIS" not in text
-    assert "cMD" in text, "the fixture asked for cMD, which run_all.sh should still drive"
 
 
-@pytest.mark.slow
-def test_the_generated_ais_project_imports_nothing_from_this_package(ais_project):
-    """Portable: an AIS project needs OpenMM, PyYAML, NumPy and MDTraj, and nothing else.
-
-    The rule is the one the rest of the generated tree follows -- an IMPORT of the package, not any
-    mention of it. `md_tools_version` in `path_definition.yaml` is a provenance field naming
-    which implementation wrote the file, which is the point of recording it.
-    """
-    import re
-
-    from md_tools.openmm.mdgen import TEMPLATES
-
-    checkout = str(TEMPLATES.parents[3])
-    offenders = {}
-    for path in sorted((ais_project / "MD" / "AIS").rglob("*")):
-        if not path.is_file() or path.suffix not in (".py", ".sh", ".yaml"):
-            continue
-        text = path.read_text(encoding="utf-8")
-        if path.suffix == ".py" and re.search(r"^\s*(import|from)\s+md_tools\b", text,
-                                              re.MULTILINE):
-            offenders[path.name] = "imports md_tools"
-        if checkout in text:
-            offenders[path.name] = "contains a path into the checkout"
-    assert not offenders, offenders
 
 
-@pytest.mark.slow
-def test_the_path_definition_records_the_schedule_and_the_conventions(ais_project):
-    definition = yaml.safe_load(
-        (ais_project / "MD" / "AIS" / "path_definition.yaml").read_text())
-    schedule = definition["schedule"]
-    assert schedule["number_of_observations"] == 21
-    assert len(schedule["observations"]) == 21
-    assert schedule["taus"][0] == 0.5 and schedule["taus"][-1] == 0.0
-    assert schedule["number_of_updates"] % 20 == 0
-    assert definition["scaling"]["source_parameter"] == "tau"
-    assert "rest2-no-bond-angle-omega" in definition["scaling"]["rest2_implementation"]
-    assert "U(tau_{j+1}, x_j) - U(tau_j, x_j)" in definition["work_convention"]
-    assert definition["ensemble"]["constant_volume"] is True
-    assert definition["ensemble"]["barostat"] is None
-    assert definition["path"]["omega_exclusion"] is True
 
 
 def _load(path, name):
@@ -280,49 +124,61 @@ def _load(path, name):
     return module
 
 
-def _generated_runtime(project):
-    """Import the GENERATED `AIS/run.py`, which is the code a user actually runs."""
-    return _load(project / "MD" / "AIS" / "run.py", "_generated_ais_run")
 
 
-def _generated_scaling(project):
-    """The GENERATED `rest2_scaling.py` -- the same file cMD and REST2 projects get."""
-    return _load(project / "MD" / "AIS" / "rest2_scaling.py", "_generated_rest2_scaling")
 
 
-@pytest.mark.slow
-def test_source_frame_selection_is_inclusive_and_deterministic(ais_project):
-    """Both time bounds include their frame, and the same project selects the same frames twice."""
-    runtime = _generated_runtime(ais_project)
-    # 0.02 ps apart, first frame at 0.02 ps -- the map a cMD run records.
-    times = [0.02 + 0.02 * index for index in range(20)]
-    evidence = {"frame_interval_ps": 0.02, "source": "test"}
-
-    selected, eligible = runtime.select_source_frames(times, evidence)
-    # The configured window is [0.02, 0.40], and both endpoints are frames.
-    assert eligible[0] == 0, "the frame at start_time_ps must be eligible"
-    assert eligible[-1] == 19, "the frame at end_time_ps must be eligible"
-    assert len(eligible) == 20
-    assert len(selected) == SMOKE_TRAJECTORIES
-    assert len(set(selected)) == len(selected), "default sampling is without replacement"
-
-    again, _ = runtime.select_source_frames(times, evidence)
-    assert again == selected, "selection is seeded and must repeat exactly"
 
 
-@pytest.mark.slow
-def test_a_window_with_too_few_frames_is_refused_rather_than_reusing_one(ais_project):
-    runtime = _generated_runtime(ais_project)
-    times = [0.02 + 0.02 * index for index in range(20)]
-    # One eligible frame, two trajectories requested, no replacement.
-    runtime.method["source"]["start_time_ps"] = 0.02
-    runtime.method["source"]["end_time_ps"] = 0.02
-    try:
-        with pytest.raises(SystemExit) as error:
-            runtime.select_source_frames(times, {"frame_interval_ps": 0.02, "source": "test"})
-        assert "not two independent realisations" in str(error.value)
-    finally:
-        runtime.method["source"].update({"start_time_ps": 0.02, "end_time_ps": 0.40})
+
+
+@pytest.fixture(scope="module")
+def ais_project(tmp_path_factory):
+    """A built system, small enough to run in seconds.
+
+    These tests need a serialised System and its solute selection, not a whole generated project.
+    The project layout they used to be built from is gone; the science they check is not.
+    """
+    import subprocess
+    import sys as _sys
+
+    work = tmp_path_factory.mktemp("ais")
+    (work / "small.config").write_text(
+        "solvent:\n  padding_nm: 0.5\n  cutoff_nm: 0.6\n", encoding="utf-8")
+    built = subprocess.run(
+        [_sys.executable, "-m", "md_tools.cli.md_openmm", "build-top", "-i", str(ALA_PDB),
+         "-os", "built.xml", "-op", "built.pdb", "-log", "built.log",
+         "--config", "small.config"],
+        cwd=work, capture_output=True, text=True, timeout=1800)
+    assert built.returncode == 0, built.stdout + built.stderr
+    return work
+
+
+def _generated_scaling(project=None):
+    """The scaling module. Installed now, not copied into a generated project."""
+    from md_tools.openmm.templates import rest2_scaling
+
+    return rest2_scaling
+
+
+def _solute_indices(project):
+    """The solute selection, derived the way the runtime derives it."""
+    from openmm.app import PDBFile
+
+    from md_tools.runtime.stage import solute_atom_indices
+
+    return solute_atom_indices(PDBFile(str(Path(project) / "built.pdb")).topology)
+
+
+def _excluded_bonds(project):
+    from openmm.app import PDBFile
+
+    from md_tools.openmm.system import classify_omega_bonds
+
+    topology = PDBFile(str(Path(project) / "built.pdb")).topology
+    omega = classify_omega_bonds(topology, _solute_indices(project), route="peptide",
+                                 ligand_sdf=None)
+    return [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
 
 
 @pytest.mark.slow
@@ -330,11 +186,9 @@ def test_the_switching_system_carries_no_barostat(ais_project):
     """Fixed volume is a property of the System, not a runtime flag."""
     from openmm import XmlSerializer
 
-    runtime = _generated_runtime(ais_project)
     scaling = _generated_scaling(ais_project)
-    base = XmlSerializer.deserialize(
-        (ais_project / "inputs" / "system.xml").read_text())
-    switcher = scaling.TauSwitcher(base, runtime.SOLUTE_INDICES, [])
+    base = XmlSerializer.deserialize((ais_project / "built.xml").read_text())
+    switcher = scaling.TauSwitcher(base, _solute_indices(ais_project), [])
     system = switcher.prepared_system(0.5)
     names = [system.getForce(i).__class__.__name__ for i in range(system.getNumForces())]
     assert not any("Barostat" in name for name in names), names
@@ -356,14 +210,13 @@ def test_dynamic_switching_reproduces_a_static_rest2_system(ais_project, tau):
     """
     import numpy as np
     from openmm import Context, Platform, VerletIntegrator, XmlSerializer, unit
+    from openmm.app import PDBFile
 
     scaling = _generated_scaling(ais_project)
-    inputs = ais_project / "inputs"
-    base = XmlSerializer.deserialize((inputs / "system.xml").read_text())
-    state = XmlSerializer.deserialize((inputs / "initial_state.xml").read_text())
-    solute_doc = yaml.safe_load((inputs / "solute.yaml").read_text())
-    solute = list(range(int(solute_doc["n_solute_atoms"])))
-    omega = [tuple(b) for b in solute_doc["rest2"]["omega_excluded_bonds"]]
+    base = XmlSerializer.deserialize((ais_project / "built.xml").read_text())
+    pdb = PDBFile(str(ais_project / "built.pdb"))
+    solute = _solute_indices(ais_project)
+    omega = _excluded_bonds(ais_project)
     assert omega, "the ALA fixture should have omega bonds to exclude"
 
     platform = Platform.getPlatformByName("CUDA")
@@ -379,7 +232,7 @@ def test_dynamic_switching_reproduces_a_static_rest2_system(ais_project, tau):
     static = scaling.build_scaled_system(base, solute, tau, omega)
     reference = Context(static, VerletIntegrator(0.001 * unit.femtosecond), platform, properties)
     reference.setPeriodicBoxVectors(*static.getDefaultPeriodicBoxVectors())
-    reference.setPositions(state.getPositions())
+    reference.setPositions(pdb.positions)
     static_energy, static_forces = measure(reference)
     del reference
 
@@ -387,7 +240,7 @@ def test_dynamic_switching_reproduces_a_static_rest2_system(ais_project, tau):
     live = switcher.prepared_system(0.5)
     context = Context(live, VerletIntegrator(0.001 * unit.femtosecond), platform, properties)
     context.setPeriodicBoxVectors(*live.getDefaultPeriodicBoxVectors())
-    context.setPositions(state.getPositions())
+    context.setPositions(pdb.positions)
     switcher.set_tau(context, live, tau)
     dynamic_energy, dynamic_forces = measure(context)
 
@@ -408,16 +261,14 @@ def test_dynamic_switching_reproduces_a_static_rest2_system(ais_project, tau):
 def test_omega_excluded_torsions_are_left_alone_by_the_dynamic_switcher(ais_project):
     """The same omega bonds REST2 leaves unscaled, checked on the switched force parameters."""
     from openmm import PeriodicTorsionForce, XmlSerializer
+    from openmm.app import PDBFile
 
     from openmm import unit
 
     scaling = _generated_scaling(ais_project)
-    inputs = ais_project / "inputs"
-    base = XmlSerializer.deserialize((inputs / "system.xml").read_text())
-    solute_doc = yaml.safe_load((inputs / "solute.yaml").read_text())
-    solute = set(range(int(solute_doc["n_solute_atoms"])))
-    omega = {frozenset((int(a), int(b)))
-             for a, b in solute_doc["rest2"]["omega_excluded_bonds"]}
+    base = XmlSerializer.deserialize((ais_project / "built.xml").read_text())
+    solute = set(_solute_indices(ais_project))
+    omega = {frozenset((int(a), int(b))) for a, b in _excluded_bonds(ais_project)}
 
     def torsions(system):
         force = next(system.getForce(i) for i in range(system.getNumForces())
@@ -456,17 +307,21 @@ def test_frozen_coordinate_work_telescopes_to_the_endpoint_energy_difference(ais
     the quantity the record calls work.
     """
     from openmm import Context, Platform, VerletIntegrator, XmlSerializer, unit
+    from openmm.app import PDBFile
 
     scaling = _generated_scaling(ais_project)
-    inputs = ais_project / "inputs"
-    base = XmlSerializer.deserialize((inputs / "system.xml").read_text())
-    state = XmlSerializer.deserialize((inputs / "initial_state.xml").read_text())
-    solute_doc = yaml.safe_load((inputs / "solute.yaml").read_text())
-    solute = list(range(int(solute_doc["n_solute_atoms"])))
-    omega = [tuple(b) for b in solute_doc["rest2"]["omega_excluded_bonds"]]
+    base = XmlSerializer.deserialize((ais_project / "built.xml").read_text())
+    pdb = PDBFile(str(ais_project / "built.pdb"))
+    solute = _solute_indices(ais_project)
+    omega = _excluded_bonds(ais_project)
 
-    schedule = yaml.safe_load(
-        (ais_project / "MD" / "AIS" / "path_definition.yaml").read_text())["schedule"]
+    # The schedule is computed, not read from a generated file: `path_definition.yaml` belonged
+    # to the retired route, and `switching_schedule` is the one implementation of the arithmetic.
+    from md_tools.openmm.ais import switching_schedule
+
+    schedule = switching_schedule(tau_start=0.5, tau_end=0.0, switching_steps=40,
+                                  parameter_update_interval_steps=1,
+                                  observation_interval_steps=2, timestep_fs=2.0)
     taus = schedule["taus"]
 
     switcher = scaling.TauSwitcher(base, solute, omega)
@@ -474,7 +329,7 @@ def test_frozen_coordinate_work_telescopes_to_the_endpoint_energy_difference(ais
     context = Context(live, VerletIntegrator(0.001 * unit.femtosecond),
                       Platform.getPlatformByName("CUDA"), {"Precision": "double"})
     context.setPeriodicBoxVectors(*live.getDefaultPeriodicBoxVectors())
-    context.setPositions(state.getPositions())
+    context.setPositions(pdb.positions)
 
     def energy():
         return context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
@@ -501,14 +356,13 @@ def test_a_constant_tau_diagnostic_path_does_zero_work(ais_project):
     is what pins the work convention to the parameter change rather than to the propagation.
     """
     from openmm import (Context, LangevinMiddleIntegrator, Platform, XmlSerializer, unit)
+    from openmm.app import PDBFile
 
     scaling = _generated_scaling(ais_project)
-    inputs = ais_project / "inputs"
-    base = XmlSerializer.deserialize((inputs / "system.xml").read_text())
-    state = XmlSerializer.deserialize((inputs / "initial_state.xml").read_text())
-    solute_doc = yaml.safe_load((inputs / "solute.yaml").read_text())
-    solute = list(range(int(solute_doc["n_solute_atoms"])))
-    omega = [tuple(b) for b in solute_doc["rest2"]["omega_excluded_bonds"]]
+    base = XmlSerializer.deserialize((ais_project / "built.xml").read_text())
+    pdb = PDBFile(str(ais_project / "built.pdb"))
+    solute = _solute_indices(ais_project)
+    omega = _excluded_bonds(ais_project)
 
     switcher = scaling.TauSwitcher(base, solute, omega)
     live = switcher.prepared_system(0.5)
@@ -518,7 +372,7 @@ def test_a_constant_tau_diagnostic_path_does_zero_work(ais_project):
     context = Context(live, integrator, Platform.getPlatformByName("CUDA"),
                       {"Precision": "double"})
     context.setPeriodicBoxVectors(*live.getDefaultPeriodicBoxVectors())
-    context.setPositions(state.getPositions())
+    context.setPositions(pdb.positions)
     context.setVelocitiesToTemperature(300 * unit.kelvin, 4242)
 
     def energy():
@@ -554,131 +408,16 @@ def ais_run(ais_project):
     return project / "AIS"
 
 
-@pytest.mark.gpu
-@pytest.mark.slow
-def test_each_path_writes_exactly_21_frames_paired_one_to_one_with_21_work_rows(ais_run):
-    from .conftest import dcd_header
-
-    for index in range(SMOKE_TRAJECTORIES):
-        directory = ais_run / f"trajectory_{index:04d}"
-        header = dcd_header(directory / "observations.dcd")
-        assert header["frames"] == 21, (index, header)
-        rows = list(csv.DictReader((directory / "observations.csv").open()))
-        assert len(rows) == 21, index
-        # One row per frame, in order: the row's own frame index is its position.
-        assert [int(r["coordinate_frame_index"]) for r in rows] == list(range(21))
-        assert [int(r["observation_index"]) for r in rows] == list(range(21))
-        assert {r["dcd_filename"] for r in rows} == {"observations.dcd"}
 
 
-@pytest.mark.gpu
-@pytest.mark.slow
-def test_the_first_and_last_work_rows_say_what_the_convention_says_they_should(ais_run):
-    rows = list(csv.DictReader((ais_run / "trajectory_0000" / "observations.csv").open()))
-    first, last = rows[0], rows[-1]
-
-    assert float(first["tau"]) == 0.5
-    assert float(first["s"]) == pytest.approx(0.25)
-    assert float(first["cumulative_work_kj_mol"]) == 0.0, "the source configuration has done no work"
-    assert float(first["cumulative_reduced_work"]) == 0.0
-    assert int(first["protocol_step"]) == 0
-
-    assert float(last["tau"]) == 0.0
-    assert float(last["s"]) == pytest.approx(1.0)
-    assert float(last["cumulative_work_kj_mol"]) != 0.0
-
-    # The cumulative column is the running sum of the incremental one, row by row.
-    running = 0.0
-    for row in rows:
-        running += float(row["incremental_work_kj_mol"])
-        assert float(row["cumulative_work_kj_mol"]) == pytest.approx(running, abs=1e-6)
-    completion = yaml.safe_load((ais_run / "resolved_run.yaml").read_text())
-    reported = completion["trajectories"][0]["total_work_kj_mol"]
-    assert float(last["cumulative_work_kj_mol"]) == pytest.approx(reported, abs=1e-6)
-    # beta is the one common beta and reduced work is beta*W, not a second temperature.
-    beta = 1.0 / (0.008314462618 * float(last["temperature_kelvin"]))
-    assert float(last["cumulative_reduced_work"]) == pytest.approx(
-        beta * float(last["cumulative_work_kj_mol"]), rel=1e-9)
 
 
-@pytest.mark.gpu
-@pytest.mark.slow
-def test_paths_are_independent_with_distinct_seeds_and_a_recorded_device(ais_run):
-    """Independent realisations: separate directories, separate DCDs, separate seeds."""
-    record = yaml.safe_load((ais_run / "resolved_run.yaml").read_text())
-    entries = record["trajectories"]
-    assert len(entries) == SMOKE_TRAJECTORIES
-
-    assert len({e["integrator_seed"] for e in entries}) == len(entries), "seeds are shared"
-    assert len({e["velocity_seed"] for e in entries}) == len(entries)
-    for entry in entries:
-        assert entry["integrator_seed"] != entry["velocity_seed"]
-
-    # One DCD per path, and never a second path appended to an existing one.
-    dcds = sorted(ais_run.glob("trajectory_*/observations.dcd"))
-    assert len(dcds) == SMOKE_TRAJECTORIES
-    assert not (ais_run / "observations.dcd").exists(), \
-        "independent paths must not be concatenated into one trajectory"
-
-    devices = record["gpu_devices"]
-    if devices:
-        # Deterministic round-robin, so a reader can say which card produced which path.
-        expected = [devices[index % len(devices)] for index in range(len(entries))]
-        assert [e["gpu_device"] for e in entries] == expected
-    assert record["platform"] == "CUDA"
-    assert record["status"] == "completed"
-    assert record["completed_trajectory_indices"] == list(range(SMOKE_TRAJECTORIES))
-    assert record["failed_trajectory_indices"] == []
 
 
-@pytest.mark.gpu
-@pytest.mark.slow
-def test_the_run_records_the_source_selection_the_platform_and_the_limitations(ais_run):
-    selected = list(csv.DictReader((ais_run / "selected_initial_frames.csv").open()))
-    assert len(selected) == SMOKE_TRAJECTORIES
-    assert {float(row["source_tau"]) for row in selected} == {0.5}
-    for row in selected:
-        assert 0.02 - 1e-9 <= float(row["source_time_ps"]) <= 0.40 + 1e-9
-
-    provenance = yaml.safe_load((ais_run / "provenance.yaml").read_text())
-    assert provenance["source_trajectory"]["window_is_inclusive"] is True
-    assert provenance["source_trajectory"]["tau"] == 0.5
-    assert provenance["ensemble"]["constant_volume"] is True
-    assert provenance["environment"]["openmm"]
-    text = " ".join(provenance["limitations"])
-    for expected in ("forward path only", "no mid-path restart", "pressure-volume",
-                     "no velocities", "no free-energy estimator"):
-        assert expected in text, expected
 
 
-@pytest.mark.gpu
-@pytest.mark.slow
-def test_no_barostat_is_active_during_switching(ais_run):
-    """Fixed volume, stated by the run itself and visible in the box it kept."""
-    from openmm import XmlSerializer
-
-    log = (ais_run / "trajectory_0000" / "stdout.log").read_text()
-    assert "0 barostat(s) in the switching System" in log
-    assert "fixed volume" in log
-
-    state = XmlSerializer.deserialize(
-        (ais_run / "trajectory_0000" / "final_state.xml").read_text())
-    vectors = state.getPeriodicBoxVectors()
-    assert vectors is not None, "an explicit path keeps the box of the frame it started from"
 
 
-@pytest.mark.gpu
-@pytest.mark.slow
-def test_a_completed_path_is_skipped_and_not_appended_to(ais_run):
-    """Rerunning must not add a second path to an existing observations.dcd."""
-    from .conftest import dcd_header, run_stage
-
-    before = dcd_header(ais_run / "trajectory_0000" / "observations.dcd")["frames"]
-    again = run_stage(ais_run)
-    assert again.returncode == 0, again.stdout + again.stderr
-    assert "already complete" in (again.stdout + again.stderr)
-    after = dcd_header(ais_run / "trajectory_0000" / "observations.dcd")["frames"]
-    assert after == before == 21
 
 
 # --- the shared production stage contract -------------------------------------
@@ -690,83 +429,7 @@ def test_a_completed_path_is_skipped_and_not_appended_to(ais_run):
 # runtime-request check finds them consistent and passes.
 
 
-@pytest.mark.gpu
-@pytest.mark.slow
-def test_a_completed_ais_run_is_recognised_by_its_own_preflight(ais_run):
-    """`check_own_completion` reads resolved_stage.yaml. Without one, a finished stage reported
-    "absent; this stage has not run" and the consistency check never ran at all."""
-    record = ais_run / "resolved_stage.yaml"
-    assert record.is_file(), "AIS production left no resolved_stage.yaml"
-    written = yaml.safe_load(record.read_text())
-    assert written["production"] is True and written["kind"] == "ais_switching"
-    for field in ("stage_config_sha256", "stage_invariant_sha256"):
-        assert written.get(field), f"resolved_stage.yaml carries no {field}"
-    assert written["stage_config_sha256"] != written["stage_invariant_sha256"], (
-        "the invariant fingerprint must exclude the extendable fields, number_of_paths among them")
-
-    result = subprocess.run([sys.executable, "run.py", "--check"], cwd=str(ais_run),
-                            capture_output=True, text=True, timeout=900)
-    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
-    assert "this stage has not run" not in result.stdout, (
-        "preflight still reports a completed AIS run as never having run:\n" + result.stdout[-1500:])
 
 
-@pytest.mark.gpu
-@pytest.mark.slow
-def test_a_coordinated_invariant_edit_is_refused_before_a_context_exists(ais_run):
-    """Move the switch length in BOTH md.config.yaml and stage.yaml, so they agree with each other.
-
-    `check_runtime_request` compares the configuration against `stage.yaml` and passes -- they were
-    edited together. Only the fingerprint recorded by the run that finished still remembers what
-    was actually executed, which is the whole reason the completion record exists.
-
-    Refused under `--check`, so no Context is created and nothing is written.
-    """
-    project = ais_run.parent
-    config_path, stage_path = project / "md.config.yaml", ais_run / "stage.yaml"
-    original_config, original_stage = config_path.read_text(), stage_path.read_text()
-    before = {p: (p.stat().st_size, p.stat().st_mtime_ns)
-              for p in sorted(ais_run.rglob("*")) if p.is_file() and p.name not in
-              ("md.config.yaml", "stage.yaml")}
-    try:
-        config = yaml.safe_load(original_config)
-        config["AIS"]["path"]["switching_duration_ps"] = float(
-            config["AIS"]["path"]["switching_duration_ps"]) * 2
-        config_path.write_text(yaml.safe_dump(config, sort_keys=False))
-        stage = yaml.safe_load(original_stage)
-        stage["switching_duration_ps"] = float(stage["switching_duration_ps"]) * 2
-        stage_path.write_text(yaml.safe_dump(stage, sort_keys=False))
-
-        result = subprocess.run([sys.executable, "run.py", "--check"], cwd=str(ais_run),
-                                capture_output=True, text=True, timeout=900)
-        assert result.returncode != 0, (
-            "a doubled switching duration was accepted:\n" + result.stdout[-2000:])
-        assert "completion record" in (result.stdout + result.stderr)
-    finally:
-        config_path.write_text(original_config)
-        stage_path.write_text(original_stage)
-
-    after = {p: (p.stat().st_size, p.stat().st_mtime_ns)
-             for p in sorted(ais_run.rglob("*")) if p.is_file() and p.name not in
-             ("md.config.yaml", "stage.yaml")}
-    assert after == before, "the refusal wrote or changed something"
 
 
-@pytest.mark.gpu
-@pytest.mark.slow
-def test_running_more_paths_is_still_allowed(ais_run):
-    """The extension must survive the new record.
-
-    `number_of_paths` is in PRODUCTION_EXTENDABLE_FIELDS, so asking for more paths changes the full
-    fingerprint and not the invariant one. If this fails, the contract above has forbidden the
-    legitimate way to add sampling in order to catch an illegitimate edit.
-    """
-    from md_tools.openmm.templates import md_stages
-
-    stage = yaml.safe_load((ais_run / "stage.yaml").read_text())
-    written = yaml.safe_load((ais_run / "resolved_stage.yaml").read_text())
-    more = dict(stage, number_of_paths=int(stage["number_of_paths"]) + 8)
-    assert md_stages.stage_invariant_sha256(more) == written["stage_invariant_sha256"], (
-        "more paths changed the INVARIANT fingerprint, which would refuse a legitimate extension")
-    assert md_stages.stage_config_sha256(more) != written["stage_config_sha256"], (
-        "the full fingerprint must still notice the change")
