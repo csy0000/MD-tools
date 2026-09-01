@@ -89,3 +89,35 @@ def test_no_source_file_is_hidden_from_git_by_an_ignore_rule():
         "these source files are invisible to git because an ignore rule matches them:\n  "
         + "\n  ".join(ignored)
         + "\n\nAnchor the rule to the repository root (`/build/`, not `build/`).")
+
+
+def test_no_test_hard_codes_a_path_on_one_machine():
+    """An absolute path to somebody's home or scratch volume is a silent skip everywhere else.
+
+    This is not hypothetical. `cpptraj` and Amber's reference `rem.log` were both read from an
+    absolute path under one workstation's software tree. Locally everything ran; in CI -- where
+    AmberTools IS installed -- eight tests skipped, including the only two that check our Amber
+    trajectory and H-REMD log against the real parser. The suite reported success for code no
+    machine but one had actually exercised.
+
+    Tools are found on PATH. Fixtures live in `tests/data/`.
+    """
+    import re
+
+    # Only a path used to LOCATE something counts. A test may legitimately mention an absolute
+    # path as data -- a synthetic value in a contract fixture, or the very string a generated
+    # script is asserted NOT to contain -- and neither is a machine dependency.
+    forbidden = re.compile(
+        r'(Path\(|open\(|which\(|run\(\[)[^)]*["\'](/home/|/data\d*/|/scratch/|/Users/)')
+    offenders = []
+    tests = Path(__file__).resolve().parent
+    for path in sorted(tests.glob("test_*.py")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            stripped = line.lstrip()
+            # A path inside a comment or docstring is explanation, not a lookup.
+            if stripped.startswith("#") or stripped.startswith("#:"):
+                continue
+            if forbidden.search(line):
+                offenders.append(f"{path.name}:{number}: {stripped[:90]}")
+    assert not offenders, (
+        "tests must not hard-code a path on one machine:\n  " + "\n  ".join(offenders))

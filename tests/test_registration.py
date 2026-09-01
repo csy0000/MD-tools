@@ -307,16 +307,15 @@ def test_an_interruption_after_commit_never_loses_the_registered_data(world, sta
     try:
         _register(world)
     except RegistrationError as refusal:
-        # Both refusals are truthful and neither touches the data. They differ because of WHERE
-        # the interruption fell:
-        #   linked / committed  -- the source is a symlink, or still the source, and is recognised;
-        #   source-removed      -- the source has been removed and the symlink not yet created, so
-        #                          the command sees a missing -idata. The dataset is registered and
-        #                          intact, but the message does not say so. Recorded as a known
-        #                          rough edge in the v0.5.0 notes; it costs a confusing message in
-        #                          a narrow window, never data.
-        assert ("already been registered" in str(refusal)
-                or "does not exist" in str(refusal)), refusal
+        # Whichever boundary it fell on, the refusal must say the dataset IS registered. The
+        # `source-removed` window used to report a bare "-idata does not exist" -- the same thing
+        # a typo produces -- which sent the reader looking for data that was already in the store.
+        message = str(refusal)
+        assert ("already been registered" in message
+                or "IS registered" in message), message
+        if "IS registered" in message:
+            # It must also say how to check the data and how to get the link back.
+            assert "--verify-only" in message and "ln -s" in message, message
     inventory.verify(destination, entries)
     assert destination.is_dir() and not destination.is_symlink()
 

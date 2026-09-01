@@ -61,6 +61,39 @@ COMPONENT_KINDS: dict[str, tuple[str, str | None, str]] = {
 }
 
 
+def _missing_source_reason(source: Path, destination: Path, relative: str) -> str:
+    """Why `-idata` is not there -- which is not always "you typed the wrong path".
+
+    Registration commits by renaming the staged tree into place, THEN removes the source, THEN
+    replaces it with a symlink. Interrupted between the last two, the source is gone and the link
+    does not exist yet, so a re-run sees exactly what a typo produces. The difference matters: in
+    one case nothing has happened, in the other the dataset is registered and complete and the
+    only thing missing is the convenience link. Saying "does not exist" for both sends someone
+    looking for data that is already safely in the store.
+    """
+    if not (destination / MANIFEST_NAME).is_file():
+        return f"-idata {source}: does not exist"
+
+    state_path = destination.parent / f"{destination.name}{STATE_NAME}"
+    interrupted = ""
+    if state_path.is_file():
+        try:
+            stage = Transaction(state_path).stage
+        except RegistrationError:
+            stage = None
+        if stage and stage != ORDER[-1]:
+            interrupted = (f"\nAn interrupted registration is recorded at stage {stage!r}; the "
+                           f"commit itself had already happened.")
+    return (f"-idata {source}: does not exist, but {relative} IS registered at {destination}.\n"
+            f"Registration removes the source and then replaces it with a symlink, so an "
+            f"interruption between those two steps leaves exactly this state: the dataset is "
+            f"committed and complete, and only the link back is missing.{interrupted}\n"
+            f"Verify it with:\n"
+            f"    md-openmm data-register -idata {destination} --verify-only\n"
+            f"and recreate the link with:\n"
+            f"    ln -s {destination} {source}")
+
+
 def register_dataset(*, source: Path, project_name: str, data_name: str, year: str,
                      common: bool = False, dry_run: bool = False, verify_only: bool = False,
                      user_config: str | None = None, md_data_override: str | None = None,
@@ -87,8 +120,10 @@ def register_dataset(*, source: Path, project_name: str, data_name: str, year: s
         raise RegistrationError(str(exc)) from None
 
     source = Path(source).expanduser()
-    if not source.exists() and not source.is_symlink():
-        raise RegistrationError(f"-idata {source}: does not exist")
+    missing_source = not source.exists() and not source.is_symlink()
+    # A missing source is reported below, once the destination is known. Registration removes the
+    # source before it links it, so "-idata does not exist" is also what an interruption in that
+    # window looks like -- and there the dataset IS registered, which the user needs to be told.
     # Checked BEFORE resolving. A registered source has been replaced by a symlink to its
     # destination, so resolving first would turn "you already registered this" into the far less
     # helpful "that would copy a directory into itself".
@@ -104,6 +139,9 @@ def register_dataset(*, source: Path, project_name: str, data_name: str, year: s
     # how `..` in a name escapes the root.
     if root not in destination.parents and destination != root:
         raise RegistrationError(f"the computed destination {destination} is not inside {root}")
+    if missing_source:
+        raise RegistrationError(_missing_source_reason(source, destination, relative))
+
     say(f"canonical path       : {relative}")
     say(f"destination          : {destination}")
 

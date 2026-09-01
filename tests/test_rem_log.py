@@ -21,10 +21,26 @@ sys.path.insert(0, str(TEMPLATES))
 
 import rem_log                                                     # noqa: E402
 
-#: Genuine Amber output, shipped with AmberTools26. The grammar reference for this module.
-AMBER_REFERENCE = Path("/path/to/software/md-stack/conda/ambertools26/"
-                       "test/h_rem/rem.log.save")
-CPPTRAJ = Path("/path/to/software/md-stack/conda/ambertools26/bin/cpptraj")
+def _which_cpptraj():
+    """cpptraj, wherever this machine keeps it.
+
+    Returned as a Path so the existing `.is_file()` guards keep working; a non-existent sentinel
+    when it is genuinely absent, so those guards skip rather than raise.
+    """
+    import shutil
+
+    found = shutil.which("cpptraj")
+    return Path(found) if found else Path("cpptraj-not-found")
+
+
+#: Genuine Amber output from AmberTools26's own test suite, vendored under `tests/data/` -- see
+#: the README there. It was read from an absolute path on one workstation, so the test that
+#: decides whether our `rem.log` is well formed skipped silently everywhere else.
+AMBER_REFERENCE = Path(__file__).resolve().parent / "data" / "amber26_h_rem.log.save"
+
+#: Found on PATH. `ambertools` provides it, and hard-coding one machine's install prefix is how a
+#: real parse check turns into a skip on every other machine.
+CPPTRAJ = _which_cpptraj()
 
 
 # --- the grammar, against Amber's own bytes ---------------------------------------------------

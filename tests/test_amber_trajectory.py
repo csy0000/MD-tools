@@ -25,7 +25,16 @@ sys.path.insert(0, str(TEMPLATES))
 
 import amber_trajectory as amber                                   # noqa: E402
 
-CPPTRAJ = Path("/path/to/software/md-stack/conda/ambertools26/bin/cpptraj")
+def _which_cpptraj():
+    """cpptraj, wherever this machine keeps it. See tests/test_rem_log.py for why this is not
+    an absolute path any more."""
+    import shutil
+
+    found = shutil.which("cpptraj")
+    return Path(found) if found else Path("cpptraj-not-found")
+
+
+CPPTRAJ = _which_cpptraj()
 BOX = np.eye(3) * 2.5
 
 
