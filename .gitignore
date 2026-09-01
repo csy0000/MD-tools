@@ -30,7 +30,6 @@ docs/protocols/*.pdf
 #   authoritative and the PDF is what a reader outside this checkout is handed. Rendering it needs
 #   ReportLab and a Unicode font, neither of which a consumer of this repository has to install, so
 #   the rendered file is tracked alongside its source.
-!docs/md-defaults-scientific-rationale.pdf
 
 # --- results/: generated figures/analysis are ignored; the CANONICAL (accepted, tracked)
 #     result dirs below are whitelisted. Everything else under results/ is regenerable output. ---

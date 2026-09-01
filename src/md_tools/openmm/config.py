@@ -121,7 +121,7 @@ def _check_explicit_pairing(resolved: dict[str, Any]) -> None:
     correction fit in TIP3P and its authors caution that transferring it to another solvent model
     needs evaluation; ff19SB's amino-acid-specific CMAPs were trained for a better water model and
     its authors recommend OPC. Crossing them discards the reason either pair works. See
-    `docs/md-defaults-scientific-rationale.md` section 3.
+    `docs/scientific-defaults.md` section 3.
 
     Both halves are checked, in both directions, because either one alone can be the edited field.
     """
@@ -166,7 +166,7 @@ def _check_explicit_pairing(resolved: dict[str, Any]) -> None:
                   for other, values in EXPLICIT_COMBINATIONS.items() if other != model)
         + "  Crossing them combines a backbone with a water model it was not corrected for; both\n"
           "  run and neither is a combination anyone has validated. See\n"
-          "  docs/md-defaults-scientific-rationale.md section 3.\n"
+          "  docs/scientific-defaults.md section 3.\n"
           "  Set solvent.model in your build configuration: "
         + f"{model}` if you did not mean to change it.")
 
@@ -554,7 +554,7 @@ def check_timestep_against_masses(md_resolved: dict[str, Any],
             "constraints.hydrogen_mass_amu null, so hydrogens keep their real mass. A timestep "
             f"above ~3 fs needs hydrogen mass repartitioning; set hydrogen_mass_amu to "
             f"{HMR_HYDROGEN_MASS_AMU}, or lower the timestep to 2.0. "
-            "See docs/examples/hmr-4fs.yaml.")
+            "See the HMR section of configs/sys/build-top.config.")
     # HMR lowers the frequency of the bond-ANGLE motions involving hydrogen. The bond STRETCHES are
     # removed by the constraints, and they are the fastest motions in the system: repartitioning
     # without constraining them buys nothing and integrates a 10 fs period with a 4 fs step.

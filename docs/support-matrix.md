@@ -58,7 +58,7 @@ to the workflow matrix and seeing it pass first.
 ## Scientific scope of the defaults
 
 The evidence for every default, classified by strength, is in
-[`md-defaults-scientific-rationale.md`](md-defaults-scientific-rationale.md). In summary:
+[`scientific-defaults.md`](scientific-defaults.md). In summary:
 
 | route | status | why |
 |---|---|---|

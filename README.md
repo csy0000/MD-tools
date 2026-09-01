@@ -230,6 +230,19 @@ The shipped examples are **generated from the schema objects that enforce them**
 documenting a default and the default the code applies have one source and cannot drift. A test
 regenerates them and compares.
 
+## Documentation
+
+| | |
+|---|---|
+| [`docs/data-contract.md`](docs/data-contract.md) | what a dataset is, where it goes, who owns which part |
+| [`docs/replica-exchange.md`](docs/replica-exchange.md) | the REST2 / rREST2 scientific contract |
+| [`docs/scientific-defaults.md`](docs/scientific-defaults.md) | why each default is what it is |
+| [`docs/support-matrix.md`](docs/support-matrix.md) | versions and combinations tested |
+| [`docs/release-notes/v0.5.0.md`](docs/release-notes/v0.5.0.md) | what changed, and what was verified |
+
+The configuration examples in [`configs/`](configs/) are documentation too, and are meant to be
+read: every accepted key carries its type, unit, default and consequence.
+
 ## Tests
 
 ```bash

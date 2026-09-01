@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Assert a REST2 exchange history is one continuous run of `rounds` rounds.
 
-    python scripts/check_exchange_history.py MD/REST2 6
+    python scripts/check_exchange_history.py md_script 6
 
 A resumed ladder that restarted its attempt indices looks healthy in every other artifact it
 writes: the replicas move, the trajectories grow, the log says "segment complete". This is the

@@ -440,7 +440,7 @@ def test_nothing_instructs_a_user_to_install_over_unpinned_ssh():
     `git+ssh://.../dev` was replaced is documentation, not an instruction, and forbidding the
     string outright would forbid saying why.
     """
-    skipped = (REPO_ROOT / "docs" / "journal", REPO_ROOT / "claudecode-instructions",
+    skipped = (REPO_ROOT / "docs" / "release-notes",
                REPO_ROOT / "build", REPO_ROOT / ".git", Path(__file__))
     offenders = {}
     for path in sorted(REPO_ROOT.rglob("*")):
@@ -471,22 +471,8 @@ def test_nothing_instructs_a_user_to_install_over_unpinned_ssh():
 
 # --- the instruction index ----------------------------------------------------------------------
 
-def test_no_instruction_is_indexed_twice():
-    """A file listed both pending and executed leaves a reader with no way to tell which is true."""
-    index = (REPO_ROOT / "claudecode-instructions" / "README.md").read_text()
-    duplicated = {}
-    for path in sorted((REPO_ROOT / "claudecode-instructions").glob("2026*.md")):
-        count = index.count(f"`{path.name}`")
-        if count > 1:
-            duplicated[path.name] = count
-    assert not duplicated, duplicated
 
 
-def test_every_instruction_executed_this_round_is_indexed_once():
-    index = (REPO_ROOT / "claudecode-instructions" / "README.md").read_text()
-    for name in ("20260827_final-md-data-integrity-correction.md",
-                 "20260827_provenance-and-contract-readiness-correction.md"):
-        assert index.count(f"`{name}`") == 1, name
 
 
 # --- the installed validator, not the intended one ----------------------------------------------

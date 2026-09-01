@@ -15,7 +15,6 @@ import yaml
 
 from .conftest import REPO_ROOT
 
-RETROFIT = REPO_ROOT / "scripts" / "retrofit_fair_v030.py"
 
 
 # --- implementation identity -------------------------------------------------
@@ -221,9 +220,6 @@ def _complete_fixture(root: Path) -> Path:
     return original
 
 
-def _run_retrofit(*args):
-    return subprocess.run([sys.executable, str(RETROFIT), *[str(a) for a in args]],
-                          capture_output=True, text=True, timeout=600)
 
 
 def _snapshot(root: Path):
@@ -234,264 +230,38 @@ def _snapshot(root: Path):
             for p in sorted(root.rglob("*")) if p.is_file()}
 
 
-def test_a_0_3_x_tree_keeps_its_own_ff19sb_opc_identity_and_2nm_box(tmp_path):
-    """0.4 changed the defaults. It did not change what 0.3.x ran, and must not say it did.
-
-    The retrofit reads; it never fills a gap from the current configuration. A 0.3.x bundle that
-    recorded ff19SB + OPC at 2.0 nm has to come back out saying exactly that -- and a bundle that
-    recorded nothing has to come back out saying `unknown`, not `ff14SB`.
-    """
-    _legacy_fixture(tmp_path)
-    out = tmp_path / "fair"
-    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                           "--output", out, "--original-input", tmp_path / "source_ALA.pdb")
-    assert result.returncode == 0, result.stdout + result.stderr
-
-    text = "".join(p.read_text() for p in sorted(out.rglob("*"))
-                   if p.suffix in (".yaml", ".json", ".md"))
-    assert "amber19-all.xml" in text and "OPC" in text
-    # nothing from the 0.4 defaults may appear anywhere in a record about 0.3.x data
-    for value in ("amber14-all.xml", "amber14/tip3p.xml", "TIP3P", "sage-2.2.1", "openff-2.2.1"):
-        assert value not in text, f"{value} is a 0.4 default and cannot describe 0.3.x data"
-
-    system = yaml.safe_load((out / "system-record.yaml").read_text())
-    resolved = system["resolved_system_config"]
-    assert resolved["evidence"] == "recorded"
-    assert resolved["value"]["forcefield"]["protein"] == "amber19-all.xml"
-    assert resolved["value"]["solvent"]["model"] == "OPC"
-    assert resolved["value"]["solvent"]["padding_nm"] == 2.0
-
-    forcefield = json.loads((out / "forcefield.json").read_text())
-    assert forcefield["protein"]["openmm_resource"] == "amber19-all.xml"
-    assert forcefield["water"]["model"] == "OPC"
-    assert forcefield["explicit_solvent"]["padding_nm"] == 2.0
-    assert forcefield["package_versions"]["evidence"] == "unknown"
 
 
-def test_a_0_3_x_tree_with_no_recorded_force_field_stays_unknown(tmp_path):
-    """The dangerous case: a gap that the current default would fit neatly into."""
-    _legacy_fixture(tmp_path)
-    (tmp_path / "inputs" / "resolved_sys.config.yaml").unlink()
-    out = tmp_path / "fair"
-    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                           "--output", out)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-    text = "".join(p.read_text() for p in sorted(out.rglob("*"))
-                   if p.suffix in (".yaml", ".json", ".md"))
-    for value in ("amber14-all.xml", "amber19-all.xml", "TIP3P", "OPC", "sage-2.2"):
-        assert value not in text, f"a missing record must stay unknown, not become {value}"
-
-    system = yaml.safe_load((out / "system-record.yaml").read_text())
-    assert system["resolved_system_config"]["evidence"] == "unknown"
-    assert system["resolved_system_config"]["value"] is None
-    forcefield = json.loads((out / "forcefield.json").read_text())
-    assert forcefield["evidence"] == "unknown"
-    assert "nothing can be stated" in forcefield["note"]
 
 
-def test_the_retrofit_never_modifies_the_source(tmp_path):
-    """The one guarantee that matters: legacy data is read, never touched."""
-    _legacy_fixture(tmp_path)
-    before = {**_snapshot(tmp_path / "inputs"), **_snapshot(tmp_path / "MD")}
-
-    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                           "--output", tmp_path / "out")
-    assert result.returncode == 0, result.stdout + result.stderr
-
-    after = {**_snapshot(tmp_path / "inputs"), **_snapshot(tmp_path / "MD")}
-    assert after == before, "the retrofit modified the source tree"
-    assert not (tmp_path / "inputs" / "SHA256SUMS").exists(), "nothing may be added to inputs/"
 
 
-def test_a_version_string_alone_is_not_exact_identity(tmp_path):
-    """The old fixture has `git_commit: null` and no cMD record, so it must NOT reach A.
-
-    `0.3.1` names a release, not the build that ran; two builds of one version can differ.
-    """
-    original = _legacy_fixture(tmp_path)
-    (tmp_path / "env.yaml").write_text(yaml.safe_dump({"openmm": "8.6.0", "python": "3.12.13"}))
-
-    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                           "--output", tmp_path / "out", "--original-input", original,
-                           "--environment", tmp_path / "env.yaml")
-    assert result.returncode == 0, result.stdout + result.stderr
-    classification = json.loads(
-        (tmp_path / "out" / "validation.json").read_text())["classification"]
-    assert classification["grade"] == "B", classification
-    codes = {r["code"] for r in classification["reasons"]}
-    assert "implementation_identity_not_exact" in codes, codes
-    assert "cmd_runtime_record_missing" in codes, codes
 
 
-def test_a_genuinely_complete_fixture_grades_a(tmp_path):
-    """Exact identity plus every record the declared protocol requires."""
-    original = _complete_fixture(tmp_path)
-    (tmp_path / "env.yaml").write_text(yaml.safe_dump({"openmm": "8.6.0", "python": "3.12.13"}))
-
-    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                           "--output", tmp_path / "out", "--original-input", original,
-                           "--environment", tmp_path / "env.yaml")
-    assert result.returncode == 0, result.stdout + result.stderr
-    validation = json.loads((tmp_path / "out" / "validation.json").read_text())
-    assert validation["classification"]["grade"] == "A", validation["classification"]["reasons"]
-    assert validation["source_verification"]["unmodified"] is True
 
 
-def test_the_verified_original_input_is_retained_and_checksummed(tmp_path):
-    original = _complete_fixture(tmp_path)
-    _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                  "--output", tmp_path / "out", "--original-input", original)
-    kept = tmp_path / "out" / "original_inputs" / original.name
-    assert kept.is_file(), "a verified original must be retained in the candidate"
-    assert kept.read_bytes() == original.read_bytes()
-
-    record = yaml.safe_load((tmp_path / "out" / "system-record.yaml").read_text())
-    entry = record["original_input"]["value"]
-    assert entry["retained_path"] == f"original_inputs/{original.name}"
-    manifest = (tmp_path / "out" / "SHA256SUMS").read_text()
-    assert f"original_inputs/{original.name}" in manifest
 
 
-def test_the_source_verification_is_a_real_before_after_comparison(tmp_path):
-    """`source_modified: false` written unconditionally is a claim, not a check."""
-    _legacy_fixture(tmp_path)
-    _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                  "--output", tmp_path / "out")
-    verification = json.loads(
-        (tmp_path / "out" / "validation.json").read_text())["source_verification"]
-    assert "SHA-256" in verification["method"] and "mtime" in verification["method"]
-    assert verification["files_before"] == verification["files_after"] > 0
-    assert verification["changed"] == [] and verification["added"] == []
-    assert verification["removed"] == [] and verification["unmodified"] is True
 
 
-@pytest.mark.parametrize("output_name", ["fair-registration", "out"])
-def test_every_manifest_path_resolves_for_any_output_name(tmp_path, output_name):
-    """The sidecar prefix was hardcoded, so any other output name broke every path."""
-    import hashlib
-
-    original = _complete_fixture(tmp_path)
-    out = tmp_path / output_name
-    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                           "--output", out, "--original-input", original)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-    lines = [l for l in (out / "SHA256SUMS").read_text().splitlines() if l.strip()]
-    assert lines
-    for line in lines:
-        digest, relative = line.split("  ", 1)
-        path = tmp_path / relative           # one documented root: the common project root
-        assert path.is_file(), f"{relative} does not resolve from the project root"
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, relative
-    assert any(l.endswith(f"{output_name}/system-record.yaml") for l in lines), \
-        f"the sidecar prefix must be the real directory name, not a hardcoded one"
 
 
-def test_no_record_contains_a_required_absolute_path(tmp_path):
-    original = _complete_fixture(tmp_path)
-    (tmp_path / "env.yaml").write_text(yaml.safe_dump({"openmm": "8.6.0"}))
-    out = tmp_path / "out"
-    _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD", "--output", out,
-                  "--original-input", original, "--environment", tmp_path / "env.yaml")
-
-    for name in ("system-record.yaml", "run-record.yaml", "file-inventory.yaml", "SHA256SUMS"):
-        text = (out / name).read_text()
-        assert str(tmp_path) not in text, f"{name} embeds an absolute path"
-        assert "common_root" not in text, f"{name} still records an absolute common_root"
 
 
-def test_without_the_original_input_the_grade_drops_to_b_with_reasons(tmp_path):
-    _legacy_fixture(tmp_path)
-    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                           "--output", tmp_path / "out")
-    assert result.returncode == 0
-    classification = json.loads((tmp_path / "out" / "validation.json").read_text())["classification"]
-    assert classification["grade"] == "B"
-    codes = {r["code"] for r in classification["reasons"]}
-    assert "original_input_absent" in codes, codes
-    assert all(r["detail"] for r in classification["reasons"]), "every reason must be readable"
 
 
-def test_a_missing_md_config_grades_c(tmp_path):
-    _legacy_fixture(tmp_path)
-    (tmp_path / "MD" / "md.config.yaml").unlink()
-    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                           "--output", tmp_path / "out")
-    assert result.returncode == 0
-    classification = json.loads((tmp_path / "out" / "validation.json").read_text())["classification"]
-    assert classification["grade"] == "C", classification
 
 
-def test_a_mismatched_original_input_is_a_hard_failure(tmp_path):
-    _legacy_fixture(tmp_path)
-    wrong = tmp_path / "wrong.pdb"
-    wrong.write_text("NOT THE FILE THIS SYSTEM WAS BUILT FROM\n")
-    # named as the recorded input so the name lookup succeeds and only the hash disagrees
-    renamed = tmp_path / "source_ALA.pdb"
-    renamed.write_text(wrong.read_text())
-
-    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                           "--output", tmp_path / "out", "--original-input", renamed)
-    assert result.returncode == 3, result.stdout + result.stderr
-    assert "mismatch" in (result.stdout + result.stderr).lower()
-    assert not (tmp_path / "out").exists() or not any((tmp_path / "out").iterdir())
 
 
-def test_a_non_empty_output_directory_is_refused(tmp_path):
-    _legacy_fixture(tmp_path)
-    out = tmp_path / "out"
-    out.mkdir()
-    (out / "already-here.txt").write_text("do not clobber me")
-    result = _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD", "--output", out)
-    assert result.returncode == 2
-    assert (out / "already-here.txt").read_text() == "do not clobber me"
 
 
-def test_evidence_labels_are_used_and_inferred_is_never_one(tmp_path):
-    _legacy_fixture(tmp_path)
-    _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                  "--output", tmp_path / "out")
-    text = ((tmp_path / "out" / "system-record.yaml").read_text()
-            + (tmp_path / "out" / "run-record.yaml").read_text())
-    assert "evidence: recorded" in text
-    assert "evidence: unknown" in text
-    assert "inferred" not in text, "a guess must never be labelled as a scientific value"
-
-    counts = json.loads((tmp_path / "out" / "validation.json").read_text())["evidence_counts"]
-    assert set(counts) <= {"recorded", "derived", "user_supplied", "unknown"}, counts
 
 
-def test_the_retrofit_assigns_no_dataset_id_and_moves_no_data(tmp_path):
-    """Identity, storage and lifecycle belong to MD-data, not here."""
-    _legacy_fixture(tmp_path)
-    _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                  "--output", tmp_path / "out")
-    validation = json.loads((tmp_path / "out" / "validation.json").read_text())
-    joined = " ".join(validation["not_performed"]).lower()
-    assert "dataset identifier" in joined and "$md_data" in joined
-    assert validation["handoff_required_from_md_data"]
-
-    blob = " ".join(p.read_text() for p in (tmp_path / "out").iterdir() if p.is_file())
-    assert "doi:" not in blob.lower(), "no identifier may be minted here"
 
 
-def test_the_reconstructed_command_is_never_called_the_original(tmp_path):
-    _legacy_fixture(tmp_path)
-    _run_retrofit("--inputs", tmp_path / "inputs", "--md", tmp_path / "MD",
-                  "--output", tmp_path / "out")
-    run = yaml.safe_load((tmp_path / "out" / "run-record.yaml").read_text())
-    entry = run["reconstructed_command"]
-    assert entry["evidence"] == "derived"
-    assert "was not recorded" in entry["source"]
 
 
-def test_the_retrofit_needs_only_python_and_pyyaml():
-    """It must run where OpenMM, CUDA and the checkout are absent."""
-    source = RETROFIT.read_text()
-    for forbidden in ("import openmm", "from openmm", "import md_tools", "from md_tools",
-                      "requests", "urllib"):
-        assert forbidden not in source, forbidden
 
 
 # --- the inventory that replaced sys-gen's checksum manifest ---------------------------------------

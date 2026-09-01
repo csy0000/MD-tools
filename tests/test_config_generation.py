@@ -188,15 +188,21 @@ def test_the_hmr_example_is_a_complete_and_loadable_pair():
     from md_tools.openmm.defaults import HMR_HYDROGEN_MASS_AMU, HMR_TIMESTEP_FS, \
         md_defaults, sys_defaults
 
-    example = yaml.safe_load(
-        (Path(__file__).resolve().parents[1] / "docs/examples/hmr-4fs.yaml").read_text())
-    assert example["sys.config.yaml"]["constraints"]["hydrogen_mass_amu"] == HMR_HYDROGEN_MASS_AMU
-    assert example["md.config.yaml"]["common"]["timestep_fs"] == HMR_TIMESTEP_FS
+    # The numbers used to live in docs/examples/hmr-4fs.yaml. That file is gone; the shipped
+    # build-top example documents them, and the model defines them. Both are checked, because a
+    # documented value that the code does not apply is the failure this guards against.
+    from md_tools.configs import example as shipped_example
+
+    documented = shipped_example("sys/build-top.config").read_text(encoding="utf-8")
+    assert str(HMR_HYDROGEN_MASS_AMU) in documented, (
+        f"the shipped example no longer documents the {HMR_HYDROGEN_MASS_AMU} amu target")
+    assert f"{HMR_TIMESTEP_FS:g} fs" in documented or str(HMR_TIMESTEP_FS) in documented
 
     system = sys_defaults()
-    system["constraints"].update(example["sys.config.yaml"]["constraints"])
+    system["constraints"].update({"type": "HBonds", "rigid_water": True,
+                                  "hydrogen_mass_amu": HMR_HYDROGEN_MASS_AMU})
     protocol = md_defaults()
-    protocol["common"].update(example["md.config.yaml"]["common"])
+    protocol["common"].update({"timestep_fs": HMR_TIMESTEP_FS})
     check_timestep_against_masses(
         resolve_md_config(protocol, implicit=False), resolve_sys_config(system))
 

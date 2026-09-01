@@ -11,7 +11,7 @@ Split by cost, and marked accordingly:
     slow        one system built and loaded per combination.
     gpu         minimisation or integration, which runs on CUDA and nowhere else.
 
-The evidence for the choices themselves is `docs/md-defaults-scientific-rationale.md`; this file
+The evidence for the choices themselves is `docs/scientific-defaults.md`; this file
 only checks that what is implemented is what is documented.
 """
 from __future__ import annotations

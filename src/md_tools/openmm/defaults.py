@@ -24,7 +24,7 @@ METHODS = ("cMD", "REST2", "rREST2", "AIS")
 SOLVENTS = ("TIP3P", "OPC", "GBn2")
 
 #: What `--solvent` selects when nothing is asked for. TIP3P is the method-development default:
-#: see `docs/md-defaults-scientific-rationale.md`.
+#: see `docs/scientific-defaults.md`.
 DEFAULT_SOLVENT = "TIP3P"
 
 
@@ -65,7 +65,7 @@ AIS_OBSERVATIONS = 21
 #: is the one with published workflow-level protein-ligand use. ff19SB + OPC is the alternative:
 #: ff19SB's amino-acid-specific CMAPs were fit with OPC, so the pair is internally consistent, but
 #: it is a heavier and slower water model and the joint ff19SB/Sage/OPC combination has no
-#: published combination-level benchmark. See `docs/md-defaults-scientific-rationale.md`.
+#: published combination-level benchmark. See `docs/scientific-defaults.md`.
 EXPLICIT_COMBINATIONS = {
     "TIP3P": {"protein": "amber14-all.xml", "water": "amber14/tip3p.xml"},
     "OPC": {"protein": "amber19-all.xml", "water": "amber19/opc.xml"},
@@ -335,7 +335,8 @@ def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT) -> dic
             # null: hydrogens keep the masses the force field gave them, and the timestep stays at
             # 2 fs. This is the baseline, not a placeholder. Set to 3.024 for HMR, and raise
             # timestep_fs to 4.0 with it -- 4 fs on unrepartitioned hydrogens is the unstable
-            # combination, and `md-gen` refuses it. See docs/examples/hmr-4fs.yaml.
+            # combination, and build-md refuses it. See the HMR section of
+            # configs/sys/build-top.config.
             "hydrogen_mass_amu": None,
         },
     }
@@ -377,7 +378,7 @@ def md_defaults(*, methods=("cMD", "REST2"), solvent: str = DEFAULT_SOLVENT) -> 
             # OpenMM's LangevinMiddleIntegrator collision rate, in ps^-1. 1.0 ps^-1 is a nominal
             # 1 ps damping time: weak enough not to dominate the dynamics, strong enough to
             # thermostat. It still affects real-time dynamical and transport observables -- see
-            # docs/md-defaults-scientific-rationale.md.
+            # docs/scientific-defaults.md.
             "friction_per_ps": 1.0,
             "random_seed": None,
         },

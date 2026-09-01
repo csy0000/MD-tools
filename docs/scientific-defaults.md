@@ -6,7 +6,6 @@
 | Applies to | the values `md-openmm sys-config` and `md-openmm show-default` write |
 | Date | 2026-08-27 |
 | References | `docs/md-defaults-references.bib` |
-| Rendered by | `python scripts/render_markdown_pdf.py docs/md-defaults-scientific-rationale.md docs/md-defaults-scientific-rationale.pdf` |
 
 ---
 

@@ -17,7 +17,8 @@ not describe.
 are never accepted back as input.
 
 Not implemented here, deliberately: the reverse path, mid-path restart, pV work, and any estimator
-built on the resulting work values. See `docs/journal/2026-08-27_ais-method-and-release-gaps.md`.
+built on the resulting work values. See configs/md/AIS.config for the path, the work
+convention and what this deliberately does not do.
 """
 from __future__ import annotations
 
