@@ -626,8 +626,10 @@ def managed(tmp_path_factory):
     environment = dict(os.environ, MD_DATA=str(root), MD_DATA_LOCAL=str(local))
 
     def cli(*args):
-        return subprocess.run([sys.executable, "-m", "md_tools.cli.md_openmm", *args],
-                              capture_output=True, text=True, cwd=str(build), env=environment)
+        # Through conftest's run_cli, which routes the three retired subcommand names to the
+        # generator API they used to reach. This fixture is exercising the generator and the
+        # MD-data contract shape, not the argument parser.
+        return run_cli("md_openmm", *args, cwd=build)
 
     assert cli("sys-config", "--method", "cMD", "AIS").returncode == 0
     path = build / "sys.config.yaml"

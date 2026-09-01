@@ -211,6 +211,46 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         check_timestep_against_masses(timestep_fs, system, pdb.topology)
 
         # -- the Force layout, fixed before any state is loaded -----------------------------
+        #
+        # Order matters and is the same order the REST2 ladder uses: SCALE FIRST, on the bare
+        # System, then restrain, then add the barostat. The scaler audits every force and refuses
+        # one it cannot classify, and the restraint and barostat are stage machinery rather than
+        # terms of the molecular Hamiltonian, so neither may be scaled. Scaling last would scale
+        # them, and a fixed-tau walker would then construct a different System from the ladder
+        # rung it is supposed to match.
+        tau = float(stage.get("tau") or 0.0)
+        excluded: list = []
+        if tau > 0.0:
+            if stage["ensemble"] != "NVT":
+                raise SystemExit(
+                    f"stage {name} runs at tau={tau} but declares ensemble "
+                    f"{stage['ensemble']}. A scaled run samples the fixed-volume ensemble of the "
+                    f"ladder rung it sits at; a barostat would sample a different distribution.")
+            from ..openmm.system import classify_omega_bonds
+            from ..openmm.templates.rest2_scaling import build_scaled_system
+            omega = classify_omega_bonds(pdb.topology, solute, route="peptide", ligand_sdf=None)
+            excluded = [tuple(int(a) for a in bond)
+                        for bond in omega.get("omega_unscaled_bonds", [])]
+            system = build_scaled_system(system, solute, tau, excluded_bonds=excluded)
+            log.field("tau", f"{tau}  (fixed REST2 scaling; ordinary amide omega left unscaled, "
+                             f"{len(excluded)} bond(s) excluded)")
+
+        # The MOLECULAR Hamiltonian, fingerprinted HERE, before any stage machinery is added.
+        # The restraint (always present, at zero strength when unrestrained) and the barostat are
+        # properties of how this stage is run, not terms of the energy the ensemble is defined
+        # by. A reservoir fingerprint taken after them claims a CustomExternalForce the ladder
+        # rung it refreshes does not have, and the probability-one transfer is then refused --
+        # correctly, for the wrong reason.
+        #
+        # Computed now rather than holding a reference: `add_positional_restraint` mutates the
+        # System in place, so a reference would be fingerprinted after the restraint anyway.
+        hamiltonian_identity_record = None
+        if stage.get("phase_space_interval_steps"):
+            from ..openmm.templates.hamiltonian_identity import identity_record
+            hamiltonian_identity_record = identity_record(
+                system, tau=tau, temperature_k=float(stage["temperature_K"]),
+                ensemble=stage["ensemble"], solute_indices=solute, excluded_bonds=excluded)
+
         restrained = float(stage.get("restraint_kcal_per_mol_A2") or 0.0) > 0.0
         add_positional_restraint(system, pdb.positions, solute)
         if not implicit:
@@ -318,6 +358,18 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                                       int(stage["state_interval_steps"]), step=True, time=True,
                                       potentialEnergy=True, temperature=True, volume=True,
                                       density=True, speed=True, append=done > 0))
+            if hamiltonian_identity_record is not None:
+                from ..openmm.templates.phase_space import PhaseSpaceReporter
+
+                # The reservoir consumer compares this fingerprint against the ladder rung it is
+                # about to refresh, and a probability-one transfer is only justified when they
+                # agree. It is the real identity record -- over the canonical serialised System,
+                # the solute selection and the omega exclusions -- taken before stage machinery.
+                simulation.reporters.append(PhaseSpaceReporter(
+                    str(traj_path.with_suffix(".phase_space.nc")),
+                    int(stage["phase_space_interval_steps"]),
+                    identity={"hamiltonian": hamiltonian_identity_record},
+                    periodic=not implicit, timestep_fs=timestep_fs, step_offset=done))
             if stage.get("checkpoint_interval_steps"):
                 simulation.reporters.append(
                     _CheckpointWithFingerprint(str(chk_path), int(stage["checkpoint_interval_steps"]),
@@ -355,6 +407,10 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         if traj_path.is_file():
             outputs["trajectory"] = file_facts(traj_path)
             log.field(traj_path.name, traj_path)
+        phase_space = traj_path.with_suffix(".phase_space.nc")
+        if phase_space.is_file():
+            outputs["phase_space"] = file_facts(phase_space)
+            log.field(phase_space.name, f"{phase_space}  (positions, velocities and box)")
         log.update(outputs=outputs)
         log.complete()
         log.heading("Summary")

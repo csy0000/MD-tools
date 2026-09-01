@@ -22,6 +22,7 @@ built system rather than carried in configuration that could go stale:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -118,6 +119,61 @@ protocol = REST2Protocol(
 '''
 
 
+def write_reservoir_declaration(ladder: dict[str, Any], out: Path) -> Path:
+    """Turn the config's reservoir block into the declaration the runtime reads.
+
+    `reservoir.path` names a PHASE-SPACE file: complete samples with positions, velocities and
+    box, which is what the Boltzmann contract requires and what a plain trajectory cannot supply.
+    Such a file is produced by a fixed-tau cMD run at the ladder's top rung
+    (`dynamics.tau` with `dynamics.phase_space_printout`).
+
+    The frame count and time window are read FROM the file rather than restated in configuration,
+    so a declaration cannot claim a window the reservoir does not contain.
+    """
+    import yaml
+
+    from ..openmm.templates.phase_space import PhaseSpaceReader
+    from ..openmm.templates.rrest2_reservoir import DECLARATION_FORMAT
+
+    block = ladder["reservoir"]
+    source = Path(block["path"]).expanduser().resolve()
+    if not source.is_file():
+        raise SystemExit(
+            f"reservoir.path {source} does not exist. It must name a phase-space file holding "
+            f"complete samples (positions, velocities and box) generated at the ladder's top "
+            f"rung -- run a cMD with dynamics.tau set to the ladder's tau_max and "
+            f"dynamics.phase_space_printout set.")
+    reader = PhaseSpaceReader(str(source))
+    try:
+        frames = int(reader.n_frames)
+        times = [float(value) for value in reader.times()]     # `times` is a method, not a property
+    finally:
+        reader.close()
+    if frames < 1:
+        raise SystemExit(f"{source} holds no frames; there is nothing to refresh from.")
+
+    declaration = {
+        "format": DECLARATION_FORMAT,
+        "weighting": "boltzmann",
+        "ensemble": "NVT",
+        "prepared_directory": "reservoir",
+        # `stored` installs the recorded momentum, which is what makes the drawn sample a sample
+        # of the same distribution. `maxwell` redraws it and must be asked for deliberately.
+        "velocity_policy": "stored" if block.get("velocities") == "inherit" else "maxwell",
+        "refresh_interval_exchanges": int(block.get("refresh_interval_exchanges", 1)),
+        "random_seed": int(ladder["dynamics"]["seed"]),
+        "source": {
+            "phase_space": os.path.relpath(source, out.parent),
+            "start_time_ps": float(min(times)) if times else 0.0,
+            "end_time_ps": float(max(times)) if times else 0.0,
+            "frames": frames,
+        },
+    }
+    path = out / "reservoir.yaml"
+    path.write_text(yaml.safe_dump(declaration, sort_keys=False), encoding="utf-8")
+    return path
+
+
 def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     """Prepare the ladder's inputs and hand them to the validated executor."""
     import argparse
@@ -191,7 +247,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     if ladder.get("rem_log", True):
         executor_argv += ["--rem", str(out / "rem.log")]
     if ladder.get("reservoir", {}).get("enabled"):
-        executor_argv += ["--reservoir", str(Path(ladder["reservoir"]["path"]).resolve())]
+        executor_argv += ["--reservoir", str(write_reservoir_declaration(ladder, out))]
     if args.resume:
         executor_argv.append("--resume")
     if args.verify_only:
