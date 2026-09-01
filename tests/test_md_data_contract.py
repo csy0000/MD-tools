@@ -26,6 +26,7 @@ import yaml
 from md_templates.openmm import md_data_contract as MD
 
 from .conftest import ALA_PDB, REPO_ROOT, run_cli
+import datetime
 
 md_data = pytest.importorskip("md_data", reason="the authoritative MD-data validator")
 
@@ -40,10 +41,19 @@ FAKE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 GENERATOR_COMMIT = MD.generator_commit()["commit"]
 
 
+#: The dated path segment is the dataset's VERSION, and the contract requires it to equal the month
+#: of `created_at` (MD-data `dataset_contract.py`: "it cannot disagree with when the dataset was
+#: created"). A literal month here is a time bomb: these fixtures stamp `created_at` from the clock,
+#: so every one of them started failing at 00:00 on the first of the month. Derive it from the same
+#: clock the manifest is stamped from, and the fixture is correct on any day.
+def current_month():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m")
+
+
 def _dataset_block(namespace="my-project", name="ALA-explicit", role="project"):
     return {
         "enabled": True,
-        "dataset_id": f"{namespace}-2026-08-{name}".lower(),
+        "dataset_id": f"{namespace}-{current_month()}-{name}".lower(),
         "namespace": namespace,
         "dataset_name": name,
         "role": role,
@@ -62,9 +72,47 @@ def _dataset_block(namespace="my-project", name="ALA-explicit", role="project"):
 def _roots(tmp_path, namespace="my-project", name="ALA-explicit"):
     """A synthetic $MD_DATA. Never a real one: nothing here may point at production storage."""
     root = tmp_path / "MD_DATA"
-    local = root / namespace / "2026-08" / name
+    local = root / namespace / current_month() / name
     local.mkdir(parents=True)
     return root, local
+
+
+def test_no_fixture_hardcodes_a_dated_path_segment():
+    """The regression guard for a bug that only fires on the first of a month.
+
+    Every fixture here stamps `created_at` from the clock, and the contract requires the dated path
+    segment to equal that month. A literal `2026-08` therefore passes for a few weeks and then
+    fails at midnight on the 1st, in 24 tests at once, with nothing in the diff to explain it --
+    which is exactly what happened.
+
+    Asserting "no literal month appears" is what keeps the fix from being undone by the next person
+    who writes a fixture by copying an existing one.
+    """
+    import ast
+    import re
+    from pathlib import Path
+
+    pattern = re.compile(r"\b20\d\d-(0[1-9]|1[0-2])\b")
+    offenders = []
+    for path in (Path(__file__), Path(__file__).with_name("test_template_provenance.py")):
+        source = path.read_text(encoding="utf-8")
+        # Only string LITERALS that reach the code -- prose in a docstring or comment describing
+        # the bug is not the bug, and a guard that cannot tell the difference gets deleted.
+        tree = ast.parse(source)
+        docstrings = set()
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                doc = node.body[0] if node.body else None
+                if (isinstance(doc, ast.Expr) and isinstance(doc.value, ast.Constant)
+                        and isinstance(doc.value.value, str)):
+                    docstrings.update(range(doc.lineno, (doc.end_lineno or doc.lineno) + 1))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and node.lineno not in docstrings and pattern.search(node.value)):
+                offenders.append(f"{path.name}:{node.lineno}: {node.value!r}")
+    assert not offenders, (
+        "a dated path segment is hardcoded; derive it with current_month() instead:\n  "
+        + "\n  ".join(offenders))
 
 
 # --- the manifest, against MD-data's own validator ---------------------------------------------
@@ -85,7 +133,7 @@ def test_a_generated_manifest_passes_the_authoritative_validator(tmp_path):
     # the declared layout, which needs the manifest to be on disk where it says it is.
     MD.write_manifest(local, manifest)
     report = MD.validate(manifest, root=str(root))
-    assert report["dataset_id"] == "my-project-2026-08-ala-explicit"
+    assert report["dataset_id"] == f"my-project-{current_month()}-ala-explicit"
     assert report["role"] == "project" and report["status"] == "active"
     assert report["read_only"] is False
     assert report["validator"]["package"] == "md-data"
@@ -93,7 +141,7 @@ def test_a_generated_manifest_passes_the_authoritative_validator(tmp_path):
 
     # ...and the path is relative, always. An absolute machine path in a manifest stops being true
     # the moment the tree moves, which is the whole reason $MD_DATA is a variable.
-    assert manifest["path"] == "my-project/2026-08/ALA-explicit"
+    assert manifest["path"] == f"my-project/{current_month()}/ALA-explicit"
     assert not os.path.isabs(manifest["path"])
     assert str(tmp_path) not in yaml.safe_dump(manifest)
 
@@ -215,9 +263,9 @@ def test_a_symlinked_dataset_root_is_refused_as_an_alias(tmp_path):
     from md_templates.openmm import md_data_contract as MD
 
     root = tmp_path / "MD_DATA"
-    real = root / "owner" / "2026-08" / "ALA"
+    real = root / "owner" / current_month() / "ALA"
     real.mkdir(parents=True)
-    alias_parent = root / "consumer" / "2026-08"
+    alias_parent = root / "consumer" / current_month()
     alias_parent.mkdir(parents=True)
     alias = alias_parent / "ALA"
     alias.symlink_to(real, target_is_directory=True)
@@ -232,12 +280,13 @@ def test_a_complete_dataset_is_never_overwritten(tmp_path):
 
     root, local = _roots(tmp_path)
     (local / "dataset.yaml").write_text(yaml.safe_dump({
-        "schema_version": "1.0", "dataset_id": "my-project-2026-08-ala-explicit",
-        "path": "my-project/2026-08/ALA-explicit", "namespace": "my-project",
+        "schema_version": "1.0",
+        "dataset_id": f"my-project-{current_month()}-ala-explicit",
+        "path": f"my-project/{current_month()}/ALA-explicit", "namespace": "my-project",
         "dataset_name": "ALA-explicit", "role": "project", "status": "complete"}))
     with pytest.raises(MD.ContractError, match="read-only"):
-        MD.write_manifest(local, {"dataset_id": "my-project-2026-08-ala-explicit",
-                                  "path": "my-project/2026-08/ALA-explicit",
+        MD.write_manifest(local, {"dataset_id": f"my-project-{current_month()}-ala-explicit",
+                                  "path": f"my-project/{current_month()}/ALA-explicit",
                                   "namespace": "my-project", "dataset_name": "ALA-explicit",
                                   "role": "project", "status": "active"})
 
@@ -249,11 +298,11 @@ def test_a_different_identity_never_replaces_an_existing_manifest(tmp_path):
     root, local = _roots(tmp_path)
     (local / "dataset.yaml").write_text(yaml.safe_dump({
         "schema_version": "1.0", "dataset_id": "someone-elses-dataset",
-        "path": "my-project/2026-08/ALA-explicit", "namespace": "my-project",
+        "path": f"my-project/{current_month()}/ALA-explicit", "namespace": "my-project",
         "dataset_name": "ALA-explicit", "role": "project", "status": "active"}))
     with pytest.raises(MD.ContractError, match="identity of an existing dataset"):
-        MD.write_manifest(local, {"dataset_id": "my-project-2026-08-ala-explicit",
-                                  "path": "my-project/2026-08/ALA-explicit",
+        MD.write_manifest(local, {"dataset_id": f"my-project-{current_month()}-ala-explicit",
+                                  "path": f"my-project/{current_month()}/ALA-explicit",
                                   "namespace": "my-project", "dataset_name": "ALA-explicit",
                                   "role": "project", "status": "active"})
 
@@ -569,7 +618,7 @@ def managed(tmp_path_factory):
     """A contract-managed dataset with a multi-chunk AIS source, generated but not yet run."""
     work = tmp_path_factory.mktemp("managed")
     root = work / "MD_DATA"
-    local = root / "proj" / "2026-08" / "ALA"
+    local = root / "proj" / current_month() / "ALA"
     local.mkdir(parents=True)
     build = work / "build"
     build.mkdir()
@@ -666,7 +715,7 @@ def test_generated_scripts_are_portable_and_carry_no_storage_root(managed):
 
     # The manifest's own path field is relative to $MD_DATA, which is the contract's rule.
     manifest = yaml.safe_load((local / "dataset.yaml").read_text())
-    assert manifest["path"] == "proj/2026-08/ALA"
+    assert manifest["path"] == f"proj/{current_month()}/ALA"
     assert not manifest["path"].startswith("/")
 
 

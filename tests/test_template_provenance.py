@@ -10,6 +10,8 @@ resolution or the comparison, and then assert on the files actually written.
 """
 from __future__ import annotations
 
+
+
 import os
 import shutil
 import subprocess
@@ -23,6 +25,13 @@ from md_templates.openmm import md_data_contract as MD
 from md_templates.openmm import provenance_min
 
 from .conftest import ALA_PDB, REPO_ROOT, template_module
+import datetime
+
+
+#: See the note in test_md_data_contract.py: the dated path segment must equal the month
+#: of `created_at`, so a literal month here fails on the first of every month.
+def _current_month():
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m")
 
 CLEAN = "1" * 40
 OTHER = "2" * 40
@@ -121,7 +130,7 @@ def _sys_config(work, *, enabled, commit):
     document["solvent"].update({"padding_nm": 0.5, "cutoff_nm": 0.5})
     if enabled:
         document["dataset"].update({
-            "enabled": True, "dataset_id": "proj-2026-08-ala", "namespace": "proj",
+            "enabled": True, "dataset_id": f"proj-{_current_month()}-ala", "namespace": "proj",
             "dataset_name": "ala", "role": "project", "system": "ALA in TIP3P",
             "created_by": {"person_id": "chen", "name": "Chen", "affiliation": None,
                            "orcid": None},
@@ -143,7 +152,7 @@ def _generate(work, *, enabled, commit, identity):
     environment = dict(os.environ)
     if enabled:
         root = work / "MD_DATA"
-        local = root / "proj" / "2026-08" / "ala"
+        local = root / "proj" / _current_month() / "ala"
         local.mkdir(parents=True)
         os.environ.update({"MD_DATA": str(root), "MD_DATA_LOCAL": str(local)})
         inputs, project = local / "common", local
@@ -225,7 +234,7 @@ def test_contract_generation_from_a_dirty_checkout_fails_before_the_system_is_bu
                         lambda: _raw(git_commit=CLEAN, dirty=True))
     _sys_config(tmp_path, enabled=True, commit=CLEAN)
     root = tmp_path / "MD_DATA"
-    local = root / "proj" / "2026-08" / "ala"
+    local = root / "proj" / _current_month() / "ala"
     local.mkdir(parents=True)
     monkeypatch.setenv("MD_DATA", str(root))
     monkeypatch.setenv("MD_DATA_LOCAL", str(local))
