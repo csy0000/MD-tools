@@ -1,0 +1,230 @@
+name: ci
+
+# WHAT THIS JOB IS EVIDENCE FOR, AND WHAT IT IS NOT
+#
+# It validates PACKAGING AND INTERFACE: that the wheel installs, that the three public commands
+# exist and work from outside the checkout, that the shipped configuration examples are found
+# through distribution metadata and validate, that every protocol generates a bundle whose scripts
+# compile, and that the exported schemas match their models.
+#
+# It runs NO DYNAMICS and produces NO SCIENTIFIC EVIDENCE. There is no CUDA runner configured, and
+# CPU execution is never substituted for CUDA evidence: the GPU lane is recorded locally and named
+# in the release notes. A green run here means the package is well formed, not that the science is
+# right.
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [dev, main]
+    tags:
+      # MD-tools' own convention. The historical `openmm-v*` tags belong to this package when it
+      # was called MD-templates and must not trigger a release validation for this one.
+      - "v*"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: wheel, three commands, configs, schemas and the non-GPU lane
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: create the documented CPU environment
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment-ci.yml
+          environment-name: md-tools-ci
+          cache-environment: true
+          cache-downloads: true
+
+      - name: record the environment under test
+        run: |
+          python --version
+          python -c "import openmm; print('openmm', openmm.version.short_version)"
+          python -c "from openmm import Platform; print('platforms', [Platform.getPlatform(i).getName() for i in range(Platform.getNumPlatforms())])"
+          python -c "import openff.toolkit, openmmforcefields, parmed, rdkit.rdBase as r; print('openff', openff.toolkit.__version__, '| openmmforcefields', openmmforcefields.__version__, '| parmed', parmed.__version__, '| rdkit', r.rdkitVersion)"
+          for exe in sqm antechamber tleap; do command -v "$exe" || { echo "::error::$exe missing from the environment"; exit 1; }; done
+
+      - name: build and install the wheel
+        run: |
+          python -m pip install --quiet build
+          python -m build --wheel
+          python -m pip install --quiet --no-deps dist/*.whl
+          mkdir -p "${RUNNER_TEMP}/outside"
+
+      - name: prove the installed package is the wheel, not the checkout
+        working-directory: ${{ runner.temp }}/outside
+        run: |
+          python - <<'PY'
+          import md_tools, sys
+          origin = md_tools.__file__
+          print("md_tools:", origin)
+          assert "site-packages" in origin, f"imported the checkout: {origin}"
+          assert not any(p.endswith("/src") for p in sys.path), sys.path
+          PY
+
+      - name: the three public commands
+        working-directory: ${{ runner.temp }}/outside
+        run: |
+          md-openmm -h
+          md-openmm --version
+          md-openmm build-top -h
+          md-openmm build-md -h
+          md-openmm data-register -h
+
+      - name: retired subcommands must fail
+        working-directory: ${{ runner.temp }}/outside
+        run: |
+          for retired in sys-config sys-gen md-gen setup show-default; do
+            if md-openmm "$retired" -h >/dev/null 2>&1; then
+              echo "::error title=Retired command still runs::md-openmm $retired exited 0"
+              exit 1
+            fi
+            echo "refused: md-openmm $retired"
+          done
+          for gone in openmm-md md-template md-data-register md-data-finish; do
+            if command -v "$gone" >/dev/null 2>&1; then
+              echo "::error title=Retired executable installed::$gone is on PATH"
+              exit 1
+            fi
+            echo "absent: $gone"
+          done
+
+      - name: the shipped configuration examples
+        working-directory: ${{ runner.temp }}/outside
+        run: |
+          python - <<'PY'
+          from md_tools.build.md import resolve_md_config
+          from md_tools.build.top import resolve_build_config
+          from md_tools.configs import EXAMPLES, example, example_root
+
+          root = example_root()
+          print("located through distribution metadata:", root)
+          # The exact set from the documented `configs/` tree -- stronger than any count, and it
+          # fails both when a file stops shipping and when an undeclared one appears.
+          expected = {
+              "machine/user.config.example",
+              "sys/build-top.config",
+              "md/cMD.config",
+              "md/REST2.config",
+              "md/rREST2.config",
+              "md/AIS.config",
+          }
+          assert {str(r) for r in EXAMPLES} == expected, sorted(str(r) for r in EXAMPLES)
+          missing = [str(r) for r in EXAMPLES if not (root / r).is_file()]
+          assert not missing, f"declared but not shipped: {missing}"
+
+          resolve_build_config(example("sys/build-top.config"))
+          for name in ("cMD", "REST2", "rREST2", "AIS"):
+              resolved = resolve_md_config(example(f"md/{name}.config"))
+              assert resolved["protocol"] == name, (name, resolved["protocol"])
+          print("all seven examples present and resolving")
+          PY
+
+      - name: generate and compile every protocol bundle
+        working-directory: ${{ runner.temp }}/outside
+        run: |
+          python - <<'PY'
+          import py_compile, subprocess, yaml
+          from pathlib import Path
+
+          SHORT = {"stages": {"minimization_iterations": 10, "restrained_nvt_steps": 10,
+                              "restrained_npt_steps": 10, "unrestrained_npt_steps": 10,
+                              "production_steps": 10},
+                   "reporting": {"solute_printout": 10, "system_printout": 10,
+                                 "checkpoint_printout": 10}}
+          cases = [
+              ("cMD-explicit", {"protocol": "cMD", "solvent": "explicit", **SHORT}, [],
+               {"min.py", "eq_nvt_posres.py", "eq_npt_posres.py", "eq_npt_free.py", "cMD.py", "run.sh"}),
+              ("cMD-implicit", {"protocol": "cMD", "solvent": "implicit", **SHORT}, [],
+               {"min.py", "eq_nvt_posres.py", "eq_nvt_posres_2.py", "eq_nvt_free.py", "cMD.py", "run.sh"}),
+              ("cMD-all-in-one", {"protocol": "cMD", "solvent": "explicit", **SHORT}, ["--all-in-one"],
+               {"md.py", "run.sh"}),
+              ("REST2", {"protocol": "REST2", "solvent": "explicit", **SHORT,
+                         "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 10,
+                                   "number_of_exchanges": 2}}, [], {"REST2.py", "run.sh"}),
+              ("rREST2", {"protocol": "rREST2", "solvent": "explicit", **SHORT,
+                          "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 10,
+                                    "number_of_exchanges": 2},
+                          "reservoir": {"enabled": True, "path": "./reservoir"}}, [],
+               {"rREST2.py", "run.sh"}),
+              ("AIS", {"protocol": "AIS", "solvent": "explicit",
+                       "ais": {"number_of_paths": 2, "switching_steps": 20,
+                               "observation_interval_steps": 10},
+                       "ais_source": {"trajectory": "../source.dcd"}}, [],
+               {"AIS.py", "run.sh"}),
+          ]
+          for name, document, extra, expected in cases:
+              config = Path(f"{name}.config")
+              config.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+              out = Path(name)
+              result = subprocess.run(
+                  ["md-openmm", "build-md", "-odir", str(out), "--config", str(config), *extra],
+                  capture_output=True, text=True)
+              assert result.returncode == 0, f"{name}: {result.stdout}{result.stderr}"
+              written = {p.name for p in out.iterdir()}
+              assert expected <= written, f"{name}: expected {expected}, got {sorted(written)}"
+              for script in out.glob("*.py"):
+                  py_compile.compile(str(script), doraise=True)
+                  text = script.read_text(encoding="utf-8")
+                  assert "/home/" not in text and "/runner/" not in text, f"{name}: absolute path"
+              print(f"{name}: {len(written)} files, all compile, no absolute path")
+
+          ais = {p.name for p in Path("AIS").iterdir()}
+          assert not any(n.startswith(("min", "eq_")) for n in ais), ais
+          print("AIS carries no equilibration chain")
+          PY
+
+      - name: dataset and extension schemas
+        working-directory: ${{ runner.temp }}/outside
+        run: |
+          python - <<'PY'
+          import json
+
+          from md_tools.data_contract import exported_schema_path
+          from md_tools.data_contract.extension import json_schema as extension_schema
+          from md_tools.data_contract.model import json_schema as dataset_schema
+
+          for which, render in (("dataset", dataset_schema), ("extension", extension_schema)):
+              path = exported_schema_path(which)
+              committed = json.loads(path.read_text(encoding="utf-8"))
+              assert committed == render(), f"{which} schema has drifted from its model"
+              print(f"{which}: {path.name} matches its model")
+          PY
+
+      - name: the non-GPU test lane
+        run: |
+          python -m pytest tests -m "not slow and not gpu" -q -rs --tb=short | tee pytest.log
+          # A skip here is not neutral: it means a test that should have run did not, and a green
+          # run would report coverage the job did not actually have.
+          if grep -qE "^SKIPPED|[0-9]+ skipped" pytest.log; then
+            echo "::error title=Unexpected skip::A test skipped in the non-GPU lane; see the log."
+            exit 1
+          fi
+
+      - name: state plainly what this job did NOT validate
+        if: always()
+        run: |
+          echo "::notice title=No simulation validation::This job validated packaging, the three-command interface, the shipped examples, bundle generation and the schemas. It ran no dynamics. GPU/scientific validation is a separate locally recorded lane; see docs/release-notes/."
+
+      - name: upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs
+          path: |
+            pytest.log
+            ${{ runner.temp }}/outside/**/*.log
+            ${{ runner.temp }}/outside/**/*.config
+          if-no-files-found: ignore
+          retention-days: 14

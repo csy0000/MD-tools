@@ -7,6 +7,9 @@ works. This file audits the suite for that rule rather than trusting it to be fo
 from __future__ import annotations
 
 import ast
+import re
+
+import yaml
 from pathlib import Path
 
 from .conftest import REPO_ROOT
@@ -140,11 +143,67 @@ def test_the_shared_runner_leaves_the_platform_to_the_generated_script():
         "run_stage must not default to a platform"
 
 
-def test_the_release_workflow_runs_no_dynamics():
-    """The GitHub runner has no GPU, so a green tick there must not read as scientific validation."""
-    workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text()
+def _ci_workflow() -> str:
+    return (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
+
+
+def test_the_ci_workflow_runs_no_dynamics():
+    """The GitHub runner has no GPU, so a green tick there must not read as scientific validation.
+
+    Migrated from the deleted `release.yml` guard: the file was replaced, the guarantee was not.
+    """
+    workflow = _ci_workflow()
     assert 'MD_PLATFORM' not in workflow, "the workflow must not select an MD platform"
     for forbidden in ("run_all.sh", "cMD && python run.py", "equilibrate.py"):
         assert f"({forbidden}" not in workflow and f"cd {forbidden}" not in workflow, forbidden
-    assert '-m "not gpu"' in workflow, "the workflow must deselect the simulation tests"
+    # The lane must deselect the simulation tests. The marker expression may narrow further
+    # (it also drops `slow`), but it may never stop excluding `gpu`.
+    assert re.search(r'-m "not [^"]*\bnot gpu\b|-m "not gpu', workflow), \
+        "the workflow must deselect the gpu-marked tests"
     assert "No simulation validation" in workflow, "it must say what it did not validate"
+
+
+def test_ci_runs_on_pull_requests_and_on_dev_and_main():
+    """CI that only fires on a tag is not evidence for the branch under review."""
+    document = yaml.safe_load(_ci_workflow())
+    # PyYAML reads the bare key `on` as the boolean True.
+    triggers = document.get("on", document.get(True))
+    assert "pull_request" in triggers, triggers
+    assert "workflow_dispatch" in triggers, triggers
+    assert set(triggers["push"]["branches"]) == {"dev", "main"}, triggers["push"]
+
+
+def test_ci_does_not_use_the_retired_openmm_v_tag_convention():
+    """`openmm-v*` belongs to this package under its former name, not to MD-tools."""
+    document = yaml.safe_load(_ci_workflow())
+    triggers = document.get("on", document.get(True))
+    tags = triggers["push"].get("tags", [])
+    assert tags, "tag-triggered release validation must still exist"
+    assert not any(tag.startswith("openmm-v") for tag in tags), tags
+
+
+def test_ci_names_the_retired_commands_only_to_prove_they_fail():
+    """A workflow that *invokes* a retired command would teach an agent the wrong interface."""
+    workflow = _ci_workflow()
+    for retired in ("sys-config", "sys-gen", "md-gen", "show-default"):
+        occurrences = workflow.count(retired)
+        assert occurrences == 1, f"{retired} appears {occurrences} times; expected only the must-fail loop"
+    assert "retired subcommands must fail" in workflow
+
+
+def test_ci_exercises_exactly_the_three_public_commands():
+    workflow = _ci_workflow()
+    for command in ("build-top", "build-md", "data-register"):
+        assert f"md-openmm {command} -h" in workflow, command
+
+
+def test_ci_installs_the_wheel_and_runs_outside_the_checkout():
+    """Running in the checkout would test the source tree, not the artefact users install."""
+    workflow = _ci_workflow()
+    assert "python -m build --wheel" in workflow
+    assert "pip install --quiet --no-deps dist/*.whl" in workflow
+    assert 'assert "site-packages" in origin' in workflow
+    document = yaml.safe_load(workflow)
+    steps = document["jobs"]["package"]["steps"]
+    outside = [s for s in steps if "outside" in str(s.get("working-directory", ""))]
+    assert len(outside) >= 5, [s.get("name") for s in steps]
