@@ -204,8 +204,10 @@ MD_TOOLS_REPOSITORY = "https://github.com/csy0000/MD-tools"
 def dataset_defaults() -> dict[str, Any]:
     """The MD-data dataset identity, as editable YAML with every unguessable field left null.
 
-    MD-data owns the dataset contract (`csy0000/MD-data`, `docs/contracts/dataset-v1.md`); this
-    block is the smallest input `build-top` needs to WRITE a manifest that its validator accepts. It
+    MD-tools owns the dataset contract now: the v2 model and its generated schema live in
+    `md_tools.data_contract`, and `docs/data-contract.md` states where the FAIR boundary falls.
+    (MD-data owned v1, at `docs/contracts/dataset-v1.md`; nothing here validates against it.) This
+    block is the smallest input `build-top` needs to WRITE a manifest that the validator accepts. It
     lives in `sys.config.yaml` rather than in both files because a dataset has one identity, and
     `build-md` reads it back from `common/resolved_sys.config.yaml`.
 

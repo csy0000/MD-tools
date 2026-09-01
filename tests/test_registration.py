@@ -259,6 +259,68 @@ def test_an_interruption_before_commit_leaves_the_source_intact(world, stage):
     assert world["source"].is_symlink()
 
 
+@pytest.mark.parametrize("stage", ["committed", "source-removed", "linked"])
+def test_an_interruption_after_commit_never_loses_the_registered_data(world, stage, monkeypatch):
+    """After the atomic rename the destination is the only copy, so the invariant INVERTS.
+
+    Before commit the source must survive, because it is the only copy. After it, the staged tree
+    IS the dataset and the source may already be gone. What must hold at every one of these
+    boundaries is that the registered bytes are complete and verifiable, and that running the
+    command again neither duplicates nor destroys them.
+
+    The interruption is driven through the real registration rather than a hand-built transaction:
+    a simulated one can reach a state the code never actually produces, and would prove nothing
+    about the code.
+    """
+    from md_tools.registry.transaction import Transaction as RealTransaction
+
+    real_advance = RealTransaction.advance
+    armed = [True]
+
+    def advance_then_die(self, to, **kwargs):
+        result = real_advance(self, to, **kwargs)
+        if to == stage and armed[0]:
+            # One shot: the second run below must be allowed to proceed normally. Disarming is
+            # used rather than `monkeypatch.undo()`, which would also revert the fixture's XDG
+            # and $MD_DATA settings and register into the real user's configuration.
+            armed[0] = False
+            raise KeyboardInterrupt(f"interrupted at {to}")
+        return result
+
+    monkeypatch.setattr(RealTransaction, "advance", advance_then_die)
+    with pytest.raises(KeyboardInterrupt):
+        _register(world)
+
+    destination = world["root"] / "2026" / "ALA" / "ALA-cMD"
+    staging = destination.with_name(destination.name + ".registering")
+
+    # The commit has happened, so the data is at its final path and complete.
+    assert destination.is_dir(), "the committed dataset is not at its destination"
+    assert not staging.exists(), "the staging directory outlived the commit that consumed it"
+    # Built from the destination itself, then verified against it: this proves the committed tree
+    # is internally consistent and, below, that a second run did not disturb a single byte.
+    entries = inventory.build(destination)
+    inventory.verify(destination, entries)
+
+    # Running again is safe: it either finishes the remaining steps or refuses with an accurate
+    # reason. What it must never do is copy the dataset a second time or remove it.
+    try:
+        _register(world)
+    except RegistrationError as refusal:
+        # Both refusals are truthful and neither touches the data. They differ because of WHERE
+        # the interruption fell:
+        #   linked / committed  -- the source is a symlink, or still the source, and is recognised;
+        #   source-removed      -- the source has been removed and the symlink not yet created, so
+        #                          the command sees a missing -idata. The dataset is registered and
+        #                          intact, but the message does not say so. Recorded as a known
+        #                          rough edge in the v0.5.0 notes; it costs a confusing message in
+        #                          a narrow window, never data.
+        assert ("already been registered" in str(refusal)
+                or "does not exist" in str(refusal)), refusal
+    inventory.verify(destination, entries)
+    assert destination.is_dir() and not destination.is_symlink()
+
+
 def test_a_transaction_state_from_another_version_is_refused(world):
     destination = world["root"] / "2026" / "ALA" / "ALA-cMD"
     destination.parent.mkdir(parents=True)
@@ -573,3 +635,80 @@ def test_a_dataset_without_an_extension_registers_unchanged(world):
     assert not (destination / "extension.yaml").exists()
     resolved = yaml.safe_load((destination / "dataset.resolved.yaml").read_text())
     assert resolved["extension"] is None
+
+
+# -- where the managed storage root comes from -----------------------------------------------------
+#
+# README and `configs/machine/user.config.example` both state one order: `--md-data`, then
+# `$MD_DATA`, then `machine.md_data`. Nothing asserted it, so the documented order and the
+# implemented order were free to disagree.
+
+
+def _roots(tmp_path):
+    made = {}
+    for name in ("flag", "environment", "configured"):
+        (tmp_path / name).mkdir()
+        made[name] = tmp_path / name
+    return made
+
+
+def test_the_flag_wins_over_the_environment_and_the_configuration(tmp_path, monkeypatch):
+    from md_tools.registry.userconfig import resolve_md_data
+
+    roots = _roots(tmp_path)
+    monkeypatch.setenv("MD_DATA", str(roots["environment"]))
+    document = {"machine": {"md_data": str(roots["configured"])}}
+
+    root, origin = resolve_md_data(document, override=str(roots["flag"]))
+    assert root == roots["flag"].resolve()
+    assert origin == "--md-data", "the source must be named, not merely used"
+
+
+def test_the_environment_wins_over_the_configuration(tmp_path, monkeypatch):
+    from md_tools.registry.userconfig import resolve_md_data
+
+    roots = _roots(tmp_path)
+    monkeypatch.setenv("MD_DATA", str(roots["environment"]))
+    document = {"machine": {"md_data": str(roots["configured"])}}
+
+    root, origin = resolve_md_data(document, override=None)
+    assert root == roots["environment"].resolve()
+    assert origin == "$MD_DATA"
+
+
+def test_the_configuration_is_used_when_nothing_overrides_it(tmp_path, monkeypatch):
+    from md_tools.registry.userconfig import resolve_md_data
+
+    roots = _roots(tmp_path)
+    monkeypatch.delenv("MD_DATA", raising=False)
+    document = {"machine": {"md_data": str(roots["configured"])}}
+
+    root, origin = resolve_md_data(document, override=None)
+    assert root == roots["configured"].resolve()
+    assert origin == "machine.md_data"
+
+
+def test_no_root_at_all_names_all_three_places_it_looked(tmp_path, monkeypatch):
+    """A user who has not configured anything must be told what to set, not that something failed."""
+    from md_tools.registry.userconfig import resolve_md_data
+
+    monkeypatch.delenv("MD_DATA", raising=False)
+    with pytest.raises(RegistrationError) as refusal:
+        resolve_md_data({}, override=None)
+    message = str(refusal.value)
+    assert "machine.md_data" in message and "$MD_DATA" in message and "--md-data" in message
+
+
+@pytest.mark.parametrize("bad, expected", [
+    ("relative/path", "not an absolute path"),
+    ("/nonexistent/md/data/root", "not an existing directory"),
+])
+def test_an_unusable_root_is_refused_and_says_where_it_came_from(bad, expected, monkeypatch):
+    """Half of debugging this is knowing which of the three sources supplied the wrong path."""
+    from md_tools.registry.userconfig import resolve_md_data
+
+    monkeypatch.delenv("MD_DATA", raising=False)
+    with pytest.raises(RegistrationError) as refusal:
+        resolve_md_data({}, override=bad)
+    assert expected in str(refusal.value)
+    assert "--md-data" in str(refusal.value)
