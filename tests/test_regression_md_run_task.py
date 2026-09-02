@@ -127,13 +127,23 @@ def test_one_platform_policy_serves_every_runtime():
 
 
 def test_the_default_policy_is_cuda_and_cpu_needs_an_explicit_request():
+    """`from_flags` became `from_machine`: the default now comes from machine.openmm, not a flag.
+
+    The guarantee is unchanged and is what is asserted -- CUDA unless somebody says otherwise, and
+    `--cpu` recorded as having been asked for. What changed is where "otherwise" is written down.
+    """
     from md_tools.openmm.platform_policy import PlatformRequest
 
     default = PlatformRequest.default()
     assert default.name == "CUDA"
     assert default.explicit_cpu is False
-    explicit = PlatformRequest.from_flags(cpu=True)
+
+    from_absent_config = PlatformRequest.from_machine({})
+    assert from_absent_config.name == "CUDA" and from_absent_config.explicit_cpu is False
+
+    explicit = PlatformRequest.from_machine({}, cpu=True)
     assert explicit.name == "CPU" and explicit.explicit_cpu is True
+    assert explicit.origin == "--cpu (command line)"
 
 
 # --- 4. AIS ---------------------------------------------------------------------------------------

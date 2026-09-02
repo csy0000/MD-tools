@@ -98,9 +98,6 @@ MD_SCHEMA = Schema(
             Field("seed", int, default=1, minimum=0,
                   doc="Base random seed. Each stage derives its own from this plus the stage "
                       "name, so stages are independent and the whole chain is reproducible."),
-            Field("platform", str, default=None, nullable=True,
-                  enum=("CUDA", "OpenCL", "CPU", "Reference"),
-                  doc="Force an OpenMM platform. Null lets OpenMM choose the fastest available."),
         ], doc="Physical constants and integrator settings. These carry real units."),
         Section("stages", [
             Field("minimization_iterations", int, default=1000, minimum=0,
@@ -336,20 +333,11 @@ def _check_ais(resolved: dict[str, Any]) -> None:
                 f"comparable with the end of another.\n"
                 f"  Divisors of {switching} near {interval}: "
                 f"{', '.join(str(d) for d in sorted(near)[:12])}.")
-    # An AIS path writes ONE frame per observation, because a frame and its work row are the same
-    # event: `coordinate_frame_index` in observations.csv is the index into the path trajectory,
-    # and a reader takes the k-th frame to be the configuration the k-th row measured. Two
-    # different cadences would silently break that correspondence, so they are required to agree
-    # rather than reconciled.
-    solute = int(reporting["solute_printout"])
-    observation = int(resolved["ais"]["observation_interval_steps"])
-    if solute and solute != observation:
-        raise ConfigError(
-            f"reporting.solute_printout is {solute} but ais.observation_interval_steps is "
-            f"{observation}. For AIS these are one cadence, not two: each observation writes one "
-            f"frame, and its row in observations.csv indexes that frame. Set them to the same "
-            f"value, or leave reporting.solute_printout unstated and it will follow "
-            f"ais.observation_interval_steps.")
+    # The four cadences are independent, and each is checked on its own above. They used to be
+    # two: `solute_printout` was forced equal to `observation_interval_steps`, which answered the
+    # question "how often is a configuration written" with the answer to "how often is work
+    # measured". Those are different questions -- work every 10 steps with frames every 50 is a
+    # perfectly ordinary thing to want, and it was refused.
 
     if (source["last_frame"] is not None
             and int(source["last_frame"]) < int(source["first_frame"])):
@@ -378,6 +366,37 @@ def _check_ais(resolved: dict[str, Any]) -> None:
 MD_SCHEMA.checks = (_check_protocol, _check_timestep)
 
 
+def _refuse_retired_platform(document: dict[str, Any]) -> None:
+    """`dynamics.platform` moved to `machine.openmm.platform`. Say where, not just "unknown key".
+
+    The generic unknown-key refusal would suggest a near-miss among the remaining dynamics fields,
+    which is worse than useless: the key has not been misspelled, it has MOVED, and for a reason
+    the message should give. A protocol is the same experiment wherever it runs; a workflow that
+    carried `platform: CUDA` carried one machine's hardware into every repository it was shared
+    through, and the next machine either had that platform or silently did not.
+    """
+    dynamics = document.get("dynamics")
+    if not isinstance(dynamics, dict) or "platform" not in dynamics:
+        return
+    stated = dynamics["platform"]
+    raise ConfigError(
+        f"dynamics.platform is retired (this file sets it to {stated!r}). It is now "
+        f"machine.openmm.platform.\n"
+        f"  The OpenMM platform is a property of the MACHINE, not of the experiment, so it lives "
+        f"in the user configuration:\n"
+        f"\n"
+        f"      machine:\n"
+        f"        openmm:\n"
+        f"          platform: CUDA        # or CPU, for a deliberate machine-wide CPU default\n"
+        f"          precision: mixed\n"
+        f"          device_policy: local_rank\n"
+        f"\n"
+        f"  at ${{XDG_CONFIG_HOME:-$HOME/.config}}/md-tools/user.config -- create it with "
+        f"`md-openmm data-register --init`.\n"
+        f"  For one run, `--cpu` overrides the machine default and is recorded as having been "
+        f"asked for. Delete this key; the protocol is the same experiment on every machine.")
+
+
 def resolve_md_config(path: Path | None) -> dict[str, Any]:
     document: dict[str, Any] = {}
     if path is not None:
@@ -385,6 +404,7 @@ def resolve_md_config(path: Path | None) -> dict[str, Any]:
                                       source=str(path)) or {} if Path(path).is_file() else {}
         if not Path(path).is_file():
             raise ConfigError(f"{path}: no such configuration file")
+    _refuse_retired_platform(document)
     stated = {name: set(block) for name, block in document.items() if isinstance(block, dict)}
     MD_SCHEMA.after_resolve = (lambda resolved: _apply_ais_reporting_defaults(resolved, stated),)
     try:
@@ -459,7 +479,6 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
         "friction_per_ps": dyn["friction_per_ps"],
         "barostat_interval_steps": dyn["barostat_interval_steps"],
         "seed": dyn["seed"],
-        "platform": dyn["platform"],
     }
     plan: list[dict[str, Any]] = []
     if resolved["protocol"] == "AIS":
@@ -676,6 +695,9 @@ def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str,
              '#',
              '# CUDA is the default and is mandatory. Pass --cpu through "$@" for a CPU run.',
              '#',
+             '#   -s is the serialised System (built.xml) and -x the output trajectory, as in',
+             '#   Amber. -o is what you read while a run is going; -log is the provenance record.',
+             '#',
              '#   ./run.sh                 run from the built system in the parent directory',
              '#   ./run.sh ../built.pdb ../built.xml    or name them explicitly',
              'set -euo pipefail',
@@ -725,22 +747,21 @@ def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str,
             '',
             'echo "== AIS =="',
             '"${LAUNCH[@]}" md-openmm md-run -i AIS.in \\',
-            '  -p "${TOPOLOGY}" -x "${SYSTEM}" -source-traj "${SOURCE}" \\',
-            '  -log AIS.log "$@"',
+            '  -p "${TOPOLOGY}" -s "${SYSTEM}" -source-traj "${SOURCE}" \\',
+            '  -o AIS.out -log AIS.log "$@"',
             '']
     elif all_in_one:
-        lines += ['md-openmm md-run -i cMD.in -p "${TOPOLOGY}" -x "${SYSTEM}" "$@"', '']
+        lines += ['md-openmm md-run -i cMD.in -p "${TOPOLOGY}" -s "${SYSTEM}" "$@"', '']
     else:
         previous = None
         for stage in plan:
             name = stage["name"]
-            # `-x` is the serialised System on this surface, as Amber's prmtop carries the
-            # parameters; the output trajectory is `--trajectory`. Getting these two the wrong way
-            # round hands the runner a .dcd where the System belongs.
+            # Amber semantics: -s is the serialised System, -x the trajectory, -o the readable
+            # output and -log the provenance record. Two files, two readers.
             call = [f'md-openmm md-run -i {name}.in \\',
-                    '  -p "${TOPOLOGY}" -x "${SYSTEM}" \\',
-                    f'  --trajectory {name}.dcd -r {name}.xml -chk {name}.chk '
-                    f'-log {name}.log "$@"']
+                    '  -p "${TOPOLOGY}" -s "${SYSTEM}" \\',
+                    f'  -x {name}.dcd -r {name}.xml -chk {name}.chk \\',
+                    f'  -o {name}.out -log {name}.log "$@"']
             if previous:
                 call.insert(2, f'  -c {previous}.xml \\')
             lines += [f'echo "== {name} =="'] + call + ['']
@@ -754,8 +775,9 @@ def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str,
                       '# run, --cpu for an explicit CPU run.',
                       f'echo "== {protocol} =="',
                       f'mpirun -n {states} md-openmm md-run -ng {states} -i {protocol}.in \\',
-                      '  -p "${TOPOLOGY}" -x "${SYSTEM}" \\',
-                      f'  -c {previous}.xml -log {protocol}.log "$@"',
+                      '  -p "${TOPOLOGY}" -s "${SYSTEM}" \\',
+                      f'  -c {previous}.xml -x {protocol}.nc -r restart.json \\',
+                      f'  -o {protocol}.out -log {protocol}.log "$@"',
                       '']
     lines += ['echo "run.sh: all stages reported completion"']
     return "\n".join(lines) + "\n"

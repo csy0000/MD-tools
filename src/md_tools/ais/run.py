@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from ..build.record import LogWriter, file_facts, openmm_platform_facts, read_record
+from ..openmm.trajectory import check_trajectory_declaration
 
 #: One row per observation. `s` and sqrt(s) are absent on purpose: see the module docstring.
 OBSERVATION_COLUMNS = (
@@ -52,6 +53,25 @@ OBSERVATION_COLUMNS = (
 
 COMPLETION_NAME = "completed.json"
 OBSERVATIONS_CSV = "observations.csv"
+
+#: The per-path thermodynamic state table, at `reporting.system_printout`. A different question
+#: from the work: how the path is BEHAVING while the Hamiltonian moves, which is what tells you a
+#: switch is too fast long before the work distribution does.
+STATE_CSV = "system.csv"
+STATE_COLUMNS = ("path_index", "protocol_step", "switching_time_ps", "tau",
+                 "potential_energy_kj_mol", "kinetic_energy_kj_mol", "total_energy_kj_mol",
+                 "temperature_kelvin", "volume_nm3", "density_g_per_ml")
+
+#: Mid-path resume. The OpenMM checkpoint restores the Context; this sidecar restores everything
+#: OUTSIDE it -- how much work has accumulated, how many rows and frames are on disk, which path
+#: this is. Restoring one without the other would resume a simulation into the wrong bookkeeping.
+RESUME_SIDECAR = "resume.json"
+PATH_CHECKPOINT = "path.chk"
+
+#: Frames are staged inside the path directory and published to the run root only when the path is
+#: complete and validated. A half-written `AIS_trajNNNN.nc` at the root would look exactly like a
+#: finished path to anyone globbing the directory.
+STAGED_TRAJECTORY = "frames.partial.nc"
 
 #: The global work table rank 0 writes once every path this run owns has finished.
 #:
@@ -87,15 +107,21 @@ def ais_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("-odir", "--out-dir", default=".", metavar="DIR",
                         help="where the path directories are written (default: here)")
     parser.add_argument("-log", "--log", default=None, metavar="LOG",
-                        help="readable log carrying this run's machine record")
+                        help="the provenance record (machine-readable). Defaults to AIS.log")
+    parser.add_argument("-o", "--output", default=None, metavar="OUT",
+                        help="human-readable simulation output, Amber's mdout. A DIFFERENT file "
+                             "from -log. Defaults to AIS.out")
+    parser.add_argument("--resume", action="store_true",
+                        help="continue interrupted paths from their checkpoints. A completed "
+                             "path is skipped either way; this affects only paths that stopped "
+                             "part-way")
     parser.add_argument("--cpu", action="store_true",
                         help="run the paths on the OpenMM CPU platform. CUDA is the default and "
                              "is mandatory; this is the only way to ask for a CPU run, and the "
                              "record says that you did")
-    parser.add_argument("--platform", default=None,
-                        help="force a named OpenMM platform. CUDA is the default; there is no "
-                             "automatic fall back to anything else")
-    parser.add_argument("--device", default=None, help="CUDA device index")
+    parser.add_argument("--device", default=None, metavar="N",
+                        help="CUDA device index. An execution placement option; rejected with "
+                             "--cpu, which has no device to place")
     parser.add_argument("--paths", default=None,
                         help="run only these path indices, e.g. 0,1,2 or 0-9")
     parser.add_argument("--check", action="store_true",
@@ -241,6 +267,419 @@ def write_selected_frames(path: Path, chosen: list[int], *, seed: int) -> None:
                              derive_seed(seed, "ais", index, "velocity")])
 
 
+
+# ---------------------------------------------------------------------------------------------
+# One switching path
+#
+# Four cadences, a staged trajectory, and a checkpoint that restores the OpenMM Context and the
+# bookkeeping OUTSIDE it together. Restoring one without the other resumes a simulation into
+# somebody else's accounting, which is worse than restarting.
+# ---------------------------------------------------------------------------------------------
+
+def _truncate_csv(path: Path, keep: int, columns) -> None:
+    """Cut a table back to `keep` data rows. A crash can leave a partial final line."""
+    if not path.is_file():
+        with path.open("w", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=list(columns)).writeheader()
+        return
+    with path.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(columns))
+        writer.writeheader()
+        writer.writerows(rows[:keep])
+
+
+def _truncate_netcdf(path: Path, keep: int) -> None:
+    """Cut a staged NetCDF back to `keep` frames by rewriting it.
+
+    NetCDF has no truncate, and a frame interrupted mid-write leaves a record that reads as
+    present but is not complete. Rewriting the first `keep` frames into a fresh file and moving it
+    into place is exact and atomic; appending onto an unverified tail is neither.
+    """
+    import os
+
+    import mdtraj
+
+    if not path.is_file():
+        return
+    with mdtraj.formats.NetCDFTrajectoryFile(str(path)) as handle:
+        available = len(handle)
+        read = handle.read(min(keep, available))
+    coordinates, time, lengths, angles = read
+    staged = path.with_name(path.name + ".rewrite")
+    with mdtraj.formats.NetCDFTrajectoryFile(str(staged), "w") as handle:
+        for frame in range(min(keep, available)):
+            handle.write(coordinates[frame],
+                         time=None if time is None else time[frame],
+                         cell_lengths=None if lengths is None else lengths[frame],
+                         cell_angles=None if angles is None else angles[frame])
+    os.replace(staged, path)
+
+
+def _state_row(simulation, *, index, protocol_step, switching_time_ps, tau, implicit,
+               temperature_unit) -> dict[str, Any]:
+    """What the path is doing thermodynamically at this step."""
+    from openmm import unit
+
+    state = simulation.context.getState(getEnergy=True)
+    potential = state.getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
+    kinetic = state.getKineticEnergy().value_in_unit(unit.kilojoule_per_mole)
+    # Degrees of freedom from the integrator's own view of the System, so constraints and any
+    # centre-of-mass motion remover are accounted for rather than assumed away.
+    dof = simulation.context.getIntegrator().computeSystemTemperature() \
+        if hasattr(simulation.context.getIntegrator(), "computeSystemTemperature") else None
+    if dof is not None:
+        temperature_now = dof.value_in_unit(unit.kelvin)
+    else:                                                 # older OpenMM: derive it
+        particles = simulation.system.getNumParticles()
+        constraints = simulation.system.getNumConstraints()
+        free = max(3 * particles - constraints - 3, 1)
+        gas = unit.MOLAR_GAS_CONSTANT_R.value_in_unit(unit.kilojoule_per_mole / unit.kelvin)
+        temperature_now = 2.0 * kinetic / (free * gas)
+
+    volume = density = None
+    if not implicit:
+        box = state.getPeriodicBoxVolume().value_in_unit(unit.nanometer ** 3)
+        volume = box
+        mass = sum(simulation.system.getParticleMass(i).value_in_unit(unit.dalton)
+                   for i in range(simulation.system.getNumParticles()))
+        # g/mL: daltons per nm^3 x 1.66053906660 (the atomic mass unit in g, over nm^3 in mL).
+        density = mass / box * 1.66053906660
+    return {
+        "path_index": index,
+        "protocol_step": protocol_step,
+        "switching_time_ps": switching_time_ps,
+        "tau": tau,
+        "potential_energy_kj_mol": potential,
+        "kinetic_energy_kj_mol": kinetic,
+        "total_energy_kj_mol": potential + kinetic,
+        "temperature_kelvin": temperature_now,
+        "volume_nm3": volume,
+        "density_g_per_ml": density,
+    }
+
+
+def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str, Any],
+                 taus, switcher, simulation_inputs: dict[str, Any], dynamics: dict[str, Any],
+                 ais: dict[str, Any], beta: float, temperature: float, rank: int,
+                 resume: bool, fingerprint: str, log) -> dict[str, Any] | None:
+    """Run (or finish) one switching path. Returns its completion record, or None if it failed."""
+    import os
+
+    import mdtraj
+    from openmm import LangevinMiddleIntegrator, XmlSerializer, unit
+    from openmm.app import Simulation
+
+    from ..md._stages import derive_seed
+
+    topology = simulation_inputs["topology"]
+    source_path = simulation_inputs["source_path"]
+    top = simulation_inputs["mdtraj_top"]
+    implicit = simulation_inputs["implicit"]
+    acceleration = simulation_inputs["acceleration"]
+
+    directory = out / f"path_{index:04d}"
+    marker = directory / COMPLETION_NAME
+    trajectory_name = path_trajectory_name(index, len(chosen))
+    published = out / trajectory_name
+
+    if marker.is_file():
+        log(f"  path {index:4d}: already completed; not rerun and never appended to")
+        return json.loads(marker.read_text(encoding="utf-8"))
+    directory.mkdir(parents=True, exist_ok=True)
+
+    frame = chosen[index]
+    integrator_seed = derive_seed(int(dynamics["seed"]), "ais", index, "integrator")
+    velocity_seed = derive_seed(int(dynamics["seed"]), "ais", index, "velocity")
+
+    interval = schedule["parameter_update_interval_steps"]
+    observe_every = schedule["observation_interval_steps"]
+    frame_every = schedule["trajectory_interval_steps"]
+    state_every = schedule["state_interval_steps"]
+    checkpoint_every = schedule["checkpoint_interval_steps"]
+    updates = schedule["number_of_updates"]
+
+    staged = directory / STAGED_TRAJECTORY
+    sidecar = directory / RESUME_SIDECAR
+    checkpoint = directory / PATH_CHECKPOINT
+
+    system = switcher.prepared_system(taus[0])
+    integrator = LangevinMiddleIntegrator(
+        temperature * unit.kelvin,
+        float(dynamics["friction_per_ps"]) / unit.picosecond,
+        float(dynamics["timestep_fs"]) * unit.femtosecond)
+    integrator.setRandomNumberSeed(int(integrator_seed))
+    simulation = Simulation(topology, system, integrator,
+                            acceleration.platform, acceleration.properties)
+
+    # -- resume, or start ----------------------------------------------------------------------
+    state_of_path = None
+    if resume and sidecar.is_file() and checkpoint.is_file():
+        state_of_path = json.loads(sidecar.read_text(encoding="utf-8"))
+        # EVERY fingerprint before anything is loaded. A checkpoint carries positions and
+        # velocities for one particular System, schedule and path; resuming it against another is
+        # how a run continues with right-looking numbers and the wrong simulation.
+        mismatched = [key for key, expected in
+                      (("fingerprint", fingerprint), ("path_index", index),
+                       ("source_frame_index", frame), ("integrator_seed", integrator_seed),
+                       ("velocity_seed", velocity_seed), ("trajectory", trajectory_name))
+                      if state_of_path.get(key) != expected]
+        if mismatched:
+            raise SystemExit(
+                f"path {index}: the checkpoint in {directory} does not belong to this run "
+                f"({', '.join(mismatched)} differ). Refusing to resume it: the numbers would look "
+                f"right and describe a different simulation. Delete the path directory to rerun "
+                f"it from its source frame.")
+
+    if state_of_path is not None:
+        simulation.loadCheckpoint(str(checkpoint))
+        # The Context is back; now put the bookkeeping back to exactly the same instant. The
+        # streams are cut to the counts the sidecar vouches for, so an interrupted final record
+        # is dropped rather than appended to.
+        updates_done = int(state_of_path["updates_completed"])
+        cumulative = float(state_of_path["cumulative_work_kj_mol"])
+        since = float(state_of_path["work_since_last_observation_kj_mol"])
+        rows_emitted = int(state_of_path["work_rows"])
+        frames_emitted = int(state_of_path["frames"])
+        state_rows_emitted = int(state_of_path["state_rows"])
+        switcher.set_tau(simulation.context, system, taus[updates_done])
+        _truncate_csv(directory / OBSERVATIONS_CSV, rows_emitted, OBSERVATION_COLUMNS)
+        _truncate_csv(directory / STATE_CSV, state_rows_emitted, STATE_COLUMNS)
+        _truncate_netcdf(staged, frames_emitted)
+        log(f"  path {index:4d}: resuming at step {updates_done * interval} of "
+            f"{schedule['switching_steps']} ({rows_emitted} work row(s), {frames_emitted} "
+            f"frame(s) kept)")
+    else:
+        positions, boxes = _read_source_frame(source_path, top, frame, implicit=implicit)
+        system_box = boxes
+        if system_box is not None:
+            simulation.context.setPeriodicBoxVectors(*system_box)
+        simulation.context.setPositions(positions)
+        # A trajectory carries no velocities, so each path draws fresh Maxwell-Boltzmann momenta
+        # at the run temperature with its own recorded seed.
+        simulation.context.setVelocitiesToTemperature(temperature * unit.kelvin,
+                                                      int(velocity_seed))
+        updates_done = 0
+        cumulative = since = 0.0
+        rows_emitted = frames_emitted = state_rows_emitted = 0
+        for path, columns in ((directory / OBSERVATIONS_CSV, OBSERVATION_COLUMNS),
+                              (directory / STATE_CSV, STATE_COLUMNS)):
+            with path.open("w", newline="") as handle:
+                csv.DictWriter(handle, fieldnames=list(columns)).writeheader()
+        staged.unlink(missing_ok=True)
+
+    # -- the streams ---------------------------------------------------------------------------
+    netcdf = mdtraj.formats.NetCDFTrajectoryFile(
+        str(staged), "a" if frames_emitted else "w")
+
+    def append(path: Path, columns, row: dict[str, Any]) -> None:
+        with path.open("a", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=list(columns)).writerow(row)
+
+    def write_frame(protocol_step: int, switching_time_ps: float) -> None:
+        nonlocal frames_emitted
+        state = simulation.context.getState(getPositions=True, enforcePeriodicBox=False)
+        lengths = angles = None
+        if not implicit:
+            vectors = state.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
+            # NOT unpacked as `a, b, c, alpha, beta, gamma`: `beta` is the reciprocal temperature
+            # in this module, and binding the box's beta ANGLE to that name once made it local to
+            # the writer and put the angle times the work into `cumulative_reduced_work`.
+            box = mdtraj.utils.box_vectors_to_lengths_and_angles(
+                vectors[0], vectors[1], vectors[2])
+            lengths = [box[0] * 10.0, box[1] * 10.0, box[2] * 10.0]
+            angles = [box[3], box[4], box[5]]
+        netcdf.write(state.getPositions(asNumpy=True).value_in_unit(unit.angstrom),
+                     time=switching_time_ps, cell_lengths=lengths, cell_angles=angles)
+        netcdf.flush()
+        frames_emitted += 1
+
+    def write_observation(observation_index: int, protocol_step: int, switching_time_ps: float,
+                          tau: float, incremental: float, wrote_frame: bool) -> None:
+        nonlocal rows_emitted
+        append(directory / OBSERVATIONS_CSV, OBSERVATION_COLUMNS, {
+            "path_index": index,
+            "observation_index": observation_index,
+            # The index into the path trajectory when this observation also wrote a frame, and
+            # empty when it did not. The two cadences are independent now, so a row that claimed
+            # a frame index it does not have would be a lie a reader could not detect.
+            "coordinate_frame_index": frames_emitted - 1 if wrote_frame else "",
+            "source_frame_index": frame,
+            "protocol_step": protocol_step,
+            "switching_time_ps": switching_time_ps,
+            "tau": tau,
+            "incremental_work_kj_mol": incremental,
+            "cumulative_work_kj_mol": cumulative,
+            "cumulative_reduced_work": beta * cumulative,
+            "temperature_kelvin": temperature,
+            "integrator_seed": integrator_seed,
+            "velocity_seed": velocity_seed,
+        })
+        rows_emitted += 1
+
+    def write_state(protocol_step: int, switching_time_ps: float, tau: float) -> None:
+        nonlocal state_rows_emitted
+        append(directory / STATE_CSV, STATE_COLUMNS,
+               _state_row(simulation, index=index, protocol_step=protocol_step,
+                          switching_time_ps=switching_time_ps, tau=tau, implicit=implicit,
+                          temperature_unit=unit.kelvin))
+        state_rows_emitted += 1
+
+    def save_checkpoint(updates_completed: int) -> None:
+        """The Context and its bookkeeping, together and in that order.
+
+        The sidecar is written LAST and atomically: it is what vouches for the counts, so it must
+        never claim more than the streams already hold.
+        """
+        netcdf.flush()
+        simulation.saveCheckpoint(str(checkpoint))
+        payload = {
+            "fingerprint": fingerprint,
+            "path_index": index,
+            "source_frame_index": frame,
+            "updates_completed": updates_completed,
+            "protocol_step": updates_completed * interval,
+            "tau": taus[updates_completed],
+            "cumulative_work_kj_mol": cumulative,
+            "work_since_last_observation_kj_mol": since,
+            "work_rows": rows_emitted,
+            "frames": frames_emitted,
+            "state_rows": state_rows_emitted,
+            "integrator_seed": integrator_seed,
+            "velocity_seed": velocity_seed,
+            "trajectory": trajectory_name,
+        }
+        temporary = sidecar.with_name(sidecar.name + ".partial")
+        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, sidecar)
+
+    def time_of(step: int) -> float:
+        return round(step * float(dynamics["timestep_fs"]) / 1000.0, 9)
+
+    # -- step 0: the source configuration, before any work ---------------------------------------
+    if updates_done == 0 and rows_emitted == 0:
+        wrote = False
+        if 0 % frame_every == 0:
+            write_frame(0, 0.0)
+            wrote = True
+        write_observation(0, 0, 0.0, taus[0], 0.0, wrote)
+        if state_every:
+            write_state(0, 0.0, taus[0])
+
+    # -- the switch ------------------------------------------------------------------------------
+    for update in range(updates_done, updates):
+        before = simulation.context.getState(getEnergy=True).getPotentialEnergy(
+            ).value_in_unit(unit.kilojoule_per_mole)
+        switcher.set_tau(simulation.context, system, taus[update + 1])
+        after = simulation.context.getState(getEnergy=True).getPotentialEnergy(
+            ).value_in_unit(unit.kilojoule_per_mole)
+        increment = after - before
+        cumulative += increment
+        since += increment
+        simulation.step(interval)
+
+        step = (update + 1) * interval
+        wrote = False
+        if step % frame_every == 0:
+            write_frame(step, time_of(step))
+            wrote = True
+        if step % observe_every == 0:
+            write_observation(step // observe_every, step, time_of(step), taus[update + 1],
+                              since, wrote)
+            since = 0.0
+        if state_every and step % state_every == 0:
+            write_state(step, time_of(step), taus[update + 1])
+        if checkpoint_every and step % checkpoint_every == 0:
+            save_checkpoint(update + 1)
+
+    # -- finish: flush, validate, publish, and only then declare completion -----------------------
+    final = simulation.context.getState(getPositions=True, getVelocities=True,
+                                        getParameters=True, enforcePeriodicBox=False)
+    (directory / "final_state.xml").write_text(XmlSerializer.serialize(final), encoding="utf-8")
+    netcdf.close()
+
+    if rows_emitted != schedule["number_of_observations"]:
+        raise SystemExit(f"path {index} wrote {rows_emitted} observations, expected "
+                         f"{schedule['number_of_observations']}")
+    if frames_emitted != schedule["number_of_frames"]:
+        raise SystemExit(f"path {index} wrote {frames_emitted} frames, expected "
+                         f"{schedule['number_of_frames']}")
+    if state_every and state_rows_emitted != schedule["number_of_state_rows"]:
+        raise SystemExit(f"path {index} wrote {state_rows_emitted} state rows, expected "
+                         f"{schedule['number_of_state_rows']}")
+
+    with (directory / OBSERVATIONS_CSV).open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    if float(rows[0]["cumulative_work_kj_mol"]) != 0.0:
+        raise SystemExit(f"path {index} observation 0 has non-zero work")
+    if float(rows[0]["tau"]) != float(ais["tau_start"]) \
+            or float(rows[-1]["tau"]) != float(ais["tau_end"]):
+        raise SystemExit(f"path {index} does not span tau_start -> tau_end")
+
+    # The staged trajectory becomes the published one only now, in one atomic move. Until this
+    # point nothing at the run root could be mistaken for a finished path.
+    os.replace(staged, published)
+    with mdtraj.formats.NetCDFTrajectoryFile(str(published)) as handle:
+        published_frames = len(handle)
+    if published_frames != schedule["number_of_frames"]:
+        raise SystemExit(f"path {index}: {published.name} holds {published_frames} frames, "
+                         f"expected {schedule['number_of_frames']}")
+
+    completion = {
+        "status": "completed",
+        "path_index": index,
+        "source_frame_index": frame,
+        "observations": rows_emitted,
+        "frames": frames_emitted,
+        "state_rows": state_rows_emitted,
+        "total_work_kj_mol": cumulative,
+        "total_reduced_work": beta * cumulative,
+        "integrator_seed": integrator_seed,
+        "velocity_seed": velocity_seed,
+        "trajectory": trajectory_name,
+        "mpi_rank": rank,
+        "platform": simulation.context.getPlatform().getName(),
+        "resumed": bool(state_of_path),
+    }
+    marker.write_text(json.dumps(completion, indent=2) + "\n", encoding="utf-8")
+    # The checkpoint has served its purpose; leaving it would invite a resume of a finished path.
+    checkpoint.unlink(missing_ok=True)
+    sidecar.unlink(missing_ok=True)
+    log(f"  path {index:4d}: frame {frame}, {rows_emitted} observations, {frames_emitted} "
+        f"frames, W = {cumulative:.4f} kJ/mol (reduced {beta * cumulative:.4f})")
+    return completion
+
+
+def _read_source_frame(source_path: Path, top, frame: int, *, implicit: bool):
+    """One frame's positions and box, in the reduced form OpenMM requires."""
+    import mdtraj
+    from openmm import unit
+
+    positions = boxes = None
+    for offset, chunk in enumerate(mdtraj.iterload(str(source_path), top=top, chunk=50)):
+        if offset * 50 <= frame < offset * 50 + chunk.n_frames:
+            local = frame - offset * 50
+            positions = chunk.xyz[local] * unit.nanometer
+            if not implicit and chunk.unitcell_lengths is not None:
+                # Rebuilt from lengths and angles rather than handed over as the vectors the file
+                # happens to store. OpenMM requires REDUCED form, and a truncated octahedron
+                # written by any of the usual tools is not in it -- `setPeriodicBoxVectors` then
+                # refuses and every path dies at its first frame.
+                import numpy
+                from openmm.app.internal.unitcell import computePeriodicBoxVectors
+
+                lengths = chunk.unitcell_lengths[local]
+                angles = numpy.radians(chunk.unitcell_angles[local])
+                boxes = computePeriodicBoxVectors(
+                    float(lengths[0]), float(lengths[1]), float(lengths[2]),
+                    float(angles[0]), float(angles[1]), float(angles[2]))
+            break
+    if positions is None:
+        raise SystemExit(f"could not read frame {frame} from {source_path}")
+    return positions, boxes
+
+
 def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     """Run the switching paths this generated script describes."""
     args = ais_parser(run.get("description", "AIS switching paths")).parse_args(argv)
@@ -259,6 +698,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     from . import path_trajectory_name, paths_for_rank
 
     ais, source_cfg, dynamics = run["ais"], run["ais_source"], run["dynamics"]
+    reporting = run["reporting"]
     out = Path(args.out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
 
@@ -269,6 +709,12 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     rank, size = mpi_rank_and_size()
     log_path = Path(args.log) if args.log else out / (
         "AIS.log" if size == 1 else f"AIS.rank{rank:02d}.log")
+    out_path = Path(args.output) if args.output else out / (
+        "AIS.out" if size == 1 else f"AIS.rank{rank:02d}.out")
+    if out_path.resolve() == log_path.resolve():
+        print(f"AIS: -o and -log both name {out_path}. They are different files: one is read by "
+              f"a person during the run, the other by a machine afterwards.", file=sys.stderr)
+        return 2
 
     topology_path = Path(args.topology)
     system_path = Path(args.system)
@@ -285,8 +731,27 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         print(f"AIS: -source-traj {source_path} {what}. AIS consumes an equilibrium ensemble you "
               f"have already produced; it does not generate one.", file=sys.stderr)
         return 2
+    try:
+        # DCD or NetCDF, decided from the bytes. A fixed-tau cMD run writes DCD and an earlier
+        # AIS or REST2 run writes NetCDF; both are legitimate sources, and a file whose suffix
+        # disagrees with its contents is neither.
+        source_format = check_trajectory_declaration(source_path, what="-source-traj")
+    except SystemExit as refusal:
+        print(f"AIS: {refusal}", file=sys.stderr)
+        return 2
+
+    from ..build.simout import SimulationOutput
+
+    sim_out = SimulationOutput(out_path, title=f"AIS: {ais['number_of_paths']} switching paths",
+                               log_path=log_path)
+    sim_out.heading("Inputs")
+    sim_out.field("topology", topology_path)
+    sim_out.field("system", system_path)
+    sim_out.field("source", f"{source_path} ({source_format.upper()})")
+    sim_out.field("output directory", out)
 
     log = LogWriter(log_path, record_type="md-ais")
+    log.update(simulation_output=str(out_path))
     log("md-openmm AIS")
     log("=" * 68)
 
@@ -308,7 +773,13 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             switching_steps=int(ais["switching_steps"]),
             parameter_update_interval_steps=int(ais["parameter_update_interval_steps"]),
             observation_interval_steps=int(ais["observation_interval_steps"]),
-            timestep_fs=float(dynamics["timestep_fs"]))
+            timestep_fs=float(dynamics["timestep_fs"]),
+            # The three reporting cadences are settings a person wrote and they now do what they
+            # say. `system_printout` and `checkpoint_printout` were validated and then dropped:
+            # accepted, consequential-looking, and inert.
+            trajectory_interval_steps=int(reporting["solute_printout"]),
+            state_interval_steps=int(reporting["system_printout"]),
+            checkpoint_interval_steps=int(reporting["checkpoint_printout"]))
         if pdb.topology.getNumAtoms() != base.getNumParticles():
             raise SystemExit(f"{topology_path} has {pdb.topology.getNumAtoms()} atoms but "
                              f"{system_path} has {base.getNumParticles()} particles")
@@ -335,8 +806,18 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         log.field("parameter updates", f"{schedule['number_of_updates']} "
                                        f"(every {schedule['parameter_update_interval_steps']} step)")
         log.field("observations", f"{schedule['number_of_observations']} "
-                                  f"(every {schedule['observation_interval_steps']} steps, "
+                                  f"(work, every {schedule['observation_interval_steps']} steps, "
                                   f"both endpoints included)")
+        log.field("frames", f"{schedule['number_of_frames']} "
+                            f"(every {schedule['trajectory_interval_steps']} steps)")
+        log.field("state rows", f"{schedule['number_of_state_rows']} "
+                                f"(every {schedule['state_interval_steps']} steps)"
+                  if schedule["state_interval_steps"] else "disabled (system_printout = 0)")
+        log.field("checkpoints", f"{schedule['number_of_checkpoints']} "
+                                 f"(every {schedule['checkpoint_interval_steps']} steps)"
+                  if schedule["checkpoint_interval_steps"] else
+                  "disabled (checkpoint_printout = 0): an interrupted path restarts from its "
+                  "source frame")
         log.field("observation 0", "the source configuration, before any work")
         log.field("omega bonds", f"{len(excluded)} left unscaled")
         log.field("ensemble", "fixed volume; no barostat")
@@ -360,6 +841,10 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         # the FILE's own header rather than through `top`, which is derived from -p and would
         # therefore agree with itself. mdtraj would fail on a mismatch too, but obscurely and
         # several frames in; this fails here, with both counts and both filenames.
+        # Hashed ONCE, here, and reused by both the record and the resume fingerprint. A
+        # production trajectory is large and is already read frame by frame; digesting it twice
+        # would double that for a number that has one value.
+        source_facts = file_facts(source_path)
         source_atoms = _source_atom_count(source_path)
         if source_atoms is not None and source_atoms != pdb.topology.getNumAtoms():
             raise SystemExit(
@@ -370,7 +855,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                 f"produces work values that mean nothing.")
 
         log.heading("Source ensemble")
-        log.field("trajectory", source_path)
+        log.field("trajectory", f"{source_path}  ({source_format.upper()})")
         log.field("atoms", f"{source_atoms}, matching {topology_path.name}"
                   if source_atoms is not None else "not stated by the file format")
         log.field("frames", f"{n_frames} total, {len(eligible)} eligible "
@@ -396,7 +881,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
 
         log.update(
             schedule=schedule,
-            source={"trajectory": source_path.name,
+            source={"trajectory": source_path.name, "format": source_format,
                     "atoms": None if source_atoms is None else int(source_atoms),
                     "tau_asserted": float(ais["tau_start"]),
                     "tau_verified_from_file": False,
@@ -414,7 +899,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             work_convention="delta_W_j = U(tau_{j+1}, x_j) - U(tau_j, x_j); parameters move at "
                             "frozen coordinates, then the configuration propagates",
             inputs={"topology": file_facts(topology_path), "system": file_facts(system_path),
-                    "source": file_facts(source_path)},
+                    "source": source_facts},
             implicit=bool(implicit),
         )
 
@@ -431,6 +916,10 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             log("  --check: schedule, source and Force layout validated; nothing was switched.")
             log.record["status"] = "checked"
             log.save()
+            sim_out.heading("Preflight")
+            sim_out.write("  --check: schedule, source and Force layout validated; nothing was "
+                          "switched.")
+            sim_out.completed("checked; no paths were run")
             return 0
 
         # --- run the paths -------------------------------------------------------------------
@@ -454,9 +943,10 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                         "this rank. Refusing rather than letting every rank fall onto one GPU.")
             else:
                 device_policy = "single process: OpenMM selects the device"
+        from ..registry.userconfig import machine_openmm_settings
+
         acceleration = resolve_platform_request(
-            PlatformRequest.from_flags(cpu=bool(args.cpu),
-                                       platform=args.platform or dynamics.get("platform")),
+            PlatformRequest.from_machine(machine_openmm_settings(), cpu=bool(args.cpu)),
             device_index=device)
         log.field("platform", f"{acceleration.name}"
                               + (f" device {acceleration.device_index}"
@@ -464,6 +954,24 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         log.update(acceleration=dict(
             acceleration_record(acceleration, mpi_rank=rank, mpi_size=size, local_rank=device),
             device_policy=device_policy))
+
+        # What a mid-path checkpoint has to match before it may be resumed from. The System, the
+        # topology, the source ensemble and the whole schedule: a checkpoint carries positions and
+        # velocities for one particular simulation, and resuming it against another produces
+        # right-looking numbers for the wrong thing.
+        import hashlib
+
+        path_fingerprint = hashlib.sha256(json.dumps({
+            "system": file_facts(system_path)["sha256"],
+            "topology": file_facts(topology_path)["sha256"],
+            "source": source_facts["sha256"],
+            "schedule": {k: v for k, v in schedule.items()
+                         if k not in ("observations", "taus", "note")},
+            "temperature_K": float(dynamics["temperature_K"]),
+            "friction_per_ps": float(dynamics["friction_per_ps"]),
+            "seed": int(dynamics["seed"]),
+            "resolved_config": run.get("resolved_config"),
+        }, sort_keys=True).encode()).hexdigest()
 
         switcher = TauSwitcher(base, solute, excluded)
         taus = schedule["taus"]
@@ -484,169 +992,44 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             log.field("mpi", f"rank {rank} of {size}: {len(wanted)} of {len(chosen)} path(s)")
             log.update(mpi={"rank": rank, "size": size, "paths": list(wanted)})
 
+        sim_out.heading("Schedule")
+        sim_out.field("tau", f"{ais['tau_start']} -> {ais['tau_end']} (linear)")
+        sim_out.field("switching", f"{schedule['switching_steps']} steps "
+                                   f"= {schedule['switching_ps']:g} ps")
+        sim_out.field("work observations", f"{schedule['number_of_observations']} "
+                                           f"(every {schedule['observation_interval_steps']})")
+        sim_out.field("trajectory frames", f"{schedule['number_of_frames']} "
+                                           f"(every {schedule['trajectory_interval_steps']})")
+        sim_out.field("state rows", f"{schedule['number_of_state_rows']} "
+                                    f"(every {schedule['state_interval_steps']})"
+                      if schedule["state_interval_steps"] else "disabled")
+        sim_out.field("checkpoints", f"{schedule['number_of_checkpoints']} "
+                                     f"(every {schedule['checkpoint_interval_steps']})"
+                      if schedule["checkpoint_interval_steps"] else "disabled")
+        sim_out.field("platform", acceleration.name)
+        if size > 1:
+            sim_out.field("mpi", f"rank {rank} of {size}, {len(wanted)} path(s) of {len(chosen)}")
+
+        sim_out.heading("Paths")
+        sim_out.table_header(("path", "frame", "obs", "frames", "W kJ/mol", "reduced"),
+                             (6, 8, 6, 8, 14, 12))
+
         log.heading("Paths")
         completed: list[dict[str, Any]] = []
         for index in wanted:
-            directory = out / f"path_{index:04d}"
-            marker = directory / COMPLETION_NAME
-            if marker.is_file():
-                log(f"  path {index:4d}: already completed; not rerun and never appended to")
-                completed.append(json.loads(marker.read_text(encoding="utf-8")))
-                continue
-            directory.mkdir(parents=True, exist_ok=True)
-
-            frame = chosen[index]
-            integrator_seed = derive_seed(int(dynamics["seed"]), "ais", index, "integrator")
-            velocity_seed = derive_seed(int(dynamics["seed"]), "ais", index, "velocity")
-
-            positions = None
-            boxes = None
-            for offset, chunk in enumerate(mdtraj.iterload(str(source_path), top=top, chunk=50)):
-                if offset * 50 <= frame < offset * 50 + chunk.n_frames:
-                    local = frame - offset * 50
-                    positions = chunk.xyz[local] * unit.nanometer
-                    if not implicit and chunk.unitcell_lengths is not None:
-                        # Rebuilt from lengths and angles rather than handed over as the vectors
-                        # the file happens to store. OpenMM requires REDUCED form, and a
-                        # truncated octahedron written by any of the usual tools is not in it --
-                        # `setPeriodicBoxVectors` then refuses with "Periodic box vectors must be
-                        # in reduced form" and every path of the run dies at its first frame.
-                        # `computePeriodicBoxVectors` is OpenMM's own reduction, so the box the
-                        # path keeps is the source frame's box, expressed the way OpenMM needs it.
-                        import numpy
-                        from openmm.app.internal.unitcell import computePeriodicBoxVectors
-
-                        lengths = chunk.unitcell_lengths[local]
-                        angles = numpy.radians(chunk.unitcell_angles[local])
-                        boxes = computePeriodicBoxVectors(
-                            float(lengths[0]), float(lengths[1]), float(lengths[2]),
-                            float(angles[0]), float(angles[1]), float(angles[2]))
-                    break
-            if positions is None:
-                raise SystemExit(f"could not read frame {frame} from {source_path}")
-
-            system = switcher.prepared_system(taus[0])
-            integrator = LangevinMiddleIntegrator(
-                temperature * unit.kelvin,
-                float(dynamics["friction_per_ps"]) / unit.picosecond,
-                float(dynamics["timestep_fs"]) * unit.femtosecond)
-            integrator.setRandomNumberSeed(int(integrator_seed))
-            simulation = Simulation(pdb.topology, system, integrator,
-                                    acceleration.platform, acceleration.properties)
-            if boxes is not None:
-                simulation.context.setPeriodicBoxVectors(*boxes)
-            simulation.context.setPositions(positions)
-            # A trajectory carries no velocities, so each path draws fresh Maxwell-Boltzmann
-            # momenta at the run temperature with its own recorded seed.
-            simulation.context.setVelocitiesToTemperature(temperature * unit.kelvin,
-                                                          int(velocity_seed))
-
-            def energy() -> float:
-                return simulation.context.getState(getEnergy=True).getPotentialEnergy(
-                    ).value_in_unit(unit.kilojoule_per_mole)
-
-            rows: list[dict[str, Any]] = []
-            # One trajectory per PATH, named by its global path id, at the run root. The name is
-            # a pure function of (path id, total): the same path writes the same file whatever
-            # the worker count, so a campaign resumed on a different number of GPUs does not
-            # reshuffle which trajectory is which. AMBER NetCDF rather than DCD because every
-            # analysis tool in this stack (cpptraj, mdtraj, MDAnalysis) reads it and it carries
-            # the box for a switching path that started from an NPT frame.
-            trajectory_name = path_trajectory_name(index, len(chosen))
-            netcdf = mdtraj.formats.NetCDFTrajectoryFile(str(out / trajectory_name), "w")
-
-            def observe(observation, cumulative, incremental) -> None:
-                state = simulation.context.getState(getPositions=True, enforcePeriodicBox=False)
-                lengths = angles = None
-                if not implicit:
-                    vectors = state.getPeriodicBoxVectors(asNumpy=True).value_in_unit(
-                        unit.nanometer)
-                    # NOT unpacked as `a, b, c, alpha, beta, gamma`. `beta` is the reciprocal
-                    # temperature in this function, and binding the box's beta ANGLE to that name
-                    # here made it local to this closure: `beta * cumulative` below then wrote the
-                    # angle times the work into `cumulative_reduced_work` under explicit solvent,
-                    # and raised UnboundLocalError under implicit, where the branch never ran.
-                    box = mdtraj.utils.box_vectors_to_lengths_and_angles(
-                        vectors[0], vectors[1], vectors[2])
-                    lengths = [box[0] * 10.0, box[1] * 10.0, box[2] * 10.0]
-                    angles = [box[3], box[4], box[5]]
-                netcdf.write(
-                    state.getPositions(asNumpy=True).value_in_unit(unit.angstrom),
-                    time=observation["switching_time_ps"],
-                    cell_lengths=lengths, cell_angles=angles)
-                rows.append({
-                    "path_index": index,
-                    "observation_index": observation["observation_index"],
-                    # Appended in lockstep with the DCD, so the k-th row IS the k-th frame.
-                    "coordinate_frame_index": len(rows),
-                    "source_frame_index": frame,
-                    "protocol_step": observation["protocol_step"],
-                    "switching_time_ps": observation["switching_time_ps"],
-                    "tau": observation["tau"],
-                    "incremental_work_kj_mol": incremental,
-                    "cumulative_work_kj_mol": cumulative,
-                    "cumulative_reduced_work": beta * cumulative,
-                    "temperature_kelvin": temperature,
-                    "integrator_seed": integrator_seed,
-                    "velocity_seed": velocity_seed,
-                })
-
-            # Observation 0: the source configuration under the source Hamiltonian, before any
-            # parameter change and before any propagation. Its work is exactly zero.
-            cumulative = 0.0
-            since = 0.0
-            observe(schedule["observations"][0], 0.0, 0.0)
-
-            for update in range(schedule["number_of_updates"]):
-                before = energy()
-                switcher.set_tau(simulation.context, system, taus[update + 1])
-                after = energy()
-                increment = after - before
-                cumulative += increment
-                since += increment
-                simulation.step(interval)
-                if (update + 1) % per_observation == 0:
-                    observe(schedule["observations"][(update + 1) // per_observation],
-                            cumulative, since)
-                    since = 0.0
-
-            state = simulation.context.getState(getPositions=True, getVelocities=True,
-                                                getParameters=True, enforcePeriodicBox=False)
-            (directory / "final_state.xml").write_text(XmlSerializer.serialize(state),
-                                                       encoding="utf-8")
-            netcdf.close()
-            with (directory / OBSERVATIONS_CSV).open("w", newline="") as table:
-                writer = csv.DictWriter(table, fieldnames=list(OBSERVATION_COLUMNS))
-                writer.writeheader()
-                writer.writerows(rows)
-
-            # Validated before completion is declared: the row count, the endpoints, and that the
-            # first row really is zero work at tau_start.
-            if len(rows) != schedule["number_of_observations"]:
-                raise SystemExit(f"path {index} wrote {len(rows)} observations, expected "
-                                 f"{schedule['number_of_observations']}")
-            if rows[0]["cumulative_work_kj_mol"] != 0.0:
-                raise SystemExit(f"path {index} observation 0 has non-zero work")
-            if rows[0]["tau"] != float(ais["tau_start"]) or rows[-1]["tau"] != float(ais["tau_end"]):
-                raise SystemExit(f"path {index} does not span tau_start -> tau_end")
-
-            completion = {
-                "status": "completed",
-                "path_index": index,
-                "source_frame_index": frame,
-                "observations": len(rows),
-                "total_work_kj_mol": cumulative,
-                "total_reduced_work": beta * cumulative,
-                "integrator_seed": integrator_seed,
-                "velocity_seed": velocity_seed,
-                "trajectory": trajectory_name,
-                "mpi_rank": rank,
-                "platform": simulation.context.getPlatform().getName(),
-            }
-            marker.write_text(json.dumps(completion, indent=2) + "\n", encoding="utf-8")
-            completed.append(completion)
-            log(f"  path {index:4d}: frame {frame}, {len(rows)} observations, "
-                f"W = {cumulative:.4f} kJ/mol (reduced {beta * cumulative:.4f})")
+            record = run_one_path(
+                index=index, chosen=chosen, out=out, schedule=schedule, taus=taus,
+                switcher=switcher, simulation_inputs=dict(
+                    topology=pdb.topology, source_path=source_path, mdtraj_top=top,
+                    implicit=implicit, acceleration=acceleration),
+                dynamics=dynamics, ais=ais, beta=beta, temperature=temperature,
+                rank=rank, resume=bool(args.resume), fingerprint=path_fingerprint, log=log)
+            if record is not None:
+                completed.append(record)
+                sim_out.table_row(
+                    (record["path_index"], record["source_frame_index"], record["observations"],
+                     record.get("frames", 0), float(record["total_work_kj_mol"]),
+                     float(record["total_reduced_work"])), (6, 8, 6, 8, 14, 12))
 
         # The global work table. Every worker has written a completion record per path it owns;
         # rank 0 waits for all of them and assembles ONE table in global path order. The work
@@ -674,11 +1057,15 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         log(f"  {len(completed)} switching path(s), "
             f"{schedule['number_of_observations']} observations each")
         log("  status: completed")
+        sim_out.completed(f"{len(completed)} switching path(s), "
+                          f"{schedule['number_of_observations']} work observations and "
+                          f"{schedule['number_of_frames']} frames each")
     except BaseException as exc:
         log.fail(f"{type(exc).__name__}: {exc}")
         log.heading("Failure")
         log(f"  {type(exc).__name__}: {exc}")
         log.save()
+        sim_out.failed(f"{type(exc).__name__}: {exc}")
         print(f"AIS: {exc}", file=sys.stderr)
         return 1
 
@@ -710,6 +1097,10 @@ def run_generated_ais(script: str | Path, argv: list[str] | None = None) -> int:
         "ais": dict(resolved["ais"]),
         "ais_source": dict(resolved["ais_source"]),
         "dynamics": dict(resolved["dynamics"]),
+        # The reporting block reaches the runtime. It used to be validated by `build-md` and then
+        # left behind, so `system_printout` and `checkpoint_printout` were settings a person wrote
+        # that nothing ever read.
+        "reporting": dict(resolved["reporting"]),
         "resolved_config": str(config_path),
     }
     return ais_main(run, argv)

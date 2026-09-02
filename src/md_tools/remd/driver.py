@@ -340,10 +340,10 @@ class ReplicaRun:
         from ..openmm.platform_policy import (PlatformRequest, acceleration_record,
                                               resolve_platform_request)
 
+        from ..registry.userconfig import machine_openmm_settings
+
         resolution = resolve_platform_request(
-            PlatformRequest.from_flags(cpu=bool(self.explicit_cpu),
-                                       platform=None if self.explicit_cpu else name,
-                                       precision=self.precision),
+            PlatformRequest.from_machine(machine_openmm_settings(), cpu=bool(self.explicit_cpu)),
             device_index=device)
         self._platform, self._properties = resolution.platform, resolution.properties
         self._acceleration = acceleration_record(

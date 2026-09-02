@@ -1,0 +1,223 @@
+"""MPI coordination that fails CLOSED.
+
+The rule, in one sentence: **a launch of more than one rank either coordinates or stops.**
+
+It used to fail open. `barrier()` caught `ImportError` and returned, so `mpirun -n 8` on a machine
+without a working `mpi4py` ran eight processes that never met. That is not a slower ladder or a
+partly-parallel one. It is eight independent simulations writing over one set of output paths,
+each believing it is the whole thing, and the result is a directory of files that look complete.
+The exchange record would describe a ladder that never exchanged.
+
+So every collective here is real or fatal. There is no code path in which `barrier`, a broadcast
+or a gather quietly becomes a no-op while `size > 1`.
+
+WHAT IS CHECKED, AND WHY EACH ONE
+
+    mpi4py imports, MPI initialised, not finalised   without this nothing else is meaningful
+    launcher rank/size == communicator rank/size     the launcher and the library disagreeing
+                                                     means the process is not in the world it
+                                                     thinks it is in
+    communicator size == -ng                         what was launched is what was asked for
+    -ng == replica count (REST2/rREST2)              one process per thermodynamic state
+
+All of it runs BEFORE any output directory, resolved configuration, log, Context or coordination
+file is created, so a launch that cannot work leaves nothing behind that could be mistaken for a
+run that did.
+
+SERIAL IS NOT AFFECTED. World size 1 needs no mpi4py, imports nothing, and every collective is a
+genuine no-op because there is genuinely nobody to wait for.
+"""
+from __future__ import annotations
+
+import os
+from typing import Any, Callable
+
+__all__ = ["launcher_rank_and_size", "require_mpi", "check_launch_consistency",
+           "MPI_RANK_ENVIRONMENT", "MPI_SIZE_ENVIRONMENT", "barrier", "abort", "Coordination"]
+
+#: Variables an MPI launcher sets in every rank's environment. Read rather than importing mpi4py,
+#: because the rank has to be known before anything decides whether to call MPI_Init at all.
+MPI_RANK_ENVIRONMENT = ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "PMIX_RANK", "SLURM_PROCID")
+MPI_SIZE_ENVIRONMENT = ("OMPI_COMM_WORLD_SIZE", "PMI_SIZE", "SLURM_NTASKS")
+
+#: Set by the fail-closed tests to make `mpi4py` unavailable in a child process without uninstalling
+#: it. Never set in normal use; read here so the refusal path is exercised by the real command
+#: rather than by a mock of it.
+FORCE_NO_MPI4PY = "MD_TOOLS_FORCE_NO_MPI4PY"
+
+
+def launcher_rank_and_size(environment=None) -> tuple[int, int]:
+    """What the LAUNCHER says this process is. Not what the library says -- those are compared."""
+    environment = os.environ if environment is None else environment
+    rank, size = 0, 1
+    for name in MPI_RANK_ENVIRONMENT:
+        if name in environment:
+            try:
+                rank = int(environment[name])
+                break
+            except ValueError:
+                pass
+    for name in MPI_SIZE_ENVIRONMENT:
+        if name in environment:
+            try:
+                size = int(environment[name])
+                break
+            except ValueError:
+                pass
+    return rank, size
+
+
+def _import_mpi():
+    """Import `mpi4py.MPI`, honouring the test switch that makes it unavailable."""
+    if os.environ.get(FORCE_NO_MPI4PY):
+        raise ImportError(f"{FORCE_NO_MPI4PY} is set: mpi4py is being treated as unavailable")
+    from mpi4py import MPI                                # noqa: PLC0415 - deliberate, see module
+
+    return MPI
+
+
+def require_mpi(*, size: int, importer: Callable[[], Any] | None = None):
+    """Return a live `MPI` module for a multi-rank launch, or refuse. None when `size == 1`.
+
+    `importer` exists so the refusal can be tested without arranging for a broken install.
+    """
+    if int(size) <= 1:
+        return None                                       # genuinely nobody to coordinate with
+
+    importer = importer or _import_mpi
+    try:
+        MPI = importer()
+    except Exception as failure:                          # noqa: BLE001 - reported below
+        raise SystemExit(
+            f"this command was launched with {size} ranks, but MD-tools cannot coordinate them: "
+            f"mpi4py is unavailable ({type(failure).__name__}: {failure}).\n"
+            f"  Refusing rather than continuing. {size} uncoordinated processes would each run a "
+            f"whole simulation over the SAME output paths, and the result would look complete: a "
+            f"ladder that never exchanged, or a set of paths written over one another.\n"
+            f"  Install mpi4py into this environment, or run a single process without a "
+            f"launcher.") from None
+
+    if not MPI.Is_initialized():
+        raise SystemExit(
+            f"mpi4py imported but MPI is not initialised in this process, which was launched with "
+            f"{size} ranks. Nothing can be coordinated; refusing before any output is written.")
+    if MPI.Is_finalized():
+        raise SystemExit(
+            "MPI has already been finalised in this process; no collective can be issued. "
+            "Refusing before any output is written.")
+    return MPI
+
+
+def check_launch_consistency(*, launcher_rank: int, launcher_size: int,
+                             comm_rank: int, comm_size: int,
+                             number_of_groups: int | None = None,
+                             replicas: int | None = None,
+                             protocol: str = "this run") -> None:
+    """Every number that describes the launch must be the same number.
+
+    Reported as a table of all of them rather than as the first pair that differed: the reader has
+    to see which one is the odd one out, and naming two of four leaves them guessing.
+    """
+    rows = [
+        ("launcher world size", launcher_size),
+        ("MPI communicator size", comm_size),
+    ]
+    if number_of_groups is not None:
+        rows.append(("-ng on the command line", int(number_of_groups)))
+    if replicas is not None:
+        rows.append(("replicas in the configuration", int(replicas)))
+
+    values = {value for _, value in rows}
+    if len(values) > 1:
+        listing = "\n".join(f"  {name:<30}: {value}" for name, value in rows)
+        raise SystemExit(
+            f"{protocol} was launched with numbers that do not agree:\n{listing}\n"
+            f"These must all be the same. Refusing before any output is written: a mismatch "
+            f"leaves work either unowned or done twice, and the record would describe neither.")
+
+    if int(launcher_rank) != int(comm_rank):
+        raise SystemExit(
+            f"the launcher says this process is rank {launcher_rank} but the MPI communicator "
+            f"says it is rank {comm_rank}. The process is not in the world it thinks it is in; "
+            f"refusing before any output is written.")
+
+
+class Coordination:
+    """A live world, or a genuine single process. Never a fake one.
+
+    Every method is a real collective when `size > 1`. `require_mpi` has already refused the case
+    where that is impossible, so there is no branch here in which a collective silently does
+    nothing while other ranks are waiting.
+    """
+
+    def __init__(self, *, MPI=None, rank: int = 0, size: int = 1) -> None:
+        self.MPI = MPI
+        self.comm = MPI.COMM_WORLD if MPI is not None else None
+        self.rank = int(rank)
+        self.size = int(size)
+
+    @classmethod
+    def open(cls, *, number_of_groups: int | None = None, replicas: int | None = None,
+             protocol: str = "this run") -> "Coordination":
+        """The whole preflight: detect, require, cross-check. Call before creating any output."""
+        launcher_rank, launcher_size = launcher_rank_and_size()
+        MPI = require_mpi(size=launcher_size)
+        if MPI is None:
+            if number_of_groups is not None and int(number_of_groups) > 1:
+                raise SystemExit(
+                    f"-ng {number_of_groups} was requested but this process was not started by an "
+                    f"MPI launcher: the world size is 1.\n"
+                    f"  -ng says how many processes coordinate; it does not create them.\n"
+                    f"  mpirun -n {number_of_groups} md-openmm md-run "
+                    f"-ng {number_of_groups} ...")
+            return cls()
+
+        comm = MPI.COMM_WORLD
+        check_launch_consistency(
+            launcher_rank=launcher_rank, launcher_size=launcher_size,
+            comm_rank=comm.Get_rank(), comm_size=comm.Get_size(),
+            number_of_groups=number_of_groups, replicas=replicas, protocol=protocol)
+        return cls(MPI=MPI, rank=comm.Get_rank(), size=comm.Get_size())
+
+    def barrier(self) -> None:
+        if self.comm is not None:
+            self.comm.barrier()
+
+    def all_agree(self, value: bool) -> bool:
+        """True on every rank if it is true on any. Used to turn one rank's failure into all."""
+        if self.comm is None:
+            return bool(value)
+        return bool(max(self.comm.allgather(bool(value))))
+
+    def abort(self, code: int = 1) -> None:
+        """Stop the whole world. A rank that dies alone leaves the others integrating forever."""
+        if self.comm is not None:
+            self.comm.Abort(int(code))
+        raise SystemExit(int(code))
+
+
+def barrier(size: int | None = None, *, coordination: Coordination | None = None) -> None:
+    """Wait for every rank. Fatal, not silent, when the world is plural and MPI is unusable."""
+    if coordination is not None:
+        coordination.barrier()
+        return
+    if size is None:
+        _, size = launcher_rank_and_size()
+    if int(size) <= 1:
+        return
+    MPI = require_mpi(size=int(size))
+    MPI.COMM_WORLD.barrier()
+
+
+def abort(code: int = 1, *, size: int | None = None) -> None:
+    """Terminate the whole communicator. Used where a rank-local failure is unrecoverable."""
+    if size is None:
+        _, size = launcher_rank_and_size()
+    if int(size) > 1:
+        try:
+            from mpi4py import MPI
+
+            MPI.COMM_WORLD.Abort(int(code))
+        except Exception:                                  # noqa: BLE001 - already failing
+            pass
+    raise SystemExit(int(code))

@@ -56,25 +56,37 @@ def md_run_parser() -> argparse.ArgumentParser:
         description="Run a stage, a replica-exchange ladder or a set of AIS switching paths from "
                     "a short Amber-like input file.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        # No abbreviation. argparse resolves a unique prefix by default, so `--traj` would become
+        # `--trajectory` and a misspelling would RUN, with a setting nobody wrote.
+        allow_abbrev=False,
         epilog=(
             "examples:\n"
-            "  md-openmm md-run -i min.in -p built.pdb -s built.xml -r min.xml -log min.log\n"
+            "  md-openmm md-run -i min.in -p built.pdb -s built.xml -c prev.xml \\\n"
+            "            -o min.out -x min.dcd -r min.xml -log min.log\n"
             "  mpirun -n 8 md-openmm md-run -ng 8 -i REST2.in -p built.pdb -s built.xml \\\n"
-            "            -c eq_npt_free.xml -odir REST2/\n"
+            "            -c eq_npt_free.xml -o REST2.out -x REST2.nc -r restart.json \\\n"
+            "            -log REST2.log\n"
             "  mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in -p built.pdb -s built.xml \\\n"
-            "            -source-traj hot_cmd/production.nc -odir AIS/\n"
+            "            -source-traj ../cMD_tau0p5/tau_0p5.dcd -o AIS.out -log AIS.log \\\n"
+            "            -odir ./AIS\n"
             "\n"
-            "`resolved.config`, written into -odir, is what actually ran. The .in file is the\n"
-            "input it was resolved from, and its sha256 is recorded beside it.\n"),
+            "flags follow Amber: -x is the trajectory (mdcrd) and -o the readable output\n"
+            "(mdout). -s is the serialised OpenMM System, which Amber has no counterpart for\n"
+            "because its prmtop carries the parameters that live in built.xml here.\n"
+            "\n"
+            "-o and -log are two files. -o is what you read while a run is going; -log is the\n"
+            "provenance record a machine reads. The .in file is resolved on every invocation\n"
+            "and the result is written to resolved.config in -odir, with the .in file's\n"
+            "sha256, so what ran can always be matched to what was written.\n"),
     )
     parser.add_argument("-i", "--input", required=True, metavar="FILE",
                         help="the run input: &cntrl / &remd / &AIS sections (Amber's -i mdin)")
     parser.add_argument("-p", "--topology", required=True, metavar="PDB",
                         help="topology and reference coordinates, built.pdb (Amber's -p prmtop)")
-    parser.add_argument("-x", "--system", dest="system", required=True, metavar="XML",
-                        help="serialised OpenMM System, built.xml. Amber's prmtop carries the "
-                             "topology AND the parameters; here they are two files, and this is "
-                             "the one that holds the physics")
+    parser.add_argument("-s", "--system", dest="system", required=True, metavar="XML",
+                        help="serialised OpenMM System, built.xml. Amber has no counterpart: its "
+                             "prmtop carries the topology AND the parameters, and here they are "
+                             "two files. Required")
     parser.add_argument("-c", "--coordinates", default=None, metavar="XML",
                         help="starting state: the final state of the previous stage "
                              "(Amber's -c inpcrd/restrt). Omit for the first stage")
@@ -82,18 +94,17 @@ def md_run_parser() -> argparse.ArgumentParser:
                         help="output final state, the handoff to the next stage "
                              "(Amber's -r restrt)")
     parser.add_argument("-o", "--output", default=None, metavar="OUT",
-                        help="human-readable run output (Amber's -o mdout). For a stage or an "
-                             "AIS run this names the SAME artefact as -log -- this package "
-                             "writes one readable file that carries the machine record, rather "
-                             "than two that can disagree -- so giving both a different value is "
-                             "refused. For a ladder they are two things: -o is the coordinated "
-                             "run's .out and -log is the ladder's own record")
+                        help="human-readable simulation output (Amber's -o mdout): what the run "
+                             "is doing, how far it has got, energies where they apply, and how "
+                             "it ended. A DIFFERENT file from -log. Defaults to <name>.out")
     parser.add_argument("-log", "--log", default=None, metavar="LOG",
-                        help="readable log carrying this run's machine record")
-    parser.add_argument("--trajectory", default=None, metavar="TRAJ",
-                        help="output trajectory. Long-form only: Amber spells this -x, and on "
-                             "this surface -x is the serialised System. Omit it and each stage "
-                             "writes <stage>.dcd into -odir")
+                        help="the provenance record (MD-data contract): resolved configuration "
+                             "identity, input and output hashes, software and hardware, "
+                             "warnings, status. Machine-readable. Defaults to <name>.log")
+    parser.add_argument("-x", "--trajectory", default=None, metavar="TRAJ",
+                        help="output trajectory (Amber's -x mdcrd). Optional: a stage defaults "
+                             "to <stage>.dcd and AIS writes AIS_trajNNNN.nc, one per path, which "
+                             "no single path could name")
     parser.add_argument("-chk", "--checkpoint", default=None, metavar="CHK",
                         help="output checkpoint, written periodically so the run can resume")
     parser.add_argument("-odir", "--out-dir", default=".", metavar="DIR",
@@ -114,12 +125,14 @@ def md_run_parser() -> argparse.ArgumentParser:
                         help="for AIS: the equilibrium trajectory the switching paths are drawn "
                              "from. Overrides ais_source.trajectory in the input")
     parser.add_argument("--cpu", action="store_true",
-                        help="run on the OpenMM CPU platform. CUDA is the default and is "
-                             "mandatory; this is the only way to ask for a CPU run, and the "
-                             "record says that you did")
-    parser.add_argument("--platform", default=None,
-                        help="force a named OpenMM platform. There is no automatic fall back")
-    parser.add_argument("--device", default=None, metavar="N", help="CUDA device index")
+                        help="run this invocation on the OpenMM CPU platform, overriding "
+                             "machine.openmm.platform. The only per-run platform override there "
+                             "is, and the record says it was asked for on the command line")
+    parser.add_argument("--device", default=None, metavar="N",
+                        help="CUDA device index. An execution PLACEMENT option: which GPU, never "
+                             "whether to use one. Rejected with --cpu, which has no device to "
+                             "place. The platform itself is machine.openmm.platform in the user "
+                             "configuration -- it is a property of the machine, not of the run")
     parser.add_argument("--check", action="store_true",
                         help="validate the input, the files and the schedule, then exit without "
                              "integrating anything")
@@ -178,7 +191,7 @@ def _forward(args, *, names) -> list[str]:
         "coordinates": ("-c", args.coordinates),
         "out_dir": ("-odir", args.out_dir),
         "device": ("--device", args.device),
-        "platform": ("--platform", args.platform),
+        "output": ("-o", args.output),
     }
     for name in names:
         flag, value = optional[name]
@@ -191,40 +204,78 @@ def _forward(args, *, names) -> list[str]:
     return argv
 
 
-def _reconcile_output_and_log(args) -> None:
-    """`-o` and `-log` name one artefact for a stage or an AIS run, and two for a ladder.
+def _check_file_roles(args) -> None:
+    """Every path argument must be the KIND of thing its flag names.
 
-    This package writes ONE readable file that carries the machine record; there is no separate
-    energy stream to put in a second one. So `-o` and `-log` are accepted as two spellings of the
-    same output, and two DIFFERENT values are refused rather than one being picked -- a run that
-    wrote its record to a path the caller did not name is a record nobody finds.
-
-    A ladder is the exception and genuinely has two: the coordinated run's `.out`, written by the
-    executor, and the ladder's own record. Both are forwarded there.
+    Each of these was a real mistake waiting to be made rather than a hypothetical one. `-x` used
+    to mean the serialised System on this surface, so `-x built.xml` is what the old
+    documentation taught people to type and it must not now be read as "write the trajectory to
+    built.xml", which would destroy the System. The others are the same mistake mirrored.
     """
-    if args.output and args.log and args.output != args.log:
-        # Refused only where they would collide; the ladder is dispatched before this matters.
-        args._output_and_log_differ = True
-    else:
-        args._output_and_log_differ = False
-    if args.log is None and args.output is not None:
-        args.log = args.output
-
-
-def _check_launch(args) -> None:
-    """`-ng` describes a launch, so it is checked against the launch, not against the intent."""
-    if args.number_of_groups is None:
-        return
-    from ..remd.executor import mpi_rank_and_size
-
-    _, size = mpi_rank_and_size()
-    if int(args.number_of_groups) > 1 and size == 1:
+    system = Path(args.system)
+    if system.suffix.lower() in (".dcd", ".nc", ".netcdf", ".mdcrd"):
         raise SystemExit(
-            f"-ng {args.number_of_groups} was requested but this process was not started by an "
-            f"MPI launcher: the world size is 1.\n"
-            f"  -ng says how many processes coordinate; it does not create them.\n"
-            f"  mpirun -n {args.number_of_groups} md-openmm md-run "
-            f"-ng {args.number_of_groups} ...")
+            f"-s {args.system} looks like a trajectory. `-s` is the serialised OpenMM System "
+            f"(built.xml); `-x` is the output trajectory, as in Amber.")
+
+    if args.trajectory:
+        trajectory = Path(args.trajectory)
+        if trajectory.suffix.lower() == ".xml":
+            raise SystemExit(
+                f"-x {args.trajectory} looks like a serialised System or state. `-x` is the "
+                f"output TRAJECTORY, as in Amber's mdcrd; use `-s` for the serialized System.\n"
+                f"  This surface briefly used `-x` for built.xml. It does not any more: writing "
+                f"a trajectory over built.xml would destroy the System the run needs.")
+        if trajectory.resolve() == system.resolve():
+            raise SystemExit(
+                f"-x and -s are the same path ({args.trajectory}). The trajectory would be "
+                f"written over the System.")
+
+    # `-o` and `-log` are two artefacts for two readers. One file cannot be both, so an actual
+    # collision is refused -- and ONLY a collision: different paths are the normal case.
+    if args.output and args.log and Path(args.output) == Path(args.log):
+        raise SystemExit(
+            f"-o and -log both name {args.output}. They are different files: -o is the "
+            f"human-readable simulation output you read while a run is going, and -log is the "
+            f"machine-readable provenance record. One file cannot be both without a person "
+            f"having to read a machine record to see progress, which is the thing this "
+            f"separation exists to avoid.")
+
+
+def _preflight_mpi(args, resolved: dict[str, Any] | None = None) -> None:
+    """Everything about the launch, checked before a single output path is created.
+
+    Ordering matters as much as the checks. `mpi4py` is imported, MPI's own rank and size are
+    compared with the launcher's, and both are compared with `-ng` and the replica count -- all
+    before `-odir` is made, before `resolved.config` is written, before a Context exists. A launch
+    that cannot work must leave nothing behind that a reader could mistake for a run that did.
+    """
+    from ..remd.mpi import check_launch_consistency, launcher_rank_and_size, require_mpi
+
+    launcher_rank, launcher_size = launcher_rank_and_size()
+    replicas = None
+    protocol = "this run"
+    if resolved is not None:
+        protocol = resolved.get("protocol", protocol)
+        if protocol in ("REST2", "rREST2"):
+            replicas = int(resolved["rest2"]["number_of_replicas"])
+
+    MPI = require_mpi(size=launcher_size)
+    if MPI is None:
+        if args.number_of_groups is not None and int(args.number_of_groups) > 1:
+            raise SystemExit(
+                f"-ng {args.number_of_groups} was requested but this process was not started by "
+                f"an MPI launcher: the world size is 1.\n"
+                f"  -ng says how many processes coordinate; it does not create them.\n"
+                f"  mpirun -n {args.number_of_groups} md-openmm md-run "
+                f"-ng {args.number_of_groups} ...")
+        return
+
+    comm = MPI.COMM_WORLD
+    check_launch_consistency(
+        launcher_rank=launcher_rank, launcher_size=launcher_size,
+        comm_rank=comm.Get_rank(), comm_size=comm.Get_size(),
+        number_of_groups=args.number_of_groups, replicas=replicas, protocol=protocol)
 
 
 def md_run_main(argv: list[str] | None = None) -> int:
@@ -234,9 +285,13 @@ def md_run_main(argv: list[str] | None = None) -> int:
 
     args = md_run_parser().parse_args(argv)
 
+    # PREFLIGHT, in this order and all of it before any output exists: the flags mean what they
+    # name, the launch can coordinate itself, the input parses and resolves, and only then is a
+    # directory created. A failure at any point leaves no resolved.config, no .out, no .log and no
+    # trajectory -- nothing that could be read as a run that happened.
     try:
-        _reconcile_output_and_log(args)
-        _check_launch(args)
+        _check_file_roles(args)
+        _preflight_mpi(args)
     except SystemExit as refusal:
         print(f"md-run: {refusal}", file=sys.stderr)
         return 2
@@ -245,6 +300,14 @@ def md_run_main(argv: list[str] | None = None) -> int:
         run_input = parse_run_input(args.input, source_trajectory=args.source_traj)
     except ConfigError as invalid:
         print(f"md-run: {invalid}", file=sys.stderr)
+        return 2
+
+    try:
+        # Again, now that the replica count is known. The first pass caught a launch with no
+        # working MPI; this one catches a ladder whose size disagrees with the world it was given.
+        _preflight_mpi(args, run_input.resolved)
+    except SystemExit as refusal:
+        print(f"md-run: {refusal}", file=sys.stderr)
         return 2
 
     out_dir = Path(args.out_dir)
@@ -280,12 +343,6 @@ def _run_stages(args, resolved: dict[str, Any], stage: str | None, config_path: 
     from ..build.md import stage_plan
     from ..md.stage import stage_main
 
-    if getattr(args, "_output_and_log_differ", False):
-        print(f"md-run: -o {args.output} and -log {args.log} name the same artefact for a stage. "
-              f"This package writes one readable file carrying the machine record, not an energy "
-              f"stream and a log that can disagree. Give one of them.", file=sys.stderr)
-        return 2
-
     plan = stage_plan(resolved)
     names = [entry["name"] for entry in plan]
     if stage is not None and stage not in names:
@@ -310,11 +367,12 @@ def _run_stages(args, resolved: dict[str, Any], stage: str | None, config_path: 
             log=args.log if single and args.log else str(out_dir / f"{name}.log"),
             checkpoint=args.checkpoint if single and args.checkpoint
                        else str(out_dir / f"{name}.chk"),
-            out_dir=args.out_dir, device=args.device, platform=args.platform,
+            output=args.output if single and args.output else str(out_dir / f"{name}.out"),
+            out_dir=args.out_dir, device=args.device,
             cpu=args.cpu, check=args.check)
         code = stage_main(dict(entry, resolved_config=str(config_path)),
                           _forward(forwarded, names=("coordinates", "trajectory", "restart",
-                                                     "log", "checkpoint", "device", "platform")))
+                                                     "log", "output", "checkpoint", "device")))
         if code != 0:
             print(f"md-run: stage {name} failed with exit code {code}", file=sys.stderr)
             return code
@@ -328,13 +386,15 @@ def _run_ladder(args, resolved: dict[str, Any], protocol: str, config_path: Path
 
     ladder = ladder_from_resolved(resolved, protocol)
     ladder["resolved_config"] = str(config_path)
-    argv = _forward(args, names=("coordinates", "log", "out_dir", "device", "platform"))
+    argv = _forward(args, names=("coordinates", "log", "output", "out_dir", "device"))
+    if args.restart:
+        argv += ["-r", str(args.restart)]
     # replica_main spells the starting state -c, as this command does, and takes -ng itself so
     # the check lives with the ladder rather than being repeated here.
     if args.number_of_groups is not None:
         argv += ["-ng", str(args.number_of_groups)]
-    if args.output:
-        argv += ["-o", str(args.output)]
+    if args.trajectory:
+        argv += ["-x", str(args.trajectory)]
     if args.groupfile:
         argv += ["--groupfile", str(args.groupfile)]
     if args.resume:
@@ -346,9 +406,12 @@ def _run_ais(args, resolved: dict[str, Any], config_path: Path) -> int:
     """AIS switching paths, distributed across the MPI world by global path id."""
     from ..ais.run import ais_main
 
-    if getattr(args, "_output_and_log_differ", False):
-        print(f"md-run: -o {args.output} and -log {args.log} name the same artefact for an AIS "
-              f"run. Give one of them.", file=sys.stderr)
+    if args.trajectory:
+        # One name cannot describe N files, and pretending it can is how a "prefix" option grows
+        # a meaning nobody tested. AIS writes AIS_trajNNNN.nc, one per global path id, into -odir.
+        print(f"md-run: -x {args.trajectory} names one trajectory, but AIS writes one per path -- "
+              f"AIS_traj0000.nc .. into -odir. Omit -x and use -odir to say where they go.",
+              file=sys.stderr)
         return 2
 
     run = {
@@ -357,6 +420,7 @@ def _run_ais(args, resolved: dict[str, Any], config_path: Path) -> int:
         "ais": dict(resolved["ais"]),
         "ais_source": dict(resolved["ais_source"]),
         "dynamics": dict(resolved["dynamics"]),
+        "reporting": dict(resolved["reporting"]),
         "resolved_config": str(config_path),
     }
     # `-ng` means the same thing here as for a ladder: how many workers this launch coordinates.
@@ -375,7 +439,7 @@ def _run_ais(args, resolved: dict[str, Any], config_path: Path) -> int:
                   f"how many run at once does.", file=sys.stderr)
             return 2
 
-    argv = _forward(args, names=("log", "out_dir", "device", "platform"))
+    argv = _forward(args, names=("log", "output", "out_dir", "device"))
     source = args.source_traj or resolved["ais_source"]["trajectory"]
     if source:
         argv += ["-source-traj", str(source)]

@@ -57,30 +57,39 @@ class PlatformRequest:
         """CUDA. Not "CUDA if it happens to be there"."""
         return cls()
 
-    @classmethod
-    def from_flags(cls, *, cpu: bool = False, platform: str | None = None,
-                   device_index: int | None = None,
-                   precision: str | None = None) -> "PlatformRequest":
-        """Build a request from command-line flags, refusing contradictions.
+    #: Where the platform decision came from. Carried into the record because a CPU run has three
+    #: possible provenances and they are three different facts about the same result:
+    #: the machine is configured for CPU, the person asked for CPU on this run, or -- the one this
+    #: whole module exists to make impossible -- CUDA quietly was not there.
+    origin: str = "built-in default"
+    device_policy: str = "local_rank"
 
-        A contradiction is refused rather than resolved by precedence: `--cpu --platform CUDA` is
-        not a preference to rank, it is two incompatible instructions, and picking one silently is
-        how a run ends up on hardware nobody asked for.
+    @classmethod
+    def from_machine(cls, machine: dict | None = None, *, cpu: bool = False,
+                     device_index: int | None = None) -> "PlatformRequest":
+        """The platform for one run: the machine's default, with `--cpu` as the per-run override.
+
+        There is no `--platform`. A per-run platform flag would be a second authority for a
+        machine property, and the two would disagree the first time somebody scripted one and
+        configured the other. `--cpu` is the single exception, because "run this one on the CPU"
+        is a real thing to want and it is recorded as having been asked for.
         """
-        if cpu and platform and platform.upper() != "CPU":
-            raise PlatformUnavailable(
-                f"--cpu and --platform {platform} are contradictory. Ask for one: --cpu for an "
-                f"explicit CPU run, or --platform {platform} for that platform. This is refused "
-                f"rather than resolved by precedence, because either choice would silently "
-                f"discard half of what was asked for.")
+        machine = machine or {}
+        platform = str(machine.get("platform") or "CUDA").upper()
+        precision = str(machine.get("precision") or "mixed")
+        policy = str(machine.get("device_policy") or "local_rank")
+        origin = str(machine.get("origin") or "built-in default")
+
         if cpu:
-            return cls(name="CPU", explicit_cpu=True,
-                       precision=precision or "mixed")
-        if platform:
-            return cls(name=platform.upper() if platform.upper() in ("CUDA", "CPU") else platform,
-                       explicit_cpu=platform.upper() == "CPU",
-                       device_index=device_index, precision=precision or "mixed")
-        return cls(device_index=device_index, precision=precision or "mixed")
+            return cls(name="CPU", explicit_cpu=True, precision=precision,
+                       origin="--cpu (command line)", device_policy=policy)
+        if platform == "CPU":
+            # A machine-wide CPU default is a deliberate choice, and the record says so rather
+            # than leaving a CPU result indistinguishable from an unnoticed fallback.
+            return cls(name="CPU", explicit_cpu=True, precision=precision,
+                       origin=origin, device_policy=policy)
+        return cls(name=platform, explicit_cpu=False, device_index=device_index,
+                   precision=precision, origin=origin, device_policy=policy)
 
 
 @dataclass(frozen=True)
@@ -199,6 +208,10 @@ def acceleration_record(resolution: PlatformResolution, *,
     request = resolution.request
     record: dict[str, Any] = {
         "requested_policy": "explicit-cpu" if request.explicit_cpu else "default-cuda",
+        # Where the decision came from, as three distinguishable facts: `built-in default`,
+        # `machine.openmm`, or `--cpu (command line)`.
+        "platform_origin": request.origin,
+        "device_policy": request.device_policy,
         "requested_platform": request.name,
         "explicit_cpu": bool(request.explicit_cpu),
         "resolved_platform": resolution.name,
@@ -208,6 +221,7 @@ def acceleration_record(resolution: PlatformResolution, *,
         "openmm_version": openmm.version.version,
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
     }
+    record.update(_cuda_runtime_facts())
     try:
         from openmm import Platform
 
@@ -218,3 +232,33 @@ def acceleration_record(resolution: PlatformResolution, *,
     if mpi_size is not None:
         record["mpi"] = {"rank": mpi_rank, "size": mpi_size, "local_rank": local_rank}
     return record
+
+
+def _cuda_runtime_facts() -> dict[str, Any]:
+    """Driver and runtime versions, when the machine will say. Best-effort and never fatal.
+
+    A run must not fail because the diagnostic describing it could not be produced, so an absent
+    value is reported as absent rather than guessed at or raised.
+    """
+    facts: dict[str, Any] = {"cuda_driver_version": None, "cuda_runtime_version": None}
+    try:
+        import subprocess
+
+        done = subprocess.run(["nvidia-smi", "--query-gpu=driver_version",
+                               "--format=csv,noheader"],
+                              capture_output=True, text=True, timeout=30)
+        if done.returncode == 0 and done.stdout.strip():
+            facts["cuda_driver_version"] = done.stdout.splitlines()[0].strip()
+    except (OSError, Exception):                          # noqa: BLE001 - diagnostics only
+        pass
+    try:
+        from openmm import Platform
+
+        cuda = Platform.getPlatformByName("CUDA")
+        for name in cuda.getPropertyNames():
+            if "version" in name.lower():
+                facts["cuda_runtime_version"] = cuda.getPropertyDefaultValue(name)
+                break
+    except Exception:                                     # noqa: BLE001 - diagnostics only
+        pass
+    return facts

@@ -71,7 +71,10 @@ def exact_steps(duration_ps: float, timestep_fs: float, *, field: str) -> int:
 
 def switching_schedule(*, tau_start: float, tau_end: float, switching_steps: int,
                        parameter_update_interval_steps: int, observation_interval_steps: int,
-                       timestep_fs: float) -> dict[str, Any]:
+                       timestep_fs: float,
+                       trajectory_interval_steps: int | None = None,
+                       state_interval_steps: int = 0,
+                       checkpoint_interval_steps: int = 0) -> dict[str, Any]:
     """Every tau the path visits, and which of them are observed.
 
     EVERY LENGTH HERE IS AN INTEGER STEP COUNT. A step count is exact; a duration in picoseconds is
@@ -89,6 +92,20 @@ def switching_schedule(*, tau_start: float, tau_end: float, switching_steps: int
         observation_interval_steps % parameter_update_interval_steps == 0
             otherwise observations are not on the update grid and "evenly spaced in tau" would be
             evenly spaced only after rounding.
+
+    FOUR INDEPENDENT CADENCES, because they answer four different questions:
+
+        observation_interval_steps    how often the WORK is measured. This one is the method.
+        trajectory_interval_steps     how often a configuration is written to the path's NetCDF.
+        state_interval_steps          how often the thermodynamic state is tabulated.
+        checkpoint_interval_steps     how often the path becomes resumable.
+
+    They were once tied together -- the trajectory had to match the observations -- and that
+    answered one question with another's answer. Somebody who wants work every 10 steps and frames
+    every 50 is not asking for something confused; they are asking for a small file. Each divides
+    `switching_steps` on its own, so every stream has a record on the final step, and 0 disables
+    the state table and the checkpoint (never the observations: a path with no work rows is not a
+    measurement).
 
     `taus[j]` is the Hamiltonian in force during the j-th propagation interval, so `taus[0]` is
     tau_start -- the source Hamiltonian, before any change -- and `taus[number_of_updates]` is
@@ -126,9 +143,37 @@ def switching_schedule(*, tau_start: float, tau_end: float, switching_steps: int
             f"parameter_update_interval_steps = {interval}, so observations would not land on the "
             f"parameter-update grid and would be evenly spaced only after rounding.")
 
+    # The trajectory follows the observations unless it is given its own cadence -- that is the
+    # behaviour every existing AIS project was generated with, and it stays the default.
+    frame_every = int(observe_every if trajectory_interval_steps is None
+                      else trajectory_interval_steps)
+    state_every = int(state_interval_steps or 0)
+    checkpoint_every = int(checkpoint_interval_steps or 0)
+    for label, value in (("reporting.solute_printout", frame_every),
+                         ("reporting.system_printout", state_every),
+                         ("reporting.checkpoint_printout", checkpoint_every)):
+        if value < 0:
+            raise ValueError(f"{label} cannot be negative; got {value}")
+        if value and steps % value:
+            raise ValueError(
+                f"{label} = {value} does not divide ais.switching_steps = {steps} "
+                f"({steps} % {value} = {steps % value}). Every enabled stream must have a record "
+                f"on the final step, or the end of one path is not comparable with the end of "
+                f"another.")
+    if frame_every < 1:
+        raise ValueError(
+            "reporting.solute_printout cannot be 0 for AIS: a switching path with no "
+            "configurations written is a work value with nothing to attribute it to.")
+
     updates = steps // interval
     per_observation = observe_every // interval
     number_of_observations = steps // observe_every + 1
+
+    frame_steps = list(range(0, steps + 1, frame_every))
+    state_steps = list(range(0, steps + 1, state_every)) if state_every else []
+    # Not step 0: a checkpoint before anything has happened saves nothing worth resuming from.
+    checkpoint_steps = ([s for s in range(checkpoint_every, steps + 1, checkpoint_every)]
+                        if checkpoint_every else [])
 
     span = float(tau_end) - float(tau_start)
     taus = [float(tau_start) + span * j / updates for j in range(updates + 1)]
@@ -163,6 +208,15 @@ def switching_schedule(*, tau_start: float, tau_end: float, switching_steps: int
         "number_of_observations": number_of_observations,
         "updates_per_observation": per_observation,
         "steps_per_observation": observe_every,
+        "trajectory_interval_steps": frame_every,
+        "state_interval_steps": state_every,
+        "checkpoint_interval_steps": checkpoint_every,
+        "frame_steps": frame_steps,
+        "state_steps": state_steps,
+        "checkpoint_steps": checkpoint_steps,
+        "number_of_frames": len(frame_steps),
+        "number_of_state_rows": len(state_steps),
+        "number_of_checkpoints": len(checkpoint_steps),
         "taus": taus,
         "observations": observations,
         # Derived for the reader; the step counts above are what runs.

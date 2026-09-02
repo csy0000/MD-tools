@@ -53,12 +53,6 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "tau": "dynamics.tau",
         "phase_space_printout": "dynamics.phase_space_printout",
         "random_seed": "dynamics.seed",
-        # A named platform is a machine fact rather than a protocol one, and `--cpu` / `--platform`
-        # on the command line are the usual way to state it. It is readable here because the
-        # resolved model has the field: an input language that cannot express part of the model it
-        # projects onto is one that silently drops it, which is how `dynamics.platform` was lost
-        # between a generated .in file and the resolved.config it was generated from.
-        "platform": "dynamics.platform",
         "minimization_iterations": "stages.minimization_iterations",
         "restrained_nvt_steps": "stages.restrained_nvt_steps",
         "restrained_npt_steps": "stages.restrained_npt_steps",
@@ -127,6 +121,9 @@ _CONFUSIONS = {
     "numexchg": "number_of_exchanges",
     "nreplicas": "number_of_replicas",
     "npaths": "number_of_paths",
+    # Retired rather than misspelled, and the suggestion says where it went.
+    "platform": None,
+    "device": None,
 }
 
 _SECTION_START = re.compile(r"^\s*&(\w+)\s*$")
@@ -175,6 +172,11 @@ def _suggest(section: str, key: str) -> str:
     if lowered in _CONFUSIONS:
         target = _CONFUSIONS[lowered]
         if target is None:
+            if lowered in ("platform", "device"):
+                return (f" `{key}` is a property of the MACHINE, not of the experiment, and is "
+                        f"retired from protocol configuration. It is machine.openmm.platform "
+                        f"(and machine.openmm.device_policy) in the user configuration; `--cpu` "
+                        f"and `--device` override it for one run.")
             return (f" `{key}` is an Amber control that has no counterpart here: this runner takes "
                     f"its box, restart and cutoff behaviour from the built System rather than from "
                     f"the run input.")

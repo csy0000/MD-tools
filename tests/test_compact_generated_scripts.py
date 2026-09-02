@@ -177,7 +177,10 @@ def test_a_moved_directory_still_runs(generated, tmp_path):
     # `--help` reaches argparse inside the runtime, which means resolved.config was found and
     # resolved from the script's own location rather than from the working directory.
     assert done.returncode == 0, done.stdout + done.stderr
-    assert "-p" in done.stdout and "--platform" in done.stdout
+    # SUPERSEDED: this looked for `--platform`, which is retired -- the platform is
+    # machine.openmm.platform in the user configuration now. `--cpu` is the per-run override and
+    # serves the same purpose here: proving argparse inside the runtime was reached.
+    assert "-p" in done.stdout and "--cpu" in done.stdout
 
 
 def test_editing_resolved_config_is_refused_by_the_strict_resolver(generated, tmp_path):

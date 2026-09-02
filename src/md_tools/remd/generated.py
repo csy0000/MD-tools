@@ -225,6 +225,11 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     parser.add_argument("-o", "--output", default=None, metavar="OUT",
                         help="the coordinated run's readable .out; distinct from -log, which is "
                              "this ladder's own machine record")
+    parser.add_argument("-x", "--trajectory", default=None, metavar="NC",
+                        help="the coordinated run's analysis trajectory (NetCDF). The fixed-state "
+                             "trajectories remd0.nc.. are always written beside it")
+    parser.add_argument("-r", "--restart", default=None, metavar="JSON",
+                        help="the ladder's restart manifest")
     parser.add_argument("--groupfile", default=None, metavar="FILE",
                         help="an Amber-style group file to use instead of the one derived from "
                              "the ladder. Rarely needed for a homogeneous ladder")
@@ -318,8 +323,8 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
         "-ng", str(states),
         "--groupfile", str(args.groupfile or group_file),
         "-o", str(args.output or out / f"{protocol_name}.out"),
-        "-x", str(out / f"{protocol_name}.nc"),
-        "-r", str(out / "restart.json"),
+        "-x", str(args.trajectory or out / f"{protocol_name}.nc"),
+        "-r", str(args.restart or out / "restart.json"),
         "--checkpoint", str(out / f"{protocol_name}_checkpoint.nc"),
     ]
     if ladder.get("rem_log", True):

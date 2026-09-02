@@ -29,36 +29,41 @@ from .conftest import ALA_PDB, REPO_ROOT, run_cli, template_module
 AIS_SOURCE = REPO_ROOT / "src" / "md_tools" / "ais" / "run.py"
 
 
-# --- 1. the production source is never hashed ---------------------------------------------------
+# --- 1. the production source is hashed exactly once ---------------------------------------------
 
-def test_the_ais_runtime_never_hashes_the_production_source():
-    """A full-file digest of a production trajectory costs more than it proves.
+def test_the_ais_runtime_hashes_the_source_once_and_records_it():
+    """SUPERSEDED. This once asserted that the AIS runtime hashed NOTHING.
 
-    The source is read frame by frame; hashing it would mean reading the whole thing an extra
-    time to produce a number nothing checks. The live runtime computes no digest at all, which
-    is a stronger statement of the same guarantee than the retired script could make.
+    That was the right trade when nothing needed the digest: a full-file hash of a production
+    trajectory means reading the whole thing an extra time to produce a number nobody compares.
+    It is not the right trade now. A mid-path checkpoint has to be refused when it belongs to a
+    different run, and "different run" includes "different source ensemble" -- a resumed path
+    whose source changed underneath it would continue with right-looking numbers for a different
+    measurement.
+
+    So the source IS hashed. What this guards instead is the cost: once per run, into the record
+    and the fingerprint, never per path and never inside the frame loop.
     """
     source = AIS_SOURCE.read_text()
-    assert "sha256" not in source, "the AIS runtime digests something; it used to digest the source"
-    assert "hashlib" not in source
+
+    # One call, at run scope. `file_facts` is what computes the digest.
+    assert source.count('file_facts(source_path)') == 1, (
+        "the source is hashed more than once; a production trajectory is read enough already")
+
+    # And nothing inside the per-path function reads it again.
+    path_function = source[source.index("def run_one_path("):source.index("def _read_source_frame(")]
+    assert "file_facts" not in path_function and "sha256" not in path_function, (
+        "the per-path runner hashes something; the digest belongs at run scope")
 
 
-
-
-def test_the_no_hashing_assertion_is_not_vacuous():
-    """A "this string is absent" assertion passes just as happily against the wrong file.
-
-    The guard this replaces installed a `sitecustomize` that intercepted `pathlib.Path.open` and
-    failed the run if the production source reached `sha256_file`. It could only run against the
-    retired script, which hashed things; the live runtime hashes nothing at all, so there is no
-    call to intercept. What is still worth proving is that the check DISCRIMINATES -- that the same
-    assertion applied to code which does hash would fail.
-    """
-    root = REPO_ROOT / "src" / "md_tools"
-    hashing = (root / "md" / "stage.py").read_text()
-    assert "sha256" in hashing, (
-        "the positive control no longer hashes, so the absence check above proves nothing")
-    assert "sha256" not in AIS_SOURCE.read_text()
+def test_the_fingerprint_binds_the_source_the_system_and_the_schedule():
+    """What a mid-path checkpoint is matched against, asserted as a set rather than by inspection."""
+    source = AIS_SOURCE.read_text()
+    fingerprint = source[source.index("path_fingerprint = hashlib.sha256("):]
+    fingerprint = fingerprint[:fingerprint.index(").hexdigest()")]
+    for bound in ('"system"', '"topology"', '"source"', '"schedule"', '"seed"',
+                  '"resolved_config"'):
+        assert bound in fingerprint, f"{bound} is not bound into the resume fingerprint"
 
 
 # --- 2. physical truncation, with the header left alone -----------------------------------------

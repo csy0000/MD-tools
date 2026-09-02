@@ -191,11 +191,15 @@ def test_run_sh_drives_the_installed_command_rather_than_a_second_interface(tmp_
                    capture_output=True, text=True, timeout=600, check=True)
     text = (out / "run.sh").read_text(encoding="utf-8")
     assert "md-openmm md-run -i min.in" in text, text
-    # `-x` is the System on this surface. run.sh once passed `-s built.xml --trajectory`-style
-    # flags from before that was settled, so it handed the runner a .dcd where the System belongs
-    # -- and nothing in the fast lane noticed, because nothing in the fast lane runs run.sh.
-    assert '-x "${SYSTEM}"' in text, text
-    assert '-s "${SYSTEM}"' not in text, text
+    # SUPERSEDED: this asserted `-x "${SYSTEM}"`, from the brief period when `-x` named the
+    # serialised System on this surface. It follows Amber now -- `-s` is the System, `-x` the
+    # trajectory -- and getting the two the wrong way round would write a trajectory over
+    # built.xml, so the assertion is inverted rather than dropped.
+    assert '-s "${SYSTEM}"' in text, text
+    assert '-x "${SYSTEM}"' not in text, text
+    assert "-x min.dcd" in text, text
+    # Two files, two readers.
+    assert "-o min.out" in text and "-log min.log" in text, text
     # One rank per state, and -ng stating the same number, spelled out rather than computed at
     # run time -- the ladder's size is a property of the configuration, not of the machine.
     assert "mpirun -n 4 md-openmm md-run -ng 4 -i REST2.in" in text, text
@@ -225,17 +229,34 @@ def test_the_input_language_can_express_every_field_of_the_resolved_model():
             assert not unreachable, f"{protocol}: {unreachable} cannot be written in a .in file"
 
 
-def test_a_platform_stated_in_the_configuration_survives_the_round_trip(tmp_path):
-    """The exact loss above, at the level a person would hit it."""
-    out = tmp_path / "md_script"
+def test_a_configuration_cannot_state_a_platform_at_all(tmp_path):
+    """SUPERSEDED: this asserted that `dynamics.platform` survived the .in round trip.
+
+    It no longer exists to survive. The platform is a property of the machine, so it lives in
+    `machine.openmm.platform` in the user configuration; a protocol config that carried it made a
+    workflow shared between machines carry one machine's hardware. The key is refused with the
+    migration rather than ignored, because a silently dropped platform is exactly the failure the
+    round-trip test was written to catch.
+    """
+    from md_tools.build.strict import ConfigError
+
     config = tmp_path / "cuda.config"
-    config.write_text("protocol: cMD\ndynamics:\n  platform: CUDA\n  seed: 7\n", encoding="utf-8")
-    subprocess.run(CLI + ["build-md", "-odir", str(out), "--config", str(config)],
-                   capture_output=True, text=True, timeout=600, check=True)
-    resolved = yaml.safe_load((out / "resolved.config").read_text(encoding="utf-8"))
-    assert resolved["dynamics"]["platform"] == "CUDA"
-    for path in out.glob("*.in"):
-        assert parse_run_input(path).resolved == resolved, path.name
+    config.write_text("protocol: cMD\ndynamics:\n  platform: CUDA\n", encoding="utf-8")
+    done = subprocess.run(CLI + ["build-md", "-odir", str(tmp_path / "md_script"),
+                                 "--config", str(config)],
+                          capture_output=True, text=True, timeout=600)
+    assert done.returncode == 2, done.stdout + done.stderr
+    assert "machine.openmm.platform" in done.stderr, done.stderr
+
+    from md_tools.run.inputs import SECTION_KEYS
+
+    assert not [key for keys in SECTION_KEYS.values() for key in keys if key == "platform"], \
+        "the .in language must not offer a platform either"
+
+    # And the .in language refuses it by name, saying where it went rather than proposing the
+    # nearest surviving key.
+    with pytest.raises(ConfigError, match="machine.openmm.platform"):
+        parse_run_input(_written("&cntrl\n  protocol = cMD,\n  platform = CUDA,\n/\n"))
 
 
 SPEC_EXAMPLE = """\
@@ -259,7 +280,7 @@ SPEC_EXAMPLE = """\
   system_printout            = 50,
   checkpoint_printout        = 50,
   random_seed                = 20260902,
-  source_traj                = ../cMD_tau0p5/tau_0p5.nc,
+  source_traj                = ../cMD_tau0p5/tau_0p5.dcd,
 /
 """
 
@@ -278,7 +299,7 @@ def test_the_specified_ais_example_parses_and_every_key_takes_effect():
         "switching_steps": 250, "observation_interval_steps": 10,
         "parameter_update_interval_steps": 1}
     assert parsed.resolved["ais_source"]["frame_stride"] == 10
-    assert parsed.resolved["ais_source"]["trajectory"] == "../cMD_tau0p5/tau_0p5.nc"
+    assert parsed.resolved["ais_source"]["trajectory"] == "../cMD_tau0p5/tau_0p5.dcd"
     assert parsed.resolved["dynamics"]["seed"] == 20260902
     assert parsed.resolved["reporting"] == {"solute_printout": 10, "system_printout": 50,
                                             "checkpoint_printout": 50}
@@ -290,43 +311,24 @@ def test_the_selection_spelling_is_named_when_a_near_miss_is_written():
         parse_run_input(_written(SPEC_EXAMPLE.replace("= uniform_random,", "= random,")))
 
 
-def test_an_ais_trajectory_cadence_that_disagrees_with_the_observations_is_refused():
-    """One frame per observation. Two cadences would break `coordinate_frame_index`."""
-    with pytest.raises(ConfigError, match="one cadence"):
-        parse_run_input(_written(SPEC_EXAMPLE.replace("solute_printout            = 10,",
-                                                      "solute_printout            = 50,")))
+def test_the_four_ais_cadences_are_independent(tmp_path):
+    """SUPERSEDED: this asserted that `solute_printout` had to equal the observation interval.
 
-
-@pytest.mark.parametrize("protocol", ["cMD", "REST2", "rREST2", "AIS"])
-def test_every_command_run_sh_issues_is_one_md_run_would_accept(protocol, tmp_path):
-    """Parse the generated run.sh's own command lines with md-run's parser.
-
-    The cheap half of actually running it. A flag that build-md emits and md-run does not accept
-    is a generated project that cannot run, and it is invisible to every test that only inspects
-    files -- which is how `-s built.xml` survived the rename of the System flag to `-x`.
+    That rule answered "how often is a configuration written" with the answer to "how often is
+    work measured". They are different questions, and somebody who wants work every 10 steps and
+    frames every 50 is asking for a smaller file, not for something confused. All four cadences
+    are independent now and each divides `switching_steps` on its own.
     """
-    import shlex
+    parsed = parse_run_input(_written(
+        SPEC_EXAMPLE.replace("solute_printout            = 10,",
+                             "solute_printout            = 50,")))
+    assert parsed.resolved["reporting"]["solute_printout"] == 50
+    assert parsed.resolved["ais"]["observation_interval_steps"] == 10
 
-    from md_tools.run.main import md_run_parser
+    # What is still refused is a cadence that cannot place a record on the final step.
+    from md_tools.build.strict import ConfigError
 
-    out = tmp_path / "md_script"
-    subprocess.run(CLI + ["build-md", "-odir", str(out),
-                          "--config", str(REPO / "configs" / "md" / f"{protocol}.config")],
-                   capture_output=True, text=True, timeout=600, check=True)
-
-    # Join continuations, then keep the lines that invoke md-run.
-    joined = (out / "run.sh").read_text(encoding="utf-8").replace("\\\n", " ")
-    commands = [line for line in joined.splitlines()
-                if "md-openmm md-run" in line and not line.lstrip().startswith("#")]
-    assert commands, joined
-
-    parser = md_run_parser()
-    for command in commands:
-        words = shlex.split(command)
-        # Drop the launcher and the executable; keep the flags.
-        start = words.index("md-run") + 1
-        argv = [word for word in words[start:] if word != "$@"]
-        parsed = parser.parse_args(argv)          # SystemExit here means run.sh cannot run
-        assert parsed.input.endswith(".in"), argv
-        assert parsed.system, argv
-        assert parsed.topology, argv
+    with pytest.raises(ConfigError, match="250"):
+        parse_run_input(_written(
+            SPEC_EXAMPLE.replace("solute_printout            = 10,",
+                                 "solute_printout            = 100,")))

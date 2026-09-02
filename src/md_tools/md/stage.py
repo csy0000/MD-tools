@@ -41,6 +41,7 @@ from ..openmm.platform_policy import (PlatformRequest, acceleration_record,
                                       resolve_platform_request)
 from ..openmm.timestep import resolve_timestep_fs
 from ..build.record import LogWriter, file_facts, openmm_platform_facts, read_record
+from ..openmm.trajectory import describe_trajectory
 
 
 #: Residue names that are solvent or a monatomic counter-ion, and therefore not solute. Positional
@@ -59,6 +60,26 @@ def solute_atom_indices(topology) -> list[int]:
             if atom.residue.name.strip().upper() not in SOLVENT_RESIDUES]
 
 
+
+def check_trajectory_suffix(path: Path) -> None:
+    """A conventional stage writes DCD. Refuse a name that claims otherwise.
+
+    OpenMM has a native `DCDReporter` and no native NetCDF reporter, so DCD is what an ordinary
+    stage can honestly produce. Writing DCD bytes into a file called `.nc` would be worse than
+    refusing: every tool downstream would open it as NetCDF, fail, and blame the tool.
+    """
+    suffix = Path(path).suffix.lower()
+    if suffix == ".dcd":
+        return
+    raise SystemExit(
+        f"-x {path}: an ordinary MD stage writes DCD, and this name claims {suffix or 'no'} "
+        f"format.\n"
+        f"  OpenMM has a native DCD writer and no native NetCDF writer, so DCD is what this can "
+        f"honestly produce -- and renaming a DCD file does not make it NetCDF.\n"
+        f"  Use a .dcd name. AIS paths and REST2 state trajectories ARE genuine NetCDF; those "
+        f"are written by their own protocols.")
+
+
 def stage_parser(description: str) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("-p", "--topology", required=True, metavar="PDB",
@@ -74,15 +95,19 @@ def stage_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("-chk", "--checkpoint", default=None, metavar="CHK",
                         help="output checkpoint, written periodically for resume")
     parser.add_argument("-log", "--log", default=None, metavar="LOG",
-                        help="readable log carrying this stage's machine record")
+                        help="the provenance record (machine-readable). Defaults to <stage>.log")
+    parser.add_argument("-o", "--output", default=None, metavar="OUT",
+                        help="human-readable simulation output, Amber's mdout. A DIFFERENT file "
+                             "from -log: this is what you tail while the stage runs. Defaults to "
+                             "<stage>.out")
     parser.add_argument("--cpu", action="store_true",
                         help="run on the OpenMM CPU platform. CUDA is the default and is "
                              "mandatory; this is the only way to ask for a CPU run, and the "
                              "record says that you did")
-    parser.add_argument("--platform", default=None,
-                        help="force a named OpenMM platform. CUDA is the default; there is no "
-                             "automatic fall back to anything else")
-    parser.add_argument("--device", default=None, help="CUDA device index")
+    parser.add_argument("--device", default=None, metavar="N",
+                        help="CUDA device index. An execution PLACEMENT option, not a platform "
+                             "choice: it says which GPU, never whether to use one. Rejected with "
+                             "--cpu, which has no device to place")
     parser.add_argument("--check", action="store_true",
                         help="validate inputs and settings, then exit without integrating")
     return parser
@@ -138,7 +163,19 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
     topology_path = Path(args.topology)
     system_path = Path(args.system)
     log_path = Path(args.log) if args.log else Path(f"{name}.log")
+    out_path = Path(args.output) if args.output else Path(f"{name}.out")
+    if out_path.resolve() == log_path.resolve():
+        print(f"{name}: -o and -log both name {out_path}. They are different files: one is read "
+              f"by a person during the run, the other by a machine afterwards.", file=sys.stderr)
+        return 2
     traj_path = Path(args.trajectory) if args.trajectory else Path(f"{name}.dcd")
+    # The ordinary writer is OpenMM's DCDReporter. Checked here, before anything opens a Context,
+    # so a `.nc` name is refused rather than filled with DCD bytes.
+    try:
+        check_trajectory_suffix(traj_path)
+    except SystemExit as refusal:
+        print(f"{name}: {refusal}", file=sys.stderr)
+        return 2
     restart_path = Path(args.restart) if args.restart else Path(f"{name}.xml")
     chk_path = Path(args.checkpoint) if args.checkpoint else Path(f"{name}.chk")
 
@@ -165,7 +202,19 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                                               count_barostats, derive_seed, resolve_platform,
                                               set_restraint, write_final_state)
 
+    from ..build.simout import SimulationOutput
+
+    out = SimulationOutput(out_path, title=f"stage {name}", log_path=log_path)
+    out.heading("Inputs")
+    out.field("topology", topology_path)
+    out.field("system", system_path)
+    out.field("continue from", args.continue_from or "(none -- first stage)")
+    out.field("trajectory", traj_path)
+    out.field("final state", restart_path)
+    out.field("checkpoint", chk_path)
+
     log = LogWriter(log_path, record_type=f"md-stage:{name}")
+    log.update(simulation_output=str(out_path))
     log(f"md-openmm stage: {name}")
     log("=" * 68)
     log.heading("Inputs")
@@ -268,9 +317,14 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         # ONE platform decision, from `md_tools.openmm.platform_policy`, shared with REMD and AIS.
         # CUDA unless `--cpu` was written; a CUDA that cannot open a Context is an error here,
         # before minimisation, rather than a silent CPU run that finishes hours later.
+        from ..registry.userconfig import machine_openmm_settings
+
+        if args.cpu and args.device is not None:
+            raise SystemExit("--cpu and --device are contradictory: the CPU platform has no "
+                             "device to place. --device says which GPU a CUDA run goes to, "
+                             "never whether it is one.")
         acceleration = resolve_platform_request(
-            PlatformRequest.from_flags(cpu=bool(args.cpu),
-                                       platform=args.platform or stage.get("platform")),
+            PlatformRequest.from_machine(machine_openmm_settings(), cpu=bool(args.cpu)),
             device_index=int(args.device) if args.device is not None else None)
         integrator = LangevinMiddleIntegrator(
             float(stage["temperature_K"]) * unit.kelvin,
@@ -323,6 +377,9 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                         f"'{name}' is later in the chain. No Context was created.")
                     log.record["status"] = "pending"
                     log.save()
+                    out.heading("Preflight")
+                    out.write(f"  pending: parent state {parent} does not exist yet.")
+                    out.completed(f"{name}: pending; nothing was run")
                     return 0
                 raise SystemExit(f"-c {parent} does not exist: the previous stage writes it only "
                                  f"when it finishes")
@@ -366,13 +423,23 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
             log("  --check: inputs, settings and Force layout validated; no dynamics were run.")
             log.record["status"] = "checked"
             log.save()
+            out.heading("Preflight")
+            out.write("  --check: inputs, settings and Force layout validated; nothing was run.")
+            out.completed(f"{name}: checked; no dynamics")
             return 0
 
         # -- do the work --------------------------------------------------------------------
         log.heading("Run")
+        out.heading("Run")
+        out.field("timestep", f"{timestep_fs} fs")
+        out.field("steps", f"{steps} ({steps * timestep_fs / 1000.0:g} ps)")
+        out.field("already done", f"{done} (resumed from checkpoint)" if done else "0")
+        out.field("ensemble", stage.get("ensemble", "?"))
+        out.field("platform", acceleration.name)
         iterations = int(stage.get("minimization_iterations") or 0)
         if iterations:
             log(f"  minimising, {iterations} iterations")
+            out.field("minimisation", f"{iterations} iterations")
             simulation.minimizeEnergy(maxIterations=iterations)
 
         remaining = steps - done
@@ -387,6 +454,16 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                                       int(stage["state_interval_steps"]), step=True, time=True,
                                       potentialEnergy=True, temperature=True, volume=True,
                                       density=True, speed=True, append=done > 0))
+                # The same numbers, readable, in the .out. A separate reporter rather than a
+                # post-hoc copy of the CSV: the point of the .out is that it can be tailed while
+                # the run is going, and a file written at the end cannot be.
+                out.heading("Progress")
+                simulation.reporters.append(
+                    StateDataReporter(out.handle, int(stage["state_interval_steps"]),
+                                      step=True, time=True, potentialEnergy=True,
+                                      kineticEnergy=True, totalEnergy=True, temperature=True,
+                                      volume=not implicit, density=not implicit, speed=True,
+                                      separator="  "))
             if hamiltonian_identity_record is not None:
                 from ..md.phase_space import PhaseSpaceReporter
 
@@ -445,11 +522,20 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         log.heading("Summary")
         log(f"  {name}: {steps} steps completed, {steps * timestep_fs / 1000.0:g} ps")
         log("  status: completed")
+
+        out.heading("Outputs")
+        out.field("final state", f"{restart_path}  (re-read OK)")
+        out.field("checkpoint", chk_path)
+        if traj_path.is_file():
+            out.field("trajectory", f"{traj_path}  ({describe_trajectory(traj_path)})")
+        out.completed(f"{name}: {steps} steps completed, "
+                      f"{steps * timestep_fs / 1000.0:g} ps")
     except BaseException as exc:
         log.fail(f"{type(exc).__name__}: {exc}")
         log.heading("Failure")
         log(f"  {type(exc).__name__}: {exc}")
         log.save()
+        out.failed(f"{type(exc).__name__}: {exc}")
         print(f"{name}: {exc}", file=sys.stderr)
         return 1
 
@@ -556,7 +642,6 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
     parser = argparse.ArgumentParser(description="run every stage of this workflow in order")
     parser.add_argument("-p", "--topology", required=True)
     parser.add_argument("-s", "--system", required=True)
-    parser.add_argument("--platform", default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
@@ -569,8 +654,6 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
                       "-r", f"{name}.xml", "-chk", f"{name}.chk"]
         if previous is not None:
             stage_argv += ["-c", previous]
-        if args.platform:
-            stage_argv += ["--platform", args.platform]
         if args.device is not None:
             stage_argv += ["--device", str(args.device)]
         if args.check:
