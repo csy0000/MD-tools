@@ -401,7 +401,11 @@ def test_a_large_timestep_without_hmr_is_refused_before_integrating(scripts):
     claims HMR, because by run time that is a fact rather than a request.
     """
     work = scripts / "md_script"
-    text = (work / "min.py").read_text().replace("'timestep_fs': 2.0", "'timestep_fs': 4.0")
+    # The generated stage now carries `'timestep_fs': 'auto'`, which resolves to 2 fs against
+    # these ordinary hydrogen masses -- correctly, and therefore uselessly for this test. The
+    # refusal being asserted is the one for an EXPLICIT large value, so state it explicitly.
+    text = (work / "min.py").read_text().replace("'timestep_fs': 'auto'", "'timestep_fs': 4.0")
+    assert "'timestep_fs': 4.0" in text, "the generated stage no longer declares a timestep"
     (work / "fast.py").write_text(text.replace("'name': 'min'", "'name': 'fast'"))
     try:
         result = subprocess.run(

@@ -259,17 +259,33 @@ def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
             supported = ", ".join(repr(m) for m in ("am1bcc", *NAGL_AM1BCC_METHODS))
             raise ValueError(
                 f"unsupported ligand_charge_method {method!r}; supported: {supported}")
-        generator = SMIRNOFFTemplateGenerator(
-            molecules=[offmol], forcefield=ff_cfg["ligand"]
-        )
+        # Two families, one already-resolved resource name. `ligand_forcefield` turned whatever
+        # the user wrote into an exact version before the box was built, so nothing here has to
+        # interpret a label -- it only has to pick the generator that loads this kind of file.
+        from .ligand_forcefield import gaff_provenance, is_gaff
+
+        resource = ff_cfg["ligand"]
+        family_provenance: dict[str, Any] = {}
+        if is_gaff(resource):
+            from openmmforcefields.generators import GAFFTemplateGenerator
+
+            # The charges are already on the molecule, assigned above by the requested method.
+            # GAFFTemplateGenerator uses them rather than recomputing, so the charge method
+            # recorded in the manifest is the one that actually produced these numbers.
+            generator = GAFFTemplateGenerator(molecules=[offmol], forcefield=resource)
+            family_provenance = gaff_provenance(resource)
+        else:
+            generator = SMIRNOFFTemplateGenerator(molecules=[offmol], forcefield=resource)
+            family_provenance = {"family": "smirnoff"}
         forcefield.registerTemplateGenerator(generator.generator)
         info["ligand"] = {
-            "forcefield": ff_cfg["ligand"],
+            "forcefield": resource,
             "charge_method": method,
             "net_charge_e": float(sum(c.m for c in offmol.partial_charges)),
             "formal_charge": int(round(sum(a.formal_charge.m for a in offmol.atoms))),
             "n_atoms": offmol.n_atoms,
             **charge_provenance,
+            **family_provenance,
         }
     return forcefield, info
 

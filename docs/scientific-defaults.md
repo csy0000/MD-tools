@@ -45,18 +45,18 @@ frequency, for instance — that is said plainly.
 |---|---|---|---|---|
 | protein force field | ff14SB (`amber14-all.xml` → `amber14/protein.ff14SB.xml`) | ff19SB (`amber19-all.xml`) | **JP** with TIP3P (§3) | backbone correction is empirical and TIP3P-specific |
 | water | TIP3P (`amber14/tip3p.xml`) | OPC (`amber19/opc.xml`) | **JP** (§3) | TIP3P misrepresents bulk water; ff14SB relies on error cancellation with it |
-| ligand force field | OpenFF Sage 2.2.1 (`openff-2.2.1`) | — | **CE** + **CB** at Sage 2.0 (§4) | 2.2.1 itself has no published protein–ligand benchmark |
+| ligand force field | OpenFF Sage 2.2.1 (`openff-2.2.1`) | GAFF, resolved to an exact version (§4.1) | **CE** + **CB** at Sage 2.0 (§4) | 2.2.1 itself has no published protein–ligand benchmark; GAFF2 has no dedicated publication |
 | ligand charges | AM1-BCC via AmberTools `sqm` | `am1bcc_nagl` (explicit) | **JP** with Sage (§4) | NAGL predicts AM1-BCC ELF10, it does not compute it |
 | implicit solvent | GBn2 + mbondi3, no SASA | — | **JP** with ff99SB/ff14SB (§5) | peptides and proteins only; see §6 |
-| box | rhombic dodecahedron | — | **CE** (§7) | — |
+| box | rhombic dodecahedron | `cube`, `octahedron` | **CE** (§7) | a cube needs ~1.4× the water for the same clearance |
 | padding | 1.5 nm | 2.0 nm | **CB** (§7) | not a guarantee for any future conformation |
 | electrostatics | PME, 1.0 nm real-space cutoff | — | **CE** + **ID** (§8) | finite-size artifacts are reduced, not removed |
 | thermostat | `LangevinMiddleIntegrator`, 300 K | — | **CE** (§9) | — |
 | friction | 1.0 ps⁻¹ | — | **CE** + **EX** (§9) | affects kinetics and transport, not just sampling speed |
 | barostat | `MonteCarloBarostat`, 1 bar | Berendsen: **documented, not implemented** (§10.1) | **CE** (§10) | Berendsen damps volume fluctuations and is not offered |
 | barostat frequency | 25 steps | — | **ID** + **CE** (§10) | 25 is OpenMM's default, not an optimum for any system |
-| timestep | 2 fs | 4 fs with HMR | **CE** (§11) | — |
-| hydrogen mass | unmodified | 3.024 amu | **CB** for stability (§11) | dynamics, kinetics and transport are altered |
+| timestep | `auto` → 2 fs, or 4 fs on a repartitioned System (§11.5) | any explicit value ≤ 3 fs | **CE** (§11) | resolved from the System's masses, never from a configuration's claim |
+| hydrogen mass | unmodified (`enabled: false`) | 3.024 amu (`enabled: true`) | **CB** for stability (§11) | dynamics, kinetics and transport are altered |
 | ionic strength | 0.15 M NaCl, counterions separate | — | **CE** | ion parameters are whatever the water XML carries |
 
 ---
@@ -186,6 +186,38 @@ For a protein-only system the record states that no ligand force field participa
 naming Sage for a calculation it contributed nothing to.
 
 *Evidence: **JP** (Sage + AM1-BCC), **ID** (resource resolution).*
+
+---
+
+### 4.1 GAFF as the documented alternative, resolved to an exact version
+
+Sage remains the default. GAFF is available through `openmmforcefields`'
+`GAFFTemplateGenerator`, which types the molecule with antechamber [@wang2006antechamber] and
+takes the AM1-BCC charges already assigned to it [@jakalian2002am1bcc]. GAFF version 1 is
+published [@wang2004gaff].
+
+**GAFF2 is not.** It has been distributed with AmberTools since 2015 and its provenance is the
+parameter file, not a paper [@amber_gaff2_distribution]. Citing Wang 2004 for a GAFF2 run would
+attribute version 2 parameters to the version 1 publication, which is why the two entries in the
+bibliography are kept apart.
+
+That has a direct consequence for what gets recorded. "GAFF2" does not identify a Hamiltonian:
+this environment ships `gaff-2.1`, `gaff-2.11` and `gaff-2.2.20`, they differ, and a trajectory
+belongs to exactly one of them. So `solute.ligand_forcefield: gaff2` is accepted as an alias and
+**resolved immediately** to the newest installed 2.x; the exact version is what reaches
+`built.log`, the force-field record and the machine record, and the alias never does. An exact
+version may be written instead, and one that is not installed is refused with the list that is.
+
+Because GAFF's parameters arrive through antechamber rather than from a single self-contained
+file, the AmberTools build is part of the provenance in a way it is not for SMIRNOFF. The record
+therefore carries the antechamber and `sqm` paths and the AmberTools version, read from the conda
+package record rather than scraped from a program banner.
+
+**Not claimed:** that GAFF2 and Sage are interchangeable, or that either is better here. They are
+different Hamiltonians; a study that switches between them is comparing force fields, not
+continuing a series.
+
+*Evidence: **CE** for GAFF v1; **ID** for the GAFF2 distribution and the resolved version.*
 
 ---
 
@@ -341,6 +373,29 @@ uncomfortably close to the cutoff.
 
 *Evidence: **CB** for 1.5 nm in protein–ligand production work [@hahn2024openff]; **CE + EX** for
 the general case; the cutoff gate is enforced code, not evidence.*
+
+---
+
+### 7.3 The two documented alternatives
+
+`solvent.box_shape` accepts three values, and an unknown one is refused by the schema before
+anything is solvated.
+
+| shape | height fraction | water for the same clearance | when |
+|---|---|---|---|
+| `dodecahedron` (default) | `1/√2` ≈ 0.707 | ~71 % of a cube | almost always |
+| `cube` | 1 | 100 % | when a downstream tool assumes an axis-aligned box |
+| `octahedron` | `√6/3` ≈ 0.816 | ~82 % of a cube | familiar from Amber workflows |
+
+The dodecahedron is the default because it is the cheapest of the three for a given
+solute-to-image clearance — the quantity that actually matters — and OpenMM supports all three
+directly, so this is a choice among supported reduced forms rather than a bespoke construction.
+
+Both the requested and the realised geometry are recorded in `built.log`: the box is only ever
+*grown* to satisfy the cutoff, never shrunk, and `grown_for_cutoff` says whether that happened.
+A reader therefore never has to infer whether the padding they asked for is the padding they got.
+
+*Evidence: **ID** for the supported shapes, **CE** for the clearance arithmetic (§7.1).*
 
 ---
 
@@ -506,6 +561,25 @@ by the defaults can be used for kinetic analysis without a caveat about its iner
 
 ### 11.2 The HMR option
 
+Requested explicitly, never implied by a null:
+
+```yaml
+hydrogen_mass_repartitioning:
+  enabled: false          # the default
+  hydrogen_mass_amu: 3.024
+```
+
+This replaced `constraints.hydrogen_mass_amu`, where `null` meant off and a number meant on. One
+field carrying both the switch and the value could not express "on, at the default mass", and
+reading a file required knowing the convention. The old key now raises a migration error naming
+its replacement rather than a generic unknown-key suggestion.
+
+Repartitioning takes mass **from the bonded heavy atom**, so the total is conserved; water is
+never repartitioned, because rigid water's hydrogen masses do not limit the timestep; and X-H
+constraints are required, because without them the stretch that HMR exists to slow is still the
+fastest motion in the system. All three are verified against the built System and recorded.
+
+
 `docs/examples/hmr-4fs.yaml` gives the complete change: hydrogen mass 3.024 amu, timestep 4 fs,
 `constraints: HBonds`, `rigid_water: true`. Repartitioning moves mass from each heavy atom onto the
 hydrogens bonded to it, lowering the hydrogen angle-bend frequencies and permitting a longer step
@@ -555,6 +629,37 @@ quantity your project cares about.
 
 *Evidence: **CB** for stability, **CE** for the equilibrium-sampling argument, and explicitly
 **nothing** for kinetic equivalence.*
+
+---
+
+### 11.5 `timestep_fs: auto`, and why the System decides
+
+The default is now the word `auto` rather than the number 2.0.
+
+`build-md` writes run scripts from a configuration file. It never opens `built.xml`, so it cannot
+know whether hydrogen mass repartitioning was applied — and the configuration is not evidence: the
+two files are written by different commands at different times, and only one of them contains
+masses. Under `auto` the decision is deferred to the moment the System is loaded:
+
+| requested | System | outcome |
+|---|---|---|
+| `auto` | ordinary hydrogens | 2 fs |
+| `auto` | repartitioned | 4 fs |
+| explicit ≤ 3 fs | either | honoured — 2 fs on an HMR System is slower than necessary, not wrong |
+| explicit > 3 fs | repartitioned | honoured |
+| explicit > 3 fs | ordinary hydrogens | **refused, before anything integrates** |
+
+The same rule serves cMD, REST2, rREST2 and AIS, and every log records the resolved value together
+with its basis — `ordinary_masses`, `hmr_masses` or `explicit` — and the heaviest hydrogen mass the
+decision was made from. A number without its basis cannot be audited: 2 fs chosen by `auto` on an
+ordinary System and 2 fs written by hand on a repartitioned one are different decisions.
+
+Step counts remain authoritative throughout. `build-md` prints step counts and, under `auto`, no
+picosecond figure at all, because it would be a guess; the derived duration appears in the stage
+log once the timestep is known.
+
+*Evidence: **ID**. The 2 fs and 4 fs values themselves are §11.1 and §11.2; this section is about
+which of them is applied and on what evidence.*
 
 ---
 

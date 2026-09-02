@@ -3,20 +3,24 @@
 ## Matrix
 
 Determined by what actually passes, not by aspiration. A version enters this table when a CI run
-gates it, and is described as *locally verified* until then. The only workflow is
-`release-validation`, which runs on `workflow_dispatch` and on an `openmm-v*` tag — not on every
-push — so "gated" here means gated at release, not continuously.
+gates it, and is described as *locally verified* until then. The workflow is `ci`, which runs on pull requests, on pushes to `dev` and `main`, and on manual
+dispatch, so "gated" here means gated on every push. It validates packaging and the interface and
+runs no dynamics; the CUDA lane is separate local evidence.
 
 | | version | status |
 |---|---|---|
-| Python | 3.12 | pinned by `environment-ci.yml`; gated by `release-validation`; locally verified on 3.12.13 |
-| OpenMM | 8.6.0 | pinned by `environment-ci.yml`; gated by `release-validation`; acceptance run on the conda-forge **release** package `openmm 8.6.0 py312hdfcc665_0`, which reports `openmm.version.version` as `8.6.0.dev-c6173db` — the release identity comes from the package, not that string |
+| Python | 3.12 | pinned by `environment-ci.yml`; gated by `ci`; locally verified on 3.12.13 |
+| OpenMM | 8.6.0 | pinned by `environment-ci.yml`; gated by `ci`; acceptance run on the conda-forge **release** package `openmm 8.6.0 py312hdfcc665_0`, which reports `openmm.version.version` as `8.6.0.dev-c6173db` — the release identity comes from the package, not that string |
 | MDTraj | 1.11.1 locally | reads the AIS source DCD and its box vectors; installed and import-checked |
 | OpenFF toolkit | 0.19.0 locally | installed from the conda environment; unpinned in the solve |
 | openmmforcefields | 0.16.0 locally | as above |
 | AmberTools | `sqm`, `antechamber`, `tleap` on PATH | presence and AM1-BCC readiness checked at install and in CI |
 | ParmEd / RDKit | 4.3.1 / 2026.03.1 locally | installed and import-checked |
-| OpenFF force fields | `openff-2.2.1` (Sage 2.2.1) | shipped by `openforcefields`; loaded and asserted by a non-GPU test |
+| OpenFF force fields | `openff-2.2.1` (Sage 2.2.1) | the default; shipped by `openforcefields`; loaded and asserted by a non-GPU test |
+| GAFF force fields | `gaff-1.4`, `gaff-1.8`, `gaff-1.81`, `gaff-2.1`, `gaff-2.11`, `gaff-2.2.20` | the documented alternative, through `GAFFTemplateGenerator`. The alias `gaff2` resolves to the newest installed 2.x and the **exact** version is recorded; an uninstalled version is refused. GAFF2 has no dedicated publication — see scientific defaults §4.1 |
+| Box shapes | `dodecahedron` (default), `cube`, `octahedron` | all three supported by OpenMM's reduced forms; an unknown shape is refused before solvation |
+| Pressure coupling | `MonteCarloBarostat` | the only barostat. Berendsen weak coupling is **documented, not implemented** — see scientific defaults §10.1 |
+| Timestep | `auto`, or an explicit value | `auto` resolves from the masses in the built System: 2 fs ordinary, 4 fs repartitioned. Above 3 fs without HMR is refused before integrating |
 | OpenMM force fields | `amber14-all.xml` + `amber14/tip3p.xml` (default), `amber19-all.xml` + `amber19/opc.xml` | loaded and asserted by a non-GPU test, including the Na+/Cl- templates |
 | OS | ubuntu-latest (CI), Linux x86-64 (local) | no other OS is claimed |
 | Accelerator (CI) | **CPU only** | the runners have no GPU; `environment-ci.yml` omits the CUDA pin |

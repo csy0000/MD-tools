@@ -37,6 +37,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ..openmm.timestep import resolve_timestep_fs
 from ..build.record import LogWriter, file_facts, openmm_platform_facts, read_record
 
 
@@ -106,32 +107,11 @@ def _config_fingerprint(stage: dict[str, Any], system_sha: str, topology_sha: st
 def check_timestep_against_masses(timestep_fs: float, system, topology) -> None:
     """Refuse a large timestep on hydrogens that were never repartitioned.
 
-    Checked against the MASSES IN THE SYSTEM, not against a configuration that claims HMR was
-    applied. HMR rewrites particle masses at build time; by the time a stage runs, the System
-    either has repartitioned hydrogens or it does not, and that is a fact rather than a request.
-
-    This is the combination nothing else catches: a 4 fs timestep is reasonable, a System built
-    without HMR is reasonable, and together they integrate a ~10 fs X-H angle motion with a 4 fs
-    step and silently produce a trajectory that is wrong rather than a run that fails.
+    Kept as the narrow yes/no question. The full decision -- including resolving `auto` -- is
+    `md_tools.openmm.timestep.resolve_timestep_fs`, which this delegates to so there is one
+    implementation of the rule and one place the masses are read.
     """
-    if timestep_fs <= 3.0:
-        return
-    from openmm import unit
-
-    masses = []
-    for atom in topology.atoms():
-        if atom.element is not None and atom.element.symbol == "H":
-            masses.append(system.getParticleMass(atom.index).value_in_unit(unit.dalton))
-    if not masses:
-        return
-    heaviest = max(masses)
-    if heaviest < 2.0:
-        raise SystemExit(
-            f"the timestep is {timestep_fs} fs but the heaviest hydrogen in this System is "
-            f"{heaviest:.3f} amu, so hydrogen mass repartitioning was NOT applied when it was "
-            f"built. A timestep above ~3 fs needs HMR. Either rebuild with "
-            f"constraints.hydrogen_mass_amu set in the build configuration, or lower "
-            f"dynamics.timestep_fs to 2.0. Nothing has been integrated.")
+    resolve_timestep_fs(float(timestep_fs), system, topology)
 
 
 def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
@@ -198,17 +178,25 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                     "state_interval_steps", "checkpoint_interval_steps"):
             if stage.get(key) is not None:
                 log.field(key, stage[key])
-        timestep_fs = float(stage["timestep_fs"])
+        # The numerical timestep is decided HERE, against the masses in the System that was just
+        # loaded -- not upstream in `build-md`, which never opens built.xml and would have to
+        # trust a configuration's claim about hydrogen mass repartitioning. Step counts stay
+        # authoritative; a physical duration is only derived once this returns.
+        timestep = resolve_timestep_fs(stage["timestep_fs"], system, pdb.topology)
+        timestep_fs = timestep["timestep_fs"]
         steps = int(stage.get("steps") or 0)
+        log.field("timestep", f"{timestep_fs} fs (requested {timestep['requested']!r}, "
+                              f"{timestep['basis']}; heaviest hydrogen "
+                              f"{timestep['heaviest_hydrogen_amu']} amu)")
         log.field("derived time", f"{steps} steps x {timestep_fs} fs = "
                                   f"{steps * timestep_fs / 1000.0:g} ps "
                                   f"({steps * timestep_fs / 1e6:g} ns)")
+        log.update(timestep=timestep)
         if implicit and stage["ensemble"] != "NVT":
             raise SystemExit(
                 f"stage {name} declares ensemble {stage['ensemble']}, but the System is not "
                 f"periodic. Implicit solvent has no volume to control, so there is no NPT here.")
         log.field("solvent", "implicit (no barostat possible)" if implicit else "explicit")
-        check_timestep_against_masses(timestep_fs, system, pdb.topology)
 
         # -- the Force layout, fixed before any state is loaded -----------------------------
         #

@@ -244,6 +244,17 @@ def _ligand_record(*, is_ligand, reported, requested, checksums):
         "n_atoms": ligand.get("n_atoms"),
         "prepared_artifact": prepared.get("path"),
         "prepared_artifact_sha256": prepared.get("sha256"),
+        # Which family parameterised it, and -- for GAFF -- what else is part of the Hamiltonian.
+        # GAFF types the molecule with antechamber and charges it through sqm, so the AmberTools
+        # build in the environment identifies the result in a way it does not for SMIRNOFF, where
+        # the offxml file is the whole specification. `null` for a Sage build is correct and
+        # different from absent.
+        "family": ligand.get("family"),
+        "typing": ligand.get("typing"),
+        "installed_versions": ligand.get("installed_versions"),
+        "antechamber": ligand.get("antechamber"),
+        "sqm": ligand.get("sqm"),
+        "ambertools": ligand.get("ambertools"),
     }
 
 
@@ -388,4 +399,6 @@ def _null_ligand() -> dict[str, Optional[str]]:
             "charge_method": None, "charge_scheme": None, "charge_model": None,
             "charge_model_sha256": None, "toolkit_registry": None,
             "net_charge_e": None, "formal_charge": None, "n_atoms": None,
-            "prepared_artifact": None, "prepared_artifact_sha256": None}
+            "prepared_artifact": None, "prepared_artifact_sha256": None,
+            "family": None, "typing": None, "installed_versions": None,
+            "antechamber": None, "sqm": None, "ambertools": None}

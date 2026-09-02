@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -50,7 +51,13 @@ BUILD_SCHEMA = Schema(
                       "with the small-molecule force field. Sage never touches a peptide-only "
                       "input, and the record must not claim it did."),
             Field("ligand_forcefield", str, default="sage-2.2.1",
-                  doc="Small-molecule force field, used only when peptide is false."),
+                  doc="Small-molecule force field, used only when peptide is false. Two families "
+                      "are supported. `sage-2.2.1` (the default) is OpenFF Sage, applied through "
+                      "SMIRNOFF. `gaff2` selects the newest installed GAFF 2.x and is resolved to "
+                      "its exact version -- `gaff-2.2.20` here -- because GAFF2 has been "
+                      "distributed as several different parameter sets and the ambiguous label "
+                      "does not identify a Hamiltonian. An exact version such as `gaff-2.11` may "
+                      "be written instead; one that is not installed is refused, naming what is."),
             Field("ligand_charge_method", str, default="am1bcc",
                   enum=("am1bcc", "am1bccelf10", "gasteiger", "nagl"),
                   doc="Partial-charge method for the small molecule. am1bcc is the validated "
@@ -97,16 +104,49 @@ BUILD_SCHEMA = Schema(
             Field("rigid_water", bool, default=True,
                   doc="Forced to false under implicit solvent, where there is no water to hold "
                       "rigid."),
-            Field("hydrogen_mass_amu", float, default=None, nullable=True, minimum=1.0,
-                  maximum=6.0, unit="amu",
-                  doc="Hydrogen mass repartitioning. Null (the default) means HMR is NOT applied "
-                      "and the serialised masses are the force field's own. Setting this rewrites "
-                      "particle masses in built.xml, which is a property of the System and cannot "
-                      "be inferred later from a config that merely asks for 4 fs. Whether HMR was "
-                      "applied, the target mass, and a mass summary are all recorded."),
-        ], doc="Constraints and mass treatment. These change the serialised System."),
+        ], doc="Constraints. These change the serialised System."),
+        Section("hydrogen_mass_repartitioning", [
+            Field("enabled", bool, default=False,
+                  doc="Whether to repartition hydrogen masses. FALSE by default: the serialised "
+                      "masses are then the force field's own. Repartitioning rewrites particle "
+                      "masses in built.xml, which is a property of the System -- it cannot be "
+                      "inferred later from a configuration that merely asks for a 4 fs timestep, "
+                      "which is exactly why it is stated here and verified from the System at "
+                      "run time."),
+            Field("hydrogen_mass_amu", float, default=3.024, minimum=1.0, maximum=6.0,
+                  unit="amu",
+                  doc="Target hydrogen mass when enabled. Mass is moved FROM the bonded heavy "
+                      "atom, so the total is conserved; water is never repartitioned, because "
+                      "rigid water's hydrogen masses do not limit the timestep. Ignored, and "
+                      "recorded as ignored, when enabled is false."),
+        ], doc="Hydrogen mass repartitioning, stated explicitly rather than implied by a null."),
     ],
 )
+
+
+def _check_hmr_constraints(resolved: dict[str, Any]) -> None:
+    """Repartitioning without X-H constraints is the combination that silently does nothing good.
+
+    HMR buys a longer timestep by slowing the X-H stretch. If those bonds are NOT constrained the
+    stretch is still the fastest motion in the system, so the repartitioning has moved mass around
+    -- changing the dynamics -- without removing the thing that limits the step. Worse, the user
+    asked for it in order to run at 4 fs, and 4 fs on unconstrained X-H does not integrate.
+
+    Refused rather than warned: there is no reading of this configuration under which it does what
+    the person who wrote it wanted.
+    """
+    if not resolved["hydrogen_mass_repartitioning"]["enabled"]:
+        return
+    kind = str(resolved["constraints"]["type"])
+    if kind == "None":
+        raise ConfigError(
+            "hydrogen_mass_repartitioning.enabled is true but constraints.type is 'None'.\n"
+            "  Repartitioning lengthens the stable timestep by slowing the X-H stretch. With the "
+            "X-H bonds unconstrained that stretch is still the fastest motion in the system, so "
+            "the masses would be changed -- altering the dynamics -- without buying the timestep "
+            "the change is for.\n"
+            "  Set constraints.type to HBonds (or AllBonds), or set "
+            "hydrogen_mass_repartitioning.enabled to false.")
 
 
 def _check_pairings(resolved: dict[str, Any]) -> None:
@@ -130,6 +170,37 @@ def _check_pairings(resolved: dict[str, Any]) -> None:
             f"force field was validated for. Use ff14SB with {solvent}, or OPC with ff19SB.")
 
 
+def _refuse_retired_hmr_key(document: dict[str, Any]) -> None:
+    """`constraints.hydrogen_mass_amu` was the old way to ask for repartitioning. Say so.
+
+    The generic unknown-key refusal would name the key and suggest `rigid_water`, which is worse
+    than useless here: the value has not moved, it has changed MEANING. It used to be
+    null-means-off, where the number and the on/off switch were the same field, so a file could
+    not distinguish "HMR off" from "HMR on at the default mass" without knowing that convention.
+
+    A migration error is worth more than a suggestion, because the old file is otherwise valid and
+    the user's intent is unambiguous.
+    """
+    constraints = document.get("constraints")
+    if not isinstance(constraints, dict) or "hydrogen_mass_amu" not in constraints:
+        return
+    value = constraints["hydrogen_mass_amu"]
+    if value is None:
+        wanted = "  hydrogen_mass_repartitioning:\n    enabled: false"
+        meaning = "`null` meant repartitioning was OFF"
+    else:
+        wanted = (f"  hydrogen_mass_repartitioning:\n    enabled: true\n"
+                  f"    hydrogen_mass_amu: {value}")
+        meaning = f"a value meant repartitioning was ON with a target of {value} amu"
+    raise ConfigError(
+        f"constraints.hydrogen_mass_amu has been replaced. It used to carry two facts in one "
+        f"field -- {meaning} -- so a file could not say 'on, at the default mass' at all. "
+        f"Repartitioning is now stated explicitly:\n\n{wanted}\n\n"
+        f"Move the value into that block and delete it from `constraints`. Nothing about the "
+        f"repartitioning itself changed: mass still comes from the bonded heavy atom, water is "
+        f"still never repartitioned, and the result is still verified against the built System.")
+
+
 def resolve_build_config(path: Path | None) -> dict[str, Any]:
     """Resolve a build configuration, recording which keys the user actually stated.
 
@@ -150,10 +221,12 @@ def resolve_build_config(path: Path | None) -> dict[str, Any]:
             raise ConfigError(f"{path}: not valid YAML -- {exc}") from None
         if not isinstance(document, dict):
             raise ConfigError(f"{path}: the document must be a mapping")
+    _refuse_retired_hmr_key(document)
     stated = {name: tuple(block) for name, block in document.items() if isinstance(block, dict)}
     resolved = BUILD_SCHEMA.resolve(document)
     resolved["_explicit_keys"] = stated
     _check_pairings(resolved)
+    _check_hmr_constraints(resolved)
     resolved.pop("_explicit_keys")
     resolved["_stated"] = stated
     return resolved
@@ -184,11 +257,16 @@ def _sys_document(resolved: dict[str, Any]) -> dict[str, Any]:
             "negative_ion": resolved["solvent"]["negative_ion"],
             "cutoff_nm": resolved["solvent"]["cutoff_nm"],
         })
+    hmr_block = resolved["hydrogen_mass_repartitioning"]
     document["constraints"] = {
         "type": resolved["constraints"]["type"],
         "rigid_water": (False if is_implicit(solvent)
                         else bool(resolved["constraints"]["rigid_water"])),
-        "hydrogen_mass_amu": resolved["constraints"]["hydrogen_mass_amu"],
+        # The builders take a scalar-or-null; the CONFIGURATION states it explicitly. `enabled:
+        # false` collapses to null here, which is what "the force field's own masses" means to
+        # `createSystem`. The user-facing block is never a null-with-a-meaning.
+        "hydrogen_mass_amu": (float(hmr_block["hydrogen_mass_amu"])
+                              if hmr_block["enabled"] else None),
     }
     document.pop("dataset", None)          # registration is a separate command now
     return document
@@ -312,7 +390,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
     document = _sys_document(resolved)
 
-    from ..openmm.system_config import resolve_sys_config
+    from ..openmm.system_config import pairing_warnings, resolve_sys_config
     from ..openmm.builders import (Log as _BuilderLog, _build_explicit, _build_implicit,
                                _legacy_cfg)
 
@@ -323,9 +401,18 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     sys_resolved = resolve_sys_config(document)
     cfg = _legacy_cfg(sys_resolved)
 
+    # A supported-but-unvalidated combination is allowed and never silent. Emitted on stderr so a
+    # person watching sees it, and recorded structurally so a reader of the DATA sees it too --
+    # a warning that exists only in a terminal that has since been closed is not provenance.
+    warnings = pairing_warnings(sys_resolved)
+    for warning in warnings:
+        print(f"build-top: WARNING: {warning['message']}", file=sys.stderr)
+        log(f"  WARNING: {warning['message']}")
+
     log.update(
         input=file_facts(input_path),
         resolved_config=sys_resolved,
+        warnings=warnings,
         stated_keys={k: list(v) for k, v in stated.items()},
         interpretation={"route": route, "smiles": smiles, "residue_name": residue_name,
                         "input_format": suffix.lstrip(".")},
@@ -378,12 +465,21 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
         masses = [system.getParticleMass(i).value_in_unit_system(
             __import__("openmm").unit.md_unit_system) for i in range(n_sys)]
-        hmr_requested = resolved["constraints"]["hydrogen_mass_amu"]
+        hmr_block = resolved["hydrogen_mass_repartitioning"]
+        hmr_enabled = bool(hmr_block["enabled"])
+        hmr_requested = float(hmr_block["hydrogen_mass_amu"]) if hmr_enabled else None
         hydrogen_masses = sorted({round(m, 4) for atom, m in zip(pdb.topology.atoms(), masses)
                                   if atom.element is not None and atom.element.symbol == "H"})
         hmr = {
+            "enabled": hmr_enabled,
             "applied": hmr_requested is not None,
             "target_hydrogen_mass_amu": hmr_requested,
+            # Present and explained rather than merely absent: a reader must be able to tell
+            # "repartitioning was off" from "nobody recorded whether it was on".
+            "configured_hydrogen_mass_amu": float(hmr_block["hydrogen_mass_amu"]),
+            "ignored_because_disabled": (None if hmr_enabled
+                                         else "enabled is false; the force field's own masses "
+                                              "are serialised"),
             "distinct_hydrogen_masses_amu": hydrogen_masses[:12],
             "total_mass_amu": round(sum(masses), 4),
             "recommended_timestep_fs": 4.0 if hmr_requested is not None else 2.0,

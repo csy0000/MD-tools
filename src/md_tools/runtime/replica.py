@@ -222,6 +222,20 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
 
     protocol_name = ladder["protocol"]
+
+    # Resolve the timestep against the masses in the System before anything downstream -- the
+    # protocol file, the exchange interval in picoseconds and every derived duration -- is
+    # written. Under `auto` this is where 2 fs or 4 fs is decided, from the System rather than
+    # from a configuration's claim, and the ladder carries a number from here on.
+    from openmm import XmlSerializer as _XmlSerializer
+    from openmm.app import PDBFile as _PDBFile
+    from ..openmm.timestep import resolve_timestep_fs
+
+    _topology = _PDBFile(str(args.topology)).topology
+    _system = _XmlSerializer.deserialize(Path(args.system).read_text(encoding="utf-8"))
+    timestep_record = resolve_timestep_fs(ladder["dynamics"]["timestep_fs"], _system, _topology)
+    ladder = dict(ladder, dynamics=dict(ladder["dynamics"],
+                                        timestep_fs=timestep_record["timestep_fs"]))
     dynamics = ladder["dynamics"]
     timestep = float(dynamics["timestep_fs"])
     states = int(ladder["n_states"])

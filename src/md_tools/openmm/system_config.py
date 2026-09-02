@@ -22,7 +22,7 @@ import yaml
 from ..build.strict import ConfigError
 from .system_defaults import canonical_solvent, is_implicit
 
-__all__ = ["resolve_sys_config", "openff_resource", "ConfigError"]
+__all__ = ["resolve_sys_config", "openff_resource", "pairing_warnings", "ConfigError"]
 
 def resolve_sys_config(document: dict[str, Any]) -> dict[str, Any]:
     """The effective system settings: the irrelevant solvent block removed, and checks applied."""
@@ -71,45 +71,49 @@ def resolve_sys_config(document: dict[str, Any]) -> dict[str, Any]:
 
     _check_constraints(resolved)
     _check_protein_solvation_pairing(resolved)
-    _check_explicit_pairing(resolved)
     return resolved
 
 
 def openff_resource(name):
-    """`sage-2.2.1` is what a user writes; `openff-2.2.1` is what the toolkit loads.
+    """The exact small-molecule resource a written label resolves to.
 
-    The installed `openforcefields` package ships the file as `openff-2.2.1.offxml`, and
-    `SMIRNOFFTemplateGenerator` resolves the name with or without the suffix. A name that does not
-    resolve raises there, at the point the parameters would have been assigned.
+    `sage-2.2.1` is what a user writes and `openff-2.2.1` is what the toolkit loads; `gaff2` is an
+    alias for the newest installed GAFF 2.x. The resolution -- and the refusal of a GAFF version
+    that is not installed -- lives in `ligand_forcefield`, which owns it for every caller.
+
+    Kept under this name because `builders.py` and the resolved system document already use it.
     """
-    if not name:
-        return None
-    text = str(name).strip().lower()
-    if text.startswith("sage-"):
-        return "openff-" + text[len("sage-"):]
-    return text
+    from .ligand_forcefield import resolve_ligand_forcefield
+
+    return resolve_ligand_forcefield(name)
 
 
-def _check_explicit_pairing(resolved: dict[str, Any]) -> None:
-    """Refuse a hand-edited explicit configuration that crosses the two supported pairs.
+def pairing_warnings(resolved: dict[str, Any]) -> list[dict[str, Any]]:
+    """Structured warnings for an explicit protein/water pairing outside the two supported ones.
 
-    the build configuration writes a coupled selection -- ff14SB with TIP3P, ff19SB with OPC -- but the file it
-    writes is ordinary editable YAML, so generating it correctly is not the same as building it
-    correctly. Changing `solvent.model` to OPC and leaving `forcefield.protein` at ff14SB produces
-    a System, runs to completion, and reports a Hamiltonian nobody validated.
+    **A warning, not a refusal.** ff14SB + OPC and ff19SB + TIP3P are combinations a competent user
+    may deliberately want -- to reproduce someone else's published setup, or to measure exactly the
+    water-model sensitivity this pairing exposes. Refusing them made MD-tools the arbiter of
+    somebody else's experiment. What the tool owes the user is that the choice is never made
+    silently or by accident.
+
+    So the two supported pairs are quiet, and a crossed pair is loud: named on stderr and recorded
+    structurally in `built.log` and its machine record, so a reader of the data a year later can
+    see the combination was chosen rather than inferred.
 
     The two pairs are not interchangeable halves. ff14SB's backbone adjustment is an empirical
-    correction fit in TIP3P and its authors caution that transferring it to another solvent model
+    correction fit in TIP3P, and its authors caution that transferring it to another water model
     needs evaluation; ff19SB's amino-acid-specific CMAPs were trained for a better water model and
     its authors recommend OPC. Crossing them discards the reason either pair works. See
     `docs/scientific-defaults.md` section 3.
 
-    Both halves are checked, in both directions, because either one alone can be the edited field.
+    This is about the PROTEIN/WATER pairing only. A ligand force field -- Sage or GAFF -- is
+    orthogonal to it and never triggers a warning here.
     """
     from .system_defaults import EXPLICIT_COMBINATIONS, PROTEIN_FAMILY_MARKERS, WATER_FAMILY_MARKERS
 
     if resolved.get("solvation") != "explicit":
-        return
+        return []
     forcefield = resolved.get("forcefield") or {}
     solvent = resolved.get("solvent") or {}
     model = canonical_solvent(solvent.get("model"))
@@ -125,31 +129,32 @@ def _check_explicit_pairing(resolved: dict[str, Any]) -> None:
                 return name
         return ""
 
-    wrong = []
+    crossed = []
     if protein and family(protein, PROTEIN_FAMILY_MARKERS) not in ("", model):
-        wrong.append(("forcefield.protein", protein, expected["protein"]))
+        crossed.append(("forcefield.protein", protein, expected["protein"]))
     if water and family(water, WATER_FAMILY_MARKERS) not in ("", model):
-        wrong.append(("forcefield.water", water, expected["water"]))
-    if not wrong:
-        return
+        crossed.append(("forcefield.water", water, expected["water"]))
+    if not crossed:
+        return []
 
-    named = "\n".join(f"      {field}: {value}   -> should be {want}" for field, value, want in wrong)
-    raise ConfigError(
-        f"solvent.model = {model!r} does not match the force field this configuration names.\n"
-        f"{named}\n"
-        f"  The protein force field and the water model are ONE selection, not two independent\n"
-        f"  keys. {model} is supported only as:\n"
-        f"      forcefield.protein: {expected['protein']}\n"
-        f"      forcefield.water:   {expected['water']}\n"
-        f"      solvent.model:      {model}\n"
-        f"  and the other supported explicit selection is\n"
-        + "".join(f"      {other}: {values['protein']} + {values['water']}\n"
-                  for other, values in EXPLICIT_COMBINATIONS.items() if other != model)
-        + "  Crossing them combines a backbone with a water model it was not corrected for; both\n"
-          "  run and neither is a combination anyone has validated. See\n"
-          "  docs/scientific-defaults.md section 3.\n"
-          "  Set solvent.model in your build configuration: "
-        + f"{model}` if you did not mean to change it.")
+    named = ", ".join(f"{field}={value!r}" for field, value, _ in crossed)
+    other = ", ".join(f"{name} = {values['protein']} + {values['water']}"
+                      for name, values in EXPLICIT_COMBINATIONS.items())
+    return [{
+        "code": "crossed_explicit_pair",
+        "severity": "warning",
+        "message": (
+            f"CROSSED PROTEIN/WATER PAIR: solvent.model={model!r} with {named}. "
+            f"The protein force field and the water model are one coupled selection. The pairs "
+            f"that were developed and validated together are: {other}. This combination will "
+            f"build and run; it is not one anyone has validated, and the backbone correction is "
+            f"being used with a water model it was not fit for. See "
+            f"docs/scientific-defaults.md section 3."),
+        "solvent_model": model,
+        "fields": [{"field": field, "value": value, "supported_pair_expects": want}
+                   for field, value, want in crossed],
+        "supported_pairs": {name: dict(values) for name, values in EXPLICIT_COMBINATIONS.items()},
+    }]
 
 
 def _check_protein_solvation_pairing(resolved: dict[str, Any]) -> None:

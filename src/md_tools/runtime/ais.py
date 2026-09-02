@@ -137,6 +137,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     from openmm.app import DCDFile, PDBFile, Simulation
 
     from ..openmm.ais import switching_schedule
+    from ..openmm.timestep import resolve_timestep_fs
     from ..openmm.system import classify_omega_bonds
     from ..openmm.templates.md_stages import derive_seed
     from ..openmm.templates.rest2_scaling import TauSwitcher
@@ -165,15 +166,24 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     log("=" * 68)
 
     try:
+        # The System is opened BEFORE the schedule is built, because the schedule reports a
+        # duration and the duration needs the numerical timestep -- which under `auto` is a fact
+        # about the masses in this System, not about the configuration.
+        pdb = PDBFile(str(topology_path))
+        base = XmlSerializer.deserialize(system_path.read_text(encoding="utf-8"))
+
+        timestep = resolve_timestep_fs(dynamics["timestep_fs"], base, pdb.topology)
+        dynamics = dict(dynamics, timestep_fs=timestep["timestep_fs"])
+        log.field("timestep", f"{timestep['timestep_fs']} fs (requested "
+                              f"{timestep['requested']!r}, {timestep['basis']})")
+        log.update(timestep=timestep)
+
         schedule = switching_schedule(
             tau_start=float(ais["tau_start"]), tau_end=float(ais["tau_end"]),
             switching_steps=int(ais["switching_steps"]),
             parameter_update_interval_steps=int(ais["parameter_update_interval_steps"]),
             observation_interval_steps=int(ais["observation_interval_steps"]),
             timestep_fs=float(dynamics["timestep_fs"]))
-
-        pdb = PDBFile(str(topology_path))
-        base = XmlSerializer.deserialize(system_path.read_text(encoding="utf-8"))
         if pdb.topology.getNumAtoms() != base.getNumParticles():
             raise SystemExit(f"{topology_path} has {pdb.topology.getNumAtoms()} atoms but "
                              f"{system_path} has {base.getNumParticles()} particles")

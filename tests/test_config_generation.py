@@ -173,9 +173,14 @@ def test_a_barostat_interval_that_is_not_a_positive_whole_step_count_is_refused(
 
 # --- 2 fs is the baseline; 4 fs needs HMR AND the constraints -----------------
 
-def test_the_default_protocol_is_2fs_without_hmr():
-    assert resolve_md_config(_written({"protocol": "cMD"}))["dynamics"]["timestep_fs"] == 2.0
-    assert D.sys_defaults()["constraints"]["hydrogen_mass_amu"] is None
+def test_the_default_protocol_defers_the_timestep_and_leaves_hmr_off():
+    """The default is `auto`, not 2.0. The 2 fs still arrives -- from the System, at run time.
+
+    `build-md` cannot know whether the System it will be pointed at was repartitioned, so the
+    default stopped being a number and became the instruction to look. The number this resolves
+    to on ordinary hydrogens is asserted against a real System in `test_timestep_resolution.py`.
+    """
+    assert resolve_md_config(_written({"protocol": "cMD"}))["dynamics"]["timestep_fs"] == "auto"
     assert D.sys_defaults()["constraints"]["type"] == "HBonds"
     assert D.sys_defaults()["constraints"]["rigid_water"] is True
 
@@ -207,12 +212,12 @@ def test_a_hydrogen_mass_lighter_than_hydrogen_is_refused():
     from md_tools.openmm.system_config import resolve_sys_config
 
     system = D.sys_defaults()
-    system["constraints"]["hydrogen_mass_amu"] = 0.5
+    system["constraints"]["hydrogen_mass_amu"] = 0.5   # the retired scalar, still checked below
     with pytest.raises(ConfigError, match="lighter than a hydrogen"):
         resolve_sys_config(system)
 
 
-# --- a hand-edited explicit configuration cannot cross the two supported pairs ---------------
+# --- a hand-edited explicit configuration may cross the two supported pairs, loudly ----------
 
 @pytest.mark.parametrize("solvent, field, value", [
     ("TIP3P", "protein", "amber19-all.xml"),
@@ -222,29 +227,74 @@ def test_a_hydrogen_mass_lighter_than_hydrogen_is_refused():
     ("OPC", "protein", "amber14/protein.ff14SB.xml"),
     ("OPC", "water", "amber14/tip3p.xml"),
 ])
-def test_a_crossed_explicit_pair_is_refused_however_it_was_spelled(solvent, field, value):
-    """The defaults are a coupled selection; a configuration file is editable YAML.
+def test_a_crossed_explicit_pair_warns_however_it_was_spelled(solvent, field, value):
+    """It used to be refused. It is now a warning, and the warning is the deliverable.
 
-    Generating the pair correctly is not the same as building it correctly. Changing one half by
-    hand produces a System, runs to completion, and reports a Hamiltonian nobody validated -- so
-    the crossing is refused before a System exists, and refused on the FAMILY of the resource name
-    rather than on an exact string, because there is more than one way to spell each force field.
+    Refusing made MD-tools the arbiter of somebody else's experiment: reproducing a published
+    ff14SB/OPC setup, or measuring the water-model sensitivity this pairing exposes, are things a
+    competent user may deliberately want. What the tool owes them is that the choice can never be
+    made silently or by accident.
+
+    So this asserts the warning is produced, names the field, and says what the supported pairs
+    are -- and that it is detected on the FAMILY of the resource name rather than an exact string,
+    because there is more than one way to spell each force field.
+    """
+    from md_tools.openmm.system_config import pairing_warnings, resolve_sys_config
+    from md_tools.openmm.system_defaults import sys_defaults
+
+    document = sys_defaults(solvent=solvent)
+    document["forcefield"][field] = value
+    resolved = resolve_sys_config(document)          # no longer raises
+
+    warnings = pairing_warnings(resolved)
+    assert len(warnings) == 1, f"expected exactly one warning, got {warnings}"
+    warning = warnings[0]
+    assert warning["code"] == "crossed_explicit_pair"
+    assert warning["severity"] == "warning"
+    assert any(entry["field"] == f"forcefield.{field}" for entry in warning["fields"]), warning
+    message = warning["message"]
+    assert value in message and solvent in message
+    assert "amber14-all.xml" in message and "amber19-all.xml" in message
+    assert "coupled selection" in message
+
+
+@pytest.mark.parametrize("solvent, protein", [("TIP3P", "amber14-all.xml"),
+                                              ("OPC", "amber19-all.xml")])
+def test_a_supported_pair_warns_about_nothing(solvent, protein):
+    """The warning must discriminate. One that fires on the default pair is noise."""
+    from md_tools.openmm.system_config import pairing_warnings, resolve_sys_config
+    from md_tools.openmm.system_defaults import sys_defaults
+
+    document = sys_defaults(solvent=solvent)
+    document["forcefield"]["protein"] = protein
+    assert pairing_warnings(resolve_sys_config(document)) == []
+
+
+@pytest.mark.parametrize("ligand", ["sage-2.2.1", "gaff2"])
+def test_the_ligand_force_field_never_triggers_a_pairing_warning(ligand):
+    """The warning is about the PROTEIN/WATER pairing. Sage and GAFF are orthogonal to it."""
+    from md_tools.openmm.system_config import pairing_warnings, resolve_sys_config
+    from md_tools.openmm.system_defaults import sys_defaults
+
+    document = sys_defaults(peptide=False, solvent="TIP3P")
+    document["solute"]["ligand_forcefield"] = ligand
+    assert pairing_warnings(resolve_sys_config(document)) == []
+
+
+def test_incoherent_physics_is_still_a_hard_error_not_a_warning():
+    """Softening the pairing policy must not soften the combinations that cannot be built.
+
+    ff19SB has no GBn2 parameterisation: that is not an unvalidated choice a user might defend,
+    it is a System that does not mean anything. It stays a refusal.
     """
     from md_tools.build.strict import ConfigError
     from md_tools.openmm.system_config import resolve_sys_config
     from md_tools.openmm.system_defaults import sys_defaults
 
-    document = sys_defaults(solvent=solvent)
-    document["forcefield"][field] = value
-    with pytest.raises(ConfigError) as error:
+    document = sys_defaults(solvent="GBn2")
+    document["forcefield"]["protein"] = "ff19SB"
+    with pytest.raises(ConfigError, match="not parameterised for"):
         resolve_sys_config(document)
-
-    message = str(error.value)
-    assert f"forcefield.{field}" in message, "the mismatched field must be named"
-    assert value in message and solvent in message
-    # ...and the message must say what the supported pair actually is.
-    assert "amber14-all.xml" in message and "amber19-all.xml" in message
-    assert "ONE selection" in message
 
 
 @pytest.mark.parametrize("solvent", ["TIP3P", "OPC", "GBn2"])
@@ -418,7 +468,7 @@ def test_the_explicit_default_is_ff14sb_sage_221_tip3p():
     assert (resolved["solvent"]["positive_ion"], resolved["solvent"]["negative_ion"]) == \
            ("Na+", "Cl-")
     assert resolved["constraints"]["type"] == "HBonds"
-    assert resolved["constraints"]["hydrogen_mass_amu"] is None, "HMR is off by default"
+    assert resolved["hydrogen_mass_repartitioning"]["enabled"] is False, "HMR is off by default"
 
     document = _sys_document(resolved)
     assert document["forcefield"]["protein"] == "amber14-all.xml"
@@ -428,12 +478,15 @@ def test_the_explicit_default_is_ff14sb_sage_221_tip3p():
     assert "ff19sb" not in values and "opc" not in values and "amber19" not in values
 
 
-def test_the_default_protocol_is_2fs_five_ns_without_hmr():
+def test_the_default_protocol_is_five_ns_of_steps_at_two_femtoseconds():
     resolved = resolve_md_config(None)
-    assert resolved["dynamics"]["timestep_fs"] == 2.0
+    assert resolved["dynamics"]["timestep_fs"] == "auto"
     assert resolved["dynamics"]["friction_per_ps"] == 1.0
     assert resolved["dynamics"]["barostat_interval_steps"] == 25
     assert resolved["stages"]["production_steps"] == 2_500_000
+    # The STEP COUNT is the default; 5 ns is what it becomes at the 2 fs an unrepartitioned
+    # System resolves to. Written as the derivation rather than as a stored duration, because
+    # the same step count is 10 ns on a System built with HMR.
     assert resolved["stages"]["production_steps"] * 2.0 / 1e6 == 5.0, "5 ns at 2 fs"
     assert resolved["reporting"] == {"solute_printout": 1000, "system_printout": 10000,
                                      "checkpoint_printout": 10000}

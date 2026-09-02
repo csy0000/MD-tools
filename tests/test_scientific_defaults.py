@@ -262,7 +262,11 @@ def test_the_default_system_has_unmodified_hydrogen_masses(default_project):
     assert max(m for m in masses if m < 4.0) < 1.1, "a hydrogen above 1.1 amu means HMR ran"
 
     stage = _stage(default_project, "cMD", "cMD")
-    assert stage["timestep_fs"] == 2.0
+    # The generated stage declares `auto`, not a number: `build-md` never opened built.xml and so
+    # cannot know these masses. What this test establishes is the other half -- that the System
+    # really is unrepartitioned, which is what `auto` resolves against to give 2 fs. That
+    # resolution is asserted end-to-end in test_timestep_resolution.py.
+    assert stage["timestep_fs"] == "auto"
     assert stage["friction_per_ps"] == 1.0
 
 

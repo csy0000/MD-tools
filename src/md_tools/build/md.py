@@ -33,6 +33,7 @@ import yaml
 
 from .record import LogWriter
 from .strict import ConfigError, Field, Schema, Section
+from ..openmm.timestep import ORDINARY_TIMESTEP_FS
 from ..openmm.system_defaults import DEFAULT_BAROSTAT_FREQUENCY_STEPS
 
 PROTOCOLS = ("cMD", "REST2", "rREST2", "AIS")
@@ -56,10 +57,14 @@ MD_SCHEMA = Schema(
     ],
     sections=[
         Section("dynamics", [
-            Field("timestep_fs", float, default=2.0, minimum=0.1, maximum=5.0, unit="fs",
-                  doc="2.0 fs is the baseline with HBonds constraints and unmodified hydrogen "
-                      "masses. 4.0 fs requires hydrogen mass repartitioning, which is a property "
-                      "of the System built by `build-top`, not something this file can grant."),
+            Field("timestep_fs", (float, str), default="auto", unit="fs",
+                  doc="`auto` (the default) resolves the timestep from the masses serialised in "
+                      "built.xml when the run starts: 2.0 fs on ordinary hydrogens, 4.0 fs on "
+                      "repartitioned ones. `build-md` never opens built.xml, so it cannot know "
+                      "whether HMR was applied -- and a configuration CLAIMING it is not "
+                      "evidence. A number may be given instead: it is honoured up to 3.0 fs, and "
+                      "above that only if the System really was repartitioned. The resolved "
+                      "value and its basis are recorded in every log."),
             Field("temperature_K", float, default=300.0, minimum=1.0, maximum=1000.0, unit="K",
                   doc="Thermostat temperature. Under REST2 every replica runs at this same "
                       "physical temperature; the ladder scales the Hamiltonian, not the bath."),
@@ -220,6 +225,30 @@ MD_SCHEMA = Schema(
 )
 
 
+def _check_timestep(resolved: dict[str, Any]) -> None:
+    """`timestep_fs` is a number or the word `auto`, and nothing else.
+
+    The field accepts two types so `auto` can be written, which means the schema's own range check
+    cannot run on it -- comparing a string with a float raises rather than refusing politely. The
+    range is therefore enforced here, where the two cases are already separated.
+    """
+    from ..openmm.timestep import AUTO
+
+    value = resolved["dynamics"]["timestep_fs"]
+    if isinstance(value, str):
+        if value.strip().lower() != AUTO:
+            raise ConfigError(
+                f"dynamics.timestep_fs: {value!r} is not a number and not {AUTO!r}. Write a "
+                f"number of femtoseconds, or {AUTO!r} to resolve it from the masses in the built "
+                f"System when the run starts.")
+        return
+    if not 0.1 <= float(value) <= 5.0:
+        raise ConfigError(
+            f"dynamics.timestep_fs: {value!r} is outside 0.1 .. 5.0 fs. A value above 3.0 fs is "
+            f"additionally refused at run time unless the System was built with hydrogen mass "
+            f"repartitioning.")
+
+
 def _check_protocol(resolved: dict[str, Any]) -> None:
     protocol = resolved["protocol"]
     if protocol == "AIS":
@@ -282,12 +311,18 @@ def _check_ais(resolved: dict[str, Any]) -> None:
             switching_steps=int(ais["switching_steps"]),
             parameter_update_interval_steps=int(ais["parameter_update_interval_steps"]),
             observation_interval_steps=int(ais["observation_interval_steps"]),
-            timestep_fs=float(resolved["dynamics"]["timestep_fs"]))
+            # The schedule's divisibility is pure STEP arithmetic and does not depend on the
+            # timestep; the value is needed only to report the derived picoseconds. Under `auto`
+            # the check uses the ordinary-mass value, because what is being validated here is the
+            # step schedule, and the run re-derives the real duration once it reads the masses.
+            timestep_fs=(float(resolved["dynamics"]["timestep_fs"])
+                         if isinstance(resolved["dynamics"]["timestep_fs"], (int, float))
+                         else ORDINARY_TIMESTEP_FS))
     except ValueError as error:
         raise ConfigError(str(error)) from None
 
 
-MD_SCHEMA.checks = (_check_protocol,)
+MD_SCHEMA.checks = (_check_protocol, _check_timestep)
 
 
 def resolve_md_config(path: Path | None) -> dict[str, Any]:
@@ -629,12 +664,22 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
     log.field("solvent", resolved["solvent"])
     log.field("shape", "all-in-one" if all_in_one else "split")
     timestep = resolved["dynamics"]["timestep_fs"]
+    # Step counts are authoritative and are always printed. A physical duration is derived ONLY
+    # when the timestep is already a number: under `auto` it is not known until the run opens
+    # built.xml and reads the masses, and printing a picosecond figure here would be a guess at
+    # whether hydrogen mass repartitioning was applied. Every stage log states the real one.
+    numeric = timestep if isinstance(timestep, (int, float)) else None
+    log.field("timestep", f"{numeric} fs" if numeric else
+              f"{timestep!r} (resolved from the System's masses when the run starts)")
     log.heading("Stages")
     for stage in plan:
-        ps = stage["steps"] * timestep / 1000.0
-        detail = (f"{stage['minimization_iterations']} iterations"
-                  if stage["name"] == "min" else
-                  f"{stage['steps']} steps = {ps:g} ps ({ps / 1000.0:g} ns), {stage['ensemble']}")
+        if stage["name"] == "min":
+            detail = f"{stage['minimization_iterations']} iterations"
+        elif numeric:
+            ps = stage["steps"] * numeric / 1000.0
+            detail = f"{stage['steps']} steps = {ps:g} ps ({ps / 1000.0:g} ns), {stage['ensemble']}"
+        else:
+            detail = f"{stage['steps']} steps, {stage['ensemble']}"
         log.field(stage["name"], detail)
 
     written: list[str] = []
@@ -692,12 +737,21 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
         log.heading(protocol)
         log.field("states", ladder["n_states"])
         log.field("tau ladder", f"0.0 .. {ladder['tau_max']} (linear)")
-        log.field("exchange every", f"{ladder['exchange_interval_steps']} steps = "
-                                    f"{ladder['exchange_interval_steps'] * timestep / 1000.0:g} ps")
+        # Step counts always; a duration only when the timestep is already a number. Under `auto`
+        # it is not known until the run reads the System's masses, and the ladder's own log states
+        # the real one.
+        steps_between = ladder["exchange_interval_steps"]
+        total_steps = ladder["number_of_exchanges"] * steps_between
+        if numeric:
+            log.field("exchange every", f"{steps_between} steps = "
+                                        f"{steps_between * numeric / 1000.0:g} ps")
+            production = total_steps * numeric / 1000.0
+            log.field("production per state",
+                      f"{production:g} ps ({production / 1000.0:g} ns)")
+        else:
+            log.field("exchange every", f"{steps_between} steps")
+            log.field("production per state", f"{total_steps} steps")
         log.field("attempts", ladder["number_of_exchanges"])
-        production = (ladder["number_of_exchanges"] * ladder["exchange_interval_steps"]
-                      * timestep / 1000.0)
-        log.field("production per state", f"{production:g} ps ({production / 1000.0:g} ns)")
 
     run_sh = out_dir / "run.sh"
     run_sh.write_text(_run_sh(plan, all_in_one=all_in_one, protocol=protocol), encoding="utf-8")
