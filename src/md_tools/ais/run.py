@@ -73,13 +73,26 @@ STATE_COLUMNS = ("path_index", "protocol_step", "switching_time_ps", "tau",
                  "potential_energy_kj_mol", "kinetic_energy_kj_mol", "total_energy_kj_mol",
                  "temperature_kelvin", "volume_nm3", "density_g_per_ml")
 
-#: Mid-path resume lives in `md_tools.ais.checkpoint`: a generation-based transaction whose
+#: Mid-path resume lives in `md_tools.openmm.checkpoint`: a generation-based transaction whose
 #: committed pointer is replaced last, so a crash never pairs a new Context with old bookkeeping.
 #: `RESUME_SIDECAR` and `PATH_CHECKPOINT` were the two files of the previous, non-atomic design.
 #: Frames are staged inside the path directory and published to the run root only when the path is
 #: complete and validated. A half-written `AIS_trajNNNN.nc` at the root would look exactly like a
 #: finished path to anyone globbing the directory.
 STAGED_TRAJECTORY = "frames.partial.nc"
+
+#: The run-level identity of an AIS output directory, written once and never rewritten.
+#:
+#: A path's checkpoint fingerprint protects that path. Nothing protected the DIRECTORY: a second
+#: invocation into the same `-odir` with a different source trajectory, a different tau schedule,
+#: a different seed or a different path count would skip the completed paths, run the rest under
+#: the new settings, and assemble one work table out of two different measurements. The table
+#: reads perfectly and describes no experiment.
+RUN_IDENTITY = "AIS_run.json"
+
+#: The schema of that record. Bumped when the SET of fields changes, so a directory written by an
+#: older build is refused by name rather than compared field by field against a shape it never had.
+RUN_IDENTITY_VERSION = 1
 
 #: The global work table rank 0 writes once every path this run owns has finished.
 #:
@@ -286,15 +299,114 @@ def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
             previous_tau = entry["tau"]
 
     rows.sort(key=lambda row: (row["path_id"], row["switch_step"]))
-    with (out / WORK_TABLE).open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(WORK_COLUMNS))
+
+    # ATOMIC. These tables are rewritten from scratch every time rank 0 assembles them, and
+    # opening the real path with "w" truncates it first: a reader arriving during the rewrite --
+    # or a crash in the middle of one -- finds a table that is valid CSV and short, which is the
+    # one failure a table cannot signal. Written to a temporary and moved into place instead.
+    import io
+
+    for path, columns, payload in ((out / WORK_TABLE, WORK_COLUMNS, rows),
+                                   (out / WORK_SUMMARY, SUMMARY_COLUMNS, summary)):
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=list(columns))
         writer.writeheader()
-        writer.writerows(rows)
-    with (out / WORK_SUMMARY).open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(SUMMARY_COLUMNS))
-        writer.writeheader()
-        writer.writerows(summary)
+        writer.writerows(payload)
+        write_atomically(path, buffer.getvalue())
     return {"rows": len(rows), "paths": len(summary), "requested": len(chosen)}
+
+
+def run_identity_document(*, fingerprint, topology_facts, system_facts, source_facts,
+                          source_format, schedule, ais, dynamics, chosen, reporting,
+                          resolved_config) -> dict[str, Any]:
+    """Everything an output directory may not change between invocations.
+
+    Deliberately NOT the same thing as the per-path fingerprint. That one answers "may this
+    checkpoint be loaded into this path?"; this one answers "do these paths belong to the same
+    experiment?", and the second question is the one a work table assembled from N directories
+    depends on.
+    """
+    from .decomposition import DECOMPOSITION_SCHEMA
+
+    return {
+        "schema": "md-ais-run-identity",
+        "schema_version": RUN_IDENTITY_VERSION,
+        "fingerprint": fingerprint,
+        "topology": {"name": Path(topology_facts["path"]).name if "path" in topology_facts
+                     else None, "sha256": topology_facts["sha256"]},
+        "system": {"sha256": system_facts["sha256"]},
+        "source": {"sha256": source_facts["sha256"], "format": source_format},
+        "tau": {"start": float(ais["tau_start"]), "end": float(ais["tau_end"]),
+                "interpolation": "linear"},
+        "schedule": {k: v for k, v in schedule.items()
+                     if k not in ("observations", "taus", "note")},
+        "reporting": {k: int(reporting[k]) for k in sorted(reporting)},
+        "seed_policy": {"seed": int(dynamics["seed"]),
+                        "derivation": "derive_seed(seed, 'ais', path_index, role)"},
+        "number_of_paths": int(ais["number_of_paths"]),
+        "selected_frames": [int(f) for f in chosen],
+        "observation_columns": list(OBSERVATION_COLUMNS),
+        "decomposition_schema": {"name": DECOMPOSITION_SCHEMA["name"],
+                                 "version": DECOMPOSITION_SCHEMA["version"]},
+        "resolved_config": resolved_config,
+    }
+
+
+def require_same_run(out: Path, document: dict[str, Any]) -> None:
+    """Refuse an `-odir` that already belongs to a different AIS run.
+
+    Written by rank 0 the first time and compared on every invocation after. The comparison is
+    field by field so the refusal names WHAT changed -- "this directory holds a different run" is
+    true and useless, and the person reading it has to diff two configurations by hand.
+    """
+    path = Path(out) / RUN_IDENTITY
+    if not path.is_file():
+        return
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        raise SystemExit(
+            f"{path} is not readable JSON. It is the record of which run this directory holds, "
+            f"so without it nothing here can be matched to anything. Move the directory aside "
+            f"rather than adding paths to it.") from None
+
+    if existing.get("schema_version") != RUN_IDENTITY_VERSION:
+        raise SystemExit(
+            f"{path} was written under run-identity schema "
+            f"v{existing.get('schema_version')}, and this build writes "
+            f"v{RUN_IDENTITY_VERSION}. The set of fields differs, so 'unchanged' cannot be "
+            f"established. Start a new directory rather than extending this one.")
+
+    differing = sorted(key for key in set(existing) | set(document)
+                       if existing.get(key) != document.get(key))
+    differing = [key for key in differing if key != "resolved_config"]
+    if not differing:
+        return
+    detail = "\n".join(
+        f"    {key}: recorded {json.dumps(existing.get(key))[:120]}\n"
+        f"    {' ' * len(key)}  now      {json.dumps(document.get(key))[:120]}"
+        for key in differing[:6])
+    raise SystemExit(
+        f"{Path(out)} already holds a DIFFERENT AIS run, differing in "
+        f"{', '.join(differing)}:\n{detail}\n"
+        f"  Completed paths in this directory would be skipped and the remaining ones run under "
+        f"the new settings, and the work table would then be assembled out of two different "
+        f"experiments -- readable, and describing neither. Use a new -odir.")
+
+
+def write_atomically(path: Path, text: str) -> None:
+    """Write through a temporary and `os.replace`, so a reader never sees half a file.
+
+    The global tables are rewritten from scratch every time rank 0 assembles them. Truncating the
+    real file first means any reader -- or any crash -- during the rewrite finds a table that is
+    valid CSV and short, which is the one failure mode a table cannot signal.
+    """
+    import os
+
+    path = Path(path)
+    staging = path.with_name(path.name + ".partial")
+    staging.write_text(text, encoding="utf-8")
+    os.replace(staging, path)
 
 
 def write_selected_frames(path: Path, chosen: list[int], *, seed: int) -> None:
@@ -421,6 +533,72 @@ def _state_row(simulation, *, index, protocol_step, switching_time_ps, tau, impl
     }
 
 
+def _verified_completion(marker: Path, *, directory: Path, published: Path, fingerprint: str,
+                         index: int, frame: int, trajectory_name: str,
+                         schedule: dict[str, Any]) -> dict[str, Any]:
+    """Read a `completed.json` and REFUSE it unless everything it claims still holds.
+
+    A completed path is skipped, which means this record is the only thing standing between a
+    reader and a path nobody will ever look at again. Every check here is a way a directory has
+    read as finished while not being:
+
+      an old record, from before the fields below existed, which cannot be checked at all;
+      a record from another run, copied or resumed into the wrong directory;
+      outputs that no longer match their recorded digests -- truncated by a full disk, or
+      rewritten by a second process;
+      counts that do not match the schedule this invocation resolved.
+    """
+    from .decomposition import require_compatible_schema
+
+    try:
+        record = json.loads(marker.read_text(encoding="utf-8"))
+    except ValueError:
+        raise SystemExit(
+            f"{marker} is not readable JSON. It is the only record that path {index} finished, "
+            f"so it cannot be believed and cannot be repaired. Delete "
+            f"{directory} to rerun this path from its source frame.") from None
+
+    missing = [key for key in ("fingerprint", "outputs", "source_frame_index", "observations",
+                               "frames", "total_work_kj_mol") if key not in record]
+    if missing:
+        raise SystemExit(
+            f"{marker} was written before this build's completion manifest existed: it carries "
+            f"no {', '.join(missing)}. Nothing about it can be verified, so it is refused rather "
+            f"than trusted. Delete {directory} to rerun this path.")
+    require_compatible_schema(record, what=str(marker))
+
+    for field, expected in (("fingerprint", fingerprint), ("path_index", index),
+                            ("source_frame_index", frame), ("trajectory", trajectory_name)):
+        if record.get(field) != expected:
+            raise SystemExit(
+                f"{marker} records {field} = {record.get(field)!r} but this run has "
+                f"{expected!r}. This directory holds a path from a different run. Refusing to "
+                f"skip it as though it were this one.")
+
+    for name, facts in (record.get("outputs") or {}).items():
+        where = published if name == "trajectory" else directory / (
+            OBSERVATIONS_CSV if name == "observations" else STATE_CSV)
+        if not where.is_file():
+            raise SystemExit(
+                f"{marker} says path {index} completed, but its {name} ({where}) is missing. "
+                f"Delete {directory} to rerun this path.")
+        now = file_facts(where)["sha256"]
+        if now != facts.get("sha256"):
+            raise SystemExit(
+                f"{marker} says path {index} completed with {name} sha256 "
+                f"{str(facts.get('sha256'))[:16]}..., and {where.name} now hashes to "
+                f"{now[:16]}.... It has changed since the path finished, so the record describes "
+                f"a file that no longer exists. Delete {directory} to rerun this path.")
+
+    for field, expected in (("observations", schedule["number_of_observations"]),
+                            ("frames", schedule["number_of_frames"])):
+        if int(record[field]) != int(expected):
+            raise SystemExit(
+                f"{marker} records {record[field]} {field} but this run's schedule calls for "
+                f"{expected}. The path was run under a different schedule.")
+    return record
+
+
 def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str, Any],
                  taus, switcher, simulation_inputs: dict[str, Any], dynamics: dict[str, Any],
                  ais: dict[str, Any], beta: float, temperature: float, rank: int,
@@ -447,8 +625,15 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
     published = out / trajectory_name
 
     if marker.is_file():
-        log(f"  path {index:4d}: already completed; not rerun and never appended to")
-        return json.loads(marker.read_text(encoding="utf-8"))
+        # A completion record is only believed once its claims are checked. "status: completed" is
+        # a field in a file; the outputs it describes are what a reader will actually load, and a
+        # path whose trajectory was truncated by a full disk, or whose directory was copied from
+        # another run, is exactly the case that reads as finished and is not.
+        record = _verified_completion(marker, directory=directory, published=published,
+                                      fingerprint=fingerprint, index=index, frame=chosen[index],
+                                      trajectory_name=trajectory_name, schedule=schedule)
+        log(f"  path {index:4d}: already completed and verified; not rerun and never appended to")
+        return record
     directory.mkdir(parents=True, exist_ok=True)
 
     frame = chosen[index]
@@ -506,7 +691,8 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         return components, measured
 
     # -- resume, or start ----------------------------------------------------------------------
-    from .checkpoint import clear_committed, commit_generation, fault, read_committed
+    from ..openmm.checkpoint import (clear_committed, commit_generation, fault,
+                                     read_committed)
 
     state_of_path = None
     if resume:
@@ -851,8 +1037,20 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         "mpi_rank": rank,
         "platform": simulation.context.getPlatform().getName(),
         "resumed": bool(state_of_path),
+        # What a later invocation checks before believing any of the above.
+        "fingerprint": fingerprint,
+        "outputs": {
+            "trajectory": file_facts(published),
+            "observations": file_facts(directory / OBSERVATIONS_CSV),
+            **({"system_table": file_facts(directory / STATE_CSV)}
+               if (directory / STATE_CSV).is_file() else {}),
+        },
     }
-    marker.write_text(json.dumps(completion, indent=2) + "\n", encoding="utf-8")
+    # Atomic, and last. Until this file lands the path is incomplete, and a half-written marker
+    # would be read as a finished path by the very next invocation.
+    from ..openmm.checkpoint import write_durably
+
+    write_durably(marker, (json.dumps(completion, indent=2, sort_keys=True) + "\n").encode())
     # The transaction has served its purpose; leaving it would invite a resume of finished work.
     clear_committed(directory)
     log(f"  path {index:4d}: frame {frame}, {rows_emitted} observations, {frames_emitted} "
@@ -1101,8 +1299,12 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         # function of the window, the count and the run seed -- so only rank 0 writes it, and the
         # others would otherwise race to truncate the file rank 0 is writing.
         if rank == 0:
-            write_selected_frames(out / "selected_source_frames.csv", chosen,
-                                  seed=int(dynamics["seed"]))
+            # Not rewritten over an existing one. `require_same_run` has already established that
+            # the selection is unchanged, so rewriting could only ever produce the same bytes --
+            # and a write that can only be a no-op is a write that can still be interrupted.
+            table = out / "selected_source_frames.csv"
+            if not table.is_file():
+                write_selected_frames(table, chosen, seed=int(dynamics["seed"]))
 
         if args.check:
             log.heading("Preflight")
@@ -1146,6 +1348,23 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             "seed": int(dynamics["seed"]),
             "resolved_config": run.get("resolved_config"),
         }, sort_keys=True).encode()).hexdigest()
+
+        # THE RUN IDENTITY. Established before any path runs, and refused if this directory
+        # already holds a different one. Every rank computes the same document -- every input to
+        # it is either a file digest or a resolved setting -- so every rank can check it, and
+        # only rank 0 writes it.
+        identity_document = run_identity_document(
+            fingerprint=path_fingerprint,
+            topology_facts=file_facts(topology_path), system_facts=file_facts(system_path),
+            source_facts=source_facts, source_format=source_format, schedule=schedule,
+            ais=ais, dynamics=dynamics, chosen=chosen, reporting=reporting,
+            resolved_config=run.get("resolved_config"))
+        require_same_run(out, identity_document)
+        if rank == 0 and not (out / RUN_IDENTITY).is_file():
+            write_atomically(out / RUN_IDENTITY,
+                             json.dumps(identity_document, indent=2, sort_keys=True) + "\n")
+        coordination.barrier()
+        log.update(run_identity=identity_document)
 
         # The switcher the preflight built and audited, not a second one over the same System.
         switcher = checked.switcher

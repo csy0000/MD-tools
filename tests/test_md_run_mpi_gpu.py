@@ -422,7 +422,7 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
     """
     import mdtraj
 
-    from md_tools.ais.checkpoint import FAULT_ENVIRONMENT
+    from md_tools.openmm.checkpoint import FAULT_ENVIRONMENT
 
     out = _cadence_project(built, "resume")
     argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
@@ -436,7 +436,7 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
     interrupted = [p for p in sorted(out.glob("path_*")) if (p / "current_checkpoint.json").is_file()]
     assert interrupted, "no generation was committed before the crash"
 
-    from md_tools.ais.checkpoint import read_committed
+    from md_tools.openmm.checkpoint import read_committed
 
     committed = read_committed(interrupted[0])
     assert committed["state"]["protocol_step"] > 0

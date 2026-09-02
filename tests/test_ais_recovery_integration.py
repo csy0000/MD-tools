@@ -39,7 +39,7 @@ import numpy
 import pytest
 
 from md_tools.ais import run as ais_run
-from md_tools.ais.checkpoint import (BOUNDARIES, STREAM_BOUNDARIES, CheckpointError,
+from md_tools.openmm.checkpoint import (BOUNDARIES, STREAM_BOUNDARIES, CheckpointError,
                                      FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT, POINTER_NAME,
                                      read_committed)
 from md_tools.ais.schedule import switching_schedule
@@ -181,7 +181,7 @@ def harness(tmp_path, monkeypatch):
         interesting one -- the interesting one is resuming from a good generation while a newer,
         half-written one lies beside it. `after=0` reaches the first case.
         """
-        import md_tools.ais.checkpoint as _checkpoint
+        import md_tools.openmm.checkpoint as _checkpoint
 
         _checkpoint._passed.clear()
         previous = os.environ.get(FAULT_ENVIRONMENT)
@@ -543,7 +543,7 @@ def test_a_resumed_path_reproduces_the_uninterrupted_component_totals(boundary, 
     second = tmp_path / "AIS-again"
     second.mkdir()
     _read_frame_source(monkeypatch)
-    import md_tools.ais.checkpoint as _checkpoint
+    import md_tools.openmm.checkpoint as _checkpoint
 
     def run(**kwargs):
         _checkpoint._passed.clear()
@@ -643,3 +643,158 @@ def test_an_observation_interval_wider_than_the_update_interval_sums_several_upd
                 f"{name} at step {row['protocol_step']}")
     # And the last row's totals are the path's totals.
     assert abs(sum(running.values()) - float(rows[-1]["cumulative_work_kj_mol"])) < 1e-6
+
+
+# --- the run-level identity of an output directory ----------------------------------------------
+#
+# A path's checkpoint fingerprint protects that PATH. Nothing protected the DIRECTORY. A second
+# invocation into the same `-odir` with a different source, schedule, seed or path count would
+# skip the completed paths, run the rest under the new settings, and assemble one work table out
+# of two different experiments -- a table that reads perfectly and describes neither.
+
+def test_a_completed_path_is_verified_before_it_is_skipped(harness):
+    """The record is only believed once the files it describes still hash to what it recorded."""
+    call, out, schedule = harness
+    first = call()
+    assert first["status"] == "completed"
+    assert "outputs" in first and "trajectory" in first["outputs"]
+
+    # Unchanged: it is skipped, and the record comes back.
+    again = call()
+    assert again["status"] == "completed"
+    assert again["total_work_kj_mol"] == first["total_work_kj_mol"]
+
+
+def test_a_completed_path_whose_trajectory_changed_is_refused_rather_than_skipped(harness):
+    """Truncated by a full disk, or rewritten by a second process. It reads as finished."""
+    call, out, schedule = harness
+    call()
+    published = out / "AIS_traj0000.nc"
+    published.write_bytes(published.read_bytes()[:-64])
+    with pytest.raises(SystemExit, match="has changed since the path finished"):
+        call()
+
+
+def test_a_completed_path_whose_output_is_gone_is_refused(harness):
+    call, out, schedule = harness
+    call()
+    (out / "AIS_traj0000.nc").unlink()
+    with pytest.raises(SystemExit, match="is missing"):
+        call()
+
+
+def test_a_completion_record_from_before_the_manifest_existed_is_refused(harness):
+    """An old `completed.json` carries none of the fields a verification needs."""
+    call, out, schedule = harness
+    call()
+    marker = out / "path_0000" / "completed.json"
+    marker.write_text(json.dumps({"status": "completed", "path_index": 0}), encoding="utf-8")
+    with pytest.raises(SystemExit, match="carries no"):
+        call()
+
+
+def test_a_completion_record_from_another_run_is_refused(harness):
+    call, out, schedule = harness
+    call()
+    marker = out / "path_0000" / "completed.json"
+    record = json.loads(marker.read_text(encoding="utf-8"))
+    record["fingerprint"] = "a different run entirely"
+    marker.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(SystemExit, match="a path from a different run"):
+        call()
+
+
+def test_a_completion_record_written_under_another_schedule_is_refused(harness):
+    call, out, schedule = harness
+    call()
+    marker = out / "path_0000" / "completed.json"
+    record = json.loads(marker.read_text(encoding="utf-8"))
+    record["observations"] = int(record["observations"]) + 1
+    marker.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(SystemExit, match="different schedule"):
+        call()
+
+
+def test_the_completion_manifest_lands_atomically(harness):
+    """Written through a temporary: a half-written marker is read as a finished path."""
+    call, out, schedule = harness
+    call()
+    assert (out / "path_0000" / "completed.json").is_file()
+    leftovers = list((out / "path_0000").glob("*.partial"))
+    assert not leftovers, f"a staging file survived the commit: {leftovers}"
+
+
+def test_the_run_identity_document_names_every_field_that_may_not_change():
+    """A unit check on the document, so the fields are asserted rather than merely produced."""
+    from md_tools.ais.run import RUN_IDENTITY_VERSION, run_identity_document
+
+    document = run_identity_document(
+        fingerprint="f", topology_facts={"sha256": "t"}, system_facts={"sha256": "s"},
+        source_facts={"sha256": "x"}, source_format="dcd",
+        schedule={"switching_steps": 200, "taus": [1, 2], "observations": [], "note": "n"},
+        ais={"tau_start": 0.5, "tau_end": 0.0, "number_of_paths": 2},
+        dynamics={"seed": 3}, chosen=[7, 9],
+        reporting={"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 5},
+        resolved_config="/somewhere/resolved.config")
+    assert document["schema_version"] == RUN_IDENTITY_VERSION
+    for field in ("source", "tau", "schedule", "reporting", "seed_policy", "number_of_paths",
+                  "selected_frames", "observation_columns", "decomposition_schema"):
+        assert field in document, field
+    # The derived, per-invocation parts of the schedule are excluded: `taus` is a list of floats
+    # derived from tau_start/tau_end/updates, and comparing it would report a difference twice.
+    assert "taus" not in document["schedule"] and "observations" not in document["schedule"]
+
+
+def test_a_directory_holding_another_run_is_refused_by_naming_what_differs(tmp_path):
+    from md_tools.ais.run import RUN_IDENTITY, require_same_run, run_identity_document
+
+    def document(seed, paths):
+        return run_identity_document(
+            fingerprint="f", topology_facts={"sha256": "t"}, system_facts={"sha256": "s"},
+            source_facts={"sha256": "x"}, source_format="dcd",
+            schedule={"switching_steps": 200},
+            ais={"tau_start": 0.5, "tau_end": 0.0, "number_of_paths": paths},
+            dynamics={"seed": seed}, chosen=list(range(paths)),
+            reporting={"solute_printout": 5}, resolved_config=None)
+
+    (tmp_path / RUN_IDENTITY).write_text(json.dumps(document(3, 2)), encoding="utf-8")
+    require_same_run(tmp_path, document(3, 2))                    # unchanged: accepted
+
+    with pytest.raises(SystemExit) as refusal:
+        require_same_run(tmp_path, document(4, 2))
+    assert "seed_policy" in str(refusal.value)
+
+    with pytest.raises(SystemExit) as refusal:
+        require_same_run(tmp_path, document(3, 5))
+    message = str(refusal.value)
+    assert "number_of_paths" in message and "selected_frames" in message
+
+
+def test_an_older_run_identity_schema_is_refused_rather_than_compared(tmp_path):
+    from md_tools.ais.run import RUN_IDENTITY, require_same_run, run_identity_document
+
+    document = run_identity_document(
+        fingerprint="f", topology_facts={"sha256": "t"}, system_facts={"sha256": "s"},
+        source_facts={"sha256": "x"}, source_format="dcd", schedule={"switching_steps": 1},
+        ais={"tau_start": 0.5, "tau_end": 0.0, "number_of_paths": 1},
+        dynamics={"seed": 1}, chosen=[0], reporting={}, resolved_config=None)
+    old = dict(document, schema_version=0)
+    (tmp_path / RUN_IDENTITY).write_text(json.dumps(old), encoding="utf-8")
+    with pytest.raises(SystemExit, match="schema"):
+        require_same_run(tmp_path, document)
+
+
+def test_a_resolved_config_path_alone_does_not_make_it_a_different_run(tmp_path):
+    """Where the file lives is not a property of the experiment. Moving a project is allowed."""
+    from md_tools.ais.run import RUN_IDENTITY, require_same_run, run_identity_document
+
+    def document(where):
+        return run_identity_document(
+            fingerprint="f", topology_facts={"sha256": "t"}, system_facts={"sha256": "s"},
+            source_facts={"sha256": "x"}, source_format="dcd", schedule={"switching_steps": 1},
+            ais={"tau_start": 0.5, "tau_end": 0.0, "number_of_paths": 1},
+            dynamics={"seed": 1}, chosen=[0], reporting={}, resolved_config=where)
+
+    (tmp_path / RUN_IDENTITY).write_text(json.dumps(document("/old/resolved.config")),
+                                         encoding="utf-8")
+    require_same_run(tmp_path, document("/new/resolved.config"))

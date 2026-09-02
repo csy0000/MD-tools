@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from md_tools.ais.checkpoint import (BOUNDARIES, CheckpointError, FAULT_ENVIRONMENT,
+from md_tools.openmm.checkpoint import (BOUNDARIES, CheckpointError, FAULT_ENVIRONMENT,
                                      POINTER_NAME, clear_committed, commit_generation,
                                      read_committed)
 

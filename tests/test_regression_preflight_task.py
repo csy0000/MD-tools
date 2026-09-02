@@ -416,7 +416,7 @@ def test_ais_reads_the_device_policy_before_choosing_a_device():
 # --- 8. crash-atomic AIS checkpoints -----------------------------------------------------------
 
 def test_the_checkpoint_transaction_is_generation_based_with_a_committed_pointer():
-    from md_tools.ais import checkpoint
+    from md_tools.openmm import checkpoint
 
     assert hasattr(checkpoint, "commit_generation")
     assert hasattr(checkpoint, "read_committed")
@@ -424,7 +424,7 @@ def test_the_checkpoint_transaction_is_generation_based_with_a_committed_pointer
 
 
 def test_a_committed_generation_round_trips(tmp_path):
-    from md_tools.ais.checkpoint import commit_generation, read_committed
+    from md_tools.openmm.checkpoint import commit_generation, read_committed
 
     directory = tmp_path / "path_0000"
     directory.mkdir()
@@ -446,7 +446,7 @@ def test_an_uncommitted_newer_generation_is_never_selected(tmp_path):
     replaced one sidecar, so a crash between those two writes left a NEW Context checkpoint paired
     with OLD accumulated work -- a resume that looks successful and is measuring nothing.
     """
-    from md_tools.ais.checkpoint import commit_generation, read_committed
+    from md_tools.openmm.checkpoint import commit_generation, read_committed
 
     directory = tmp_path / "path_0000"
     directory.mkdir()
@@ -463,7 +463,7 @@ def test_an_uncommitted_newer_generation_is_never_selected(tmp_path):
 
 
 def test_a_corrupt_committed_checkpoint_is_refused_rather_than_loaded(tmp_path):
-    from md_tools.ais.checkpoint import CheckpointError, commit_generation, read_committed
+    from md_tools.openmm.checkpoint import CheckpointError, commit_generation, read_committed
 
     directory = tmp_path / "path_0000"
     directory.mkdir()

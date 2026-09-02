@@ -1,4 +1,9 @@
-"""A crash-atomic checkpoint for one AIS switching path.
+"""A crash-atomic checkpoint transaction, for an AIS switching path or a cMD stage.
+
+Written for AIS and generalised, not copied: the same defect was in the cMD stage, in the same
+shape, and a second implementation of a transaction is a second thing to get right. What is
+specific to a caller is the `state` dictionary it commits and the `write_checkpoint` callable it
+supplies; everything about ORDERING -- which is the whole of the guarantee -- is here.
 
 THE FAILURE THIS EXISTS FOR
 
@@ -52,7 +57,7 @@ from typing import Any, Callable
 
 __all__ = ["CheckpointError", "POINTER_NAME", "GENERATIONS_DIR", "commit_generation",
            "read_committed", "clear_committed", "fault", "BOUNDARIES",
-           "STREAM_BOUNDARIES"]
+           "STREAM_BOUNDARIES", "write_durably"]
 
 POINTER_NAME = "current_checkpoint.json"
 GENERATIONS_DIR = "checkpoints"
@@ -119,12 +124,26 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _write_durably(path: Path, payload: bytes) -> None:
-    """Write, flush and fsync. A file that is not fsynced is not on disk after a power loss."""
-    with path.open("wb") as handle:
+def write_durably(path: Path, payload: bytes) -> None:
+    """Write, flush, fsync, and land the NAME atomically.
+
+    Through a temporary and `os.replace`, so a reader never sees a partial file under the real
+    name: a completion manifest or a pointer read halfway through is worse than one that is
+    missing, because the missing one is obviously missing.
+    """
+    path = Path(path)
+    staging = path.with_name(path.name + ".partial")
+    with staging.open("wb") as handle:
         handle.write(payload)
         handle.flush()
         os.fsync(handle.fileno())
+    os.replace(staging, path)
+
+
+#: The private spelling the transaction below uses. It writes to a NEW name every generation, so
+#: it needs the durability and not the rename; `write_durably` gives it both and the rename is a
+#: no-op there.
+_write_durably = write_durably
 
 
 def _sync_directory(path: Path) -> None:

@@ -335,7 +335,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
     out.field("continue from", args.continue_from or "(none -- first stage)")
     out.field("trajectory", traj_path)
     out.field("final state", restart_path)
-    out.field("checkpoint", chk_path)
+    out.field("checkpoint", f"{chk_path.parent / (chk_path.stem + '.checkpoints')}")
 
     log = LogWriter(log_path, record_type=f"md-stage:{name}")
     log.update(simulation_output=str(out_path))
@@ -467,34 +467,51 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                             "timestep_fs": timestep_fs, "steps": steps})
 
         # -- where do we start? -------------------------------------------------------------
+        #
+        # ONLY the committed pointer, never "the newest checkpoint on disk": the newest file is
+        # exactly what a crash leaves behind, and choosing it is how a Context from step 3000 gets
+        # paired with bookkeeping from step 2000.
+        from ..openmm.checkpoint import CheckpointError, read_committed
+
         done = 0
-        sidecar = chk_path.with_suffix(chk_path.suffix + ".json")
-        if chk_path.is_file() and sidecar.is_file():
-            try:
-                meta = json.loads(sidecar.read_text())
-            except Exception:
-                meta = {}
+        checkpoints = chk_path.parent / f"{chk_path.stem}.checkpoints"
+        try:
+            committed = read_committed(checkpoints)
+        except CheckpointError as broken:
+            raise SystemExit(str(broken)) from None
+        if committed is not None:
+            meta = committed["state"]
             if meta.get("fingerprint") != fingerprint:
                 raise SystemExit(
-                    f"{chk_path} was written under a different configuration for this stage "
-                    f"(fingerprint mismatch). Resuming it would continue a run that was set up "
-                    f"differently. Delete the checkpoint to start this stage over.")
+                    f"the committed checkpoint under {checkpoints} was written under a different "
+                    f"configuration for this stage (fingerprint mismatch). Resuming it would "
+                    f"continue a run that was set up differently. Delete {checkpoints} to start "
+                    f"this stage over.")
             try:
-                simulation.loadCheckpoint(str(chk_path))
+                simulation.loadCheckpoint(committed["checkpoint"])
             except Exception as failure:                  # noqa: BLE001 - reported below
                 # An OpenMM binary checkpoint is platform-specific, and the exception says so in
                 # a way that reads like an internal error. It is not: it means this stage ran on
                 # one platform and is being continued on another, which is a fact about the two
                 # commands rather than about the simulation.
                 raise SystemExit(
-                    f"{chk_path} cannot be loaded on the {acceleration.name} platform: "
-                    f"{failure}\n"
+                    f"the committed checkpoint cannot be loaded on the {acceleration.name} "
+                    f"platform: {failure}\n"
                     f"  An OpenMM checkpoint is binary and platform-specific. Continue this "
-                    f"stage on the platform it was written on, or delete {chk_path.name} and "
-                    f"{sidecar.name} to start the stage over.") from None
+                    f"stage on the platform it was written on, or delete {checkpoints} to start "
+                    f"the stage over.") from None
             done = int(meta.get("steps_done", 0))
+            # Cut every appendable stream back to what the checkpoint VOUCHES for. A trajectory
+            # is flushed as it is written, so after a crash it is routinely longer than the
+            # checkpoint describing it; keeping those extra frames would put the coordinates
+            # permanently ahead of the step count and misattribute every later frame. Never
+            # inferred from whichever file happens to be longest.
+            trimmed = _truncate_streams_to_committed(meta.get("streams") or {},
+                                                     trajectory=traj_path, log=log)
             log.heading("Resume")
-            log.field("from checkpoint", f"{chk_path} at step {done}")
+            log.field("from checkpoint", f"generation {committed['generation']} at step {done}")
+            for name, (was, now) in sorted(trimmed.items()):
+                log.field(f"truncated {name}", f"{was} -> {now} (committed)")
         elif args.continue_from:
             parent = Path(args.continue_from)
             if not parent.is_file():
@@ -591,8 +608,13 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                     periodic=not implicit, timestep_fs=timestep_fs, step_offset=done))
             if stage.get("checkpoint_interval_steps"):
                 simulation.reporters.append(
-                    _CheckpointWithFingerprint(str(chk_path), int(stage["checkpoint_interval_steps"]),
-                                               fingerprint=fingerprint, offset=done))
+                    _CheckpointWithFingerprint(
+                        checkpoints, int(stage["checkpoint_interval_steps"]),
+                        fingerprint=fingerprint, offset=done,
+                        identity=_checkpoint_identity(stage, name, seed, acceleration,
+                                                      timestep_fs),
+                        streams={"trajectory": lambda: _stream_counts(
+                            trajectory=traj_path).get("trajectory", 0)}))
             if done == 0 and not args.continue_from and iterations == 0:
                 simulation.context.setVelocitiesToTemperature(
                     float(stage["temperature_K"]) * unit.kelvin, int(seed))
@@ -612,17 +634,37 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         simulation.reporters.clear()
 
         write_final_state(simulation, restart_path)
-        simulation.saveCheckpoint(str(chk_path))
-        sidecar.write_text(json.dumps({"fingerprint": fingerprint, "steps_done": steps}), "utf-8")
+        # The final commit goes through the same transaction as every periodic one, so the last
+        # checkpoint of a stage is committed exactly as the intermediate ones are rather than by
+        # a second, weaker code path that only ever runs at the end.
+        from ..openmm.checkpoint import commit_generation
+
+        commit_generation(
+            checkpoints,
+            write_checkpoint=lambda path: simulation.saveCheckpoint(str(path)),
+            state={"fingerprint": fingerprint, "steps_done": steps,
+                   **_checkpoint_identity(stage, name, seed, acceleration, timestep_fs),
+                   "streams": _stream_counts(trajectory=traj_path)})
 
         log.heading("Outputs")
         reread = XmlSerializer.deserialize(restart_path.read_text(encoding="utf-8"))
         if reread.getPositions(asNumpy=True).shape[0] != system.getNumParticles():
             raise SystemExit("the written final state does not match the System; refusing to "
                              "report completion")
-        outputs = {"final_state": file_facts(restart_path), "checkpoint": file_facts(chk_path)}
+        # The checkpoint is a committed GENERATION now, not one file: the pointer is the thing
+        # that says which generation is current, so it is the pointer that is recorded and
+        # hashed. Recording the binary alone would name a file whose meaning depends on a second
+        # file nobody recorded.
+        from ..openmm.checkpoint import POINTER_NAME
+
+        pointer = checkpoints / POINTER_NAME
+        outputs = {"final_state": file_facts(restart_path)}
+        if pointer.is_file():
+            outputs["checkpoint_pointer"] = file_facts(pointer)
+            committed_now = read_committed(checkpoints)
+            outputs["checkpoint"] = file_facts(Path(committed_now["checkpoint"]))
+            log.field("checkpoint", f"{checkpoints} generation {committed_now['generation']}")
         log.field(restart_path.name, f"{restart_path}  (re-read OK)")
-        log.field(chk_path.name, chk_path)
         if traj_path.is_file():
             outputs["trajectory"] = file_facts(traj_path)
             log.field(traj_path.name, traj_path)
@@ -638,7 +680,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
 
         out.heading("Outputs")
         out.field("final state", f"{restart_path}  (re-read OK)")
-        out.field("checkpoint", chk_path)
+        out.field("checkpoint", checkpoints)
         if traj_path.is_file():
             out.field("trajectory", f"{traj_path}  ({describe_trajectory(traj_path)})")
         out.completed(f"{name}: {steps} steps completed, "
@@ -656,29 +698,111 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
     return 0
 
 
-class _CheckpointWithFingerprint:
-    """A checkpoint reporter that records which configuration each checkpoint belongs to.
+def _checkpoint_identity(stage, name, seed, acceleration, timestep_fs) -> dict[str, Any]:
+    """What a resume has to agree about beyond the configuration fingerprint.
 
-    OpenMM's own CheckpointReporter writes only the binary state. Without the sidecar there is no
-    way to tell, on resume, whether the checkpoint was produced by this stage's settings or by a
-    different run that happened to leave a file with the same name.
+    The fingerprint already binds the resolved settings and both input digests. These are the
+    facts about the RUN rather than about the configuration: which stage this is, which seed it
+    drew, what it integrated with, and what it ran on. A checkpoint that matches the fingerprint
+    but came from a different stage of the same workflow, or from a different platform, is a
+    checkpoint that will load and be wrong -- and the platform case is the one that produces an
+    exception rather than a silent error, so it is worth naming before it is loaded.
+    """
+    return {"stage": name, "seed": int(seed), "timestep_fs": float(timestep_fs),
+            "ensemble": stage.get("ensemble"), "platform": acceleration.name,
+            "precision": (acceleration.properties or {}).get("Precision")}
+
+
+def _stream_counts(*, trajectory: Path) -> dict[str, int]:
+    """How many records each appendable output holds RIGHT NOW, for the commit to vouch for.
+
+    Read from the files rather than counted in memory: what a resume has to cut back to is what
+    is on disk, and an in-memory counter that disagrees with the file is exactly the discrepancy
+    the committed counts exist to resolve.
+    """
+    counts: dict[str, int] = {}
+    if Path(trajectory).is_file():
+        try:
+            from ..openmm.trajectory import count_frames
+
+            counts["trajectory"] = int(count_frames(trajectory))
+        except Exception:                                  # noqa: BLE001 - absence is not failure
+            pass
+    return counts
+
+
+def _truncate_streams_to_committed(committed: dict[str, Any], *, trajectory: Path,
+                                   log) -> dict[str, tuple[int, int]]:
+    """Cut each appendable stream back to the count the checkpoint committed.
+
+    Returns `{name: (before, after)}` for whatever actually moved, so the log can say so. A
+    stream that is already at or below its committed count is left alone: shorter than committed
+    means the crash lost records the checkpoint believes exist, which is a different failure and
+    is reported by the caller's own count checks rather than papered over here.
+    """
+    moved: dict[str, tuple[int, int]] = {}
+    wanted = committed.get("trajectory")
+    if wanted is None or not Path(trajectory).is_file():
+        return moved
+    from ..openmm.trajectory import count_frames, truncate_frames
+
+    have = int(count_frames(trajectory))
+    if have > int(wanted):
+        truncate_frames(trajectory, int(wanted))
+        moved["trajectory"] = (have, int(wanted))
+    return moved
+
+
+class _CheckpointWithFingerprint:
+    """A checkpoint reporter that COMMITS a generation instead of overwriting a pair.
+
+    OpenMM's own CheckpointReporter writes only the binary state, so this once wrote the state and
+    then the sidecar beside it:
+
+        simulation.saveCheckpoint(path)
+        Path(path + ".json").write_text(...)
+
+    Two writes, in order, to two names that are only meaningful together. A crash between them --
+    or a filesystem that reorders them, which is the ordinary case without an fsync -- leaves a
+    NEW Context checkpoint beside an OLD `steps_done`, and the resume continues from step 3000
+    while believing it is at 2000. It re-emits frames and rows that already exist and reports a
+    stage length that was never run. Nothing fails; the trajectory is simply wrong.
+
+    It is the same defect the AIS path checkpoint had, in the same shape, so it uses the same
+    transaction rather than a second implementation of one:
+    `md_tools.openmm.checkpoint.commit_generation` writes a new generation, fsyncs it, digests it,
+    writes the sidecar, fsyncs the directory, and only then replaces the pointer.
+
+    The committed state binds everything a resume has to agree about -- the configuration
+    fingerprint, the step, the stage's identity, the seeds, the platform, and the committed row
+    and frame counts of every appendable stream -- so recovery can cut those streams back to what
+    the checkpoint vouches for instead of trusting whichever file happens to be longest.
     """
 
-    def __init__(self, path: str, interval: int, *, fingerprint: str, offset: int = 0) -> None:
-        self._path = path
+    def __init__(self, directory, interval: int, *, fingerprint: str, offset: int = 0,
+                 identity=None, streams=None) -> None:
+        self._directory = Path(directory)
         self._interval = int(interval)
         self._fingerprint = fingerprint
         self._offset = int(offset)
+        self._identity = dict(identity or {})
+        #: name -> callable returning the committed count for that stream, read at commit time.
+        self._streams = dict(streams or {})
 
     def describeNextReport(self, simulation):
         steps = self._interval - simulation.currentStep % self._interval
         return (steps, False, False, False, False, False)
 
     def report(self, simulation, state):
-        simulation.saveCheckpoint(self._path)
-        Path(self._path + ".json").write_text(
-            json.dumps({"fingerprint": self._fingerprint,
-                        "steps_done": int(simulation.currentStep)}), encoding="utf-8")
+        from ..openmm.checkpoint import commit_generation
+
+        commit_generation(
+            self._directory,
+            write_checkpoint=lambda path: simulation.saveCheckpoint(str(path)),
+            state={"fingerprint": self._fingerprint,
+                   "steps_done": int(simulation.currentStep),
+                   **self._identity,
+                   "streams": {name: int(count()) for name, count in self._streams.items()}})
 
 
 # ---------------------------------------------------------------------------------------------
