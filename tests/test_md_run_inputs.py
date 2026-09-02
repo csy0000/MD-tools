@@ -191,6 +191,11 @@ def test_run_sh_drives_the_installed_command_rather_than_a_second_interface(tmp_
                    capture_output=True, text=True, timeout=600, check=True)
     text = (out / "run.sh").read_text(encoding="utf-8")
     assert "md-openmm md-run -i min.in" in text, text
+    # `-x` is the System on this surface. run.sh once passed `-s built.xml --trajectory`-style
+    # flags from before that was settled, so it handed the runner a .dcd where the System belongs
+    # -- and nothing in the fast lane noticed, because nothing in the fast lane runs run.sh.
+    assert '-x "${SYSTEM}"' in text, text
+    assert '-s "${SYSTEM}"' not in text, text
     # One rank per state, and -ng stating the same number, spelled out rather than computed at
     # run time -- the ladder's size is a property of the configuration, not of the machine.
     assert "mpirun -n 4 md-openmm md-run -ng 4 -i REST2.in" in text, text
@@ -290,3 +295,38 @@ def test_an_ais_trajectory_cadence_that_disagrees_with_the_observations_is_refus
     with pytest.raises(ConfigError, match="one cadence"):
         parse_run_input(_written(SPEC_EXAMPLE.replace("solute_printout            = 10,",
                                                       "solute_printout            = 50,")))
+
+
+@pytest.mark.parametrize("protocol", ["cMD", "REST2", "rREST2", "AIS"])
+def test_every_command_run_sh_issues_is_one_md_run_would_accept(protocol, tmp_path):
+    """Parse the generated run.sh's own command lines with md-run's parser.
+
+    The cheap half of actually running it. A flag that build-md emits and md-run does not accept
+    is a generated project that cannot run, and it is invisible to every test that only inspects
+    files -- which is how `-s built.xml` survived the rename of the System flag to `-x`.
+    """
+    import shlex
+
+    from md_tools.run.main import md_run_parser
+
+    out = tmp_path / "md_script"
+    subprocess.run(CLI + ["build-md", "-odir", str(out),
+                          "--config", str(REPO / "configs" / "md" / f"{protocol}.config")],
+                   capture_output=True, text=True, timeout=600, check=True)
+
+    # Join continuations, then keep the lines that invoke md-run.
+    joined = (out / "run.sh").read_text(encoding="utf-8").replace("\\\n", " ")
+    commands = [line for line in joined.splitlines()
+                if "md-openmm md-run" in line and not line.lstrip().startswith("#")]
+    assert commands, joined
+
+    parser = md_run_parser()
+    for command in commands:
+        words = shlex.split(command)
+        # Drop the launcher and the executable; keep the flags.
+        start = words.index("md-run") + 1
+        argv = [word for word in words[start:] if word != "$@"]
+        parsed = parser.parse_args(argv)          # SystemExit here means run.sh cannot run
+        assert parsed.input.endswith(".in"), argv
+        assert parsed.system, argv
+        assert parsed.topology, argv

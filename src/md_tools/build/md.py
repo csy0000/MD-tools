@@ -725,18 +725,22 @@ def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str,
             '',
             'echo "== AIS =="',
             '"${LAUNCH[@]}" md-openmm md-run -i AIS.in \\',
-            '  -p "${TOPOLOGY}" -s "${SYSTEM}" -source-traj "${SOURCE}" \\',
+            '  -p "${TOPOLOGY}" -x "${SYSTEM}" -source-traj "${SOURCE}" \\',
             '  -log AIS.log "$@"',
             '']
     elif all_in_one:
-        lines += ['md-openmm md-run -i cMD.in -p "${TOPOLOGY}" -s "${SYSTEM}" "$@"', '']
+        lines += ['md-openmm md-run -i cMD.in -p "${TOPOLOGY}" -x "${SYSTEM}" "$@"', '']
     else:
         previous = None
         for stage in plan:
             name = stage["name"]
+            # `-x` is the serialised System on this surface, as Amber's prmtop carries the
+            # parameters; the output trajectory is `--trajectory`. Getting these two the wrong way
+            # round hands the runner a .dcd where the System belongs.
             call = [f'md-openmm md-run -i {name}.in \\',
-                    '  -p "${TOPOLOGY}" -s "${SYSTEM}" \\',
-                    f'  -x {name}.dcd -r {name}.xml -chk {name}.chk -log {name}.log "$@"']
+                    '  -p "${TOPOLOGY}" -x "${SYSTEM}" \\',
+                    f'  --trajectory {name}.dcd -r {name}.xml -chk {name}.chk '
+                    f'-log {name}.log "$@"']
             if previous:
                 call.insert(2, f'  -c {previous}.xml \\')
             lines += [f'echo "== {name} =="'] + call + ['']
@@ -750,7 +754,7 @@ def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str,
                       '# run, --cpu for an explicit CPU run.',
                       f'echo "== {protocol} =="',
                       f'mpirun -n {states} md-openmm md-run -ng {states} -i {protocol}.in \\',
-                      '  -p "${TOPOLOGY}" -s "${SYSTEM}" \\',
+                      '  -p "${TOPOLOGY}" -x "${SYSTEM}" \\',
                       f'  -c {previous}.xml -log {protocol}.log "$@"',
                       '']
     lines += ['echo "run.sh: all stages reported completion"']
