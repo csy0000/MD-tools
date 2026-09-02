@@ -340,15 +340,21 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
     from ..openmm.checkpoint import read_committed as _read_committed
     from ..run.preflight import check_existing_outputs
 
-    # A directory holding a COMMITTED checkpoint is an interrupted run, not a finished one, and
-    # continuing it is exactly what should happen -- so it is not something `--overwrite` has to
-    # be asked for. That is the one cMD resume contract: an interrupted stage continues from its
-    # committed pointer, a completed one is skipped, and only a directory that is neither -- half
-    # a run nobody claimed -- has to be answered for.
+    # INTERRUPTED, which is not the same as "has a checkpoint". A stage that finished commits a
+    # final generation too, so the presence of one says nothing on its own -- the discriminator is
+    # whether that generation is short of this stage's step count.
+    #
+    # An interrupted run continues, and that is not something `--overwrite` has to be asked for.
+    # That is the one cMD resume contract: an interrupted stage continues from its committed
+    # pointer, a completed one is skipped, and only a directory that is neither -- half a run
+    # nobody claimed -- has to be answered for.
     try:
-        interrupted = _read_committed(chk_path.parent / f"{chk_path.stem}.checkpoints") is not None
+        committed_now = _read_committed(chk_path.parent / f"{chk_path.stem}.checkpoints")
     except _CheckpointError:
-        interrupted = False
+        committed_now = None
+    interrupted = (committed_now is not None
+                   and int(committed_now["state"].get("steps_done", 0))
+                   < int(stage.get("steps") or 0))
     try:
         check_existing_outputs(checked.inventory, overwrite=bool(getattr(args, "overwrite", False)),
                                resume=bool(getattr(args, "resume", False)) or interrupted,

@@ -123,6 +123,20 @@ Do not change these without a failing test that demonstrates a defect.
   Work is `ΔW_j = U(τ_{j+1}, x_j) − U(τ_j, x_j)`: parameters move at frozen coordinates, then the
   configuration propagates. Observation 0 precedes all work and has exactly zero. Switching is at
   fixed volume; a barostat in the System is refused.
+* **The potential is exactly quadratic in `a = 1 − τ`.** Unscaled terms carry `a⁰`,
+  solute–environment terms `a¹`, solute–solute terms `a²`, so at frozen coordinates
+  `U(τ,x) = U_unscaled + a·U_linear + a²·U_quadratic` is an IDENTITY — including the PME reciprocal
+  sum, the Ewald self-energy and the dispersion correction, each a quadratic form in the charges
+  or in `sqrt(ε)`. `md_tools.ais.decomposition` measures it with three energy evaluations per
+  update at `a ∈ {0, ½, 1}` and one exact quadratic through them. The total work stays measured
+  directly from the Hamiltonian and the components are derived independently; the run then
+  REQUIRES `ΔW_total = ΔW_u + ΔW_l + ΔW_q` and refuses otherwise. Deriving the total from the
+  components would make that identity true by construction and test nothing.
+* **An interrupted AIS path resumes mid-path**, from its last committed generation. The older
+  claim that a switching path has no meaningful mid-path restart had the premise right (the work
+  integral is defined along a whole path) and the conclusion wrong: a resume continues *that*
+  path. A completed path is skipped only after its manifest and the sha256 of every output it
+  claims verify.
 * **Lengths are integer step counts**, everywhere. Logs derive ps/ns for the reader. A schedule
   that would have to be rounded is refused with the arithmetic that would fix it.
 * **Implicit solvent (GBn2)** has no box, no barostat, no salt and no NPT stage. Implicit stages
@@ -155,6 +169,31 @@ Do not change these without a failing test that demonstrates a defect.
   wrapper: it makes the unsafe path look tested. "Calls the preflight and ignores what it returns"
   is the same defect wearing a better name — if a runtime re-resolves the platform, the machine
   settings or the MPI world, there are two policies again.
+* **An output directory has ONE identity.** `AIS_run.json` records the source digest, the tau
+  schedule, the seed policy, the selected frames, the reporting schema, the path count and the
+  column schema. A second invocation into the same `-odir` with any of those changed is refused by
+  name: the completed paths would be skipped, the rest run under the new settings, and the work
+  table assembled out of two different experiments — readable, and describing neither.
+* **A checkpoint commit is a generation transaction, for cMD as well as AIS.**
+  `md_tools.openmm.checkpoint` is the one implementation. The cMD stage used to
+  `saveCheckpoint(path)` and then write a sidecar beside it: a crash between them paired a new
+  Context with an old `steps_done`, and the resume continued from step 3000 believing it was at
+  2000. The committed state binds the fingerprint, the step, the stage, the seeds, the platform
+  and the committed row and frame counts of every appendable stream; recovery truncates those
+  streams to the committed counts and never infers progress from whichever file is longest.
+* **`--check` creates nothing**, not even `-odir`. A `--check` that leaves a directory behind has
+  already produced the thing whose absence the caller was asking about.
+* **Every accepted flag does its job or is refused before any output.** Flags of another protocol
+  are accepted by the parser and refused BY NAME in the preflight — leaving them off makes argparse
+  say "unrecognized arguments", which explains nothing and puts the rule where `md-run` and a
+  generated script can disagree about it. They did.
+* **Under MPI, rank 0 writes the shared files** — `solute.yaml`, `_protocol.py`, the group file —
+  atomically, and every rank then verifies the digest. The helpers are content-addressed: a stale
+  `_protocol.py` from a ladder with a different state count is executable, runs perfectly and
+  simulates something else.
+* **A rank-local failure is made collective.** The preflight agrees across ranks before any output
+  exists, and a runtime failure aborts the communicator. A rank that raises alone leaves the
+  others waiting at the next collective for a participant that has already exited.
 * **Nothing is written until the whole preflight passes.** `md_tools.run.preflight` checks flag
   roles, resolved-path collisions (outputs against each other AND against the inputs), input
   existence and format, topology/System agreement, the MPI launch, the machine configuration,

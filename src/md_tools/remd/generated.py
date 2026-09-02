@@ -283,14 +283,35 @@ def _yaml_text(document) -> str:
 
 
 def _group_file_text(protocol_name, states, ladder, args, protocol_file, solute_yaml) -> str:
+    """One line per state. Every path is written RELATIVE TO THE GROUP FILE.
+
+    That is how the parser reads them -- as Amber does, and as everyone who writes one by hand
+    expects. The writer used to emit `-p` and `-s` exactly as they arrived on the command line,
+    which are relative to the working directory, and the two conventions agreed only while the
+    ladder happened to be launched from its own output directory. Run from anywhere else, every
+    rank looked for `built.pdb` beside the group file and did not find it -- or, worse, found a
+    different one.
+
+    Relative rather than absolute so the directory stays movable, which is the same reason a
+    generated script contains no absolute path.
+    """
+    import os
+
+    directory = protocol_file.parent
+
+    def relative(value):
+        return os.path.relpath(Path(value).resolve(), directory)
+
     lines = [f"# {protocol_name}: {states} states, tau 0.0 to {ladder['tau_max']}.",
              "# One group per line, inputs only. Run-level outputs go on the executor call,",
              "# because they describe the coordinated run rather than one replica.",
+             "# Paths are relative to THIS FILE, which is how they are read back.",
              ""]
     for index in range(states):
-        parts = [f"-i {protocol_file.name}", f"-p {args.topology}", f"-s {args.system}"]
+        parts = [f"-i {protocol_file.name}", f"-p {relative(args.topology)}",
+                 f"-s {relative(args.system)}"]
         if args.continue_from:
-            parts.append(f"-c {args.continue_from}")
+            parts.append(f"-c {relative(args.continue_from)}")
         parts += [f"--solute {solute_yaml.name}", f"--group-index {index}"]
         lines.append(" ".join(parts))
     return "\n".join(lines) + "\n"

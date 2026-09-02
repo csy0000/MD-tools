@@ -799,8 +799,8 @@ defined to begin in. Point -src at a finished fixed-tau run at tau = {tau_start}
     python AIS.py -p built.pdb -s built.xml -src ../hot/cMD.dcd --paths 0-9
 
 Each path is independent and has its own seeds. A completed path is skipped and never appended to;
-an interrupted one is rerun from its source frame, because the work integral is only defined along
-a whole path.
+an interrupted one RESUMES from its last committed checkpoint generation, continuing the same
+path rather than starting a new one.
 """
 from md_tools.ais import run_generated_ais
 

@@ -26,9 +26,24 @@ FIXED VOLUME. No barostat is active during switching and no pressure-volume term
 even when the source ensemble was NPT. Each path keeps the box of the frame it started from.
 
 Paths are independent: each has its own directory, its own deterministic seeds derived from the run
-seed and the path index, and its own completion record. A completed path is skipped, never appended
-to; an interrupted one is rerun from its source frame, because a switching path has no meaningful
-mid-path restart -- the work integral is only defined along a whole path.
+seed and the path index, and its own completion record.
+
+A completed path is skipped -- after its completion manifest and the sha256 of every output it
+claims have been verified, because "status: completed" is a field in a file and the files it
+describes are what a reader will actually load.
+
+An interrupted path RESUMES MID-PATH, from its last committed checkpoint generation. This text
+used to say the opposite -- that a switching path has no meaningful mid-path restart because the
+work integral is only defined along a whole path. The premise is right and the conclusion was
+wrong: the integral is defined along the whole path, and a resume continues the SAME path, with
+the accumulated work, the component accumulators, the Context and every stream counter restored
+to one committed instant. `md_tools.openmm.checkpoint` is what makes that instant well defined,
+and `test_ais_recovery_integration.py` proves a resumed path reproduces an uninterrupted one's
+totals at every transaction and stream boundary.
+
+DECOMPOSITION. Every observation also carries the potential and the work split into the three
+tau-basis groups -- see `md_tools.ais.decomposition` for the identity, the columns, the tolerances
+and what the three extra energy evaluations per update cost.
 """
 
 from __future__ import annotations

@@ -330,3 +330,60 @@ def test_group_file_paths_resolve_against_the_group_file_not_the_working_directo
     group = parse_group_file(path)[0]
     assert Path(group["topology"]) == elsewhere / "built.pdb"
     assert Path(group["solute"]) == elsewhere / "solute.yaml"
+
+
+def test_the_group_file_is_written_with_paths_relative_to_itself(tmp_path):
+    """The writer and the parser must agree about what a relative path is relative to.
+
+    Found by running an installed wheel from OUTSIDE the checkout, which is the only place the
+    two conventions come apart: the parser resolves against the group file (Amber's rule), the
+    writer emitted `-p` and `-s` exactly as they arrived on the command line, and those are
+    relative to the working directory. They agreed for as long as every ladder happened to be
+    launched from its own output directory -- which every test in this suite did, and which a
+    person running `md-openmm md-run -odir ./run` from their project root does not.
+
+    Run from anywhere else, every rank looked for `built.pdb` beside the group file. Not finding
+    it is the good case.
+    """
+    import argparse
+    import os
+
+    from md_tools.remd.executor import parse_group_file
+    from md_tools.remd.generated import _group_file_text
+
+    project = tmp_path / "project"
+    run = tmp_path / "project" / "run"
+    run.mkdir(parents=True)
+    (project / "built.pdb").write_text("END\n", encoding="utf-8")
+    (project / "built.xml").write_text("<System/>\n", encoding="utf-8")
+    (run / "eq.xml").write_text("<State/>\n", encoding="utf-8")
+    (run / "solute.yaml").write_text("n_solute_atoms: 1\n", encoding="utf-8")
+    (run / "_protocol.py").write_text("n_states = 2\n", encoding="utf-8")
+
+    # Exactly as a caller standing in `project` would spell them.
+    args = argparse.Namespace(topology="built.pdb", system="built.xml",
+                              continue_from="run/eq.xml")
+    here = Path.cwd()
+    os.chdir(project)
+    try:
+        text = _group_file_text("REST2", 2, {"tau_max": 0.5}, args,
+                                run / "_protocol.py", run / "solute.yaml")
+    finally:
+        os.chdir(here)
+    (run / "REST2.group").write_text(text, encoding="utf-8")
+
+    # Parsed with the working directory somewhere else entirely, which is the whole point.
+    os.chdir(tmp_path)
+    try:
+        groups = parse_group_file(run / "REST2.group")
+    finally:
+        os.chdir(here)
+
+    assert len(groups) == 2
+    for group in groups:
+        assert Path(group["topology"]) == (project / "built.pdb").resolve(), group["topology"]
+        assert Path(group["system"]) == (project / "built.xml").resolve(), group["system"]
+        assert Path(group["coordinates"]) == (run / "eq.xml").resolve(), group["coordinates"]
+    # Relative, not absolute: the directory has to stay movable, for the same reason a generated
+    # script contains no absolute path.
+    assert "/tmp" not in text and str(tmp_path) not in text, text

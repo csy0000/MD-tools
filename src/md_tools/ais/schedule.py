@@ -16,9 +16,12 @@ not describe.
 `tau` is the SOURCE parameter. `s`, `sqrt(s)` and the effective solute temperature are derived and
 are never accepted back as input.
 
-Not implemented here, deliberately: the reverse path, mid-path restart, pV work, and any estimator
-built on the resulting work values. See configs/md/AIS.config for the path, the work
-convention and what this deliberately does not do.
+Not implemented here, deliberately: the reverse path, pV work, and any estimator built on the
+resulting work values. See configs/md/AIS.config for the path and the work convention.
+
+Mid-path restart WAS on that list and no longer is: it lives in `md_tools.openmm.checkpoint` and
+`md_tools.ais.run`, not here, because it is a property of the runtime rather than of the schedule
+this module computes.
 """
 from __future__ import annotations
 

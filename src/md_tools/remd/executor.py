@@ -184,8 +184,13 @@ def _resolve_group_paths(path, groups):
     for group in groups:
         for field in ("input", "topology", "system", "coordinates", "solute"):
             value = group.get(field)
-            if value and not Path(value).is_absolute():
-                group[field] = str(parent / value)
+            if not value:
+                continue
+            # RESOLVED, not merely joined: `run/../built.pdb` and `built.pdb` are one file, and
+            # the collision checks in `md_tools.run.preflight` compare resolved paths. Leaving
+            # one of the two unnormalised is how the same file comes to look like two.
+            group[field] = str((Path(value) if Path(value).is_absolute()
+                                else parent / value).resolve(strict=False))
 
 
 #: Fields every line of a homogeneous ladder must agree about. The current ladder is exactly that

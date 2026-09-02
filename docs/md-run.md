@@ -102,7 +102,27 @@ Two consequences worth stating plainly:
 If `-odir` already holds a `resolved.config` describing a *different* run, md-run refuses rather
 than overwriting: outputs from one resolution beside the configuration of another cannot be read
 correctly afterwards. An identical one is left alone, so rerunning a command is safe.
-`--overwrite` is the explicit way through.
+
+**`--overwrite` governs the COMPLETE output inventory**, not `resolved.config` alone. That was the
+old behaviour and it meant every other file — the reports, the trajectories, the phase-space
+stream, the state tables, the restarts, the per-state `remdN.nc`, the generated helpers — was
+replaced silently whether it was asked for or not. The preflight now names every artefact a run
+will create, before any of it exists, and refuses a `-odir` that already holds a run unless one of
+three things is true:
+
+* the run there **completed** under this exact configuration, and its outputs verify — then it is
+  skipped, and rerunning a command is still safe;
+* the run there was **interrupted** — a committed checkpoint short of the stage's step count —
+  then it continues, which is what `--resume` means and what happens by default;
+* you passed **`--overwrite`**, which replaces all of it.
+
+Anything else is half a run nobody claimed, and it has to be answered for rather than written
+into. `--resume` and `--overwrite` are forwarded to the runtimes, so a generated script and
+`md-openmm md-run` mean the same thing by them.
+
+**`--check` creates nothing at all**, not even `-odir`. It used to make the directory, both
+reports and (for AIS) `selected_source_frames.csv`, then say nothing had been run — leaving
+exactly the directory whose absence the caller was asking about.
 
 Every `.in` that `build-md` writes resolves back to exactly the `resolved.config` beside it. That
 is a test over all four protocols and every generated input, not a convention.
@@ -293,9 +313,16 @@ MPI, so an interrupted campaign still produces a table describing exactly what w
 with no completion record is simply absent; the table never invents a row for work that was not
 measured.
 
-A completed path is **skipped, never appended to**. An interrupted one is rerun from its source
-frame, because a switching path has no meaningful mid-path restart — the work integral is only
-defined along a whole path.
+A completed path is **skipped, never appended to** — and only after its completion manifest and
+the sha256 of every output it claims have been verified, because "status: completed" is a field in
+a file and the files it describes are what a reader will actually load.
+
+An interrupted path **resumes mid-path**, from its last committed checkpoint generation. This page
+used to say the opposite: that a switching path has no meaningful mid-path restart, because the
+work integral is only defined along a whole path. The premise is right and the conclusion was
+wrong — the integral is defined along the whole path, and a resume continues *that* path, with the
+accumulated work, the three component accumulators, the Context and every stream counter restored
+to one committed instant.
 
 ### The source ensemble
 
@@ -304,8 +331,11 @@ anneals away from an equilibrium ensemble; it cannot generate one.
 
 * a path with a trailing slash fails as *"is a directory, not a file"*, here, rather than obscurely
   inside the trajectory reader;
-* the atom count is read from the file's own header and compared with `-p` and `-x`. A trajectory
-  of a different system reads without error and produces work values that mean nothing;
+* the atom count is read from the file's own header and compared with **`-p` and `-s`** — the
+  topology and the serialised System the paths actually run in. This page said `-p` and `-x`,
+  which is wrong twice over: `-x` is an *output* trajectory, and AIS does not take one at all
+  (it writes `AIS_trajNNNN.nc`, one per path, and refuses `-x` by name). A source trajectory of a
+  different system reads without error and produces work values that mean nothing;
 * the file is hashed into the record;
 * frames are chosen deterministically from the global seed, and every path's source frame is
   written down *before* any dynamics;
@@ -399,8 +429,8 @@ could be mistaken for a finished path. A completed path is skipped, never overwr
 checkpoint is removed so nothing invites a resume of finished work.
 
 With `checkpoint_printout: 0` there are no checkpoints, and an interrupted path restarts from its
-source frame — which is correct, because a switching path has no meaningful mid-path restart
-without one: the work integral is only defined along a whole path.
+source frame — there is nothing committed to resume from. That is the setting, not a property of
+the method: with checkpoints on, an interrupted path continues from the last committed generation.
 
 ### The work convention, unchanged
 
