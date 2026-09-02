@@ -361,6 +361,12 @@ def test_a_multi_rank_preflight_failure_leaves_no_authoritative_output(tmp_path)
                        MD_TOOLS_FORCE_NO_MPI4PY="1")
     (tmp_path / "REST2.in").write_text(
         "&cntrl\n  protocol = REST2,\n/\n&remd\n  number_of_replicas = 4,\n/\n", encoding="utf-8")
+    # Real files, so the MPI check is genuinely REACHED. Preflight validates the inputs before the
+    # launch -- an unreadable topology is wrong on every machine, and its message should not be
+    # preceded by one about MPI -- so a test that leaves them missing refuses for a different
+    # reason than the one it is named for.
+    (tmp_path / "built.pdb").write_text("END\n", encoding="utf-8")
+    (tmp_path / "built.xml").write_text("<System/>\n", encoding="utf-8")
     done = subprocess.run(
         CLI + ["md-run", "-i", "REST2.in", "-p", "built.pdb", "-s", "built.xml",
                "-ng", "4", "-odir", str(tmp_path / "out")],

@@ -183,40 +183,15 @@ def protocol_file_text(ladder: dict[str, Any]) -> str:
         seed=int(dynamics["seed"]), platform=dynamics.get("platform"))
 
 
-def _check_group_count(number_of_groups, n_states: int, protocol: str) -> None:
-    """`-ng`, the configured state count and the MPI world size must be the same number.
+def replica_parser(description: str = "one coordinated replica-exchange ladder"):
+    """The ladder's flags. Exposed as a factory so the parser contract is testable on its own.
 
-    A preflight of the rule `ReplicaRun` enforces anyway. It is repeated here only to move the
-    refusal to before the launch does any work -- the driver's check is the authority, and this
-    one must never accept a world the driver would reject.
+    `allow_abbrev=False` for the same reason as everywhere else: a misspelling argparse resolves
+    runs, with a setting nobody wrote.
     """
-    from .executor import mpi_rank_and_size
-
-    _, size = mpi_rank_and_size()
-    stated = None if number_of_groups is None else int(number_of_groups)
-    if (stated is not None and stated != n_states) or (size > 1 and size != n_states):
-        # All THREE numbers, always. Naming only the two that happened to differ leaves the reader
-        # to work out which of the remaining pair is the one they should change.
-        raise SystemExit(
-            f"a {protocol} ladder runs one process per thermodynamic state, and these three "
-            f"numbers must be the same:\n"
-            f"  replicas in the configuration : {n_states}  (rest2.number_of_replicas)\n"
-            f"  -ng on the command line       : "
-            f"{stated if stated is not None else 'not given'}\n"
-            f"  MPI world size                : {size}"
-            f"{' (not launched under MPI)' if size == 1 else ''}\n"
-            f"Launch it as:\n"
-            f"  mpirun -n {n_states} md-openmm md-run -ng {n_states} ...\n"
-            f"Refused rather than run: a world size that is not the state count leaves states "
-            f"either unowned or shared, and the exchange record would describe neither.")
-
-
-def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
-    """Prepare the ladder's inputs and hand them to the validated executor."""
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description=f"{ladder['protocol']}: one coordinated replica-exchange ladder")
+    parser = argparse.ArgumentParser(description=description, allow_abbrev=False)
     parser.add_argument("-p", "--topology", required=True, metavar="PDB")
     parser.add_argument("-s", "--system", required=True, metavar="XML")
     parser.add_argument("-c", "--continue-from", default=None, metavar="XML",
@@ -226,8 +201,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
                         help="the coordinated run's readable .out; distinct from -log, which is "
                              "this ladder's own machine record")
     parser.add_argument("-x", "--trajectory", default=None, metavar="NC",
-                        help="the coordinated run's analysis trajectory (NetCDF). The fixed-state "
-                             "trajectories remd0.nc.. are always written beside it")
+                        help="the coordinated run's analysis trajectory (NetCDF)")
     parser.add_argument("-r", "--restart", default=None, metavar="JSON",
                         help="the ladder's restart manifest")
     parser.add_argument("--groupfile", default=None, metavar="FILE",
@@ -237,13 +211,12 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
                         help="where the ladder's outputs are written (default: here)")
     parser.add_argument("-ng", "--number-of-groups", dest="number_of_groups", type=int,
                         default=None, metavar="N",
-                        help="how many replicas this launch coordinates. Amber spells the same "
-                             "thing the same way. It is CHECKED, not used to size the ladder: the "
-                             "ladder's size comes from the configuration, and a mismatch between "
-                             "what you launched and what the ladder needs is refused")
+                        help="how many replicas this launch coordinates. CHECKED against the "
+                             "configured state count and the MPI world size; it never resizes "
+                             "the ladder")
     parser.add_argument("--cpu", action="store_true",
-                        help="run every replica on the OpenMM CPU platform. CUDA is the default "
-                             "and is mandatory; this is the only way to ask for a CPU run")
+                        help="run every replica on the OpenMM CPU platform, overriding "
+                             "machine.openmm.platform for this invocation")
     parser.add_argument("--route", default="peptide", choices=("peptide", "ligand"),
                         help="how the omega classifier reads the solute")
     parser.add_argument("--resume", action="store_true")
@@ -251,19 +224,36 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     parser.add_argument("--extend", type=int, default=0, metavar="N")
     parser.add_argument("--extend-from", default=None, metavar="DIRECTORY")
     parser.add_argument("--force", action="store_true")
-    args = parser.parse_args(argv)
+    return parser
 
-    out = Path(args.out_dir).resolve()
-    out.mkdir(parents=True, exist_ok=True)
+
+def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
+    """Prepare the ladder's inputs and hand them to the validated executor."""
+    import argparse
+
+    parser = replica_parser(
+        f"{ladder['protocol']}: one coordinated replica-exchange ladder")
+    args = parser.parse_args(argv)
 
     protocol_name = ladder["protocol"]
 
-    # A replica ladder is one process per thermodynamic state. Three numbers have to agree -- the
-    # states the configuration declares, the `-ng` the command line claims, and the MPI world the
-    # launcher actually created -- and any disagreement is refused here, before a Context is
-    # opened. Silently running 8 states in 4 processes is not a smaller ladder; it is a different
-    # Hamiltonian schedule wearing the same output names.
-    _check_group_count(args.number_of_groups, int(ladder["n_states"]), protocol_name)
+    # THE LAUNCH IS VALIDATED BEFORE `-odir` EXISTS. This runs here, in the shared runtime, and
+    # not only in `md-openmm md-run`, because the generated `REST2.py` and `rREST2.py` call this
+    # function directly -- a guard that lives in the outer command is a property of that command
+    # rather than of the ladder.
+    #
+    # One process per thermodynamic state: the states the configuration declares, the `-ng` the
+    # command line claims, and the MPI world the launcher created must be one number. Running 8
+    # states in 4 processes is not a smaller ladder, it is a different Hamiltonian schedule
+    # wearing the same output names.
+    from .mpi import Coordination
+
+    coordination = Coordination.open(number_of_groups=args.number_of_groups,
+                                     replicas=int(ladder["n_states"]),
+                                     protocol=protocol_name)
+
+    out = Path(args.out_dir).resolve()
+    out.mkdir(parents=True, exist_ok=True)
 
     if args.cpu:
         # `platform` reaches the driver through the protocol file, and `from_flags` records that a
@@ -293,9 +283,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     # any of it. These three files are inputs to the executor, and N ranks writing them
     # concurrently is not a slow start -- it is a rank reading a half-written protocol module, or
     # a group file that lost lines to an interleaved write.
-    from .executor import barrier, mpi_rank_and_size
-
-    rank, size = mpi_rank_and_size()
+    rank, size = coordination.rank, coordination.size
 
     solute_yaml = out / "solute.yaml"
     protocol_file = out / "_protocol.py"
@@ -317,7 +305,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
             parts += [f"--solute {solute_yaml.name}", f"--group-index {index}"]
             lines.append(" ".join(parts))
         group_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    barrier(size)
+    coordination.barrier()
 
     executor_argv = [
         "-ng", str(states),

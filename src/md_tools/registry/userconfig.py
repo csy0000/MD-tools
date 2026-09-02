@@ -111,6 +111,30 @@ def config_path(explicit: str | Path | None = None) -> tuple[Path, str]:
     return default_config_path(), "XDG default"
 
 
+def _load_document(path: Path, origin: str) -> dict[str, Any]:
+    """Read one user configuration STRICTLY. Duplicate keys are fatal and are named.
+
+    `yaml.safe_load` keeps the last of a repeated key and says nothing, so a file that sets
+    `platform` twice runs as one of them and the other is invisible. This is a file a person edits
+    by hand, which is exactly where that happens.
+    """
+    from ..build.strict import ConfigError, load_yaml_strictly
+
+    try:
+        document = load_yaml_strictly(path.read_text(encoding="utf-8"), source=str(path))
+    except ConfigError as duplicate:
+        raise RegistrationError(f"{path} (from {origin}): {duplicate}") from None
+    except yaml.YAMLError as exc:
+        raise RegistrationError(f"{path} (from {origin}): not valid YAML -- {exc}") from None
+    if document is None:
+        return {}
+    if not isinstance(document, dict):
+        raise RegistrationError(
+            f"{path} (from {origin}): the configuration must be a mapping of sections, not a "
+            f"{type(document).__name__}.")
+    return document
+
+
 def load_user_config(explicit: str | Path | None = None) -> tuple[dict[str, Any], Path, str]:
     path, origin = config_path(explicit)
     if not path.is_file():
@@ -118,18 +142,16 @@ def load_user_config(explicit: str | Path | None = None) -> tuple[dict[str, Any]
             f"no user configuration at {path} (from {origin}).\n"
             f"Create one with:\n"
             f"    md-openmm data-register --init")
-    try:
-        document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as exc:
-        raise RegistrationError(f"{path}: not valid YAML -- {exc}") from None
-    if not isinstance(document, dict):
-        raise RegistrationError(f"{path}: the configuration must be a mapping")
+    document = _load_document(path, origin)
     version = document.get("schema_version")
     if str(version) != CONFIG_SCHEMA_VERSION:
         raise RegistrationError(
             f"{path}: schema_version is {version!r}, this build understands "
             f"{CONFIG_SCHEMA_VERSION!r}")
     user = document.get("user") or {}
+    if not isinstance(user, dict):
+        raise RegistrationError(
+            f"{path}: `user` must be a mapping of fields, not a {type(user).__name__}.")
     for field in ("person_id", "name"):
         if not user.get(field):
             raise RegistrationError(f"{path}: user.{field} is required")
@@ -264,18 +286,57 @@ def resolve_machine_openmm(document: dict[str, Any] | None = None) -> dict[str, 
 
 
 def machine_openmm_settings(explicit: str | Path | None = None) -> dict[str, Any]:
-    """The machine's OpenMM settings, loaded through the ordinary configuration discovery order.
+    """The machine's OpenMM settings, through the ordinary configuration discovery order.
 
-    A missing configuration file is NOT an error here. Registration needs an identity and a
-    storage root, so it insists on the file; running a simulation needs neither, and refusing to
-    run because nobody has registered data yet would be absurd.
+    ABSENT IS NOT INVALID, and the difference is the whole point of this function.
+
+    A missing configuration file is legitimate here in a way it is not for registration: running a
+    simulation needs neither an identity nor a storage root, and refusing to run because nobody has
+    registered data yet would be absurd. So an absent file resolves to the built-in defaults.
+
+    An EXISTING file that cannot be read, or that says something wrong, is fatal. It used to be
+    caught by the same `except RegistrationError` and answered with those same defaults, which
+    meant a malformed configuration -- bad YAML, a duplicate key, an unknown field, an invalid
+    platform -- silently became CUDA / mixed / local_rank. The machine then ran on settings nobody
+    chose, and the file that was supposed to say otherwise was never mentioned again.
+
+    `MD_TOOLS_CONFIG` naming a file that does not exist is a BROKEN REFERENCE, not an absence:
+    somebody meant that path, and answering with defaults hides a typo in an environment variable.
     """
-    try:
-        document, path, origin = load_user_config(explicit)
-    except RegistrationError:
+    path, origin = config_path(explicit)
+
+    if not path.is_file():
+        if origin in ("--user-config", "MD_TOOLS_CONFIG"):
+            raise RegistrationError(
+                f"{origin} points at {path}, which does not exist.\n"
+                f"  This is a broken reference rather than an absent configuration: something "
+                f"named that path deliberately. Correct it, or unset it to use the built-in "
+                f"defaults (CUDA, mixed precision, local-rank device placement).")
         resolved = resolve_machine_openmm({})
         resolved["config_path"] = None
+        resolved["config_origin"] = f"{origin} (no file; built-in defaults)"
         return resolved
+
+    document = _load_document(path, origin)
+    version = document.get("schema_version")
+    if version is not None and str(version) != CONFIG_SCHEMA_VERSION:
+        raise RegistrationError(
+            f"{path} (from {origin}): schema_version is {version!r}, this build understands "
+            f"{CONFIG_SCHEMA_VERSION!r}.")
+    # The `user` block is not this function's business, but a malformed one still means the file
+    # is wrong, and a wrong file must not resolve to defaults just because the part this caller
+    # needed happened to be absent.
+    user = document.get("user")
+    if user is not None and not isinstance(user, dict):
+        raise RegistrationError(
+            f"{path} (from {origin}): `user` must be a mapping of fields, not a "
+            f"{type(user).__name__}.")
+    machine = document.get("machine")
+    if machine is not None and not isinstance(machine, dict):
+        raise RegistrationError(
+            f"{path} (from {origin}): `machine` must be a mapping of settings, not a "
+            f"{type(machine).__name__}.")
+
     resolved = resolve_machine_openmm(document)
     resolved["config_path"] = str(path)
     resolved["config_origin"] = origin

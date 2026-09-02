@@ -62,12 +62,9 @@ STATE_COLUMNS = ("path_index", "protocol_step", "switching_time_ps", "tau",
                  "potential_energy_kj_mol", "kinetic_energy_kj_mol", "total_energy_kj_mol",
                  "temperature_kelvin", "volume_nm3", "density_g_per_ml")
 
-#: Mid-path resume. The OpenMM checkpoint restores the Context; this sidecar restores everything
-#: OUTSIDE it -- how much work has accumulated, how many rows and frames are on disk, which path
-#: this is. Restoring one without the other would resume a simulation into the wrong bookkeeping.
-RESUME_SIDECAR = "resume.json"
-PATH_CHECKPOINT = "path.chk"
-
+#: Mid-path resume lives in `md_tools.ais.checkpoint`: a generation-based transaction whose
+#: committed pointer is replaced last, so a crash never pairs a new Context with old bookkeeping.
+#: `RESUME_SIDECAR` and `PATH_CHECKPOINT` were the two files of the previous, non-atomic design.
 #: Frames are staged inside the path directory and published to the run root only when the path is
 #: complete and validated. A half-written `AIS_trajNNNN.nc` at the root would look exactly like a
 #: finished path to anyone globbing the directory.
@@ -94,7 +91,7 @@ SUMMARY_COLUMNS = ("path_index", "source_frame_index", "observations",
 
 
 def ais_parser(description: str) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=description)
+    parser = argparse.ArgumentParser(description=description, allow_abbrev=False)
     parser.add_argument("-p", "--topology", required=True, metavar="PDB",
                         help="topology and reference coordinates (built.pdb)")
     parser.add_argument("-s", "--system", required=True, metavar="XML",
@@ -111,14 +108,19 @@ def ais_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("-o", "--output", default=None, metavar="OUT",
                         help="human-readable simulation output, Amber's mdout. A DIFFERENT file "
                              "from -log. Defaults to AIS.out")
+    parser.add_argument("-ng", "--number-of-groups", dest="number_of_groups", type=int,
+                        default=None, metavar="N",
+                        help="how many workers share the paths. Checked against the MPI "
+                             "communicator; it never changes how many paths there are")
     parser.add_argument("--resume", action="store_true",
                         help="continue interrupted paths from their checkpoints. A completed "
                              "path is skipped either way; this affects only paths that stopped "
                              "part-way")
     parser.add_argument("--cpu", action="store_true",
-                        help="run the paths on the OpenMM CPU platform. CUDA is the default and "
-                             "is mandatory; this is the only way to ask for a CPU run, and the "
-                             "record says that you did")
+                        help="run this invocation on the OpenMM CPU platform, overriding "
+                             "machine.openmm.platform. That setting can also select "
+                             "CPU machine-wide; this flag is the per-run override, "
+                             "and the record distinguishes the two")
     parser.add_argument("--device", default=None, metavar="N",
                         help="CUDA device index. An execution placement option; rejected with "
                              "--cpu, which has no device to place")
@@ -420,8 +422,6 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
     updates = schedule["number_of_updates"]
 
     staged = directory / STAGED_TRAJECTORY
-    sidecar = directory / RESUME_SIDECAR
-    checkpoint = directory / PATH_CHECKPOINT
 
     system = switcher.prepared_system(taus[0])
     integrator = LangevinMiddleIntegrator(
@@ -433,9 +433,15 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                             acceleration.platform, acceleration.properties)
 
     # -- resume, or start ----------------------------------------------------------------------
+    from .checkpoint import clear_committed, commit_generation, read_committed
+
     state_of_path = None
-    if resume and sidecar.is_file() and checkpoint.is_file():
-        state_of_path = json.loads(sidecar.read_text(encoding="utf-8"))
+    if resume:
+        # ONLY the committed pointer. Never "the newest generation on disk": the newest file is
+        # exactly what a crash leaves behind, and choosing it would pair a Context from step 3000
+        # with bookkeeping from step 2000.
+        committed = read_committed(directory)
+        state_of_path = committed["state"] if committed else None
         # EVERY fingerprint before anything is loaded. A checkpoint carries positions and
         # velocities for one particular System, schedule and path; resuming it against another is
         # how a run continues with right-looking numbers and the wrong simulation.
@@ -452,7 +458,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                 f"it from its source frame.")
 
     if state_of_path is not None:
-        simulation.loadCheckpoint(str(checkpoint))
+        simulation.loadCheckpoint(committed["checkpoint"])
         # The Context is back; now put the bookkeeping back to exactly the same instant. The
         # streams are cut to the counts the sidecar vouches for, so an interrupted final record
         # is dropped rather than appended to.
@@ -544,32 +550,34 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         state_rows_emitted += 1
 
     def save_checkpoint(updates_completed: int) -> None:
-        """The Context and its bookkeeping, together and in that order.
+        """One crash-atomic generation: a new checkpoint, its sidecar, then the pointer.
 
-        The sidecar is written LAST and atomically: it is what vouches for the counts, so it must
-        never claim more than the streams already hold.
+        The committed pair is never overwritten and the pointer is replaced last, so a crash
+        anywhere in here leaves the PREVIOUS generation committed and complete. The old design
+        overwrote the binary state and then replaced the sidecar, and a crash between those two
+        writes left a new Context paired with old accumulated work -- a resume that looks
+        successful and is measuring a path that was never run.
         """
         netcdf.flush()
-        simulation.saveCheckpoint(str(checkpoint))
-        payload = {
-            "fingerprint": fingerprint,
-            "path_index": index,
-            "source_frame_index": frame,
-            "updates_completed": updates_completed,
-            "protocol_step": updates_completed * interval,
-            "tau": taus[updates_completed],
-            "cumulative_work_kj_mol": cumulative,
-            "work_since_last_observation_kj_mol": since,
-            "work_rows": rows_emitted,
-            "frames": frames_emitted,
-            "state_rows": state_rows_emitted,
-            "integrator_seed": integrator_seed,
-            "velocity_seed": velocity_seed,
-            "trajectory": trajectory_name,
-        }
-        temporary = sidecar.with_name(sidecar.name + ".partial")
-        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        os.replace(temporary, sidecar)
+        commit_generation(
+            directory,
+            write_checkpoint=lambda path: simulation.saveCheckpoint(str(path)),
+            state={
+                "fingerprint": fingerprint,
+                "path_index": index,
+                "source_frame_index": frame,
+                "updates_completed": updates_completed,
+                "protocol_step": updates_completed * interval,
+                "tau": taus[updates_completed],
+                "cumulative_work_kj_mol": cumulative,
+                "work_since_last_observation_kj_mol": since,
+                "work_rows": rows_emitted,
+                "frames": frames_emitted,
+                "state_rows": state_rows_emitted,
+                "integrator_seed": integrator_seed,
+                "velocity_seed": velocity_seed,
+                "trajectory": trajectory_name,
+            })
 
     def time_of(step: int) -> float:
         return round(step * float(dynamics["timestep_fs"]) / 1000.0, 9)
@@ -660,9 +668,8 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         "resumed": bool(state_of_path),
     }
     marker.write_text(json.dumps(completion, indent=2) + "\n", encoding="utf-8")
-    # The checkpoint has served its purpose; leaving it would invite a resume of a finished path.
-    checkpoint.unlink(missing_ok=True)
-    sidecar.unlink(missing_ok=True)
+    # The transaction has served its purpose; leaving it would invite a resume of finished work.
+    clear_committed(directory)
     log(f"  path {index:4d}: frame {frame}, {rows_emitted} observations, {frames_emitted} "
         f"frames, W = {cumulative:.4f} kJ/mol (reduced {beta * cumulative:.4f})")
     return completion
@@ -711,19 +718,21 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     from ..rest2 import TauSwitcher
     from ..md.stage import solute_atom_indices
 
-    from ..remd.executor import barrier, mpi_rank_and_size
+    from ..remd.mpi import Coordination
     from . import path_trajectory_name, paths_for_rank
 
     ais, source_cfg, dynamics = run["ais"], run["ais_source"], run["dynamics"]
     reporting = run["reporting"]
+
+    # THE LAUNCH IS VALIDATED BEFORE `-odir` EXISTS, here in the shared runtime rather than only
+    # in `md-openmm md-run`: the generated `AIS.py` calls this function directly. Paths are
+    # independent, so `-ng` is simply the worker count, and it must equal the communicator.
+    coordination = Coordination.open(number_of_groups=args.number_of_groups,
+                                     protocol="AIS")
+    rank, size = coordination.rank, coordination.size
+
     out = Path(args.out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
-
-    # Paths are independent, so AIS parallelises by simply giving each worker its own paths. The
-    # rank is read from the launcher's environment rather than by importing mpi4py: the split has
-    # to be known before anything opens a Context, and a single-process run must work on a machine
-    # with no MPI at all.
-    rank, size = mpi_rank_and_size()
     # Every rank keeps its own pair. An explicitly named -log or -o is suffixed the same way an
     # unnamed one is: without that, N ranks race to rename the same temporary and the run dies
     # with a FileNotFoundError that says nothing about the cause. A rank that failed to bind its
@@ -948,36 +957,50 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
 
         # --- run the paths -------------------------------------------------------------------
         # ONE platform decision for the whole run, made before the first path opens a Context:
-        # a CUDA device that cannot be initialised must fail here rather than 40 paths in. Under
-        # MPI each rank takes its own device by local rank unless one was named.
+        # a CUDA device that cannot be initialised must fail here rather than 40 paths in.
+        #
+        # THE MACHINE POLICY IS READ FIRST. It used to be read last: a local-rank device was
+        # chosen unconditionally and `machine.openmm` was consulted afterwards, so
+        # `device_policy: openmm` was accepted by validation and had no effect on where anything
+        # ran. A configuration field with no runtime behaviour is worse than an absent one,
+        # because somebody set it and believes it took hold.
         from ..openmm.platform_policy import (PlatformRequest, acceleration_record,
-                                              resolve_platform_request)
-        from ..remd.engine import select_device_for_rank, visible_cuda_devices
+                                              device_index_for, resolve_platform_request)
+        from ..registry.userconfig import machine_openmm_settings
+        from ..remd.engine import visible_cuda_devices
 
-        device, device_policy = args.device, "named on the command line"
+        machine = machine_openmm_settings()
+        policy = str(machine.get("device_policy") or "local_rank")
+        request = PlatformRequest.from_machine(machine, cpu=bool(args.cpu))
+
+        device = args.device
+        device_policy = "named on the command line (--device)"
         if device is None:
-            if size > 1 and not args.cpu:
+            if request.name != "CUDA":
+                device_policy = "not a CUDA platform"
+            elif policy == "openmm":
+                device_policy = "machine.openmm.device_policy: openmm -- OpenMM selects"
+            else:
                 # Nothing binds ranks to devices automatically: without this every rank creates
                 # its Context on the default device and the whole run sits on one GPU.
-                device, device_policy = select_device_for_rank(
-                    rank, size, visible_cuda_devices(probe=True))
-                if device is None:
+                device = device_index_for(policy=policy, rank=rank, size=size,
+                                          devices=visible_cuda_devices(probe=size > 1))
+                device_policy = (f"machine.openmm.device_policy: local_rank "
+                                 f"(rank {rank} of {size})")
+                if device is None and size > 1:
                     raise SystemExit(
-                        "AIS was launched under MPI on CUDA but no CUDA device is visible to "
-                        "this rank. Refusing rather than letting every rank fall onto one GPU.")
-            else:
-                device_policy = "single process: OpenMM selects the device"
-        from ..registry.userconfig import machine_openmm_settings
+                        "AIS was launched under MPI on CUDA with device_policy: local_rank, but "
+                        "no CUDA device is visible to this rank. Refusing rather than letting "
+                        "every rank fall onto one GPU.")
 
-        acceleration = resolve_platform_request(
-            PlatformRequest.from_machine(machine_openmm_settings(), cpu=bool(args.cpu)),
-            device_index=device)
+        acceleration = resolve_platform_request(request, device_index=device)
         log.field("platform", f"{acceleration.name}"
                               + (f" device {acceleration.device_index}"
                                  if acceleration.device_index is not None else ""))
+        log.field("device policy", device_policy)
         log.update(acceleration=dict(
             acceleration_record(acceleration, mpi_rank=rank, mpi_size=size, local_rank=device),
-            device_policy=device_policy))
+            device_policy_detail=device_policy))
 
         # What a mid-path checkpoint has to match before it may be resumed from. The System, the
         # topology, the source ensemble and the whole schedule: a checkpoint carries positions and
@@ -1059,7 +1082,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         # rank 0 waits for all of them and assembles ONE table in global path order. The work
         # distribution is the result of the method, and it has to be readable as a single object
         # rather than as N per-rank fragments the reader is left to concatenate correctly.
-        barrier(size)
+        coordination.barrier()
         outputs = {"selected_source_frames": file_facts(out / "selected_source_frames.csv",
                                                         relative_to=out)}
         if rank == 0 and not args.paths:

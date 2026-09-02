@@ -90,15 +90,23 @@ def test_no_permissive_mpi_import_survives_outside_the_one_authority():
     Asserted over the source because it is a property no successful run can demonstrate: the
     permissive path only runs when MPI is broken, which is exactly when nobody is watching.
     """
+    import ast
+
     offenders = []
     for path in sorted((REPO / "src" / "md_tools").rglob("*.py")):
         if path.name == "mpi.py" and path.parent.name == "remd":
             continue
-        text = path.read_text(encoding="utf-8")
-        if "from mpi4py import MPI" in text:
-            offenders.append(str(path.relative_to(REPO)))
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        # The AST, not the text: a docstring that QUOTES the retired code to explain why it was
+        # retired is exactly the thing worth keeping, and a grep cannot tell it from the code.
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("mpi4py"):
+                offenders.append(f"{path.relative_to(REPO)}:{node.lineno}")
+            if isinstance(node, ast.Import) and any(
+                    alias.name.startswith("mpi4py") for alias in node.names):
+                offenders.append(f"{path.relative_to(REPO)}:{node.lineno}")
     assert not offenders, (
-        f"mpi4py is imported outside md_tools/remd/mpi.py in {offenders}. There must be one MPI "
+        f"mpi4py is imported outside md_tools/remd/mpi.py at {offenders}. There must be one MPI "
         f"authority; a second one is a second policy.")
 
 
@@ -120,14 +128,19 @@ def test_the_driver_coordinator_cannot_represent_a_plural_world_as_serial():
 
 def test_the_executor_barrier_is_not_a_second_implementation():
     """`md_tools.remd.executor.barrier` had its own permissive copy of the same decision."""
+    import ast
     import inspect
 
     from md_tools.remd import executor
 
     if not hasattr(executor, "barrier"):
         return                                        # removed entirely, which is also correct
-    source = inspect.getsource(executor.barrier)
-    assert "except ImportError" not in source, source
+    tree = ast.parse(inspect.getsource(executor.barrier).lstrip())
+    handlers = [h for node in ast.walk(tree) if isinstance(node, ast.Try) for h in node.handlers]
+    caught = [ast.unparse(h.type) for h in handlers if h.type is not None]
+    assert "ImportError" not in caught, (
+        f"executor.barrier still decides what to do about a missing mpi4py ({caught}); it must "
+        f"delegate to md_tools.remd.mpi, which refuses.")
 
 
 # --- 3. generated wrappers are as fail-closed as md-run ----------------------------------------
@@ -182,10 +195,36 @@ VALID_USER = {"person_id": "t", "name": "T", "orcid": None, "affiliation": None}
 
 
 def test_an_absent_configuration_resolves_to_the_built_in_defaults():
+    """Nobody has written one. That is legitimate and resolves to CUDA / mixed / local_rank.
+
+    A genuine absence, via an empty XDG root -- not an explicit path that happens to be missing,
+    which is a different thing and is tested separately as a broken reference.
+    """
     from md_tools.registry.userconfig import machine_openmm_settings
 
-    resolved = machine_openmm_settings(Path(tempfile.mkdtemp()) / "absent.config")
-    assert resolved["platform"] == "CUDA" and resolved["origin"] == "built-in default"
+    empty = Path(tempfile.mkdtemp())
+    previous = {key: os.environ.get(key) for key in ("XDG_CONFIG_HOME", "MD_TOOLS_CONFIG")}
+    os.environ["XDG_CONFIG_HOME"] = str(empty)
+    os.environ.pop("MD_TOOLS_CONFIG", None)
+    try:
+        resolved = machine_openmm_settings()
+        assert resolved["platform"] == "CUDA" and resolved["origin"] == "built-in default"
+        assert resolved["config_path"] is None
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def test_an_explicit_path_that_does_not_exist_is_a_broken_reference_not_an_absence():
+    """`--user-config /gone` names a file somebody meant. Defaults would hide the typo."""
+    from md_tools.registry.errors import RegistrationError
+    from md_tools.registry.userconfig import machine_openmm_settings
+
+    with pytest.raises(RegistrationError, match="does not exist"):
+        machine_openmm_settings(Path(tempfile.mkdtemp()) / "absent.config")
 
 
 def test_a_legacy_configuration_without_the_openmm_block_is_still_valid():
@@ -358,10 +397,15 @@ def test_ais_reads_the_device_policy_before_choosing_a_device():
     from md_tools.ais import run
 
     source = inspect.getsource(run)
-    placement = source.index("select_device_for_rank") if "select_device_for_rank" in source \
-        else source.index("device_index_for")
-    settings = source.index("machine_openmm_settings")
+    # The CALLS, not the imports: an import line says nothing about when a value is used, and the
+    # question here is whether the policy is known at the moment the device is picked.
+    settings = source.index("machine_openmm_settings()")
+    placement = source.index("device_index_for(policy=")
     assert settings < placement, "the device is chosen before the machine policy is read"
+
+    # And the policy the call is given is the machine's, not a constant.
+    call = source[placement:placement + 200]
+    assert "policy=policy" in call, call
 
 
 # --- 8. crash-atomic AIS checkpoints -----------------------------------------------------------

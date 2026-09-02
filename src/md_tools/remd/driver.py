@@ -42,6 +42,7 @@ from . import rem_log as rem_log
 from . import state_trajectories as state_trajectories
 from .rules import (ExchangeContext, NeighbouringExchangeRule, builtin_rule_identity,
                             load_rule)
+from .mpi import Coordination
 from .engine import (Configuration, ReplicaEngine, build_platform,
                             select_device_for_rank, visible_cuda_devices)
 from md_tools.rest2 import require_compatible_implementation
@@ -55,49 +56,27 @@ class IdentityError(DriverError):
     """The run being continued is not the run that was started."""
 
 
-class Coordinator:
-    """Rank, size, and the few collectives the driver needs. No MPI import when not under MPI."""
+class Coordinator(Coordination):
+    """The driver's view of the world. A NAME for `md_tools.remd.mpi.Coordination`, not a copy.
 
-    def __init__(self):
-        self.comm = None
-        self.rank, self.size = 0, 1
+    It used to be a copy, and the copy had its own policy:
+
         try:
             from mpi4py import MPI
         except ImportError:
-            return
-        comm = MPI.COMM_WORLD
-        if comm.Get_size() > 1:
-            self.comm, self.rank, self.size = comm, comm.Get_rank(), comm.Get_size()
+            return                      # rank 0 of 1, whatever the launcher said
 
-    @property
-    def is_root(self):
-        return self.rank == 0
+    Under `mpirun -n 8` on a machine with a broken mpi4py that produced eight processes each
+    believing it was the only one, all eight driving every state, all eight writing the same
+    files. The failure is invisible precisely because it only happens when MPI is broken.
 
-    def allgather(self, value):
-        return [value] if self.comm is None else self.comm.allgather(value)
+    There is one MPI authority now. This subclass exists so `driver.Coordinator()` keeps working
+    for callers, and it adds nothing.
+    """
 
-    def bcast(self, value):
-        return value if self.comm is None else self.comm.bcast(value, root=0)
-
-    def barrier(self):
-        if self.comm is not None:
-            self.comm.barrier()
-
-    def any_true(self, flag):
-        """True on EVERY rank if it is true on any. How a termination request becomes collective."""
-        if self.comm is None:
-            return bool(flag)
-        return bool(max(self.comm.allgather(bool(flag))))
-
-    def agree(self, value, *, what):
-        """Every rank must present the same value. Used to prove shared state is actually shared."""
-        if self.comm is None:
-            return
-        values = self.comm.allgather(value)
-        if len(set(values)) != 1:
-            raise DriverError(
-                f"the ranks disagree about {what}: {sorted(set(values))[:4]}. Continuing would "
-                f"propagate different states under one record.")
+    def __init__(self):
+        opened = Coordination.open()
+        super().__init__(MPI=opened.MPI, rank=opened.rank, size=opened.size)
 
 
 def owned_states(protocol, coordinator):

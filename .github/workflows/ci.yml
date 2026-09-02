@@ -2,7 +2,7 @@ name: ci
 
 # WHAT THIS JOB IS EVIDENCE FOR, AND WHAT IT IS NOT
 #
-# It validates PACKAGING AND INTERFACE: that the wheel installs, that the three public commands
+# It validates PACKAGING AND INTERFACE: that the wheel installs, that the four public commands
 # exist and work from outside the checkout, that the shipped configuration examples are found
 # through distribution metadata and validate, that every protocol generates a bundle whose scripts
 # compile, and that the exported schemas match their models.
@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   package:
-    name: wheel, three commands, configs, schemas and the non-GPU lane
+    name: wheel, four commands, configs, schemas and the non-GPU lane
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -98,13 +98,34 @@ jobs:
         working-directory: ${{ runner.temp }}/outside
         # `-ng` says how many processes coordinate; it does not create them. Accepting it in a
         # single process would run a ladder in one rank while claiming otherwise.
+        #
+        # This step was RED for two commits. It passed an XML through `-x` and omitted the
+        # mandatory `-s`, so argparse refused it first: the command exited non-zero for the wrong
+        # reason and the MPI check it is named after never ran. A test that fails for the wrong
+        # reason is worse than no test, so the argparse case is now detected explicitly rather
+        # than being indistinguishable from success.
         run: |
           printf '&cntrl\n  protocol = REST2,\n/\n' > ladder.in
-          if md-openmm md-run -ng 4 -i ladder.in -p missing.pdb -x missing.xml >out.txt 2>&1; then
+          if md-openmm md-run -ng 4 \
+               -i ladder.in \
+               -p missing.pdb \
+               -s missing.xml \
+               -odir out >out.txt 2>&1; then
             echo "::error title=-ng accepted with no launcher::md-run exited 0"; exit 1
+          fi
+          if grep -qE "the following arguments are required|unrecognized arguments" out.txt; then
+            echo "::error title=Argparse refused first::the flags do not match the current"\
+                 " contract, so the MPI refusal was never reached"; cat out.txt; exit 1
           fi
           grep -q "not started by an MPI launcher" out.txt || {
             echo "::error title=Wrong refusal::"; cat out.txt; exit 1; }
+          # A refused preflight must leave nothing behind: a -odir holding a resolved.config is
+          # indistinguishable from a run that happened.
+          if [ -e out ]; then
+            echo "::error title=Preflight wrote output::-odir was created by a refused launch"
+            ls -la out; exit 1
+          fi
+          echo "refused before any output, for the right reason"
 
       - name: retired subcommands must fail
         working-directory: ${{ runner.temp }}/outside

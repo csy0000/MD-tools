@@ -103,41 +103,32 @@ class GroupFileError(ValueError):
 
 
 def mpi_rank_and_size(environment=None):
-    environment = os.environ if environment is None else environment
-    rank, size = 0, 1
-    for name in MPI_RANK_ENVIRONMENT:
-        if name in environment:
-            try:
-                rank = int(environment[name])
-                break
-            except ValueError:
-                pass
-    for name in MPI_SIZE_ENVIRONMENT:
-        if name in environment:
-            try:
-                size = int(environment[name])
-                break
-            except ValueError:
-                pass
-    return rank, size
+    """What the launcher says this process is. A NAME for `md_tools.remd.mpi`'s reader.
 
-
-def barrier(size=None):
-    """Wait for every worker, when there is more than one. No mpi4py import in a serial run.
-
-    `size` may be passed by a caller that already read it; otherwise it is read from the
-    environment. A launcher that provides no mpi4py simply does not wait -- which is correct,
-    because without MPI there is nothing to wait for.
+    Kept because callers across the package spell it this way; it holds no policy of its own.
     """
-    if size is None:
-        _, size = mpi_rank_and_size()
-    if size <= 1:
-        return
-    try:
-        from mpi4py import MPI
-    except ImportError:                               # launched by srun without mpi4py
-        return
-    MPI.COMM_WORLD.barrier()
+    from .mpi import launcher_rank_and_size
+
+    return launcher_rank_and_size(environment)
+
+
+def barrier(size=None, *, coordination=None):
+    """Wait for every rank. Delegates to the ONE MPI authority; it does not decide anything.
+
+    This function used to decide, and it decided wrongly:
+
+        try:
+            from mpi4py import MPI
+        except ImportError:
+            return                      # "no mpi4py, so nothing to wait for"
+
+    That is true of a serial run and false of every other kind. Under a plural launcher it turned
+    a barrier into a no-op, which is how eight ranks stop being a ladder without anything failing.
+    `md_tools.remd.mpi.barrier` refuses instead, and this now calls it.
+    """
+    from .mpi import barrier as _barrier
+
+    _barrier(size, coordination=coordination)
 
 
 def report_path_for_rank(output, rank):

@@ -148,6 +148,11 @@ class Coordination:
     Every method is a real collective when `size > 1`. `require_mpi` has already refused the case
     where that is impossible, so there is no branch here in which a collective silently does
     nothing while other ranks are waiting.
+
+    This is the ONLY coordinator. `md_tools.remd.driver.Coordinator` was a second one with its own
+    permissive import, and `md_tools.remd.executor.barrier` a third; both answered "mpi4py is
+    missing" with "then there is nobody to wait for", which is true only if the launcher agrees --
+    and under `mpirun -n 8` it does not.
     """
 
     def __init__(self, *, MPI=None, rank: int = 0, size: int = 1) -> None:
@@ -183,11 +188,49 @@ class Coordination:
         if self.comm is not None:
             self.comm.barrier()
 
+    @property
+    def is_root(self) -> bool:
+        return self.rank == 0
+
+    def allgather(self, value):
+        return [value] if self.comm is None else self.comm.allgather(value)
+
+    def bcast(self, value):
+        return value if self.comm is None else self.comm.bcast(value, root=0)
+
     def all_agree(self, value: bool) -> bool:
         """True on every rank if it is true on any. Used to turn one rank's failure into all."""
         if self.comm is None:
             return bool(value)
         return bool(max(self.comm.allgather(bool(value))))
+
+    #: The driver spells it `any_true`. One implementation, two names, rather than two
+    #: implementations that could disagree about what "any" means under a partial failure.
+    any_true = all_agree
+
+    def agree(self, value, *, what: str) -> None:
+        """Every rank must present the same value. Proves shared state is actually shared."""
+        if self.comm is None:
+            return
+        values = self.comm.allgather(value)
+        if len(set(values)) != 1:
+            raise SystemExit(
+                f"the ranks disagree about {what}: {sorted(set(values))[:4]}. Continuing would "
+                f"propagate different states under one record.")
+
+    def fail(self, message: str, *, code: int = 1):
+        """A rank-local fatal error, made collective.
+
+        A rank that raises alone leaves the others waiting in the next collective forever. This
+        prints the reason from the rank that has it and takes the whole communicator down, so a
+        multi-rank failure is a stopped job rather than a hung one.
+        """
+        import sys as _sys
+
+        print(f"[rank {self.rank}/{self.size}] fatal: {message}", file=_sys.stderr, flush=True)
+        if self.comm is not None:
+            self.comm.Abort(int(code))
+        raise SystemExit(int(code))
 
     def abort(self, code: int = 1) -> None:
         """Stop the whole world. A rank that dies alone leaves the others integrating forever."""

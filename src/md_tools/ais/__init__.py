@@ -24,7 +24,9 @@ from .run import ais_main as run_ais
 from .run import run_generated_ais
 from .schedule import switching_schedule
 
-__all__ = ["run_generated_ais", "run_ais", "switching_schedule",
+from . import checkpoint                                  # noqa: F401 - the restart transaction
+
+__all__ = ["run_generated_ais", "run_ais", "switching_schedule", "checkpoint",
            "path_trajectory_name", "paths_for_rank", "path_id_width"]
 
 

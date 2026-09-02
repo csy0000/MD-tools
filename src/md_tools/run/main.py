@@ -7,7 +7,7 @@
               -c eq_npt_free.xml -odir REST2/
 
     mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in -p built.pdb -s built.xml \\
-              -source-traj hot_cmd/production.nc -odir AIS/
+              -source-traj ../cMD_tau0p5/tau_0p5.dcd -odir AIS/
 
 Anyone who has run `pmemd -i mdin -p prmtop -c inpcrd -o mdout -x mdcrd -r restrt` can read those
 without a manual, which is the whole reason the surface exists. It is a *surface*, not a second
@@ -31,8 +31,9 @@ continuation changes the fingerprint and the continuation is refused, which is t
 the `.in` after the run changes nothing at all -- its digest in the record will simply no longer
 match, which is how you find out.
 
-CUDA IS THE DEFAULT AND IT IS MANDATORY. `--cpu` is the only way to ask for a CPU run, and the
-record says that you asked. See `md_tools.openmm.platform_policy`.
+CUDA IS THE DEFAULT AND THERE IS NO FALLBACK. The platform is a property of the machine --
+`machine.openmm.platform` in the user configuration -- and `--cpu` overrides it for one
+invocation. The record keeps the two apart. See `md_tools.openmm.platform_policy`.
 """
 from __future__ import annotations
 
@@ -42,7 +43,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
-__all__ = ["md_run_parser", "md_run_main"]
+#: Re-exported so the collision rule has one home and one name. It lives in `preflight` with the
+#: rest of the checks that must pass before anything is written.
+from .preflight import check_output_collisions                # noqa: E402,F401
+
+__all__ = ["md_run_parser", "md_run_main", "check_output_collisions"]
 
 
 def md_run_parser() -> argparse.ArgumentParser:
@@ -250,42 +255,6 @@ def _check_file_roles(args) -> None:
             f"separation exists to avoid.")
 
 
-def _preflight_mpi(args, resolved: dict[str, Any] | None = None) -> None:
-    """Everything about the launch, checked before a single output path is created.
-
-    Ordering matters as much as the checks. `mpi4py` is imported, MPI's own rank and size are
-    compared with the launcher's, and both are compared with `-ng` and the replica count -- all
-    before `-odir` is made, before `resolved.config` is written, before a Context exists. A launch
-    that cannot work must leave nothing behind that a reader could mistake for a run that did.
-    """
-    from ..remd.mpi import check_launch_consistency, launcher_rank_and_size, require_mpi
-
-    launcher_rank, launcher_size = launcher_rank_and_size()
-    replicas = None
-    protocol = "this run"
-    if resolved is not None:
-        protocol = resolved.get("protocol", protocol)
-        if protocol in ("REST2", "rREST2"):
-            replicas = int(resolved["rest2"]["number_of_replicas"])
-
-    MPI = require_mpi(size=launcher_size)
-    if MPI is None:
-        if args.number_of_groups is not None and int(args.number_of_groups) > 1:
-            raise SystemExit(
-                f"-ng {args.number_of_groups} was requested but this process was not started by "
-                f"an MPI launcher: the world size is 1.\n"
-                f"  -ng says how many processes coordinate; it does not create them.\n"
-                f"  mpirun -n {args.number_of_groups} md-openmm md-run "
-                f"-ng {args.number_of_groups} ...")
-        return
-
-    comm = MPI.COMM_WORLD
-    check_launch_consistency(
-        launcher_rank=launcher_rank, launcher_size=launcher_size,
-        comm_rank=comm.Get_rank(), comm_size=comm.Get_size(),
-        number_of_groups=args.number_of_groups, replicas=replicas, protocol=protocol)
-
-
 def md_run_main(argv: list[str] | None = None) -> int:
     """Parse, resolve, record, then hand the work to the installed runner for that protocol."""
     from ..build.strict import ConfigError
@@ -293,13 +262,16 @@ def md_run_main(argv: list[str] | None = None) -> int:
 
     args = md_run_parser().parse_args(argv)
 
-    # PREFLIGHT, in this order and all of it before any output exists: the flags mean what they
-    # name, the launch can coordinate itself, the input parses and resolves, and only then is a
-    # directory created. A failure at any point leaves no resolved.config, no .out, no .log and no
-    # trajectory -- nothing that could be read as a run that happened.
+    # PREFLIGHT, all of it, before ANY output exists. `-odir`, `resolved.config`, the `.out`,
+    # the `.log`, a group file, a trajectory, a checkpoint -- none of them may be created until
+    # every check below has passed. A `-odir` holding a `resolved.config` is indistinguishable
+    # from a run that happened, and the next person to look will read it as one.
+    #
+    # The checks themselves live in `md_tools.run.preflight`, shared with `stage_main`,
+    # `replica_main` and `ais_main`, because the generated wrappers call THOSE directly. A guard
+    # that lives only here is a property of one entry point rather than of the runtime.
     try:
         _check_file_roles(args)
-        _preflight_mpi(args)
     except SystemExit as refusal:
         print(f"md-run: {refusal}", file=sys.stderr)
         return 2
@@ -310,14 +282,31 @@ def md_run_main(argv: list[str] | None = None) -> int:
         print(f"md-run: {invalid}", file=sys.stderr)
         return 2
 
+    resolved = run_input.resolved
+    protocol = resolved["protocol"]
+    replicas = (int(resolved["rest2"]["number_of_replicas"])
+                if protocol in ("REST2", "rREST2") else None)
+    source = args.source_traj or (resolved["ais_source"]["trajectory"]
+                                  if protocol == "AIS" else None)
+
+    from .preflight import Preflight
+
     try:
-        # Again, now that the replica count is known. The first pass caught a launch with no
-        # working MPI; this one catches a ladder whose size disagrees with the world it was given.
-        _preflight_mpi(args, run_input.resolved)
+        checked = Preflight.run(
+            topology=args.topology, system=args.system, source=source,
+            outputs={"o": args.output, "log": args.log, "x": args.trajectory,
+                     "r": args.restart, "chk": args.checkpoint},
+            cpu=bool(args.cpu),
+            device=int(args.device) if args.device is not None else None,
+            number_of_groups=args.number_of_groups, replicas=replicas, protocol=protocol,
+            # `--check` validates everything a real run relies on, including that a Context can
+            # be created. It is not a way to skip the expensive half.
+            probe_cuda=True)
     except SystemExit as refusal:
         print(f"md-run: {refusal}", file=sys.stderr)
         return 2
 
+    # Only now. Everything above touched nothing.
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -325,9 +314,6 @@ def md_run_main(argv: list[str] | None = None) -> int:
     except SystemExit as refusal:
         print(f"md-run: {refusal}", file=sys.stderr)
         return 2
-
-    resolved = run_input.resolved
-    protocol = resolved["protocol"]
 
     # `stage` decides, not `protocol`. A REST2 workflow's minimisation and equilibration are
     # ordinary stages of that workflow: an input that names one asks for that stage, and only an

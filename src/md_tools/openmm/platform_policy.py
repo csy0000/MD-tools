@@ -8,7 +8,12 @@ later, on a machine whose GPU was simply not visible to the process. The result 
 wrong, which is what makes it expensive: it is found weeks later, if at all.
 
 So there is no automatic fallback to CPU, OpenCL or Reference. CUDA that cannot be initialised is
-an error *before* dynamics, and `--cpu` is the only public way to ask for a CPU run.
+an error *before* dynamics.
+
+The CPU is reachable two ways, deliberately: `machine.openmm.platform: CPU` for a machine that has
+no GPU, and `--cpu` for one invocation. Both are choices somebody made, and the record keeps them
+apart -- `platform_selection` is `machine-config` or `cli-override` -- because a CPU result whose
+provenance is unclear is halfway back to the unnoticed fallback this module exists to prevent.
 
 This module exists because the policy was previously decided twice. An ordinary stage refused to
 fall back; a replica ladder, given no explicit platform, chose `"CUDA" if available else "CPU"`.
@@ -27,6 +32,7 @@ from typing import Any, Optional
 
 __all__ = [
     "PlatformRequest",
+    "device_index_for",
     "PlatformResolution",
     "PlatformUnavailable",
     "resolve_platform_request",
@@ -57,10 +63,14 @@ class PlatformRequest:
         """CUDA. Not "CUDA if it happens to be there"."""
         return cls()
 
-    #: Where the platform decision came from. Carried into the record because a CPU run has three
-    #: possible provenances and they are three different facts about the same result:
-    #: the machine is configured for CPU, the person asked for CPU on this run, or -- the one this
-    #: whole module exists to make impossible -- CUDA quietly was not there.
+    #: Where the platform decision came from: `built-in-default`, `machine-config`, or
+    #: `cli-override`. A CPU run has three possible provenances and they are three different facts
+    #: about the same result -- the machine is configured for CPU, the person asked for CPU on this
+    #: run, or, the one this module exists to make impossible, CUDA quietly was not there.
+    platform_selection: str = "built-in-default"
+    #: True ONLY for `--cpu`. A machine-wide CPU default is not a command-line request, and
+    #: recording it as one made the two indistinguishable in every record.
+    cli_cpu_override: bool = False
     origin: str = "built-in default"
     device_policy: str = "local_rank"
 
@@ -80,15 +90,23 @@ class PlatformRequest:
         policy = str(machine.get("device_policy") or "local_rank")
         origin = str(machine.get("origin") or "built-in default")
 
+        selection = "machine-config" if machine.get("origin") == "machine.openmm" \
+            else "built-in-default"
+
         if cpu:
-            return cls(name="CPU", explicit_cpu=True, precision=precision,
+            return cls(name="CPU", explicit_cpu=True, cli_cpu_override=True,
+                       platform_selection="cli-override", precision=precision,
                        origin="--cpu (command line)", device_policy=policy)
         if platform == "CPU":
-            # A machine-wide CPU default is a deliberate choice, and the record says so rather
-            # than leaving a CPU result indistinguishable from an unnoticed fallback.
-            return cls(name="CPU", explicit_cpu=True, precision=precision,
+            # A machine-wide CPU default is a deliberate choice and is recorded as one -- but NOT
+            # as a command-line request. `explicit_cpu` stays true because the meaning it carries
+            # downstream is "CPU was chosen, not fallen back to"; `cli_cpu_override` is the field
+            # that separates who chose it.
+            return cls(name="CPU", explicit_cpu=True, cli_cpu_override=False,
+                       platform_selection=selection, precision=precision,
                        origin=origin, device_policy=policy)
-        return cls(name=platform, explicit_cpu=False, device_index=device_index,
+        return cls(name=platform, explicit_cpu=False, cli_cpu_override=False,
+                   platform_selection=selection, device_index=device_index,
                    precision=precision, origin=origin, device_policy=policy)
 
 
@@ -129,8 +147,33 @@ def _cuda_device_names() -> tuple[str, ...]:
     return ()
 
 
+def device_index_for(*, policy: str, rank: int, size: int, devices) -> str | None:
+    """Which CUDA device this process uses, under the machine's `device_policy`.
+
+    Both advertised values do something, which was the point of implementing this: `openmm` was
+    accepted by validation and never consulted, so a person could configure it and get local-rank
+    placement anyway -- a field with no runtime effect is worse than an absent one.
+
+        local_rank  one rank per visible device. The only policy that keeps a ladder off a single
+                    GPU: nothing binds ranks to devices otherwise, and every rank builds its
+                    Context on the default one.
+        openmm      set no DeviceIndex and let OpenMM choose. Right when something outside this
+                    package already partitioned the GPUs -- a scheduler setting
+                    CUDA_VISIBLE_DEVICES per rank, or MPS.
+    """
+    if policy == "openmm":
+        return None
+    if not devices:
+        return None
+    from ..remd.engine import select_device_for_rank
+
+    chosen, _ = select_device_for_rank(int(rank), int(size), list(devices))
+    return chosen
+
+
 def resolve_platform_request(request: PlatformRequest | None = None, *,
-                             device_index: int | None = None) -> PlatformResolution:
+                             device_index: int | None = None,
+                             probe: bool = True) -> PlatformResolution:
     """Turn a request into a real OpenMM Platform, or refuse before any dynamics happen.
 
     `device_index` overrides the request's own, so an MPI rank can be placed on its own device
@@ -162,7 +205,7 @@ def resolve_platform_request(request: PlatformRequest | None = None, *,
         if index is not None:
             properties["DeviceIndex"] = str(index)
 
-    if request.name == "CUDA":
+    if request.name == "CUDA" and probe:
         # Listing the platform is not the same as having a usable device: conda-forge ships the
         # plugin unconditionally, so a machine with no driver still reports CUDA. The only honest
         # check is to build a Context, and doing it HERE means the failure lands before a
@@ -207,9 +250,13 @@ def acceleration_record(resolution: PlatformResolution, *,
 
     request = resolution.request
     record: dict[str, Any] = {
-        "requested_policy": "explicit-cpu" if request.explicit_cpu else "default-cuda",
-        # Where the decision came from, as three distinguishable facts: `built-in default`,
-        # `machine.openmm`, or `--cpu (command line)`.
+        # `requested_policy` follows the SELECTION, so a machine-configured CPU is not reported
+        # as an explicit CPU request. The two used to be the same string.
+        "requested_policy": ("explicit-cpu" if request.cli_cpu_override else
+                            "machine-cpu" if request.name == "CPU" else "default-cuda"),
+        # Three distinguishable facts about one decision.
+        "platform_selection": request.platform_selection,
+        "cli_cpu_override": bool(request.cli_cpu_override),
         "platform_origin": request.origin,
         "device_policy": request.device_policy,
         "requested_platform": request.name,

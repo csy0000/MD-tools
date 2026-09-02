@@ -81,7 +81,11 @@ def check_trajectory_suffix(path: Path) -> None:
 
 
 def stage_parser(description: str) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=description)
+    parser = argparse.ArgumentParser(
+        description=description,
+        # No abbreviation. argparse resolves a unique prefix by default, so `--traj` would become
+        # `--trajectory` and a misspelling would RUN, with a setting nobody wrote.
+        allow_abbrev=False)
     parser.add_argument("-p", "--topology", required=True, metavar="PDB",
                         help="topology and reference coordinates (built.pdb)")
     parser.add_argument("-s", "--system", required=True, metavar="XML",
@@ -101,9 +105,10 @@ def stage_parser(description: str) -> argparse.ArgumentParser:
                              "from -log: this is what you tail while the stage runs. Defaults to "
                              "<stage>.out")
     parser.add_argument("--cpu", action="store_true",
-                        help="run on the OpenMM CPU platform. CUDA is the default and is "
-                             "mandatory; this is the only way to ask for a CPU run, and the "
-                             "record says that you did")
+                        help="run this invocation on the OpenMM CPU platform, overriding "
+                             "machine.openmm.platform. That setting can also select "
+                             "CPU machine-wide; this flag is the per-run override, "
+                             "and the record distinguishes the two")
     parser.add_argument("--device", default=None, metavar="N",
                         help="CUDA device index. An execution PLACEMENT option, not a platform "
                              "choice: it says which GPU, never whether to use one. Rejected with "
