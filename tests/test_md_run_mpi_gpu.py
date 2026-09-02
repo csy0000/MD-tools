@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -400,29 +401,38 @@ def test_each_ais_cadence_controls_its_own_stream(built, source):
 
 
 def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, source):
-    """Kill a run mid-path, resume it, and get the same outputs an uninterrupted run produces.
+    """Crash a real run mid-path DETERMINISTICALLY, resume it, and compare with an uninterrupted one.
 
-    The interruption is a real SIGKILL of the real command, not a simulated one: what is being
-    tested is that a process which never got to clean up left a resumable state behind.
+    The interruption is injected at a checkpoint transaction boundary rather than produced by a
+    stopwatch. An earlier version killed the process after a fixed number of seconds and skipped
+    when the timing missed, which meant the property was often not tested at all -- and it left a
+    half-finished directory behind that the next test read as its own.
+
+    `after-pointer-replace` is the interesting boundary: a generation is fully committed and the
+    process then dies, which is exactly the state a resume has to pick up from.
     """
     import mdtraj
+
+    from md_tools.ais.checkpoint import FAULT_ENVIRONMENT
 
     out = _cadence_project(built, "resume")
     argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
             "-source-traj", "../source/cMD.dcd", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
 
-    # Long enough to pass a checkpoint, short enough not to finish the second path.
-    killed = subprocess.run(["timeout", "-s", "KILL", "8", "md-openmm", "md-run", *argv],
-                            cwd=out, capture_output=True, text=True, timeout=120)
-    assert killed.returncode != 0, "the run was meant to be interrupted"
-    interrupted = [p for p in out.glob("path_*") if (p / "resume.json").is_file()]
-    if not interrupted:
-        pytest.skip("the run finished or died before its first checkpoint; timing-dependent")
+    crashed = subprocess.run(["md-openmm", "md-run", *argv], cwd=out, capture_output=True,
+                             text=True, timeout=1800,
+                             env=dict(os.environ, **{FAULT_ENVIRONMENT: "after-pointer-replace"}))
+    assert crashed.returncode != 0, "the injected fault did not stop the run"
 
-    sidecar = json.loads((interrupted[0] / "resume.json").read_text())
-    assert sidecar["protocol_step"] > 0 and sidecar["work_rows"] > 0
+    interrupted = [p for p in sorted(out.glob("path_*")) if (p / "current_checkpoint.json").is_file()]
+    assert interrupted, "no generation was committed before the crash"
+
+    from md_tools.ais.checkpoint import read_committed
+
+    committed = read_committed(interrupted[0])
+    assert committed["state"]["protocol_step"] > 0
     # Nothing is published until a path is complete and validated.
-    assert not (out / sidecar["trajectory"]).exists(), \
+    assert not (out / committed["state"]["trajectory"]).exists(), \
         "a half-written path was published under its final name"
 
     finished = _md_run(out, *argv, "--resume", "--overwrite")
@@ -441,8 +451,8 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
         assert [int(r["protocol_step"]) for r in states] == [0, 500, 1000]
         assert frames.n_frames == 6, (path_id, frames.n_frames)
 
-        # The work integral is continuous across the boundary: cumulative is still the running
-        # sum of the increments, which a duplicated or dropped row would break.
+        # The work integral is continuous across the boundary: cumulative is still the running sum
+        # of the increments, which a duplicated or dropped row would break.
         running = 0.0
         for row in observations[1:]:
             running += float(row["incremental_work_kj_mol"])
@@ -454,20 +464,31 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
         completion = json.loads((directory / "completed.json").read_text())
         assert completion["trajectory"] == f"AIS_traj{path_id:04d}.nc"
         assert completion["source_frame_index"] == int(observations[0]["source_frame_index"])
-        # And the checkpoint is gone, so nothing invites a resume of a finished path.
-        assert not (directory / "path.chk").exists()
-        assert not (directory / "resume.json").exists()
+        # And the transaction is gone, so nothing invites a resume of finished work.
+        assert not (directory / "current_checkpoint.json").exists()
+        assert not (directory / "checkpoints").exists()
 
 
 def test_a_completed_path_is_not_touched_by_a_resume(built, source):
-    out = built / "resume"
+    """A `--resume` over finished work must be a no-op on every published file.
+
+    Self-contained: it runs a project to completion itself rather than reading whatever another
+    test left behind. Depending on a neighbour's directory made this fail for that neighbour's
+    reasons, which is the wrong signal in the wrong place.
+    """
+    out = _cadence_project(built, "untouched")
+    argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
+            "-source-traj", "../source/cMD.dcd", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
+    assert _md_run(out, *argv).returncode == 0
+
     before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
               for p in sorted(out.glob("AIS_traj*.nc"))}
-    assert before, "nothing to check"
-    done = _md_run(out, "-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
-                   "-source-traj", "../source/cMD.dcd", "-odir", ".", "-o", "AIS.out",
-                   "-log", "AIS.log", "--resume", "--overwrite")
+    assert len(before) == 2, sorted(before)
+
+    done = _md_run(out, *argv, "--resume", "--overwrite")
     assert done.returncode == 0, done.stderr[-2000:]
+    assert "already completed" in done.stdout, done.stdout[-1500:]
+
     after = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
              for p in sorted(out.glob("AIS_traj*.nc"))}
     assert after == before, "a completed path was rewritten"
@@ -490,7 +511,13 @@ def test_the_machine_configuration_decides_the_platform_and_cpu_overrides_it(bui
     argv = ("-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml")
 
     # 1. no user configuration at all -> built-in default, CUDA.
-    environment = dict(os.environ, MD_TOOLS_CONFIG=str(tmp_path / "absent.config"))
+    #
+    # An EMPTY XDG root, not a MD_TOOLS_CONFIG pointing at a missing file: that is a broken
+    # reference now, and refusing it is the point -- somebody who names a path means it.
+    empty = tmp_path / "empty-config-home"
+    empty.mkdir(exist_ok=True)
+    environment = dict(os.environ, XDG_CONFIG_HOME=str(empty))
+    environment.pop("MD_TOOLS_CONFIG", None)
     done = subprocess.run(["md-openmm", "md-run", *argv, "-r", "m1.xml", "-x", "m1.dcd",
                            "-chk", "m1.chk", "-o", "m1.out", "-log", "m1.log"],
                           cwd=out, capture_output=True, text=True, timeout=1800, env=environment)

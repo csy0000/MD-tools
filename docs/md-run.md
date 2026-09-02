@@ -179,18 +179,35 @@ expensive: it is found weeks later, if at all. CUDA that cannot be initialised i
 conda-forge ships the plugin unconditionally, so the resolver opens and discards a one-particle
 Context to prove it.
 
-`--cpu` is the one per-run override. There is no `--platform`: a per-run platform flag would be a
-second authority for a machine property, and the two would disagree the first time somebody
-scripted one and configured the other. `--device` says *which* GPU, never *whether*, and is
-refused together with `--cpu`.
+The CPU is reachable two ways, and both are choices somebody made: `machine.openmm.platform: CPU`
+for a machine with no GPU, and `--cpu` for one invocation. There is no `--platform` — a per-run
+platform flag would be a second authority for a machine property, and the two would disagree the
+first time somebody scripted one and configured the other. `--device` says *which* GPU, never
+*whether*, and is refused together with `--cpu`.
+
+`device_policy` decides where a rank's Context goes, and both values do something:
+
+| value | behaviour |
+|---|---|
+| `local_rank` | one rank per visible device. The only policy that keeps a ladder off a single GPU |
+| `openmm` | set no `DeviceIndex` and let OpenMM choose — right when a scheduler or MPS has already partitioned the GPUs |
+
+**An absent configuration is not an invalid one.** No file at all resolves to the built-in
+defaults. A file that exists and is malformed — bad YAML, a duplicate key, an unknown field, an
+invalid value — is fatal, and is never replaced by those defaults: the machine would then run on
+settings nobody chose, and the file that said otherwise would never be mentioned again.
+`MD_TOOLS_CONFIG` naming a file that does not exist is a broken reference, because somebody meant
+that path.
 
 Every run record distinguishes the three ways a platform can be chosen, because a CPU result has
 three possible causes and only one of them is nobody's decision:
 
 ```yaml
 acceleration:
-  platform_origin: built-in default      # or machine.openmm, or --cpu (command line)
-  requested_policy: default-cuda         # or explicit-cpu
+  platform_selection: machine-config     # or built-in-default, or cli-override
+  cli_cpu_override: false                # true ONLY for --cpu
+  platform_origin: machine.openmm
+  requested_policy: machine-cpu          # or default-cuda, or explicit-cpu
   resolved_platform: CUDA
   cuda_device_index: 3
   cuda_precision: mixed

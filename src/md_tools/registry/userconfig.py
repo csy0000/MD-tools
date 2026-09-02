@@ -337,7 +337,12 @@ def machine_openmm_settings(explicit: str | Path | None = None) -> dict[str, Any
             f"{path} (from {origin}): `machine` must be a mapping of settings, not a "
             f"{type(machine).__name__}.")
 
-    resolved = resolve_machine_openmm(document)
+    try:
+        resolved = resolve_machine_openmm(document)
+    except RegistrationError as invalid:
+        # `resolve_machine_openmm` works on a document and cannot know where it came from. Every
+        # refusal a person sees must name the file they have to edit, so the path is added here.
+        raise RegistrationError(f"{path} (from {origin}): {invalid}") from None
     resolved["config_path"] = str(path)
     resolved["config_origin"] = origin
     return resolved

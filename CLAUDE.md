@@ -142,11 +142,33 @@ Do not change these without a failing test that demonstrates a defect.
   putting DCD bytes in it. What a file IS is decided from its leading bytes
   (`md_tools.openmm.trajectory`), never from its suffix, and a source whose suffix and contents
   disagree is refused with both named.
-* **A multi-rank launch either coordinates or stops.** `md_tools.remd.mpi` imports mpi4py and
-  cross-checks the launcher's rank and size against the communicator's and both against `-ng` and
-  the replica count, all before any output exists. No collective may silently become a no-op while
-  the world is plural: N ranks with no coordination are N simulations writing over one set of
-  paths, and the result looks complete.
+* **A multi-rank launch either coordinates or stops.** `md_tools.remd.mpi` is the ONLY MPI
+  authority — the only module that imports `mpi4py`, and the only place a barrier, gather or abort
+  is decided. It cross-checks the launcher's rank and size against the communicator's and both
+  against `-ng` and the replica count, all before any output exists. No collective may silently
+  become a no-op while the world is plural: N ranks with no coordination are N simulations writing
+  over one set of paths, and the result looks complete. A second `except ImportError: return`
+  anywhere is a second policy, and it will be the one that runs.
+* **The guard belongs in the runtime, not in `md-run`.** `replica_main`, `ais_main` and
+  `stage_main` validate the launch themselves, because the generated wrappers call them directly.
+  A safe outer command wrapping an unsafe runtime is worse than no wrapper: it makes the unsafe
+  path look tested.
+* **Nothing is written until the whole preflight passes.** `md_tools.run.preflight` checks flag
+  roles, resolved-path collisions, input existence and format, the MPI launch, the machine
+  configuration, `--cpu`/`--device`, the device policy, platform availability and a real CUDA
+  Context — before `-odir`, `resolved.config`, the `.out`, the `.log`, a group file, a trajectory
+  or a checkpoint exists. A `-odir` holding a `resolved.config` is indistinguishable from a run
+  that happened.
+* **An absent configuration is not an invalid one.** No user configuration resolves to the
+  built-in CUDA/mixed/local_rank. An existing one that is malformed, has a duplicate key, an
+  unknown field or an invalid value is FATAL and is never replaced by those defaults — the machine
+  would then run on settings nobody chose. `MD_TOOLS_CONFIG` naming a missing file is a broken
+  reference, not an absence.
+* **An AIS checkpoint commit is a generation transaction.** New generation, fsync, digest,
+  sidecar, fsync, then the `current_checkpoint.json` pointer replaced atomically last. Resume
+  follows only the pointer and verifies the digest; never the newest generation on disk, which is
+  exactly what a crash leaves behind. Overwrite-then-replace can pair a new Context with old
+  accumulated work, and nothing fails.
 * **Every accepted reporting option does something.** AIS has four independent cadences — work
   observations, trajectory frames, the `system.csv` state table, and checkpoints — each dividing
   `switching_steps` on its own. A setting that is accepted and inert is worse than one refused.

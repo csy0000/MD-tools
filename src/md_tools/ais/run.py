@@ -442,6 +442,10 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         # with bookkeeping from step 2000.
         committed = read_committed(directory)
         state_of_path = committed["state"] if committed else None
+
+    # `--resume` over a path that never committed a generation is not an error: that path simply
+    # starts from its source frame. Only a path that HAS a committed checkpoint is fingerprinted.
+    if state_of_path is not None:
         # EVERY fingerprint before anything is loaded. A checkpoint carries positions and
         # velocities for one particular System, schedule and path; resuming it against another is
         # how a run continues with right-looking numbers and the wrong simulation.

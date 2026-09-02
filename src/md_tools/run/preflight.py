@@ -147,7 +147,16 @@ class Preflight:
 
         # 6. the machine. An ABSENT configuration is legitimate and resolves to the built-in
         #    defaults; an existing INVALID one is fatal and is not replaced by them.
-        machine = machine_openmm_settings(machine_config)
+        #
+        # Converted to a PreflightError so a person sees the message rather than a traceback: a
+        # broken configuration is their mistake in a file they edited, and a stack trace makes it
+        # look like ours.
+        from ..registry.errors import RegistrationError
+
+        try:
+            machine = machine_openmm_settings(machine_config)
+        except RegistrationError as invalid:
+            raise PreflightError(str(invalid)) from None
 
         # 7-9. what platform, and where
         policy = str(machine.get("device_policy") or "local_rank")
