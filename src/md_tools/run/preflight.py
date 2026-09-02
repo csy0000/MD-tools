@@ -123,12 +123,29 @@ class Preflight:
         from ..openmm.trajectory import check_trajectory_declaration
         from ..registry.userconfig import machine_openmm_settings
 
-        # 1-2. the command line describes something coherent
+        # 1-2. the command line describes something coherent. These need no filesystem and no
+        #      library, so they come first: a self-contradictory command is wrong before any
+        #      question about what is on disk arises, and its message should not be preceded by
+        #      one about a missing file.
         check_output_collisions(**(outputs or {}))
         if cpu and device is not None:
             raise PreflightError(
                 "--cpu and --device are contradictory: the CPU platform has no device to place. "
                 "--device says which GPU a CUDA run goes to, never whether it is one.")
+
+        # `-ng > 1` with no launcher is the same kind of contradiction: you asked for N processes
+        # to coordinate and there is one. Knowable from the command line and the environment
+        # alone, so it is refused here rather than after the inputs are checked -- somebody
+        # debugging a launch script should be told about the launch, not about their paths.
+        from ..remd.mpi import launcher_rank_and_size
+
+        _, launcher_size = launcher_rank_and_size()
+        if number_of_groups is not None and int(number_of_groups) > 1 and launcher_size == 1:
+            raise PreflightError(
+                f"-ng {number_of_groups} was requested but this process was not started by an "
+                f"MPI launcher: the world size is 1.\n"
+                f"  -ng says how many processes coordinate; it does not create them.\n"
+                f"  mpirun -n {number_of_groups} md-openmm md-run -ng {number_of_groups} ...")
 
         # 3-4. the inputs exist and are what they claim
         check_input_files(p=topology, s=system)
