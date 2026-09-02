@@ -32,7 +32,7 @@ from typing import Any
 import yaml
 
 from .record import LogWriter
-from .strict import ConfigError, Field, Schema, Section
+from .strict import ConfigError, Field, Schema, Section, load_yaml_strictly
 from ..openmm.timestep import ORDINARY_TIMESTEP_FS
 from ..openmm.system_defaults import DEFAULT_BAROSTAT_FREQUENCY_STEPS
 
@@ -358,9 +358,43 @@ MD_SCHEMA.checks = (_check_protocol, _check_timestep)
 
 
 def resolve_md_config(path: Path | None) -> dict[str, Any]:
-    if path is None:
-        return MD_SCHEMA.resolve({})
-    return MD_SCHEMA.load(Path(path))
+    document: dict[str, Any] = {}
+    if path is not None:
+        document = load_yaml_strictly(Path(path).read_text(encoding="utf-8"),
+                                      source=str(path)) or {} if Path(path).is_file() else {}
+        if not Path(path).is_file():
+            raise ConfigError(f"{path}: no such configuration file")
+    stated = {name: set(block) for name, block in document.items() if isinstance(block, dict)}
+    MD_SCHEMA.after_resolve = (lambda resolved: _apply_ais_reporting_defaults(resolved, stated),)
+    try:
+        return MD_SCHEMA.resolve(document)
+    except ConfigError as exc:
+        raise ConfigError(f"{path}: {exc}" if path is not None else str(exc)) from None
+    finally:
+        MD_SCHEMA.after_resolve = ()
+
+
+def _apply_ais_reporting_defaults(resolved: dict[str, Any],
+                                  stated: dict[str, set[str]]) -> None:
+    """An AIS path is reported at its own cadence, not at a production run's.
+
+    The `reporting.*` defaults -- 1000 and 10000 steps -- are sized for a 2.5 M-step cMD
+    production. Applied to a switching path of a few hundred steps they are not merely coarse:
+    they do not divide it, so no frame lands on the final step, and the divisibility rule below
+    would refuse every short AIS run by construction.
+
+    So for AIS, an interval the user did NOT state defaults to `observation_interval_steps` --
+    the cadence the path is already observed at, which divides `switching_steps` because that is
+    checked. An interval the user DID state is left alone and must divide, which is the whole
+    point of the check.
+    """
+    if resolved.get("protocol") != "AIS":
+        return
+    cadence = int(resolved["ais"]["observation_interval_steps"])
+    given = stated.get("reporting", set())
+    for key in ("solute_printout", "system_printout", "checkpoint_printout"):
+        if key not in given:
+            resolved["reporting"][key] = cadence
 
 
 # ---------------------------------------------------------------------------------------------

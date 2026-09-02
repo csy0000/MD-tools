@@ -148,6 +148,10 @@ class Schema:
         self.sections = {s.name: s for s in sections}
         self.doc = doc
         self.checks = tuple(checks)
+        #: Hooks that adjust the resolved document BEFORE the cross-field checks
+        #: run. A default that depends on another resolved value cannot be a
+        #: `Field` default, and it has to land before the checks that read it.
+        self.after_resolve: tuple = ()
 
     def resolve(self, document: Any) -> dict[str, Any]:
         if document is None:
@@ -173,6 +177,8 @@ class Schema:
             out[name] = section.resolve(document.get(name), where="")
         # Cross-field incompatibilities are refused here, after every individual value is known to
         # be well formed, so their messages can talk about the combination rather than the key.
+        for hook in self.after_resolve:
+            hook(out)
         for check in self.checks:
             check(out)
         return out
