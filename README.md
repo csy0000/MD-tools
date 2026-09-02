@@ -48,9 +48,10 @@ md-openmm build-md -odir ./md_script/ --config configs/md/cMD.config
 # 3. run it
 cd md_script && ./run.sh
 #   or one stage at a time, the Amber-like way:
-md-openmm md-run -i min.in -p ../built.pdb -x ../built.xml -r min.xml -log min.log
+md-openmm md-run -i min.in -p ../built.pdb -s ../built.xml \
+    -o min.out -x min.dcd -r min.xml -log min.log
 #   or as ordinary Python -- the same run, reaching the same installed code:
-python min.py -p ../built.pdb -s ../built.xml -r min.xml -x min.dcd -log min.log
+python min.py -p ../built.pdb -s ../built.xml -o min.out -x min.dcd -r min.xml -log min.log
 
 # 4. register the result
 md-openmm data-register -idata ./data/ALA-cMD \
@@ -69,16 +70,24 @@ The behaviour lives in the installed package; `resolved.config` beside the scrip
 authoritative resolved declaration of the workflow, found relative to `__file__`. Move the
 directory and it still runs.
 
-**CUDA is the default and it is mandatory.** There is no automatic fall back — a run that quietly
-moved to the CPU finishes, writes a trajectory and reports success two orders of magnitude later.
-`--cpu` is the only way to ask for a CPU run, and the record says that you did.
+Flags follow Amber: `-x` is the trajectory (mdcrd) and `-o` the readable output (mdout). `-s` is
+the serialised OpenMM System, which Amber has no counterpart for because its prmtop carries the
+parameters that live in `built.xml` here. `-o` and `-log` are two files for two readers: `.out` is
+what you tail during a run, `.log` is the provenance record a machine parses.
+
+**CUDA is the default and it is mandatory.** The platform is a property of the machine and is
+configured once, in `machine.openmm` in the user configuration; it is not part of any protocol.
+There is no automatic fall back — a run that quietly moved to the CPU finishes, writes a trajectory
+and reports success two orders of magnitude later. `--cpu` overrides the machine default for one
+invocation, and the record distinguishes all three provenances.
 
 Parallel protocols are launched the way Amber launches them:
 
 ```bash
-mpirun -n 8 md-openmm md-run -ng 8 -i REST2.in -p built.pdb -x built.xml -odir REST2/
-mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in   -p built.pdb -x built.xml \
-          -source-traj cMD_tau0p5/tau_0p5.nc -odir AIS/
+mpirun -n 8 md-openmm md-run -ng 8 -i REST2.in -p built.pdb -s built.xml \
+          -o REST2.out -x REST2.nc -r restart.json -log REST2.log
+mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in   -p built.pdb -s built.xml \
+          -source-traj ../cMD_tau0p5/tau_0p5.dcd -o AIS.out -log AIS.log -odir ./AIS
 ```
 
 See [Running](docs/md-run.md) for the flags, the input language, the platform policy, the MPI
@@ -89,7 +98,7 @@ rules, and what AIS writes.
 Six browsable examples at the repository root, one copy each, shipped as wheel data files:
 
 ```text
-configs/machine/user.config.example        identity and $MD_DATA, for `data-register --init`
+configs/machine/user.config.example        identity, $MD_DATA and the machine's OpenMM defaults
 configs/sys/build-top.config               force fields, solvent, box, ions, constraints, HMR
 configs/md/{cMD,REST2,rREST2,AIS}.config   protocol, stage lengths, reporting
 ```

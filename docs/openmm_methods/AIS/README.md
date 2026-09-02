@@ -40,8 +40,12 @@ account for.
 * independent per-path seeds derived from the run seed, so paths are independent and the whole set
   is reproducible;
 * frame selection from an explicitly identified source ensemble, without repetition by default;
-* per-path directories, each with its own trajectory and observation table;
-* restart: a completed path is skipped rather than appended to.
+* four INDEPENDENT reporting cadences -- work observations, trajectory frames, a per-path state
+  table, and checkpoints -- each of which must divide `switching_steps` on its own;
+* per-path directories, each with its own observation table and `system.csv`, and one published
+  NetCDF trajectory per global path id;
+* restart: a completed path is skipped rather than appended to, and an interrupted one resumes
+  from its checkpoint without duplicating a work row, a state row or a frame.
 
 The Hamiltonian is scaled by the **same** `md_tools.rest2.REST2Scaler` that REST2 uses. There is no
 second AIS scaler.
@@ -65,8 +69,15 @@ md-openmm build-md -odir ./hot/ --config hot.config   # dynamics.tau: 0.5
 cd hot && ./run.sh
 ```
 
-The source's own record is checked against `ais.tau_start`: a source generated at a different τ is
-refused. There is no second, user-declared "source tau" to disagree with it.
+`ais.tau_start` **asserts** what ensemble the source represents; nothing can verify it. A
+coordinate trajectory does not record the Hamiltonian it was sampled under, so the log says so in
+those words and records `tau_verified_from_file: false`. Check it against the run that produced the
+file. What IS checked is the file itself: its atom count against `-p` and `-s`, and that its
+contents are a genuine DCD or NetCDF rather than something with the right suffix.
+
+A fixed-τ cMD run writes DCD, so `../hot/cMD.dcd` is the ordinary source. An earlier AIS or REST2
+NetCDF works too; the format is read from the file's leading bytes, and a file whose suffix and
+contents disagree is refused with both named.
 
 ## Minimal sequence
 
@@ -93,8 +104,19 @@ md_script/
 
 AIS carries **no minimisation or equilibration chain**: it consumes an ensemble that already exists.
 
-Running produces `selected_initial_frames.csv` (which source frame each path started from, written
-*before* any dynamics), one `trajectory_NNNN/` per path with its observation table, and `AIS.log`.
+Running produces:
+
+```text
+selected_source_frames.csv    which source frame each path starts from, and with which seeds,
+                              written BEFORE any dynamics
+AIS_traj0000.nc …             one genuine NetCDF trajectory per GLOBAL path id
+AIS_work.csv                  one row per (path, switching step), sorted by that pair
+AIS_paths.csv                 one row per path: the work distribution
+path_0000/observations.csv    the work rows for one path
+path_0000/system.csv          its state table
+path_0000/completed.json      the machine record that says the path finished
+AIS.out / AIS.log             the readable output and the provenance record
+```
 
 ## Configuration fields that matter
 
@@ -103,15 +125,27 @@ Running produces `selected_initial_frames.csv` (which source frame each path sta
 | `ais.number_of_paths` | 100 | independent realisations. The spread of the work distribution is the result |
 | `ais.tau_start` / `tau_end` | 0.5 / 0.0 | the path. They must differ, or every work value is zero |
 | `ais.switching_steps` | 50000 | **work is path-length dependent**: a faster switch does more dissipative work |
-| `ais.observation_interval_steps` | 2500 | how finely the path is observed |
+| `ais.observation_interval_steps` | 2500 | how often the WORK is measured. This one is the method |
+| `reporting.solute_printout` | follows the observations | frames in `AIS_trajNNNN.nc`. Set it larger for a smaller file |
+| `reporting.system_printout` | follows the observations | rows in `path_NNNN/system.csv`. 0 disables the table |
+| `reporting.checkpoint_printout` | follows the observations | how often a path becomes resumable. 0 means an interrupted path restarts from its source frame |
 | `ais_source.trajectory` | null | required. The equilibrium ensemble the paths start from |
 | `ais_source.allow_repeated_frames` | false | two paths from one configuration are not two independent realisations |
 
 ## Reporting and registration
 
-Each path's observation table carries τ, the incremental and cumulative work, the reduced work, the
-temperature and the seeds. τ is the only persisted scaling coordinate — neither `s` nor `√s` is ever
-written.
+Each path's `observations.csv` carries τ, the incremental and cumulative work, the reduced work,
+the temperature and the seeds. τ is the only persisted scaling coordinate — neither `s` nor `√s` is
+ever written.
+
+`system.csv` is a different question, at its own cadence: protocol step, τ, potential, kinetic and
+total energy, temperature, and volume and density where the box makes them meaningful. It is how
+the path is *behaving* while the Hamiltonian moves, which shows a switch is too fast long before
+the work distribution does.
+
+The four cadences are independent and each must divide `switching_steps` exactly. Work every 10
+steps with frames every 50 is an ordinary thing to want. See
+[Running](../../md-run.md#ais) for the resume contract.
 
 ## Limitations
 
@@ -120,7 +154,11 @@ written.
 * The estimator is not provided; an exponential average over too few paths is dominated by rare
   low-work realisations, and this package does not protect you from that.
 * Source quality is your responsibility: paths starting from a poorly equilibrated ensemble produce
-  a work distribution for that ensemble, not for the one you meant.
+  a work distribution for that ensemble, not for the one you meant. `ais.tau_start` is asserted,
+  not verified — nothing in a coordinate trajectory records the Hamiltonian it was sampled under.
+* Work values are not bit-reproducible across GPUs or worker counts. Path IDENTITY is: path *n*
+  starts from the same frame with the same seeds and writes `AIS_traj000n.nc` whatever the world
+  size. The values differ by CUDA's reduction order, amplified along a chaotic trajectory.
 
 ## References
 

@@ -593,6 +593,10 @@ def run_grouped(files, arguments, groups):
         rule_path=arguments.exchange_rule,
         reservoir_declaration=arguments.reservoir,
         platform=getattr(protocol, "platform", None),
+        # `--cpu` reaches the driver through the protocol file's `platform` field, which is the
+        # only channel a generated protocol has. The platform itself comes from machine.openmm;
+        # this carries the one thing the command line can still say about it.
+        explicit_cpu=str(getattr(protocol, "platform", None) or "").upper() == "CPU",
         precision=getattr(protocol, "precision", None),
         identity_extra={"groups": len(groups),
                         "group_indices": [g["group_index"] for g in groups]})

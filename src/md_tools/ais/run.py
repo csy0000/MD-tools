@@ -290,31 +290,46 @@ def _truncate_csv(path: Path, keep: int, columns) -> None:
         writer.writerows(rows[:keep])
 
 
-def _truncate_netcdf(path: Path, keep: int) -> None:
-    """Cut a staged NetCDF back to `keep` frames by rewriting it.
+def _open_staged_netcdf(path: Path, keep: int):
+    """An open NetCDF writer positioned after exactly `keep` good frames.
 
-    NetCDF has no truncate, and a frame interrupted mid-write leaves a record that reads as
-    present but is not complete. Rewriting the first `keep` frames into a fresh file and moving it
-    into place is exact and atomic; appending onto an unverified tail is neither.
+    mdtraj's NetCDF writer offers 'r' and 'w' and no append mode, and that turns out to be the
+    right constraint rather than an obstacle: a frame interrupted mid-write leaves a record that
+    reads as present and is not complete, so appending onto an unverified tail would be wrong even
+    where the format allowed it.
+
+    So a resume REWRITES: the frames the sidecar vouches for are read back, written into a fresh
+    file, and the handle is returned still open for the rest of the path. The count is bounded by
+    `number_of_frames`, which is small by construction, and it happens once per interruption.
     """
     import os
 
     import mdtraj
 
-    if not path.is_file():
-        return
+    if not keep:
+        return mdtraj.formats.NetCDFTrajectoryFile(str(path), "w")
+
     with mdtraj.formats.NetCDFTrajectoryFile(str(path)) as handle:
         available = len(handle)
-        read = handle.read(min(keep, available))
-    coordinates, time, lengths, angles = read
+        coordinates, time, lengths, angles = handle.read(min(keep, available))
+    if available < keep:
+        raise SystemExit(
+            f"{path} holds {available} frame(s) but the checkpoint sidecar vouches for {keep}. "
+            f"The staged trajectory and the record of it disagree, so neither can be trusted; "
+            f"delete the path directory to rerun it from its source frame.")
+
     staged = path.with_name(path.name + ".rewrite")
-    with mdtraj.formats.NetCDFTrajectoryFile(str(staged), "w") as handle:
-        for frame in range(min(keep, available)):
-            handle.write(coordinates[frame],
-                         time=None if time is None else time[frame],
-                         cell_lengths=None if lengths is None else lengths[frame],
-                         cell_angles=None if angles is None else angles[frame])
+    writer = mdtraj.formats.NetCDFTrajectoryFile(str(staged), "w")
+    for frame in range(keep):
+        writer.write(coordinates[frame],
+                     time=None if time is None else time[frame],
+                     cell_lengths=None if lengths is None else lengths[frame],
+                     cell_angles=None if angles is None else angles[frame])
+    writer.flush()
+    # `os.replace` while the handle is open is safe on POSIX: the writer keeps writing to the same
+    # inode, now reachable under the staged name.
     os.replace(staged, path)
+    return writer
 
 
 def _state_row(simulation, *, index, protocol_step, switching_time_ps, tau, implicit,
@@ -344,8 +359,11 @@ def _state_row(simulation, *, index, protocol_step, switching_time_ps, tau, impl
         volume = box
         mass = sum(simulation.system.getParticleMass(i).value_in_unit(unit.dalton)
                    for i in range(simulation.system.getNumParticles()))
-        # g/mL: daltons per nm^3 x 1.66053906660 (the atomic mass unit in g, over nm^3 in mL).
-        density = mass / box * 1.66053906660
+        # g/mL from daltons per nm^3. One dalton is 1.66053906660e-24 g and one nm^3 is
+        # 1e-21 mL, so the factor is their ratio: 1.66053906660e-3. Written out rather than
+        # given as a bare constant, because the plausible wrong answer here is 1000x and water
+        # at 947 g/mL looks like a number rather than like a mistake.
+        density = mass / box * 1.66053906660e-3
     return {
         "path_index": index,
         "protocol_step": protocol_step,
@@ -372,6 +390,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
     from openmm.app import Simulation
 
     from ..md._stages import derive_seed
+    from . import path_trajectory_name
 
     topology = simulation_inputs["topology"]
     source_path = simulation_inputs["source_path"]
@@ -446,7 +465,6 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         switcher.set_tau(simulation.context, system, taus[updates_done])
         _truncate_csv(directory / OBSERVATIONS_CSV, rows_emitted, OBSERVATION_COLUMNS)
         _truncate_csv(directory / STATE_CSV, state_rows_emitted, STATE_COLUMNS)
-        _truncate_netcdf(staged, frames_emitted)
         log(f"  path {index:4d}: resuming at step {updates_done * interval} of "
             f"{schedule['switching_steps']} ({rows_emitted} work row(s), {frames_emitted} "
             f"frame(s) kept)")
@@ -470,8 +488,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         staged.unlink(missing_ok=True)
 
     # -- the streams ---------------------------------------------------------------------------
-    netcdf = mdtraj.formats.NetCDFTrajectoryFile(
-        str(staged), "a" if frames_emitted else "w")
+    netcdf = _open_staged_netcdf(staged, frames_emitted)
 
     def append(path: Path, columns, row: dict[str, Any]) -> None:
         with path.open("a", newline="") as handle:
@@ -707,10 +724,17 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     # to be known before anything opens a Context, and a single-process run must work on a machine
     # with no MPI at all.
     rank, size = mpi_rank_and_size()
-    log_path = Path(args.log) if args.log else out / (
-        "AIS.log" if size == 1 else f"AIS.rank{rank:02d}.log")
-    out_path = Path(args.output) if args.output else out / (
-        "AIS.out" if size == 1 else f"AIS.rank{rank:02d}.out")
+    # Every rank keeps its own pair. An explicitly named -log or -o is suffixed the same way an
+    # unnamed one is: without that, N ranks race to rename the same temporary and the run dies
+    # with a FileNotFoundError that says nothing about the cause. A rank that failed to bind its
+    # device is exactly what a multi-GPU run needs to be able to show, so the other ranks' files
+    # are kept beside rank 0's rather than discarded.
+    from ..remd.executor import report_path_for_rank
+
+    log_path = Path(report_path_for_rank(str(Path(args.log) if args.log else out / "AIS.log"),
+                                         rank))
+    out_path = Path(report_path_for_rank(str(Path(args.output) if args.output else out / "AIS.out"),
+                                         rank))
     if out_path.resolve() == log_path.resolve():
         print(f"AIS: -o and -log both name {out_path}. They are different files: one is read by "
               f"a person during the run, the other by a machine afterwards.", file=sys.stderr)

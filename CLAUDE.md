@@ -21,9 +21,23 @@ not add a fifth command**, and do not add a second executable: `md-run` is a SUB
 and hands the work to the same function a generated script calls — `stage_main`, `replica_main`,
 `ais_main`. If you find run logic in `md_tools.run`, it is in the wrong package.
 
-**`resolved.config` is authoritative**, and the `.in` file is the input it was resolved from.
-Every `.in` that `build-md` writes resolves back to exactly the `resolved.config` beside it; that
-round-trip is a test, not a convention.
+**The short flags are Amber's**, and this is contractual:
+
+```text
+-i mdin   -o mdout   -p topology   -c input restart   -r output restart   -x trajectory
+-s the serialised OpenMM System (no Amber counterpart)   -log the provenance record
+```
+
+`-x` is never the System. `-s` is required, `-x` is optional with a protocol default, and both
+mistakes are refused by name. Flag abbreviation is off.
+
+**`-o` and `-log` are two files**, for two readers: `.out` is what a person tails during a run,
+`.log` is the machine-readable provenance record. Never merge them; only a genuine collision is
+refused.
+
+**`resolved.config` is authoritative** and md-run writes it on every invocation, from the `.in`
+file it re-reads each time. Every `.in` that `build-md` writes resolves back to exactly the
+`resolved.config` beside it; that round-trip is a test, not a convention.
 
 These do not exist and must never be suggested: `sys-config`, `sys-gen`, `md-gen`, `setup`,
 `show-default`, `openmm-md`, `md-template`, `md-data-finish`, `md-data-register`.
@@ -37,7 +51,7 @@ executor lives at `md_tools/remd/executor.py` because `openmm_md.py` read as the
 ## Configuration
 
 ```text
-configs/machine/user.config.example   identity and $MD_DATA, for `data-register --init`
+configs/machine/user.config.example   identity, $MD_DATA, and `machine.openmm`
 configs/sys/build-top.config          force fields, solvent, box, ions, constraints, HMR
 configs/md/{cMD,REST2,rREST2,AIS}.config   protocol, stage lengths, reporting
 ```
@@ -116,11 +130,26 @@ Do not change these without a failing test that demonstrates a defect.
 * **HMR defaults off.** A 4 fs timestep is refused unless the masses serialised in the System prove
   repartitioning — a fact at run time, not a claim in a configuration.
 * **Completion is read from a machine record**, never from prose in a log.
-* **CUDA is the default and it is mandatory.** There is no automatic fall back to CPU, OpenCL or
-  Reference: a run that quietly moved to the CPU finishes, writes a trajectory and reports success
-  two orders of magnitude later, and is found weeks afterwards if at all. `--cpu` is the only way
-  to ask for a CPU run, and the record says `requested_policy: explicit-cpu` when you did. One
+* **CUDA is the default and it is mandatory**, and the platform is a MACHINE property:
+  `machine.openmm.{platform,precision,device_policy}` in the user configuration, never in a
+  protocol. `dynamics.platform` is retired and refused with the migration. There is no automatic
+  fall back in either direction: a run that quietly moved to the CPU finishes, writes a trajectory
+  and reports success two orders of magnitude later. `--cpu` is the one per-run override and the
+  record distinguishes `built-in default`, `machine.openmm` and `--cpu (command line)`. One
   resolver — `md_tools.openmm.platform_policy` — serves stages, ladders and AIS alike.
+* **Ordinary MD writes genuine DCD; AIS and REMD write genuine NetCDF.** OpenMM has a native DCD
+  writer and no native NetCDF writer, so a stage refuses a `.nc` trajectory name rather than
+  putting DCD bytes in it. What a file IS is decided from its leading bytes
+  (`md_tools.openmm.trajectory`), never from its suffix, and a source whose suffix and contents
+  disagree is refused with both named.
+* **A multi-rank launch either coordinates or stops.** `md_tools.remd.mpi` imports mpi4py and
+  cross-checks the launcher's rank and size against the communicator's and both against `-ng` and
+  the replica count, all before any output exists. No collective may silently become a no-op while
+  the world is plural: N ranks with no coordination are N simulations writing over one set of
+  paths, and the result looks complete.
+* **Every accepted reporting option does something.** AIS has four independent cadences — work
+  observations, trajectory frames, the `system.csv` state table, and checkpoints — each dividing
+  `switching_steps` on its own. A setting that is accepted and inert is worse than one refused.
 * **AIS path identity does not depend on the worker count.** `paths_for_rank(rank, size, total)`
   is a pure function, and global path *n* always writes `AIS_traj000n.nc`. A campaign resumed on a
   different number of GPUs must land on the same files.

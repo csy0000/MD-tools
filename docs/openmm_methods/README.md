@@ -3,6 +3,9 @@
 One page per protocol MD-tools generates. Each page states what the method is for, what this
 repository implements and does not implement, and what the generated directory contains.
 
+How any of these is actually launched — the Amber-like flags, the platform policy, the MPI rules —
+is [Running](../md-run.md).
+
 | method | ensemble | what it is for | page |
 |---|---|---|---|
 | [cMD](cMD/README.md) | NPT explicit, NVT implicit | ordinary molecular dynamics; also the fixed-τ source ensemble for AIS and for an rREST2 reservoir | `protocol: cMD` |

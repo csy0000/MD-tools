@@ -231,6 +231,14 @@ def _check_file_roles(args) -> None:
                 f"-x and -s are the same path ({args.trajectory}). The trajectory would be "
                 f"written over the System.")
 
+    if args.source_traj:
+        # Checked HERE rather than inside the AIS runtime, because it is a check on a file the
+        # command line named and it must run before -odir or resolved.config exist. A source whose
+        # suffix and contents disagree is refused with both named.
+        from ..openmm.trajectory import check_trajectory_declaration
+
+        check_trajectory_declaration(args.source_traj, what="-source-traj")
+
     # `-o` and `-log` are two artefacts for two readers. One file cannot be both, so an actual
     # collision is refused -- and ONLY a collision: different paths are the normal case.
     if args.output and args.log and Path(args.output) == Path(args.log):
@@ -440,6 +448,11 @@ def _run_ais(args, resolved: dict[str, Any], config_path: Path) -> int:
             return 2
 
     argv = _forward(args, names=("log", "output", "out_dir", "device"))
+    if args.resume:
+        # Without this, `--resume` reached md-run and stopped there: every interrupted path
+        # silently restarted from its source frame while the command reported success, which is
+        # the failure mode a checkpoint exists to prevent.
+        argv.append("--resume")
     source = args.source_traj or resolved["ais_source"]["trajectory"]
     if source:
         argv += ["-source-traj", str(source)]

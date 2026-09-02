@@ -45,7 +45,11 @@ cd md_script && ./run.sh
 `run.sh` runs the chain in order. To drive one stage yourself:
 
 ```bash
-python min.py -p ../built.pdb -s ../built.xml -r min.xml -x min.dcd -log min.log
+python min.py -p ../built.pdb -s ../built.xml -o min.out -x min.dcd -r min.xml -log min.log
+
+# or, the Amber-like way -- the same run, reaching the same installed code:
+md-openmm md-run -i min.in -p ../built.pdb -s ../built.xml \
+    -o min.out -x min.dcd -r min.xml -log min.log
 ```
 
 ## Generated files

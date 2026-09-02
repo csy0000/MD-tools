@@ -360,7 +360,19 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                     f"{chk_path} was written under a different configuration for this stage "
                     f"(fingerprint mismatch). Resuming it would continue a run that was set up "
                     f"differently. Delete the checkpoint to start this stage over.")
-            simulation.loadCheckpoint(str(chk_path))
+            try:
+                simulation.loadCheckpoint(str(chk_path))
+            except Exception as failure:                  # noqa: BLE001 - reported below
+                # An OpenMM binary checkpoint is platform-specific, and the exception says so in
+                # a way that reads like an internal error. It is not: it means this stage ran on
+                # one platform and is being continued on another, which is a fact about the two
+                # commands rather than about the simulation.
+                raise SystemExit(
+                    f"{chk_path} cannot be loaded on the {acceleration.name} platform: "
+                    f"{failure}\n"
+                    f"  An OpenMM checkpoint is binary and platform-specific. Continue this "
+                    f"stage on the platform it was written on, or delete {chk_path.name} and "
+                    f"{sidecar.name} to start the stage over.") from None
             done = int(meta.get("steps_done", 0))
             log.heading("Resume")
             log.field("from checkpoint", f"{chk_path} at step {done}")

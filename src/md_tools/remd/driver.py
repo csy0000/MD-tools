@@ -318,14 +318,15 @@ class ReplicaRun:
         sys.stdout.flush()
 
     def _build_platform(self):
-        # ONE platform decision, the same one an ordinary stage makes. This used to read
-        # `"CUDA" if "CUDA" in available else "CPU"` -- a ladder given no explicit platform fell
-        # back to the CPU where a stage refused, so the two disagreed about the only question that
-        # matters when a GPU is missing. There is no fallback now: CUDA unless `--cpu`.
-        name = self.platform_request
+        # ONE platform decision, the same one an ordinary stage makes. The machine's configuration
+        # decides it -- `machine.openmm.platform`, defaulting to CUDA -- and `--cpu` overrides it
+        # for this run. This used to read `"CUDA" if "CUDA" in available else "CPU"`, so a ladder
+        # fell back to the CPU where a stage refused; there is no fallback in either direction now.
+        from ..registry.userconfig import machine_openmm_settings
+
+        machine = machine_openmm_settings()
+        name = "CPU" if (self.explicit_cpu or machine["platform"] == "CPU") else "CUDA"
         device, policy = None, "not a CUDA platform"
-        if name in (None, "automatic"):
-            name = "CPU" if self.explicit_cpu else "CUDA"
         if name == "CUDA":
             devices = visible_cuda_devices(probe=(self.coordinator.size > 1))
             if self.coordinator.size > 1:
@@ -340,10 +341,8 @@ class ReplicaRun:
         from ..openmm.platform_policy import (PlatformRequest, acceleration_record,
                                               resolve_platform_request)
 
-        from ..registry.userconfig import machine_openmm_settings
-
         resolution = resolve_platform_request(
-            PlatformRequest.from_machine(machine_openmm_settings(), cpu=bool(self.explicit_cpu)),
+            PlatformRequest.from_machine(machine, cpu=bool(self.explicit_cpu)),
             device_index=device)
         self._platform, self._properties = resolution.platform, resolution.properties
         self._acceleration = acceleration_record(

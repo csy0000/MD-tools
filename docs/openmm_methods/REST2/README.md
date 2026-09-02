@@ -83,6 +83,11 @@ One process holds every state and lets OpenMM choose the device. Under MPI, one 
 
 ```bash
 mpiexec -n 4 python REST2.py -p ../built.pdb -s ../built.xml -c eq_npt_free.xml -log REST2.log
+
+# or, the Amber-like way -- one rank per thermodynamic state, `-ng` checked against both the
+# configured replica count and the MPI world size:
+mpirun -n 4 md-openmm md-run -ng 4 -i REST2.in -p ../built.pdb -s ../built.xml \
+    -c eq_npt_free.xml -o REST2.out -x REST2.nc -r restart.json -log REST2.log
 ```
 
 A world size that is neither 1 nor exactly the number of states is refused.

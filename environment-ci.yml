@@ -46,8 +46,14 @@ dependencies:
   - openmmtools=0.26.0
   - netcdf4                   # the multistate NetCDF storage a REST2 run writes and restarts from
   # mpi4py is deliberately ABSENT: single-process and single-GPU REST2 are fully supported, and a
-  # CI runner has no second device to bind a second rank to. Multi-GPU REST2 needs `mpi4py` and a
-  # working MPI, installed alongside. A replica ladder needs one rank per state.
+  # CI runner has no second device to bind a second rank to. Multi-rank REST2, rREST2 and AIS need
+  # `mpi4py` and a working MPI, installed alongside -- it is the `mpi` extra
+  # (`pip install md-tools[mpi]`) or a conda `mpi4py` in this environment.
+  #
+  # Its absence is not a silent downgrade. A launch of more than one rank without a working mpi4py
+  # is a FATAL preflight error before any output exists: N uncoordinated ranks would each run a
+  # whole simulation over one set of output paths, and the result would look complete. Serial runs
+  # are unaffected -- world size 1 coordinates with nobody and imports nothing.
 
   # cuda-version is deliberately ABSENT: the runners are CPU-only. OpenMM still provides the
   # Reference and CPU platforms, which is what the smoke tests use.

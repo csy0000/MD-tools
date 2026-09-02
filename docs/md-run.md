@@ -5,13 +5,14 @@ Amber-like input file. If you have run `pmemd -i mdin -p prmtop -c inpcrd -o mdo
 can read every command on this page without a manual, which is the whole reason it exists.
 
 ```bash
-md-openmm md-run -i min.in -p built.pdb -x built.xml -r min.xml -log min.log
+md-openmm md-run -i min.in -p built.pdb -s built.xml -c prev.xml \
+          -o min.out -x min.dcd -r min.xml -log min.log
 
-mpirun -n 8 md-openmm md-run -ng 8 -i REST2.in -p built.pdb -x built.xml \
-          -c eq_npt_free.xml -odir REST2/
+mpirun -n 8 md-openmm md-run -ng 8 -i REST2.in -p built.pdb -s built.xml \
+          -c eq_npt_free.xml -o REST2.out -x REST2.nc -r restart.json -log REST2.log
 
-mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in -p built.pdb -x built.xml \
-          -source-traj cMD_tau0p5/tau_0p5.nc -odir AIS/
+mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in -p built.pdb -s built.xml \
+          -source-traj ../cMD_tau0p5/tau_0p5.dcd -o AIS.out -log AIS.log -odir ./AIS
 ```
 
 It is a **surface**, not a second implementation. Every protocol is handed to the same function a
@@ -24,40 +25,63 @@ both. There is no behaviour reachable from one and not the other.
 | flag | meaning | Amber |
 |---|---|---|
 | `-i` | the run input: `&cntrl` / `&remd` / `&AIS` sections | `-i mdin` |
+| `-o` | human-readable simulation output | `-o mdout` |
 | `-p` | topology and reference coordinates, `built.pdb` | `-p prmtop` |
-| `-x` | the serialised OpenMM System, `built.xml` | (part of `prmtop`) |
 | `-c` | starting state — the previous stage's final state | `-c inpcrd` / `restrt` |
 | `-r` | output final state, the handoff to the next stage | `-r restrt` |
-| `-o` | human-readable run output | `-o mdout` |
-| `-log` | readable log carrying the machine record | |
-| `-chk` | output checkpoint, written periodically for resume | |
-| `--trajectory` | output trajectory | `-x mdcrd` |
-| `-odir` | where outputs and `resolved.config` are written | |
+| `-x` | output trajectory | `-x mdcrd` |
+| `-s` | the serialised OpenMM System, `built.xml` | — |
+| `-log` | the provenance record | — |
+| `-chk` | output checkpoint, written periodically for resume | — |
+| `-odir` | where outputs and `resolved.config` are written | — |
 | `-ng` | how many replicas or workers this launch coordinates | `-ng` |
 | `-groupfile` | an Amber-style group file, for a heterogeneous ladder | `-groupfile` |
-| `-source-traj` | AIS only: the equilibrium ensemble the paths start from | |
-| `--cpu` | explicit CPU execution — see the platform policy below | |
+| `-source-traj` | AIS only: the equilibrium ensemble the paths start from | — |
+| `--cpu` | run this invocation on the CPU — see the platform policy below | — |
+| `--device` | which CUDA device: placement, never platform | — |
 
-Amber's `prmtop` carries the topology *and* the parameters. Here they are two files, and `-x` is
-the one that holds the physics. That is the single place this surface differs from `pmemd`, and it
-is why `-x` is not the trajectory: the output trajectory keeps only its long `--trajectory` form
-rather than borrowing a short flag that means something else here.
+**`-x` is the trajectory and `-s` is the System.** Amber's `prmtop` carries the topology *and* the
+parameters; here they are two files, and `-s` is the one that holds the physics. `-s` has no Amber
+counterpart, which is exactly why it gets the flag Amber does not use — `-x` has meant mdcrd for
+decades, and briefly using it for `built.xml` here trained people to type the one command that
+would write a trajectory over the System their run needs. Both mistakes are refused by name.
+
+`-s` is required. `-x` is optional: a stage defaults to `<stage>.dcd`, and AIS writes
+`AIS_trajNNNN.nc`, one per path, which no single path could name — pass `-odir` instead.
+
+Flag abbreviation is off. `--traj` fails rather than quietly becoming `--trajectory`: a misspelling
+argparse resolves is worse than one that errors, because it runs, with a setting nobody wrote.
 
 `-h` works on a machine with no GPU, no driver and no OpenMM Context, because that is where people
 read it before submitting a job.
 
-## Which file is authoritative
+## Two outputs, two readers
 
-**`resolved.config`. Always.**
+`-o` and `-log` are different files and are never merged.
 
-The `.in` file is an *input*: a short, partial, human-written statement of intent. Resolving it —
-through `md_tools.build.md`, the one authority for MD workflow configuration — produces
-`resolved.config`, with every default written out and every cross-field rule applied. That resolved
-document is what the run reads, what the checkpoint fingerprint binds, and what the log records.
+| | `-o` (`<name>.out`) | `-log` (`<name>.log`) |
+|---|---|---|
+| for | a person, during the run | a machine, afterwards |
+| holds | stage, settings, progress, energies, temperature, how it ended | resolved configuration identity, input/output hashes, software and hardware, warnings, status, MD-data-contract fields |
+| read by | `tail -f` | `md_tools.build.record.read_record` |
 
-`md-run` writes it into `-odir` before anything integrates, with the `.in` file's sha256 in its
-header, so the chain from what a person wrote to what actually ran is a link a reader can follow
-rather than a claim:
+They were briefly one file, on the argument that this package writes a single readable record.
+That made a person open a machine record and scroll past a hundred lines of hashes to find out
+whether a simulation was moving. Amber has kept `mdout` and its logfile apart for the same reason.
+
+Each names the other, so whichever you open first tells you where the rest is. Only an actual
+collision — the two resolving to the same path — is refused.
+
+## Which file drives the run
+
+**`resolved.config`. Always — and md-run writes it on every invocation.**
+
+The `.in` file is an *input*: a short, partial, human-written statement of intent. Every
+invocation parses it and resolves it through `md_tools.build.md`, the one authority for MD
+workflow configuration, producing a document with every default written out and every cross-field
+rule applied. That resolved document is what the run reads, what the checkpoint fingerprint binds,
+and what the log records; it is written into `-odir` with the `.in` file's sha256 in its header,
+before anything integrates:
 
 ```text
 # The configuration this run resolved to, in full. THIS FILE IS AUTHORITATIVE:
@@ -69,15 +93,16 @@ rather than a claim:
 
 Two consequences worth stating plainly:
 
-* editing `resolved.config` between a run and its continuation changes the fingerprint and the
-  continuation is refused — which is the intent;
-* editing the `.in` afterwards changes nothing at all. Its digest in the record simply stops
-  matching, which is how you find out.
+* editing the `.in` file changes the NEXT invocation, because the next invocation reads it again.
+  It does not change a run that already happened;
+* `resolved.config` in `-odir` is the record of what a particular run resolved to, and a
+  continuation whose resolution differs is refused. Editing it by hand changes the fingerprint and
+  the continuation stops, which is the intent.
 
-If `-odir` already holds a `resolved.config` describing a *different* run, `md-run` refuses rather
-than overwriting: a directory holding outputs from one resolution and the configuration of another
-cannot be read correctly afterwards. An identical one is left alone, so rerunning a command is
-safe. `--overwrite` is the explicit way through.
+If `-odir` already holds a `resolved.config` describing a *different* run, md-run refuses rather
+than overwriting: outputs from one resolution beside the configuration of another cannot be read
+correctly afterwards. An identical one is left alone, so rerunning a command is safe.
+`--overwrite` is the explicit way through.
 
 Every `.in` that `build-md` writes resolves back to exactly the `resolved.config` beside it. That
 is a test over all four protocols and every generated input, not a convention.
@@ -120,40 +145,74 @@ The parser defines **no defaults**. It projects onto the schema that owns them a
 two files that each decided what "the default timestep" is would eventually disagree, and the one
 that lost would be invisible.
 
-## CUDA is the default, and it is mandatory
+## The platform is a property of the machine
 
 ```text
 md-openmm md-run ≈ pmemd.cuda
 ```
 
-There is no automatic fall back to CPU, OpenCL or Reference. A run that quietly moved to the CPU
-still finishes, still writes a trajectory and still reports success — two orders of magnitude
-later, on a machine whose GPU was simply not visible to the process. The result is not obviously
-wrong, which is what makes it expensive: it is found weeks later, if at all.
+It is configured once per machine, in the user configuration, and not in any protocol:
 
-* CUDA that cannot be initialised is an error **before** dynamics. Listing the platform is not the
-  same as having a usable device — conda-forge ships the plugin unconditionally — so the resolver
-  opens and discards a one-particle Context to prove it.
-* `--cpu` is the only public way to ask for a CPU run.
-* `--cpu --platform CUDA` is refused as a contradiction rather than resolved by precedence: either
-  choice would silently discard half of what was asked for.
+```yaml
+machine:
+  md_data: /absolute/path/to/MD_DATA
+  openmm:
+    platform: CUDA        # or CPU, for a deliberate machine-wide CPU default
+    precision: mixed
+    device_policy: local_rank
+```
+
+found through the order that already existed — `--user-config`, `$MD_TOOLS_CONFIG`,
+`${XDG_CONFIG_HOME:-$HOME/.config}/md-tools/user.config` — and defaulting to CUDA, mixed precision
+and local-rank device placement when the file or the `openmm:` block is absent. A configuration
+written before this block existed is still valid. `md-openmm data-register --init` writes it out.
+
+`dynamics.platform` in a protocol configuration is **retired** and refused with this migration. A
+protocol is the same experiment wherever it runs; a workflow that carried `platform: CUDA` carried
+one machine's hardware into every repository it was shared through.
+
+**There is no automatic fallback, in either direction.** A run that quietly moved to the CPU still
+finishes, still writes a trajectory and still reports success — two orders of magnitude later, on a
+machine whose GPU was simply not visible. The result is not obviously wrong, which is what makes it
+expensive: it is found weeks later, if at all. CUDA that cannot be initialised is an error
+**before** dynamics; listing the platform is not the same as having a usable device, since
+conda-forge ships the plugin unconditionally, so the resolver opens and discards a one-particle
+Context to prove it.
+
+`--cpu` is the one per-run override. There is no `--platform`: a per-run platform flag would be a
+second authority for a machine property, and the two would disagree the first time somebody
+scripted one and configured the other. `--device` says *which* GPU, never *whether*, and is
+refused together with `--cpu`.
+
+Every run record distinguishes the three ways a platform can be chosen, because a CPU result has
+three possible causes and only one of them is nobody's decision:
+
+```yaml
+acceleration:
+  platform_origin: built-in default      # or machine.openmm, or --cpu (command line)
+  requested_policy: default-cuda         # or explicit-cpu
+  resolved_platform: CUDA
+  cuda_device_index: 3
+  cuda_precision: mixed
+  device_policy: local_rank
+  gpus_on_host: [NVIDIA RTX A5000, ...]
+  cuda_visible_devices: null
+  cuda_driver_version: "580.95.05"
+  openmm_version: "8.6"
+  mpi: {rank: 3, size: 8, local_rank: 3}
+```
 
 One resolver, `md_tools.openmm.platform_policy`, serves stages, ladders and AIS alike, so they
-cannot drift apart again. Every run record carries the requested policy (`default-cuda` or
-`explicit-cpu`), the resolved platform, the CUDA device index and precision, the GPUs on the host,
-`CUDA_VISIBLE_DEVICES`, the OpenMM version, and the MPI rank and world size. **A CPU result can
-never be mistaken for an unnoticed CUDA fallback.**
-
-This applies to OpenMM Context work. `build-top` assigns parameters with OpenFF and AmberTools,
-which is CPU work and is not claimed to be anything else.
+cannot drift apart. This applies to OpenMM Context work; `build-top` assigns parameters with
+OpenFF and AmberTools, which is CPU work and is not claimed to be anything else.
 
 ## REST2 and rREST2 under MPI
 
 One rank per thermodynamic state:
 
 ```bash
-mpirun -n 8 md-openmm md-run -ng 8 -i REST2.in -p built.pdb -x built.xml \
-          -c eq_npt_free.xml -odir REST2/ -log REST2.log
+mpirun -n 8 md-openmm md-run -ng 8 -i REST2.in -p built.pdb -s built.xml \
+          -c eq_npt_free.xml -o REST2.out -x REST2.nc -r restart.json -log REST2.log
 ```
 
 Three numbers must agree — `rest2.number_of_replicas`, `-ng`, and the MPI world size — and a
@@ -191,8 +250,8 @@ wrong.
 ## AIS
 
 ```bash
-mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in -p built.pdb -x built.xml \
-          -source-traj cMD_tau0p5/tau_0p5.nc -odir AIS/ -log AIS.log
+mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in -p built.pdb -s built.xml \
+          -source-traj ../cMD_tau0p5/tau_0p5.dcd -o AIS.out -log AIS.log -odir ./AIS
 ```
 
 Paths are independent and never exchange, so `-ng` here is simply how many workers share them.
@@ -266,10 +325,65 @@ reporting.system_printout is 100, which does not divide ais.switching_steps = 25
   Divisors of 250 near 100: 50, 125, 250.
 ```
 
-An AIS run writes one frame per observation, so `reporting.solute_printout` and
-`ais.observation_interval_steps` must be the same number: each observation writes one frame, and
-its row indexes that frame. Leave `solute_printout` unstated and it follows the observation
-cadence.
+The four cadences are **independent**. They answer four different questions, and tying two of
+them together answers one of them with the other's answer:
+
+| setting | controls | disabled by 0 |
+|---|---|---|
+| `ais.observation_interval_steps` | how often the WORK is measured — this one is the method | no |
+| `reporting.solute_printout` | frames written to `AIS_trajNNNN.nc` | no |
+| `reporting.system_printout` | rows in `path_NNNN/system.csv` | yes |
+| `reporting.checkpoint_printout` | how often the path becomes resumable | yes |
+
+Work every 10 steps with frames every 50 is a perfectly ordinary thing to want — it is a smaller
+file — and it used to be refused. Leave `solute_printout` unstated and it follows the observation
+cadence, which is what every existing project was generated with.
+
+### `system.csv`: what the path is doing
+
+At `reporting.system_printout`, each path writes a row of `path_NNNN/system.csv`:
+
+```text
+path_index, protocol_step, switching_time_ps, tau,
+potential_energy_kj_mol, kinetic_energy_kj_mol, total_energy_kj_mol,
+temperature_kelvin, volume_nm3, density_g_per_ml
+```
+
+Volume and density are empty under implicit solvent, where there is no box to have either. This is
+a different question from the work: it is how the system is *behaving* while the Hamiltonian
+moves, which tells you a switch is too fast long before the work distribution does.
+
+### Mid-path resume
+
+At `reporting.checkpoint_printout` a path writes an OpenMM binary checkpoint and a sidecar holding
+everything outside the Context — accumulated work, work since the last observation, and how many
+work rows, frames and state rows are on disk. Restoring one without the other resumes a simulation
+into somebody else's bookkeeping, so they are written and validated together.
+
+```bash
+md-openmm md-run -i AIS.in -p built.pdb -s built.xml \
+          -source-traj ../cMD_tau0p5/tau_0p5.dcd -odir ./AIS --resume
+```
+
+On `--resume`, and in this order:
+
+1. **every fingerprint is checked before anything loads** — the System, the topology, the source
+   ensemble, the whole schedule, the path id, its source frame and its seeds. A checkpoint from a
+   different run would continue with right-looking numbers for a different measurement;
+2. the Context is restored, and τ is put back to the checkpoint's rung;
+3. the streams are cut back to the counts the sidecar vouches for, so a record interrupted
+   mid-write is dropped rather than appended to;
+4. the path continues, and finishes with exactly the number of observations, frames and state rows
+   an uninterrupted run produces.
+
+Frames are staged inside the path directory and published to `AIS_trajNNNN.nc` in one atomic move
+only after the path is complete and validated. Until then there is nothing at the run root that
+could be mistaken for a finished path. A completed path is skipped, never overwritten, and its
+checkpoint is removed so nothing invites a resume of finished work.
+
+With `checkpoint_printout: 0` there are no checkpoints, and an interrupted path restarts from its
+source frame — which is correct, because a switching path has no meaningful mid-path restart
+without one: the work integral is only defined along a whole path.
 
 ### The work convention, unchanged
 

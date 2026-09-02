@@ -22,6 +22,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-xdist", "build"]
+# Multi-rank REST2, rREST2 and AIS. Deliberately an EXTRA rather than a dependency: an ordinary
+# serial user needs no MPI at all, and installing mpi4py pulls a whole MPI implementation with it.
+# What is NOT optional is the behaviour -- a launch of more than one rank without a working mpi4py
+# is a fatal preflight error, never a quietly serial run. See `md_tools.remd.mpi`.
+mpi = ["mpi4py>=3.1"]
 
 # The ONLY entry point. Installing the wheel puts `md-openmm` on PATH, which is what lets a
 # consuming project run the whole pipeline with no source checkout and no component lock.
