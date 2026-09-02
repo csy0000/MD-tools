@@ -537,12 +537,219 @@ def test_there_is_no_automatic_cpu_fallback_on_this_machine(built, hardware, tmp
             detail="CUDA made unavailable through the deterministic seam")
 
 
+# --- explicit solvent -----------------------------------------------------------------------------
+#
+# Every lane above is implicit, which is the fast one. Explicit solvent is a different code path on
+# the GPU in every way that matters: PME rather than a cutoff, a barostat that can be active, a box
+# that has to survive a checkpoint, and a particle count two orders of magnitude larger. A matrix
+# that proved only the implicit branch would be proving the branch that does not use PME.
+
+@pytest.fixture(scope="module")
+def built_explicit(tmp_path_factory):
+    """One small explicit ALA box, built once. Slow enough to be worth building only here."""
+    if not ALA.is_file():
+        pytest.skip("no ALA fixture")
+    root = tmp_path_factory.mktemp("cuda-matrix-explicit")
+    # `TIP3P` in the spelling the schema accepts, and the default padding: unknown keys and
+    # unknown values are both refused rather than ignored, which is what made this fixture fail
+    # loudly instead of quietly building something else.
+    (root / "sys.config").write_text("solvent:\n  model: TIP3P\n", encoding="utf-8")
+    done = subprocess.run(
+        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
+               "-log", "built.log", "--config", str(root / "sys.config")],
+        cwd=root, capture_output=True, text=True, timeout=3600)
+    if done.returncode != 0:
+        pytest.fail("could not build an explicit-solvent system, so the explicit CUDA lanes "
+                    f"cannot run:\n{done.stdout}{done.stderr}")
+    return root
+
+
+def test_explicit_solvent_npt_lane(built_explicit, hardware, tmp_path):
+    """Explicit cMD on CUDA: PME, a real barostat, NPT, and a box that survives the restart."""
+    work = tmp_path / "explicit"
+    work.mkdir()
+    (work / "cMD.config").write_text(yaml.safe_dump({
+        "protocol": "cMD", "solvent": "explicit",
+        "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 10,
+                   "restrained_npt_steps": 10, "unrestrained_npt_steps": 10,
+                   "production_steps": 20},
+        "reporting": {"solute_printout": 10, "system_printout": 10,
+                      "checkpoint_printout": 10}}), encoding="utf-8")
+    generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
+                                      "--config", str(work / "cMD.config")],
+                               capture_output=True, text=True, timeout=600)
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+
+    done = subprocess.run(
+        [sys.executable, str(work / "project" / "cMD.py"),
+         "-p", str(built_explicit / "built.pdb"), "-s", str(built_explicit / "built.xml"),
+         "-odir", str(work / "run")],
+        cwd=work, capture_output=True, text=True, timeout=3600,
+        env=_environment(work, **_machine()))
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    from md_tools.build.record import read_record
+
+    record = read_record(work / "run" / "cMD.log")
+    assert record["acceleration"]["resolved_platform"] == "CUDA"
+    assert record["implicit"] is False, "this lane is meant to be the explicit one"
+    assert record["stage"]["ensemble"] == "NPT", record["stage"]
+    assert record["barostats"]["active"] >= 1, (
+        f"an NPT explicit stage ran with no active barostat: {record['barostats']}")
+    # The box has to come back out of the restart, or a continuation silently changes the volume.
+    from openmm import XmlSerializer
+
+    state = XmlSerializer.deserialize(
+        (work / "run" / "cMD.xml").read_text(encoding="utf-8"))
+    vectors = state.getPeriodicBoxVectors()
+    assert vectors is not None and vectors[0][0]._value > 0.0, vectors
+    _record("test_explicit_solvent_npt_lane",
+            feature="cMD explicit (PME), NPT with an active barostat",
+            precision=record["acceleration"].get("cuda_precision") or "mixed",
+            device=record["acceleration"].get("cuda_device_index") or "-",
+            detail=f"{record['stage']['steps']} production steps; box preserved in the restart")
+
+
+def _equilibrate(project: Path, topology: Path, system: Path, work: Path, run: Path) -> Path:
+    """Run the project's equilibration chain and return the state the ladder starts from.
+
+    A ladder is refused without `-c`: every rung starts from the same equilibrated configuration,
+    and a group line with no coordinates is a rung starting from the topology's own positions.
+    So the lanes below run the chain rather than inventing a starting state -- which also puts
+    the minimisation and every equilibration stage on CUDA, in the same lane.
+    """
+    from md_tools.md.stage import load_generated_plan
+
+    plan, _config = load_generated_plan(project / "REST2.py")
+    previous = None
+    for stage in plan:
+        name = stage["name"]
+        script = project / f"{name}.py"
+        if not script.is_file():
+            continue
+        argv = [sys.executable, str(script), "-p", str(topology), "-s", str(system),
+                "-odir", str(run)]
+        if previous is not None:
+            argv += ["-c", str(previous)]
+        done = subprocess.run(argv, cwd=work, capture_output=True, text=True, timeout=3600,
+                              env=_environment(work, **_machine()))
+        assert done.returncode == 0, f"{name}:\n{done.stdout}{done.stderr}"
+        previous = run / f"{name}.xml"
+    assert previous is not None and previous.is_file(), "the chain produced no starting state"
+    return previous
+
+
+def test_explicit_solvent_rest2_lane(built_explicit, hardware, tmp_path):
+    """A REST2 ladder on explicit solvent, on CUDA, serially.
+
+    The scaled Hamiltonian over a PME system is the combination REST2 is actually used for, and
+    it is the one where a NonbondedForce exception or a reciprocal-space term scaling wrongly
+    would show up as an acceptance ratio nobody questions.
+    """
+    work = tmp_path / "rest2-explicit"
+    work.mkdir()
+    (work / "REST2.config").write_text(yaml.safe_dump({
+        "protocol": "REST2", "solvent": "explicit",
+        "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 10,
+                   "restrained_npt_steps": 10, "unrestrained_npt_steps": 10,
+                   "production_steps": 20},
+        "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 10,
+                  "number_of_exchanges": 2},
+        "reporting": {"solute_printout": 10, "system_printout": 10,
+                      "checkpoint_printout": 10}}), encoding="utf-8")
+    generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
+                                      "--config", str(work / "REST2.config")],
+                               capture_output=True, text=True, timeout=600)
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+
+    start = _equilibrate(work / "project", built_explicit / "built.pdb",
+                         built_explicit / "built.xml", work, work / "run")
+    done = subprocess.run(
+        [sys.executable, str(work / "project" / "REST2.py"),
+         "-p", str(built_explicit / "built.pdb"), "-s", str(built_explicit / "built.xml"),
+         "-c", str(start), "-odir", str(work / "run")],
+        cwd=work, capture_output=True, text=True, timeout=3600,
+        env=_environment(work, **_machine()))
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    trajectories = sorted((work / "run").glob("remd*.nc"))
+    assert len(trajectories) == 2, [p.name for p in trajectories]
+    report = (work / "run" / "REST2.out").read_text(encoding="utf-8")
+    assert "platform           : CUDA" in report, report[:2000]
+    _record("test_explicit_solvent_rest2_lane",
+            feature="REST2 explicit (PME), 2 states, serial",
+            precision="mixed", device="-",
+            detail=f"{len(trajectories)} state trajectories; exchanges attempted on CUDA")
+
+
+@pytest.mark.parametrize("states", [2, 4])
+def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_path):
+    """Real `mpirun -n N` ladders on CUDA, one rank per state, one GPU per rank.
+
+    Sizes rather than one size: `owned_states` and the neighbour exchange rule both depend on the
+    state count's parity, and a ladder that only ever ran with 2 has never exercised the case
+    where a rank has a neighbour on both sides.
+    """
+    import shutil
+
+    if shutil.which("mpirun") is None:
+        pytest.fail("no mpirun on PATH; the multi-rank CUDA lane is an unmet criterion")
+    if len(hardware) < states:
+        pytest.fail(f"{states} states need {states} devices; {len(hardware)} visible")
+
+    work = tmp_path / f"ladder-{states}"
+    work.mkdir()
+    (work / "REST2.config").write_text(yaml.safe_dump({
+        "protocol": "REST2", "solvent": "implicit",
+        "stages": {"minimization_iterations": 2, "restrained_nvt_steps": 5,
+                   "production_steps": 20},
+        "rest2": {"number_of_replicas": states, "exchange_interval_steps": 10,
+                  "number_of_exchanges": 2},
+        "reporting": {"solute_printout": 10, "system_printout": 10,
+                      "checkpoint_printout": 10}}), encoding="utf-8")
+    generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
+                                      "--config", str(work / "REST2.config")],
+                               capture_output=True, text=True, timeout=600)
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+
+    start = _equilibrate(work / "project", built / "built.pdb", built / "built.xml",
+                         work, work / "run")
+    done = subprocess.run(
+        ["mpirun", "-n", str(states), sys.executable, str(work / "project" / "REST2.py"),
+         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-c", str(start), "-odir", str(work / "run"), "-ng", str(states)],
+        cwd=work, capture_output=True, text=True, timeout=3600,
+        env=_environment(work, **_machine()))
+    assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
+
+    trajectories = sorted((work / "run").glob("remd*.nc"))
+    assert len(trajectories) == states, [p.name for p in trajectories]
+
+    # One device per rank, and they must be DIFFERENT devices: `device_policy: local_rank` is the
+    # setting, and N ranks sharing one GPU is the failure it exists to prevent.
+    devices = []
+    for rank in range(states):
+        name = "REST2.out" if rank == 0 else f"REST2.out.rank{rank:02d}"
+        text = (work / "run" / name).read_text(encoding="utf-8")
+        assert "platform           : CUDA" in text, text[:1500]
+        line = next(line for line in text.splitlines() if "platform           :" in line)
+        devices.append(line.split("device=")[1].split()[0] if "device=" in line else None)
+    assert len(set(devices)) == states, f"ranks shared devices: {devices}"
+    _record("test_multi_rank_rest2_ladders_of_several_sizes",
+            feature=f"REST2 implicit, {states} states, real mpirun -n {states}",
+            precision="mixed", device=", ".join(str(d) for d in devices),
+            detail=f"{len(trajectories)} state trajectories; one rank per device")
+
+
 # --- the evidence document ------------------------------------------------------------------------
 
 def test_write_the_coverage_evidence(hardware, request):
     """Emit the matrix, with what actually ran, so the published table is a record of a run.
 
-    Ordered last by name so the lanes above have filled `RESULTS`. It writes the document only
+    LAST IN THE FILE, deliberately. pytest runs a module in definition order, and `RESULTS` is
+    filled by the lanes as they pass -- so a lane defined below this function would run after it
+    and be missing from the document, which is how a matrix comes to describe less than was
+    actually verified. It writes the document only
     when `--cuda-evidence=<path>` is given, so an ordinary GPU run does not rewrite a committed
     file as a side effect.
     """
