@@ -3,7 +3,8 @@
 `build-top` turns one input structure into a serialised OpenMM `System` and the matching PDB.
 `build-md` turns a resolved protocol configuration into small, readable run scripts that import
 this installed package. Neither reads a sibling checkout, and neither assumes a repository root:
-shipped configuration examples are located with `importlib.resources`.
+the installed configuration examples are located through the distribution's own metadata, by
+`md_tools.configs.example_root()`.
 """
 
 from __future__ import annotations

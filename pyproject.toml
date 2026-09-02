@@ -37,13 +37,13 @@ include = ["md_tools*"]
 # which puts this directory on sys.path so the executor's bare imports resolve from the WHEEL
 # rather than from copies scattered into every generated project.
 "md_tools.openmm" = ["templates/*.py", "templates/*.sh"]
-# The shipped configuration examples. They are located with importlib.resources, never by
-# assuming a source checkout, so they must be inside the package. The repository-level `configs/`
-# path named in the documentation is a symlink to this directory -- one copy, so the example and
-# the schema that enforces it cannot drift apart.
-# NOTE: the configuration examples are NOT package data. They are wheel data files, declared in
-# [tool.setuptools.data-files] below, so that the repository root keeps exactly one browsable copy
-# instead of a symlink or a second hand-edited mirror inside the package.
+# The configuration examples are deliberately NOT package data, so they are not listed here. They
+# ship as wheel data files -- see [tool.setuptools.data-files] below -- which is what lets the
+# repository root hold exactly one browsable, hand-edited copy: no symlink, and no second mirror
+# inside the package. `md_tools.configs.example_root()` finds the installed copies through the
+# distribution's own metadata, falling back to the source tree when running from a checkout.
+# `importlib.resources` is the right tool for genuine package resources, such as the runtime
+# modules above and the schemas below; a config example a user is meant to read and copy is not one.
 # The generated JSON schema and the v1-to-v2 migration note travel with the contract they
 # describe, so an installed wheel can be checked against them without the repository.
 "md_tools.data_contract" = ["schemas/*.json", "*.md"]
