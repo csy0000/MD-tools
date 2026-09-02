@@ -55,7 +55,9 @@ def _generate(work: Path, out: str, *extra: str) -> Path:
     config = work / f"{out}.config"
     config.write_text(yaml.safe_dump(
         {"protocol": "cMD", "solvent": "implicit",
-         "dynamics": {"platform": "CUDA", "seed": 7},
+         # `dynamics.platform` is retired; CUDA is the machine default and
+         # `test_the_split_chain_ran_on_cuda` asserts the resolved Context.
+         "dynamics": {"seed": 7},
          "stages": STAGES, "reporting": REPORTING}, sort_keys=False), encoding="utf-8")
     result = subprocess.run(
         [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", f"./{out}",

@@ -241,7 +241,7 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
     hot = work / "hot.config"
     hot.write_text(yaml.safe_dump({
         "protocol": "cMD", "solvent": "implicit",
-        "dynamics": {"platform": "CUDA", "tau": 0.5, "seed": 3},
+        "dynamics": {"tau": 0.5, "seed": 3},
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 50,
                    "restrained_npt_steps": 50, "unrestrained_npt_steps": 50,
                    "production_steps": 200},
@@ -256,7 +256,7 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
     assert ran.returncode == 0, ran.stdout[-3000:] + ran.stderr[-3000:]
 
     result = _build_md(work, _base(ais_source={"trajectory": "../hot/cMD.dcd"},
-                                   dynamics={"platform": "CUDA"}))
+                                   dynamics={}))
     assert result.returncode == 0, result.stdout + result.stderr
 
     ais = subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml", "../hot/cMD.dcd"],

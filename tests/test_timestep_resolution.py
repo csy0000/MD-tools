@@ -128,7 +128,7 @@ def test_one_generated_script_resolves_two_and_four_fs_from_two_real_systems(tmp
     md = tmp_path / "md.config"
     md.write_text(yaml.safe_dump(
         {"protocol": "cMD", "solvent": "explicit",
-         "dynamics": {"platform": "CUDA"},
+         "dynamics": {},
          "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 5,
                     "restrained_npt_steps": 5, "unrestrained_npt_steps": 5,
                     "production_steps": 5},

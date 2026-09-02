@@ -53,7 +53,10 @@ def ladder(tmp_path_factory):
     # Anything else would be a sample of a different distribution.
     (work / "hot.config").write_text(yaml.safe_dump({
         "protocol": "cMD", "solvent": "implicit",
-        "dynamics": {"platform": "CUDA", "tau": TAU_MAX, "seed": 11,
+        # The platform is machine.openmm.platform now, and CUDA is the built-in default, so a
+        # GPU test states nothing about it. `test_the_ladder_ran_on_cuda...` checks that the
+        # Context really was CUDA, which is the assertion that matters.
+        "dynamics": {"tau": TAU_MAX, "seed": 11,
                      "phase_space_printout": 20},
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 50,
                    "restrained_npt_steps": 50, "unrestrained_npt_steps": 50,
@@ -73,7 +76,7 @@ def ladder(tmp_path_factory):
 
     (work / "rrest2.config").write_text(yaml.safe_dump({
         "protocol": "rREST2", "solvent": "implicit",
-        "dynamics": {"platform": "CUDA", "seed": 13},
+        "dynamics": {"seed": 13},
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 50,
                    "restrained_npt_steps": 50, "unrestrained_npt_steps": 50,
                    "production_steps": 200},
