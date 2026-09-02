@@ -19,6 +19,11 @@ def pytest_addoption(parser):
         help="turn every skip into a failure. Release validation uses this: a scientific smoke "
              "test that skipped because a dependency was missing is a test that did not run, and "
              "reporting that as a pass with a note is how a broken release ships.")
+    parser.addoption(
+        "--cuda-evidence", action="store", default=None, metavar="PATH",
+        help="write the CUDA coverage matrix, with the lanes that actually ran, to PATH. Omitted "
+             "in an ordinary run so a GPU suite does not rewrite a committed document as a side "
+             "effect of passing.")
 
 
 @pytest.hookimpl(hookwrapper=True)

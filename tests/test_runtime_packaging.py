@@ -183,13 +183,39 @@ def test_the_two_seed_derivations_have_different_names():
     assert definitions == ["md/_stages.py"], definitions
 
 
-def test_the_two_platform_functions_have_different_names():
-    """One decides a platform NAME and refuses a CPU fallback; the other CONSTRUCTS a Platform
-    from a name already decided. Sharing a name made them look interchangeable."""
-    from md_tools.md import resolve_platform
-    from md_tools.remd.engine import build_platform
+def test_there_is_no_second_platform_resolver_left():
+    """MIGRATED. This asserted that the TWO platform functions had different names.
 
-    assert callable(resolve_platform) and callable(build_platform)
+    There is one now. `remd.engine.build_platform` is gone: it resolved `None`/"automatic" with
+    `"CUDA" if "CUDA" in available else "CPU"`, an automatic CPU fallback in the one place a
+    stage's refusal could not reach, and a ladder that fell onto the CPU that way still ran,
+    still wrote a trajectory and still reported success two orders of magnitude later. The driver
+    consumes the platform `preflight_ladder` resolved, so there was nothing left to fall back
+    from and nothing left calling it.
+
+    What is asserted instead is the stronger property: no module defines a second resolver, and
+    no module still contains that fallback expression.
+    """
+    from md_tools.md import resolve_platform
+
+    assert callable(resolve_platform)
+    import md_tools.remd.engine as engine
+
+    assert not hasattr(engine, "build_platform"), "the second platform resolver is back"
+    # CODE only. Comments and docstrings explaining the removal must be allowed to quote the
+    # expression they are explaining -- a guard that forbids naming the defect forbids the
+    # explanation with it, and the explanation is what stops someone reintroducing it.
+    import io
+    import tokenize
+
+    for module in SRC.rglob("*.py"):
+        code = []
+        with tokenize.open(module) as handle:
+            for token in tokenize.generate_tokens(handle.readline):
+                if token.type not in (tokenize.COMMENT, tokenize.STRING):
+                    code.append(token.string)
+        assert 'if"CUDA"inavailableelse"CPU"' not in "".join(code).replace(" ", ""), (
+            f"{module.relative_to(SRC)} falls back to the CPU automatically")
     definitions = sorted(p.relative_to(SRC).as_posix() for p in SRC.rglob("*.py")
                          if "def resolve_platform(" in p.read_text(encoding="utf-8"))
     # `openmm/platform_policy.resolve_platform_request` is a different name for a different job:

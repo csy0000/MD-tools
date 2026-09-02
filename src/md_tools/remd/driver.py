@@ -43,7 +43,7 @@ from . import state_trajectories as state_trajectories
 from .rules import (ExchangeContext, NeighbouringExchangeRule, builtin_rule_identity,
                             load_rule)
 from .mpi import Coordination
-from .engine import (Configuration, ReplicaEngine, build_platform,
+from .engine import (Configuration, ReplicaEngine,
                             select_device_for_rank, visible_cuda_devices)
 from md_tools.rest2 import require_compatible_implementation
 

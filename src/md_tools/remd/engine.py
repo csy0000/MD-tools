@@ -66,36 +66,17 @@ class Configuration:
         return int(self.positions.shape[0])
 
 
-def build_platform(name=None, *, precision=None, device_index=None):
-    """Construct the OpenMM Platform and its properties. A CUDA request with no device is an error.
-
-    Listing the CUDA platform is not the same as having a device: conda-forge ships the plugin
-    unconditionally, so a machine with no driver still reports it.
-
-    NOT `md_tools.md.resolve_platform`, and renamed so the two cannot be mistaken for each other.
-    That one answers "which platform NAME should this stage use" and refuses to fall back to the
-    CPU -- a silent fallback still finishes, still writes a trajectory and still says complete, two
-    orders of magnitude later. This one CONSTRUCTS a Platform from a name that has already been
-    decided, and the caller above it (`ReplicaRun._build_platform`) is where the ladder's
-    automatic CUDA-or-CPU choice is made.
-
-    Those two policies differ, and the difference is deliberate here only in the sense that it was
-    inherited: a ladder given no explicit platform on a machine with no visible CUDA device will
-    run on the CPU. It is recorded in the run context (`platform`, `device_policy`), so a CPU run
-    is never invisible -- but it is not refused the way a stage refuses it. See the v0.5.0 release
-    notes; tightening it is a behaviour change that needs its own validation.
-    """
-    available = {Platform.getPlatform(i).getName() for i in range(Platform.getNumPlatforms())}
-    if name in (None, "automatic"):
-        name = "CUDA" if "CUDA" in available else "CPU"
-    if name not in available:
-        raise EngineError(f"OpenMM offers no {name!r} platform; available: {sorted(available)}")
-    properties = {}
-    if name in ("CUDA", "OpenCL"):
-        properties["Precision"] = precision or "mixed"
-        if device_index is not None:
-            properties["DeviceIndex"] = str(device_index)
-    return Platform.getPlatformByName(name), properties
+# `build_platform` lived here and is gone.
+#
+# It resolved a platform NAME from `None`/"automatic" with `"CUDA" if "CUDA" in available else
+# "CPU"` -- an automatic CPU fallback, in the one place a stage's refusal could not reach. A
+# ladder that fell onto the CPU that way still ran, still wrote a trajectory and still reported
+# success, two orders of magnitude later.
+#
+# There is nothing left to fall back FROM: `ReplicaRun` consumes the platform `preflight_ladder`
+# resolved, through `md_tools.openmm.platform_policy`, which is the one resolver for stages,
+# ladders and AIS alike. Nothing called this any more; leaving it would have left a second
+# policy for someone to reach for.
 
 
 def count_cuda_devices(limit=64):
