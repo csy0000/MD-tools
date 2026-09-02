@@ -293,6 +293,16 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
         # tau is the only persisted coordinate.
         assert "s" not in rows[0] and "sqrt_s" not in rows[0]
 
+        # The reduced work is W / RT and nothing else. It was once W times the box's beta ANGLE:
+        # the trajectory writer unpacked `a, b, c, alpha, beta, gamma`, which made `beta` local to
+        # that closure and shadowed the reciprocal temperature. Under explicit solvent the column
+        # was silently wrong by a factor of 60; under implicit the branch never ran and the name
+        # was simply unbound. Checking the ratio catches both, and any future shadowing.
+        rt = 8.31446261815324e-3 * float(rows[0]["temperature_kelvin"])
+        for row in rows[1:]:
+            assert float(row["cumulative_reduced_work"]) == pytest.approx(
+                float(row["cumulative_work_kj_mol"]) / rt, rel=1e-9), row
+
         completion = json.loads((directory / "completed.json").read_text())
         assert completion["status"] == "completed"
         totals.append(completion["total_work_kj_mol"])

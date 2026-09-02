@@ -193,20 +193,22 @@ def _check_group_count(number_of_groups, n_states: int, protocol: str) -> None:
     from .executor import mpi_rank_and_size
 
     _, size = mpi_rank_and_size()
-    if number_of_groups is not None and int(number_of_groups) != n_states:
+    stated = None if number_of_groups is None else int(number_of_groups)
+    if (stated is not None and stated != n_states) or (size > 1 and size != n_states):
+        # All THREE numbers, always. Naming only the two that happened to differ leaves the reader
+        # to work out which of the remaining pair is the one they should change.
         raise SystemExit(
-            f"-ng {number_of_groups} was requested but this {protocol} ladder has {n_states} "
-            f"states. The ladder's size is set by rest2.number_of_replicas in the configuration; "
-            f"-ng says how many you meant to launch. Change one so they agree -- neither is "
-            f"inferred from the other, because guessing either way would run a different "
-            f"schedule under the same output names.")
-    if size > 1 and size != n_states:
-        raise SystemExit(
-            f"this {protocol} ladder has {n_states} states but was launched in an MPI world of "
-            f"{size}. Replica exchange runs one process per thermodynamic state:\n"
+            f"a {protocol} ladder runs one process per thermodynamic state, and these three "
+            f"numbers must be the same:\n"
+            f"  replicas in the configuration : {n_states}  (rest2.number_of_replicas)\n"
+            f"  -ng on the command line       : "
+            f"{stated if stated is not None else 'not given'}\n"
+            f"  MPI world size                : {size}"
+            f"{' (not launched under MPI)' if size == 1 else ''}\n"
+            f"Launch it as:\n"
             f"  mpirun -n {n_states} md-openmm md-run -ng {n_states} ...\n"
-            f"Refused rather than run, because a world size that is not the state count leaves "
-            f"states either unowned or shared, and the exchange record would describe neither.")
+            f"Refused rather than run: a world size that is not the state count leaves states "
+            f"either unowned or shared, and the exchange record would describe neither.")
 
 
 def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
@@ -220,6 +222,12 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     parser.add_argument("-c", "--continue-from", default=None, metavar="XML",
                         help="equilibrated state every replica starts from")
     parser.add_argument("-log", "--log", default=None, metavar="LOG")
+    parser.add_argument("-o", "--output", default=None, metavar="OUT",
+                        help="the coordinated run's readable .out; distinct from -log, which is "
+                             "this ladder's own machine record")
+    parser.add_argument("--groupfile", default=None, metavar="FILE",
+                        help="an Amber-style group file to use instead of the one derived from "
+                             "the ladder. Rarely needed for a homogeneous ladder")
     parser.add_argument("-odir", "--out-dir", default=".", metavar="DIR",
                         help="where the ladder's outputs are written (default: here)")
     parser.add_argument("-ng", "--number-of-groups", dest="number_of_groups", type=int,
@@ -308,8 +316,8 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
 
     executor_argv = [
         "-ng", str(states),
-        "--groupfile", str(group_file),
-        "-o", str(out / f"{protocol_name}.out"),
+        "--groupfile", str(args.groupfile or group_file),
+        "-o", str(args.output or out / f"{protocol_name}.out"),
         "-x", str(out / f"{protocol_name}.nc"),
         "-r", str(out / "restart.json"),
         "--checkpoint", str(out / f"{protocol_name}_checkpoint.nc"),

@@ -71,23 +71,29 @@ def md_run_parser() -> argparse.ArgumentParser:
                         help="the run input: &cntrl / &remd / &AIS sections (Amber's -i mdin)")
     parser.add_argument("-p", "--topology", required=True, metavar="PDB",
                         help="topology and reference coordinates, built.pdb (Amber's -p prmtop)")
-    parser.add_argument("-s", "--system", required=True, metavar="XML",
-                        help="serialised OpenMM System, built.xml. The parameters live here "
-                             "rather than in the topology, which is the one place this differs "
-                             "from Amber's prmtop")
+    parser.add_argument("-x", "--system", dest="system", required=True, metavar="XML",
+                        help="serialised OpenMM System, built.xml. Amber's prmtop carries the "
+                             "topology AND the parameters; here they are two files, and this is "
+                             "the one that holds the physics")
     parser.add_argument("-c", "--coordinates", default=None, metavar="XML",
                         help="starting state: the final state of the previous stage "
                              "(Amber's -c inpcrd/restrt). Omit for the first stage")
-    parser.add_argument("-x", "--trajectory", default=None, metavar="TRAJ",
-                        help="output trajectory (Amber's -x mdcrd)")
     parser.add_argument("-r", "--restart", default=None, metavar="XML",
                         help="output final state, the handoff to the next stage "
                              "(Amber's -r restrt)")
     parser.add_argument("-o", "--output", default=None, metavar="OUT",
-                        help="readable run output (Amber's -o mdout). For a ladder this is the "
-                             "coordinated run's .out")
+                        help="human-readable run output (Amber's -o mdout). For a stage or an "
+                             "AIS run this names the SAME artefact as -log -- this package "
+                             "writes one readable file that carries the machine record, rather "
+                             "than two that can disagree -- so giving both a different value is "
+                             "refused. For a ladder they are two things: -o is the coordinated "
+                             "run's .out and -log is the ladder's own record")
     parser.add_argument("-log", "--log", default=None, metavar="LOG",
                         help="readable log carrying this run's machine record")
+    parser.add_argument("--trajectory", default=None, metavar="TRAJ",
+                        help="output trajectory. Long-form only: Amber spells this -x, and on "
+                             "this surface -x is the serialised System. Omit it and each stage "
+                             "writes <stage>.dcd into -odir")
     parser.add_argument("-chk", "--checkpoint", default=None, metavar="CHK",
                         help="output checkpoint, written periodically so the run can resume")
     parser.add_argument("-odir", "--out-dir", default=".", metavar="DIR",
@@ -98,6 +104,11 @@ def md_run_parser() -> argparse.ArgumentParser:
                         help="how many replicas this launch coordinates, for REST2/rREST2. "
                              "Checked against the configured state count and the MPI world size; "
                              "it never resizes the ladder")
+    parser.add_argument("-groupfile", "--groupfile", default=None, metavar="FILE",
+                        help="for REST2/rREST2: an Amber-style group file, one group per line. "
+                             "Rarely needed -- an ordinary homogeneous ladder shares one topology "
+                             "and one System, and restating the same two paths N times is a way "
+                             "to get one of them wrong")
     parser.add_argument("-source-traj", "--source-traj", dest="source_traj", default=None,
                         metavar="TRAJ",
                         help="for AIS: the equilibrium trajectory the switching paths are drawn "
@@ -180,12 +191,55 @@ def _forward(args, *, names) -> list[str]:
     return argv
 
 
+def _reconcile_output_and_log(args) -> None:
+    """`-o` and `-log` name one artefact for a stage or an AIS run, and two for a ladder.
+
+    This package writes ONE readable file that carries the machine record; there is no separate
+    energy stream to put in a second one. So `-o` and `-log` are accepted as two spellings of the
+    same output, and two DIFFERENT values are refused rather than one being picked -- a run that
+    wrote its record to a path the caller did not name is a record nobody finds.
+
+    A ladder is the exception and genuinely has two: the coordinated run's `.out`, written by the
+    executor, and the ladder's own record. Both are forwarded there.
+    """
+    if args.output and args.log and args.output != args.log:
+        # Refused only where they would collide; the ladder is dispatched before this matters.
+        args._output_and_log_differ = True
+    else:
+        args._output_and_log_differ = False
+    if args.log is None and args.output is not None:
+        args.log = args.output
+
+
+def _check_launch(args) -> None:
+    """`-ng` describes a launch, so it is checked against the launch, not against the intent."""
+    if args.number_of_groups is None:
+        return
+    from ..remd.executor import mpi_rank_and_size
+
+    _, size = mpi_rank_and_size()
+    if int(args.number_of_groups) > 1 and size == 1:
+        raise SystemExit(
+            f"-ng {args.number_of_groups} was requested but this process was not started by an "
+            f"MPI launcher: the world size is 1.\n"
+            f"  -ng says how many processes coordinate; it does not create them.\n"
+            f"  mpirun -n {args.number_of_groups} md-openmm md-run "
+            f"-ng {args.number_of_groups} ...")
+
+
 def md_run_main(argv: list[str] | None = None) -> int:
     """Parse, resolve, record, then hand the work to the installed runner for that protocol."""
     from ..build.strict import ConfigError
     from .inputs import parse_run_input
 
     args = md_run_parser().parse_args(argv)
+
+    try:
+        _reconcile_output_and_log(args)
+        _check_launch(args)
+    except SystemExit as refusal:
+        print(f"md-run: {refusal}", file=sys.stderr)
+        return 2
 
     try:
         run_input = parse_run_input(args.input, source_trajectory=args.source_traj)
@@ -225,6 +279,12 @@ def _run_stages(args, resolved: dict[str, Any], stage: str | None, config_path: 
     """One named stage, or the whole workflow in order when the input names none."""
     from ..build.md import stage_plan
     from ..md.stage import stage_main
+
+    if getattr(args, "_output_and_log_differ", False):
+        print(f"md-run: -o {args.output} and -log {args.log} name the same artefact for a stage. "
+              f"This package writes one readable file carrying the machine record, not an energy "
+              f"stream and a log that can disagree. Give one of them.", file=sys.stderr)
+        return 2
 
     plan = stage_plan(resolved)
     names = [entry["name"] for entry in plan]
@@ -273,6 +333,10 @@ def _run_ladder(args, resolved: dict[str, Any], protocol: str, config_path: Path
     # the check lives with the ladder rather than being repeated here.
     if args.number_of_groups is not None:
         argv += ["-ng", str(args.number_of_groups)]
+    if args.output:
+        argv += ["-o", str(args.output)]
+    if args.groupfile:
+        argv += ["--groupfile", str(args.groupfile)]
     if args.resume:
         argv.append("--resume")
     return replica_main(ladder, argv)
@@ -281,6 +345,11 @@ def _run_ladder(args, resolved: dict[str, Any], protocol: str, config_path: Path
 def _run_ais(args, resolved: dict[str, Any], config_path: Path) -> int:
     """AIS switching paths, distributed across the MPI world by global path id."""
     from ..ais.run import ais_main
+
+    if getattr(args, "_output_and_log_differ", False):
+        print(f"md-run: -o {args.output} and -log {args.log} name the same artefact for an AIS "
+              f"run. Give one of them.", file=sys.stderr)
+        return 2
 
     run = {
         "protocol": "AIS",

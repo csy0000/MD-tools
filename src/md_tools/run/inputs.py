@@ -53,6 +53,12 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "tau": "dynamics.tau",
         "phase_space_printout": "dynamics.phase_space_printout",
         "random_seed": "dynamics.seed",
+        # A named platform is a machine fact rather than a protocol one, and `--cpu` / `--platform`
+        # on the command line are the usual way to state it. It is readable here because the
+        # resolved model has the field: an input language that cannot express part of the model it
+        # projects onto is one that silently drops it, which is how `dynamics.platform` was lost
+        # between a generated .in file and the resolved.config it was generated from.
+        "platform": "dynamics.platform",
         "minimization_iterations": "stages.minimization_iterations",
         "restrained_nvt_steps": "stages.restrained_nvt_steps",
         "restrained_npt_steps": "stages.restrained_npt_steps",
@@ -84,7 +90,7 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "parameter_update_interval_steps": "ais.parameter_update_interval_steps",
         "source_frame_start": "ais_source.first_frame",
         "source_frame_end": "ais_source.last_frame",
-        "source_frame_stride": "_source_frame_stride",
+        "source_frame_stride": "ais_source.frame_stride",
         "source_frame_selection": "ais_source.selection",
         "allow_repeated_frames": "ais_source.allow_repeated_frames",
         "source_traj": "ais_source.trajectory",
@@ -136,7 +142,6 @@ class RunInput:
     protocol: str
     stage: str | None
     resolved: dict[str, Any]
-    source_frame_stride: int | None
     sections: tuple[str, ...]
 
 
@@ -251,15 +256,11 @@ def parse_run_input(path: str | Path, *, source_trajectory: str | None = None) -
     # Project onto the YAML model, which owns every default and every cross-field rule.
     document: dict[str, Any] = {}
     stage = None
-    stride = None
     for section, entries in values.items():
         for key, value in entries.items():
             target = SECTION_KEYS[section][key]
             if target == "_stage":
                 stage = str(value)
-                continue
-            if target == "_source_frame_stride":
-                stride = int(value)
                 continue
             if "." in target:
                 block, leaf = target.split(".", 1)
@@ -282,4 +283,4 @@ def parse_run_input(path: str | Path, *, source_trajectory: str | None = None) -
         raise ConfigError(str(invalid).replace(str(projected), str(path))) from None
 
     return RunInput(path=path, protocol=resolved["protocol"], stage=stage, resolved=resolved,
-                    source_frame_stride=stride, sections=tuple(seen_sections))
+                    sections=tuple(seen_sections))

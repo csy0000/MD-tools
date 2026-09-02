@@ -197,6 +197,12 @@ MD_SCHEMA = Schema(
                       "equilibration."),
             Field("last_frame", int, default=None, nullable=True, minimum=0,
                   doc="Last eligible frame, INCLUSIVE. Null means the final frame in the file."),
+            Field("frame_stride", int, default=1, minimum=1,
+                  doc="Take every Nth frame of the window as eligible. Consecutive frames of an "
+                      "MD trajectory are correlated, so drawing paths from every frame draws "
+                      "several of them from what is effectively one configuration. A stride is "
+                      "the honest way to say how far apart samples have to be; it does not make "
+                      "them independent, it stops them being obviously dependent."),
             Field("selection", str, default="uniform_random",
                   enum=("uniform_random", "evenly_spaced"),
                   doc="How starting frames are drawn from the eligible window. uniform_random "
@@ -330,6 +336,21 @@ def _check_ais(resolved: dict[str, Any]) -> None:
                 f"comparable with the end of another.\n"
                 f"  Divisors of {switching} near {interval}: "
                 f"{', '.join(str(d) for d in sorted(near)[:12])}.")
+    # An AIS path writes ONE frame per observation, because a frame and its work row are the same
+    # event: `coordinate_frame_index` in observations.csv is the index into the path trajectory,
+    # and a reader takes the k-th frame to be the configuration the k-th row measured. Two
+    # different cadences would silently break that correspondence, so they are required to agree
+    # rather than reconciled.
+    solute = int(reporting["solute_printout"])
+    observation = int(resolved["ais"]["observation_interval_steps"])
+    if solute and solute != observation:
+        raise ConfigError(
+            f"reporting.solute_printout is {solute} but ais.observation_interval_steps is "
+            f"{observation}. For AIS these are one cadence, not two: each observation writes one "
+            f"frame, and its row in observations.csv indexes that frame. Set them to the same "
+            f"value, or leave reporting.solute_printout unstated and it will follow "
+            f"ais.observation_interval_steps.")
+
     if (source["last_frame"] is not None
             and int(source["last_frame"]) < int(source["first_frame"])):
         raise ConfigError(

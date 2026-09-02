@@ -195,3 +195,98 @@ def test_run_sh_drives_the_installed_command_rather_than_a_second_interface(tmp_
     # run time -- the ladder's size is a property of the configuration, not of the machine.
     assert "mpirun -n 4 md-openmm md-run -ng 4 -i REST2.in" in text, text
     assert "/data3" not in text and str(tmp_path) not in text, "a machine path leaked into run.sh"
+
+
+def test_the_input_language_can_express_every_field_of_the_resolved_model():
+    """A key the `.in` language cannot say is a key a generated input silently drops.
+
+    Asserted over the model rather than over one example. `dynamics.platform` was missing, and no
+    round-trip check found it because none of the shipped configurations set it -- the loss only
+    appeared in a CUDA smoke test whose configuration did.
+    """
+    from md_tools.build.md import resolve_md_config
+    from md_tools.run.inputs import SECTION_KEYS
+
+    reachable = {target for keys in SECTION_KEYS.values() for target in keys.values()
+                 if not target.startswith("_")}
+    for protocol in ("cMD", "REST2", "rREST2", "AIS"):
+        resolved = resolve_md_config(REPO / "configs" / "md" / f"{protocol}.config")
+        for name, block in resolved.items():
+            if isinstance(block, dict):
+                unreachable = [f"{name}.{leaf}" for leaf in block
+                               if f"{name}.{leaf}" not in reachable]
+            else:
+                unreachable = [] if name in reachable else [name]
+            assert not unreachable, f"{protocol}: {unreachable} cannot be written in a .in file"
+
+
+def test_a_platform_stated_in_the_configuration_survives_the_round_trip(tmp_path):
+    """The exact loss above, at the level a person would hit it."""
+    out = tmp_path / "md_script"
+    config = tmp_path / "cuda.config"
+    config.write_text("protocol: cMD\ndynamics:\n  platform: CUDA\n  seed: 7\n", encoding="utf-8")
+    subprocess.run(CLI + ["build-md", "-odir", str(out), "--config", str(config)],
+                   capture_output=True, text=True, timeout=600, check=True)
+    resolved = yaml.safe_load((out / "resolved.config").read_text(encoding="utf-8"))
+    assert resolved["dynamics"]["platform"] == "CUDA"
+    for path in out.glob("*.in"):
+        assert parse_run_input(path).resolved == resolved, path.name
+
+
+SPEC_EXAMPLE = """\
+&cntrl
+  protocol = AIS,
+  solvent  = explicit,
+/
+&AIS
+  tau_start                  = 0.5,
+  tau_end                    = 0.0,
+  number_of_paths            = 100,
+  switching_steps            = 250,
+  observation_interval_steps = 10,
+  source_frame_start         = 0,
+  source_frame_stride        = 10,
+  source_frame_selection     = uniform_random,
+  timestep_fs                = auto,
+  temperature_K              = 300.0,
+  friction_per_ps            = 1.0,
+  solute_printout            = 10,
+  system_printout            = 50,
+  checkpoint_printout        = 50,
+  random_seed                = 20260902,
+  source_traj                = ../cMD_tau0p5/tau_0p5.nc,
+/
+"""
+
+
+def test_the_specified_ais_example_parses_and_every_key_takes_effect():
+    """The instruction's own AIS example, and each key traced to the field it sets.
+
+    `source_frame_stride` is asserted because it was originally parsed into a variable nothing
+    read -- a key that is accepted and then discarded is exactly the failure the strict parser
+    exists to prevent, and it is invisible unless something checks where the value went.
+    """
+    parsed = parse_run_input(_written(SPEC_EXAMPLE))
+    assert parsed.protocol == "AIS"
+    assert parsed.resolved["ais"] == {
+        "number_of_paths": 100, "tau_start": 0.5, "tau_end": 0.0,
+        "switching_steps": 250, "observation_interval_steps": 10,
+        "parameter_update_interval_steps": 1}
+    assert parsed.resolved["ais_source"]["frame_stride"] == 10
+    assert parsed.resolved["ais_source"]["trajectory"] == "../cMD_tau0p5/tau_0p5.nc"
+    assert parsed.resolved["dynamics"]["seed"] == 20260902
+    assert parsed.resolved["reporting"] == {"solute_printout": 10, "system_printout": 50,
+                                            "checkpoint_printout": 50}
+
+
+def test_the_selection_spelling_is_named_when_a_near_miss_is_written():
+    """`random` is refused, and the refusal says what to write. One spelling per concept."""
+    with pytest.raises(ConfigError, match="uniform_random"):
+        parse_run_input(_written(SPEC_EXAMPLE.replace("= uniform_random,", "= random,")))
+
+
+def test_an_ais_trajectory_cadence_that_disagrees_with_the_observations_is_refused():
+    """One frame per observation. Two cadences would break `coordinate_frame_index`."""
+    with pytest.raises(ConfigError, match="one cadence"):
+        parse_run_input(_written(SPEC_EXAMPLE.replace("solute_printout            = 10,",
+                                                      "solute_printout            = 50,")))

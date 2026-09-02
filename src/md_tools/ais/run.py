@@ -53,12 +53,24 @@ OBSERVATION_COLUMNS = (
 COMPLETION_NAME = "completed.json"
 OBSERVATIONS_CSV = "observations.csv"
 
-#: The global work table rank 0 writes once every path this run owns has finished. One row per
-#: path, in GLOBAL path order, whatever the worker count was -- see `paths_for_rank`.
+#: The global work table rank 0 writes once every path this run owns has finished.
+#:
+#: One row per (path, switching step), keyed by exactly that pair and sorted by it, so the table
+#: is the same file whatever the worker count was and whichever rank produced which row -- see
+#: `paths_for_rank`. It is assembled from the per-path `observations.csv` files rather than
+#: gathered over MPI: a rank that died leaves its finished paths on disk, so the table describes
+#: exactly what was measured, and a resumed run rebuilds it from the same records.
 WORK_TABLE = "AIS_work.csv"
-WORK_COLUMNS = ("path_index", "source_frame_index", "observations",
-                "total_work_kj_mol", "total_reduced_work", "trajectory",
-                "integrator_seed", "velocity_seed", "mpi_rank")
+WORK_COLUMNS = ("path_id", "source_frame", "switch_step", "tau_before", "tau_after",
+                "delta_work_kj_mol", "total_work_kj_mol", "total_reduced_work",
+                "trajectory", "mpi_rank")
+
+#: One row per path: the summary a reader wants when the question is about the work DISTRIBUTION
+#: rather than about any individual path's trajectory through it.
+WORK_SUMMARY = "AIS_paths.csv"
+SUMMARY_COLUMNS = ("path_index", "source_frame_index", "observations",
+                   "total_work_kj_mol", "total_reduced_work", "trajectory",
+                   "integrator_seed", "velocity_seed", "mpi_rank")
 
 
 def ais_parser(description: str) -> argparse.ArgumentParser:
@@ -143,26 +155,77 @@ def choose_frames(*, eligible: list[int], count: int, selection: str, allow_repe
     return sorted(generator.sample(eligible, count))
 
 
-def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
-    """Assemble the global work table from the per-path completion records.
+def _source_atom_count(path: Path) -> int | None:
+    """How many atoms the trajectory FILE says it holds, or None when its format does not say.
 
-    Read from the files each path wrote rather than gathered over MPI: a rank that died leaves its
-    finished paths on disk, so the table still describes exactly what completed, and a resumed run
-    rebuilds it from the same records. A path with no completion record is simply absent -- the
-    table never invents a row for work that was not measured.
+    Deliberately reads the file's own header rather than trusting the topology it will be paired
+    with: the whole point is to catch the case where those two disagree.
     """
-    rows = []
-    for index in range(len(chosen)):
-        marker = out / f"path_{index:04d}" / COMPLETION_NAME
+    import mdtraj
+
+    try:
+        with mdtraj.open(str(path)) as handle:
+            first = handle.read(1)
+    except Exception:                                  # noqa: BLE001 - format cannot say; not fatal
+        return None
+    xyz = first[0] if isinstance(first, tuple) else first
+    try:
+        return int(xyz.shape[1])
+    except (AttributeError, IndexError):
+        return None
+
+
+def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
+    """Assemble the global work table and the per-path summary from what the paths wrote.
+
+    Read from files rather than gathered over MPI, so an interrupted campaign still produces a
+    table that describes exactly the paths that finished. A path with no completion record is
+    absent: the table never invents a row for work that was not measured.
+    """
+    rows: list[dict[str, Any]] = []
+    summary: list[dict[str, Any]] = []
+    for path_id in range(len(chosen)):
+        directory = out / f"path_{path_id:04d}"
+        marker = directory / COMPLETION_NAME
         if not marker.is_file():
             continue
         record = json.loads(marker.read_text(encoding="utf-8"))
-        rows.append({name: record.get(name) for name in WORK_COLUMNS})
+        summary.append({name: record.get(name) for name in SUMMARY_COLUMNS})
+
+        observations = directory / OBSERVATIONS_CSV
+        if not observations.is_file():
+            continue
+        with observations.open(newline="") as handle:
+            entries = list(csv.DictReader(handle))
+        previous_tau = None
+        for entry in entries:
+            rows.append({
+                "path_id": path_id,
+                "source_frame": entry["source_frame_index"],
+                "switch_step": int(entry["protocol_step"]),
+                # `tau_before` on observation 0 is its own tau: the path has not moved yet, and
+                # writing a blank there would make the first row the only one a reader has to
+                # treat specially.
+                "tau_before": previous_tau if previous_tau is not None else entry["tau"],
+                "tau_after": entry["tau"],
+                "delta_work_kj_mol": entry["incremental_work_kj_mol"],
+                "total_work_kj_mol": entry["cumulative_work_kj_mol"],
+                "total_reduced_work": entry["cumulative_reduced_work"],
+                "trajectory": record.get("trajectory"),
+                "mpi_rank": record.get("mpi_rank"),
+            })
+            previous_tau = entry["tau"]
+
+    rows.sort(key=lambda row: (row["path_id"], row["switch_step"]))
     with (out / WORK_TABLE).open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(WORK_COLUMNS))
         writer.writeheader()
         writer.writerows(rows)
-    return {"rows": len(rows), "paths": len(chosen)}
+    with (out / WORK_SUMMARY).open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(SUMMARY_COLUMNS))
+        writer.writeheader()
+        writer.writerows(summary)
+    return {"rows": len(rows), "paths": len(summary), "requested": len(chosen)}
 
 
 def write_selected_frames(path: Path, chosen: list[int], *, seed: int) -> None:
@@ -215,9 +278,12 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             print(f"AIS: {what} {path} does not exist", file=sys.stderr)
             return 2
     if not source_path.is_file():
-        print(f"AIS: the source trajectory {source_path} does not exist. AIS consumes an "
-              f"equilibrium ensemble you have already produced; it does not generate one.",
-              file=sys.stderr)
+        # `is_file`, deliberately, not `exists`. A path written with a trailing slash names a
+        # DIRECTORY, and `exists` would accept `tau_0p5.nc/` and fail later, obscurely, inside
+        # mdtraj rather than here with the path in the message.
+        what = ("is a directory, not a file" if source_path.is_dir() else "does not exist")
+        print(f"AIS: -source-traj {source_path} {what}. AIS consumes an equilibrium ensemble you "
+              f"have already produced; it does not generate one.", file=sys.stderr)
         return 2
 
     log = LogWriter(log_path, record_type="md-ais")
@@ -287,13 +353,39 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         if last >= n_frames:
             raise SystemExit(f"ais_source.last_frame = {last} but {source_path.name} holds "
                              f"{n_frames} frame(s) (0..{n_frames - 1})")
-        eligible = list(range(first, last + 1))
+        stride = int(source_cfg["frame_stride"])
+        eligible = list(range(first, last + 1, stride))
+
+        # The source must describe the SAME particles as the System the paths run in. Read from
+        # the FILE's own header rather than through `top`, which is derived from -p and would
+        # therefore agree with itself. mdtraj would fail on a mismatch too, but obscurely and
+        # several frames in; this fails here, with both counts and both filenames.
+        source_atoms = _source_atom_count(source_path)
+        if source_atoms is not None and source_atoms != pdb.topology.getNumAtoms():
+            raise SystemExit(
+                f"-source-traj {source_path.name} holds {source_atoms} atom(s) but "
+                f"{topology_path.name} and {system_path.name} describe "
+                f"{pdb.topology.getNumAtoms()}. The source ensemble must be of the same system "
+                f"the paths are run in; a trajectory of a different one reads without error and "
+                f"produces work values that mean nothing.")
 
         log.heading("Source ensemble")
         log.field("trajectory", source_path)
+        log.field("atoms", f"{source_atoms}, matching {topology_path.name}"
+                  if source_atoms is not None else "not stated by the file format")
         log.field("frames", f"{n_frames} total, {len(eligible)} eligible "
-                            f"(frames {first}..{last} inclusive)")
+                            f"(frames {first}..{last} inclusive"
+                            + (f", every {stride}" if stride > 1 else "") + ")")
         log.field("selection", source_cfg["selection"])
+        # Stated, not verified. Nothing in a coordinate trajectory records the Hamiltonian it was
+        # sampled under, so this is an assertion the configuration makes and the log repeats --
+        # written down precisely so that a reader can check it against the run that produced the
+        # file rather than assume it was checked here.
+        log.field("asserted ensemble", f"tau = {ais['tau_start']} (ASSERTED by ais.tau_start, "
+                                       f"not verifiable from the trajectory itself)")
+        log.field("velocities", "not read from the source; each path draws fresh "
+                                f"Maxwell-Boltzmann momenta at {dynamics['temperature_K']} K "
+                                f"with its own recorded seed")
 
         chosen = choose_frames(eligible=eligible, count=int(ais["number_of_paths"]),
                                selection=source_cfg["selection"],
@@ -304,8 +396,14 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
 
         log.update(
             schedule=schedule,
-            source={"trajectory": source_path.name, "frames_total": n_frames,
+            source={"trajectory": source_path.name,
+                    "atoms": None if source_atoms is None else int(source_atoms),
+                    "tau_asserted": float(ais["tau_start"]),
+                    "tau_verified_from_file": False,
+                    "velocity_policy": "resampled_maxwell_boltzmann",
+                    "frames_total": n_frames,
                     "first_frame": first, "last_frame": last,
+                    "frame_stride": stride,
                     "selection": source_cfg["selection"],
                     "allow_repeated_frames": bool(source_cfg["allow_repeated_frames"]),
                     "chosen_frames": chosen},
@@ -463,9 +561,15 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                 if not implicit:
                     vectors = state.getPeriodicBoxVectors(asNumpy=True).value_in_unit(
                         unit.nanometer)
-                    a, b, c, alpha, beta, gamma = mdtraj.utils.box_vectors_to_lengths_and_angles(
+                    # NOT unpacked as `a, b, c, alpha, beta, gamma`. `beta` is the reciprocal
+                    # temperature in this function, and binding the box's beta ANGLE to that name
+                    # here made it local to this closure: `beta * cumulative` below then wrote the
+                    # angle times the work into `cumulative_reduced_work` under explicit solvent,
+                    # and raised UnboundLocalError under implicit, where the branch never ran.
+                    box = mdtraj.utils.box_vectors_to_lengths_and_angles(
                         vectors[0], vectors[1], vectors[2])
-                    lengths, angles = [a * 10.0, b * 10.0, c * 10.0], [alpha, beta, gamma]
+                    lengths = [box[0] * 10.0, box[1] * 10.0, box[2] * 10.0]
+                    angles = [box[3], box[4], box[5]]
                 netcdf.write(
                     state.getPositions(asNumpy=True).value_in_unit(unit.angstrom),
                     time=observation["switching_time_ps"],
@@ -553,8 +657,10 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                                                         relative_to=out)}
         if rank == 0 and not args.paths:
             table = write_work_table(out, chosen)
-            log.field("work table", f"{table['rows']} of {len(chosen)} path(s) recorded")
+            log.field("work table", f"{table['rows']} row(s) from {table['paths']} of "
+                                    f"{table['requested']} path(s)")
             outputs["work_table"] = file_facts(out / WORK_TABLE, relative_to=out)
+            outputs["work_summary"] = file_facts(out / WORK_SUMMARY, relative_to=out)
 
         log.heading("Outputs")
         log.field("paths completed", f"{len(completed)} of {len(chosen)}")
