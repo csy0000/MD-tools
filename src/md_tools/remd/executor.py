@@ -122,6 +122,24 @@ def mpi_rank_and_size(environment=None):
     return rank, size
 
 
+def barrier(size=None):
+    """Wait for every worker, when there is more than one. No mpi4py import in a serial run.
+
+    `size` may be passed by a caller that already read it; otherwise it is read from the
+    environment. A launcher that provides no mpi4py simply does not wait -- which is correct,
+    because without MPI there is nothing to wait for.
+    """
+    if size is None:
+        _, size = mpi_rank_and_size()
+    if size <= 1:
+        return
+    try:
+        from mpi4py import MPI
+    except ImportError:                               # launched by srun without mpi4py
+        return
+    MPI.COMM_WORLD.barrier()
+
+
 def report_path_for_rank(output, rank):
     """Rank 0 writes the run's `.out`; every other rank writes its own beside it.
 

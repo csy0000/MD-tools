@@ -409,6 +409,22 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
     """
     dyn, stages, rep = resolved["dynamics"], resolved["stages"], resolved["reporting"]
     implicit = resolved["solvent"] == "implicit"
+
+    # TWO reasons a workflow has no pressure-coupled stage, and they are different facts:
+    #
+    #   implicit solvent -- there is no box, so there is no volume to control;
+    #   a scaled run (tau > 0) -- it samples the fixed-volume ensemble of the ladder rung it sits
+    #     at, and a barostat would sample a different distribution.
+    #
+    # The second used to be applied to the PRODUCTION stage only. The equilibration stages before
+    # it stayed NPT, and `stage_main` -- which enforces the same rule -- refused them at run time,
+    # four stages and several minutes of GPU in. A rule that build-md knows at generation time
+    # must be applied at generation time.
+    scaled = float(dyn["tau"]) > 0.0
+    fixed_volume = implicit or scaled
+    why = ("implicit solvent has no box, so there is no volume to equilibrate" if implicit else
+           f"this run is scaled (tau = {dyn['tau']}) and samples the fixed-volume ensemble of "
+           f"the ladder rung it sits at")
     common = {
         "tau": dyn["tau"],
         # Deliberately NOT in `common`: a reservoir must be a Boltzmann sample of the ensemble the
@@ -443,7 +459,7 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
                  "state_interval_steps": rep["system_printout"],
                  "checkpoint_interval_steps": rep["checkpoint_printout"],
                  "description": "Restrained NVT: settle the solvent around a held solute."})
-    if implicit:
+    if fixed_volume:
         plan.append({**common, "name": "eq_nvt_posres_2", "ensemble": "NVT",
                      "steps": stages["restrained_npt_steps"],
                      "restraint_kcal_per_mol_A2": dyn["restraint_kcal_per_mol_A2"],
@@ -451,8 +467,7 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
                      "state_interval_steps": rep["system_printout"],
                      "checkpoint_interval_steps": rep["checkpoint_printout"],
                      "description": "Second restrained NVT stage. This REPLACES the restrained "
-                                    "NPT stage of an explicit-solvent run: implicit solvent has "
-                                    "no box, so there is no volume to equilibrate."})
+                                    f"NPT stage of an unscaled explicit-solvent run: {why}."})
         plan.append({**common, "name": "eq_nvt_free", "ensemble": "NVT",
                      "steps": stages["unrestrained_npt_steps"],
                      "restraint_kcal_per_mol_A2": 0.0,
@@ -460,7 +475,7 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
                      "state_interval_steps": rep["system_printout"],
                      "checkpoint_interval_steps": rep["checkpoint_printout"],
                      "description": "Unrestrained NVT. This REPLACES the unrestrained NPT stage "
-                                    "of an explicit-solvent run."})
+                                    f"of an unscaled explicit-solvent run: {why}."})
     else:
         plan.append({**common, "name": "eq_npt_posres", "ensemble": "NPT",
                      "steps": stages["restrained_npt_steps"],
@@ -478,11 +493,8 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
                      "description": "Unrestrained NPT, the last stage before production."})
 
     if resolved["protocol"] == "cMD":
-        # A scaled run must sample the fixed-volume ensemble the ladder's rung samples, so it is
-        # NVT whatever the solvent. This is a consequence of what tau means, not a preference.
-        scaled = float(dyn["tau"]) > 0.0
         plan.append({**common, "name": "cMD",
-                     "ensemble": "NVT" if (implicit or scaled) else "NPT",
+                     "ensemble": "NVT" if fixed_volume else "NPT",
                      "steps": stages["production_steps"],
                      "restraint_kcal_per_mol_A2": 0.0,
                      "phase_space_interval_steps": dyn["phase_space_printout"],

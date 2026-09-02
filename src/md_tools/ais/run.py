@@ -143,17 +143,6 @@ def choose_frames(*, eligible: list[int], count: int, selection: str, allow_repe
     return sorted(generator.sample(eligible, count))
 
 
-def barrier(size: int) -> None:
-    """Wait for every worker, when there is more than one. No mpi4py import in a serial run."""
-    if size <= 1:
-        return
-    try:
-        from mpi4py import MPI
-    except ImportError:                                   # launched by srun without mpi4py
-        return
-    MPI.COMM_WORLD.barrier()
-
-
 def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
     """Assemble the global work table from the per-path completion records.
 
@@ -203,7 +192,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     from ..rest2 import TauSwitcher
     from ..md.stage import solute_atom_indices
 
-    from ..remd.executor import mpi_rank_and_size
+    from ..remd.executor import barrier, mpi_rank_and_size
     from . import path_trajectory_name, paths_for_rank
 
     ais, source_cfg, dynamics = run["ais"], run["ais_source"], run["dynamics"]
@@ -418,8 +407,22 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                 if offset * 50 <= frame < offset * 50 + chunk.n_frames:
                     local = frame - offset * 50
                     positions = chunk.xyz[local] * unit.nanometer
-                    if not implicit and chunk.unitcell_vectors is not None:
-                        boxes = chunk.unitcell_vectors[local] * unit.nanometer
+                    if not implicit and chunk.unitcell_lengths is not None:
+                        # Rebuilt from lengths and angles rather than handed over as the vectors
+                        # the file happens to store. OpenMM requires REDUCED form, and a
+                        # truncated octahedron written by any of the usual tools is not in it --
+                        # `setPeriodicBoxVectors` then refuses with "Periodic box vectors must be
+                        # in reduced form" and every path of the run dies at its first frame.
+                        # `computePeriodicBoxVectors` is OpenMM's own reduction, so the box the
+                        # path keeps is the source frame's box, expressed the way OpenMM needs it.
+                        import numpy
+                        from openmm.app.internal.unitcell import computePeriodicBoxVectors
+
+                        lengths = chunk.unitcell_lengths[local]
+                        angles = numpy.radians(chunk.unitcell_angles[local])
+                        boxes = computePeriodicBoxVectors(
+                            float(lengths[0]), float(lengths[1]), float(lengths[2]),
+                            float(angles[0]), float(angles[1]), float(angles[2]))
                     break
             if positions is None:
                 raise SystemExit(f"could not read frame {frame} from {source_path}")

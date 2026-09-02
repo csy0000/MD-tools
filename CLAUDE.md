@@ -4,15 +4,26 @@ Read this before acting. It is short on purpose.
 
 ## The package
 
-One installed executable, `md-openmm`. Exactly three public work commands:
+One installed executable, `md-openmm`. Exactly four public work commands:
 
 ```text
 md-openmm build-top      a structure       -> built.xml + built.pdb + built.log
-md-openmm build-md       a protocol config -> readable run scripts in ./md_script/
+md-openmm build-md       a protocol config -> run scripts, .in files and run.sh in ./md_script/
+md-openmm md-run         an Amber-like .in -> a stage, a ladder, or AIS switching paths
 md-openmm data-register  a finished tree   -> a verified dataset under $MD_DATA
 ```
 
-AIS is `protocol: AIS` in a `build-md` configuration. **Do not add a fourth command.**
+AIS is `protocol: AIS` in a `build-md` configuration and `protocol = AIS` in an `.in` file. **Do
+not add a fifth command**, and do not add a second executable: `md-run` is a SUBCOMMAND.
+
+`md-run` is a surface, not an implementation. It parses the Amber-like input, resolves it through
+`md_tools.build.md`, writes the resulting `resolved.config` into `-odir` with the input's sha256,
+and hands the work to the same function a generated script calls — `stage_main`, `replica_main`,
+`ais_main`. If you find run logic in `md_tools.run`, it is in the wrong package.
+
+**`resolved.config` is authoritative**, and the `.in` file is the input it was resolved from.
+Every `.in` that `build-md` writes resolves back to exactly the `resolved.config` beside it; that
+round-trip is a test, not a convention.
 
 These do not exist and must never be suggested: `sys-config`, `sys-gen`, `md-gen`, `setup`,
 `show-default`, `openmm-md`, `md-template`, `md-data-finish`, `md-data-register`.
@@ -21,7 +32,7 @@ They may still be NAMED, in exactly two places: a test that asserts one is refus
 release or migration history that says it is retired. Both are how the guarantee is kept. Anywhere
 else — a docstring, a comment, a module name, an example — naming one as if it works is stale text,
 not an interface. An internal module may not be named after a retired executable either: the
-executor lives at `templates/replica_executor.py` because `openmm_md.py` read as the command.
+executor lives at `md_tools/remd/executor.py` because `openmm_md.py` read as the command.
 
 ## Configuration
 
@@ -43,7 +54,8 @@ md_tools.md      PositionalRestraint, ReportingConfig, run_stage,
 md_tools.rest2   REST2Scaler, ScalingSelection
 md_tools.remd    REMDRunner, NeighborExchangeRule, run_remd, run_generated_remd
 md_tools.remd.reservoir   ReservoirRefreshRule
-md_tools.ais     run_generated_ais
+md_tools.ais     run_generated_ais, path_trajectory_name, paths_for_rank
+md_tools.run     parse_run_input, md_run_main
 ```
 
 **Generated Python files are entry points, not copies of the implementation.** A stage script is:
@@ -104,6 +116,17 @@ Do not change these without a failing test that demonstrates a defect.
 * **HMR defaults off.** A 4 fs timestep is refused unless the masses serialised in the System prove
   repartitioning — a fact at run time, not a claim in a configuration.
 * **Completion is read from a machine record**, never from prose in a log.
+* **CUDA is the default and it is mandatory.** There is no automatic fall back to CPU, OpenCL or
+  Reference: a run that quietly moved to the CPU finishes, writes a trajectory and reports success
+  two orders of magnitude later, and is found weeks afterwards if at all. `--cpu` is the only way
+  to ask for a CPU run, and the record says `requested_policy: explicit-cpu` when you did. One
+  resolver — `md_tools.openmm.platform_policy` — serves stages, ladders and AIS alike.
+* **AIS path identity does not depend on the worker count.** `paths_for_rank(rank, size, total)`
+  is a pure function, and global path *n* always writes `AIS_traj000n.nc`. A campaign resumed on a
+  different number of GPUs must land on the same files.
+* **A scaled run (`dynamics.tau > 0`) is fixed-volume throughout**, equilibration included, and
+  its pressure-coupled stages are RENAMED exactly as the implicit ones are — never NPT with the
+  pressure ignored.
 
 ## Test lanes
 

@@ -276,26 +276,35 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     taus = tau_ladder(states, float(ladder["tau_max"]))
     exchange_ps = int(ladder["exchange_interval_steps"]) * timestep / 1000.0
 
+    # Prepared ONCE, by rank 0, with every other rank waiting behind a barrier before it reads
+    # any of it. These three files are inputs to the executor, and N ranks writing them
+    # concurrently is not a slow start -- it is a rank reading a half-written protocol module, or
+    # a group file that lost lines to an interleaved write.
+    from .executor import barrier, mpi_rank_and_size
+
+    rank, size = mpi_rank_and_size()
+
     solute_yaml = out / "solute.yaml"
-    if not solute_yaml.is_file():
-        write_solute_document(Path(args.topology), Path(args.system), solute_yaml,
-                              route=args.route)
-
     protocol_file = out / "_protocol.py"
-    protocol_file.write_text(protocol_file_text(ladder), encoding="utf-8")
-
     group_file = out / f"{protocol_name}.group"
-    lines = [f"# {protocol_name}: {states} states, tau 0.0 to {ladder['tau_max']}.",
-             "# One group per line, inputs only. Run-level outputs go on the executor call,",
-             "# because they describe the coordinated run rather than one replica.",
-             ""]
-    for index in range(states):
-        parts = [f"-i {protocol_file.name}", f"-p {args.topology}", f"-s {args.system}"]
-        if args.continue_from:
-            parts.append(f"-c {args.continue_from}")
-        parts += [f"--solute {solute_yaml.name}", f"--group-index {index}"]
-        lines.append(" ".join(parts))
-    group_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    if rank == 0:
+        if not solute_yaml.is_file():
+            write_solute_document(Path(args.topology), Path(args.system), solute_yaml,
+                                  route=args.route)
+        protocol_file.write_text(protocol_file_text(ladder), encoding="utf-8")
+        lines = [f"# {protocol_name}: {states} states, tau 0.0 to {ladder['tau_max']}.",
+                 "# One group per line, inputs only. Run-level outputs go on the executor call,",
+                 "# because they describe the coordinated run rather than one replica.",
+                 ""]
+        for index in range(states):
+            parts = [f"-i {protocol_file.name}", f"-p {args.topology}", f"-s {args.system}"]
+            if args.continue_from:
+                parts.append(f"-c {args.continue_from}")
+            parts += [f"--solute {solute_yaml.name}", f"--group-index {index}"]
+            lines.append(" ".join(parts))
+        group_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    barrier(size)
 
     executor_argv = [
         "-ng", str(states),
@@ -323,7 +332,14 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     from ..build.record import LogWriter, file_facts
     from ..remd import executor as replica_executor
 
-    log_path = Path(args.log) if args.log else out / f"{protocol_name}.log"
+    # Every rank keeps its own log rather than racing for one path. A rank that failed to bind
+    # its device is exactly what a multi-GPU ladder needs to be able to show, so the other ranks'
+    # logs are kept beside rank 0's rather than discarded -- the same rule the executor already
+    # applies to `-o`, applied through the same function so the two cannot drift.
+    from .executor import report_path_for_rank
+
+    log_path = Path(report_path_for_rank(
+        str(Path(args.log) if args.log else out / f"{protocol_name}.log"), rank))
     log = LogWriter(log_path, record_type=f"md-replica:{protocol_name}", echo=False)
     log(f"md-openmm {protocol_name}")
     log("=" * 68)

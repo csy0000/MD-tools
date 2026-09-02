@@ -204,11 +204,17 @@ def md_run_main(argv: list[str] | None = None) -> int:
     resolved = run_input.resolved
     protocol = resolved["protocol"]
 
+    # `stage` decides, not `protocol`. A REST2 workflow's minimisation and equilibration are
+    # ordinary stages of that workflow: an input that names one asks for that stage, and only an
+    # input that names none asks for the ladder itself. Dispatching on the protocol alone sent
+    # `min.in` to the replica executor, which had no coordinates and refused.
+    if run_input.stage is not None:
+        return _run_stages(args, resolved, run_input.stage, config_path)
     if protocol in ("REST2", "rREST2"):
         return _run_ladder(args, resolved, protocol, config_path)
     if protocol == "AIS":
         return _run_ais(args, resolved, config_path)
-    return _run_stages(args, resolved, run_input.stage, config_path)
+    return _run_stages(args, resolved, None, config_path)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -284,6 +290,22 @@ def _run_ais(args, resolved: dict[str, Any], config_path: Path) -> int:
         "dynamics": dict(resolved["dynamics"]),
         "resolved_config": str(config_path),
     }
+    # `-ng` means the same thing here as for a ladder: how many workers this launch coordinates.
+    # It is checked rather than ignored -- a flag that silently does nothing is worse than one
+    # that is refused, because the person who wrote it believes it took effect.
+    if args.number_of_groups is not None:
+        from ..remd.executor import mpi_rank_and_size
+
+        _, size = mpi_rank_and_size()
+        if int(args.number_of_groups) != size:
+            print(f"md-run: -ng {args.number_of_groups} was requested but this launch has "
+                  f"{size} worker(s). For AIS, -ng is how many processes share the paths:\n"
+                  f"  mpirun -n {args.number_of_groups} md-openmm md-run "
+                  f"-ng {args.number_of_groups} ...\n"
+                  f"Which global path owns which AIS_trajNNNN.nc does not depend on this number; "
+                  f"how many run at once does.", file=sys.stderr)
+            return 2
+
     argv = _forward(args, names=("log", "out_dir", "device", "platform"))
     source = args.source_traj or resolved["ais_source"]["trajectory"]
     if source:

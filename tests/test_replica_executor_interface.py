@@ -1,6 +1,6 @@
 """The replica executor's file interface: flags, precedence, refusals, and what it must never do.
 
-This is `templates/replica_executor.py`, reached as a FUNCTION from `md_tools.remd.generated`.
+This is `md_tools/remd/executor.py`, reached as a FUNCTION from `md_tools.remd.generated`.
 It was once installed as a separate `openmm-md` executable and the file was named after it; both
 are retired, and the package installs exactly one executable, `md-openmm`.
 
