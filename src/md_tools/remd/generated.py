@@ -64,6 +64,24 @@ def write_solute_document(topology_path: Path, system_path: Path, out: Path, *,
 
     topology = PDBFile(str(topology_path)).topology
     system = XmlSerializer.deserialize(Path(system_path).read_text(encoding="utf-8"))
+    document = solute_document(topology, system, route=route)
+    write_yaml(out, document)
+    return document
+
+
+def solute_document(topology, system, *, route: str = "peptide") -> dict[str, Any]:
+    """The same derivation, WITHOUT writing anything.
+
+    Split out because it carries a refusal -- an amide candidate that is neither ordinary nor
+    proline-like -- and that refusal used to fire from inside the writer, after `-odir`,
+    `solute.yaml`'s own directory and both logs already existed. The preflight calls this; the
+    writer above calls it too, so there is one derivation and the file always holds what was
+    validated.
+    """
+    from ..openmm.system import classify_omega_bonds
+    from ..openmm.builders import _solute_document
+    from ..md.stage import solute_atom_indices
+
     indices = solute_atom_indices(topology)
     omega = classify_omega_bonds(topology, indices, route=route, ligand_sdf=None)
     document = _solute_document(topology, indices, omega, route=route, system=system)
@@ -73,7 +91,6 @@ def write_solute_document(topology_path: Path, system_path: Path, out: Path, *,
             f"{len(ambiguous)} amide candidate(s) could not be classified as ordinary or "
             f"proline-like. Guessing either way silently changes the Hamiltonian, so the ladder "
             f"is refused rather than run. Candidates: {ambiguous[:3]}")
-    write_yaml(out, document)
     return document
 
 
@@ -219,6 +236,16 @@ def replica_parser(description: str = "one coordinated replica-exchange ladder")
                              "machine.openmm.platform for this invocation")
     parser.add_argument("--route", default="peptide", choices=("peptide", "ligand"),
                         help="how the omega classifier reads the solute")
+    parser.add_argument("--device", default=None, metavar="N",
+                        help="CUDA device index for THIS rank. An execution placement, never a "
+                             "platform choice. Under MPI the device is normally chosen by "
+                             "machine.openmm.device_policy; this overrides it for one process")
+    parser.add_argument("-chk", "--checkpoint", default=None, metavar="NC",
+                        help="the ladder's checkpoint. Defaults to "
+                             "<protocol>_checkpoint.nc in -odir")
+    parser.add_argument("--check", action="store_true",
+                        help="validate the launch, the inputs, the Force layout and the platform, "
+                             "then exit. READ-ONLY: it creates nothing, not even -odir")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("--extend", type=int, default=0, metavar="N")
@@ -257,14 +284,36 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
             topology=args.topology, system=args.system, replicas=int(ladder["n_states"]),
             coordinates=args.continue_from, groupfile=args.groupfile,
             trajectory=args.trajectory, restart=args.restart,
+            checkpoint=args.checkpoint,
             output=args.output or out / f"{protocol_name}.out",
             log=args.log or out / f"{protocol_name}.log",
             number_of_groups=args.number_of_groups, cpu=bool(args.cpu),
-            protocol=protocol_name)
+            device=int(args.device) if args.device is not None else None,
+            protocol=protocol_name,
+            # The timestep against the masses in THIS System, and the Force classification and
+            # scaled-System construction, all before `solute.yaml`, `_protocol.py` or the group
+            # file exists. An unclassifiable force used to surface with three files on disk.
+            timestep_fs=ladder["dynamics"]["timestep_fs"],
+            route=args.route,
+            tau=float(ladder["tau_max"]))
     except PreflightError as refusal:
         print(f"{protocol_name}: {refusal}", file=sys.stderr)
         return 2
     coordination = checked.coordination
+
+    if args.check:
+        # READ-ONLY, returning before `-odir` exists. `--check` was not even accepted here: it
+        # was forwarded by `md-run` and died in argparse, so `md-openmm md-run --check` on a
+        # REST2 input failed with "unrecognized arguments" rather than checking anything.
+        from ..run.preflight import report_check
+
+        return report_check(
+            checked, what=protocol_name,
+            extra=[("states", checked.replicas),
+                   ("tau max", ladder["tau_max"]),
+                   ("exchanges", ladder["number_of_exchanges"]),
+                   ("forces", ", ".join(f"{n}" for _i, n in
+                                        (checked.force_audit or {}).get("scaled", [])) or "-")])
 
     out.mkdir(parents=True, exist_ok=True)
 
@@ -273,17 +322,11 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
         # person chose the CPU rather than that CUDA was quietly unavailable.
         ladder = dict(ladder, dynamics=dict(ladder["dynamics"], platform="CPU"))
 
-    # Resolve the timestep against the masses in the System before anything downstream -- the
-    # protocol file, the exchange interval in picoseconds and every derived duration -- is
-    # written. Under `auto` this is where 2 fs or 4 fs is decided, from the System rather than
-    # from a configuration's claim, and the ladder carries a number from here on.
-    from openmm import XmlSerializer as _XmlSerializer
-    from openmm.app import PDBFile as _PDBFile
-    from ..openmm.timestep import resolve_timestep_fs
-
-    _topology = _PDBFile(str(args.topology)).topology
-    _system = _XmlSerializer.deserialize(Path(args.system).read_text(encoding="utf-8"))
-    timestep_record = resolve_timestep_fs(ladder["dynamics"]["timestep_fs"], _system, _topology)
+    # CONSUMED from the preflight, which resolved it against the masses in the System it had
+    # already deserialised. This used to open `-p` and `-s` a second time and resolve the
+    # timestep again -- the same authority, run twice, with the second run being the one the
+    # protocol file was written from.
+    timestep_record = checked.timestep
     ladder = dict(ladder, dynamics=dict(ladder["dynamics"],
                                         timestep_fs=timestep_record["timestep_fs"]))
     dynamics = ladder["dynamics"]
@@ -304,8 +347,12 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
 
     if rank == 0:
         if not solute_yaml.is_file():
-            write_solute_document(Path(args.topology), Path(args.system), solute_yaml,
-                                  route=args.route)
+            # Written from the document the preflight ALREADY derived and refused on. Deriving it
+            # again here would classify the omega bonds a second time, and the copy that decided
+            # what the ladder scaled would be this one -- the one no refusal could reach.
+            from ..openmm.yaml_io import write_yaml
+
+            write_yaml(solute_yaml, checked.notes["solute_document"])
         protocol_file.write_text(protocol_file_text(ladder), encoding="utf-8")
         lines = [f"# {protocol_name}: {states} states, tau 0.0 to {ladder['tau_max']}.",
                  "# One group per line, inputs only. Run-level outputs go on the executor call,",
@@ -326,7 +373,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
         "-o", str(args.output or out / f"{protocol_name}.out"),
         "-x", str(args.trajectory or out / f"{protocol_name}.nc"),
         "-r", str(args.restart or out / "restart.json"),
-        "--checkpoint", str(out / f"{protocol_name}_checkpoint.nc"),
+        "--checkpoint", str(args.checkpoint or out / f"{protocol_name}_checkpoint.nc"),
     ]
     if ladder.get("rem_log", True):
         executor_argv += ["--rem", str(out / "rem.log")]
@@ -367,7 +414,10 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
                inputs={"topology": file_facts(Path(args.topology)),
                        "system": file_facts(Path(args.system))})
 
-    code = int(replica_executor.main(executor_argv) or 0)
+    # The validated result travels WITH the call. The executor would otherwise run its own
+    # preflight (it is independently callable and must be safe alone), and the driver would
+    # otherwise resolve a second platform after every file on disk already existed.
+    code = int(replica_executor.main(executor_argv, prepared=checked) or 0)
 
     # The executor owns the run and writes its own authoritative records. This log exists so that
     # every artefact this package produces carries the SAME machine record, and so registration

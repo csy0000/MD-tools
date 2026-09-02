@@ -394,18 +394,34 @@ def test_a_missing_parent_refuses_before_any_context_is_created(scripts):
     (work / "refusal.log").unlink(missing_ok=True)
 
 
-def test_a_missing_parent_is_pending_under_check_not_a_failure(scripts):
-    """--check validates a whole chain before any of it runs, so later parents are absent."""
+def test_a_standalone_stage_with_a_missing_parent_is_refused_even_under_check(scripts):
+    """MIGRATED. This asserted the opposite, and the opposite was the defect.
+
+    A single split stage run on its own is not a chain. Nothing in this invocation will ever
+    write `eq_nvt_free.xml`, so "the parent is merely pending" is a guess -- and it was the same
+    guess for a genuine typo, which is how `-c eq_npt_fre.xml` became a run that continued
+    nothing, started from the coordinates in `-p`, and reported success.
+
+    The pending case is now something the all-in-one chain STATES, naming the stage that produces
+    the file (see the test below). Here there is no such stage, so this is a refusal.
+
+    It also wrote `pending.log` while doing it, which `--check` may no longer do at all.
+    """
     work = scripts / "md_script"
+    before = sorted(p.name for p in work.iterdir())
     result = subprocess.run(
         [sys.executable, "cMD.py", "-p", "../built.pdb", "-s", "../built.xml",
          "-c", "eq_nvt_free.xml", "-log", "pending.log", "--check"],
         cwd=work, capture_output=True, text=True, timeout=600)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "[pending]" in result.stdout
-    record = read_record(work / "pending.log")
-    assert record["status"] == "pending", "pending is not completion"
-    (work / "pending.log").unlink(missing_ok=True)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "eq_nvt_free.xml" in (result.stdout + result.stderr)
+    assert not (work / "pending.log").exists(), "--check wrote a log"
+    assert sorted(p.name for p in work.iterdir()) == before, "--check created something"
+
+# The complementary case -- an all-in-one `--check` passing with every later parent absent, and
+# writing nothing -- is `test_the_all_in_one_check_still_allows_the_parent_a_later_stage_will_write`
+# in tests/test_runtime_contract_matrix.py, where an all-in-one project is generated. This
+# fixture generates split stages, so asserting it here could only be a skip.
 
 
 def test_a_large_timestep_without_hmr_is_refused_before_integrating(scripts):

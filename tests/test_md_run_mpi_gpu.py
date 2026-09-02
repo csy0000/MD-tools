@@ -112,8 +112,17 @@ def test_each_rank_kept_its_own_record_and_ran_on_cuda(ladder):
     other = (ladder / "REST2.out.rank01").read_text(encoding="utf-8")
     assert "platform           : CUDA" in text, text
     assert "platform           : CUDA" in other, other
-    # Deterministic placement, recorded: not "a GPU" but which one, and by what rule.
-    assert "one rank per device" in text, text
+    # Deterministic placement, recorded: not "a GPU" but WHICH one, and by what rule.
+    #
+    # MIGRATED wording. The phrase used to be "one rank per device", written by the driver's own
+    # platform resolution. The driver no longer resolves a platform -- it consumes the one
+    # `preflight_ladder` established before any of these files existed -- so the sentence now
+    # comes from the single shared authority and names the setting it obeyed. What is asserted
+    # here is the substance, and it is strictly more than before: each rank names its own device
+    # index and its own rank, so the two records cannot both be describing GPU 0.
+    assert "device_policy: local_rank" in text, text
+    assert "device=0" in text and "(rank 0 of 2)" in text, text
+    assert "device=1" in other and "(rank 1 of 2)" in other, other
     assert "this process drives: state(s) [0]" in text, text
     assert "this process drives: state(s) [1]" in other, other
 

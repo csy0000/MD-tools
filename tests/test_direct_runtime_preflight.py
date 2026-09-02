@@ -132,8 +132,17 @@ def workspace(tmp_path_factory):
             cwd=root, capture_output=True, text=True, timeout=600)
         assert done.returncode == 0, f"{name}: {done.stdout}{done.stderr}"
 
-    # A genuine DCD, so an AIS source refusal is about the case under test rather than the file.
-    (root / "source.dcd").write_bytes(b"\x54\x00\x00\x00CORD" + b"\x00" * 200)
+    # A GENUINE, READABLE DCD of this very system.
+    #
+    # This used to be 200 zero bytes behind a DCD magic number. That was enough while the source
+    # was only sniffed for its format, and it stopped being enough the moment the preflight began
+    # actually reading the source -- counting its frames and comparing its atom count -- which is
+    # the whole point of moving those checks ahead of the output. A file that satisfies the
+    # format check and cannot be opened tests the format check and nothing else.
+    import mdtraj
+
+    frames = mdtraj.load(str(root / "built.pdb"))
+    mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
     return root
 
 

@@ -148,7 +148,8 @@ class ReplicaRun:
 
     def __init__(self, *, protocol, files, base_system, topology, solute_indices,
                  excluded_bonds=(), platform=None, precision=None, rule_path=None,
-                 reservoir_declaration=None, identity_extra=None, explicit_cpu=False):
+                 reservoir_declaration=None, identity_extra=None, explicit_cpu=False,
+                 prepared=None):
         self.protocol = protocol
         self.files = files
         self.base_system = base_system
@@ -163,8 +164,11 @@ class ReplicaRun:
         self.rule_path = rule_path
         self.reservoir_declaration = reservoir_declaration
         self.identity_extra = dict(identity_extra or {})
+        #: The `LadderPreflight` this run was validated by. Its platform, device and machine
+        #: settings are CONSUMED; nothing here re-resolves them. See `_build_platform`.
+        self.prepared = prepared
 
-        self.coordinator = Coordinator()
+        self.coordinator = prepared.coordination if prepared is not None else Coordinator()
         self.owned = owned_states(protocol, self.coordinator)
         self.engine = None
         self.reporter = None
@@ -297,41 +301,34 @@ class ReplicaRun:
         sys.stdout.flush()
 
     def _build_platform(self):
-        # ONE platform decision, the same one an ordinary stage makes. The machine's configuration
-        # decides it -- `machine.openmm.platform`, defaulting to CUDA -- and `--cpu` overrides it
-        # for this run. This used to read `"CUDA" if "CUDA" in available else "CPU"`, so a ladder
-        # fell back to the CPU where a stage refused; there is no fallback in either direction now.
-        from ..registry.userconfig import machine_openmm_settings
+        """CONSUME the platform the preflight resolved. Do not resolve a second one.
 
-        machine = machine_openmm_settings()
-        # `explicit_cpu` is the CLI's `--cpu` and nothing else; the machine's own preference is
-        # read separately. Two sources, one decision, and neither pretends to be the other.
-        name = "CPU" if (self.explicit_cpu or machine["platform"] == "CPU") else "CUDA"
-        device, policy = None, "not a CUDA platform"
-        if name == "CUDA":
-            devices = visible_cuda_devices(probe=(self.coordinator.size > 1))
-            if self.coordinator.size > 1:
-                device, policy = select_device_for_rank(
-                    self.coordinator.rank, self.coordinator.size, devices)
-                if device is None:
-                    raise DriverError(
-                        "the CUDA platform was selected under MPI but no CUDA device is visible "
-                        "to this rank. Refusing rather than letting every rank fall onto one GPU.")
-            else:
-                policy = "single process: OpenMM selects the device"
-        from ..openmm.platform_policy import (PlatformRequest, acceleration_record,
-                                              resolve_platform_request)
+        This function used to reload `machine_openmm_settings()` and re-run the whole platform
+        and device decision, here, after `solute.yaml`, `_protocol.py`, the group file and the
+        logs already existed. That is a second authority for a policy that had already run: the
+        two agreed only for as long as nobody edited one of them, and the one that decided where
+        the ladder actually ran was this one -- the one no preflight refusal could reach.
 
-        resolution = resolve_platform_request(
-            PlatformRequest.from_machine(machine, cpu=bool(self.explicit_cpu)),
-            device_index=device)
-        self._platform, self._properties = resolution.platform, resolution.properties
-        self._acceleration = acceleration_record(
-            resolution, mpi_rank=self.coordinator.rank, mpi_size=self.coordinator.size,
-            local_rank=getattr(self.coordinator, "local_rank", None))
+        Before that it read `"CUDA" if "CUDA" in available else "CPU"`, so a ladder fell silently
+        onto the CPU where a stage refused. There is no fallback in either direction now, and
+        there is no second resolver either.
+        """
+        if self.prepared is None:
+            raise DriverError(
+                "this ladder was constructed without a validated preflight result. The platform, "
+                "the device and the machine settings are decided by `preflight_ladder` before any "
+                "output exists, and consumed here; resolving them again at this point would put "
+                "the decision after the files it is supposed to guard.")
+
+        prepared = self.prepared
+        self._platform = prepared.acceleration.platform
+        self._properties = prepared.acceleration.properties
+        self._acceleration = prepared.record()
         self._run_context = {
             "acceleration": self._acceleration,
-            "platform": resolution.name, "device_index": device, "device_policy": policy,
+            "platform": prepared.platform_name,
+            "device_index": prepared.device_index,
+            "device_policy": prepared.device_policy_detail,
             "precision": self._properties.get("Precision"),
             "mpi_rank": self.coordinator.rank, "mpi_size": self.coordinator.size,
             "hostname": socket.gethostname(), "owned_states": list(self.owned),

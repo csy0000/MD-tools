@@ -51,7 +51,8 @@ from typing import Any
 __all__ = ["PreflightError", "ExecutionPreflight", "StagePreflight", "LadderPreflight",
            "AISPreflight", "preflight_stage", "preflight_ladder", "preflight_ais",
            "check_output_collisions", "check_input_files", "resolve_launch",
-           "check_topology_matches_system"]
+           "check_topology_matches_system", "LoadedInputs", "load_inputs", "PendingParent",
+           "check_ensemble", "check_scaling_plan", "report_check"]
 
 
 class PreflightError(SystemExit):
@@ -225,6 +226,141 @@ def _resolve_platform(machine: dict[str, Any], *, cpu: bool, device: Any,
 
 
 # ---------------------------------------------------------------------------------------------
+# loading the pair once, and the refusals that need it
+# ---------------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class LoadedInputs:
+    """The topology and the System, deserialised ONCE and handed to whoever needs them.
+
+    Every refusal that has to look inside the System -- the barostat, the masses behind a 4 fs
+    timestep, the force classification, the atom counts -- needs the deserialised object. Loading
+    it here and passing it on is what lets those refusals happen before the first mkdir instead
+    of after it, and it also stops the runtime deserialising the same megabytes a second time
+    only to reach a different conclusion.
+    """
+
+    topology_path: Path
+    system_path: Path
+    pdb: Any
+    system: Any
+    particles: int
+    implicit: bool
+    barostats: int
+
+    @property
+    def periodic(self) -> bool:
+        return not self.implicit
+
+
+def load_inputs(topology, system) -> LoadedInputs:
+    """Read `-p` and `-s`, and refuse a pair that does not describe the same particles."""
+    from openmm import XmlSerializer
+    from openmm.app import PDBFile
+
+    from ..md._stages import count_barostats
+
+    topology_path, system_path = Path(topology), Path(system)
+    try:
+        pdb = PDBFile(str(topology_path))
+    except Exception as broken:
+        raise PreflightError(f"-p {topology_path} is not a PDB this build can read: "
+                             f"{type(broken).__name__}: {broken}") from None
+    try:
+        base = XmlSerializer.deserialize(system_path.read_text(encoding="utf-8"))
+    except Exception as broken:
+        raise PreflightError(f"-s {system_path} is not a serialised OpenMM System: "
+                             f"{type(broken).__name__}: {broken}") from None
+
+    atoms, particles = pdb.topology.getNumAtoms(), base.getNumParticles()
+    if atoms != particles:
+        raise PreflightError(
+            f"{topology_path.name} has {atoms} atom(s) but {system_path.name} has {particles} "
+            f"particle(s). They must describe the same system; a mismatched pair produces "
+            f"coordinates assigned to the wrong particles and no error at all.")
+    return LoadedInputs(topology_path=topology_path, system_path=system_path, pdb=pdb,
+                        system=base, particles=particles,
+                        implicit=not base.usesPeriodicBoundaryConditions(),
+                        barostats=count_barostats(base))
+
+
+@dataclass(frozen=True)
+class PendingParent:
+    """A `-c` that does not exist yet BECAUSE an earlier stage of this same chain will write it.
+
+    The one legitimate missing-continuation case, and it is represented rather than inferred. The
+    old rule was "a `-c` that does not exist is not checked", which is the same sentence as "a
+    typo in `-c` is not checked": under `--check` it was the intended leniency and under a real
+    run it silently dropped the restart the stage was supposed to continue from, so the stage
+    started from the topology's coordinates and finished successfully.
+
+    A caller that constructs one of these is stating WHICH stage produces the file. Nothing else
+    excuses a missing `-c`.
+    """
+
+    path: Path
+    produced_by: str
+
+
+def check_ensemble(loaded: LoadedInputs, *, ensemble: str | None, tau: float = 0.0,
+                   where: str = "this stage") -> None:
+    """Pressure coupling is refused where it has no meaning, before any output exists.
+
+    Two cases, both of which used to be found after the output directory had been created:
+
+      implicit solvent has no box, so there is no volume to control and no barostat to control it;
+      a scaled run (tau > 0) is fixed-volume throughout, because a Monte Carlo volume move under a
+      scaled Hamiltonian is not the move the ensemble is defined by.
+    """
+    if ensemble is None:
+        return
+    ensemble = str(ensemble).upper()
+    if ensemble not in ("NVT", "NPT", "NVE"):
+        raise PreflightError(f"{where}: ensemble {ensemble!r} is not one of NVT, NPT, NVE")
+    if ensemble != "NPT":
+        return
+    if loaded.implicit:
+        raise PreflightError(
+            f"{where} asks for NPT, but the System has no periodic box: implicit solvent has no "
+            f"volume to control. Implicit stages are NVT and are named for it; an NPT stage with "
+            f"the pressure quietly ignored reports an ensemble it did not sample.")
+    if float(tau) > 0.0:
+        raise PreflightError(
+            f"{where} asks for NPT at tau = {tau}. A scaled run is fixed-volume throughout, "
+            f"equilibration included: the barostat's volume move is defined for the unscaled "
+            f"Hamiltonian, and accepting it at tau > 0 samples neither ensemble.")
+
+
+def check_scaling_plan(loaded: LoadedInputs, *, solute_indices, excluded_bonds=(), tau=0.0,
+                       where: str = "this run"):
+    """Classify every force and BUILD the scaled System, here, where failing costs nothing.
+
+    `audit_force_classes` refuses an energy-bearing force the convention cannot place, and
+    `build_scaled_system` is where a CustomGBForce over a partial enhanced region, an unreadable
+    CMAP map or any other construction failure surfaces. Both used to happen after the run
+    directory, the log and `solute.yaml` existed, so the refusal arrived attached to a tree that
+    looks exactly like a run that started.
+
+    The constructed System is returned, so the runtime uses this one rather than building a second
+    that could differ.
+    """
+    from ..rest2.scaler import UnclassifiedForceError, audit_force_classes, build_scaled_system
+
+    try:
+        audit = audit_force_classes(loaded.system, where=where)
+    except UnclassifiedForceError as unknown:
+        raise PreflightError(str(unknown)) from None
+    try:
+        scaled = build_scaled_system(loaded.system, solute_indices, float(tau),
+                                     excluded_bonds, prepare_for_switching=True)
+    except Exception as broken:
+        raise PreflightError(
+            f"{where}: the scaled System at tau = {tau} could not be constructed: "
+            f"{type(broken).__name__}: {broken}") from None
+    return audit, scaled
+
+
+# ---------------------------------------------------------------------------------------------
 # the results: one type per mode, so a field's meaning never depends on who is reading it
 # ---------------------------------------------------------------------------------------------
 
@@ -245,6 +381,11 @@ class ExecutionPreflight:
     device_policy: str
     device_policy_detail: str
     particles: int | None = None
+    #: The deserialised pair, when the mode needed to look inside it. Handed to the runtime so it
+    #: consumes this System rather than deserialising a second one that could differ.
+    loaded: LoadedInputs | None = None
+    #: The resolved timestep record, including how `auto` was decided and what the masses proved.
+    timestep: dict[str, Any] | None = None
     notes: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -273,6 +414,11 @@ class LadderPreflight(ExecutionPreflight):
     """A REST2 or rREST2 ladder: one process per thermodynamic state."""
 
     replicas: int = 0
+    #: How every energy-bearing force was classified, and the scaled System built from it. Both
+    #: are the products of `check_scaling_plan`, which is where an unplaceable force is refused.
+    force_audit: dict[str, Any] | None = None
+    scaled_system: Any = None
+    excluded_bonds: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -281,14 +427,48 @@ class AISPreflight(ExecutionPreflight):
 
     source: Path | None = None
     source_format: str | None = None
+    #: Everything the path loop needs, decided before the run directory exists.
+    schedule: dict[str, Any] | None = None
+    solute: tuple = ()
+    excluded_bonds: tuple = ()
+    switcher: Any = None
+    chosen_frames: tuple = ()
+    eligible_frames: int = 0
+    source_frames: int = 0
+    source_atoms: int | None = None
+    force_audit: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------------------------
 # the mode-aware entry points
 # ---------------------------------------------------------------------------------------------
 
+def _continuation_inputs(coordinates, pending: PendingParent | None, *, where: str):
+    """`-c`, checked. A missing one is an error unless a named earlier stage will write it.
+
+    The old rule tested `Path(c).exists()` and skipped the check when it did not. That reads as
+    leniency for the all-in-one `--check` chain, and it is also complete leniency for a typo: a
+    real run given `-c eq_npt_fre.xml` found nothing to check, started from the topology's
+    coordinates, and completed. The pending case is now something a caller STATES, naming the
+    stage that produces the file, so nothing else can fall through it.
+    """
+    if not coordinates:
+        return {}
+    path = Path(coordinates)
+    if path.exists():
+        return {"c": coordinates}
+    if pending is not None and Path(pending.path) == path:
+        return {}                       # produced by `pending.produced_by`, earlier in this chain
+    raise PreflightError(
+        f"{where}: -c {path} does not exist. A continuation names the restart this run starts "
+        f"from; if it is missing the run does not continue anything, it silently starts from the "
+        f"coordinates in -p and finishes looking successful."
+        + (f"\n  ({pending.path} is the one file this chain may still be missing, and it is not "
+           f"this one.)" if pending is not None else ""))
+
+
 def _common(*, topology, system, outputs, inputs, cpu, device, number_of_groups, replicas,
-            protocol, machine_config, check_particles=True):
+            protocol, machine_config, check_particles=True, load=False):
     """Steps 1-11, in order. Shared by every mode; each mode adds only its own inputs."""
     _check_command_line(cpu=cpu, device=device, number_of_groups=number_of_groups)
 
@@ -302,76 +482,321 @@ def _common(*, topology, system, outputs, inputs, cpu, device, number_of_groups,
     machine = _resolve_machine(machine_config)
     acceleration, index, detail = _resolve_platform(machine, cpu=cpu, device=device,
                                                     coordination=coordination)
-    particles = check_topology_matches_system(topology, system) if check_particles else None
-    return coordination, machine, acceleration, index, detail, particles
+    # Loaded once when the mode has refusals that need to look inside the System; the particle
+    # comparison then comes from the loaded pair rather than from a second parse of both files.
+    loaded = load_inputs(topology, system) if load else None
+    if loaded is not None:
+        particles = loaded.particles
+    else:
+        particles = check_topology_matches_system(topology, system) if check_particles else None
+    return coordination, machine, acceleration, index, detail, particles, loaded
 
 
 def preflight_stage(*, topology, system, coordinates=None, trajectory=None, restart=None,
                     checkpoint=None, output=None, log=None, cpu=False, device=None,
-                    machine_config=None, protocol="this stage") -> StagePreflight:
+                    machine_config=None, protocol="this stage", pending_parent=None,
+                    timestep_fs=None, ensemble=None, tau=0.0,
+                    number_of_groups=None, groupfile=None,
+                    source_trajectory=None) -> StagePreflight:
     """A conventional stage, including every stage of an all-in-one workflow."""
     from ..md.stage import check_trajectory_suffix
+
+    _reject_flags_outside_their_protocol(
+        protocol_name="a cMD stage", number_of_groups=number_of_groups, groupfile=groupfile,
+        source_trajectory=source_trajectory)
 
     if trajectory:
         check_trajectory_suffix(Path(trajectory))
 
-    # A continuation that does not exist yet is not an error here: `--check` validates a whole
-    # chain before any of it has run, and every parent after the first is missing by construction.
-    inputs = {"c": coordinates} if coordinates and Path(coordinates).exists() else {}
-    coordination, machine, acceleration, index, detail, particles = _common(
+    inputs = _continuation_inputs(coordinates, pending_parent, where=protocol)
+    coordination, machine, acceleration, index, detail, particles, loaded = _common(
         topology=topology, system=system,
         outputs={"o": output, "log": log, "x": trajectory, "r": restart, "chk": checkpoint},
         inputs=inputs, cpu=cpu, device=device, number_of_groups=None, replicas=None,
-        protocol=protocol, machine_config=machine_config)
+        protocol=protocol, machine_config=machine_config, load=timestep_fs is not None)
+
+    resolved_timestep = None
+    if timestep_fs is not None:
+        # 4 fs on hydrogens that were never repartitioned, and every other mass/timestep
+        # incompatibility, refused HERE. It used to be found after the `.out` and the `.log` had
+        # been created, which is a directory that reads as a run that started.
+        resolved_timestep = _resolve_timestep(loaded, timestep_fs, where=protocol)
+        check_ensemble(loaded, ensemble=ensemble, tau=tau, where=protocol)
 
     return StagePreflight(coordination=coordination, machine=machine, acceleration=acceleration,
                           device_index=index,
                           device_policy=str(machine.get("device_policy") or "local_rank"),
-                          device_policy_detail=detail, particles=particles,
+                          device_policy_detail=detail, particles=particles, loaded=loaded,
+                          timestep=resolved_timestep,
                           trajectory=Path(trajectory) if trajectory else None)
 
 
+def report_check(result, *, what: str, extra=()) -> int:
+    """What `--check` prints. To STDOUT, because `--check` creates nothing.
+
+    `--check` answers "would this run start?", and it used to answer it by starting: it created
+    `-odir`, the `.out` and the `.log`, validated, and wrote `status: checked` into the log. The
+    directory it left behind is indistinguishable from a run that began -- which is precisely the
+    thing the caller was asking about. Every fact below comes from the preflight result, so
+    nothing has to be opened to report it.
+    """
+    import sys as _sys
+
+    lines = [f"{what}: --check passed. Nothing was created.",
+             f"  platform          {result.platform_name} "
+             f"({result.record()['platform_selection']})",
+             f"  device            {result.device_index if result.device_index is not None else '-'}"
+             f"  [{result.device_policy_detail}]",
+             f"  mpi               rank {result.coordination.rank} of {result.coordination.size}",
+             f"  particles         {result.particles}"]
+    if result.timestep:
+        lines.append(f"  timestep          {result.timestep['timestep_fs']} fs "
+                     f"({result.timestep['basis']})")
+    lines.extend(f"  {label:<18}{value}" for label, value in extra)
+    print("\n".join(lines), file=_sys.stdout)
+    return 0
+
+
+def _resolve_timestep(loaded: LoadedInputs, requested, *, where: str) -> dict[str, Any]:
+    """`md_tools.openmm.timestep` is the rule; this is where it is applied early enough to help."""
+    from ..openmm.timestep import resolve_timestep_fs
+
+    try:
+        return resolve_timestep_fs(requested, loaded.system, loaded.pdb.topology)
+    except (ValueError, SystemExit) as refusal:
+        raise PreflightError(f"{where}: {refusal}") from None
+
+
+def _reject_flags_outside_their_protocol(*, protocol_name, number_of_groups=None, groupfile=None,
+                                         source_trajectory=None, trajectory=None,
+                                         coordinates=None, restart=None, checkpoint=None):
+    """Every accepted flag must do its documented job here, or be refused before any output.
+
+    A flag that a protocol parses and then ignores is worse than one it rejects: the run
+    completes, the record shows the flag was given, and nothing anywhere did what it says. These
+    are the pairings where that was true.
+    """
+    if number_of_groups is not None:
+        raise PreflightError(
+            f"-ng is a REST2/rREST2 flag and {protocol_name} has no replicas to group. It was "
+            f"accepted and ignored; refusing it instead, because a run launched under "
+            f"`mpirun -n {number_of_groups}` with -ng silently ignored is N processes writing "
+            f"over one set of files.")
+    if groupfile is not None:
+        raise PreflightError(
+            f"-groupfile describes one line per replica and {protocol_name} has one process. "
+            f"Refusing it rather than reading a file whose contents can have no effect.")
+    if source_trajectory is not None:
+        raise PreflightError(
+            f"-source-traj names the equilibrium ensemble AIS draws its starting frames from, "
+            f"and {protocol_name} draws none. Refusing it rather than accepting a trajectory "
+            f"nothing will read.")
+    for value, flag, what in ((trajectory, "-x", "its own per-path trajectory names"),
+                              (coordinates, "-c", "no continuation"),
+                              (restart, "-r", "no single output restart"),
+                              (checkpoint, "-chk", "no single checkpoint")):
+        if value is not None:
+            raise PreflightError(
+                f"{flag} has no meaning for {protocol_name}, which has {what}. Refusing it "
+                f"rather than accepting a path nothing writes to.")
+
+
 def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=None,
-                     trajectory=None, restart=None, output=None, log=None,
+                     trajectory=None, restart=None, checkpoint=None, output=None, log=None,
                      number_of_groups=None, cpu=False, device=None, machine_config=None,
-                     protocol="this ladder") -> LadderPreflight:
+                     protocol="this ladder", pending_parent=None, timestep_fs=None,
+                     ensemble=None, tau=0.0, solute_indices=None, excluded_bonds=(),
+                     route=None, source_trajectory=None) -> LadderPreflight:
     """A REST2 or rREST2 ladder. `-ng`, the configured state count and the world must agree."""
-    inputs: dict[str, Any] = {}
-    if coordinates and Path(coordinates).exists():
-        inputs["c"] = coordinates
+    if source_trajectory is not None:
+        _reject_flags_outside_their_protocol(protocol_name="a REST2/rREST2 ladder",
+                                             source_trajectory=source_trajectory)
+
+    inputs: dict[str, Any] = dict(_continuation_inputs(coordinates, pending_parent,
+                                                       where=protocol))
     if groupfile:
         inputs["groupfile"] = groupfile
 
-    coordination, machine, acceleration, index, detail, particles = _common(
+    coordination, machine, acceleration, index, detail, particles, loaded = _common(
         topology=topology, system=system,
-        outputs={"o": output, "log": log, "x": trajectory, "r": restart},
+        outputs={"o": output, "log": log, "x": trajectory, "r": restart, "chk": checkpoint},
         inputs=inputs, cpu=cpu, device=device, number_of_groups=number_of_groups,
-        replicas=int(replicas), protocol=protocol, machine_config=machine_config)
+        replicas=int(replicas), protocol=protocol, machine_config=machine_config,
+        load=timestep_fs is not None or solute_indices is not None or route is not None)
+
+    resolved_timestep = audit = scaled = None
+    if timestep_fs is not None:
+        resolved_timestep = _resolve_timestep(loaded, timestep_fs, where=protocol)
+    if loaded is not None:
+        # A REST2 runtime is NVT by contract, so `ensemble` is normally not passed; when it is,
+        # the same two impossibilities are refused as for a stage.
+        check_ensemble(loaded, ensemble=ensemble, tau=tau, where=protocol)
+    solute_record = None
+    if loaded is not None and solute_indices is None and route is not None:
+        # Derived here rather than by the writer that used to do it. The omega classification
+        # carries its own refusal -- an amide that is neither ordinary nor proline-like -- and it
+        # used to fire from inside `write_solute_document`, after `-odir` and both logs existed.
+        from ..remd.generated import solute_document
+
+        try:
+            solute_record = solute_document(loaded.pdb.topology, loaded.system, route=route)
+        except SystemExit as refusal:
+            raise PreflightError(f"{protocol}: {refusal}") from None
+        span = solute_record.get("solute_atom_range")
+        if span and solute_record.get("solute_atom_indices_are_contiguous", False):
+            solute_indices = list(range(int(span[0]), int(span[1]) + 1))
+        else:
+            solute_indices = list(range(int(solute_record["n_solute_atoms"])))
+        excluded_bonds = [tuple(int(a) for a in pair) for pair in
+                          (solute_record.get("rest2") or {}).get("omega_excluded_bonds", [])]
+
+    if solute_indices is not None:
+        # The force classification, the omega handling and the scaled-System construction, all
+        # before `solute.yaml`, `_protocol.py` or a group file exists. An unclassifiable force
+        # used to be found once the run tree was already on disk.
+        audit, scaled = check_scaling_plan(loaded, solute_indices=solute_indices,
+                                           excluded_bonds=excluded_bonds, tau=tau, where=protocol)
 
     return LadderPreflight(coordination=coordination, machine=machine,
                            acceleration=acceleration, device_index=index,
                            device_policy=str(machine.get("device_policy") or "local_rank"),
-                           device_policy_detail=detail, particles=particles,
-                           replicas=int(replicas))
+                           device_policy_detail=detail, particles=particles, loaded=loaded,
+                           timestep=resolved_timestep, replicas=int(replicas),
+                           force_audit=audit, scaled_system=scaled,
+                           excluded_bonds=tuple(tuple(int(a) for a in b) for b in excluded_bonds),
+                           notes={"solute_document": solute_record} if solute_record else {})
 
 
 def preflight_ais(*, topology, system, source, number_of_groups=None, output=None, log=None,
-                  cpu=False, device=None, machine_config=None) -> AISPreflight:
-    """AIS switching paths. The source ensemble is validated by CONTENT, not by suffix."""
+                  cpu=False, device=None, machine_config=None, dynamics=None, ais=None,
+                  reporting=None, source_config=None, groupfile=None, trajectory=None,
+                  coordinates=None, restart=None, checkpoint=None) -> AISPreflight:
+    """AIS switching paths. The source ensemble is validated by CONTENT, not by suffix.
+
+    When the resolved configuration is supplied -- which the runtime always does -- every
+    remaining refusal happens here too: the timestep against the masses, the barostat, the
+    switching and reporting divisibility, the source window, the source's own atom count, the
+    force classification, the scaled System, and the frame selection. The result carries all of
+    it, so `ais_main` runs the schedule it validated rather than building a second one.
+    """
     from ..openmm.trajectory import check_trajectory_declaration
 
-    coordination, machine, acceleration, index, detail, particles = _common(
+    # -x is refused for AIS: path trajectories are named by `path_trajectory_name(index, total)`,
+    # so a single -x could only be accepted and ignored. The rest have no AIS meaning either.
+    _reject_flags_outside_their_protocol(
+        protocol_name="AIS", groupfile=groupfile, trajectory=trajectory,
+        coordinates=coordinates, restart=restart, checkpoint=checkpoint)
+
+    coordination, machine, acceleration, index, detail, particles, loaded = _common(
         topology=topology, system=system,
         outputs={"o": output, "log": log},
         inputs={"source-traj": source}, cpu=cpu, device=device,
         number_of_groups=number_of_groups, replicas=None, protocol="AIS",
-        machine_config=machine_config)
+        machine_config=machine_config, load=dynamics is not None)
 
     # After existence, before any output: a source whose suffix and contents disagree is neither.
     source_format = check_trajectory_declaration(source, what="-source-traj")
 
+    if dynamics is None:
+        return AISPreflight(coordination=coordination, machine=machine, acceleration=acceleration,
+                            device_index=index,
+                            device_policy=str(machine.get("device_policy") or "local_rank"),
+                            device_policy_detail=detail, particles=particles,
+                            source=Path(source), source_format=source_format)
+
+    prepared = _prepare_ais(loaded, source=Path(source), dynamics=dynamics, ais=ais,
+                            reporting=reporting, source_config=source_config)
     return AISPreflight(coordination=coordination, machine=machine, acceleration=acceleration,
                         device_index=index,
                         device_policy=str(machine.get("device_policy") or "local_rank"),
-                        device_policy_detail=detail, particles=particles,
-                        source=Path(source), source_format=source_format)
+                        device_policy_detail=detail, particles=particles, loaded=loaded,
+                        source=Path(source), source_format=source_format, **prepared)
+
+
+def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting, source_config):
+    """Every AIS refusal that needs the System or the source file, before any output exists."""
+    import mdtraj
+
+    from ..ais.run import _source_atom_count, choose_frames
+    from ..ais.schedule import switching_schedule
+    from ..md.stage import solute_atom_indices
+    from ..openmm.system import classify_omega_bonds
+
+    where = "AIS"
+    timestep = _resolve_timestep(loaded, dynamics["timestep_fs"], where=where)
+
+    # FIXED VOLUME, decided before the run directory exists. A pressure-volume term in the work
+    # would make the path measure something the Jarzynski/Crooks relations are not written for.
+    if loaded.barostats:
+        raise PreflightError(
+            "the prepared System carries a barostat. AIS switches at FIXED VOLUME: each path "
+            "keeps the box of the frame it started from, and no pressure-volume term enters the "
+            "work. Build the System without a barostat.")
+
+    try:
+        schedule = switching_schedule(
+            tau_start=float(ais["tau_start"]), tau_end=float(ais["tau_end"]),
+            switching_steps=int(ais["switching_steps"]),
+            parameter_update_interval_steps=int(ais["parameter_update_interval_steps"]),
+            observation_interval_steps=int(ais["observation_interval_steps"]),
+            timestep_fs=float(timestep["timestep_fs"]),
+            trajectory_interval_steps=int(reporting["solute_printout"]),
+            state_interval_steps=int(reporting["system_printout"]),
+            checkpoint_interval_steps=int(reporting["checkpoint_printout"]))
+    except (ValueError, SystemExit) as refusal:
+        raise PreflightError(f"{where}: {refusal}") from None
+
+    solute = solute_atom_indices(loaded.pdb.topology)
+    omega = classify_omega_bonds(loaded.pdb.topology, solute, route="peptide", ligand_sdf=None)
+    excluded = tuple(tuple(int(a) for a in bond)
+                     for bond in omega.get("omega_unscaled_bonds", []))
+    audit, _scaled = check_scaling_plan(loaded, solute_indices=solute, excluded_bonds=excluded,
+                                        tau=float(ais["tau_start"]), where="AIS tau switching")
+    from ..rest2.scaler import TauSwitcher
+
+    switcher = TauSwitcher(loaded.system, solute, excluded)
+
+    # -- the source ensemble, read before anything is written ----------------------------------
+    top = mdtraj.Topology.from_openmm(loaded.pdb.topology)
+    try:
+        n_frames = sum(chunk.n_frames for chunk in mdtraj.iterload(str(source), top=top, chunk=50))
+    except Exception as broken:
+        raise PreflightError(
+            f"-source-traj {source.name} could not be read against {loaded.topology_path.name}: "
+            f"{type(broken).__name__}: {broken}") from None
+
+    last = source_config["last_frame"]
+    last = n_frames - 1 if last is None else int(last)
+    first = int(source_config["first_frame"])
+    stride = int(source_config["frame_stride"])
+    if last >= n_frames:
+        raise PreflightError(f"ais_source.last_frame = {last} but {source.name} holds "
+                             f"{n_frames} frame(s) (0..{n_frames - 1})")
+    if first > last:
+        raise PreflightError(f"ais_source.first_frame = {first} is past last_frame = {last}: "
+                             f"the source window is empty, so no path has a starting frame.")
+    eligible = list(range(first, last + 1, stride))
+
+    source_atoms = _source_atom_count(source)
+    if source_atoms is not None and source_atoms != loaded.particles:
+        raise PreflightError(
+            f"-source-traj {source.name} holds {source_atoms} atom(s) but "
+            f"{loaded.topology_path.name} and {loaded.system_path.name} describe "
+            f"{loaded.particles}. The source ensemble must be of the same system the paths are "
+            f"run in; a trajectory of a different one reads without error and produces work "
+            f"values that mean nothing.")
+
+    try:
+        chosen = choose_frames(eligible=eligible, count=int(ais["number_of_paths"]),
+                               selection=source_config["selection"],
+                               allow_repeats=bool(source_config["allow_repeated_frames"]),
+                               seed=int(dynamics["seed"]))
+    except (ValueError, SystemExit) as refusal:
+        raise PreflightError(f"{where}: {refusal}") from None
+
+    return {"timestep": timestep, "schedule": schedule, "solute": tuple(int(i) for i in solute),
+            "excluded_bonds": excluded, "switcher": switcher, "chosen_frames": tuple(chosen),
+            "eligible_frames": len(eligible), "source_frames": n_frames,
+            "source_atoms": source_atoms, "force_audit": audit,
+            "notes": {"omega": omega, "first_frame": first, "last_frame": last,
+                      "frame_stride": stride}}

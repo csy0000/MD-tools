@@ -224,7 +224,11 @@ def _parse(argv):
     parser = argparse.ArgumentParser(
         prog="replica-executor",
         description="Run one OpenMM protocol against explicit paths, or a coordinated set of "
-                    "replicas from an Amber-like group file.")
+                    "replicas from an Amber-like group file.",
+        # No abbreviation, here as in every other parser in this package. This one was missed,
+        # and it is the parser furthest from the person typing -- so a prefix argparse resolved
+        # here would be a setting nobody wrote, applied to a coordinated multi-rank run.
+        allow_abbrev=False)
     for name, short, long, environment, _must_exist, _required in SPEC:
         flags = [f for f in (short, long) if f]
         parser.add_argument(*flags, dest=name, default=None,
@@ -533,7 +537,7 @@ def verify_only(arguments):
 
 # --- grouped execution -------------------------------------------------------------------------------
 
-def run_grouped(files, arguments, groups):
+def run_grouped(files, arguments, groups, *, prepared=None):
     """Build the ladder the group file describes and hand it to the replica driver."""
     # The group file's directory is NOT put on `sys.path`: the protocol module it names is loaded
     # by path and imports the runtime from the installed package.
@@ -590,7 +594,11 @@ def run_grouped(files, arguments, groups):
         explicit_cpu=str(getattr(protocol, "platform", None) or "").upper() == "CPU",
         precision=getattr(protocol, "precision", None),
         identity_extra={"groups": len(groups),
-                        "group_indices": [g["group_index"] for g in groups]})
+                        "group_indices": [g["group_index"] for g in groups]},
+        # The validated platform, device and coordination. The driver consumes these; it no
+        # longer reloads the machine configuration and resolves a second platform of its own
+        # after every file on disk already exists.
+        prepared=prepared)
     record = run.run(resume=files.resume, extend=files.extend,
                      extend_from=getattr(files, 'extend_from', None))
     if record.get("run_status") == "completed":
@@ -647,9 +655,49 @@ def _print_grouped_summary(record, protocol):
     print("# ---------------------------------------------------------------------------")
 
 
+def _preflight_from_groups(files, arguments, groups):
+    """Run the shared ladder preflight for a directly-invoked executor.
+
+    Returns a `LadderPreflight`, or an exit code when it refuses. The group file is the only
+    description of the launch the executor has, so the inputs come from its FIRST line -- which
+    is legitimate precisely because every line must agree about them (see `_check_group_lines`);
+    a heterogeneous group file is refused before this point rather than silently represented by
+    one of its lines.
+    """
+    from ..run.preflight import PreflightError, preflight_ladder
+
+    first = groups[0]
+    try:
+        return preflight_ladder(
+            topology=first["topology"], system=first["system"], replicas=len(groups),
+            coordinates=first.get("coordinates"), groupfile=arguments.groupfile,
+            trajectory=files.trajectory, restart=files.restart,
+            checkpoint=getattr(files, "checkpoint", None),
+            output=files.output, log=None,
+            # `-ng` means something DIFFERENT at this layer. On the command line it is a claim
+            # about the launch, cross-checked against the MPI world. Here it is simply how many
+            # groups the file has, and `validate` already checks it against the file -- the
+            # generated ladder passes `-ng <states>` on every call, serial runs included. Passing
+            # it on as a launch claim would refuse every single-process ladder, which
+            # `owned_states` explicitly supports.
+            number_of_groups=None,
+            cpu=str(getattr(arguments, "platform", None) or "").upper() == "CPU",
+            protocol="this ladder")
+    except PreflightError as refusal:
+        print(f"replica executor: {refusal}", file=sys.stderr)
+        return 2
+
+
 # --- main -------------------------------------------------------------------------------------------
 
-def main(argv=None):
+def main(argv=None, *, prepared=None):
+    """`prepared` is the `LadderPreflight` the caller already validated this launch with.
+
+    The executor is an independently callable entry point -- `md_tools.remd.executor.main` is
+    importable and the generated ladder calls it -- so it must not depend on someone else having
+    checked first. When nothing is handed in it runs the shared preflight itself, below, at the
+    same point and with the same rules.
+    """
     arguments = _parse(sys.argv[1:] if argv is None else argv)
     if arguments.verify_only:
         return verify_only(arguments)
@@ -671,6 +719,14 @@ def main(argv=None):
                   else f"replica executor: {problem}", file=sys.stderr)
         return 2
 
+    if groups is not None and prepared is None:
+        # Called directly, with nobody having validated this launch. Run the SAME preflight the
+        # generated ladder runs, here, before the output directories below are created -- rather
+        # than letting the driver resolve a platform of its own halfway through the run.
+        prepared = _preflight_from_groups(files, arguments, groups)
+        if isinstance(prepared, int):
+            return prepared
+
     for value in _outputs(files).values():
         Path(value).parent.mkdir(parents=True, exist_ok=True)
 
@@ -683,7 +739,7 @@ def main(argv=None):
             try:
                 if groups is not None:
                     _announce(arguments, files, groups, rank, size)
-                    status = run_grouped(files, arguments, groups)
+                    status = run_grouped(files, arguments, groups, prepared=prepared)
                 else:
                     load_protocol(files.input).run(files)
             except SystemExit as exit_request:

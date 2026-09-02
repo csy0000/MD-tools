@@ -118,8 +118,30 @@ def stage_parser(description: str) -> argparse.ArgumentParser:
                              "choice: it says which GPU, never whether to use one. Rejected with "
                              "--cpu, which has no device to place")
     parser.add_argument("--check", action="store_true",
-                        help="validate inputs and settings, then exit without integrating")
+                        help="validate inputs and settings, then exit without integrating. "
+                             "READ-ONLY: it creates nothing, not even the output directory")
+    _add_refused_flags(parser, "a cMD stage")
     return parser
+
+
+def _add_refused_flags(parser, protocol_name: str) -> None:
+    """Flags of OTHER protocols, accepted by the parser so the preflight can refuse them by name.
+
+    Leaving them off refuses them too, as "unrecognized arguments" -- which names the flag and
+    explains nothing, and puts the rule in argparse rather than in the shared preflight where the
+    generated script and `md-run` are guaranteed to agree about it.
+    """
+    parser.add_argument("-ng", "--number-of-groups", dest="number_of_groups", type=int,
+                        default=None, metavar="N",
+                        help=f"refused for {protocol_name}: -ng groups replicas of a REST2/rREST2 "
+                             f"ladder, and this has one process")
+    parser.add_argument("-groupfile", "--groupfile", dest="groupfile", default=None,
+                        metavar="FILE",
+                        help=f"refused for {protocol_name}: a group file is one line per replica")
+    parser.add_argument("-source-traj", "-src", "--source", dest="source_trajectory",
+                        default=None, metavar="TRAJ",
+                        help=f"refused for {protocol_name}: -source-traj is the equilibrium "
+                             f"ensemble AIS draws its starting frames from")
 
 
 #: Fields a continuation may legitimately change, and which are therefore NOT part of the
@@ -130,6 +152,12 @@ def stage_parser(description: str) -> argparse.ArgumentParser:
 #: timestep, the temperature, the restraint, the seed, the System itself -- would make the
 #: continuation a different simulation wearing the same file names, so all of it is fingerprinted.
 EXTENDABLE_FIELDS = frozenset({"steps", "description"})
+
+#: Keys of the stage dictionary that are PLUMBING rather than settings: they say where this
+#: invocation found things, not what the simulation is. Excluded from the fingerprint and from the
+#: record, because binding them in would make the same physics fingerprint differently depending
+#: on how it was launched -- and `pending_parent` is not even JSON.
+NON_SCIENTIFIC_STAGE_KEYS = frozenset({"resolved_config", "pending_parent"})
 
 
 def _config_fingerprint(stage: dict[str, Any], system_sha: str, topology_sha: str) -> str:
@@ -148,7 +176,7 @@ def _config_fingerprint(stage: dict[str, Any], system_sha: str, topology_sha: st
     if config_path and Path(config_path).is_file():
         config_sha = hashlib.sha256(Path(config_path).read_bytes()).hexdigest()
     payload = {"stage": {k: v for k, v in sorted(stage.items())
-                         if k not in EXTENDABLE_FIELDS and k != "resolved_config"},
+                         if k not in EXTENDABLE_FIELDS and k not in NON_SCIENTIFIC_STAGE_KEYS},
                "system_sha256": system_sha, "topology_sha256": topology_sha,
                "resolved_config_sha256": config_sha}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
@@ -162,6 +190,44 @@ def check_timestep_against_masses(timestep_fs: float, system, topology) -> None:
     implementation of the rule and one place the masses are read.
     """
     resolve_timestep_fs(float(timestep_fs), system, topology)
+
+
+def _completion_gaps(previous: dict[str, Any], *, stage: dict[str, Any], name: str,
+                     restart: Path, trajectory: Path) -> str:
+    """Why a log claiming `status: completed` may not be believed. Empty string when it may.
+
+    "Completed" is a field in a file, and a field in a file is not a finished run. The three ways
+    it lies, in the order they actually happen:
+
+      the log belongs to a DIFFERENT configuration -- a `resolved.config` edited since, or a log
+      copied in from another tree -- so the outputs it describes are not the ones this invocation
+      would produce;
+
+      the outputs are gone. A log survives an interrupted `rm`, a partial copy, or a scratch
+      filesystem that was cleaned; skipping the stage then leaves the NEXT stage to continue from
+      a restart that does not exist;
+
+      the log names counts it cannot produce -- an older schema whose fields this build cannot
+      compare -- in which case nothing has been verified and saying so is the honest answer.
+    """
+    recorded = previous.get("fingerprint")
+    current = previous.get("stage")
+    if recorded is None or not isinstance(current, dict):
+        return ("it carries no configuration fingerprint, so nothing about it can be matched to "
+                "this stage")
+    wanted = {k: v for k, v in sorted(stage.items())
+              if k not in EXTENDABLE_FIELDS and k not in NON_SCIENTIFIC_STAGE_KEYS}
+    theirs = {k: v for k, v in sorted(current.items())
+              if k not in EXTENDABLE_FIELDS and k not in NON_SCIENTIFIC_STAGE_KEYS}
+    differing = sorted(k for k in set(wanted) | set(theirs) if wanted.get(k) != theirs.get(k))
+    if differing:
+        return (f"it records a different configuration for this stage "
+                f"({', '.join(differing)} differ)")
+
+    absent = [str(path) for path in (restart, trajectory) if not Path(path).exists()]
+    if absent:
+        return f"the output(s) it claims are missing: {', '.join(absent)}"
+    return ""
 
 
 def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
@@ -187,22 +253,19 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
             print(f"{name}: {what} {path} does not exist", file=sys.stderr)
             return 2
 
-    # -- already finished? ------------------------------------------------------------------
-    if log_path.is_file():
-        try:
-            previous = read_record(log_path)
-        except Exception:
-            previous = None
-        if previous and previous.get("status") == "completed":
-            print(f"{name}: already completed ({log_path}); not rerunning. "
-                  f"Delete {log_path} to force a rebuild.")
-            return 0
-
-    # PREFLIGHT, BEFORE THE FIRST FILESYSTEM MUTATION. This runs here, in the runtime, and not
-    # only in `md-openmm md-run`: the generated `min.py` and the all-in-one `md.py` call this
-    # function directly, so a guard living in the outer command would leave them open. A `.out`
-    # and a `.log` created before the machine configuration has been read are a directory that
-    # reads as a started run.
+    # PREFLIGHT, BEFORE THE FIRST FILESYSTEM MUTATION -- and before the completion check.
+    #
+    # This runs here, in the runtime, and not only in `md-openmm md-run`: the generated `min.py`
+    # and the all-in-one `md.py` call this function directly, so a guard living in the outer
+    # command would leave them open. A `.out` and a `.log` created before the machine
+    # configuration has been read are a directory that reads as a started run.
+    #
+    # The "already completed" short-circuit used to sit ABOVE this and return 0 on the strength
+    # of one field in a log file. That made a stale or foreign log the authority on whether this
+    # stage's outputs exist and belong to this configuration: a `min.log` copied from another
+    # tree, or left behind by a run whose `resolved.config` has since changed, ended the command
+    # successfully without anything having been verified. It is checked below, after the identity
+    # this preflight establishes.
     from ..run.preflight import PreflightError, preflight_stage
 
     try:
@@ -211,10 +274,50 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
             trajectory=traj_path, restart=restart_path, checkpoint=chk_path,
             output=out_path, log=log_path, cpu=bool(args.cpu),
             device=int(args.device) if args.device is not None else None,
-            protocol=f"stage {name}")
+            protocol=f"stage {name}",
+            pending_parent=stage.get("pending_parent"),
+            number_of_groups=args.number_of_groups, groupfile=args.groupfile,
+            source_trajectory=args.source_trajectory,
+            # The System is deserialised once, inside the preflight, and the timestep is resolved
+            # against ITS masses -- so 4 fs on hydrogens that were never repartitioned is refused
+            # before the `.out` and the `.log` exist rather than after.
+            timestep_fs=stage.get("timestep_fs"),
+            ensemble=stage.get("ensemble"), tau=float(stage.get("tau") or 0.0))
     except PreflightError as refusal:
-        print(f"{name}: {refusal}", file=sys.stderr)
+        # No `{name}:` prefix here: `protocol=f"stage {name}"` is already inside the message, and
+        # printing both produced "cMD: stage cMD: -c ... does not exist".
+        print(f"{refusal}", file=sys.stderr)
         return 2
+
+    if args.check:
+        # READ-ONLY, and it returns HERE. `--check` used to create `-odir`, the `.out` and the
+        # `.log`, validate, and write `status: checked` -- leaving behind exactly the directory
+        # whose absence the caller was trying to confirm. Everything it reported is in the
+        # preflight result, so there is nothing left to open a file for.
+        from ..run.preflight import report_check
+
+        return report_check(checked, what=f"stage {name}",
+                            extra=[("ensemble", stage.get("ensemble") or "-"),
+                                   ("steps", stage.get("steps") or 0)])
+
+    # -- already finished? -------------------------------------------------------------------
+    # Now, with the inputs validated and this build's view of the stage established.
+    if log_path.is_file():
+        try:
+            previous = read_record(log_path)
+        except Exception:
+            previous = None
+        if previous and previous.get("status") == "completed":
+            missing = _completion_gaps(previous, stage=stage, name=name, restart=restart_path,
+                                       trajectory=traj_path)
+            if missing:
+                print(f"{name}: {log_path} says the stage completed, but {missing}. Refusing to "
+                      f"treat it as done; delete {log_path} to rerun, or restore the outputs.",
+                      file=sys.stderr)
+                return 2
+            print(f"{name}: already completed ({log_path}); not rerunning. "
+                  f"Delete {log_path} to force a rebuild.")
+            return 0
 
     from openmm import LangevinMiddleIntegrator, Platform, XmlSerializer, unit
     from openmm.app import PDBFile, Simulation, DCDReporter, StateDataReporter, CheckpointReporter
@@ -356,7 +459,8 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         system_sha = file_facts(system_path)["sha256"]
         topology_sha = file_facts(topology_path)["sha256"]
         fingerprint = _config_fingerprint(stage, system_sha, topology_sha)
-        log.update(stage=dict(stage), fingerprint=fingerprint, implicit=bool(implicit),
+        log.update(stage={k: v for k, v in stage.items() if k != "pending_parent"},
+                   fingerprint=fingerprint, implicit=bool(implicit),
                    inputs={"topology": file_facts(topology_path),
                            "system": file_facts(system_path)},
                    derived={"production_ps": steps * timestep_fs / 1000.0,
@@ -394,22 +498,14 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         elif args.continue_from:
             parent = Path(args.continue_from)
             if not parent.is_file():
-                if args.check:
-                    # Not a failure. --check exists so a whole chain can be validated before any
-                    # of it runs, and in an unrun chain every parent after the first is missing
-                    # by construction. Calling that a failure would make --check useless exactly
-                    # when it is most useful.
-                    log.heading("Preflight")
-                    log(f"  [pending] parent state {parent} does not exist yet; stage "
-                        f"'{name}' is later in the chain. No Context was created.")
-                    log.record["status"] = "pending"
-                    log.save()
-                    out.heading("Preflight")
-                    out.write(f"  pending: parent state {parent} does not exist yet.")
-                    out.completed(f"{name}: pending; nothing was run")
-                    return 0
-                raise SystemExit(f"-c {parent} does not exist: the previous stage writes it only "
-                                 f"when it finishes")
+                # Unreachable in practice, and kept as the backstop it is. The preflight above
+                # refuses a missing `-c` outright unless the chain declared a `PendingParent`,
+                # and `--check` -- the only mode that grants that -- returned before this
+                # function opened a single file. Reaching here means a parent vanished between
+                # the preflight and now, which is a race worth naming rather than dereferencing.
+                raise SystemExit(f"-c {parent} existed at preflight and does not now: something "
+                                 f"removed it while this stage was starting. Refusing to "
+                                 f"continue from a state that is no longer there.")
             state = XmlSerializer.deserialize(parent.read_text(encoding="utf-8"))
             simulation.context.setState(state)
             set_restraint(simulation, float(stage.get("restraint_kcal_per_mol_A2") or 0.0))
@@ -444,16 +540,6 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                                  f"({barostats['interval_ps']:g} ps)"
                                  if barostats["active"] else ""))
         log.update(platform=openmm_platform_facts(simulation.context), barostats=barostats)
-
-        if args.check:
-            log.heading("Preflight")
-            log("  --check: inputs, settings and Force layout validated; no dynamics were run.")
-            log.record["status"] = "checked"
-            log.save()
-            out.heading("Preflight")
-            out.write("  --check: inputs, settings and Force layout validated; nothing was run.")
-            out.completed(f"{name}: checked; no dynamics")
-            return 0
 
         # -- do the work --------------------------------------------------------------------
         log.heading("Run")
@@ -687,7 +773,9 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
     parser.add_argument("--device", default=None, metavar="N",
                         help="CUDA device index. Placement, never platform")
     parser.add_argument("--check", action="store_true",
-                        help="validate every stage and exit without integrating")
+                        help="validate every stage and exit without integrating. READ-ONLY: the "
+                             "whole chain is checked and nothing at all is created")
+    _add_refused_flags(parser, "a cMD workflow")
     args = parser.parse_args(argv)
 
     base = Path(args.out_dir) if args.out_dir else Path(".")
@@ -697,9 +785,10 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
     # output on disk and no way to finish -- and `stage_main`'s own preflight, which runs per
     # stage, could not have caught it any earlier than that.
     #
-    # The continuation is deliberately excluded: every parent after the first is missing by
-    # construction until the stage before it has run.
-    from ..run.preflight import PreflightError, preflight_stage
+    # `-c` for the FIRST stage is not excluded. It is a file the caller named, produced by
+    # something outside this chain, so it must exist even under `--check`; only the parents this
+    # chain produces itself are allowed to be missing, and those are stated per stage below.
+    from ..run.preflight import PendingParent, PreflightError, preflight_stage
 
     try:
         preflight_stage(
@@ -708,20 +797,30 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
             log=args.log or base / f"{plan[0]['name']}.log",
             cpu=bool(args.cpu),
             device=int(args.device) if args.device is not None else None,
-            protocol=f"the {len(plan)}-stage workflow")
+            protocol=f"the {len(plan)}-stage workflow",
+            number_of_groups=args.number_of_groups, groupfile=args.groupfile,
+            source_trajectory=args.source_trajectory)
     except PreflightError as refusal:
         print(f"{Path(script).name}: {refusal}", file=sys.stderr)
         return 2
 
-    previous = None
+    previous = previous_name = None
     for stage in plan:
         name = stage["name"]
         stage_argv = ["-p", args.topology, "-s", args.system,
                       "-log", str(base / f"{name}.log"), "-x", str(base / f"{name}.dcd"),
                       "-o", str(base / f"{name}.out"),
                       "-r", str(base / f"{name}.xml"), "-chk", str(base / f"{name}.chk")]
+        pending = None
         if previous is not None:
             stage_argv += ["-c", previous]
+            if args.check:
+                # THE one legitimate missing continuation, stated rather than inferred: under
+                # `--check` nothing has run, so this parent does not exist yet and the stage that
+                # will write it is named here. Outside `--check` no exemption is granted -- if
+                # the previous stage really ran, the file is there, and if it is not there the
+                # chain must stop rather than silently start this stage from -p.
+                pending = PendingParent(path=Path(previous), produced_by=previous_name)
         elif args.continue_from:
             stage_argv += ["-c", args.continue_from]
         if args.device is not None:
@@ -730,12 +829,14 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
             stage_argv.append("--cpu")
         if args.check:
             stage_argv += ["--check"]
-        code = stage_main(dict(stage, resolved_config=str(config_path)), stage_argv)
+        code = stage_main(dict(stage, resolved_config=str(config_path),
+                               pending_parent=pending), stage_argv)
         if code != 0:
             print(f"{Path(script).name}: stage {name} failed with exit code {code}",
                   file=sys.stderr)
             return code
         previous = str(base / f"{name}.xml")
+        previous_name = name
     return 0
 
 

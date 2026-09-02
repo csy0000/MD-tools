@@ -127,6 +127,29 @@ def ais_parser(description: str) -> argparse.ArgumentParser:
                         help="continue interrupted paths from their checkpoints. A completed "
                              "path is skipped either way; this affects only paths that stopped "
                              "part-way")
+    # Accepted by the parser and REFUSED by the preflight, by name and with the reason. These
+    # are Amber flags that other protocols implement, and a person who has just run a stage will
+    # try them. Leaving them off the parser makes argparse say "unrecognized arguments", which
+    # names the flag and explains nothing; worse, it means the refusal lives in argparse rather
+    # than in the shared preflight, so `md-run` and `AIS.py` could disagree about it -- and they
+    # did, because only `md-run` checked -x at all.
+    for flag, alias, destination, why in (
+            ("-x", "--trajectory", "trajectory",
+             "AIS writes one trajectory per path, AIS_traj0000.nc.., named from the global path "
+             "index; one -x cannot name N files"),
+            ("-c", "--coordinates", "coordinates",
+             "each path starts from its own frame of -source-traj, chosen by the recorded seed"),
+            ("-r", "--restart", "restart",
+             "each path writes its own final_state.xml inside its path directory"),
+            ("-chk", "--checkpoint", "checkpoint",
+             "AIS checkpoints are per-path generations under path_NNNN/checkpoints/, committed "
+             "through an atomic pointer")):
+        parser.add_argument(flag, alias, dest=destination, default=None, metavar="PATH",
+                            help=f"refused for AIS: {why}")
+    parser.add_argument("-groupfile", "--groupfile", dest="groupfile", default=None,
+                        metavar="FILE",
+                        help="refused for AIS: a group file is one line per replica, and AIS "
+                             "paths are distributed by `paths_for_rank`, not enumerated in a file")
     parser.add_argument("--cpu", action="store_true",
                         help="run this invocation on the OpenMM CPU platform, overriding "
                              "machine.openmm.platform. That setting can also select "
@@ -902,7 +925,14 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             number_of_groups=args.number_of_groups,
             output=args.output or out / "AIS.out", log=args.log or out / "AIS.log",
             cpu=bool(args.cpu),
-            device=int(args.device) if args.device is not None else None)
+            device=int(args.device) if args.device is not None else None,
+            # The complete resolved configuration, so the schedule, the barostat refusal, the
+            # source window, the atom counts, the force classification and the frame selection
+            # are all decided BEFORE `-odir` exists -- and so what runs below is the plan that
+            # was validated rather than a second one built from the same inputs.
+            dynamics=dynamics, ais=ais, reporting=reporting, source_config=source_cfg,
+            trajectory=args.trajectory, coordinates=args.coordinates, restart=args.restart,
+            checkpoint=args.checkpoint, groupfile=args.groupfile)
     except PreflightError as refusal:
         print(f"AIS: {refusal}", file=sys.stderr)
         return 2
@@ -910,6 +940,27 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     coordination = checked.coordination
     rank, size = coordination.rank, coordination.size
     source_format = checked.source_format
+
+    if args.check:
+        # READ-ONLY, and it returns HERE, before `-odir` is created. `--check` used to make the
+        # directory, both reports and `selected_source_frames.csv`, then say nothing was
+        # switched -- leaving a tree that a reader, or a later `--resume`, takes for a run that
+        # started. The schedule, the source window, the frame selection and the Force audit are
+        # all in the preflight result already.
+        from ..run.preflight import report_check
+
+        schedule = checked.schedule
+        return report_check(
+            checked, what="AIS",
+            extra=[("source", f"{source_path.name} ({source_format.upper()}, "
+                              f"{checked.source_frames} frame(s), "
+                              f"{checked.eligible_frames} eligible)"),
+                   ("paths", f"{len(checked.chosen_frames)} from frames "
+                             f"{list(checked.chosen_frames)[:8]}"),
+                   ("switching", f"{schedule['switching_steps']} steps, "
+                                 f"{schedule['number_of_updates']} updates, "
+                                 f"{schedule['number_of_observations']} observations"),
+                   ("ensemble", "fixed volume; no barostat")])
 
     out.mkdir(parents=True, exist_ok=True)
     # Every rank keeps its own pair. An explicitly named -log or -o is suffixed the same way an
@@ -940,48 +991,24 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     log("=" * 68)
 
     try:
-        # The System is opened BEFORE the schedule is built, because the schedule reports a
-        # duration and the duration needs the numerical timestep -- which under `auto` is a fact
-        # about the masses in this System, not about the configuration.
-        pdb = PDBFile(str(topology_path))
-        base = XmlSerializer.deserialize(system_path.read_text(encoding="utf-8"))
-
-        timestep = resolve_timestep_fs(dynamics["timestep_fs"], base, pdb.topology)
+        # CONSUMED, not re-derived. Every one of these was computed by `preflight_ais` before
+        # `-odir` existed: the pair was deserialised once, the timestep resolved against the
+        # masses in THAT System, the schedule built, the barostat refused, the solute and the
+        # omega bonds classified and the Force layout audited. Recomputing any of it here would
+        # be a second implementation of a policy that already ran, and the one that decides what
+        # happens would be this one -- the one nothing refused on.
+        pdb, base = checked.loaded.pdb, checked.loaded.system
+        timestep = checked.timestep
         dynamics = dict(dynamics, timestep_fs=timestep["timestep_fs"])
         log.field("timestep", f"{timestep['timestep_fs']} fs (requested "
                               f"{timestep['requested']!r}, {timestep['basis']})")
         log.update(timestep=timestep)
 
-        schedule = switching_schedule(
-            tau_start=float(ais["tau_start"]), tau_end=float(ais["tau_end"]),
-            switching_steps=int(ais["switching_steps"]),
-            parameter_update_interval_steps=int(ais["parameter_update_interval_steps"]),
-            observation_interval_steps=int(ais["observation_interval_steps"]),
-            timestep_fs=float(dynamics["timestep_fs"]),
-            # The three reporting cadences are settings a person wrote and they now do what they
-            # say. `system_printout` and `checkpoint_printout` were validated and then dropped:
-            # accepted, consequential-looking, and inert.
-            trajectory_interval_steps=int(reporting["solute_printout"]),
-            state_interval_steps=int(reporting["system_printout"]),
-            checkpoint_interval_steps=int(reporting["checkpoint_printout"]))
-        if pdb.topology.getNumAtoms() != base.getNumParticles():
-            raise SystemExit(f"{topology_path} has {pdb.topology.getNumAtoms()} atoms but "
-                             f"{system_path} has {base.getNumParticles()} particles")
-        implicit = not base.usesPeriodicBoundaryConditions()
-
-        # No barostat during switching, ever. A pressure-volume term would enter the work and the
-        # path would no longer measure what the Jarzynski/Crooks relations are written for.
-        from ..md._stages import count_barostats
-        if count_barostats(base):
-            raise SystemExit(
-                "the prepared System carries a barostat. AIS switches at FIXED VOLUME: each path "
-                "keeps the box of the frame it started from, and no pressure-volume term enters "
-                "the work. Build the System without a barostat.")
-
-        solute = solute_atom_indices(pdb.topology)
-        omega = classify_omega_bonds(pdb.topology, solute, route="peptide", ligand_sdf=None)
-        excluded = [tuple(int(a) for a in bond)
-                    for bond in omega.get("omega_unscaled_bonds", [])]
+        schedule = checked.schedule
+        implicit = checked.loaded.implicit
+        solute = list(checked.solute)
+        omega = checked.notes["omega"]
+        excluded = [tuple(int(a) for a in bond) for bond in checked.excluded_bonds]
 
         log.heading("Path")
         log.field("tau", f"{ais['tau_start']} -> {ais['tau_end']} (linear)")
@@ -1010,33 +1037,18 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         import mdtraj
 
         top = mdtraj.Topology.from_openmm(pdb.topology)
-        n_frames = sum(chunk.n_frames for chunk in
-                       mdtraj.iterload(str(source_path), top=top, chunk=50))
-        last = source_cfg["last_frame"]
-        last = n_frames - 1 if last is None else int(last)
-        first = int(source_cfg["first_frame"])
-        if last >= n_frames:
-            raise SystemExit(f"ais_source.last_frame = {last} but {source_path.name} holds "
-                             f"{n_frames} frame(s) (0..{n_frames - 1})")
-        stride = int(source_cfg["frame_stride"])
+        # The window, the frame count and the source's own atom count were all established by
+        # the preflight, against this same pair, before anything was written.
+        n_frames = checked.source_frames
+        first = checked.notes["first_frame"]
+        last = checked.notes["last_frame"]
+        stride = checked.notes["frame_stride"]
         eligible = list(range(first, last + 1, stride))
-
-        # The source must describe the SAME particles as the System the paths run in. Read from
-        # the FILE's own header rather than through `top`, which is derived from -p and would
-        # therefore agree with itself. mdtraj would fail on a mismatch too, but obscurely and
-        # several frames in; this fails here, with both counts and both filenames.
+        source_atoms = checked.source_atoms
         # Hashed ONCE, here, and reused by both the record and the resume fingerprint. A
         # production trajectory is large and is already read frame by frame; digesting it twice
         # would double that for a number that has one value.
         source_facts = file_facts(source_path)
-        source_atoms = _source_atom_count(source_path)
-        if source_atoms is not None and source_atoms != pdb.topology.getNumAtoms():
-            raise SystemExit(
-                f"-source-traj {source_path.name} holds {source_atoms} atom(s) but "
-                f"{topology_path.name} and {system_path.name} describe "
-                f"{pdb.topology.getNumAtoms()}. The source ensemble must be of the same system "
-                f"the paths are run in; a trajectory of a different one reads without error and "
-                f"produces work values that mean nothing.")
 
         log.heading("Source ensemble")
         log.field("trajectory", f"{source_path}  ({source_format.upper()})")
@@ -1056,10 +1068,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                                 f"Maxwell-Boltzmann momenta at {dynamics['temperature_K']} K "
                                 f"with its own recorded seed")
 
-        chosen = choose_frames(eligible=eligible, count=int(ais["number_of_paths"]),
-                               selection=source_cfg["selection"],
-                               allow_repeats=bool(source_cfg["allow_repeated_frames"]),
-                               seed=int(dynamics["seed"]))
+        chosen = list(checked.chosen_frames)
         log.field("paths", f"{len(chosen)} starting from frames {chosen[:8]}"
                            + (" ..." if len(chosen) > 8 else ""))
 
@@ -1138,7 +1147,8 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             "resolved_config": run.get("resolved_config"),
         }, sort_keys=True).encode()).hexdigest()
 
-        switcher = TauSwitcher(base, solute, excluded)
+        # The switcher the preflight built and audited, not a second one over the same System.
+        switcher = checked.switcher
         taus = schedule["taus"]
         interval = schedule["parameter_update_interval_steps"]
         per_observation = schedule["updates_per_observation"]
