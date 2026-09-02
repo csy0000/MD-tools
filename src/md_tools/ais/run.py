@@ -1259,6 +1259,12 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         log.save()
         sim_out.failed(f"{type(exc).__name__}: {exc}")
         print(f"AIS: {exc}", file=sys.stderr)
+        if coordination.size > 1:
+            # Returning 1 from one rank is not a failed job, it is a hung one: this rank exits
+            # and every other rank walks on to the barrier before the global work table and waits
+            # there for a participant that has already gone. `fail` prints the reason and takes
+            # the communicator down, so the launcher returns promptly and no rank survives.
+            coordination.fail(f"AIS rank {rank}: {type(exc).__name__}: {exc}", code=1)
         return 1
 
     log.save()

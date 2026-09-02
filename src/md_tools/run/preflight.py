@@ -52,7 +52,7 @@ __all__ = ["PreflightError", "ExecutionPreflight", "StagePreflight", "LadderPref
            "AISPreflight", "preflight_stage", "preflight_ladder", "preflight_ais",
            "check_output_collisions", "check_input_files", "resolve_launch",
            "check_topology_matches_system", "LoadedInputs", "load_inputs", "PendingParent",
-           "check_ensemble", "check_scaling_plan", "report_check"]
+           "check_ensemble", "check_scaling_plan", "report_check", "collectively"]
 
 
 class PreflightError(SystemExit):
@@ -467,6 +467,69 @@ def _continuation_inputs(coordinates, pending: PendingParent | None, *, where: s
            f"this one.)" if pending is not None else ""))
 
 
+#: Test seam: fail the platform probe on exactly these ranks, as a comma-separated list. A rank
+#: whose GPU is held by another job, or whose CUDA context cannot initialise, fails alone and
+#: exactly here -- and that is the case whose collective handling has to be provable without
+#: arranging for a real GPU to be unavailable on one rank of a live launch.
+FAIL_RANKS_ENVIRONMENT = "MD_TOOLS_FAIL_PREFLIGHT_ON_RANKS"
+
+
+def collectively(coordination, thunk, *, what: str):
+    """Run a rank-local check, then AGREE about it. One rank's refusal becomes every rank's.
+
+    This is the difference between a stopped job and a hung one. Every check below is rank-local
+    -- a GPU held by another job, a device that will not initialise, a path visible on one node
+    and not another -- so without an agreement step the failing rank raises and exits while every
+    other rank walks on to the next collective and waits there for a participant that has already
+    gone. The launcher then reports nothing, and the job occupies its GPUs until a wall clock
+    kills it.
+
+    `allgather` rather than a bare `all_agree`: every rank ends up holding every rank's message,
+    so the error a person reads names WHICH ranks failed and why, from whichever rank's output
+    they happen to look at first.
+    """
+    error = None
+    result = None
+    try:
+        result = thunk()
+    except PreflightError as refusal:
+        error = str(refusal)
+
+    if coordination.size <= 1:
+        if error:
+            raise PreflightError(error)
+        return result
+
+    reports = coordination.allgather(error)
+    failed = [(rank, message) for rank, message in enumerate(reports) if message]
+    if not failed:
+        return result
+    if len(failed) == len(reports):
+        # Everyone hit it: it is not rank-local, so say it once rather than N times.
+        raise PreflightError(failed[0][1])
+    detail = "\n".join(f"  rank {rank} of {coordination.size}: {message}"
+                        for rank, message in failed)
+    raise PreflightError(
+        f"{what} failed on {len(failed)} of {coordination.size} rank(s), so the whole launch is "
+        f"refused:\n{detail}\n"
+        f"  Every rank stops. A rank that failed alone would leave the rest of the ladder waiting "
+        f"at the next collective for a participant that has already exited.")
+
+
+def _fail_here_if_asked(coordination) -> None:
+    """Honour the rank-failure test seam. A no-op in every normal run."""
+    import os
+
+    wanted = os.environ.get(FAIL_RANKS_ENVIRONMENT)
+    if not wanted:
+        return
+    ranks = {int(part) for part in str(wanted).replace(",", " ").split()}
+    if coordination.rank in ranks:
+        raise PreflightError(
+            f"{FAIL_RANKS_ENVIRONMENT} names this rank: simulating a rank-local platform failure "
+            f"on rank {coordination.rank} of {coordination.size}.")
+
+
 def _common(*, topology, system, outputs, inputs, cpu, device, number_of_groups, replicas,
             protocol, machine_config, check_particles=True, load=False):
     """Steps 1-11, in order. Shared by every mode; each mode adds only its own inputs."""
@@ -480,15 +543,24 @@ def _common(*, topology, system, outputs, inputs, cpu, device, number_of_groups,
                             inputs={"p": topology, "s": system, **(inputs or {})})
 
     machine = _resolve_machine(machine_config)
-    acceleration, index, detail = _resolve_platform(machine, cpu=cpu, device=device,
-                                                    coordination=coordination)
-    # Loaded once when the mode has refusals that need to look inside the System; the particle
-    # comparison then comes from the loaded pair rather than from a second parse of both files.
-    loaded = load_inputs(topology, system) if load else None
-    if loaded is not None:
-        particles = loaded.particles
-    else:
-        particles = check_topology_matches_system(topology, system) if check_particles else None
+
+    def _platform_and_inputs():
+        _fail_here_if_asked(coordination)
+        resolved = _resolve_platform(machine, cpu=cpu, device=device, coordination=coordination)
+        # Loaded once when the mode has refusals that need to look inside the System; the
+        # particle comparison then comes from the loaded pair rather than a second parse.
+        prepared = load_inputs(topology, system) if load else None
+        if prepared is not None:
+            count = prepared.particles
+        else:
+            count = check_topology_matches_system(topology, system) if check_particles else None
+        return resolved, prepared, count
+
+    # THE COLLECTIVE POINT. Everything above is a property of the command line or of files every
+    # rank sees identically; everything inside is rank-local -- this rank's device, this rank's
+    # view of the filesystem, this rank's CUDA context.
+    (acceleration, index, detail), loaded, particles = collectively(
+        coordination, _platform_and_inputs, what=f"the {protocol} preflight")
     return coordination, machine, acceleration, index, detail, particles, loaded
 
 

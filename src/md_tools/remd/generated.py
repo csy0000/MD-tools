@@ -417,6 +417,8 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     # The validated result travels WITH the call. The executor would otherwise run its own
     # preflight (it is independently callable and must be safe alone), and the driver would
     # otherwise resolve a second platform after every file on disk already existed.
+    from .executor import INTERRUPTED_STATUS
+
     code = int(replica_executor.main(executor_argv, prepared=checked) or 0)
 
     # The executor owns the run and writes its own authoritative records. This log exists so that
@@ -439,6 +441,13 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     else:
         log.fail(f"the executor returned {code}")
     log.save()
+    if code not in (0, INTERRUPTED_STATUS) and coordination.size > 1:
+        # A non-zero return from ONE rank of a ladder is a hung job, not a failed one: this
+        # process exits and the others wait at their next collective for a participant that has
+        # already gone. An interrupted run is excluded deliberately -- that is a clean,
+        # checkpointed stop that every rank reaches together.
+        coordination.fail(f"{protocol_name} rank {coordination.rank}: the executor returned "
+                          f"{code}", code=code)
     return code
 
 

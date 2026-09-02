@@ -63,10 +63,27 @@ def projects(tmp_path_factory):
                                      "--config", str(configuration)],
                               capture_output=True, text=True, timeout=600)
         assert done.returncode == 0, done.stdout + done.stderr
-    # Files that exist, so preflight reaches the MPI check rather than refusing on the inputs.
-    (root / "built.pdb").write_text("END\n", encoding="utf-8")
-    (root / "built.xml").write_text("<System/>\n", encoding="utf-8")
-    (root / "source.dcd").write_bytes(b"\x54\x00\x00\x00CORD" + b"\x00" * 200)
+    # A REAL built pair and a REAL source trajectory.
+    #
+    # These were a one-line PDB, a `<System/>` stub and 200 zero bytes behind a DCD magic number,
+    # on the reasoning that preflight only had to get as far as the MPI check. That stopped being
+    # true when the preflight began deserialising the pair and reading the source: rank 0 now
+    # fails on the stub before the rank-local case under test can be reached, and a test in which
+    # EVERY rank fails cannot demonstrate what happens when ONE does.
+    ala = REPO / "tests" / "data" / "ALA.pdb"
+    if not ala.is_file():
+        pytest.skip("no ALA fixture")
+    (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
+    built = subprocess.run(
+        CLI + ["build-top", "-i", str(ala), "-os", "built.xml", "-op", "built.pdb",
+               "-log", "built.log", "--config", str(root / "sys.config")],
+        cwd=root, capture_output=True, text=True, timeout=1800)
+    assert built.returncode == 0, built.stdout + built.stderr
+
+    import mdtraj
+
+    frames = mdtraj.load(str(root / "built.pdb"))
+    mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
     return root
 
 
@@ -188,3 +205,87 @@ def test_the_failing_rank_names_itself(tmp_path):
                           timeout=LAUNCH_TIMEOUT, env=_environment())
     assert done.returncode != 0
     assert "[rank 2/3]" in done.stdout + done.stderr, done.stdout + done.stderr
+
+
+# --- one rank fails during preflight -------------------------------------------------------------
+#
+# The case a real multi-GPU launch hits: rank 3's device is held by another job, or its CUDA
+# context will not initialise. Everything before that point is a property of the command line and
+# of files every rank sees identically, so rank 3 is the only one that fails -- and if it simply
+# raises, it exits while ranks 0..2 walk on to the next collective and wait there for a
+# participant that has already gone. The launcher reports nothing and the job holds its GPUs until
+# a wall clock kills it.
+#
+# `MD_TOOLS_FAIL_PREFLIGHT_ON_RANKS` is the seam that makes this provable without arranging for a
+# real GPU to be unavailable on exactly one rank of a live launch. It fails at precisely the point
+# a rank-local platform failure fails.
+
+FAIL_RANKS = "MD_TOOLS_FAIL_PREFLIGHT_ON_RANKS"
+
+
+@pytest.mark.parametrize("entry", ["md-run", "wrapper"])
+@pytest.mark.parametrize("protocol", ["REST2", "AIS"])
+def test_one_rank_failing_preflight_stops_the_whole_launch_promptly(entry, protocol, projects,
+                                                                    tmp_path):
+    """Rank 1 of 2 fails. The launcher must return non-zero, and neither rank may survive.
+
+    The TIMEOUT is the assertion. A hang is the defect being tested for, so a test that waits
+    forever cannot detect it.
+    """
+    _require_mpirun()
+    project = projects / protocol
+    destination = tmp_path / "never"
+
+    if entry == "md-run":
+        argv = ["md-openmm", "md-run", "-i", f"{protocol}.in",
+                "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination)]
+    else:
+        argv = [sys.executable, str(project / f"{protocol}.py"),
+                "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination)]
+    if protocol == "AIS":
+        argv += ["-source-traj", "../source.dcd"]
+
+    done = subprocess.run(["mpirun", "-n", "2", *argv], cwd=project, capture_output=True,
+                          text=True, timeout=LAUNCH_TIMEOUT, env=_environment(**{FAIL_RANKS: "1"}))
+    message = done.stdout + done.stderr
+    assert done.returncode != 0, message[-2000:]
+    # Named as a rank-local failure, with the rank in it -- so a person reading either rank's
+    # output learns which one failed rather than that "the launch failed".
+    assert "rank 1" in message, message[-3000:]
+    assert not destination.exists(), sorted(p.name for p in destination.iterdir())
+
+
+def test_every_rank_failing_reports_the_reason_once_rather_than_n_times(projects, tmp_path):
+    """A condition every rank hits is not rank-local, and repeating it N times only hides it."""
+    _require_mpirun()
+    project = projects / "REST2"
+    destination = tmp_path / "never"
+    done = subprocess.run(
+        ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
+         "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination)],
+        cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
+        env=_environment(**{FAIL_RANKS: "0,1"}))
+    message = done.stdout + done.stderr
+    assert done.returncode != 0
+    assert "of 2 rank(s), so the whole launch is refused" not in message, (
+        "a condition every rank hit was reported as a partial, rank-local failure:\n" + message)
+    assert not destination.exists()
+
+
+def test_the_collective_agreement_is_the_one_in_the_mpi_authority():
+    """`collectively` must go through `Coordination`, not import mpi4py for itself.
+
+    A second `from mpi4py import MPI` anywhere is a second policy, and it will be the one that
+    runs. The rule is stated in CLAUDE.md; this is it as a test.
+    """
+    import inspect
+
+    from md_tools.run import preflight
+
+    source = inspect.getsource(preflight)
+    # The IMPORT, not the word: this module names mpi4py in prose, explaining why it does not
+    # import it, and a test that forbade the word would forbid the explanation.
+    for forbidden in ("from mpi4py", "import mpi4py"):
+        assert forbidden not in source, f"the preflight has its own `{forbidden}`"
+    assert "coordination.allgather" in source, (
+        "the agreement does not go through the Coordination object")
