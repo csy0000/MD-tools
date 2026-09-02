@@ -50,10 +50,18 @@ def test_the_ais_runtime_hashes_the_source_once_and_records_it():
     assert source.count('file_facts(source_path)') == 1, (
         "the source is hashed more than once; a production trajectory is read enough already")
 
-    # And nothing inside the per-path function reads it again.
+    # And nothing inside the per-path function reads THE SOURCE again.
+    #
+    # Narrowed from "hashes nothing". A completion manifest now records the sha256 of the path's
+    # OWN outputs -- its trajectory and its CSVs -- because a completed path is skipped, and
+    # skipping it on the strength of a record whose files may have been truncated or replaced is
+    # how a directory reads as finished while not being. Those are small files the path has just
+    # written and still has open; the cost this test exists to guard is re-reading the SOURCE
+    # trajectory, which is the large one.
     path_function = source[source.index("def run_one_path("):source.index("def _read_source_frame(")]
-    assert "file_facts" not in path_function and "sha256" not in path_function, (
-        "the per-path runner hashes something; the digest belongs at run scope")
+    for forbidden in ("file_facts(source", "sha256(source", "source_facts"):
+        assert forbidden not in path_function, (
+            f"the per-path runner reads the source digest ({forbidden}); it belongs at run scope")
 
 
 def test_the_fingerprint_binds_the_source_the_system_and_the_schedule():

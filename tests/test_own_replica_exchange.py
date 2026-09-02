@@ -83,7 +83,12 @@ def test_a_group_file_is_parsed_with_shlex_and_never_evaluated(tmp_path):
     path = _group_file(tmp_path, [
         f'-i "a b.py" -p t.pdb -s s.xml -c "$(touch {marker})" --group-index 0'])
     groups = replica_executor.parse_group_file(path)
-    assert groups[0]["input"] == "a b.py", "quoted values must survive parsing"
+    # The VALUE survives quoting, and a relative one is now resolved against the group file's own
+    # directory -- which is how Amber reads a group file and how everyone who writes one expects
+    # it to be read. It used to be resolved against `os.getcwd()`, so `mpirun` from one directory
+    # with a group file in another gave every rank a different idea of where its inputs were.
+    assert Path(groups[0]["input"]).name == "a b.py", "quoted values must survive parsing"
+    assert Path(groups[0]["input"]).parent == path.resolve().parent
     # shlex leaves the substitution as literal text; a shell would have run it.
     assert "$(touch" in groups[0]["coordinates"]
     assert not marker.exists(), "the group file was evaluated by a shell"

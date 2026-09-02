@@ -167,7 +167,47 @@ def parse_group_file(path):
     if not groups:
         raise GroupFileError(f"{path} contains no group lines")
     _check_group_indices(path, groups)
+    _resolve_group_paths(path, groups)
+    _require_homogeneous_groups(path, groups)
     return groups
+
+
+def _resolve_group_paths(path, groups):
+    """A relative path in a group line is relative to the GROUP FILE, not to `os.getcwd()`.
+
+    Amber reads group files this way and so does everyone who writes one, but this resolved them
+    against the working directory. `mpirun` from one directory and a group file in another then
+    silently gave every rank a different idea of where `built.pdb` was -- usually "nowhere", which
+    is at least loud, and occasionally a DIFFERENT built.pdb, which is not.
+    """
+    parent = Path(path).resolve().parent
+    for group in groups:
+        for field in ("input", "topology", "system", "coordinates", "solute"):
+            value = group.get(field)
+            if value and not Path(value).is_absolute():
+                group[field] = str(parent / value)
+
+
+#: Fields every line of a homogeneous ladder must agree about. The current ladder is exactly that
+#: -- N rungs of ONE system differing only in tau, which is derived from the group index -- so a
+#: line naming a different topology or a different starting state is not a per-state input this
+#: build implements. It is a mistake, and accepting it would run a ladder whose rungs are not
+#: states of the same Hamiltonian while every exchange log looked healthy.
+HOMOGENEOUS_GROUP_FIELDS = ("input", "topology", "system", "coordinates", "solute")
+
+
+def _require_homogeneous_groups(path, groups):
+    for field in HOMOGENEOUS_GROUP_FIELDS:
+        values = {group.get(field) for group in groups}
+        if len(values) > 1:
+            listed = ", ".join(f"line {group['line']}: {group.get(field)}"
+                               for group in groups[:4])
+            raise GroupFileError(
+                f"{path}: the group lines give {len(values)} different values for {field}, and "
+                f"this ladder is homogeneous -- N rungs of ONE system, differing only in tau, "
+                f"which is derived from --group-index. Per-state inputs are not implemented, so "
+                f"accepting these would run rungs that are not states of the same Hamiltonian "
+                f"while every exchange log looked healthy.\n  {listed}")
 
 
 def _parse_group_line(path, number, tokens):

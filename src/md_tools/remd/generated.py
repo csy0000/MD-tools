@@ -251,12 +251,92 @@ def replica_parser(description: str = "one coordinated replica-exchange ladder")
     parser.add_argument("--extend", type=int, default=0, metavar="N")
     parser.add_argument("--extend-from", default=None, metavar="DIRECTORY")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="replace the ladder's COMPLETE existing output inventory -- the "
+                             "reports, the per-state trajectories, the restart manifest, "
+                             "rem.log and the generated helpers -- instead of refusing")
     return parser
+
+
+#: Marker line carrying the sha256 of the content a helper was generated from. Written into the
+#: file itself rather than into a sidecar: a helper and a record of it in another file are two
+#: things that can be separated, and the one that gets copied on its own is the helper.
+HELPER_FINGERPRINT = "# md-tools-helper-sha256:"
+
+
+def _yaml_text(document) -> str:
+    import io
+
+    from ..openmm.yaml_io import write_yaml
+
+    buffer = io.StringIO()
+    try:
+        write_yaml(buffer, document)
+        return buffer.getvalue()
+    except Exception:                                      # noqa: BLE001 - writer wants a path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory) / "solute.yaml"
+            write_yaml(scratch, document)
+            return scratch.read_text(encoding="utf-8")
+
+
+def _group_file_text(protocol_name, states, ladder, args, protocol_file, solute_yaml) -> str:
+    lines = [f"# {protocol_name}: {states} states, tau 0.0 to {ladder['tau_max']}.",
+             "# One group per line, inputs only. Run-level outputs go on the executor call,",
+             "# because they describe the coordinated run rather than one replica.",
+             ""]
+    for index in range(states):
+        parts = [f"-i {protocol_file.name}", f"-p {args.topology}", f"-s {args.system}"]
+        if args.continue_from:
+            parts.append(f"-c {args.continue_from}")
+        parts += [f"--solute {solute_yaml.name}", f"--group-index {index}"]
+        lines.append(" ".join(parts))
+    return "\n".join(lines) + "\n"
+
+
+def _write_helper_if_compatible(destination: Path, text: str, *, force: bool = False) -> None:
+    """Write a helper, or refuse an existing one that was generated from different content.
+
+    Content-addressed rather than overwritten. A `_protocol.py` left by a ladder with a different
+    state count or exchange interval is executable, runs perfectly, and simulates something else;
+    silently replacing it is almost as bad, because a run that was already using it is then
+    reading a different file than the one it started with.
+
+    The file is written to a temporary and moved into place, so no rank ever reads a half-written
+    helper -- which on a group file means a ladder with fewer rungs than it has states.
+    """
+    import hashlib
+    import os
+
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    stamped = f"{HELPER_FINGERPRINT}{digest}\n{text}"
+    if destination.is_file():
+        existing = destination.read_text(encoding="utf-8")
+        if existing == stamped:
+            return                                         # already exactly this
+        recorded = None
+        if existing.startswith(HELPER_FINGERPRINT):
+            recorded = existing.splitlines()[0][len(HELPER_FINGERPRINT):].strip()
+        if not force:
+            raise SystemExit(
+                f"{destination} already exists and was generated from different content "
+                f"({'sha256 ' + recorded[:12] + '...' if recorded else 'no fingerprint'} against "
+                f"{digest[:12]}...).\n"
+                f"  A stale helper is executed or read as though it belonged to this ladder: a "
+                f"`_protocol.py` from a run with a different state count runs perfectly and "
+                f"simulates something else.\n"
+                f"  Delete it to regenerate, or pass --force.")
+    staging = destination.with_name(destination.name + ".partial")
+    staging.write_text(stamped, encoding="utf-8")
+    os.replace(staging, destination)
 
 
 def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     """Prepare the ladder's inputs and hand them to the validated executor."""
     import argparse
+    import hashlib
 
     parser = replica_parser(
         f"{ladder['protocol']}: one coordinated replica-exchange ladder")
@@ -345,27 +425,45 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     protocol_file = out / "_protocol.py"
     group_file = out / f"{protocol_name}.group"
 
-    if rank == 0:
-        if not solute_yaml.is_file():
-            # Written from the document the preflight ALREADY derived and refused on. Deriving it
-            # again here would classify the omega bonds a second time, and the copy that decided
-            # what the ladder scaled would be this one -- the one no refusal could reach.
-            from ..openmm.yaml_io import write_yaml
+    # THE HELPERS. Rank 0 alone writes them, atomically; every rank then verifies it sees the
+    # same bytes.
+    #
+    # Every rank used to write all three. Under `mpirun -n 8` that is eight processes truncating
+    # and rewriting one path at once: the file a rank subsequently READS could be another rank's
+    # half-written copy, and the failure is intermittent and looks like a corrupt YAML file.
+    #
+    # They are content-addressed, so a helper left behind by an incompatible earlier run is
+    # refused rather than reused or silently replaced. `_protocol.py` is the sharpest case: it is
+    # executed, so a stale one from a ladder with a different state count or exchange interval
+    # runs perfectly and simulates something else.
+    from ..build.record import file_facts
 
-            write_yaml(solute_yaml, checked.notes["solute_document"])
-        protocol_file.write_text(protocol_file_text(ladder), encoding="utf-8")
-        lines = [f"# {protocol_name}: {states} states, tau 0.0 to {ladder['tau_max']}.",
-                 "# One group per line, inputs only. Run-level outputs go on the executor call,",
-                 "# because they describe the coordinated run rather than one replica.",
-                 ""]
-        for index in range(states):
-            parts = [f"-i {protocol_file.name}", f"-p {args.topology}", f"-s {args.system}"]
-            if args.continue_from:
-                parts.append(f"-c {args.continue_from}")
-            parts += [f"--solute {solute_yaml.name}", f"--group-index {index}"]
-            lines.append(" ".join(parts))
-        group_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    solute_text = _yaml_text(checked.notes["solute_document"])
+    protocol_text = protocol_file_text(ladder)
+    group_text = _group_file_text(protocol_name, states, ladder, args, protocol_file, solute_yaml)
+    helpers = {solute_yaml: solute_text, protocol_file: protocol_text, group_file: group_text}
+
+    if rank == 0:
+        for destination, text in helpers.items():
+            _write_helper_if_compatible(destination, text,
+                                        force=bool(args.force or args.overwrite))
     coordination.barrier()
+
+    # EVERY rank verifies, after the barrier: rank 0 writing correctly and rank 5 reading a file
+    # its node has not seen yet is a real failure on a shared filesystem, and it is silent.
+    for destination, text in helpers.items():
+        if not destination.is_file():
+            coordination.fail(f"{destination} was not written by rank 0")
+        actual = file_facts(destination)["sha256"]
+        stamped = f"{HELPER_FINGERPRINT}{hashlib.sha256(text.encode()).hexdigest()}\n{text}"
+        expected = hashlib.sha256(stamped.encode("utf-8")).hexdigest()
+        if actual != expected:
+            coordination.fail(
+                f"{destination} does not hold what this ladder wrote (sha256 {actual[:12]}... "
+                f"against {expected[:12]}...). Every rank must read the same helper; continuing "
+                f"would run rungs configured differently from one another.")
+    coordination.agree(hashlib.sha256(
+        "".join(sorted(helpers.values())).encode("utf-8")).hexdigest(), what="the ladder helpers")
 
     executor_argv = [
         "-ng", str(states),

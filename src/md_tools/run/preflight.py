@@ -52,7 +52,8 @@ __all__ = ["PreflightError", "ExecutionPreflight", "StagePreflight", "LadderPref
            "AISPreflight", "preflight_stage", "preflight_ladder", "preflight_ais",
            "check_output_collisions", "check_input_files", "resolve_launch",
            "check_topology_matches_system", "LoadedInputs", "load_inputs", "PendingParent",
-           "check_ensemble", "check_scaling_plan", "report_check", "collectively"]
+           "check_ensemble", "check_scaling_plan", "report_check", "collectively",
+           "OutputInventory", "check_existing_outputs"]
 
 
 class PreflightError(SystemExit):
@@ -62,6 +63,17 @@ class PreflightError(SystemExit):
 # ---------------------------------------------------------------------------------------------
 # the individual checks
 # ---------------------------------------------------------------------------------------------
+
+#: Inventory roles that ARE command-line flags, so a refusal can spell them as the person typed
+#: them. Everything else is a derived output and is named plainly -- "-state_trajectory_0" would
+#: be a flag that does not exist.
+FLAG_ROLES = frozenset({"o", "out", "log", "x", "trajectory", "r", "restart", "c", "chk",
+                        "checkpoint", "p", "s", "source-traj", "groupfile"})
+
+
+def _role(name: str) -> str:
+    return f"-{name}" if name in FLAG_ROLES else name
+
 
 def check_output_collisions(*, outputs: dict[str, str | None],
                             inputs: dict[str, str | None] | None = None) -> None:
@@ -85,9 +97,9 @@ def check_output_collisions(*, outputs: dict[str, str | None],
         if resolved in seen:
             first, second = sorted((seen[resolved], name))
             raise PreflightError(
-                f"-{first} and -{second} are the same file ({resolved}). They are different "
-                f"outputs with different readers; one file cannot be both, and opening it twice "
-                f"would have one of them truncate the other.")
+                f"{_role(first)} and {_role(second)} are the same file ({resolved}). They are "
+                f"different outputs with different readers; one file cannot be both, and opening "
+                f"it twice would have one of them truncate the other.")
         seen[resolved] = name
 
     for name, value in (inputs or {}).items():
@@ -96,8 +108,9 @@ def check_output_collisions(*, outputs: dict[str, str | None],
         resolved = Path(value).resolve(strict=False)
         if resolved in seen:
             raise PreflightError(
-                f"-{seen[resolved]} would be written over the input -{name} ({resolved}). The "
-                f"run reads that file; writing an output onto it destroys what the run needs.")
+                f"{_role(seen[resolved])} would be written over the input {_role(name)} "
+                f"({resolved}). The run reads that file; writing an output onto it destroys what "
+                f"the run needs.")
 
 
 def check_input_files(**paths: str | None) -> None:
@@ -285,6 +298,60 @@ def load_inputs(topology, system) -> LoadedInputs:
 
 
 @dataclass(frozen=True)
+class OutputInventory:
+    """EVERY file and directory a run will create or modify, named before any of it exists.
+
+    `check_output_collisions` compared the handful of paths that arrive as flags. That is not the
+    inventory: a ladder also writes `solute.yaml`, `_protocol.py`, a group file, `rem.log`, N
+    per-state trajectories and a restart manifest, and an AIS run writes a global work table, a
+    summary, a selected-frames table, a run identity, and per path a directory, a staged
+    trajectory, two CSVs, a checkpoint generation tree and a completion manifest. None of those
+    were checked against anything, so `--overwrite` -- which is supposed to say "yes, replace what
+    is there" -- governed `resolved.config` alone and every other file was replaced silently
+    whether it was asked for or not.
+
+    `roles` maps a short name to the path, so a refusal can say WHICH output is in the way rather
+    than printing a list and leaving the reader to work it out.
+    """
+
+    roles: dict[str, Path]
+    #: Paths whose existence is expected and harmless -- a directory a person made themselves, a
+    #: checkpoint tree a `--resume` is going to read. Existing-output policy skips these.
+    resumable: frozenset[str] = frozenset()
+
+    def existing(self) -> dict[str, Path]:
+        return {role: path for role, path in sorted(self.roles.items())
+                if role not in self.resumable and Path(path).exists()}
+
+    def record(self) -> dict[str, str]:
+        return {role: str(path) for role, path in sorted(self.roles.items())}
+
+
+def check_existing_outputs(inventory: OutputInventory, *, overwrite: bool = False,
+                           resume: bool = False, where: str = "this run") -> None:
+    """Refuse to overwrite an existing run unless told to, for the WHOLE inventory.
+
+    A `-odir` that already holds outputs is a run that happened. Writing into it produces a
+    directory that is half one run and half another, and every file in it looks equally current.
+    `--resume` is the other legitimate answer: it says the caller means to continue THAT run, and
+    the identity checks downstream then decide whether they may.
+    """
+    if overwrite or resume:
+        return
+    present = inventory.existing()
+    if not present:
+        return
+    listed = "\n".join(f"    {role:<20} {path}" for role, path in list(present.items())[:8])
+    more = f"\n    ... and {len(present) - 8} more" if len(present) > 8 else ""
+    raise PreflightError(
+        f"{where}: {len(present)} output(s) already exist:\n{listed}{more}\n"
+        f"  This directory already holds a run. Writing into it would leave a tree that is half "
+        f"one run and half another, with every file looking equally current.\n"
+        f"  Pass --overwrite to replace them, --resume to continue that run, or choose another "
+        f"-odir.")
+
+
+@dataclass(frozen=True)
 class PendingParent:
     """A `-c` that does not exist yet BECAUSE an earlier stage of this same chain will write it.
 
@@ -386,6 +453,8 @@ class ExecutionPreflight:
     loaded: LoadedInputs | None = None
     #: The resolved timestep record, including how `auto` was decided and what the masses proved.
     timestep: dict[str, Any] | None = None
+    #: Every file and directory this run will create or modify.
+    inventory: OutputInventory | None = None
     notes: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -581,9 +650,11 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
         check_trajectory_suffix(Path(trajectory))
 
     inputs = _continuation_inputs(coordinates, pending_parent, where=protocol)
+    inventory = _stage_inventory(output=output, log=log, trajectory=trajectory, restart=restart,
+                                 checkpoint=checkpoint)
     coordination, machine, acceleration, index, detail, particles, loaded = _common(
         topology=topology, system=system,
-        outputs={"o": output, "log": log, "x": trajectory, "r": restart, "chk": checkpoint},
+        outputs=inventory.roles,
         inputs=inputs, cpu=cpu, device=device, number_of_groups=None, replicas=None,
         protocol=protocol, machine_config=machine_config, load=timestep_fs is not None)
 
@@ -599,8 +670,29 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
                           device_index=index,
                           device_policy=str(machine.get("device_policy") or "local_rank"),
                           device_policy_detail=detail, particles=particles, loaded=loaded,
-                          timestep=resolved_timestep,
+                          timestep=resolved_timestep, inventory=inventory,
                           trajectory=Path(trajectory) if trajectory else None)
+
+
+def _stage_inventory(*, output, log, trajectory, restart, checkpoint) -> OutputInventory:
+    """A stage's complete inventory, including the outputs it derives rather than is given.
+
+    The phase-space stream and the checkpoint GENERATION TREE are the two that were invisible:
+    neither arrives as a flag, both are written, and `--overwrite` therefore governed neither.
+    """
+    roles: dict[str, Path] = {}
+    for role, value in (("out", output), ("log", log), ("trajectory", trajectory),
+                        ("restart", restart)):
+        if value:
+            roles[role] = Path(value)
+    if trajectory:
+        roles["phase_space"] = Path(trajectory).with_suffix(".phase_space.nc")
+    if checkpoint:
+        checkpoint = Path(checkpoint)
+        roles["checkpoints"] = checkpoint.parent / f"{checkpoint.stem}.checkpoints"
+    # The checkpoint tree is what a `--resume` reads, so its presence is never itself the
+    # objection -- `check_existing_outputs` is about a FINISHED run being in the way.
+    return OutputInventory(roles=roles, resumable=frozenset({"checkpoints"}))
 
 
 def report_check(result, *, what: str, extra=()) -> int:
@@ -688,10 +780,13 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                                                        where=protocol))
     if groupfile:
         inputs["groupfile"] = groupfile
+    inventory = _ladder_inventory(protocol=protocol, replicas=int(replicas), output=output,
+                                  log=log, trajectory=trajectory, restart=restart,
+                                  checkpoint=checkpoint, groupfile=groupfile)
 
     coordination, machine, acceleration, index, detail, particles, loaded = _common(
         topology=topology, system=system,
-        outputs={"o": output, "log": log, "x": trajectory, "r": restart, "chk": checkpoint},
+        outputs=inventory.roles,
         inputs=inputs, cpu=cpu, device=device, number_of_groups=number_of_groups,
         replicas=int(replicas), protocol=protocol, machine_config=machine_config,
         load=timestep_fs is not None or solute_indices is not None or route is not None)
@@ -734,9 +829,36 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                            device_policy=str(machine.get("device_policy") or "local_rank"),
                            device_policy_detail=detail, particles=particles, loaded=loaded,
                            timestep=resolved_timestep, replicas=int(replicas),
+                           inventory=inventory,
                            force_audit=audit, scaled_system=scaled,
                            excluded_bonds=tuple(tuple(int(a) for a in b) for b in excluded_bonds),
                            notes={"solute_document": solute_record} if solute_record else {})
+
+
+def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, checkpoint,
+                      groupfile) -> OutputInventory:
+    """A ladder's complete inventory: the run-level files AND the per-state ones.
+
+    `remd0.nc .. remdN-1.nc` are the scientific result and were not in any inventory at all --
+    one per thermodynamic state, written by the root, and silently replaceable. So were
+    `solute.yaml`, `_protocol.py`, the group file and `rem.log`.
+    """
+    roles: dict[str, Path] = {}
+    for role, value in (("out", output), ("log", log), ("trajectory", trajectory),
+                        ("restart", restart), ("checkpoint", checkpoint)):
+        if value:
+            roles[role] = Path(value)
+    directory = Path(output).parent if output else Path(".")
+    roles["solute"] = directory / "solute.yaml"
+    roles["protocol_helper"] = directory / "_protocol.py"
+    if not groupfile:
+        # A group file the caller NAMED is an INPUT -- it is read, not written -- and listing it
+        # among the outputs made it collide with itself.
+        roles["group_file"] = directory / f"{protocol}.group"
+    roles["rem_log"] = directory / "rem.log"
+    for state in range(int(replicas)):
+        roles[f"state_trajectory_{state}"] = directory / f"remd{state}.nc"
+    return OutputInventory(roles=roles)
 
 
 def preflight_ais(*, topology, system, source, number_of_groups=None, output=None, log=None,
@@ -778,11 +900,46 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
 
     prepared = _prepare_ais(loaded, source=Path(source), dynamics=dynamics, ais=ais,
                             reporting=reporting, source_config=source_config)
+    prepared["inventory"] = _ais_inventory(output=output, log=log,
+                                           paths=len(prepared["chosen_frames"]))
     return AISPreflight(coordination=coordination, machine=machine, acceleration=acceleration,
                         device_index=index,
                         device_policy=str(machine.get("device_policy") or "local_rank"),
                         device_policy_detail=detail, particles=particles, loaded=loaded,
                         source=Path(source), source_format=source_format, **prepared)
+
+
+def _ais_inventory(*, output, log, paths: int) -> OutputInventory:
+    """AIS's complete inventory: the global tables AND every per-path artefact.
+
+    A path directory holds a staged trajectory, two CSVs, a checkpoint generation tree and a
+    completion manifest, and the run root holds one published trajectory per path plus four
+    tables. None of it was named anywhere, so nothing could be checked against it.
+    """
+    from ..ais import path_trajectory_name
+
+    directory = Path(output).parent if output else Path(".")
+    roles: dict[str, Path] = {}
+    if output:
+        roles["out"] = Path(output)
+    if log:
+        roles["log"] = Path(log)
+    roles["run_identity"] = directory / "AIS_run.json"
+    roles["work_table"] = directory / "AIS_work.csv"
+    roles["work_summary"] = directory / "AIS_paths.csv"
+    roles["selected_frames"] = directory / "selected_source_frames.csv"
+    for index in range(int(paths)):
+        roles[f"path_{index:04d}"] = directory / f"path_{index:04d}"
+        roles[f"trajectory_{index:04d}"] = directory / path_trajectory_name(index, int(paths))
+    # Every per-path artefact is resumable by design: a completed path is skipped and an
+    # interrupted one is continued, which is what `--resume` is for and what the run identity
+    # and the completion manifests police. What must not be silently replaced is the RUN.
+    return OutputInventory(
+        roles=roles,
+        resumable=frozenset({role for role in roles
+                             if role.startswith(("path_", "trajectory_"))}
+                            | {"run_identity", "work_table", "work_summary",
+                               "selected_frames"}))
 
 
 def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting, source_config):

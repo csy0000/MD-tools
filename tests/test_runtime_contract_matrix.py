@@ -157,3 +157,176 @@ def test_no_generated_parser_resolves_an_abbreviation(mode, workspace, tmp_path,
     assert "unrecognized arguments" in (done.stdout + done.stderr), (
         f"{mode}: refused, but not as an unknown flag:\n{done.stdout}{done.stderr}")
     _untouched(destination, before)
+
+
+# --- the complete output inventory ----------------------------------------------------------------
+
+def test_the_inventory_names_every_artefact_a_ladder_writes():
+    """`--overwrite` governed `resolved.config` alone; everything else was replaced silently.
+
+    The per-state trajectories are the scientific result and were in no inventory at all.
+    """
+    from md_tools.run.preflight import _ladder_inventory
+
+    inventory = _ladder_inventory(protocol="REST2", replicas=4, output="run/REST2.out",
+                                  log="run/REST2.log", trajectory="run/REST2.nc",
+                                  restart="run/restart.json", checkpoint="run/REST2_chk.nc",
+                                  groupfile=None)
+    for role in ("out", "log", "trajectory", "restart", "checkpoint", "solute",
+                 "protocol_helper", "group_file", "rem_log"):
+        assert role in inventory.roles, role
+    for state in range(4):
+        assert f"state_trajectory_{state}" in inventory.roles
+
+
+def test_a_named_group_file_is_an_input_and_not_part_of_the_inventory():
+    """It is read, not written. Listing it as an output made it collide with itself."""
+    from md_tools.run.preflight import _ladder_inventory
+
+    inventory = _ladder_inventory(protocol="REST2", replicas=2, output="run/o", log="run/l",
+                                  trajectory=None, restart=None, checkpoint=None,
+                                  groupfile="ladder.group")
+    assert "group_file" not in inventory.roles
+
+
+def test_the_inventory_names_every_artefact_an_ais_run_writes():
+    from md_tools.run.preflight import _ais_inventory
+
+    inventory = _ais_inventory(output="run/AIS.out", log="run/AIS.log", paths=3)
+    for role in ("out", "log", "run_identity", "work_table", "work_summary", "selected_frames"):
+        assert role in inventory.roles, role
+    for index in range(3):
+        assert f"path_{index:04d}" in inventory.roles
+        assert f"trajectory_{index:04d}" in inventory.roles
+
+
+def test_a_stage_inventory_includes_the_outputs_it_derives_rather_than_is_given():
+    """The phase-space stream and the checkpoint tree arrive as no flag and are still written."""
+    from md_tools.run.preflight import _stage_inventory
+
+    inventory = _stage_inventory(output="d/min.out", log="d/min.log", trajectory="d/min.dcd",
+                                 restart="d/min.xml", checkpoint="d/min.chk")
+    assert inventory.roles["phase_space"].name == "min.phase_space.nc"
+    assert inventory.roles["checkpoints"].name == "min.checkpoints"
+    # The checkpoint tree is what `--resume` reads, so its presence is never itself the objection.
+    assert "checkpoints" in inventory.resumable
+
+
+def test_an_existing_output_is_refused_unless_overwrite_or_resume_says_otherwise(tmp_path):
+    from md_tools.run.preflight import (OutputInventory, PreflightError,
+                                        check_existing_outputs)
+
+    existing = tmp_path / "min.dcd"
+    existing.write_bytes(b"frames")
+    inventory = OutputInventory(roles={"trajectory": existing, "log": tmp_path / "absent.log"})
+
+    with pytest.raises(PreflightError) as refusal:
+        check_existing_outputs(inventory, where="stage min")
+    assert "min.dcd" in str(refusal.value) and "trajectory" in str(refusal.value)
+
+    check_existing_outputs(inventory, overwrite=True)      # explicitly asked for
+    check_existing_outputs(inventory, resume=True)         # continuing that run
+
+
+def test_a_run_refuses_to_write_over_an_existing_one_and_says_which_files(workspace, tmp_path,
+                                                                          good_config):
+    """End to end, through `md-run`: the second invocation must not half-overwrite the first."""
+    destination = tmp_path / "twice"
+    first = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
+                  "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
+                  "-odir", str(destination)],
+                 cwd=workspace / "split", environment=good_config)
+    assert first.returncode == 0, first.stdout + first.stderr
+
+    # Rerunning a stage that COMPLETED under this exact configuration is the idempotent case and
+    # stays a success: it is how a chain is safely re-driven.
+    second = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
+                   "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
+                   "-odir", str(destination)],
+                  cwd=workspace / "split", environment=good_config)
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "already completed" in second.stdout + second.stderr
+
+    # Remove the log and the outputs are suddenly a previous run nobody claimed. THAT is the case
+    # `--overwrite` exists for, and it must be asked for rather than assumed.
+    for log in destination.glob("*.log"):
+        log.unlink()
+    third = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
+                  "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
+                  "-odir", str(destination)],
+                 cwd=workspace / "split", environment=good_config)
+    assert third.returncode != 0, third.stdout + third.stderr
+    message = third.stdout + third.stderr
+    assert "already exist" in message and "--overwrite" in message, message
+
+    fourth = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
+                   "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
+                   "-odir", str(destination), "--overwrite"],
+                  cwd=workspace / "split", environment=good_config)
+    assert fourth.returncode == 0, fourth.stdout + fourth.stderr
+
+
+# --- ladder helpers are content-addressed and written once ------------------------------------
+
+def test_a_stale_protocol_helper_is_refused_rather_than_reused_or_replaced(tmp_path):
+    from md_tools.remd.generated import HELPER_FINGERPRINT, _write_helper_if_compatible
+
+    helper = tmp_path / "_protocol.py"
+    _write_helper_if_compatible(helper, "n_states = 4\n")
+    assert helper.read_text(encoding="utf-8").startswith(HELPER_FINGERPRINT)
+
+    # The same content again is a no-op, not a rewrite.
+    before = helper.stat().st_mtime_ns
+    _write_helper_if_compatible(helper, "n_states = 4\n")
+    assert helper.stat().st_mtime_ns == before
+
+    with pytest.raises(SystemExit, match="generated from different content"):
+        _write_helper_if_compatible(helper, "n_states = 8\n")
+    assert "n_states = 4" in helper.read_text(encoding="utf-8"), "the refusal replaced it anyway"
+
+    _write_helper_if_compatible(helper, "n_states = 8\n", force=True)
+    assert "n_states = 8" in helper.read_text(encoding="utf-8")
+
+
+def test_a_helper_without_a_fingerprint_is_refused_rather_than_assumed_current(tmp_path):
+    from md_tools.remd.generated import _write_helper_if_compatible
+
+    helper = tmp_path / "_protocol.py"
+    helper.write_text("n_states = 4\n", encoding="utf-8")   # hand-written, or from an old build
+    with pytest.raises(SystemExit, match="no fingerprint"):
+        _write_helper_if_compatible(helper, "n_states = 4\n")
+
+
+# --- group files ---------------------------------------------------------------------------------
+
+def test_group_lines_that_disagree_about_their_inputs_are_refused(tmp_path):
+    """A homogeneous ladder is N rungs of ONE system, differing only in tau."""
+    from md_tools.remd.executor import GroupFileError, parse_group_file
+
+    path = tmp_path / "ladder.group"
+    path.write_text(
+        "-i p.py -p a.pdb -s s.xml -c c.xml --solute solute.yaml --group-index 0\n"
+        "-i p.py -p OTHER.pdb -s s.xml -c c.xml --solute solute.yaml --group-index 1\n",
+        encoding="utf-8")
+    with pytest.raises(GroupFileError, match="different values for topology"):
+        parse_group_file(path)
+
+
+def test_group_file_paths_resolve_against_the_group_file_not_the_working_directory(tmp_path):
+    """Amber reads them this way, and so does everyone who writes one.
+
+    Resolved against `os.getcwd()`, `mpirun` from one directory with a group file in another gave
+    every rank a different idea of where its inputs were -- usually "nowhere", which is loud, and
+    occasionally a DIFFERENT built.pdb, which is not.
+    """
+    from md_tools.remd.executor import parse_group_file
+
+    elsewhere = tmp_path / "ladder"
+    elsewhere.mkdir()
+    path = elsewhere / "ladder.group"
+    path.write_text(
+        "-i p.py -p built.pdb -s s.xml -c c.xml --solute solute.yaml --group-index 0\n",
+        encoding="utf-8")
+    group = parse_group_file(path)[0]
+    assert Path(group["topology"]) == elsewhere / "built.pdb"
+    assert Path(group["solute"]) == elsewhere / "solute.yaml"

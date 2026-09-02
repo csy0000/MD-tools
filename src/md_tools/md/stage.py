@@ -120,6 +120,15 @@ def stage_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--check", action="store_true",
                         help="validate inputs and settings, then exit without integrating. "
                              "READ-ONLY: it creates nothing, not even the output directory")
+    parser.add_argument("--resume", action="store_true",
+                        help="continue this stage from its committed checkpoint. The one cMD "
+                             "resume contract: the committed pointer is followed, the "
+                             "configuration fingerprint must match, and the appendable streams "
+                             "are cut back to the counts that checkpoint vouches for")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="replace the stage's COMPLETE existing output inventory -- the "
+                             "reports, the trajectory, the phase-space stream, the restart and "
+                             "the checkpoint tree -- instead of refusing")
     _add_refused_flags(parser, "a cMD stage")
     return parser
 
@@ -224,7 +233,12 @@ def _completion_gaps(previous: dict[str, Any], *, stage: dict[str, Any], name: s
         return (f"it records a different configuration for this stage "
                 f"({', '.join(differing)} differ)")
 
-    absent = [str(path) for path in (restart, trajectory) if not Path(path).exists()]
+    # Only the outputs this stage actually produces. A minimisation integrates nothing and so
+    # writes no trajectory; demanding one would make every completed `min` look damaged.
+    required = [restart]
+    if int(stage.get("steps") or 0) > 0 and int(stage.get("trajectory_interval_steps") or 0) > 0:
+        required.append(trajectory)
+    absent = [str(path) for path in required if not Path(path).exists()]
     if absent:
         return f"the output(s) it claims are missing: {', '.join(absent)}"
     return ""
@@ -302,7 +316,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
 
     # -- already finished? -------------------------------------------------------------------
     # Now, with the inputs validated and this build's view of the stage established.
-    if log_path.is_file():
+    if log_path.is_file() and not args.overwrite:
         try:
             previous = read_record(log_path)
         except Exception:
@@ -318,6 +332,30 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
             print(f"{name}: already completed ({log_path}); not rerunning. "
                   f"Delete {log_path} to force a rebuild.")
             return 0
+
+    # Not a completed run of THIS configuration, and outputs are in the way. The complete
+    # inventory, not `resolved.config` alone: a `-odir` holding half of a previous stage produces
+    # a tree that is half one run and half another, with every file looking equally current.
+    from ..openmm.checkpoint import CheckpointError as _CheckpointError
+    from ..openmm.checkpoint import read_committed as _read_committed
+    from ..run.preflight import check_existing_outputs
+
+    # A directory holding a COMMITTED checkpoint is an interrupted run, not a finished one, and
+    # continuing it is exactly what should happen -- so it is not something `--overwrite` has to
+    # be asked for. That is the one cMD resume contract: an interrupted stage continues from its
+    # committed pointer, a completed one is skipped, and only a directory that is neither -- half
+    # a run nobody claimed -- has to be answered for.
+    try:
+        interrupted = _read_committed(chk_path.parent / f"{chk_path.stem}.checkpoints") is not None
+    except _CheckpointError:
+        interrupted = False
+    try:
+        check_existing_outputs(checked.inventory, overwrite=bool(getattr(args, "overwrite", False)),
+                               resume=bool(getattr(args, "resume", False)) or interrupted,
+                               where=f"stage {name}")
+    except PreflightError as refusal:
+        print(f"{refusal}", file=sys.stderr)
+        return 2
 
     from openmm import LangevinMiddleIntegrator, Platform, XmlSerializer, unit
     from openmm.app import PDBFile, Simulation, DCDReporter, StateDataReporter, CheckpointReporter
@@ -899,6 +937,11 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
     parser.add_argument("--check", action="store_true",
                         help="validate every stage and exit without integrating. READ-ONLY: the "
                              "whole chain is checked and nothing at all is created")
+    parser.add_argument("--resume", action="store_true",
+                        help="continue each stage from its committed checkpoint, in order. The "
+                             "same contract a single stage's --resume follows")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="replace each stage's complete existing output inventory")
     _add_refused_flags(parser, "a cMD workflow")
     args = parser.parse_args(argv)
 
@@ -953,6 +996,12 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
             stage_argv.append("--cpu")
         if args.check:
             stage_argv += ["--check"]
+        # Forwarded, not reinvented: a `--resume` that reached the wrapper and stopped there
+        # silently restarted every stage from the beginning while the command reported success.
+        if args.resume:
+            stage_argv.append("--resume")
+        if args.overwrite:
+            stage_argv.append("--overwrite")
         code = stage_main(dict(stage, resolved_config=str(config_path),
                                pending_parent=pending), stage_argv)
         if code != 0:

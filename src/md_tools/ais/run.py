@@ -140,6 +140,11 @@ def ais_parser(description: str) -> argparse.ArgumentParser:
                         help="continue interrupted paths from their checkpoints. A completed "
                              "path is skipped either way; this affects only paths that stopped "
                              "part-way")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="start this -odir over as a NEW run: replace the recorded run "
+                             "identity and every path in it. Without this, an -odir that already "
+                             "holds a different run -- a different source, schedule, seed or path "
+                             "count -- is refused rather than half-extended")
     # Accepted by the parser and REFUSED by the preflight, by name and with the reason. These
     # are Amber flags that other protocols implement, and a person who has just run a stage will
     # try them. Leaving them off the parser makes argparse say "unrecognized arguments", which
@@ -1359,7 +1364,15 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             source_facts=source_facts, source_format=source_format, schedule=schedule,
             ais=ais, dynamics=dynamics, chosen=chosen, reporting=reporting,
             resolved_config=run.get("resolved_config"))
-        require_same_run(out, identity_document)
+        if args.overwrite:
+            # Explicitly asked for: this directory becomes a new run. Rank 0 removes the old
+            # identity so the record below is written afresh; the paths themselves are then
+            # refused by their own completion checks, which name what differs.
+            if rank == 0:
+                (out / RUN_IDENTITY).unlink(missing_ok=True)
+            coordination.barrier()
+        else:
+            require_same_run(out, identity_document)
         if rank == 0 and not (out / RUN_IDENTITY).is_file():
             write_atomically(out / RUN_IDENTITY,
                              json.dumps(identity_document, indent=2, sort_keys=True) + "\n")

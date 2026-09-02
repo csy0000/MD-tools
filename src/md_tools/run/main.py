@@ -144,7 +144,11 @@ def md_run_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", action="store_true",
                         help="continue an interrupted run from its checkpoint")
     parser.add_argument("--overwrite", action="store_true",
-                        help="replace an existing resolved.config in -odir instead of refusing")
+                        help="replace the COMPLETE existing output inventory in -odir instead of "
+                             "refusing: the reports, the trajectories, the state tables, the "
+                             "restarts, the helpers and resolved.config. It governed "
+                             "resolved.config alone before, and every other file was replaced "
+                             "silently whether it was asked for or not")
     return parser
 
 
@@ -206,6 +210,13 @@ def _forward(args, *, names) -> list[str]:
         argv.append("--cpu")
     if args.check:
         argv.append("--check")
+    # `--resume` and `--overwrite` are the runtime's contract, so they are forwarded rather than
+    # interpreted here. A flag that reached `md-run` and stopped there is a flag the person
+    # believes took effect: `--resume` silently restarted every stage from the beginning.
+    if getattr(args, "resume", False):
+        argv.append("--resume")
+    if getattr(args, "overwrite", False):
+        argv.append("--overwrite")
     return argv
 
 
@@ -294,15 +305,18 @@ def md_run_main(argv: list[str] | None = None) -> int:
     # its own arguments, which is cheap and is what makes a generated script as safe as this one.
     from .preflight import (PreflightError, preflight_ais, preflight_ladder, preflight_stage)
 
+    from .preflight import check_existing_outputs
+
     try:
+        checked = None
         if protocol == "AIS":
-            preflight_ais(
+            checked = preflight_ais(
                 topology=args.topology, system=args.system, source=source,
                 number_of_groups=args.number_of_groups,
                 output=args.output, log=args.log, cpu=bool(args.cpu),
                 device=int(args.device) if args.device is not None else None)
         elif protocol in ("REST2", "rREST2") and run_input.stage is None:
-            preflight_ladder(
+            checked = preflight_ladder(
                 topology=args.topology, system=args.system, replicas=replicas,
                 coordinates=args.coordinates, groupfile=args.groupfile,
                 trajectory=args.trajectory, restart=args.restart,
@@ -311,12 +325,20 @@ def md_run_main(argv: list[str] | None = None) -> int:
                 device=int(args.device) if args.device is not None else None,
                 protocol=protocol)
         else:
-            preflight_stage(
+            checked = preflight_stage(
                 topology=args.topology, system=args.system, coordinates=args.coordinates,
                 trajectory=args.trajectory, restart=args.restart, checkpoint=args.checkpoint,
                 output=args.output, log=args.log, cpu=bool(args.cpu),
                 device=int(args.device) if args.device is not None else None,
                 protocol=protocol)
+
+        # The COMPLETE inventory, not `resolved.config` alone. An `-odir` that already holds a
+        # run is a run that happened; writing into it leaves a tree that is half one run and half
+        # another, with every file looking equally current.
+        if checked is not None and checked.inventory is not None:
+            check_existing_outputs(checked.inventory, overwrite=bool(args.overwrite),
+                                   resume=bool(args.resume) or bool(args.check),
+                                   where=f"md-run {protocol}")
     except PreflightError as refusal:
         print(f"md-run: {refusal}", file=sys.stderr)
         return 2
@@ -378,7 +400,11 @@ def _run_stages(args, resolved: dict[str, Any], stage: str | None, config_path: 
                        else str(out_dir / f"{name}.chk"),
             output=args.output if single and args.output else str(out_dir / f"{name}.out"),
             out_dir=args.out_dir, device=args.device,
-            cpu=args.cpu, check=args.check)
+            cpu=args.cpu, check=args.check,
+            # Carried explicitly. This namespace is built fresh rather than passed through, so a
+            # flag that is not listed here does not reach the stage at all -- which is how
+            # `--resume` and `--overwrite` were accepted by `md-run` and silently dropped.
+            resume=args.resume, overwrite=args.overwrite)
         code = stage_main(dict(entry, resolved_config=str(config_path)),
                           _forward(forwarded, names=("coordinates", "trajectory", "restart",
                                                      "log", "output", "checkpoint", "device")))
