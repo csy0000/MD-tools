@@ -31,6 +31,7 @@ ordered by strength and they are not interchangeable:
 | **CE** — component evidence | each component is supported individually; the combination is not itself the subject of a study |
 | **EX** — extrapolation | a scientifically reasonable inference from adjacent evidence, stated as an inference |
 | **ID** — implementation documentation | a fact about what the software does, not about whether it is right |
+| **DNI** — documented, not implemented | an option discussed here for completeness that this repository does **not** provide |
 
 An **ID** source is never used in place of a primary source for a scientific claim. Where a value
 is taken from software documentation because it *is* a software fact — OpenMM's barostat default
@@ -52,7 +53,7 @@ frequency, for instance — that is said plainly.
 | electrostatics | PME, 1.0 nm real-space cutoff | — | **CE** + **ID** (§8) | finite-size artifacts are reduced, not removed |
 | thermostat | `LangevinMiddleIntegrator`, 300 K | — | **CE** (§9) | — |
 | friction | 1.0 ps⁻¹ | — | **CE** + **EX** (§9) | affects kinetics and transport, not just sampling speed |
-| barostat | `MonteCarloBarostat`, 1 bar | — | **CE** (§10) | — |
+| barostat | `MonteCarloBarostat`, 1 bar | Berendsen: **documented, not implemented** (§10.1) | **CE** (§10) | Berendsen damps volume fluctuations and is not offered |
 | barostat frequency | 25 steps | — | **ID** + **CE** (§10) | 25 is OpenMM's default, not an optimum for any system |
 | timestep | 2 fs | 4 fs with HMR | **CE** (§11) | — |
 | hydrogen mass | unmodified | 3.024 amu | **CB** for stability (§11) | dynamics, kinetics and transport are altered |
@@ -452,6 +453,40 @@ by Hamiltonian, so the `pV` contributions cancel in the NPT exchange criterion, 
 box vectors travel together as one configuration [@wang2011rest2].
 
 *Evidence: **CE** (the algorithm), **ID** (the value 25).*
+
+---
+
+### 10.1 Berendsen pressure coupling: documented, not implemented
+
+Berendsen weak coupling rescales the box toward the target pressure with a first-order relaxation
+of time constant τ_p, so the volume approaches its target smoothly and quickly
+[@berendsen1984coupling]. That is genuinely useful, and it is why the method survives in
+equilibration protocols: relaxing a box that was built by a solvation heuristic is exactly the job
+it does well.
+
+It is not a production barostat. First-order relaxation damps the volume fluctuations rather than
+generating them, so the trajectory does not sample the isothermal–isobaric distribution: the mean
+volume can be right while the fluctuations around it — and therefore every quantity derived from
+them, the isothermal compressibility first among them — are wrong. This is the standard position in
+the literature, stated plainly in the paper that introduced stochastic cell rescaling to fix it:
+the usual recipe of a Berendsen barostat for equilibration followed by a second-order or Monte
+Carlo barostat for production exists precisely because the first "results in incorrect volume
+fluctuations" [@bernetti2020csr].
+
+**MD-tools does not provide it.** OpenMM ships no `BerendsenBarostat` class, and this repository
+will not offer a hand-written one under that name. A pressure-control method that silently
+misreports fluctuations is worse than an absent one, because a run that uses it completes and looks
+ordinary. Implementing it would mean writing an integrator-coupled box rescaling, validating that
+it reproduces the published relaxation behaviour, and then documenting that its output must not be
+used for any fluctuation-derived quantity — work that is not justified when
+`MonteCarloBarostat` is available, correct, and already the default.
+
+If Berendsen-style relaxation is wanted for equilibration specifically, the honest route today is
+the existing restrained-NPT stages under the Monte Carlo barostat, which relax the box without
+claiming a different ensemble.
+
+*Evidence: **DNI**. The method is real and cited; its absence here is an MD-tools policy, not a
+statement that the method has no use.*
 
 ---
 

@@ -1,30 +1,42 @@
 # MD-tools documentation
 
-Small on purpose. These documents are authoritative for the current package; anything else is
-history.
+Start at the [root README](../README.md) for what the package is and how to install it. This
+directory is the detail.
 
-| document | what it answers |
+**Do not reconstruct how the package works from Git history.** It changed substantially during the
+v0.5 development cycle: retired commands (`sys-gen`, `md-gen`, `sys-config`, `setup`, `openmm-md`),
+a v1 dataset contract and a copy-based generated-project layout all existed and no longer do. What
+is current is here.
+
+## Methods
+
+| page | |
 |---|---|
-| [`data-contract.md`](data-contract.md) | what a dataset is, where it goes, and who owns which part of the FAIR boundary |
-| [`replica-exchange.md`](replica-exchange.md) | the REST2 / rREST2 scientific contract |
-| [`scientific-defaults.md`](scientific-defaults.md) | why each default is what it is, with the evidence |
-| [`scientific-defaults.bib`](scientific-defaults.bib) | the references that document cites |
-| [`support-matrix.md`](support-matrix.md) | versions and combinations this package is tested against |
-| [`release-notes/`](release-notes/) | what changed in each release, and what was verified |
+| [Method index](openmm_methods/README.md) | what the four protocols are, and what they share |
+| [cMD](openmm_methods/cMD/README.md) | ordinary MD; also the source ensemble for AIS and reservoirs |
+| [REST2](openmm_methods/REST2/README.md) | Hamiltonian replica exchange at one temperature |
+| [rREST2](openmm_methods/rREST2/README.md) | REST2 with a Boltzmann reservoir |
+| [AIS](openmm_methods/AIS/README.md) | non-equilibrium switching and work |
 
-The commands themselves, the configuration layout and the three-command workflow are in the
-[root README](../README.md). The shipped configuration examples are in
-[`configs/`](../configs/) and are meant to be read.
+Each method page carries a minimal, runnable `example.config` beside it.
 
-## For agents
+## Science
 
-**Do not search Git history to answer a question about how this package works today.** These
-documents and the code are the answer. History contains a large amount of superseded material —
-retired commands (`sys-gen`, `md-gen`, `sys-config`, `setup`, `openmm-md`), a v1 dataset contract
-with a `{namespace}/{yyyy-mm}/{dataset_name}` path, and an environment installer — none of which
-exist any more. Reading it as current guidance produces confidently wrong instructions.
+| page | |
+|---|---|
+| [Scientific defaults](scientific-defaults.md) | every consequential default, its evidence, and the limits of that evidence |
+| [Bibliography](scientific-defaults.bib) | the sources, in BibTeX |
+| [Support matrix](support-matrix.md) | supported, experimental and unsupported combinations |
 
-Search history only when the question is explicitly historical: what a released version did, or
-why something was changed. The v0.5.0 migration and everything it removed are summarised in
-[`release-notes/v0.5.0.md`](release-notes/v0.5.0.md), and the state immediately before that cleanup
-is preserved at the tag `pre-v0.5-doc-cleanup`.
+## Data
+
+| page | |
+|---|---|
+| [Data registration](data_register/README.md) | how to register a finished run, with worked examples |
+| [The dataset contract](data-contract.md) | the schema-level authority: paths, records, immutability |
+
+## Releases
+
+| page | |
+|---|---|
+| [v0.5.0](release-notes/v0.5.0.md) | the current development cycle: what changed and what was verified |

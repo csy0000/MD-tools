@@ -1,0 +1,65 @@
+# extension.yaml -- the declaration that a dataset CONTINUES an existing, completed one.
+#
+# Unlike dataset.yaml, this file is yours to write. You place it in the directory you are about to
+# register, and registration validates it, cross-checks it against the manifest, and refuses the
+# registration if the two disagree.
+#
+# The rule it exists to enforce: a completed dataset is IMMUTABLE. An extension never appends to
+# its parent. It creates a NEW dataset holding only the new segment, and pins the parent by
+# content so the chain can be reassembled and verified later.
+#
+# The authoritative schema is docs/data-contract.md and the generated
+# extension-v2.0.schema.json that ships with the package.
+
+schema_version: "2.0"
+
+# `new-dataset` is the supported mode: a new dataset, parent untouched. (`in-place` exists in the
+# model for datasets written before that rule, and requires a copied checkpoint to be accepted.)
+mode: new-dataset
+
+# The dataset this file is being registered INTO -- the new one, not the parent.
+dataset_id: "2026/ALA/ALA-cMD-ext1"
+
+target:
+  # The parent. It must already be registered and complete.
+  dataset_id: "2026/ALA/ALA-cMD"
+  # Which component of the parent is being continued.
+  component: "cMD"
+  # The checkpoint the continuation started from, and its digest. The digest is REQUIRED: it is
+  # what makes "this continues that" a checkable statement rather than a claim. Registration
+  # re-hashes the copied checkpoint and refuses a mismatch.
+  source_checkpoint: "cMD/cMD.chk"
+  source_checkpoint_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+  original_length_ns: 5.0
+
+# The component in THIS dataset that holds the new segment.
+output_component: "cMD"
+
+additional_length_ns: 5.0
+combined_length_ns: 10.0
+
+# Where the new segment picks up. Steps are authoritative; the time is derived.
+restart_step: 2500000
+restart_time_ps: 5000.0
+
+reason: "The first 5 ns had not left the starting basin; 5 ns more before analysis."
+
+requested_by:
+  person_id: "your-name-here"
+  name: "Your Name"
+
+requested_at: "2026-09-02T19:00:00Z"
+status: complete
+
+# The exact code that produced the new segment. Not a counter: a chain is reassembled from
+# `target`, and what a reader needs here is which build wrote these bytes.
+generation:
+  repository: "https://github.com/csy0000/MD-tools"
+  commit: "0000000000000000000000000000000000000000"
+  version: "0.5.0.dev0"
+
+started_at: "2026-09-02T19:05:00Z"
+completed_at: "2026-09-03T04:10:00Z"
+final_length_ns: 10.0
+
+notes: null

@@ -431,3 +431,115 @@
                   read from ParmEd 4.3.1's own source
                   (parmed.structure.Structure._get_gb_parameters).},
 }
+
+% ---------------------------------------------------------------------------------------------
+% Pressure coupling: what is implemented, and what is only discussed.
+% ---------------------------------------------------------------------------------------------
+
+@article{berendsen1984coupling,
+  author  = {Berendsen, H. J. C. and Postma, J. P. M. and van Gunsteren, W. F. and
+             DiNola, A. and Haak, J. R.},
+  title   = {Molecular dynamics with coupling to an external bath},
+  journal = {The Journal of Chemical Physics},
+  year    = {1984},
+  volume  = {81},
+  number  = {8},
+  pages   = {3684--3690},
+  doi     = {10.1063/1.448118},
+}
+
+@article{bernetti2020csr,
+  author  = {Bernetti, Mattia and Bussi, Giovanni},
+  title   = {Pressure control using stochastic cell rescaling},
+  journal = {The Journal of Chemical Physics},
+  year    = {2020},
+  volume  = {153},
+  number  = {11},
+  pages   = {114107},
+  doi     = {10.1063/5.0020514},
+  note    = {States the standard position on Berendsen pressure coupling: first-order volume
+             relaxation that is efficient for equilibration but gives incorrect volume
+             fluctuations, motivating a second-order or Monte Carlo barostat for production.},
+}
+
+% ---------------------------------------------------------------------------------------------
+% The GAFF ligand route.
+%
+% GAFF2 has NO dedicated peer-reviewed publication. It is distributed with AmberTools, and its
+% provenance is the parameter file itself. Citing Wang 2004 for "GAFF2" would misattribute
+% version 2 parameters to the version 1 paper, so the two are kept apart here.
+% ---------------------------------------------------------------------------------------------
+
+@article{wang2004gaff,
+  author  = {Wang, Junmei and Wolf, Romain M. and Caldwell, James W. and
+             Kollman, Peter A. and Case, David A.},
+  title   = {Development and testing of a general amber force field},
+  journal = {Journal of Computational Chemistry},
+  year    = {2004},
+  volume  = {25},
+  number  = {9},
+  pages   = {1157--1174},
+  doi     = {10.1002/jcc.20035},
+  note    = {GAFF version 1. An erratum appeared as J. Comput. Chem. 2005, 26(1), 114.},
+}
+
+@misc{amber_gaff2_distribution,
+  author       = {{The Amber developers}},
+  title        = {{GAFF2} parameters, distributed with {AmberTools} as \texttt{gaff2.dat}},
+  howpublished = {\url{https://ambermd.org/AmberModels_organic.php}},
+  year         = {2026},
+  note         = {GAFF2 has no dedicated peer-reviewed publication. Its provenance is the
+                  distributed parameter file and the Amber Reference Manual. MD-tools therefore
+                  records the exact resolved version string (for example \texttt{gaff-2.2.20})
+                  rather than the ambiguous label ``GAFF2''. Accessed 2026-09-02.},
+}
+
+@article{jakalian2002am1bcc,
+  author  = {Jakalian, Araz and Jack, David B. and Bayly, Christopher I.},
+  title   = {Fast, efficient generation of high-quality atomic charges. {AM1-BCC} model:
+             {II}. Parameterization and validation},
+  journal = {Journal of Computational Chemistry},
+  year    = {2002},
+  volume  = {23},
+  number  = {16},
+  pages   = {1623--1641},
+  doi     = {10.1002/jcc.10128},
+}
+
+@article{wang2006antechamber,
+  author  = {Wang, Junmei and Wang, Wei and Kollman, Peter A. and Case, David A.},
+  title   = {Automatic atom type and bond type perception in molecular mechanical calculations},
+  journal = {Journal of Molecular Graphics and Modelling},
+  year    = {2006},
+  volume  = {25},
+  number  = {2},
+  pages   = {247--260},
+  doi     = {10.1016/j.jmgm.2005.12.005},
+  note    = {Antechamber, which assigns GAFF atom and bond types.},
+}
+
+% ---------------------------------------------------------------------------------------------
+% Nonequilibrium work, for AIS.
+% ---------------------------------------------------------------------------------------------
+
+@article{jarzynski1997equality,
+  author  = {Jarzynski, C.},
+  title   = {Nonequilibrium Equality for Free Energy Differences},
+  journal = {Physical Review Letters},
+  year    = {1997},
+  volume  = {78},
+  number  = {14},
+  pages   = {2690--2693},
+  doi     = {10.1103/PhysRevLett.78.2690},
+}
+
+@article{neal2001ais,
+  author  = {Neal, Radford M.},
+  title   = {Annealed importance sampling},
+  journal = {Statistics and Computing},
+  year    = {2001},
+  volume  = {11},
+  number  = {2},
+  pages   = {125--139},
+  doi     = {10.1023/A:1008923215028},
+}
