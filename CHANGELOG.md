@@ -28,6 +28,27 @@ executable and three commands. Every detail, with the tests that verify it, is i
 - `dataset-v2.0` and `extension-v2.0` schemas generated from the models and drift-checked
 - **`md_data` is no longer imported at runtime**, and contract v1 is gone
 
+### A stable import API, and generated files that are entry points
+
+- `md_tools.md` (`PositionalRestraint`, `ReportingConfig`, `run_stage`, `run_generated_stage`,
+  `run_generated_workflow`), `md_tools.rest2` (`REST2Scaler`, `ScalingSelection`), `md_tools.remd`
+  (`REMDRunner`, `NeighborExchangeRule`, `run_remd`, `run_generated_remd`),
+  `md_tools.remd.reservoir` (`ReservoirRefreshRule`) and `md_tools.ais` (`run_generated_ais`)
+- generated Python files are now compact entry points that call those APIs; `resolved.config`
+  beside them is the single resolved declaration, found from `__file__`, re-validated at execution
+  and bound into the checkpoint fingerprint
+- **one REST2 scaler** for fixed-τ cMD, REST2, rREST2 and AIS
+- `openmm/templates/` removed: it held installed runtime code, not templates. `md_tools.runtime`
+  remains as compatibility-only facades so pre-v0.5 generated scripts still run
+
+### Scientific options
+
+- box shape: `cube` and `octahedron` documented alongside the `dodecahedron` default
+- ligand force field: GAFF available and **resolved to an exact installed version**
+- crossed protein/water pairs warn instead of refusing, and the warning is recorded
+- `hydrogen_mass_repartitioning: {enabled, hydrogen_mass_amu}` replaces the null-means-off scalar
+- `dynamics.timestep_fs: auto` resolves from the masses in the built System
+
 ### One current MD configuration model
 
 - `md_tools.build.md` is the only authority for MD workflow configuration. The retired `methods:`

@@ -35,6 +35,34 @@ configs/md/{cMD,REST2,rREST2,AIS}.config   protocol, stage lengths, reporting
 reporting. `md_tools.openmm.system_config` and `system_defaults` cover the `build-top` system half
 and nothing else. If you find a second function resolving an MD configuration, it is residue.
 
+## The import API
+
+```text
+md_tools.md      PositionalRestraint, ReportingConfig, run_stage,
+                 run_generated_stage, run_generated_workflow
+md_tools.rest2   REST2Scaler, ScalingSelection
+md_tools.remd    REMDRunner, NeighborExchangeRule, run_remd, run_generated_remd
+md_tools.remd.reservoir   ReservoirRefreshRule
+md_tools.ais     run_generated_ais
+```
+
+**Generated Python files are entry points, not copies of the implementation.** A stage script is:
+
+```python
+#!/usr/bin/env python
+from md_tools.md import run_generated_stage
+raise SystemExit(run_generated_stage(__file__, "min"))
+```
+
+No function or class definition, no `argparse`, no OpenMM import, no reporter, restraint, barostat,
+scaler or exchange rule built there. `resolved.config` beside the script is the single resolved
+declaration: located from `__file__` so the directory is movable, re-validated by the strict
+resolver at execution, and bound into the checkpoint fingerprint.
+
+ONE REST2 scaler serves fixed-τ cMD, REST2, rREST2 and AIS. `md_tools/openmm/templates/` is gone —
+it held installed runtime code, not templates. `md_tools.runtime` is compatibility-only: it
+re-exports and defines nothing, and new work must not import from it.
+
 Ordinary browsable files at the repository root, one copy each, shipped as **wheel data files**
 and found through `md_tools.configs.example_root()`. Never add a symlink or a second hand-edited
 copy. Every file is YAML despite the `.config` suffix, unknown keys are refused, and the examples

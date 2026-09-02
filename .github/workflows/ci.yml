@@ -128,14 +128,75 @@ jobs:
           for name in ("cMD", "REST2", "rREST2", "AIS"):
               resolved = resolve_md_config(example(f"md/{name}.config"))
               assert resolved["protocol"] == name, (name, resolved["protocol"])
-          print("all seven examples present and resolving")
+          print("six shipped examples present and resolving")
+          PY
+
+      - name: the documented examples, through the same resolvers
+        run: |
+          python - <<'PY'
+          import yaml
+          from pathlib import Path
+
+          from md_tools.build.md import resolve_md_config
+          from md_tools.data_contract.extension import Extension
+          from md_tools.data_contract.model import Dataset
+
+          docs = Path("docs")
+          for name in ("cMD", "REST2", "rREST2", "AIS"):
+              path = docs / "openmm_methods" / name / "example.config"
+              assert resolve_md_config(path)["protocol"] == name, path
+          print("four documented method examples resolve")
+
+          Dataset.model_validate(
+              yaml.safe_load((docs / "data_register" / "dataset.yaml.example").read_text()))
+          Extension.model_validate(
+              yaml.safe_load((docs / "data_register" / "extension.yaml.example").read_text()))
+          print("registration examples validate against their models")
+          PY
+
+      - name: the public API imports from the wheel
+        working-directory: ${{ runner.temp }}/outside
+        run: |
+          python - <<'PY'
+          from md_tools.ais import run_generated_ais
+          from md_tools.md import (PositionalRestraint, ReportingConfig, run_generated_stage,
+                                   run_generated_workflow, run_stage)
+          from md_tools.remd import (NeighborExchangeRule, REMDRunner, run_generated_remd,
+                                     run_remd)
+          from md_tools.remd.reservoir import ReservoirRefreshRule
+          from md_tools.rest2 import REST2Scaler, ScalingSelection
+
+          print("every documented public name imports")
+          PY
+
+      - name: the retired runtime layout is not in the wheel
+        working-directory: ${{ runner.temp }}/outside
+        run: |
+          python - <<'PY'
+          import importlib
+          from pathlib import Path
+
+          import md_tools
+
+          root = Path(md_tools.__file__).parent
+          assert not (root / "openmm" / "templates").exists(), "openmm/templates shipped"
+          for gone in ("md_tools.openmm.templates", "md_tools.openmm.ais"):
+              try:
+                  importlib.import_module(gone)
+              except ModuleNotFoundError:
+                  continue
+              raise SystemExit(f"{gone} is still importable")
+          # The packages a generated script actually calls.
+          for package in ("md", "rest2", "remd", "ais"):
+              assert (root / package / "__init__.py").is_file(), package
+          print("openmm/templates gone; the four runtime packages ship")
           PY
 
       - name: generate and compile every protocol bundle
         working-directory: ${{ runner.temp }}/outside
         run: |
           python - <<'PY'
-          import py_compile, subprocess, yaml
+          import ast, py_compile, subprocess, yaml
           from pathlib import Path
 
           SHORT = {"stages": {"minimization_iterations": 10, "restrained_nvt_steps": 10,
@@ -174,11 +235,25 @@ jobs:
               assert result.returncode == 0, f"{name}: {result.stdout}{result.stderr}"
               written = {p.name for p in out.iterdir()}
               assert expected <= written, f"{name}: expected {expected}, got {sorted(written)}"
+              assert (out / "resolved.config").is_file(), f"{name}: no resolved.config"
               for script in out.glob("*.py"):
                   py_compile.compile(str(script), doraise=True)
                   text = script.read_text(encoding="utf-8")
                   assert "/home/" not in text and "/runner/" not in text, f"{name}: absolute path"
-              print(f"{name}: {len(written)} files, all compile, no absolute path")
+                  # A generated script is an ENTRY POINT: one import of the stable API and one
+                  # call. A definition, an argparse or an OpenMM import means the implementation
+                  # has leaked back into the generated file, where it would have as many versions
+                  # as there are generated directories.
+                  tree = ast.parse(text)
+                  statements = [n for n in tree.body
+                                if not (isinstance(n, ast.Expr)
+                                        and isinstance(n.value, ast.Constant))]
+                  kinds = [type(n).__name__ for n in statements]
+                  assert kinds == ["ImportFrom", "Raise"], f"{name}/{script.name}: {kinds}"
+                  body = text.split('"""', 2)[-1]
+                  for forbidden in ("argparse", "import openmm", "STAGE = {", "LADDER = {"):
+                      assert forbidden not in body, f"{name}/{script.name} contains {forbidden}"
+              print(f"{name}: {len(written)} files, all compile, compact, no absolute path")
 
           ais = {p.name for p in Path("AIS").iterdir()}
           assert not any(n.startswith(("min", "eq_")) for n in ais), ais
