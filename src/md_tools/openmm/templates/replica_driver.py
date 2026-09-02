@@ -36,7 +36,7 @@ from pathlib import Path
 
 import numpy as np
 
-import hamiltonian_identity
+from md_tools.rest2 import identity as hamiltonian_identity
 import replica_storage as storage
 import rem_log
 import state_trajectories
@@ -44,7 +44,7 @@ from exchange_rules import (ExchangeContext, NeighbouringExchangeRule, builtin_r
                             load_rule)
 from replica_engine import (Configuration, ReplicaEngine, resolve_platform,
                             select_device_for_rank, visible_cuda_devices)
-from rest2_scaling import require_compatible_implementation
+from md_tools.rest2 import require_compatible_implementation
 
 
 class DriverError(RuntimeError):

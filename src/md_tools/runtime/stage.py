@@ -215,7 +215,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                     f"{stage['ensemble']}. A scaled run samples the fixed-volume ensemble of the "
                     f"ladder rung it sits at; a barostat would sample a different distribution.")
             from ..openmm.system import classify_omega_bonds
-            from ..openmm.templates.rest2_scaling import build_scaled_system
+            from ..rest2 import build_scaled_system
             omega = classify_omega_bonds(pdb.topology, solute, route="peptide", ligand_sdf=None)
             excluded = [tuple(int(a) for a in bond)
                         for bond in omega.get("omega_unscaled_bonds", [])]
@@ -234,7 +234,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         # System in place, so a reference would be fingerprinted after the restraint anyway.
         hamiltonian_identity_record = None
         if stage.get("phase_space_interval_steps"):
-            from ..openmm.templates.hamiltonian_identity import identity_record
+            from ..rest2 import identity_record
             hamiltonian_identity_record = identity_record(
                 system, tau=tau, temperature_k=float(stage["temperature_K"]),
                 ensemble=stage["ensemble"], solute_indices=solute, excluded_bonds=excluded)

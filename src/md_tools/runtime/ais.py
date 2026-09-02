@@ -140,7 +140,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     from ..openmm.timestep import resolve_timestep_fs
     from ..openmm.system import classify_omega_bonds
     from ..openmm.templates.md_stages import derive_seed
-    from ..openmm.templates.rest2_scaling import TauSwitcher
+    from ..rest2 import TauSwitcher
     from .stage import solute_atom_indices
 
     ais, source_cfg, dynamics = run["ais"], run["ais_source"], run["dynamics"]

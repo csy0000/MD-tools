@@ -156,7 +156,7 @@ def ais_project(tmp_path_factory):
 
 def _generated_scaling(project=None):
     """The scaling module. Installed now, not copied into a generated project."""
-    from md_tools.openmm.templates import rest2_scaling
+    from md_tools import rest2 as rest2_scaling
 
     return rest2_scaling
 

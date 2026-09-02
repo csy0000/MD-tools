@@ -16,7 +16,7 @@ That rescaling belongs to temperature REMD, where the rungs differ in beta; appl
 inject or remove energy at every accepted swap and quietly change the ensemble being sampled.
 """
 from replica_schedule import EventSchedule, ScheduleError, exact_steps   # noqa: F401
-from rest2_scaling import (REST2_IMPLEMENTATION, audit_force_classes,
+from md_tools.rest2 import (REST2_IMPLEMENTATION, audit_force_classes,
                            build_scaled_system, scaling_for_tau,
                            torsion_exclusion_report)
 

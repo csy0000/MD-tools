@@ -22,7 +22,7 @@ from ..build.strict import ConfigError
 from .system_config import openff_resource
 from .yaml_io import write_yaml
 from .system_defaults import DEFAULT_PADDING_NM, DEFAULT_SOLVENT
-from .templates.rest2_scaling import (OMEGA_DETECTOR_VERSION,
+from ..rest2 import (OMEGA_DETECTOR_VERSION,
                                      torsion_exclusion_report)
 
 #: Short water labels an older configuration may still carry, and the QUALIFIED OpenMM resource

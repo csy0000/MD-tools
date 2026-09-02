@@ -19,7 +19,10 @@ TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" 
 openmm = pytest.importorskip("openmm")
 sys.path.insert(0, str(TEMPLATES))
 
-import rest2_scaling as scaling                                    # noqa: E402
+# The internals of the scaling are what these tests exercise, so they name the
+# module rather than the package facade -- `md_tools.rest2` exports the public
+# API, and a test of `_scale_cmap` is not using the public API.
+from md_tools.rest2 import scaler as scaling                                    # noqa: E402
 
 SOLUTE = set(range(6))
 ENVIRONMENT = (6, 7, 8, 9, 10)

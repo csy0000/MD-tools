@@ -65,7 +65,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-import hamiltonian_identity
+from md_tools.rest2 import identity as hamiltonian_identity
 import phase_space
 import source_ensemble
 

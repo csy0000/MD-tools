@@ -388,35 +388,20 @@ def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=(),
     return system
 
 
-def reduced_potential(energy_kj_mol, beta, pressure_bar=None, volume_nm3=None):
-    """u = beta * (U + p V), the NPT form.
-
-    REST2 replicas share one thermostat temperature and one pressure, so they share beta: the pV
-    terms cancel exactly in `exchange_log_acceptance` below, because a swap moves each configuration
-    -- positions AND its box -- to the other rung, and the same two volumes appear on both sides.
-    They are carried anyway so the cancellation is arithmetic that can be checked rather than an
-    omission that has to be trusted.
-    """
-    u = beta * energy_kj_mol
-    if pressure_bar is not None and volume_nm3 is not None:
-        # 1 bar * 1 nm^3 in kJ/mol
-        u += beta * pressure_bar * volume_nm3 * 0.0602214076
-    return u
+# The exchange mathematics that lived here -- `reduced_potential`, `exchange_log_acceptance`
+# and `exchange_pairs` -- has moved to `md_tools.remd`, where the ladder that uses it lives.
+# It was duplicated: `replica_engine` carried its own copies and those were the ones the
+# driver actually called, while these were reached only by tests. The two were verified
+# bit-identical over 2000 random inputs before this one was removed, and `exchange_pairs`
+# against `alternating_pairs` for every ladder size 2..8 in both phases.
+#
+# Scaling a Hamiltonian and deciding whether two replicas swap are different jobs. Fixed-tau
+# cMD and AIS need the first and never the second.
 
 
-def exchange_log_acceptance(u_ii, u_jj, u_ij, u_ji):
-    """log of the Metropolis criterion for swapping configurations i and j.
-
-        log(alpha) = beta * [U_i(x_i,V_i) + U_j(x_j,V_j) - U_i(x_j,V_j) - U_j(x_i,V_i)]
-
-    where u_ij is replica j's configuration evaluated in replica i's Hamiltonian.
-    """
-    return (u_ii + u_jj) - (u_ij + u_ji)
 
 
-def exchange_pairs(n_replicas, phase):
-    """Alternating nearest-neighbour pairs: phase 0 gives (0,1),(2,3)…; phase 1 gives (1,2),(3,4)…"""
-    return [(i, i + 1) for i in range(phase % 2, n_replicas - 1, 2)]
+
 
 
 # ---------------------------------------------------------------------------------------------

@@ -24,7 +24,7 @@ openmm = pytest.importorskip("openmm")
 sys.path.insert(0, str(TEMPLATES))
 sys.path.insert(0, str(SRC))
 
-import hamiltonian_identity                                        # noqa: E402
+from md_tools.rest2 import identity as hamiltonian_identity                                        # noqa: E402
 import phase_space                                                 # noqa: E402
 import replica_storage as storage                                  # noqa: E402
 from replica_schedule import EVENT_ORDER, EventSchedule            # noqa: E402

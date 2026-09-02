@@ -13,7 +13,13 @@ import pytest
 from .conftest import template_module
 
 stages = template_module("md_stages")
-scaling = template_module("rest2_scaling")
+from md_tools import rest2 as scaling
+
+#: The exchange mathematics moved out of the scaler to the ladder that uses it -- one
+#: implementation, verified bit-identical to the copy that was removed. These tests
+#: followed it rather than being deleted with the duplicate.
+exchange = template_module("replica_engine")
+rules = template_module("exchange_rules")
 
 
 # --- seeds -----------------------------------------------------------------
@@ -174,11 +180,11 @@ def test_the_pv_terms_cancel_at_a_common_beta_and_pressure():
     pressure, volume_i, volume_j = 1.0, 27.0, 31.5          # deliberately different volumes
     energy_i, energy_j, energy_ij, energy_ji = -2500.0, -2480.0, -2495.0, -2470.0
 
-    with_pv = scaling.exchange_log_acceptance(
-        scaling.reduced_potential(energy_i, beta, pressure, volume_i),
-        scaling.reduced_potential(energy_j, beta, pressure, volume_j),
-        scaling.reduced_potential(energy_ij, beta, pressure, volume_j),
-        scaling.reduced_potential(energy_ji, beta, pressure, volume_i))
+    with_pv = exchange.exchange_log_acceptance(
+        exchange.reduced_potential(energy_i, beta, pressure_bar=pressure, volume_nm3=volume_i),
+        exchange.reduced_potential(energy_j, beta, pressure_bar=pressure, volume_nm3=volume_j),
+        exchange.reduced_potential(energy_ij, beta, pressure_bar=pressure, volume_nm3=volume_j),
+        exchange.reduced_potential(energy_ji, beta, pressure_bar=pressure, volume_nm3=volume_i))
     energy_only = beta * (energy_i + energy_j - energy_ij - energy_ji)
 
     assert with_pv == pytest.approx(energy_only, rel=1e-12, abs=1e-12)
@@ -187,19 +193,19 @@ def test_the_pv_terms_cancel_at_a_common_beta_and_pressure():
 def test_the_criterion_is_the_documented_expression():
     beta = 1.0 / (0.008314462618 * 300.0)
     values = (-10.0, -20.0, -5.0, -8.0)
-    reduced = [scaling.reduced_potential(v, beta) for v in values]
-    assert scaling.exchange_log_acceptance(*reduced) == pytest.approx(
+    reduced = [exchange.reduced_potential(v, beta) for v in values]
+    assert exchange.exchange_log_acceptance(*reduced) == pytest.approx(
         beta * (values[0] + values[1] - values[2] - values[3]))
 
 
 def test_a_two_replica_ladder_offers_its_pair_in_the_phase_the_runner_falls_back_to():
-    """Alternating regardless would exchange on every other round only, and a run resumed on an
+    """Alternating regardless would exchange on every other round only, pressure_bar=and a run resumed on an
     odd index would keep landing on the empty phase."""
-    assert scaling.exchange_pairs(2, 0) == [(0, 1)]
-    assert scaling.exchange_pairs(2, 1) == []
+    assert rules.alternating_pairs(2, 0) == [(0, 1)]
+    assert rules.alternating_pairs(2, 1) == []
     for attempt_index in range(6):
         phase = attempt_index % 2
-        pairs = scaling.exchange_pairs(2, phase) or scaling.exchange_pairs(2, (phase + 1) % 2)
+        pairs = rules.alternating_pairs(2, phase) or rules.alternating_pairs(2, (phase + 1) % 2)
         assert pairs == [(0, 1)], attempt_index
 
 

@@ -19,7 +19,9 @@ from openmm import CustomGBForce, HarmonicBondForce, NonbondedForce, System
 
 from .conftest import template_module
 
-scaling = template_module("rest2_scaling")
+# Internals of the scaling (the GB scale parameter name, force layout) rather than the
+# public API, so this names the module.
+from md_tools.rest2 import scaler as scaling
 stages = template_module("md_stages")
 
 

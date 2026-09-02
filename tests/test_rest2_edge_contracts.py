@@ -26,7 +26,7 @@ sys.path.insert(0, str(SRC))
 
 import replica_executor                                                   # noqa: E402
 import phase_space                                                 # noqa: E402
-import hamiltonian_identity                                        # noqa: E402
+from md_tools.rest2 import identity as hamiltonian_identity                                        # noqa: E402
 import replica_storage as storage                                  # noqa: E402
 import rrest2_reservoir                                            # noqa: E402
 import source_ensemble                                             # noqa: E402

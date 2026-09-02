@@ -104,8 +104,16 @@ def template_module(name: str):
     import them from. Loading them by path is how a test exercises the same code the run does.
     """
     import importlib.util
+    import sys
 
     path = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates" / f"{name}.py"
+    # Several of these modules import each other by BARE name, which only resolves with the
+    # directory on sys.path -- the mechanism `md_tools.runtime.replica` sets up for the executor.
+    # A test loading one by path has to set up the same thing or it gets a ModuleNotFoundError
+    # that says nothing about what it was actually testing.
+    directory = str(path.parent)
+    if directory not in sys.path:
+        sys.path.insert(0, directory)
     spec = importlib.util.spec_from_file_location(f"_template_{name}", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
