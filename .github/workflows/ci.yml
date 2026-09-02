@@ -73,14 +73,38 @@ jobs:
           assert not any(p.endswith("/src") for p in sys.path), sys.path
           PY
 
-      - name: the three public commands
+      - name: the four public commands
         working-directory: ${{ runner.temp }}/outside
         run: |
           md-openmm -h
           md-openmm --version
           md-openmm build-top -h
           md-openmm build-md -h
+          md-openmm md-run -h
           md-openmm data-register -h
+
+      - name: md-run help must not need a GPU or an OpenMM context
+        working-directory: ${{ runner.temp }}/outside
+        # The runner has no CUDA device. `-h` is what somebody reads before submitting a job, so
+        # it has to answer on a machine that could not run the job at all.
+        run: |
+          md-openmm md-run -h | tee help.txt
+          for flag in -i -p -x -c -o -r -log -odir -ng -source-traj --cpu; do
+            grep -q -- "$flag" help.txt || {
+              echo "::error title=md-run flag missing::$flag is not documented"; exit 1; }
+          done
+
+      - name: md-run refuses -ng outside an MPI launch
+        working-directory: ${{ runner.temp }}/outside
+        # `-ng` says how many processes coordinate; it does not create them. Accepting it in a
+        # single process would run a ladder in one rank while claiming otherwise.
+        run: |
+          printf '&cntrl\n  protocol = REST2,\n/\n' > ladder.in
+          if md-openmm md-run -ng 4 -i ladder.in -p missing.pdb -x missing.xml >out.txt 2>&1; then
+            echo "::error title=-ng accepted with no launcher::md-run exited 0"; exit 1
+          fi
+          grep -q "not started by an MPI launcher" out.txt || {
+            echo "::error title=Wrong refusal::"; cat out.txt; exit 1; }
 
       - name: retired subcommands must fail
         working-directory: ${{ runner.temp }}/outside
