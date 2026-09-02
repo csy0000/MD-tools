@@ -304,6 +304,8 @@ class ReplicaRun:
         from ..registry.userconfig import machine_openmm_settings
 
         machine = machine_openmm_settings()
+        # `explicit_cpu` is the CLI's `--cpu` and nothing else; the machine's own preference is
+        # read separately. Two sources, one decision, and neither pretends to be the other.
         name = "CPU" if (self.explicit_cpu or machine["platform"] == "CPU") else "CUDA"
         device, policy = None, "not a CUDA platform"
         if name == "CUDA":

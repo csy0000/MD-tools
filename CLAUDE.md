@@ -149,16 +149,22 @@ Do not change these without a failing test that demonstrates a defect.
   become a no-op while the world is plural: N ranks with no coordination are N simulations writing
   over one set of paths, and the result looks complete. A second `except ImportError: return`
   anywhere is a second policy, and it will be the one that runs.
-* **The guard belongs in the runtime, not in `md-run`.** `replica_main`, `ais_main` and
-  `stage_main` validate the launch themselves, because the generated wrappers call them directly.
-  A safe outer command wrapping an unsafe runtime is worse than no wrapper: it makes the unsafe
-  path look tested.
+* **The guard belongs in the runtime, not in `md-run`.** `stage_main`, `replica_main` and
+  `ais_main` run the shared preflight themselves and CONSUME its result, because the generated
+  wrappers call them directly. A safe outer command wrapping an unsafe runtime is worse than no
+  wrapper: it makes the unsafe path look tested. "Calls the preflight and ignores what it returns"
+  is the same defect wearing a better name — if a runtime re-resolves the platform, the machine
+  settings or the MPI world, there are two policies again.
 * **Nothing is written until the whole preflight passes.** `md_tools.run.preflight` checks flag
-  roles, resolved-path collisions, input existence and format, the MPI launch, the machine
-  configuration, `--cpu`/`--device`, the device policy, platform availability and a real CUDA
-  Context — before `-odir`, `resolved.config`, the `.out`, the `.log`, a group file, a trajectory
-  or a checkpoint exists. A `-odir` holding a `resolved.config` is indistinguishable from a run
-  that happened.
+  roles, resolved-path collisions (outputs against each other AND against the inputs), input
+  existence and format, topology/System agreement, the MPI launch, the machine configuration,
+  `--cpu`/`--device`, the device policy, platform availability and a real CUDA Context — before
+  `mkdir`, `resolved.config`, the `.out`, the `.log`, `solute.yaml`, `_protocol.py`, a group file,
+  a trajectory or a checkpoint exists. A `-odir` holding a `resolved.config` is indistinguishable
+  from a run that happened, and a refusal must not touch an existing directory either.
+* **`explicit_cpu` means the user typed `--cpu` on this invocation.** Nothing else. A machine
+  configured for CPU is `platform_selection: machine-config`, and conflating the two makes a
+  file somebody wrote months ago look like something they just typed.
 * **An absent configuration is not an invalid one.** No user configuration resolves to the
   built-in CUDA/mixed/local_rank. An existing one that is malformed, has a duplicate key, an
   unknown field or an invalid value is FATAL and is never replaced by those defaults — the machine

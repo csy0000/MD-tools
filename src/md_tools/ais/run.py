@@ -433,7 +433,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                             acceleration.platform, acceleration.properties)
 
     # -- resume, or start ----------------------------------------------------------------------
-    from .checkpoint import clear_committed, commit_generation, read_committed
+    from .checkpoint import clear_committed, commit_generation, fault, read_committed
 
     state_of_path = None
     if resume:
@@ -506,6 +506,11 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
 
     def write_frame(protocol_step: int, switching_time_ps: float) -> None:
         nonlocal frames_emitted
+        # A crash here, after the frame is durable and before the checkpoint that vouches for it,
+        # is the case the committed counters exist for: the trajectory is then LONGER than the
+        # bookkeeping, and keeping the extra frame would put the path's coordinates permanently
+        # ahead of its work rows.
+        fault("before-frame")
         state = simulation.context.getState(getPositions=True, enforcePeriodicBox=False)
         lengths = angles = None
         if not implicit:
@@ -521,10 +526,12 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                      time=switching_time_ps, cell_lengths=lengths, cell_angles=angles)
         netcdf.flush()
         frames_emitted += 1
+        fault("after-frame")
 
     def write_observation(observation_index: int, protocol_step: int, switching_time_ps: float,
                           tau: float, incremental: float, wrote_frame: bool) -> None:
         nonlocal rows_emitted
+        fault("before-work-row")
         append(directory / OBSERVATIONS_CSV, OBSERVATION_COLUMNS, {
             "path_index": index,
             "observation_index": observation_index,
@@ -544,14 +551,17 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             "velocity_seed": velocity_seed,
         })
         rows_emitted += 1
+        fault("after-work-row")
 
     def write_state(protocol_step: int, switching_time_ps: float, tau: float) -> None:
         nonlocal state_rows_emitted
+        fault("before-state-row")
         append(directory / STATE_CSV, STATE_COLUMNS,
                _state_row(simulation, index=index, protocol_step=protocol_step,
                           switching_time_ps=switching_time_ps, tau=tau, implicit=implicit,
                           temperature_unit=unit.kelvin))
         state_rows_emitted += 1
+        fault("after-state-row")
 
     def save_checkpoint(updates_completed: int) -> None:
         """One crash-atomic generation: a new checkpoint, its sidecar, then the pointer.
@@ -728,14 +738,31 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     ais, source_cfg, dynamics = run["ais"], run["ais_source"], run["dynamics"]
     reporting = run["reporting"]
 
-    # THE LAUNCH IS VALIDATED BEFORE `-odir` EXISTS, here in the shared runtime rather than only
+    # EVERYTHING is validated before `-odir` exists, here in the shared runtime rather than only
     # in `md-openmm md-run`: the generated `AIS.py` calls this function directly. Paths are
     # independent, so `-ng` is simply the worker count, and it must equal the communicator.
-    coordination = Coordination.open(number_of_groups=args.number_of_groups,
-                                     protocol="AIS")
-    rank, size = coordination.rank, coordination.size
-
+    topology_path = Path(args.topology)
+    system_path = Path(args.system)
+    source_path = Path(args.source or source_cfg["trajectory"] or "")
     out = Path(args.out_dir).resolve()
+
+    from ..run.preflight import PreflightError, preflight_ais
+
+    try:
+        checked = preflight_ais(
+            topology=topology_path, system=system_path, source=source_path,
+            number_of_groups=args.number_of_groups,
+            output=args.output or out / "AIS.out", log=args.log or out / "AIS.log",
+            cpu=bool(args.cpu),
+            device=int(args.device) if args.device is not None else None)
+    except PreflightError as refusal:
+        print(f"AIS: {refusal}", file=sys.stderr)
+        return 2
+
+    coordination = checked.coordination
+    rank, size = coordination.rank, coordination.size
+    source_format = checked.source_format
+
     out.mkdir(parents=True, exist_ok=True)
     # Every rank keeps its own pair. An explicitly named -log or -o is suffixed the same way an
     # unnamed one is: without that, N ranks race to rename the same temporary and the run dies
@@ -748,34 +775,6 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                                          rank))
     out_path = Path(report_path_for_rank(str(Path(args.output) if args.output else out / "AIS.out"),
                                          rank))
-    if out_path.resolve() == log_path.resolve():
-        print(f"AIS: -o and -log both name {out_path}. They are different files: one is read by "
-              f"a person during the run, the other by a machine afterwards.", file=sys.stderr)
-        return 2
-
-    topology_path = Path(args.topology)
-    system_path = Path(args.system)
-    source_path = Path(args.source or source_cfg["trajectory"])
-    for path, what in ((topology_path, "-p topology"), (system_path, "-s system")):
-        if not path.is_file():
-            print(f"AIS: {what} {path} does not exist", file=sys.stderr)
-            return 2
-    if not source_path.is_file():
-        # `is_file`, deliberately, not `exists`. A path written with a trailing slash names a
-        # DIRECTORY, and `exists` would accept `tau_0p5.nc/` and fail later, obscurely, inside
-        # mdtraj rather than here with the path in the message.
-        what = ("is a directory, not a file" if source_path.is_dir() else "does not exist")
-        print(f"AIS: -source-traj {source_path} {what}. AIS consumes an equilibrium ensemble you "
-              f"have already produced; it does not generate one.", file=sys.stderr)
-        return 2
-    try:
-        # DCD or NetCDF, decided from the bytes. A fixed-tau cMD run writes DCD and an earlier
-        # AIS or REST2 run writes NetCDF; both are legitimate sources, and a file whose suffix
-        # disagrees with its contents is neither.
-        source_format = check_trajectory_declaration(source_path, what="-source-traj")
-    except SystemExit as refusal:
-        print(f"AIS: {refusal}", file=sys.stderr)
-        return 2
 
     from ..build.simout import SimulationOutput
 
@@ -960,51 +959,18 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             return 0
 
         # --- run the paths -------------------------------------------------------------------
-        # ONE platform decision for the whole run, made before the first path opens a Context:
-        # a CUDA device that cannot be initialised must fail here rather than 40 paths in.
-        #
-        # THE MACHINE POLICY IS READ FIRST. It used to be read last: a local-rank device was
-        # chosen unconditionally and `machine.openmm` was consulted afterwards, so
-        # `device_policy: openmm` was accepted by validation and had no effect on where anything
-        # ran. A configuration field with no runtime behaviour is worse than an absent one,
-        # because somebody set it and believes it took hold.
-        from ..openmm.platform_policy import (PlatformRequest, acceleration_record,
-                                              device_index_for, resolve_platform_request)
-        from ..registry.userconfig import machine_openmm_settings
-        from ..remd.engine import visible_cuda_devices
-
-        machine = machine_openmm_settings()
-        policy = str(machine.get("device_policy") or "local_rank")
-        request = PlatformRequest.from_machine(machine, cpu=bool(args.cpu))
-
-        device = args.device
-        device_policy = "named on the command line (--device)"
-        if device is None:
-            if request.name != "CUDA":
-                device_policy = "not a CUDA platform"
-            elif policy == "openmm":
-                device_policy = "machine.openmm.device_policy: openmm -- OpenMM selects"
-            else:
-                # Nothing binds ranks to devices automatically: without this every rank creates
-                # its Context on the default device and the whole run sits on one GPU.
-                device = device_index_for(policy=policy, rank=rank, size=size,
-                                          devices=visible_cuda_devices(probe=size > 1))
-                device_policy = (f"machine.openmm.device_policy: local_rank "
-                                 f"(rank {rank} of {size})")
-                if device is None and size > 1:
-                    raise SystemExit(
-                        "AIS was launched under MPI on CUDA with device_policy: local_rank, but "
-                        "no CUDA device is visible to this rank. Refusing rather than letting "
-                        "every rank fall onto one GPU.")
-
-        acceleration = resolve_platform_request(request, device_index=device)
+        # The preflight already resolved this -- machine settings, device policy, rank placement
+        # and a proved Context -- before this function created anything. Consuming its result is
+        # what keeps ONE platform policy in the package: resolving again here would be a second
+        # implementation, and the one that runs is never the one that gets fixed.
+        acceleration = checked.acceleration
+        device = checked.device_index
+        device_policy = checked.device_policy_detail
         log.field("platform", f"{acceleration.name}"
                               + (f" device {acceleration.device_index}"
                                  if acceleration.device_index is not None else ""))
         log.field("device policy", device_policy)
-        log.update(acceleration=dict(
-            acceleration_record(acceleration, mpi_rank=rank, mpi_size=size, local_rank=device),
-            device_policy_detail=device_policy))
+        log.update(acceleration=checked.record())
 
         # What a mid-path checkpoint has to match before it may be resumed from. The System, the
         # topology, the source ensemble and the whole schedule: a checkpoint carries positions and

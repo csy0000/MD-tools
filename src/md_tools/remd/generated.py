@@ -246,13 +246,26 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     # command line claims, and the MPI world the launcher created must be one number. Running 8
     # states in 4 processes is not a smaller ladder, it is a different Hamiltonian schedule
     # wearing the same output names.
-    from .mpi import Coordination
-
-    coordination = Coordination.open(number_of_groups=args.number_of_groups,
-                                     replicas=int(ladder["n_states"]),
-                                     protocol=protocol_name)
+    # EVERYTHING is validated before `-odir` exists -- not only the launch. The ladder writes
+    # `solute.yaml`, `_protocol.py` and a group file before the driver ever resolves a platform,
+    # so a malformed machine configuration used to be discovered with three files already on disk.
+    from ..run.preflight import PreflightError, preflight_ladder
 
     out = Path(args.out_dir).resolve()
+    try:
+        checked = preflight_ladder(
+            topology=args.topology, system=args.system, replicas=int(ladder["n_states"]),
+            coordinates=args.continue_from, groupfile=args.groupfile,
+            trajectory=args.trajectory, restart=args.restart,
+            output=args.output or out / f"{protocol_name}.out",
+            log=args.log or out / f"{protocol_name}.log",
+            number_of_groups=args.number_of_groups, cpu=bool(args.cpu),
+            protocol=protocol_name)
+    except PreflightError as refusal:
+        print(f"{protocol_name}: {refusal}", file=sys.stderr)
+        return 2
+    coordination = checked.coordination
+
     out.mkdir(parents=True, exist_ok=True)
 
     if args.cpu:

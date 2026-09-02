@@ -109,6 +109,10 @@ def stage_parser(description: str) -> argparse.ArgumentParser:
                              "machine.openmm.platform. That setting can also select "
                              "CPU machine-wide; this flag is the per-run override, "
                              "and the record distinguishes the two")
+    parser.add_argument("-odir", "--out-dir", default=None, metavar="DIR",
+                        help="directory the stage's outputs go in, when they are not named "
+                             "individually. The same flag `md-openmm md-run` takes, so a stage "
+                             "run directly and one run through the command behave alike")
     parser.add_argument("--device", default=None, metavar="N",
                         help="CUDA device index. An execution PLACEMENT option, not a platform "
                              "choice: it says which GPU, never whether to use one. Rejected with "
@@ -167,22 +171,16 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
     name = stage["name"]
     topology_path = Path(args.topology)
     system_path = Path(args.system)
-    log_path = Path(args.log) if args.log else Path(f"{name}.log")
-    out_path = Path(args.output) if args.output else Path(f"{name}.out")
-    if out_path.resolve() == log_path.resolve():
-        print(f"{name}: -o and -log both name {out_path}. They are different files: one is read "
-              f"by a person during the run, the other by a machine afterwards.", file=sys.stderr)
-        return 2
-    traj_path = Path(args.trajectory) if args.trajectory else Path(f"{name}.dcd")
-    # The ordinary writer is OpenMM's DCDReporter. Checked here, before anything opens a Context,
-    # so a `.nc` name is refused rather than filled with DCD bytes.
-    try:
-        check_trajectory_suffix(traj_path)
-    except SystemExit as refusal:
-        print(f"{name}: {refusal}", file=sys.stderr)
-        return 2
-    restart_path = Path(args.restart) if args.restart else Path(f"{name}.xml")
-    chk_path = Path(args.checkpoint) if args.checkpoint else Path(f"{name}.chk")
+    base = Path(args.out_dir) if args.out_dir else Path(".")
+    log_path = Path(args.log) if args.log else base / f"{name}.log"
+    out_path = Path(args.output) if args.output else base / f"{name}.out"
+    # The `-o` / `-log` collision is checked by the shared preflight below, together with every
+    # other output pair and with the inputs. A second comparison here was a second policy: it
+    # compared only those two, missed `-x`, `-r` and `-chk`, and fired first -- so the message a
+    # person saw depended on which of the two implementations happened to reach the case.
+    traj_path = Path(args.trajectory) if args.trajectory else base / f"{name}.dcd"
+    restart_path = Path(args.restart) if args.restart else base / f"{name}.xml"
+    chk_path = Path(args.checkpoint) if args.checkpoint else base / f"{name}.chk"
 
     for path, what in ((topology_path, "-p topology"), (system_path, "-s system")):
         if not path.is_file():
@@ -199,6 +197,24 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
             print(f"{name}: already completed ({log_path}); not rerunning. "
                   f"Delete {log_path} to force a rebuild.")
             return 0
+
+    # PREFLIGHT, BEFORE THE FIRST FILESYSTEM MUTATION. This runs here, in the runtime, and not
+    # only in `md-openmm md-run`: the generated `min.py` and the all-in-one `md.py` call this
+    # function directly, so a guard living in the outer command would leave them open. A `.out`
+    # and a `.log` created before the machine configuration has been read are a directory that
+    # reads as a started run.
+    from ..run.preflight import PreflightError, preflight_stage
+
+    try:
+        checked = preflight_stage(
+            topology=topology_path, system=system_path, coordinates=args.continue_from,
+            trajectory=traj_path, restart=restart_path, checkpoint=chk_path,
+            output=out_path, log=log_path, cpu=bool(args.cpu),
+            device=int(args.device) if args.device is not None else None,
+            protocol=f"stage {name}")
+    except PreflightError as refusal:
+        print(f"{name}: {refusal}", file=sys.stderr)
+        return 2
 
     from openmm import LangevinMiddleIntegrator, Platform, XmlSerializer, unit
     from openmm.app import PDBFile, Simulation, DCDReporter, StateDataReporter, CheckpointReporter
@@ -322,15 +338,9 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         # ONE platform decision, from `md_tools.openmm.platform_policy`, shared with REMD and AIS.
         # CUDA unless `--cpu` was written; a CUDA that cannot open a Context is an error here,
         # before minimisation, rather than a silent CPU run that finishes hours later.
-        from ..registry.userconfig import machine_openmm_settings
-
-        if args.cpu and args.device is not None:
-            raise SystemExit("--cpu and --device are contradictory: the CPU platform has no "
-                             "device to place. --device says which GPU a CUDA run goes to, "
-                             "never whether it is one.")
-        acceleration = resolve_platform_request(
-            PlatformRequest.from_machine(machine_openmm_settings(), cpu=bool(args.cpu)),
-            device_index=int(args.device) if args.device is not None else None)
+        # The preflight already resolved this, and proved a Context can be created on it. Using
+        # its result rather than resolving again is what keeps one platform policy in the package.
+        acceleration = checked.acceleration
         integrator = LangevinMiddleIntegrator(
             float(stage["temperature_K"]) * unit.kelvin,
             float(stage["friction_per_ps"]) / unit.picosecond,
@@ -338,9 +348,9 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         integrator.setRandomNumberSeed(int(seed))
         simulation = Simulation(pdb.topology, system, integrator,
                                 acceleration.platform, acceleration.properties)
-        log.update(acceleration=acceleration_record(acceleration))
+        log.update(acceleration=checked.record())
         log.field("acceleration", f"{acceleration.name} "
-                                  f"({acceleration_record(acceleration)['requested_policy']})")
+                                  f"({checked.record()['requested_policy']})")
         set_restraint(simulation, float(stage.get("restraint_kcal_per_mol_A2") or 0.0))
 
         system_sha = file_facts(system_path)["sha256"]
@@ -656,23 +666,68 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
     import argparse
 
     plan, config_path = load_generated_plan(script)
-    parser = argparse.ArgumentParser(description="run every stage of this workflow in order")
-    parser.add_argument("-p", "--topology", required=True)
-    parser.add_argument("-s", "--system", required=True)
-    parser.add_argument("--device", default=None)
-    parser.add_argument("--check", action="store_true")
+    parser = argparse.ArgumentParser(
+        description="run every stage of this workflow in order",
+        # No abbreviation, as everywhere else: a misspelling argparse resolves RUNS.
+        allow_abbrev=False)
+    parser.add_argument("-p", "--topology", required=True, metavar="PDB")
+    parser.add_argument("-s", "--system", required=True, metavar="XML")
+    parser.add_argument("-c", "--continue-from", default=None, metavar="XML",
+                        help="starting state for the FIRST stage; the rest chain from each other")
+    parser.add_argument("-odir", "--out-dir", default=None, metavar="DIR",
+                        help="directory every stage's outputs go in (default: here)")
+    parser.add_argument("-o", "--output", default=None, metavar="OUT",
+                        help="human-readable output for the FIRST stage. The others are named "
+                             "after themselves: one path cannot describe a whole chain")
+    parser.add_argument("-log", "--log", default=None, metavar="LOG",
+                        help="provenance record for the FIRST stage, for the same reason")
+    parser.add_argument("--cpu", action="store_true",
+                        help="run every stage on the OpenMM CPU platform, overriding "
+                             "machine.openmm.platform for this invocation")
+    parser.add_argument("--device", default=None, metavar="N",
+                        help="CUDA device index. Placement, never platform")
+    parser.add_argument("--check", action="store_true",
+                        help="validate every stage and exit without integrating")
     args = parser.parse_args(argv)
+
+    base = Path(args.out_dir) if args.out_dir else Path(".")
+
+    # THE WHOLE CHAIN IS VALIDATED BEFORE THE FIRST STAGE WRITES ANYTHING. An all-in-one workflow
+    # that discovered a broken machine configuration at stage four would have three stages of
+    # output on disk and no way to finish -- and `stage_main`'s own preflight, which runs per
+    # stage, could not have caught it any earlier than that.
+    #
+    # The continuation is deliberately excluded: every parent after the first is missing by
+    # construction until the stage before it has run.
+    from ..run.preflight import PreflightError, preflight_stage
+
+    try:
+        preflight_stage(
+            topology=args.topology, system=args.system, coordinates=args.continue_from,
+            output=args.output or base / f"{plan[0]['name']}.out",
+            log=args.log or base / f"{plan[0]['name']}.log",
+            cpu=bool(args.cpu),
+            device=int(args.device) if args.device is not None else None,
+            protocol=f"the {len(plan)}-stage workflow")
+    except PreflightError as refusal:
+        print(f"{Path(script).name}: {refusal}", file=sys.stderr)
+        return 2
 
     previous = None
     for stage in plan:
         name = stage["name"]
         stage_argv = ["-p", args.topology, "-s", args.system,
-                      "-log", f"{name}.log", "-x", f"{name}.dcd",
-                      "-r", f"{name}.xml", "-chk", f"{name}.chk"]
+                      "-log", str(base / f"{name}.log"), "-x", str(base / f"{name}.dcd"),
+                      "-o", str(base / f"{name}.out"),
+                      "-r", str(base / f"{name}.xml"), "-chk", str(base / f"{name}.chk")]
         if previous is not None:
             stage_argv += ["-c", previous]
+        elif args.continue_from:
+            stage_argv += ["-c", args.continue_from]
         if args.device is not None:
             stage_argv += ["--device", str(args.device)]
+        if args.cpu:
+            stage_argv.append("--cpu")
         if args.check:
             stage_argv += ["--check"]
         code = stage_main(dict(stage, resolved_config=str(config_path)), stage_argv)
@@ -680,7 +735,7 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
             print(f"{Path(script).name}: stage {name} failed with exit code {code}",
                   file=sys.stderr)
             return code
-        previous = f"{name}.xml"
+        previous = str(base / f"{name}.xml")
     return 0
 
 

@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 __all__ = [
+    "FORCE_NO_CUDA",
     "PlatformRequest",
     "device_index_for",
     "PlatformResolution",
@@ -54,6 +55,10 @@ class PlatformRequest:
     """
 
     name: str = "CUDA"
+    #: True ONLY when this invocation supplied `--cpu`. It once also meant "the machine is
+    #: configured for CPU", which made a machine-wide default indistinguishable from a per-run
+    #: override in every record that carried it -- a claim about what somebody typed, made on the
+    #: basis of a file they wrote months earlier. `platform_selection` is what says WHO chose.
     explicit_cpu: bool = False
     device_index: Optional[int] = None
     precision: str = "mixed"
@@ -98,11 +103,11 @@ class PlatformRequest:
                        platform_selection="cli-override", precision=precision,
                        origin="--cpu (command line)", device_policy=policy)
         if platform == "CPU":
-            # A machine-wide CPU default is a deliberate choice and is recorded as one -- but NOT
-            # as a command-line request. `explicit_cpu` stays true because the meaning it carries
-            # downstream is "CPU was chosen, not fallen back to"; `cli_cpu_override` is the field
-            # that separates who chose it.
-            return cls(name="CPU", explicit_cpu=True, cli_cpu_override=False,
+            # A machine-wide CPU default is a deliberate choice, and `platform_selection` records
+            # that it was made -- but `explicit_cpu` stays FALSE, because nobody typed `--cpu`.
+            # What keeps this distinguishable from a fallback is that there IS no fallback: a
+            # CUDA that cannot open a Context is an error, never a quiet move to the CPU.
+            return cls(name="CPU", explicit_cpu=False, cli_cpu_override=False,
                        platform_selection=selection, precision=precision,
                        origin=origin, device_policy=policy)
         return cls(name=platform, explicit_cpu=False, cli_cpu_override=False,
@@ -216,9 +221,24 @@ def resolve_platform_request(request: PlatformRequest | None = None, *,
                               device_index=index, visible_devices=_cuda_device_names())
 
 
+#: Set by the tests to make CUDA unusable in a child process without needing a machine that has no
+#: GPU. Never set in normal use; read here so the refusal path is exercised by the real command
+#: rather than by a mock of it, and so a CI runner with no device tests the same code a workstation
+#: does.
+FORCE_NO_CUDA = "MD_TOOLS_FORCE_NO_CUDA"
+
+
 def _prove_cuda_initialises(platform, properties: dict[str, str]) -> None:
     """Open and discard a one-particle Context. Cheap, and it either works or it does not."""
+    import os as _os
+
     from openmm import Context, System, VerletIntegrator, unit
+
+    if _os.environ.get(FORCE_NO_CUDA):
+        raise PlatformUnavailable(
+            f"CUDA is required but a Context could not be created: {FORCE_NO_CUDA} is set, so "
+            f"CUDA is being treated as unusable.\n"
+            f"  Nothing has been integrated. For an intentional CPU run, pass --cpu.")
 
     system = System()
     system.addParticle(1.0 * unit.amu)

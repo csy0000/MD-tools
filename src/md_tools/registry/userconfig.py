@@ -148,13 +148,7 @@ def load_user_config(explicit: str | Path | None = None) -> tuple[dict[str, Any]
         raise RegistrationError(
             f"{path}: schema_version is {version!r}, this build understands "
             f"{CONFIG_SCHEMA_VERSION!r}")
-    user = document.get("user") or {}
-    if not isinstance(user, dict):
-        raise RegistrationError(
-            f"{path}: `user` must be a mapping of fields, not a {type(user).__name__}.")
-    for field in ("person_id", "name"):
-        if not user.get(field):
-            raise RegistrationError(f"{path}: user.{field} is required")
+    check_user_identity(document, where=str(path))
     return document, path, origin
 
 
@@ -241,6 +235,30 @@ def init_user_config(*, explicit: str | Path | None = None, force: bool = False,
     return path
 
 
+def check_user_identity(document: dict[str, Any], *, where: str) -> None:
+    """The `user` block, validated once for registration and for simulation alike.
+
+    `person_id` and `name` are required and non-empty wherever a configuration exists. They are
+    not needed to run a simulation, which is why an ABSENT configuration is fine -- but a file
+    that HAS a user block and leaves the identity blank is a file somebody started filling in and
+    did not finish, and every dataset it later registers would carry that blank as provenance.
+    Refusing early is cheaper than discovering it at registration, after the compute is spent.
+    """
+    user = document.get("user")
+    if user is None:
+        return
+    if not isinstance(user, dict):
+        raise RegistrationError(
+            f"{where}: `user` must be a mapping of fields, not a {type(user).__name__}.")
+    for field in ("person_id", "name"):
+        value = user.get(field)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            raise RegistrationError(
+                f"{where}: user.{field} is required and must not be empty. It is recorded as "
+                f"provenance in every dataset registered from this machine, and a blank there is "
+                f"not recoverable afterwards.")
+
+
 def resolve_machine_openmm(document: dict[str, Any] | None = None) -> dict[str, Any]:
     """The machine's OpenMM settings, and where each came from.
 
@@ -323,14 +341,11 @@ def machine_openmm_settings(explicit: str | Path | None = None) -> dict[str, Any
         raise RegistrationError(
             f"{path} (from {origin}): schema_version is {version!r}, this build understands "
             f"{CONFIG_SCHEMA_VERSION!r}.")
-    # The `user` block is not this function's business, but a malformed one still means the file
-    # is wrong, and a wrong file must not resolve to defaults just because the part this caller
-    # needed happened to be absent.
-    user = document.get("user")
-    if user is not None and not isinstance(user, dict):
-        raise RegistrationError(
-            f"{path} (from {origin}): `user` must be a mapping of fields, not a "
-            f"{type(user).__name__}.")
+    # The `user` block is not this caller's business, but a malformed one still means the file is
+    # wrong, and a wrong file must not resolve to defaults just because the part this caller
+    # needed happened to be valid. ONE validator, shared with registration: copying the identity
+    # rules into a second one is how the two come to disagree about what "required" means.
+    check_user_identity(document, where=f"{path} (from {origin})")
     machine = document.get("machine")
     if machine is not None and not isinstance(machine, dict):
         raise RegistrationError(

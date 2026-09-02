@@ -332,9 +332,9 @@ def test_paths_that_resolve_to_one_file_collide_however_they_are_spelled():
     """`-o sub/../run.out` and `-log ./run.out` are one file. String comparison misses it."""
     from md_tools.run.main import check_output_collisions
 
-    check_output_collisions(output="a.out", log="b.log")            # accepted
+    check_output_collisions(outputs={"o": "a.out", "log": "b.log"})          # accepted
     with pytest.raises(SystemExit):
-        check_output_collisions(output="sub/../run.out", log="./run.out")
+        check_output_collisions(outputs={"o": "sub/../run.out", "log": "./run.out"})
 
 
 # --- 6. platform provenance -------------------------------------------------------------------
@@ -395,11 +395,16 @@ def test_ais_reads_the_device_policy_before_choosing_a_device():
     import inspect
 
     from md_tools.ais import run
+    from md_tools.run import preflight
 
-    source = inspect.getsource(run)
-    # The CALLS, not the imports: an import line says nothing about when a value is used, and the
-    # question here is whether the policy is known at the moment the device is picked.
-    settings = source.index("machine_openmm_settings()")
+    # AIS no longer places a device at all. It asks preflight and uses the answer, so the
+    # ordering cannot be got wrong here by editing this module: there is nothing left to order.
+    assert "device_index_for" not in inspect.getsource(run), \
+        "AIS picks its own device again; the placement belongs to the shared preflight"
+
+    # The ordering now lives in the one place that does the work, and is asserted there.
+    source = inspect.getsource(preflight)
+    settings = source.index("machine_openmm_settings(machine_config)")
     placement = source.index("device_index_for(policy=")
     assert settings < placement, "the device is chosen before the machine policy is read"
 

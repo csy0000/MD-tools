@@ -289,20 +289,35 @@ def md_run_main(argv: list[str] | None = None) -> int:
     source = args.source_traj or (resolved["ais_source"]["trajectory"]
                                   if protocol == "AIS" else None)
 
-    from .preflight import Preflight
+    # The SAME mode-aware preflight the runtimes run for themselves. `md-run` does it here so a
+    # refusal happens before `-odir` and `resolved.config` exist; the runtime does it again for
+    # its own arguments, which is cheap and is what makes a generated script as safe as this one.
+    from .preflight import (PreflightError, preflight_ais, preflight_ladder, preflight_stage)
 
     try:
-        checked = Preflight.run(
-            topology=args.topology, system=args.system, source=source,
-            outputs={"o": args.output, "log": args.log, "x": args.trajectory,
-                     "r": args.restart, "chk": args.checkpoint},
-            cpu=bool(args.cpu),
-            device=int(args.device) if args.device is not None else None,
-            number_of_groups=args.number_of_groups, replicas=replicas, protocol=protocol,
-            # `--check` validates everything a real run relies on, including that a Context can
-            # be created. It is not a way to skip the expensive half.
-            probe_cuda=True)
-    except SystemExit as refusal:
+        if protocol == "AIS":
+            preflight_ais(
+                topology=args.topology, system=args.system, source=source,
+                number_of_groups=args.number_of_groups,
+                output=args.output, log=args.log, cpu=bool(args.cpu),
+                device=int(args.device) if args.device is not None else None)
+        elif protocol in ("REST2", "rREST2") and run_input.stage is None:
+            preflight_ladder(
+                topology=args.topology, system=args.system, replicas=replicas,
+                coordinates=args.coordinates, groupfile=args.groupfile,
+                trajectory=args.trajectory, restart=args.restart,
+                output=args.output, log=args.log,
+                number_of_groups=args.number_of_groups, cpu=bool(args.cpu),
+                device=int(args.device) if args.device is not None else None,
+                protocol=protocol)
+        else:
+            preflight_stage(
+                topology=args.topology, system=args.system, coordinates=args.coordinates,
+                trajectory=args.trajectory, restart=args.restart, checkpoint=args.checkpoint,
+                output=args.output, log=args.log, cpu=bool(args.cpu),
+                device=int(args.device) if args.device is not None else None,
+                protocol=protocol)
+    except PreflightError as refusal:
         print(f"md-run: {refusal}", file=sys.stderr)
         return 2
 

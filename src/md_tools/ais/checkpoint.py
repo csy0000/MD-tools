@@ -51,7 +51,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 __all__ = ["CheckpointError", "POINTER_NAME", "GENERATIONS_DIR", "commit_generation",
-           "read_committed", "clear_committed"]
+           "read_committed", "clear_committed", "fault", "BOUNDARIES",
+           "STREAM_BOUNDARIES"]
 
 POINTER_NAME = "current_checkpoint.json"
 GENERATIONS_DIR = "checkpoints"
@@ -61,12 +62,27 @@ GENERATIONS_DIR = "checkpoints"
 #: pointer lands would remove the only alternative at the exact moment it might be needed.
 KEEP_GENERATIONS = 2
 
-#: Fault injection for the tests. Set to the name of a boundary and the commit raises there, so a
+#: Fault injection for the tests. Set to the name of a boundary and execution raises there, so a
 #: crash at each step of the transaction is exercised deterministically rather than by racing a
 #: real kill against a real write.
 FAULT_ENVIRONMENT = "MD_TOOLS_CHECKPOINT_FAULT"
+
+#: How many times a boundary is allowed to pass before it fires. Without it, a fault at the FIRST
+#: commit leaves nothing committed and the interesting case -- resuming from a previous generation
+#: while a newer one lies half-written -- cannot be reached at all.
+FAULT_AFTER_ENVIRONMENT = "MD_TOOLS_CHECKPOINT_FAULT_AFTER"
+
+#: The commit transaction's own boundaries.
 BOUNDARIES = ("after-checkpoint-write", "after-checkpoint-sync", "after-sidecar-write",
               "before-pointer-replace", "after-pointer-replace")
+
+#: The stream boundaries, raised by the path runner. A crash between a frame reaching the disk and
+#: the checkpoint that vouches for it is the case the committed counters exist for.
+STREAM_BOUNDARIES = ("before-frame", "after-frame", "before-work-row", "after-work-row",
+                     "before-state-row", "after-state-row")
+
+#: How many times each boundary has been passed in this process, so `FAULT_AFTER` can count.
+_passed: dict[str, int] = {}
 
 
 class CheckpointError(SystemExit):
@@ -77,9 +93,22 @@ class _InjectedFault(RuntimeError):
     """A deliberate crash at a transaction boundary. Only the tests raise it."""
 
 
-def _fault(boundary: str) -> None:
-    if os.environ.get(FAULT_ENVIRONMENT) == boundary:
+def fault(boundary: str) -> None:
+    """Raise here if the tests armed this boundary. A no-op in every normal run.
+
+    `FAULT_AFTER` lets a boundary pass a stated number of times first, so a crash can be placed
+    at the second or third commit rather than only the first.
+    """
+    if os.environ.get(FAULT_ENVIRONMENT) != boundary:
+        return
+    allowed = int(os.environ.get(FAULT_AFTER_ENVIRONMENT) or 0)
+    _passed[boundary] = _passed.get(boundary, 0) + 1
+    if _passed[boundary] > allowed:
         raise _InjectedFault(f"injected crash at {boundary}")
+
+
+#: The private spelling the transaction below uses.
+_fault = fault
 
 
 def _sha256(path: Path) -> str:
@@ -220,7 +249,9 @@ def read_committed(directory: str | Path) -> dict[str, Any] | None:
             f"(committed {document['checkpoint_sha256'][:16]}..., found {actual[:16]}...).\n"
             f"  The checkpoint has changed since it was committed, so the Context it restores is "
             f"not the one the bookkeeping describes. Refusing to resume it: the numbers would "
-            f"look right and describe a different simulation.")
+            f"look right and describe a different simulation.\n"
+            f"  Delete the path directory ({binary.parent.parent}) to rerun this path from its "
+            f"source frame. Its work is lost; the other paths are untouched.")
 
     return {"generation": document["generation"],
             "checkpoint": str(binary),
