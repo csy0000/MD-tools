@@ -92,9 +92,34 @@ def scaling_for_tau(tau):
     """
     if not 0.0 <= tau < 1.0:
         raise ValueError(f"tau must be in [0, 1); got {tau}")
-    solute_solute_scale = (1.0 - tau) ** 2
-    solute_environment_scale = 1.0 - tau
-    return solute_solute_scale, solute_environment_scale
+    # Delegated so the powers of the amplitude are written once. A `**2` repeated in two places
+    # is two chances for one of them to be changed alone -- the same reason this function exists.
+    return scaling_for_amplitude(amplitude_for_tau(tau))
+
+
+#: The coupling amplitude `a = 1 - tau`. Every scale factor in this convention is a power of it:
+#: solute-environment terms carry `a`, solute-solute terms `a^2`, and everything else `a^0`. That
+#: makes the potential an exact quadratic polynomial in `a` at frozen coordinates, which is what
+#: `md_tools.ais.decomposition` measures.
+def amplitude_for_tau(tau):
+    """`a = 1 - tau`, the coupling amplitude. The one conversion; never stored as a coordinate."""
+    return 1.0 - float(tau)
+
+
+def scaling_for_amplitude(amplitude):
+    """The two factors as powers of the amplitude, WITHOUT the `tau < 1` state restriction.
+
+    `scaling_for_tau` guards `0 <= tau < 1` because tau is a protocol COORDINATE and tau = 1 is a
+    fully decoupled solute that no rung and no path endpoint may sit at. This function exists for
+    the other use: a momentary PROBE of the Hamiltonian at a controlled amplitude, at frozen
+    coordinates, to measure a basis component. `a = 0` is exactly the measurement that isolates
+    the unscaled terms, so forbidding it here would forbid the measurement rather than protect a
+    state -- nothing is integrated at a probe amplitude and nothing persists it.
+    """
+    amplitude = float(amplitude)
+    if not 0.0 <= amplitude <= 1.0:
+        raise ValueError(f"the coupling amplitude must be in [0, 1]; got {amplitude}")
+    return amplitude * amplitude, amplitude
 
 
 def linear_tau_ladder(minimum, maximum, count):
@@ -461,7 +486,18 @@ class TauSwitcher:
         returned -- because `updateParametersInContext` writes through the Force objects the
         Context already holds.
         """
-        solute_solute, solute_environment = scaling_for_tau(tau)
+        return self.set_amplitude(context, system, amplitude_for_tau(tau))
+
+    def set_amplitude(self, context, system, amplitude):
+        """The same change, addressed by coupling amplitude `a = 1 - tau` instead of by tau.
+
+        `set_tau` is the protocol operation and this is the one underneath it, so a probe at a
+        controlled amplitude and a real switch to a tau go through exactly the same restore-and-
+        rescale code. A separate probe implementation would be a second Hamiltonian: it would
+        agree with this one until one of them was edited, and the decomposition it measured would
+        then describe a potential the path never ran under.
+        """
+        solute_solute, solute_environment = scaling_for_amplitude(amplitude)
         for index in range(system.getNumForces()):
             force = system.getForce(index)
             reference = self.base.getForce(index)

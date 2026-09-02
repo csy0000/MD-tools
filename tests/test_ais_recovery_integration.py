@@ -69,20 +69,28 @@ class _TinySimulation:
     """
 
     def __init__(self, topology, system, integrator, platform=None, properties=None):
-        from openmm import LangevinMiddleIntegrator, Platform, System, unit
+        from openmm import Platform, unit
 
-        real = System()
-        for _ in range(ATOMS):
-            real.addParticle(12.0 * unit.dalton)
-        self._integrator = LangevinMiddleIntegrator(
-            300.0 * unit.kelvin, 1.0 / unit.picosecond, 0.002 * unit.picosecond)
+        # The System AND the integrator the runner handed us, not fresh ones.
+        #
+        # The System matters because `TauSwitcher.set_amplitude` pushes parameters through
+        # `updateParametersInContext`, which writes through the Force objects the Context already
+        # holds: a Context built from a different System of the same size would accept every call
+        # and change nothing, and every component would read zero while the test reported success.
+        #
+        # The integrator matters because `run_one_path` seeds the one it constructs. Building a
+        # replacement here left it at OpenMM's seed 0, which means "choose a random seed" -- so
+        # two runs of the same path took different random streams, and no test could compare a
+        # resumed path against an uninterrupted one.
+        self._integrator = integrator
         # `_REAL_SIMULATION`, captured at import time: `openmm.app.Simulation` is monkeypatched
         # to this class for the duration of a test, so constructing it by name here would recurse.
-        self._simulation = _REAL_SIMULATION(_FourAtomTopology(), real, self._integrator,
+        self._simulation = _REAL_SIMULATION(_FourAtomTopology(), system, self._integrator,
                                             Platform.getPlatformByName("Reference"))
         self._simulation.context.setPositions(
-            numpy.zeros((ATOMS, 3)) * unit.nanometer)
-        self.system = real
+            numpy.array([[0.0, 0.0, 0.0], [0.4, 0.0, 0.0], [0.0, 0.5, 0.0], [0.3, 0.3, 0.4]])
+            * unit.nanometer)
+        self.system = system
         self.topology = _FourAtomTopology()
 
     # -- what `run_one_path` uses ----------------------------------------------------------
@@ -114,27 +122,36 @@ class _FourAtomTopology:
         return topology
 
 
-class _Switcher:
-    """`TauSwitcher` reduced to what the path loop asks of it.
+def _switcher():
+    """The REAL `TauSwitcher`, over four particles carrying a real NonbondedForce.
 
-    The scaling mathematics is not under test here and is covered elsewhere; what this must do is
-    hand back a System and accept a tau, so the recovery path can be driven deterministically.
+    This used to be a stub that recorded the tau and did nothing. That was enough while the path
+    loop only needed a System handed back -- and it stopped being enough the moment the loop began
+    measuring the Hamiltonian, because a switcher that changes no parameters produces a potential
+    that is zero at every amplitude, three identical probe energies, and components that are all
+    zero. Every identity in this file would then hold, and none of them would mean anything.
+
+    Two of the four particles are solute, so the three basis groups are all non-empty: the
+    environment-environment pair is unscaled, the two cross pairs are linear, and the
+    solute-solute pair is quadratic. The component accumulators a crash has to preserve are
+    therefore genuinely different numbers rather than three zeros.
     """
+    from openmm import NonbondedForce, System, unit
 
-    def __init__(self):
-        self.tau = None
-        from openmm import System, unit
+    from md_tools.rest2.scaler import TauSwitcher
 
-        self._system = System()
-        for _ in range(ATOMS):
-            self._system.addParticle(12.0 * unit.dalton)
+    base = System()
+    for _ in range(ATOMS):
+        base.addParticle(12.0 * unit.dalton)
+    nonbonded = NonbondedForce()
+    for index in range(ATOMS):
+        nonbonded.addParticle(0.5 if index % 2 == 0 else -0.5, 0.3, 0.6)
+    base.addForce(nonbonded)
+    return TauSwitcher(base, SOLUTE_ATOMS)
 
-    def prepared_system(self, tau):
-        self.tau = tau
-        return self._system
 
-    def set_tau(self, context, system, tau):
-        self.tau = tau
+#: Which of the four particles are the enhanced region.
+SOLUTE_ATOMS = (0, 1)
 
 
 @pytest.fixture
@@ -178,7 +195,7 @@ def harness(tmp_path, monkeypatch):
         try:
             return ais_run.run_one_path(
                 index=0, chosen=[7, 9], out=out, schedule=schedule, taus=schedule["taus"],
-                switcher=_Switcher(),
+                switcher=_switcher(),
                 simulation_inputs={"topology": object(), "source_path": tmp_path / "source.dcd",
                                    "mdtraj_top": object(), "implicit": False,
                                    "acceleration": _Acceleration()},
@@ -202,10 +219,20 @@ class _Acceleration:
     properties: dict = {}
 
 
+#: The source configuration every path in this file starts from. Four separated particles, not
+#: four at the origin: the system carries a real NonbondedForce now, and coincident particles put
+#: a Lennard-Jones singularity in the potential -- every energy becomes `inf`, every work becomes
+#: `nan`, and every identity in this file compares `nan` with `nan` and passes.
+SOURCE_POSITIONS = numpy.array([[0.0, 0.0, 0.0],
+                                [0.4, 0.0, 0.0],
+                                [0.0, 0.5, 0.0],
+                                [0.3, 0.3, 0.4]])
+
+
 def _read_frame_source(monkeypatch):
     """`_read_source_frame` reads a real trajectory; the stub returns fixed coordinates."""
     monkeypatch.setattr(ais_run, "_read_source_frame",
-                        lambda *a, **k: (numpy.zeros((ATOMS, 3)), None))
+                        lambda *a, **k: (SOURCE_POSITIONS.copy(), None))
 
 
 @pytest.fixture(autouse=True)
@@ -432,3 +459,187 @@ def test_a_checkpoint_from_a_different_run_is_refused(harness, tmp_path):
     # check exists for rather than one the digest would catch.
     with pytest.raises(SystemExit, match="does not belong to this run"):
         call(resume=True)
+
+
+# --- the tau-basis component accumulators survive an interruption ------------------------------
+#
+# The components are accumulated in the same loop as the total and committed by the same
+# transaction. That makes them subject to exactly the failure the transaction exists to prevent --
+# a resume that restores a Context from one generation and accumulators from another -- with one
+# extra way to go wrong: an accumulator that is simply not restored starts again from zero, and
+# the resulting file still satisfies `dW_u + dW_l + dW_q == dW_total` on every INDIVIDUAL row
+# while the cumulative columns are short by everything before the crash.
+
+COMPONENT_TOTALS = ("total_work_unscaled_kj_mol", "total_work_linear_kj_mol",
+                    "total_work_quadratic_kj_mol")
+
+
+def _final_row(out: Path):
+    rows = _counts(out)["observations"]
+    return rows[-1]
+
+
+def test_the_components_sum_to_the_total_on_every_row_of_an_uninterrupted_path(harness):
+    call, out, schedule = harness
+    call()
+    for row in _counts(out)["observations"]:
+        parts = sum(float(row[name]) for name in
+                    ("delta_work_unscaled_kj_mol", "delta_work_linear_kj_mol",
+                     "delta_work_quadratic_kj_mol"))
+        assert abs(parts - float(row["incremental_work_kj_mol"])) < 1e-6, row["protocol_step"]
+        cumulative = sum(float(row[name]) for name in COMPONENT_TOTALS)
+        assert abs(cumulative - float(row["cumulative_work_kj_mol"])) < 1e-6, row["protocol_step"]
+
+
+def test_the_unscaled_component_work_is_zero_on_every_row(harness):
+    """The column a nonzero value would condemn. Written, so it can be read rather than assumed."""
+    call, out, schedule = harness
+    call()
+    for row in _counts(out)["observations"]:
+        assert float(row["delta_work_unscaled_kj_mol"]) == 0.0, row["protocol_step"]
+        assert float(row["total_work_unscaled_kj_mol"]) == 0.0, row["protocol_step"]
+
+
+def test_the_reconstructed_potential_is_written_and_agrees_with_its_own_components(harness):
+    call, out, schedule = harness
+    call()
+    for row in _counts(out)["observations"]:
+        tau = float(row["tau"])
+        amplitude = 1.0 - tau
+        expected = (float(row["potential_unscaled_kj_mol"])
+                    + amplitude * float(row["potential_linear_basis_kj_mol"])
+                    + amplitude * amplitude * float(row["potential_quadratic_basis_kj_mol"]))
+        assert abs(expected - float(row["potential_total_reconstructed_kj_mol"])) < 1e-6
+        assert abs(amplitude * float(row["potential_linear_basis_kj_mol"])
+                   - float(row["potential_linear_contribution_kj_mol"])) < 1e-9
+        assert abs(amplitude ** 2 * float(row["potential_quadratic_basis_kj_mol"])
+                   - float(row["potential_quadratic_contribution_kj_mol"])) < 1e-9
+
+
+def test_the_components_are_non_trivial_so_these_checks_can_fail(harness):
+    """Guard on the guards: three zeros would satisfy every identity above."""
+    call, out, schedule = harness
+    call()
+    row = _final_row(out)
+    assert abs(float(row["total_work_linear_kj_mol"])) > 1e-9
+    assert abs(float(row["total_work_quadratic_kj_mol"])) > 1e-9
+    assert abs(float(row["potential_quadratic_basis_kj_mol"])) > 1e-9
+
+
+@pytest.mark.parametrize("boundary", BOUNDARIES)
+def test_a_resumed_path_reproduces_the_uninterrupted_component_totals(boundary, harness,
+                                                                     tmp_path, monkeypatch):
+    """Crash, resume, and land on the same three component totals as an uninterrupted run.
+
+    Same seeds, same source frame, same schedule, so the paths are the same trajectory -- and a
+    resume that dropped or double-counted a component would move exactly one of these three
+    numbers while leaving the total right, because the total is measured independently.
+    """
+    call, out, schedule = harness
+    reference = call()
+    reference_row = _final_row(out)
+
+    # A second, identical path in a fresh directory, interrupted at this boundary.
+    second = tmp_path / "AIS-again"
+    second.mkdir()
+    _read_frame_source(monkeypatch)
+    import md_tools.ais.checkpoint as _checkpoint
+
+    def run(**kwargs):
+        _checkpoint._passed.clear()
+        return ais_run.run_one_path(
+            index=0, chosen=[7, 9], out=second, schedule=schedule, taus=schedule["taus"],
+            switcher=_switcher(),
+            simulation_inputs={"topology": object(), "source_path": tmp_path / "source.dcd",
+                               "mdtraj_top": object(), "implicit": False,
+                               "acceleration": _Acceleration()},
+            dynamics={"seed": 3, "friction_per_ps": 1.0, "timestep_fs": 2.0,
+                      "temperature_K": 300.0},
+            ais={"tau_start": 0.5, "tau_end": 0.0}, beta=0.4, temperature=300.0,
+            rank=0, fingerprint="fixed-fingerprint", log=lambda *a: None, **kwargs)
+
+    monkeypatch.setenv(FAULT_ENVIRONMENT, boundary)
+    monkeypatch.setenv(FAULT_AFTER_ENVIRONMENT, "1")
+    with pytest.raises(RuntimeError):
+        run(resume=False)
+    monkeypatch.delenv(FAULT_ENVIRONMENT)
+    monkeypatch.delenv(FAULT_AFTER_ENVIRONMENT)
+
+    resumed = run(resume=True)
+    assert resumed["status"] == "completed" and resumed["resumed"] is True
+    resumed_row = _final_row(second)
+
+    for name in COMPONENT_TOTALS + ("cumulative_work_kj_mol",):
+        assert abs(float(resumed_row[name]) - float(reference_row[name])) < 1e-6, (
+            f"{boundary}: {name} differs between the uninterrupted and the resumed path")
+    assert abs(sum(float(resumed_row[n]) for n in COMPONENT_TOTALS)
+               - float(resumed_row["cumulative_work_kj_mol"])) < 1e-6
+
+
+def test_a_checkpoint_without_a_decomposition_schema_is_refused_on_resume(harness):
+    """An old checkpoint has no components to continue, and is refused rather than zero-filled."""
+    call, out, schedule = harness
+    with pytest.raises(RuntimeError):
+        call(fault="after-pointer-replace")
+
+    sidecar = Path(read_committed(out / "path_0000")["sidecar"])
+    document = json.loads(sidecar.read_text(encoding="utf-8"))
+    document["state"].pop("decomposition_schema")
+    sidecar.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(Exception, match="no component-decomposition schema"):
+        call(resume=True)
+
+
+def test_a_checkpoint_from_another_basis_version_is_refused_on_resume(harness):
+    call, out, schedule = harness
+    with pytest.raises(RuntimeError):
+        call(fault="after-pointer-replace")
+
+    sidecar = Path(read_committed(out / "path_0000")["sidecar"])
+    document = json.loads(sidecar.read_text(encoding="utf-8"))
+    document["state"]["decomposition_schema"]["version"] = 99
+    sidecar.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(Exception, match="not summable"):
+        call(resume=True)
+
+
+def test_the_completion_record_carries_the_component_totals_and_the_evaluation_count(harness):
+    call, out, schedule = harness
+    record = call()
+    assert record["decomposition_schema"]["version"] == 1
+    assert record["potential_energy_evaluations_per_update"] == 3
+    # One probe per update, plus the one at observation 0, three evaluations each.
+    assert record["switching_energy_evaluations"] == 3 * (schedule["number_of_updates"] + 1)
+    assert record["switching_energy_evaluation_seconds"] > 0.0
+    assert abs(sum(record[name] for name in COMPONENT_TOTALS)
+               - record["total_work_kj_mol"]) < 1e-6
+
+
+def test_an_observation_interval_wider_than_the_update_interval_sums_several_updates(harness):
+    """The two cadences are independent, and a row must carry the work of EVERY update it covers.
+
+    This harness observes every 20 steps and updates every 10, so each row after the first spans
+    two parameter changes. A component accumulator that was reset per update instead of per
+    observation would halve these numbers and still satisfy the per-row sum identity.
+    """
+    call, out, schedule = harness
+    assert schedule["observation_interval_steps"] > schedule["parameter_update_interval_steps"], \
+        "this test is vacuous unless the observation cadence is the wider one"
+    updates_per_row = (schedule["observation_interval_steps"]
+                       // schedule["parameter_update_interval_steps"])
+    assert updates_per_row == 2
+
+    call()
+    rows = _counts(out)["observations"]
+    # Reconstruct each row's linear work from the tau it spans. The linear component work over an
+    # observation is sum_j (a_{j+1} - a_j) * U_linear(x_j), which is NOT (a_end - a_start) * U_l
+    # unless the coordinates were frozen -- so the check here is the cheaper, sharper one: the
+    # cumulative columns must be the running sum of the incremental ones, per component.
+    running = {"unscaled": 0.0, "linear": 0.0, "quadratic": 0.0}
+    for row in rows[1:]:
+        for name in running:
+            running[name] += float(row[f"delta_work_{name}_kj_mol"])
+            assert abs(running[name] - float(row[f"total_work_{name}_kj_mol"])) < 1e-9, (
+                f"{name} at step {row['protocol_step']}")
+    # And the last row's totals are the path's totals.
+    assert abs(sum(running.values()) - float(rows[-1]["cumulative_work_kj_mol"])) < 1e-6

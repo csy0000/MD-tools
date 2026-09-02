@@ -42,14 +42,25 @@ from typing import Any
 
 from ..build.record import LogWriter, file_facts, openmm_platform_facts, read_record
 from ..openmm.trajectory import check_trajectory_declaration
+from .decomposition import (COMPONENT_OBSERVATION_COLUMNS, COMPONENT_SUMMARY_COLUMNS,
+                            COMPONENT_WORK_COLUMNS, DECOMPOSITION_SCHEMA,
+                            RECONSTRUCTION_TOLERANCES, ComponentProbe, ComponentWork,
+                            reconstruction_tolerance, require_compatible_schema)
 
 #: One row per observation. `s` and sqrt(s) are absent on purpose: see the module docstring.
+#:
+#: WHICH INSTANT A ROW DESCRIBES. The work columns are cumulative to this protocol step. The
+#: component POTENTIAL columns are the frozen-coordinate measurement of the last parameter update
+#: contributing to this row -- the configuration the parameters moved at, under this row's `tau`.
+#: `potential_total_reconstructed_kj_mol` is therefore exactly the `U(tau_after, x_frozen)` whose
+#: difference from `U(tau_before, x_frozen)` is that update's total work, which is what makes it
+#: comparable to a directly measured number rather than to nothing.
 OBSERVATION_COLUMNS = (
     "path_index", "observation_index", "coordinate_frame_index",
     "source_frame_index", "protocol_step", "switching_time_ps", "tau",
     "incremental_work_kj_mol", "cumulative_work_kj_mol", "cumulative_reduced_work",
     "temperature_kelvin", "integrator_seed", "velocity_seed",
-)
+) + COMPONENT_OBSERVATION_COLUMNS
 
 COMPLETION_NAME = "completed.json"
 OBSERVATIONS_CSV = "observations.csv"
@@ -80,14 +91,14 @@ STAGED_TRAJECTORY = "frames.partial.nc"
 WORK_TABLE = "AIS_work.csv"
 WORK_COLUMNS = ("path_id", "source_frame", "switch_step", "tau_before", "tau_after",
                 "delta_work_kj_mol", "total_work_kj_mol", "total_reduced_work",
-                "trajectory", "mpi_rank")
+                "trajectory", "mpi_rank") + COMPONENT_WORK_COLUMNS
 
 #: One row per path: the summary a reader wants when the question is about the work DISTRIBUTION
 #: rather than about any individual path's trajectory through it.
 WORK_SUMMARY = "AIS_paths.csv"
 SUMMARY_COLUMNS = ("path_index", "source_frame_index", "observations",
                    "total_work_kj_mol", "total_reduced_work", "trajectory",
-                   "integrator_seed", "velocity_seed", "mpi_rank")
+                   "integrator_seed", "velocity_seed", "mpi_rank") + COMPONENT_SUMMARY_COLUMNS
 
 
 def ais_parser(description: str) -> argparse.ArgumentParser:
@@ -227,7 +238,7 @@ def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
             entries = list(csv.DictReader(handle))
         previous_tau = None
         for entry in entries:
-            rows.append({
+            row = {
                 "path_id": path_id,
                 "source_frame": entry["source_frame_index"],
                 "switch_step": int(entry["protocol_step"]),
@@ -241,7 +252,14 @@ def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
                 "total_reduced_work": entry["cumulative_reduced_work"],
                 "trajectory": record.get("trajectory"),
                 "mpi_rank": record.get("mpi_rank"),
-            })
+            }
+            # Copied by name from the per-path row rather than recomputed. The global table is an
+            # assembly of what the paths measured; recomputing a column here would let the two
+            # files disagree about the same number, and the one a reader trusts would be whichever
+            # they opened first.
+            for column in COMPONENT_WORK_COLUMNS:
+                row[column] = entry.get(column, "")
+            rows.append(row)
             previous_tau = entry["tau"]
 
     rows.sort(key=lambda row: (row["path_id"], row["switch_step"]))
@@ -432,6 +450,38 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
     simulation = Simulation(topology, system, integrator,
                             acceleration.platform, acceleration.properties)
 
+    # The component probe drives the SAME switcher the path switches with, so a probe amplitude
+    # and a real tau reach this Context through one implementation.
+    probe = ComponentProbe(switcher, system)
+    precision = (acceleration.properties or {}).get("Precision", "mixed")
+
+    def measure_components(tau: float):
+        """The three basis components at the current (frozen) coordinates, checked against U(tau).
+
+        The reconstruction is compared with a directly measured potential every time it is taken.
+        That comparison is the whole safety net: it is what would fail if a force ever acquired a
+        tau dependence outside the three-group model, and catching that at the first update is the
+        difference between a refused run and a work integral for a Hamiltonian nothing ran under.
+        """
+        measured = simulation.context.getState(getEnergy=True).getPotentialEnergy(
+            ).value_in_unit(unit.kilojoule_per_mole)
+        components = probe.measure(simulation.context, restore_tau=tau)
+        reconstructed = components.total_at(tau)
+        allowed = reconstruction_tolerance(measured, precision=precision)
+        if abs(reconstructed - measured) > allowed:
+            raise SystemExit(
+                f"path {index}: the tau-basis decomposition does not reproduce the potential at "
+                f"tau = {tau}. Measured {measured:.6f} kJ/mol, reconstructed "
+                f"{reconstructed:.6f} kJ/mol from "
+                f"U_unscaled = {components.unscaled:.6f}, U_linear = {components.linear:.6f}, "
+                f"U_quadratic = {components.quadratic:.6f}; the difference "
+                f"{reconstructed - measured:.3e} exceeds the {precision}-precision tolerance "
+                f"{allowed:.3e}.\n"
+                f"  U(tau) is a quadratic in (1 - tau) only if every force scales as the REST2 "
+                f"convention says. Refusing rather than recording components that do not add up "
+                f"to the potential the path is actually running under.")
+        return components, measured
+
     # -- resume, or start ----------------------------------------------------------------------
     from .checkpoint import clear_committed, commit_generation, fault, read_committed
 
@@ -466,9 +516,20 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         # The Context is back; now put the bookkeeping back to exactly the same instant. The
         # streams are cut to the counts the sidecar vouches for, so an interrupted final record
         # is dropped rather than appended to.
+        # Before any accumulator is restored: the components in this checkpoint must have been
+        # measured under the basis this build implements. Adding today's components onto a total
+        # accumulated under another definition would produce a decomposition that sums correctly
+        # and describes no Hamiltonian.
+        require_compatible_schema(state_of_path, what=f"the checkpoint in {directory}")
         updates_done = int(state_of_path["updates_completed"])
         cumulative = float(state_of_path["cumulative_work_kj_mol"])
         since = float(state_of_path["work_since_last_observation_kj_mol"])
+        cumulative_components = ComponentWork(
+            *(float(state_of_path["cumulative_component_work_kj_mol"][name])
+              for name in ("unscaled", "linear", "quadratic")))
+        since_components = ComponentWork(
+            *(float(state_of_path["component_work_since_last_observation_kj_mol"][name])
+              for name in ("unscaled", "linear", "quadratic")))
         rows_emitted = int(state_of_path["work_rows"])
         frames_emitted = int(state_of_path["frames"])
         state_rows_emitted = int(state_of_path["state_rows"])
@@ -490,6 +551,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                                                       int(velocity_seed))
         updates_done = 0
         cumulative = since = 0.0
+        cumulative_components = since_components = ComponentWork.zero()
         rows_emitted = frames_emitted = state_rows_emitted = 0
         for path, columns in ((directory / OBSERVATIONS_CSV, OBSERVATION_COLUMNS),
                               (directory / STATE_CSV, STATE_COLUMNS)):
@@ -529,9 +591,11 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         fault("after-frame")
 
     def write_observation(observation_index: int, protocol_step: int, switching_time_ps: float,
-                          tau: float, incremental: float, wrote_frame: bool) -> None:
+                          tau: float, incremental: float, wrote_frame: bool, components,
+                          increment_components) -> None:
         nonlocal rows_emitted
         fault("before-work-row")
+        linear_contribution, quadratic_contribution = components.contributions_at(tau)
         append(directory / OBSERVATIONS_CSV, OBSERVATION_COLUMNS, {
             "path_index": index,
             "observation_index": observation_index,
@@ -549,6 +613,22 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             "temperature_kelvin": temperature,
             "integrator_seed": integrator_seed,
             "velocity_seed": velocity_seed,
+            # The basis values are tau-independent and are what a reweighting reads; the
+            # contributions are those values as they enter U at THIS row's tau. Both are written
+            # because deriving one from the other needs the convention, and a column that needs a
+            # convention to read is a column that gets read wrongly.
+            "potential_unscaled_kj_mol": components.unscaled,
+            "potential_linear_basis_kj_mol": components.linear,
+            "potential_quadratic_basis_kj_mol": components.quadratic,
+            "potential_linear_contribution_kj_mol": linear_contribution,
+            "potential_quadratic_contribution_kj_mol": quadratic_contribution,
+            "potential_total_reconstructed_kj_mol": components.total_at(tau),
+            "delta_work_unscaled_kj_mol": increment_components.unscaled,
+            "delta_work_linear_kj_mol": increment_components.linear,
+            "delta_work_quadratic_kj_mol": increment_components.quadratic,
+            "total_work_unscaled_kj_mol": cumulative_components.unscaled,
+            "total_work_linear_kj_mol": cumulative_components.linear,
+            "total_work_quadratic_kj_mol": cumulative_components.quadratic,
         })
         rows_emitted += 1
         fault("after-work-row")
@@ -585,6 +665,20 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                 "tau": taus[updates_completed],
                 "cumulative_work_kj_mol": cumulative,
                 "work_since_last_observation_kj_mol": since,
+                # The component accumulators are committed with the same transaction as the total.
+                # Committing them separately would let a resume restore a total from one
+                # generation and components from another, and the sum identity would then hold on
+                # every row while describing two different paths.
+                "decomposition_schema": {"name": DECOMPOSITION_SCHEMA["name"],
+                                         "version": DECOMPOSITION_SCHEMA["version"]},
+                "cumulative_component_work_kj_mol": {
+                    "unscaled": cumulative_components.unscaled,
+                    "linear": cumulative_components.linear,
+                    "quadratic": cumulative_components.quadratic},
+                "component_work_since_last_observation_kj_mol": {
+                    "unscaled": since_components.unscaled,
+                    "linear": since_components.linear,
+                    "quadratic": since_components.quadratic},
                 "work_rows": rows_emitted,
                 "frames": frames_emitted,
                 "state_rows": state_rows_emitted,
@@ -602,20 +696,48 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         if 0 % frame_every == 0:
             write_frame(0, 0.0)
             wrote = True
-        write_observation(0, 0, 0.0, taus[0], 0.0, wrote)
+        # The source configuration under the source Hamiltonian: decomposed like any other
+        # instant, with exactly zero work in every component because nothing has moved yet.
+        source_components, _ = measure_components(taus[0])
+        write_observation(0, 0, 0.0, taus[0], 0.0, wrote, source_components, ComponentWork.zero())
         if state_every:
             write_state(0, 0.0, taus[0])
 
     # -- the switch ------------------------------------------------------------------------------
     for update in range(updates_done, updates):
-        before = simulation.context.getState(getEnergy=True).getPotentialEnergy(
-            ).value_in_unit(unit.kilojoule_per_mole)
-        switcher.set_tau(simulation.context, system, taus[update + 1])
+        tau_before, tau_after = taus[update], taus[update + 1]
+
+        # The three basis components at THESE frozen coordinates, and `before` with them. The
+        # probe restores tau_before, so what follows is the same switch it always was.
+        components, before = measure_components(tau_before)
+
+        switcher.set_tau(simulation.context, system, tau_after)
         after = simulation.context.getState(getEnergy=True).getPotentialEnergy(
             ).value_in_unit(unit.kilojoule_per_mole)
         increment = after - before
+
+        # Derived from the fit, INDEPENDENTLY of `increment`. The two are then required to agree:
+        # deriving one from the other would make the identity true by construction and it would
+        # test nothing.
+        increment_components = components.work_between(tau_before, tau_after)
+        allowed = reconstruction_tolerance(max(abs(before), abs(after)), precision=precision)
+        if abs(increment_components.total - increment) > allowed:
+            raise SystemExit(
+                f"path {index}, update {update}: the component works do not sum to the measured "
+                f"work. Measured {increment:.6f} kJ/mol from U({tau_after}) - U({tau_before}); "
+                f"components sum to {increment_components.total:.6f} "
+                f"(unscaled {increment_components.unscaled:.6f}, "
+                f"linear {increment_components.linear:.6f}, "
+                f"quadratic {increment_components.quadratic:.6f}); the difference "
+                f"{increment_components.total - increment:.3e} exceeds the {precision}-precision "
+                f"tolerance {allowed:.3e}.\n"
+                f"  Refusing rather than writing a decomposition of a work value it does not "
+                f"reproduce.")
+
         cumulative += increment
         since += increment
+        cumulative_components = cumulative_components + increment_components
+        since_components = since_components + increment_components
         simulation.step(interval)
 
         step = (update + 1) * interval
@@ -624,11 +746,12 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             write_frame(step, time_of(step))
             wrote = True
         if step % observe_every == 0:
-            write_observation(step // observe_every, step, time_of(step), taus[update + 1],
-                              since, wrote)
+            write_observation(step // observe_every, step, time_of(step), tau_after,
+                              since, wrote, components, since_components)
             since = 0.0
+            since_components = ComponentWork.zero()
         if state_every and step % state_every == 0:
-            write_state(step, time_of(step), taus[update + 1])
+            write_state(step, time_of(step), tau_after)
         if checkpoint_every and step % checkpoint_every == 0:
             save_checkpoint(update + 1)
 
@@ -656,6 +779,21 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             or float(rows[-1]["tau"]) != float(ais["tau_end"]):
         raise SystemExit(f"path {index} does not span tau_start -> tau_end")
 
+    # The identity on the WHOLE path, checked against what was actually written to the file rather
+    # than against the accumulators still in memory. An accumulator that agrees with itself proves
+    # nothing about the row a reader will load.
+    final_total = float(rows[-1]["cumulative_work_kj_mol"])
+    final_components = sum(float(rows[-1][name]) for name in
+                           ("total_work_unscaled_kj_mol", "total_work_linear_kj_mol",
+                            "total_work_quadratic_kj_mol"))
+    allowed = reconstruction_tolerance(final_total, precision=precision) * max(rows_emitted, 1)
+    if abs(final_components - final_total) > allowed:
+        raise SystemExit(
+            f"path {index}: the cumulative component works in {OBSERVATIONS_CSV} sum to "
+            f"{final_components:.6f} kJ/mol but the cumulative total is {final_total:.6f}. "
+            f"The difference {final_components - final_total:.3e} exceeds {allowed:.3e} "
+            f"(per-update {precision} tolerance accumulated over {rows_emitted} rows).")
+
     # The staged trajectory becomes the published one only now, in one atomic move. Until this
     # point nothing at the run root could be mistaken for a finished path.
     os.replace(staged, published)
@@ -674,6 +812,16 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         "state_rows": state_rows_emitted,
         "total_work_kj_mol": cumulative,
         "total_reduced_work": beta * cumulative,
+        "decomposition_schema": {"name": DECOMPOSITION_SCHEMA["name"],
+                                 "version": DECOMPOSITION_SCHEMA["version"]},
+        "decomposition_schema_version": DECOMPOSITION_SCHEMA["version"],
+        "total_work_unscaled_kj_mol": cumulative_components.unscaled,
+        "total_work_linear_kj_mol": cumulative_components.linear,
+        "total_work_quadratic_kj_mol": cumulative_components.quadratic,
+        "potential_energy_evaluations_per_update": (
+            DECOMPOSITION_SCHEMA["potential_energy_evaluations_per_update"]),
+        "switching_energy_evaluations": probe.evaluations,
+        "switching_energy_evaluation_seconds": round(probe.seconds, 6),
         "integrator_seed": integrator_seed,
         "velocity_seed": velocity_seed,
         "trajectory": trajectory_name,
@@ -1068,6 +1216,23 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             platform=openmm_platform_facts(),
             paths=completed,
             outputs=outputs,
+            # What the decomposition cost, measured. Three extra potential-energy evaluations per
+            # switching update and no extra integration steps -- stated with the count and the
+            # seconds so the claim can be checked against the run rather than believed.
+            decomposition={
+                **DECOMPOSITION_SCHEMA,
+                "switching_energy_evaluations": sum(
+                    int(record.get("switching_energy_evaluations", 0)) for record in completed),
+                "switching_energy_evaluation_seconds": round(sum(
+                    float(record.get("switching_energy_evaluation_seconds", 0.0))
+                    for record in completed), 6),
+                "reconstruction_tolerance": {
+                    "precision": (acceleration.properties or {}).get("Precision", "mixed"),
+                    "relative_and_floor_kj_mol": list(RECONSTRUCTION_TOLERANCES.get(
+                        str((acceleration.properties or {}).get("Precision", "mixed")).lower(),
+                        RECONSTRUCTION_TOLERANCES["mixed"])),
+                },
+            },
         )
         log.complete()
         log.heading("Summary")
