@@ -183,6 +183,32 @@ def protocol_file_text(ladder: dict[str, Any]) -> str:
         seed=int(dynamics["seed"]), platform=dynamics.get("platform"))
 
 
+def _check_group_count(number_of_groups, n_states: int, protocol: str) -> None:
+    """`-ng`, the configured state count and the MPI world size must be the same number.
+
+    A preflight of the rule `ReplicaRun` enforces anyway. It is repeated here only to move the
+    refusal to before the launch does any work -- the driver's check is the authority, and this
+    one must never accept a world the driver would reject.
+    """
+    from .executor import mpi_rank_and_size
+
+    _, size = mpi_rank_and_size()
+    if number_of_groups is not None and int(number_of_groups) != n_states:
+        raise SystemExit(
+            f"-ng {number_of_groups} was requested but this {protocol} ladder has {n_states} "
+            f"states. The ladder's size is set by rest2.number_of_replicas in the configuration; "
+            f"-ng says how many you meant to launch. Change one so they agree -- neither is "
+            f"inferred from the other, because guessing either way would run a different "
+            f"schedule under the same output names.")
+    if size > 1 and size != n_states:
+        raise SystemExit(
+            f"this {protocol} ladder has {n_states} states but was launched in an MPI world of "
+            f"{size}. Replica exchange runs one process per thermodynamic state:\n"
+            f"  mpirun -n {n_states} md-openmm md-run -ng {n_states} ...\n"
+            f"Refused rather than run, because a world size that is not the state count leaves "
+            f"states either unowned or shared, and the exchange record would describe neither.")
+
+
 def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     """Prepare the ladder's inputs and hand them to the validated executor."""
     import argparse
@@ -196,6 +222,15 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     parser.add_argument("-log", "--log", default=None, metavar="LOG")
     parser.add_argument("-odir", "--out-dir", default=".", metavar="DIR",
                         help="where the ladder's outputs are written (default: here)")
+    parser.add_argument("-ng", "--number-of-groups", dest="number_of_groups", type=int,
+                        default=None, metavar="N",
+                        help="how many replicas this launch coordinates. Amber spells the same "
+                             "thing the same way. It is CHECKED, not used to size the ladder: the "
+                             "ladder's size comes from the configuration, and a mismatch between "
+                             "what you launched and what the ladder needs is refused")
+    parser.add_argument("--cpu", action="store_true",
+                        help="run every replica on the OpenMM CPU platform. CUDA is the default "
+                             "and is mandatory; this is the only way to ask for a CPU run")
     parser.add_argument("--route", default="peptide", choices=("peptide", "ligand"),
                         help="how the omega classifier reads the solute")
     parser.add_argument("--resume", action="store_true")
@@ -209,6 +244,18 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
 
     protocol_name = ladder["protocol"]
+
+    # A replica ladder is one process per thermodynamic state. Three numbers have to agree -- the
+    # states the configuration declares, the `-ng` the command line claims, and the MPI world the
+    # launcher actually created -- and any disagreement is refused here, before a Context is
+    # opened. Silently running 8 states in 4 processes is not a smaller ladder; it is a different
+    # Hamiltonian schedule wearing the same output names.
+    _check_group_count(args.number_of_groups, int(ladder["n_states"]), protocol_name)
+
+    if args.cpu:
+        # `platform` reaches the driver through the protocol file, and `from_flags` records that a
+        # person chose the CPU rather than that CUDA was quietly unavailable.
+        ladder = dict(ladder, dynamics=dict(ladder["dynamics"], platform="CPU"))
 
     # Resolve the timestep against the masses in the System before anything downstream -- the
     # protocol file, the exchange interval in picoseconds and every derived duration -- is

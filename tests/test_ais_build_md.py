@@ -56,15 +56,20 @@ def _base(**patch) -> dict:
 
 # --- the public interface ---------------------------------------------------------------------
 
-def test_ais_is_a_build_md_protocol_and_not_a_fourth_command():
-    """The whole point of the migration: no `build-ais`."""
+def test_ais_is_a_build_md_protocol_and_not_a_command_of_its_own():
+    """The whole point of the migration: no `build-ais`, and no `ais-run`.
+
+    `md-run` joined the surface later and is not a counterexample: it runs whatever protocol its
+    input declares, AIS included, so AIS still has no command that is only for AIS.
+    """
     from md_tools.cli.md_openmm import build_parser
 
     names = set()
     for action in build_parser()._actions:
         if getattr(action, "choices", None):
             names |= {str(k) for k in action.choices}
-    assert names == {"build-top", "build-md", "data-register"}, names
+    assert names == {"build-top", "build-md", "md-run", "data-register"}, names
+    assert not [name for name in names if "ais" in name.lower()], names
 
     from md_tools.build.md import PROTOCOLS
     assert "AIS" in PROTOCOLS

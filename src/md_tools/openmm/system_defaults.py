@@ -83,6 +83,12 @@ WATER_FAMILY_MARKERS = {
 #: Implicit GBn2: ff14SB, the force field GBn2 was developed and validated against. A tleap
 #: resource, because the implicit route builds its topology with tleap rather than an OpenMM XML.
 IMPLICIT_PROTEIN_FORCEFIELD = "leaprc.protein.ff14SB"
+#: The implicit route's counterpart of `PROTEIN_FORCEFIELDS`: the label a user writes, mapped to
+#: the tleap resource. Stated as a mapping rather than as a single default so that what an
+#: implicit build uses is what the configuration asked for. It used to be the default
+#: unconditionally, which meant a request for a force field with no GB parameterisation was not
+#: refused -- it was quietly built as this one.
+IMPLICIT_PROTEIN_FORCEFIELDS = {"ff14SB": IMPLICIT_PROTEIN_FORCEFIELD}
 #: Protein force fields known to be mismatched with a GB implicit-solvent model.
 GB_INCOMPATIBLE_PROTEIN = ("ff19SB", "amber19")
 

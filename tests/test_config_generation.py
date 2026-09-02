@@ -492,14 +492,28 @@ def test_the_default_protocol_is_five_ns_of_steps_at_two_femtoseconds():
                                      "checkpoint_printout": 10000}
 
 
-def test_opc_selects_ff19sb_and_tip3p_does_not():
-    """ff19SB was parameterised against OPC; the pairing is enforced, not documented."""
+def test_opc_selects_ff19sb_and_tip3p_is_warned_about_rather_than_refused():
+    """ff19SB was parameterised against OPC. The crossed EXPLICIT pair now builds and warns.
+
+    Migrated, not weakened. Refusing ff19SB + TIP3P made this tool the arbiter of somebody else's
+    experiment, and the refusal fired before `pairing_warnings()` could see the combination, so
+    the documented warning policy was unreachable for half the pairs it described. The pair that
+    cannot be built at all -- ff19SB with GBn2 -- is still a hard error; see
+    `test_ff19sb_with_gbn2_remains_a_hard_error`.
+    """
+    from md_tools.openmm.system_config import pairing_warnings, resolve_sys_config
+
     opc = resolve_build_config(_written({"solvent": {"model": "OPC"},
                                          "forcefield": {"protein": "ff19SB"}}))
     assert _sys_document(opc)["forcefield"]["protein"] == "amber19-all.xml"
-    with pytest.raises(ConfigError, match="ff19SB"):
-        resolve_build_config(_written({"solvent": {"model": "TIP3P"},
-                                       "forcefield": {"protein": "ff19SB"}}))
+    assert pairing_warnings(resolve_sys_config(_sys_document(opc))) == []
+
+    crossed = resolve_build_config(_written({"solvent": {"model": "TIP3P"},
+                                             "forcefield": {"protein": "ff19SB"}}))
+    warnings = pairing_warnings(resolve_sys_config(_sys_document(crossed)))
+    assert warnings, "the crossed pair must build LOUDLY, not silently"
+    assert [warning["code"] for warning in warnings] == ["crossed_explicit_pair"], warnings
+    assert "amber19-all.xml" in warnings[0]["message"], warnings[0]["message"]
 
 
 def test_gbn2_is_implicit_and_carries_no_box_or_water():

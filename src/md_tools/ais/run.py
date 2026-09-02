@@ -52,7 +52,13 @@ OBSERVATION_COLUMNS = (
 
 COMPLETION_NAME = "completed.json"
 OBSERVATIONS_CSV = "observations.csv"
-OBSERVATIONS_DCD = "observations.dcd"
+
+#: The global work table rank 0 writes once every path this run owns has finished. One row per
+#: path, in GLOBAL path order, whatever the worker count was -- see `paths_for_rank`.
+WORK_TABLE = "AIS_work.csv"
+WORK_COLUMNS = ("path_index", "source_frame_index", "observations",
+                "total_work_kj_mol", "total_reduced_work", "trajectory",
+                "integrator_seed", "velocity_seed", "mpi_rank")
 
 
 def ais_parser(description: str) -> argparse.ArgumentParser:
@@ -61,14 +67,22 @@ def ais_parser(description: str) -> argparse.ArgumentParser:
                         help="topology and reference coordinates (built.pdb)")
     parser.add_argument("-s", "--system", required=True, metavar="XML",
                         help="serialised OpenMM System (built.xml)")
-    parser.add_argument("-src", "--source", default=None, metavar="TRAJ",
-                        help="the equilibrium source trajectory; overrides the configured path")
+    parser.add_argument("-source-traj", "-src", "--source", dest="source", default=None,
+                        metavar="TRAJ",
+                        help="the equilibrium source trajectory these paths are drawn from; "
+                             "overrides ais_source.trajectory. AIS consumes an ensemble you have "
+                             "already produced -- it does not generate one")
     parser.add_argument("-odir", "--out-dir", default=".", metavar="DIR",
                         help="where the path directories are written (default: here)")
     parser.add_argument("-log", "--log", default=None, metavar="LOG",
                         help="readable log carrying this run's machine record")
+    parser.add_argument("--cpu", action="store_true",
+                        help="run the paths on the OpenMM CPU platform. CUDA is the default and "
+                             "is mandatory; this is the only way to ask for a CPU run, and the "
+                             "record says that you did")
     parser.add_argument("--platform", default=None,
-                        help="force an OpenMM platform (CUDA, OpenCL, CPU, Reference)")
+                        help="force a named OpenMM platform. CUDA is the default; there is no "
+                             "automatic fall back to anything else")
     parser.add_argument("--device", default=None, help="CUDA device index")
     parser.add_argument("--paths", default=None,
                         help="run only these path indices, e.g. 0,1,2 or 0-9")
@@ -129,12 +143,58 @@ def choose_frames(*, eligible: list[int], count: int, selection: str, allow_repe
     return sorted(generator.sample(eligible, count))
 
 
+def barrier(size: int) -> None:
+    """Wait for every worker, when there is more than one. No mpi4py import in a serial run."""
+    if size <= 1:
+        return
+    try:
+        from mpi4py import MPI
+    except ImportError:                                   # launched by srun without mpi4py
+        return
+    MPI.COMM_WORLD.barrier()
+
+
+def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
+    """Assemble the global work table from the per-path completion records.
+
+    Read from the files each path wrote rather than gathered over MPI: a rank that died leaves its
+    finished paths on disk, so the table still describes exactly what completed, and a resumed run
+    rebuilds it from the same records. A path with no completion record is simply absent -- the
+    table never invents a row for work that was not measured.
+    """
+    rows = []
+    for index in range(len(chosen)):
+        marker = out / f"path_{index:04d}" / COMPLETION_NAME
+        if not marker.is_file():
+            continue
+        record = json.loads(marker.read_text(encoding="utf-8"))
+        rows.append({name: record.get(name) for name in WORK_COLUMNS})
+    with (out / WORK_TABLE).open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(WORK_COLUMNS))
+        writer.writeheader()
+        writer.writerows(rows)
+    return {"rows": len(rows), "paths": len(chosen)}
+
+
+def write_selected_frames(path: Path, chosen: list[int], *, seed: int) -> None:
+    """Which source frame each path starts from, and with which seeds. Written before dynamics."""
+    from ..md._stages import derive_seed
+
+    with Path(path).open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["path_index", "source_frame_index", "integrator_seed", "velocity_seed"])
+        for index, frame in enumerate(chosen):
+            writer.writerow([index, frame,
+                             derive_seed(seed, "ais", index, "integrator"),
+                             derive_seed(seed, "ais", index, "velocity")])
+
+
 def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     """Run the switching paths this generated script describes."""
     args = ais_parser(run.get("description", "AIS switching paths")).parse_args(argv)
 
-    from openmm import LangevinMiddleIntegrator, Platform, XmlSerializer, unit
-    from openmm.app import DCDFile, PDBFile, Simulation
+    from openmm import LangevinMiddleIntegrator, XmlSerializer, unit
+    from openmm.app import PDBFile, Simulation
 
     from .schedule import switching_schedule
     from ..openmm.timestep import resolve_timestep_fs
@@ -143,10 +203,20 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     from ..rest2 import TauSwitcher
     from ..md.stage import solute_atom_indices
 
+    from ..remd.executor import mpi_rank_and_size
+    from . import path_trajectory_name, paths_for_rank
+
     ais, source_cfg, dynamics = run["ais"], run["ais_source"], run["dynamics"]
     out = Path(args.out_dir).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    log_path = Path(args.log) if args.log else out / "AIS.log"
+
+    # Paths are independent, so AIS parallelises by simply giving each worker its own paths. The
+    # rank is read from the launcher's environment rather than by importing mpi4py: the split has
+    # to be known before anything opens a Context, and a single-process run must work on a machine
+    # with no MPI at all.
+    rank, size = mpi_rank_and_size()
+    log_path = Path(args.log) if args.log else out / (
+        "AIS.log" if size == 1 else f"AIS.rank{rank:02d}.log")
 
     topology_path = Path(args.topology)
     system_path = Path(args.system)
@@ -262,15 +332,12 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         )
 
         # Written BEFORE any dynamics, so which frame each path started from is recorded even if
-        # the run is interrupted.
-        with (out / "selected_source_frames.csv").open("w", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(["path_index", "source_frame_index", "integrator_seed",
-                             "velocity_seed"])
-            for index, frame in enumerate(chosen):
-                writer.writerow([index, frame,
-                                 derive_seed(int(dynamics["seed"]), "ais", index, "integrator"),
-                                 derive_seed(int(dynamics["seed"]), "ais", index, "velocity")])
+        # the run is interrupted. Every rank computes the SAME table -- `choose_frames` is a pure
+        # function of the window, the count and the run seed -- so only rank 0 writes it, and the
+        # others would otherwise race to truncate the file rank 0 is writing.
+        if rank == 0:
+            write_selected_frames(out / "selected_source_frames.csv", chosen,
+                                  seed=int(dynamics["seed"]))
 
         if args.check:
             log.heading("Preflight")
@@ -280,6 +347,37 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             return 0
 
         # --- run the paths -------------------------------------------------------------------
+        # ONE platform decision for the whole run, made before the first path opens a Context:
+        # a CUDA device that cannot be initialised must fail here rather than 40 paths in. Under
+        # MPI each rank takes its own device by local rank unless one was named.
+        from ..openmm.platform_policy import (PlatformRequest, acceleration_record,
+                                              resolve_platform_request)
+        from ..remd.engine import select_device_for_rank, visible_cuda_devices
+
+        device, device_policy = args.device, "named on the command line"
+        if device is None:
+            if size > 1 and not args.cpu:
+                # Nothing binds ranks to devices automatically: without this every rank creates
+                # its Context on the default device and the whole run sits on one GPU.
+                device, device_policy = select_device_for_rank(
+                    rank, size, visible_cuda_devices(probe=True))
+                if device is None:
+                    raise SystemExit(
+                        "AIS was launched under MPI on CUDA but no CUDA device is visible to "
+                        "this rank. Refusing rather than letting every rank fall onto one GPU.")
+            else:
+                device_policy = "single process: OpenMM selects the device"
+        acceleration = resolve_platform_request(
+            PlatformRequest.from_flags(cpu=bool(args.cpu),
+                                       platform=args.platform or dynamics.get("platform")),
+            device_index=device)
+        log.field("platform", f"{acceleration.name}"
+                              + (f" device {acceleration.device_index}"
+                                 if acceleration.device_index is not None else ""))
+        log.update(acceleration=dict(
+            acceleration_record(acceleration, mpi_rank=rank, mpi_size=size, local_rank=device),
+            device_policy=device_policy))
+
         switcher = TauSwitcher(base, solute, excluded)
         taus = schedule["taus"]
         interval = schedule["parameter_update_interval_steps"]
@@ -288,7 +386,17 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         beta = 1.0 / (unit.MOLAR_GAS_CONSTANT_R * temperature * unit.kelvin).value_in_unit(
             unit.kilojoule_per_mole)
 
+        # Which paths this worker runs. `paths_for_rank` is a pure function of
+        # (rank, size, total): a given global path id always owns the same file name, so a
+        # restart under a different worker count lands on the same trajectories rather than
+        # silently reshuffling which path is which.
         wanted = _selected(args.paths, len(chosen))
+        if size > 1:
+            mine = set(paths_for_rank(rank, size, len(chosen)))
+            wanted = [index for index in wanted if index in mine]
+            log.field("mpi", f"rank {rank} of {size}: {len(wanted)} of {len(chosen)} path(s)")
+            log.update(mpi={"rank": rank, "size": size, "paths": list(wanted)})
+
         log.heading("Paths")
         completed: list[dict[str, Any]] = []
         for index in wanted:
@@ -322,17 +430,8 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                 float(dynamics["friction_per_ps"]) / unit.picosecond,
                 float(dynamics["timestep_fs"]) * unit.femtosecond)
             integrator.setRandomNumberSeed(int(integrator_seed))
-            platform_name = args.platform or dynamics.get("platform")
-            if platform_name:
-                plat = Platform.getPlatformByName(platform_name)
-                properties = {}
-                if platform_name == "CUDA":
-                    properties = {"Precision": "mixed"}
-                    if args.device is not None:
-                        properties["DeviceIndex"] = str(args.device)
-                simulation = Simulation(pdb.topology, system, integrator, plat, properties)
-            else:
-                simulation = Simulation(pdb.topology, system, integrator)
+            simulation = Simulation(pdb.topology, system, integrator,
+                                    acceleration.platform, acceleration.properties)
             if boxes is not None:
                 simulation.context.setPeriodicBoxVectors(*boxes)
             simulation.context.setPositions(positions)
@@ -346,14 +445,28 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                     ).value_in_unit(unit.kilojoule_per_mole)
 
             rows: list[dict[str, Any]] = []
-            handle = open(directory / OBSERVATIONS_DCD, "wb")
-            dcd = DCDFile(handle, pdb.topology, float(dynamics["timestep_fs"]) * unit.femtosecond)
+            # One trajectory per PATH, named by its global path id, at the run root. The name is
+            # a pure function of (path id, total): the same path writes the same file whatever
+            # the worker count, so a campaign resumed on a different number of GPUs does not
+            # reshuffle which trajectory is which. AMBER NetCDF rather than DCD because every
+            # analysis tool in this stack (cpptraj, mdtraj, MDAnalysis) reads it and it carries
+            # the box for a switching path that started from an NPT frame.
+            trajectory_name = path_trajectory_name(index, len(chosen))
+            netcdf = mdtraj.formats.NetCDFTrajectoryFile(str(out / trajectory_name), "w")
 
             def observe(observation, cumulative, incremental) -> None:
                 state = simulation.context.getState(getPositions=True, enforcePeriodicBox=False)
-                dcd.writeModel(state.getPositions(),
-                               periodicBoxVectors=(None if implicit
-                                                   else state.getPeriodicBoxVectors()))
+                lengths = angles = None
+                if not implicit:
+                    vectors = state.getPeriodicBoxVectors(asNumpy=True).value_in_unit(
+                        unit.nanometer)
+                    a, b, c, alpha, beta, gamma = mdtraj.utils.box_vectors_to_lengths_and_angles(
+                        vectors[0], vectors[1], vectors[2])
+                    lengths, angles = [a * 10.0, b * 10.0, c * 10.0], [alpha, beta, gamma]
+                netcdf.write(
+                    state.getPositions(asNumpy=True).value_in_unit(unit.angstrom),
+                    time=observation["switching_time_ps"],
+                    cell_lengths=lengths, cell_angles=angles)
                 rows.append({
                     "path_index": index,
                     "observation_index": observation["observation_index"],
@@ -394,7 +507,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                                                 getParameters=True, enforcePeriodicBox=False)
             (directory / "final_state.xml").write_text(XmlSerializer.serialize(state),
                                                        encoding="utf-8")
-            handle.close()
+            netcdf.close()
             with (directory / OBSERVATIONS_CSV).open("w", newline="") as table:
                 writer = csv.DictWriter(table, fieldnames=list(OBSERVATION_COLUMNS))
                 writer.writeheader()
@@ -419,6 +532,8 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                 "total_reduced_work": beta * cumulative,
                 "integrator_seed": integrator_seed,
                 "velocity_seed": velocity_seed,
+                "trajectory": trajectory_name,
+                "mpi_rank": rank,
                 "platform": simulation.context.getPlatform().getName(),
             }
             marker.write_text(json.dumps(completion, indent=2) + "\n", encoding="utf-8")
@@ -426,13 +541,24 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             log(f"  path {index:4d}: frame {frame}, {len(rows)} observations, "
                 f"W = {cumulative:.4f} kJ/mol (reduced {beta * cumulative:.4f})")
 
+        # The global work table. Every worker has written a completion record per path it owns;
+        # rank 0 waits for all of them and assembles ONE table in global path order. The work
+        # distribution is the result of the method, and it has to be readable as a single object
+        # rather than as N per-rank fragments the reader is left to concatenate correctly.
+        barrier(size)
+        outputs = {"selected_source_frames": file_facts(out / "selected_source_frames.csv",
+                                                        relative_to=out)}
+        if rank == 0 and not args.paths:
+            table = write_work_table(out, chosen)
+            log.field("work table", f"{table['rows']} of {len(chosen)} path(s) recorded")
+            outputs["work_table"] = file_facts(out / WORK_TABLE, relative_to=out)
+
         log.heading("Outputs")
         log.field("paths completed", f"{len(completed)} of {len(chosen)}")
         log.update(
             platform=openmm_platform_facts(),
             paths=completed,
-            outputs={"selected_source_frames": file_facts(out / "selected_source_frames.csv",
-                                                          relative_to=out)},
+            outputs=outputs,
         )
         log.complete()
         log.heading("Summary")

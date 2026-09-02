@@ -65,19 +65,27 @@ def test_a_matched_pair_produces_no_pairing_warning(protein, water):
 def test_ff19sb_with_gbn2_remains_a_hard_error():
     """Softening the pairing policy must not soften a combination that cannot be built.
 
-    Asserted through the PUBLIC path. `resolve_build_config` never refused this one -- its check
-    was skipped under implicit solvent -- and the refusal comes from `resolve_sys_config` further
-    in. Testing the resolver alone would have reported a guarantee the command does not get from
-    where the test looked.
+    Refused by `resolve_build_config`, which is the LAST point where the evidence still exists.
+    Further in, `_sys_document` takes the protein force field from `sys_defaults` on the implicit
+    branch, so by the time `_check_protein_solvation_pairing` runs the document says ff14SB and
+    the pair it was written to refuse is no longer visible in it. An ff19SB + GBn2 request was
+    therefore not refused anywhere -- it was silently built as ff14SB + GBn2.
     """
     from md_tools.build.strict import ConfigError
-    from md_tools.build.top import _sys_document, resolve_build_config
-    from md_tools.openmm.system_config import resolve_sys_config
+    from md_tools.build.top import resolve_build_config
 
-    resolved = resolve_build_config(_config(forcefield={"protein": "ff19SB"},
-                                            solvent={"model": "GBn2"}))
     with pytest.raises(ConfigError, match="not parameterised for"):
-        resolve_sys_config(_sys_document(resolved))
+        resolve_build_config(_config(forcefield={"protein": "ff19SB"},
+                                     solvent={"model": "GBn2"}))
+
+
+def test_an_implicit_build_uses_the_protein_forcefield_that_was_asked_for():
+    """The silent substitution above, asserted directly: what is requested is what is mapped."""
+    from md_tools.build.top import _sys_document, resolve_build_config
+
+    resolved = resolve_build_config(_config(forcefield={"protein": "ff14SB"},
+                                            solvent={"model": "GBn2"}))
+    assert "ff14SB" in _sys_document(resolved)["forcefield"]["protein"]
 
 
 # --- 2. the md-run surface ------------------------------------------------------------------------

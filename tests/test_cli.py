@@ -14,7 +14,7 @@ import pytest
 
 from md_tools.cli.md_openmm import build_parser
 
-PUBLIC_COMMANDS = ("build-top", "build-md", "data-register")
+PUBLIC_COMMANDS = ("build-top", "build-md", "md-run", "data-register")
 RETIRED_COMMANDS = ("sys-config", "sys-gen", "md-gen", "setup", "show-default")
 
 
@@ -40,7 +40,7 @@ def test_the_retired_commands_are_gone():
         assert "invalid choice" in result.stderr or "usage:" in result.stderr
 
 
-def test_the_subparsers_are_exactly_the_public_three():
+def test_the_subparsers_are_exactly_the_public_four():
     actions = [a for a in build_parser()._actions if hasattr(a, "choices") and a.choices]
     names = set()
     for action in actions:

@@ -1,10 +1,15 @@
 """`md-openmm` -- the only executable MD-tools installs.
 
-Three public work commands, and no state carried between them: each reads files and writes files.
+Four public work commands, and no state carried between them: each reads files and writes files.
 
     md-openmm build-top        one input structure  -> built.xml + built.pdb + built.log
-    md-openmm build-md         a protocol config    -> readable run scripts in ./md_script/
+    md-openmm build-md         a protocol config    -> readable run scripts and .in files
+    md-openmm md-run           an Amber-like .in    -> a stage, a ladder, or AIS paths
     md-openmm data-register    a finished directory -> a verified dataset under $MD_DATA
+
+`md-run` is a SUBCOMMAND, not a second executable. It is the Amber-like way to execute what
+`build-md` resolved -- `-i`, `-p`, `-c`, `-o`, `-x`, `-r`, and `-ng` under `mpirun` -- and it
+delegates to the same installed runtime a generated script calls.
 
 The option spellings, including the single-dash multi-character ones (`-os`, `-op`, `-log`,
 `-odir`, `-idata`, `-project_name`, `-data_name`, `-year`), are contractual: they are what the
@@ -81,6 +86,17 @@ def cmd_build_md(args) -> int:
 
 
 # ---------------------------------------------------------------------------------------------
+# md-run
+# ---------------------------------------------------------------------------------------------
+
+def cmd_md_run(args) -> int:
+    """Parsed by `md_tools.run` itself, so its Amber-like flags live with its implementation."""
+    from ..run.main import md_run_main
+
+    return md_run_main(args.md_run_argv)
+
+
+# ---------------------------------------------------------------------------------------------
 # data-register
 # ---------------------------------------------------------------------------------------------
 
@@ -146,6 +162,8 @@ def build_parser() -> argparse.ArgumentParser:
             "examples:\n"
             "  md-openmm build-top -i ALA.pdb -os built.xml -op built.pdb -log built.log\n"
             "  md-openmm build-md -odir ./md_script/ --config cMD.config\n"
+            "  md-openmm md-run -i md_script/min.in -p built.pdb -s built.xml -r min.xml\n"
+            "  mpirun -n 8 md-openmm md-run -ng 8 -i REST2.in -p built.pdb -s built.xml\n"
             "  md-openmm data-register -idata ./data/ALA -project_name ALA "
             "-data_name ALA-cMD -year 2026\n"),
     )
@@ -182,13 +200,29 @@ def build_parser() -> argparse.ArgumentParser:
                     help="directory to write the scripts into (default: ./md_script/)")
     md.add_argument("--config", default=None, metavar="PATH",
                     help="protocol configuration (YAML syntax, .config suffix); the default is "
-                         "explicit-solvent cMD at a 2 fs timestep")
+                         "explicit-solvent cMD at `timestep_fs: auto` -- resolved from the masses "
+                         "in built.xml when the run starts, so it is 2 fs ordinarily and 4 fs "
+                         "only when the System proves hydrogen mass repartitioning")
     md.add_argument("--all-in-one", action="store_true",
                     help="emit a single md.py running every stage, instead of one script per "
                          "stage; the resolved settings and stage boundaries are identical")
     md.add_argument("--overwrite", action="store_true",
                     help="replace an existing script directory instead of refusing")
     md.set_defaults(func=cmd_build_md)
+
+    # -- md-run ------------------------------------------------------------------------------
+    # Its own parser owns the flags, because they are Amber's spellings rather than this CLI's and
+    # they belong beside the code that acts on them. `parse_known_args` is not enough here: `-i`,
+    # `-p` and `-c` collide with nothing above only by accident today, and forwarding the argv
+    # verbatim keeps that an accident that cannot start mattering.
+    run = sub.add_parser(
+        "md-run", help="run a stage, a REST2/rREST2 ladder or AIS paths from an Amber-like input",
+        add_help=False, prefix_chars="\0",
+        description="Run what an Amber-like .in file describes. See `md-openmm md-run -h`.")
+    run.add_argument("md_run_argv", nargs=argparse.REMAINDER,
+                     help="the md-run flags: -i -p -s -c -x -r -o -log -odir -ng "
+                          "-source-traj --cpu")
+    run.set_defaults(func=cmd_md_run)
 
     # -- data-register ------------------------------------------------------------------------
     reg = sub.add_parser(

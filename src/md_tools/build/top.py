@@ -154,6 +154,35 @@ def _check_pairings(resolved: dict[str, Any]) -> None:
     solvent = canonical_solvent(resolved["solvent"]["model"])
     implicit = is_implicit(solvent)
     if implicit:
+        # ff19SB with GBn2 is refused HERE, where the protein force field the file asked for is
+        # still visible. Downstream it is not: the implicit branch of `_sys_document` takes the
+        # protein from `sys_defaults`, so an ff19SB request became an ff14SB build silently and
+        # `_check_protein_solvation_pairing` -- written for exactly this pair -- never saw a
+        # document that still said ff19SB. A refusal placed where the evidence is already gone is
+        # not a refusal.
+        #
+        # Which force fields have no GB parameterisation is NOT decided again here: the list is
+        # `GB_INCOMPATIBLE_PROTEIN`, and this reads it.
+        from ..openmm.system_defaults import (GB_INCOMPATIBLE_PROTEIN,
+                                              IMPLICIT_PROTEIN_FORCEFIELD)
+
+        protein = str(resolved["forcefield"]["protein"])
+        if any(marker.lower() in protein.lower() for marker in GB_INCOMPATIBLE_PROTEIN):
+            raise ConfigError(
+                f"forcefield.protein = {protein!r} is not parameterised for solvent.model = "
+                f"{solvent!r}.\n"
+                f"  ff19SB's amino-acid-specific CMAP corrections were fit in explicit OPC water, "
+                f"and no GB model has been reparameterised against them. GBn2 was developed and "
+                f"validated with the ff99SB/ff14SB lineage, so this pair mixes a backbone trained "
+                f"in explicit solvent with a solvation model tuned for a different one. It would "
+                f"produce numbers, which is the problem: nothing fails, and the result describes "
+                f"a Hamiltonian nobody validated.\n"
+                f"  This is one of the two combinations that is REFUSED rather than warned about. "
+                f"The crossed explicit pairs -- ff14SB/OPC and ff19SB/TIP3P -- build and warn.\n"
+                f"  Use the matched pair:\n"
+                f"      forcefield.protein: ff14SB   ({IMPLICIT_PROTEIN_FORCEFIELD})\n"
+                f"  or switch to explicit solvent, where ff19SB belongs.")
+
         # Not a warning. An implicit build with a box request in the file means the person who
         # wrote it expected a box, and would read the resulting log as if they had got one.
         for key in ("padding_nm", "box_shape", "ionic_strength_molar", "cutoff_nm",
@@ -249,8 +278,22 @@ def _sys_document(resolved: dict[str, Any]) -> dict[str, Any]:
     document["solute"]["peptide"] = peptide
     document["solute"]["ligand_forcefield"] = resolved["solute"]["ligand_forcefield"]
     document["solute"]["ligand_charge_method"] = resolved["solute"]["ligand_charge_method"]
+    protein = resolved["forcefield"]["protein"]
+    if is_implicit(solvent):
+        # Carried through rather than defaulted. `sys_defaults` used to decide this on its own on
+        # the implicit branch, so whatever the configuration asked for became ff14SB with nothing
+        # said about it. Anything with no GB parameterisation is refused in `_check_pairings`,
+        # where the request is still visible; anything else has to be mapped here explicitly.
+        from ..openmm.system_defaults import IMPLICIT_PROTEIN_FORCEFIELDS
+
+        if protein not in IMPLICIT_PROTEIN_FORCEFIELDS:
+            raise ConfigError(
+                f"forcefield.protein = {protein!r} has no tleap resource for the implicit route. "
+                f"Known: {', '.join(sorted(IMPLICIT_PROTEIN_FORCEFIELDS))}.")
+        document["forcefield"]["protein"] = IMPLICIT_PROTEIN_FORCEFIELDS[protein]
+    else:
+        document["forcefield"]["protein"] = PROTEIN_FORCEFIELDS[protein]
     if not is_implicit(solvent):
-        document["forcefield"]["protein"] = PROTEIN_FORCEFIELDS[resolved["forcefield"]["protein"]]
         document["solvent"].update({
             "model": solvent,
             "padding_nm": resolved["solvent"]["padding_nm"],
