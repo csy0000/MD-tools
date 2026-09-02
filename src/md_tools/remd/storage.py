@@ -1095,7 +1095,7 @@ class ReplicaCheckpoint:
     def read(self):
         import netCDF4
 
-        from replica_engine import Configuration
+        from .engine import Configuration
 
         if not self.path.is_file():
             raise StorageError(f"{self.path} does not exist; there is no checkpoint to continue")

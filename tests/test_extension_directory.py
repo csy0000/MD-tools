@@ -23,12 +23,14 @@ from pathlib import Path
 
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
+#: The checkout's `src`, for subprocesses. NOT the package directory: putting that on
+#: PYTHONPATH would let `remd/statistics.py` shadow the standard library.
+SRC = Path(__file__).resolve().parents[1] / "src"
 pytest.importorskip("netCDF4")
 pytest.importorskip("openmm")
-sys.path.insert(0, str(TEMPLATES))
 
-import amber_trajectory as amber                                   # noqa: E402
+from md_tools.remd import amber_trajectory as amber
 
 from .conftest import EXCHANGES, TAUS                               # noqa: E402
 
@@ -47,9 +49,9 @@ def _fingerprint(directory):
 
 
 def _invoke(work, *extra):
-    environment = dict(os.environ, PYTHONPATH=str(TEMPLATES), OPENMM_CPU_THREADS="1")
+    environment = dict(os.environ, PYTHONPATH=str(SRC), OPENMM_CPU_THREADS="1")
     return subprocess.run(
-        [sys.executable, str(TEMPLATES / "replica_executor.py"),
+        [sys.executable, "-m", "md_tools.remd.executor",
          "--groupfile", "ladder.group", "-ng", str(len(TAUS)),
          "-x", "exchange.nc", "-r", "restart.json", "--checkpoint", "checkpoint.nc",
          "-o", "run.out", "--rem", "rem.log", *extra],
@@ -300,9 +302,9 @@ def test_an_output_inside_the_parent_is_refused(prepared, tmp_path_factory):
     assert _invoke(parent).returncode == 0
     before = _fingerprint(parent)
 
-    environment = dict(os.environ, PYTHONPATH=str(TEMPLATES), OPENMM_CPU_THREADS="1")
+    environment = dict(os.environ, PYTHONPATH=str(SRC), OPENMM_CPU_THREADS="1")
     result = subprocess.run(
-        [sys.executable, str(TEMPLATES / "replica_executor.py"),
+        [sys.executable, "-m", "md_tools.remd.executor",
          "--groupfile", "ladder.group", "-ng", str(len(TAUS)),
          "-x", str(parent / "inside.nc"), "-r", "restart2.json",
          "--checkpoint", "checkpoint2.nc", "-o", "run2.out",
@@ -349,9 +351,9 @@ def test_the_parent_file_names_are_read_from_its_manifest_not_assumed(prepared,
                      "ladder.group"):
             shutil.copy(source / name, directory / name)
 
-    environment = dict(os.environ, PYTHONPATH=str(TEMPLATES), OPENMM_CPU_THREADS="1")
+    environment = dict(os.environ, PYTHONPATH=str(SRC), OPENMM_CPU_THREADS="1")
     first = subprocess.run(
-        [sys.executable, str(TEMPLATES / "replica_executor.py"),
+        [sys.executable, "-m", "md_tools.remd.executor",
          "--groupfile", "ladder.group", "-ng", str(len(TAUS)),
          "-x", "rest2.nc", "-r", "restart.json", "--checkpoint", "rest2_checkpoint.nc",
          "-o", "run.out", "--rem", "rem.log"],
@@ -361,7 +363,7 @@ def test_the_parent_file_names_are_read_from_its_manifest_not_assumed(prepared,
               ("rest2.nc", "rest2_checkpoint.nc", "restart.json", "remd0.nc", "remd1.nc")}
 
     second = subprocess.run(
-        [sys.executable, str(TEMPLATES / "replica_executor.py"),
+        [sys.executable, "-m", "md_tools.remd.executor",
          "--groupfile", "ladder.group", "-ng", str(len(TAUS)),
          "-x", "rest2.nc", "-r", "restart.json", "--checkpoint", "rest2_checkpoint.nc",
          "-o", "run.out", "--rem", "rem.log",

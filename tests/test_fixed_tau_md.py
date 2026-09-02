@@ -12,6 +12,8 @@ s = 1, which is a different Hamiltonian that runs to completion and looks health
 """
 from __future__ import annotations
 
+import importlib
+
 import math
 
 import pytest
@@ -22,7 +24,7 @@ from .conftest import template_module
 # Internals of the scaling (the GB scale parameter name, force layout) rather than the
 # public API, so this names the module.
 from md_tools.rest2 import scaler as scaling
-stages = template_module("md_stages")
+stages = importlib.import_module("md_tools.md._stages")
 
 
 def _gb_system(n=3):

@@ -22,14 +22,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
 
 netCDF4 = pytest.importorskip("netCDF4")
-sys.path.insert(0, str(TEMPLATES))
 
-import replica_storage as storage                                  # noqa: E402
-from replica_engine import Configuration                           # noqa: E402
-import replica_validate as validate                                # noqa: E402
+from md_tools.remd import storage as storage
+from md_tools.remd.engine import Configuration                           # noqa: E402
+from md_tools.remd import validate as validate
 
 FIELD = "reservoir_velocity_seed"
 ZERO = np.zeros((2, 2), dtype=np.int64)
@@ -355,7 +354,7 @@ def test_a_migrated_stored_mode_history_stays_all_minus_one(tmp_path):
 
 def test_the_driver_validates_before_it_opens_for_append(tmp_path):
     """Ordering is the safety property. A file must not be modified because it could be opened."""
-    source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     block = source[source.index("def _continue"):source.index("def _loop")]
     probe = block.index("self.read_only_probe()")
     identity = block.index("the scientific configuration changed since this run was created")
@@ -371,7 +370,7 @@ def test_the_driver_validates_before_it_opens_for_append(tmp_path):
 
 
 def test_only_rank_zero_opens_writable_storage(tmp_path):
-    source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     block = source[source.index("def _continue"):source.index("def _loop")]
     for opener in ('mode="a"', "self.read_only_probe()", "ensure_optional_exchange_fields()"):
         assert opener in block, opener
@@ -384,14 +383,14 @@ def test_only_rank_zero_opens_writable_storage(tmp_path):
 def test_the_migration_is_recorded_in_the_continuation_provenance():
     """Recorded as a cumulative HISTORY. A singular field was rewritten by every continuation, so
     a later no-op erased the real event -- see test_migration_provenance.py."""
-    source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     assert "storage_migrations=history" in source
     assert '"storage_migrations": migrations' in source
 
 
 def test_schema_knowledge_stays_in_the_storage_module():
     """No raw NetCDF variable creation for these fields anywhere but `replica_storage.py`."""
-    driver = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    driver = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     code = "\n".join(line for line in driver.splitlines()
                      if not line.strip().startswith("#"))
     assert "self.dataset.createVariable" not in code and ".createVariable(" not in code, (
@@ -399,7 +398,7 @@ def test_schema_knowledge_stays_in_the_storage_module():
     # Calling the reader `reservoir_velocity_seeds()` is right; naming the raw variable is not.
     assert f'"{FIELD}"' not in driver and f"'{FIELD}'" not in driver, (
         "the driver names a raw schema variable it should ask the storage module about")
-    declared = (TEMPLATES / "replica_storage.py").read_text(encoding="utf-8")
+    declared = (TEMPLATES / "storage.py").read_text(encoding="utf-8")
     assert "OPTIONAL_EXCHANGE_FIELDS" in declared
 
 

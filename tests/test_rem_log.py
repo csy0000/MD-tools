@@ -16,10 +16,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
-sys.path.insert(0, str(TEMPLATES))
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
 
-import rem_log                                                     # noqa: E402
+from md_tools.remd import rem_log as rem_log
 
 def _which_cpptraj():
     """cpptraj, wherever this machine keeps it.
@@ -233,7 +232,7 @@ def test_cpptraj_reconstructs_the_exchange_history_we_recorded(tmp_path):
 
 def test_rem_is_a_coordinated_flag_and_needs_a_groupfile():
     """Like --exchange-rule and --reservoir: it describes a ladder, not a single protocol."""
-    import replica_executor
+    from md_tools.remd import executor as replica_executor
 
     class _Files:
         def __init__(self, rem):
@@ -259,7 +258,7 @@ def test_rem_is_a_coordinated_flag_and_needs_a_groupfile():
 
 
 def test_the_flag_is_spelled_exactly_as_documented():
-    source = (TEMPLATES / "replica_executor.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "executor.py").read_text(encoding="utf-8")
     assert '"--rem"' in source
     assert '"OPENMM_REM"' in source
 
@@ -267,7 +266,7 @@ def test_the_flag_is_spelled_exactly_as_documented():
 def test_the_driver_regenerates_rather_than_appends():
     """A torn append would disagree with the record it came from, with nothing saying which half
     is true. The log is rewritten in full from committed rows and replaced atomically."""
-    driver = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    driver = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     block = driver[driver.index("def _write_rem_log"):driver.index("def _write_checkpoint")]
     assert "rem_log.build" in block and "rem_log.write" in block
     assert "last_exchange()" in block, "the log must be built from committed rows only"

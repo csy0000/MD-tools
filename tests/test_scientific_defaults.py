@@ -182,9 +182,16 @@ def _build_md(work, config, odir):
 
 
 def _stage(work, directory, name):
-    """The resolved settings a generated stage script declares."""
-    text = (Path(work) / directory / f"{name}.py").read_text(encoding="utf-8")
-    return ast.literal_eval(text.split("STAGE = ", 1)[1].split("\n\nif __name__", 1)[0])
+    """The resolved settings the named stage will run with.
+
+    Read from `resolved.config` beside the scripts, which is the single declaration of the
+    workflow. The script used to embed a `STAGE = {...}` literal -- a second declaration that
+    could disagree with the configuration next to it -- and now names its stage and nothing else.
+    """
+    from md_tools.build.md import resolve_md_config, stage_plan
+
+    plan = stage_plan(resolve_md_config(Path(work) / directory / "resolved.config"))
+    return next(entry for entry in plan if entry["name"] == name)
 
 
 @pytest.mark.slow

@@ -37,12 +37,12 @@ from pathlib import Path
 import numpy as np
 
 from md_tools.rest2 import identity as hamiltonian_identity
-import replica_storage as storage
-import rem_log
-import state_trajectories
-from exchange_rules import (ExchangeContext, NeighbouringExchangeRule, builtin_rule_identity,
+from . import storage
+from . import rem_log as rem_log
+from . import state_trajectories as state_trajectories
+from .rules import (ExchangeContext, NeighbouringExchangeRule, builtin_rule_identity,
                             load_rule)
-from replica_engine import (Configuration, ReplicaEngine, resolve_platform,
+from .engine import (Configuration, ReplicaEngine, resolve_platform,
                             select_device_for_rank, visible_cuda_devices)
 from md_tools.rest2 import require_compatible_implementation
 
@@ -298,7 +298,7 @@ class ReplicaRun:
     def _open_reservoir(self, systems):
         if not self.reservoir_declaration:
             return
-        from rrest2_reservoir import PreparedReservoir
+        from .reservoir import PreparedReservoir
 
         # The reservoir refreshes the TOP rung, so the Hamiltonian it must match is the top rung's
         # SCALED system -- not the unscaled reference. Comparing against the reference rejected
@@ -513,7 +513,7 @@ class ReplicaRun:
         """
         payload = None
         if self.coordinator.is_root:
-            import replica_validate
+            from . import validate as replica_validate
 
             manifest, files = self.parent_files(parent)
             for name in ("analysis", "checkpoint"):
@@ -689,7 +689,7 @@ class ReplicaRun:
             # completion markers lead its data, or whose streams have duplicated steps, must not
             # be continued: the continuation would read rows that were never written and then
             # append to them. Nothing here trusts the previous process to have exited cleanly.
-            import replica_validate
+            from . import validate as replica_validate
 
             check = replica_validate.validate_replica_output(
                 analysis=self.files.trajectory, checkpoint=self.files.checkpoint,
@@ -1216,7 +1216,7 @@ class ReplicaRun:
                 f"the run stopped at step {completed} of {expected}. No completion manifest was "
                 f"written; --resume will continue it.")
 
-        from replica_statistics import (completion_report, lifetime_statistics,
+        from .statistics import (completion_report, lifetime_statistics,
                                         mapping_is_permutation_every_iteration)
         accepted, proposed = self.reporter.statistics()
         events = self.reporter.reservoir_events()
@@ -1322,7 +1322,7 @@ def _sha256_of(path, *, chunk=1 << 20):
 def _state_trajectory_digests(directory, *, n_states):
     """The parent's per-state trajectories, pinned. A missing one is recorded as missing rather
     than skipped: a silent gap in this list would read as a parent that had fewer states."""
-    from amber_trajectory import state_trajectory_name
+    from .amber_trajectory import state_trajectory_name
 
     records = []
     for index in range(int(n_states)):

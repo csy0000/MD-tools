@@ -14,14 +14,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
 netCDF4 = pytest.importorskip("netCDF4")
-sys.path.insert(0, str(TEMPLATES))
 
-import amber_trajectory as amber                                   # noqa: E402
-import replica_storage as storage                                  # noqa: E402
-import state_trajectories as st                                    # noqa: E402
-from replica_engine import Configuration                           # noqa: E402
+from md_tools.remd import amber_trajectory as amber
+from md_tools.remd import storage as storage
+from md_tools.remd import state_trajectories as st
+from md_tools.remd.engine import Configuration                           # noqa: E402
 
 TAUS = [0.0, 0.2, 0.4]
 BOX = np.eye(3) * 2.5

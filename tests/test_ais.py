@@ -40,7 +40,7 @@ SMOKE_TRAJECTORIES = 2
 
 def test_the_schedule_is_evenly_spaced_endpoint_inclusive_and_exact():
     """21 observations are 20 equal intervals in tau, and both endpoints are exact."""
-    from md_tools.openmm import ais
+    from md_tools import ais
 
     # 40 steps, observed every 2 -> 21 observations counting both endpoints.
     schedule = ais.switching_schedule(
@@ -90,7 +90,7 @@ def test_the_schedule_is_evenly_spaced_endpoint_inclusive_and_exact():
 def test_a_schedule_that_would_have_to_be_rounded_is_refused(steps, update_interval,
                                                              observe_interval, expected):
     """Every inexact division is refused with the arithmetic that would fix it, never rounded."""
-    from md_tools.openmm import ais
+    from md_tools import ais
 
     with pytest.raises(ValueError) as error:
         ais.switching_schedule(tau_start=0.5, tau_end=0.0, switching_steps=steps,
@@ -165,7 +165,7 @@ def _solute_indices(project):
     """The solute selection, derived the way the runtime derives it."""
     from openmm.app import PDBFile
 
-    from md_tools.runtime.stage import solute_atom_indices
+    from md_tools.md.stage import solute_atom_indices
 
     return solute_atom_indices(PDBFile(str(Path(project) / "built.pdb")).topology)
 
@@ -317,7 +317,7 @@ def test_frozen_coordinate_work_telescopes_to_the_endpoint_energy_difference(ais
 
     # The schedule is computed, not read from a generated file: `path_definition.yaml` belonged
     # to the retired route, and `switching_schedule` is the one implementation of the arithmetic.
-    from md_tools.openmm.ais import switching_schedule
+    from md_tools.ais import switching_schedule
 
     schedule = switching_schedule(tau_start=0.5, tau_end=0.0, switching_steps=40,
                                   parameter_update_interval_steps=1,

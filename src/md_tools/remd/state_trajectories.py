@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from amber_trajectory import AmberTrajectoryWriter, read_frames, state_trajectory_name
+from .amber_trajectory import AmberTrajectoryWriter, read_frames, state_trajectory_name
 
 #: Where the per-state trajectories live, relative to the run directory. A subdirectory keeps the
 #: N files from crowding the record they belong to.

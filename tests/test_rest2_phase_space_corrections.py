@@ -17,18 +17,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 openmm = pytest.importorskip("openmm")
-sys.path.insert(0, str(TEMPLATES))
 sys.path.insert(0, str(SRC))
 
 from md_tools.rest2 import identity as hamiltonian_identity                                        # noqa: E402
-import phase_space                                                 # noqa: E402
-import replica_storage as storage                                  # noqa: E402
-from replica_schedule import EVENT_ORDER, EventSchedule            # noqa: E402
-from replica_protocol import ProtocolError, REST2Protocol          # noqa: E402
+from md_tools.md import phase_space                                                 # noqa: E402
+from md_tools.remd import storage as storage
+from md_tools.remd.schedule import EVENT_ORDER, EventSchedule            # noqa: E402
+from md_tools.remd.protocol import ProtocolError, REST2Protocol          # noqa: E402
 
 
 def _peptide_system(n=22, periodic=False):
@@ -216,13 +215,13 @@ def test_the_solute_stream_is_its_own_file_with_its_own_completion_marker(tmp_pa
 def test_stored_is_the_default_velocity_policy():
     """The probability-one acceptance assumes the recorded momentum is installed unchanged, so
     redrawing must be a decision someone made, not what happens when nothing is said."""
-    import rrest2_reservoir
+    from md_tools.remd import reservoir as rrest2_reservoir
     assert rrest2_reservoir.DEFAULT_VELOCITY_POLICY == "stored"
     assert set(rrest2_reservoir.VELOCITY_POLICIES) == {"stored", "maxwell"}
 
 
 def test_an_unknown_velocity_policy_is_refused_rather_than_defaulted(tmp_path):
-    import rrest2_reservoir
+    from md_tools.remd import reservoir as rrest2_reservoir
     declaration = tmp_path / "reservoir.yaml"
     declaration.write_text(
         "format: md-tools-reservoir-request/v2\nvelocity_policy: whatever\n"
@@ -259,7 +258,7 @@ def test_extending_twice_adds_to_the_budget_each_time():
 def test_a_marker_ahead_of_its_data_is_refused(tmp_path):
     """The marker is committed after the rows it describes, so a crash leaves it BEHIND them. A
     marker ahead of them cannot arise that way: the file disagrees with itself."""
-    import replica_validate
+    from md_tools.remd import validate as replica_validate
 
     path = tmp_path / "rest2.nc"
     schedule = EventSchedule(timestep_fs=2.0, exchange_interval_ps=2.0, number_of_exchanges=2,
@@ -298,7 +297,7 @@ def test_the_generated_replica_protocol_states_its_platform():
     resuming on another machine's platform is legitimate, so it is not part of the scientific
     identity -- which the test below this one asserts.
     """
-    from md_tools.runtime.replica import protocol_file_text
+    from md_tools.remd.generated import protocol_file_text
 
     ladder = {"protocol": "REST2", "solvent": "implicit", "n_states": 2, "tau_max": 0.5,
               "exchange_interval_steps": 1000, "number_of_exchanges": 10,

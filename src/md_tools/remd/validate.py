@@ -11,8 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
-import replica_statistics as statistics
-import replica_storage as storage
+from . import statistics
+from . import storage
 
 
 class ValidationResult:

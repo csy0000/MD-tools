@@ -66,8 +66,8 @@ import numpy as np
 import yaml
 
 from md_tools.rest2 import identity as hamiltonian_identity
-import phase_space
-import source_ensemble
+from md_tools.md import phase_space
+from . import source_ensemble as source_ensemble
 
 #: The declaration format `--reservoir` points at.
 DECLARATION_FORMAT = "md-tools-reservoir-request/v2"
@@ -446,3 +446,97 @@ class PreparedReservoir:
 
     def close(self):
         self.reader.close()
+
+
+# =================================================================================================
+# The generic reservoir transition rule.
+#
+# GENERIC on purpose. rREST2 is the first user, not the only possible one: any REMD method whose
+# hottest state can be refreshed from a pre-generated equilibrium ensemble composes this rule with
+# `REMDRunner` rather than forking the driver. The rule knows nothing about REST2 -- it takes an
+# ordinary neighbouring sweep and adds a refresh -- which is why it lives here and not in a file
+# named after rREST2.
+#
+# Lifted from the generated `rrest2_exchange.py` plug-in, which remains as the worked example of
+# the `--exchange-rule` contract. The behaviour is unchanged.
+# =================================================================================================
+
+from .rules import NeighbouringExchangeRule, RULE_INTERFACE_VERSION   # noqa: E402
+
+#: Where the reservoir refresh sits relative to the ordinary sweep. See the module docstring.
+REFRESH_ORDER = "after_neighbouring_sweep"
+
+
+class ReservoirRefreshRule:
+    """Neighbouring REST2 with a periodic Boltzmann reservoir refresh of the hottest state."""
+
+    name = "rrest2-boltzmann"
+    version = RULE_INTERFACE_VERSION
+
+    def __init__(self):
+        self.neighbouring = NeighbouringExchangeRule()
+
+    def describe(self):
+        return {
+            "name": self.name,
+            "interface_version": self.version,
+            "parameters": {"refresh_order": REFRESH_ORDER},
+            "schedule": ("strict alternation of odd/even adjacent-pair sweeps, plus a reservoir "
+                         "refresh of the top state every refresh_interval_exchanges exchange "
+                         "iterations"),
+            "refresh_order": REFRESH_ORDER,
+            "refresh_acceptance": ("probability one under the Boltzmann/same-state contract "
+                                   "checked by rrest2_reservoir.py"),
+            "criterion": "log(alpha) = [u_i(x_i)+u_j(x_j)] - [u_i(x_j)+u_j(x_i)]",
+            "source": "md_tools.remd.reservoir.ReservoirRefreshRule",
+        }
+
+    def propose(self, context):
+        # 1. the ordinary sweep, unchanged.
+        outcome = self.neighbouring.propose(context)
+
+        reservoir = context.reservoir
+        if reservoir is None:
+            return outcome
+
+        declaration = getattr(reservoir, "declaration", {}) or {}
+        interval = int(declaration.get("refresh_interval_exchanges", 1))
+        if interval < 1:
+            raise ValueError(
+                f"refresh_interval_exchanges must be >= 1; got {interval}")
+
+        state = dict(context.rule_state)
+        attempts = int(state.get("refresh_attempts", 0))
+        # Counted in EXCHANGE iterations, not segments: an interval of 1 refreshes at every
+        # exchange, and the count survives a resume because the rule state is checkpointed.
+        exchanges_seen = int(state.get("exchanges_seen", 0)) + 1
+        state["exchanges_seen"] = exchanges_seen
+
+        if exchanges_seen % interval != 0:
+            outcome.rule_state = state
+            return outcome
+
+        # 2. the refresh, second and separately recorded.
+        top_state = context.n_states - 1
+        frame = int(context.rng.integers(reservoir.n_frames))
+        # A DCD carries no velocities, so the installed configuration needs fresh momenta at the
+        # one common temperature. The seed is derived from the rule's own stream so a resumed run
+        # redraws the same way it would have.
+        velocity_seed = int(context.rng.integers(1, 2 ** 31 - 1))
+        state["refresh_attempts"] = attempts + 1
+        state["last_refresh_frame"] = frame
+        state["last_refresh_iteration"] = int(context.iteration)
+
+        outcome.reservoir_refresh = {
+            "state": top_state,
+            "frame": frame,
+            "velocity_seed": velocity_seed,
+            "accepted": True,
+            "order": REFRESH_ORDER,
+        }
+        outcome.rule_state = state
+        outcome.diagnostics = dict(outcome.diagnostics or {})
+        outcome.diagnostics["reservoir_refresh"] = {
+            "state": top_state, "frame": frame, "interval_exchanges": interval}
+        return outcome
+

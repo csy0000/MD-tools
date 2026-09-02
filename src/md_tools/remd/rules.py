@@ -186,9 +186,10 @@ def load_rule(path):
     module = importlib.util.module_from_spec(spec)
     # The rule sits beside the runtime modules it needs, so its own directory is importable.
     import sys
-    directory = str(path.resolve().parent)
-    if directory not in sys.path:
-        sys.path.insert(0, directory)
+    # NOT added to `sys.path`. A rule or protocol file used to sit beside COPIES of the
+    # runtime modules and import them by bare name, so its directory had to be importable.
+    # It imports from the installed package now, and inserting the directory would let a
+    # file next to it shadow a standard-library module for the rest of the process.
     spec.loader.exec_module(module)
 
     rule = getattr(module, "rule", None)

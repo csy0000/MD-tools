@@ -19,11 +19,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
 netCDF4 = pytest.importorskip("netCDF4")
-sys.path.insert(0, str(TEMPLATES))
 
-import amber_trajectory as amber                                   # noqa: E402
+from md_tools.remd import amber_trajectory as amber
 
 def _which_cpptraj():
     """cpptraj, wherever this machine keeps it. See tests/test_rem_log.py for why this is not

@@ -165,7 +165,7 @@ def test_no_writer_reaches_for_git_commit_on_its_own():
     sources = [REPO_ROOT / "src" / "md_tools" / "build" / "record.py",
                REPO_ROOT / "src" / "md_tools" / "registry" / "register.py",
                REPO_ROOT / "src" / "md_tools" / "build" / "top.py",
-               REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py"]
+               REPO_ROOT / "src" / "md_tools" / "ais" / "run.py"]
     for path in sources:
         name = path.name
         for number, line in enumerate(path.read_text().splitlines(), 1):

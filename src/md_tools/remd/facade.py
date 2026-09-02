@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """What a generated replica-exchange input imports. A facade, deliberately thin.
 
-    from replica_runtime import REST2Protocol
+    from md_tools.remd import REST2Protocol
 
     protocol = REST2Protocol(
         tau=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
@@ -17,6 +17,6 @@ That is the whole contract. The generated input names a protocol and nothing els
 exchange loop, no NetCDF, no MPI, no source parsing. The executor reads `protocol` out of the file
 and runs it.
 """
-from replica_protocol import KB_KJ_PER_MOL_K, ProtocolError, REST2Protocol   # noqa: F401
+from .protocol import KB_KJ_PER_MOL_K, ProtocolError, REST2Protocol   # noqa: F401
 
 __all__ = ["REST2Protocol", "ProtocolError", "KB_KJ_PER_MOL_K"]

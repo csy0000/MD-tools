@@ -29,14 +29,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
 
 netCDF4 = pytest.importorskip("netCDF4")
-sys.path.insert(0, str(TEMPLATES))
 
-import replica_storage as storage                                  # noqa: E402
-import replica_validate as validate                                # noqa: E402
-from replica_engine import Configuration                           # noqa: E402
+from md_tools.remd import storage as storage
+from md_tools.remd import validate as validate
+from md_tools.remd.engine import Configuration                           # noqa: E402
 
 FIELD = "reservoir_velocity_seed"
 ZERO = np.zeros((2, 2), dtype=np.int64)
@@ -318,7 +317,7 @@ def test_fill_values_without_a_pending_record_stay_refused(tmp_path):
 
 
 def test_the_transaction_id_is_computed_by_one_function():
-    source = (TEMPLATES / "replica_storage.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "storage.py").read_text(encoding="utf-8")
     assert source.count("def migration_transaction_id") == 1
     creation = source[source.index("def _begin_migration"):source.index("def _apply_migration")]
     assert "migration_transaction_id(pending)" in creation
@@ -333,7 +332,7 @@ def test_the_transaction_id_is_computed_by_one_function():
 
 def _probe(path):
     """The driver's own read-only phase, run against a real file."""
-    import replica_driver
+    from md_tools.remd import driver as replica_driver
 
     driver = object.__new__(replica_driver.ReplicaRun)
     driver.files = type("F", (), {"trajectory": str(path)})()
@@ -408,8 +407,7 @@ def test_the_real_cli_recovers_every_crash_state(tmp_path, fault):
     script = tmp_path / "runner.py"
     script.write_text(textwrap.dedent(f'''
         import sys
-        sys.path.insert(0, {str(TEMPLATES)!r})
-        import replica_storage as storage
+        from md_tools.remd import storage
         r = storage.ReplicaReporter(sys.argv[1], mode="a")
         try:
             r.ensure_optional_exchange_fields()

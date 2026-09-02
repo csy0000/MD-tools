@@ -28,14 +28,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
 
 netCDF4 = pytest.importorskip("netCDF4")
-sys.path.insert(0, str(TEMPLATES))
 
-import replica_storage as storage                                  # noqa: E402
-import replica_validate as validate                                # noqa: E402
-from replica_engine import Configuration                           # noqa: E402
+from md_tools.remd import storage as storage
+from md_tools.remd import validate as validate
+from md_tools.remd.engine import Configuration                           # noqa: E402
 
 FIELD = "reservoir_velocity_seed"
 EXTRA = "synthetic_second_field"
@@ -83,8 +82,7 @@ def _make_legacy(path, rows=4, drop=(FIELD,)):
 
 _RUNNER = textwrap.dedent('''
     import os, sys
-    sys.path.insert(0, {templates!r})
-    import replica_storage as storage
+    from md_tools.remd import storage
     if {extra!r}:
         storage.OPTIONAL_EXCHANGE_FIELDS[{extra!r}] = {spec!r}
     reporter = storage.ReplicaReporter(sys.argv[1], mode="a")
@@ -99,7 +97,7 @@ _RUNNER = textwrap.dedent('''
 def _migrate_in_subprocess(path, *, fault=None, extra=None, tmp_path=None):
     """Run the real transaction in another process, optionally hard-killed at `fault`."""
     script = (tmp_path or path.parent) / "runner.py"
-    script.write_text(_RUNNER.format(templates=str(TEMPLATES), extra=extra, spec=EXTRA_SPEC))
+    script.write_text(_RUNNER.format(extra=extra, spec=EXTRA_SPEC))
     environment = dict(os.environ)
     if fault:
         environment[storage._MIGRATION_FAULT_ENV] = fault
@@ -413,7 +411,7 @@ def test_a_corrupt_pending_record_is_refused_not_guessed(tmp_path):
 # --- documentation must not claim atomicity -----------------------------------------------------
 
 def test_the_code_does_not_claim_atomicity():
-    text = (TEMPLATES / "replica_storage.py").read_text(encoding="utf-8")
+    text = (TEMPLATES / "storage.py").read_text(encoding="utf-8")
     lowered = text.lower()
     assert "is not atomic" in lowered or "no transaction" in lowered
     for claim in ("atomically migrates", "atomic migration", "committed by the same `sync()`"):
@@ -440,7 +438,7 @@ class _Driver:
     """The narrowest realistic boundary: the real methods, bound to a stub with the real files."""
 
     def __init__(self, files):
-        from replica_driver import ReplicaRun
+        from md_tools.remd import REMDRunner as ReplicaRun
         self.files = files
         self.coordinator = type("C", (), {"is_root": True})()
         self._recover_history_readonly = ReplicaRun._recover_history_readonly.__get__(self)
@@ -487,7 +485,7 @@ def test_recovery_merges_the_manifest_when_the_file_predates_the_attribute(tmp_p
 
 def test_every_run_state_write_in_the_driver_carries_the_history():
     """An audit with teeth: every `write_run_state` call must pass `storage_migrations`."""
-    source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     calls, index = [], 0
     while True:
         index = source.find("storage.write_run_state(", index)
@@ -509,7 +507,7 @@ def test_every_run_state_write_in_the_driver_carries_the_history():
 
 
 def test_the_exception_handler_skips_the_write_when_provenance_is_unreadable():
-    source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     handler = source[source.index("except BaseException as failure:"):
                      source.index("raise", source.index("except BaseException as failure:"))]
     assert "_recover_history_readonly()" in handler
@@ -565,7 +563,7 @@ def test_verification_refuses_a_pending_migration_but_continuation_may_reconcile
 
 
 def test_the_driver_marks_its_own_check_reconcilable():
-    source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     block = source[source.index("def _continue"):source.index("def _loop")]
     assert "reconcilable=True" in block, (
         "the continuation would refuse the pending migration it exists to finish")

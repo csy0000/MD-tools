@@ -26,7 +26,7 @@ from md_tools.build.record import read_record
 from .conftest import REPO_ROOT
 
 REPO = Path(__file__).resolve().parents[1]
-TEMPLATES = REPO / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = REPO / "src" / "md_tools" / "remd"
 
 
 def _md_stages():
@@ -206,7 +206,7 @@ def test_the_fingerprint_ignores_only_the_extendable_fields():
     live fingerprint additionally binds the System and topology digests, so the same stage against
     a rebuilt System is correctly a different fingerprint.
     """
-    from md_tools.runtime.stage import EXTENDABLE_FIELDS, _config_fingerprint
+    from md_tools.md.stage import EXTENDABLE_FIELDS, _config_fingerprint
 
     base = {"timestep_fs": 2.0, "temperature_kelvin": 300.0, "steps": 500000, "ensemble": "NPT"}
     longer = dict(base, steps=1000000)
@@ -229,7 +229,7 @@ def test_every_extendable_field_is_excluded_and_nothing_else_is():
     rather than by agreement. What must not change is which KIND of field is extendable: how long
     to run, and the human description. Every scientific invariant stays inside the fingerprint.
     """
-    from md_tools.runtime.stage import EXTENDABLE_FIELDS
+    from md_tools.md.stage import EXTENDABLE_FIELDS
 
     assert set(EXTENDABLE_FIELDS) == {"steps", "description"}
     for field in ("timestep_fs", "temperature_kelvin", "tau", "ensemble", "implicit",
@@ -248,13 +248,17 @@ def test_the_stage_request_is_derived_once_not_twice():
     script and the run it describes drift apart.
     """
     from md_tools.build import md as build_md
-    from md_tools.runtime import stage as runtime_stage
+    from md_tools.md import stage as runtime_stage
 
     generator = Path(build_md.__file__).read_text(encoding="utf-8")
     runtime = Path(runtime_stage.__file__).read_text(encoding="utf-8")
 
     assert "def stage_plan(" in generator, "the generator no longer derives the plan"
-    assert "STAGE = {stage!r}" in generator, "the plan is not written into the script"
+    # The plan is written into `resolved.config`, and the script names which stage of it to run.
+    # One derivation, one file -- rather than a plan embedded in every script AND a configuration
+    # beside them that could say something else.
+    assert "run_generated_stage" in generator, "the script no longer reaches the runtime"
+    assert "STAGE = {stage!r}" not in generator, "the plan is embedded in the script again"
     # The runtime consumes what it is given. If it started deriving stage lengths itself there
     # would be two answers to one question.
     assert "def stage_plan(" not in runtime
@@ -262,14 +266,14 @@ def test_the_stage_request_is_derived_once_not_twice():
 
 
 # `preflight.py` and the three launchers that called it are retired with the copy-based generated
-# project. Their guarantees did not retire with them -- `md_tools.runtime.stage` is where they now
+# project. Their guarantees did not retire with them -- `md_tools.md.stage` is where they now
 # live, and these are the same properties asserted against it.
 
 
 def test_the_stage_runtime_checks_its_parent_before_it_builds_anything():
     """The defect this came from: `check_parent` short-circuited on `if not stage`, so production
     skipped the check entirely. The check must be reached for every stage, continued or not."""
-    runtime = (REPO_ROOT / "src" / "md_tools" / "runtime" / "stage.py").read_text(encoding="utf-8")
+    runtime = (REPO_ROOT / "src" / "md_tools" / "md" / "stage.py").read_text(encoding="utf-8")
     assert '"continued_from"' in runtime, "a continued stage no longer records its parent"
     assert "file_facts(parent)" in runtime, "the parent is recorded without being re-read"
     # It is recorded by content, not by name: a parent that was regenerated is a different parent.
@@ -290,7 +294,7 @@ def test_the_stage_runtime_remains_bounded():
     A stage validates the files it was given. The moment it starts searching a managed store it
     can find something that merely looks like its parent.
     """
-    source = (REPO_ROOT / "src" / "md_tools" / "runtime" / "stage.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "src" / "md_tools" / "md" / "stage.py").read_text(encoding="utf-8")
     for forbidden in ("rglob", "os.walk", "glob.glob", "MD_DATA"):
         assert forbidden not in source, f"the stage runtime must stay bounded; found {forbidden!r}"
 
@@ -354,13 +358,23 @@ def scripts(tmp_path_factory):
     return work
 
 
-def test_each_generated_script_declares_its_resolved_stage(scripts):
-    """What `stage.yaml` used to carry now lives in the script that runs it."""
+def test_each_generated_script_names_its_stage_and_reads_the_resolved_plan(scripts):
+    """The stage the script runs is derived from `resolved.config`, not embedded in the script.
+
+    It used to be a `STAGE = {...}` literal in every file -- a SECOND declaration of the same
+    workflow, which could disagree with the configuration beside it after a hand edit. The script
+    names its stage and nothing else; the settings come from the one file.
+    """
+    from md_tools.build.md import resolve_md_config, stage_plan
+
+    directory = scripts / "md_script"
+    plan = {entry["name"]: entry for entry in
+            stage_plan(resolve_md_config(directory / "resolved.config"))}
     for name in ("min", "eq_nvt_posres", "cMD"):
-        text = (scripts / "md_script" / f"{name}.py").read_text()
-        assert "STAGE = {" in text
-        stage = ast.literal_eval(text.split("STAGE = ", 1)[1].split("\n\nif __name__", 1)[0])
-        assert stage["name"] == name
+        text = (directory / f"{name}.py").read_text()
+        assert f'run_generated_stage(__file__, "{name}")' in text
+        assert "STAGE = {" not in text, "the script embeds a second declaration again"
+        stage = plan[name]
         assert stage["ensemble"] in ("NVT", "NPT")
         assert stage["timestep_fs"] and stage["temperature_K"]
         assert isinstance(stage["steps"], int), "lengths are exact step counts"
@@ -400,32 +414,55 @@ def test_a_large_timestep_without_hmr_is_refused_before_integrating(scripts):
     Checked against the masses actually serialised in built.xml rather than against a config that
     claims HMR, because by run time that is a fact rather than a request.
     """
-    work = scripts / "md_script"
-    # The generated stage now carries `'timestep_fs': 'auto'`, which resolves to 2 fs against
-    # these ordinary hydrogen masses -- correctly, and therefore uselessly for this test. The
-    # refusal being asserted is the one for an EXPLICIT large value, so state it explicitly.
-    text = (work / "min.py").read_text().replace("'timestep_fs': 'auto'", "'timestep_fs': 4.0")
-    assert "'timestep_fs': 4.0" in text, "the generated stage no longer declares a timestep"
-    (work / "fast.py").write_text(text.replace("'name': 'min'", "'name': 'fast'"))
+    import shutil
+
+    import yaml
+
+    # `resolved.config` is the one declaration, so an explicit timestep is stated THERE. The
+    # default is `auto`, which resolves to 2 fs against these ordinary hydrogen masses --
+    # correctly, and therefore uselessly for this test. What is asserted is the refusal of an
+    # explicit large value.
+    #
+    # Into a copy of the directory, because editing `resolved.config` in place would invalidate
+    # the checkpoints the sibling tests share through this module-scoped fixture -- which is
+    # itself the fingerprint rule working.
+    work = scripts / "md_script_fast"
+    if work.exists():
+        shutil.rmtree(work)
+    shutil.copytree(scripts / "md_script", work)
+    config = work / "resolved.config"
+    document = yaml.safe_load(config.read_text(encoding="utf-8"))
+    document.setdefault("dynamics", {})["timestep_fs"] = 4.0
+    config.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     try:
         result = subprocess.run(
-            [sys.executable, "fast.py", "-p", "../built.pdb", "-s", "../built.xml",
+            [sys.executable, "min.py", "-p", "../built.pdb", "-s", "../built.xml",
              "-log", "fast.log"], cwd=work, capture_output=True, text=True, timeout=600)
         combined = result.stdout + result.stderr
         assert result.returncode != 0, combined
         assert "hydrogen mass repartitioning was NOT applied" in combined, combined[-800:]
-        assert not (work / "fast.dcd").exists()
+        assert not (work / "min.dcd").exists()
     finally:
-        (work / "fast.py").unlink(missing_ok=True)
-        (work / "fast.log").unlink(missing_ok=True)
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _resolved_stage(scripts, name):
+    """The resolved stage a generated script runs, read from `resolved.config` beside it.
+
+    The script no longer embeds it: `resolved.config` is the one declaration, and this is how a
+    test reads what the script will actually run.
+    """
+    from md_tools.build.md import resolve_md_config, stage_plan
+
+    plan = stage_plan(resolve_md_config(scripts / "md_script" / "resolved.config"))
+    return next(entry for entry in plan if entry["name"] == name)
 
 
 def test_asking_for_a_longer_run_does_not_invalidate_the_checkpoint(scripts):
     """Extension must survive. Only the INVARIANTS are fingerprinted, and steps is not one."""
-    from md_tools.runtime.stage import EXTENDABLE_FIELDS, _config_fingerprint
+    from md_tools.md.stage import EXTENDABLE_FIELDS, _config_fingerprint
 
-    text = (scripts / "md_script" / "cMD.py").read_text()
-    stage = ast.literal_eval(text.split("STAGE = ", 1)[1].split("\n\nif __name__", 1)[0])
+    stage = _resolved_stage(scripts, "cMD")
     longer = {**stage, "steps": stage["steps"] * 4}
     assert _config_fingerprint(stage, "a", "b") == _config_fingerprint(longer, "a", "b")
 
@@ -439,10 +476,9 @@ def test_asking_for_a_longer_run_does_not_invalidate_the_checkpoint(scripts):
 
 def test_a_checkpoint_from_a_different_system_is_refused(scripts):
     """A checkpoint carries positions for a particular particle set."""
-    from md_tools.runtime.stage import _config_fingerprint
+    from md_tools.md.stage import _config_fingerprint
 
-    text = (scripts / "md_script" / "cMD.py").read_text()
-    stage = ast.literal_eval(text.split("STAGE = ", 1)[1].split("\n\nif __name__", 1)[0])
+    stage = _resolved_stage(scripts, "cMD")
     assert _config_fingerprint(stage, "system-a", "top") != \
            _config_fingerprint(stage, "system-b", "top")
 
@@ -456,7 +492,7 @@ def test_a_stage_records_the_parent_state_it_consumed_with_its_digest(scripts):
     refuses a directory whose files no longer match its records -- so a parent rewritten after a
     child consumed it is caught, at the point where it would otherwise become false ancestry.
     """
-    from md_tools.runtime import stage as stage_module
+    from md_tools.md import stage as stage_module
 
     source = Path(stage_module.__file__).read_text(encoding="utf-8")
     assert '"continued_from"' in source, "the parent state is not recorded"

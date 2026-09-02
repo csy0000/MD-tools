@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """The ONE simulation executor a generated replica script drives.
 
-Called as a function by `md_tools.runtime.replica`, not as a command: MD-tools
+Called as a function by `md_tools.remd.generated`, not as a command: MD-tools
 installs exactly one executable, `md-openmm`, and this is reached through the
 `REST2.py` / `rREST2.py` that `md-openmm build-md` generates.
 
@@ -450,13 +450,14 @@ def load_module(path, name):
     """Import a file by location, with its own directory importable.
 
     A generated project keeps its runtime modules beside the protocol, so the protocol's directory
-    goes on `sys.path` -- which is what lets `from replica_runtime import REST2Protocol` resolve in
+    is imported from the installed package -- `from md_tools.remd import REST2Protocol` -- in
     a project that has been moved and has no `md_tools` anywhere.
     """
     path = Path(path)
-    directory = str(path.resolve().parent)
-    if directory not in sys.path:
-        sys.path.insert(0, directory)
+    # NOT added to `sys.path`. A rule or protocol file used to sit beside COPIES of the
+    # runtime modules and import them by bare name, so its directory had to be importable.
+    # It imports from the installed package now, and inserting the directory would let a
+    # file next to it shadow a standard-library module for the rest of the process.
     spec = importlib.util.spec_from_file_location(name, str(path))
     if spec is None or spec.loader is None:
         raise RuntimeError(f"{path} could not be loaded as a Python file")
@@ -484,7 +485,7 @@ def load_grouped_protocol(path):
     if protocol is None:
         raise RuntimeError(
             f"{path} defines neither `protocol` nor `make_protocol()`. A grouped protocol file "
-            f"names one REST2Protocol and nothing else; see replica_runtime.py for the contract.")
+            f"names one REST2Protocol and nothing else; see md_tools.remd.facade for the contract.")
     return protocol
 
 
@@ -506,16 +507,11 @@ def verify_only(arguments):
               file=sys.stderr)
         return 2
     storage_path = Path(storage).expanduser()
-    directory = str(storage_path.resolve().parent)
-    if directory not in sys.path:
-        sys.path.insert(0, directory)
-    try:
-        import replica_validate
-    except ImportError as failure:
-        print(f"replica executor: cannot import replica_validate from {directory} ({failure}). "
-              f"--verify-only reads the copy that belongs to the run being checked.",
-              file=sys.stderr)
-        return 2
+    # The validator comes from the INSTALLED package. It used to be imported from the directory
+    # beside the stored output, because a generated project carried its own copy and the run had
+    # to be checked by the code that produced it. There are no copies now -- one installed
+    # implementation, whose version every record already names.
+    from . import validate as replica_validate
     checkpoint = arguments.checkpoint or os.environ.get("OPENMM_CHECKPOINT")
     manifest = arguments.restart or os.environ.get("OPENMM_RESTART")
     result = replica_validate.validate_replica_output(
@@ -530,15 +526,13 @@ def verify_only(arguments):
 
 def run_grouped(files, arguments, groups):
     """Build the ladder the group file describes and hand it to the replica driver."""
-    directory = str(Path(groups[0]["input"]).resolve().parent)
-    if directory not in sys.path:
-        sys.path.insert(0, directory)
-
+    # The group file's directory is NOT put on `sys.path`: the protocol module it names is loaded
+    # by path and imports the runtime from the installed package.
     from openmm import XmlSerializer
     from openmm.app import PDBFile
     import yaml
 
-    from replica_driver import ReplicaRun
+    from .driver import ReplicaRun
 
     protocol = load_grouped_protocol(groups[0]["input"])
     if protocol.n_states != len(groups):

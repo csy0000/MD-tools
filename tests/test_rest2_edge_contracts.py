@@ -17,20 +17,19 @@ import numpy as np
 import pytest
 import yaml
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 openmm = pytest.importorskip("openmm")
-sys.path.insert(0, str(TEMPLATES))
 sys.path.insert(0, str(SRC))
 
-import replica_executor                                                   # noqa: E402
-import phase_space                                                 # noqa: E402
+from md_tools.remd import executor as replica_executor
+from md_tools.md import phase_space                                                 # noqa: E402
 from md_tools.rest2 import identity as hamiltonian_identity                                        # noqa: E402
-import replica_storage as storage                                  # noqa: E402
-import rrest2_reservoir                                            # noqa: E402
-import source_ensemble                                             # noqa: E402
-from replica_protocol import REST2Protocol                         # noqa: E402
+from md_tools.remd import storage as storage
+from md_tools.remd import reservoir as rrest2_reservoir
+from md_tools.remd import source_ensemble as source_ensemble
+from md_tools.remd.protocol import REST2Protocol                         # noqa: E402
 
 
 def _protocol():
@@ -160,8 +159,8 @@ def test_zero_velocities_are_refused_under_stored_and_accepted_under_maxwell(tmp
 
 def test_no_code_path_turns_stored_into_maxwell(tmp_path):
     """There is no automatic fallback. The only way to redraw is to ask for it."""
-    source = (TEMPLATES / "rrest2_reservoir.py").read_text(encoding="utf-8")
-    driver = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "reservoir.py").read_text(encoding="utf-8")
+    driver = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     for text, name in ((source, "rrest2_reservoir.py"), (driver, "replica_driver.py")):
         for line in text.splitlines():
             stripped = line.strip()
@@ -176,7 +175,7 @@ def test_the_source_format_is_the_same_for_both_policies():
     """`maxwell` is not DCD support. A DCD carries no Hamiltonian identity, no absolute source
     step, and no completion marker, so it cannot satisfy this reservoir contract under either
     policy."""
-    source = (TEMPLATES / "rrest2_reservoir.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "reservoir.py").read_text(encoding="utf-8")
     lowered = source.lower()
     for claim in ("maxwell allows a dcd", "dcd is allowed under maxwell",
                   "coordinate-only source is supported"):
@@ -314,7 +313,7 @@ def test_validation_happens_before_any_output_is_touched(tmp_path):
     assert _refusal(replica_executor.validate(files, _Arguments(), rank=0, groups=None))
     assert not outputs.exists(), "validation created an output directory"
 
-    source = (TEMPLATES / "replica_executor.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "executor.py").read_text(encoding="utf-8")
     refusal_index = source.index("def validate(")
     mkdir_index = source.index("Path(value).parent.mkdir")
     import_index = source.index("load_protocol(files.input)")
@@ -361,7 +360,7 @@ def test_only_the_owning_rank_draws_and_the_array_is_shared():
     """Serial and MPI must install the SAME momenta. Every rank drawing for itself would give
     each a different array from the same seed once the contexts differ, so the owning rank draws
     and the result is shared."""
-    driver = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    driver = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     block = driver[driver.index("if installed_velocities is None:"):
                    driver.index("replacement = Configuration(")]
     assert "state_index in self.owned" in block, "any rank could draw"
@@ -370,8 +369,8 @@ def test_only_the_owning_rank_draws_and_the_array_is_shared():
 
 
 def test_the_storage_records_the_seed_each_maxwell_refresh_drew_from(tmp_path):
-    import replica_storage as storage
-    from replica_engine import Configuration
+    from md_tools.remd import storage as storage
+    from md_tools.remd.engine import Configuration
 
     path = tmp_path / "rest2.nc"
     reporter = storage.ReplicaReporter.create(
@@ -400,7 +399,7 @@ def test_the_storage_records_the_seed_each_maxwell_refresh_drew_from(tmp_path):
 
 
 def test_the_statistics_report_the_seeds_that_were_actually_used():
-    import replica_statistics as statistics
+    from md_tools.remd import statistics as statistics
 
     accepted = np.zeros((3, 2, 2), dtype=np.int64)
     proposed = np.zeros((3, 2, 2), dtype=np.int64)
@@ -419,7 +418,7 @@ def test_the_statistics_report_the_seeds_that_were_actually_used():
 
 
 def test_the_prepared_manifest_names_the_policy_it_was_materialised_under():
-    source = (TEMPLATES / "rrest2_reservoir.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "reservoir.py").read_text(encoding="utf-8")
     manifest_block = source[source.index('"format": "md-tools-prepared-reservoir/v1"'):
                             source.index('"citations"')]
     assert '"velocity_policy": policy' in manifest_block, (
@@ -449,7 +448,7 @@ def test_a_descriptive_manifest_field_is_not_checked_as_a_filename(tmp_path):
     """`storage` mixes filenames with description. `coordinate_indexing: walker` says how the
     coordinates are indexed; treating it as a file failed every run with "walker does not exist
     beside the manifest"."""
-    import replica_validate
+    from md_tools.remd import validate as replica_validate
 
     manifest = tmp_path / "restart.json"
     (tmp_path / "run.nc").write_bytes(b"x")
@@ -472,7 +471,7 @@ def test_the_identity_budget_is_a_floor_not_an_equality(tmp_path):
     """`--extend` legitimately runs past the count the protocol was created with, so comparing the
     stored rows against the ORIGINAL request rejected every extended run. The authoritative budget
     is the schedule the run actually finished under."""
-    source = (TEMPLATES / "replica_validate.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "validate.py").read_text(encoding="utf-8")
     block = source[source.index('expected = identity.get("number_of_exchanges")'):
                    source.index('if stats["reservoir"]:')]
     assert "schedule" in block, "the actual budget is never consulted"
@@ -501,4 +500,11 @@ def test_the_generated_cmd_launcher_passes_no_continuation_flag(tmp_path):
     assert "--extend" not in run_sh
     cmd = (out / "cMD.py").read_text()
     assert "--resume" not in cmd and "--extend" not in cmd
-    assert "'tau': 0.5" in cmd, "the fixed tau must reach the stage it scales"
+    # The tau reaches the stage through `resolved.config`, which is the one declaration; the
+    # script names the stage and nothing else. What matters is that the value survives the round
+    # trip to the stage that will scale with it.
+    from md_tools.build.md import resolve_md_config, stage_plan
+
+    plan = stage_plan(resolve_md_config(out / "resolved.config"))
+    assert all(stage["tau"] == 0.5 for stage in plan), \
+        "the fixed tau must reach every stage it scales"

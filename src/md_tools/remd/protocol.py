@@ -15,7 +15,7 @@ Because every rung shares one temperature and one beta, an exchange must NOT res
 That rescaling belongs to temperature REMD, where the rungs differ in beta; applying it here would
 inject or remove energy at every accepted swap and quietly change the ensemble being sampled.
 """
-from replica_schedule import EventSchedule, ScheduleError, exact_steps   # noqa: F401
+from .schedule import EventSchedule, ScheduleError, exact_steps   # noqa: F401
 from md_tools.rest2 import (REST2_IMPLEMENTATION, audit_force_classes,
                            build_scaled_system, scaling_for_tau,
                            torsion_exclusion_report)
@@ -68,7 +68,7 @@ class REST2Protocol:
 
     A generated input reads:
 
-        from replica_runtime import REST2Protocol
+        from md_tools.remd import REST2Protocol
 
         protocol = REST2Protocol(
             tau=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
@@ -235,7 +235,7 @@ class REST2Protocol:
         The trajectory basename comes from the state index and never from tau, so two ladders with
         different tau at the same index name the same file.
         """
-        from amber_trajectory import state_trajectory_name
+        from .amber_trajectory import state_trajectory_name
 
         records = []
         for index, tau in enumerate(self.tau):

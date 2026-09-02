@@ -7,6 +7,8 @@ commit that is syntactically valid and names nothing.
 """
 from __future__ import annotations
 
+import importlib
+
 import json
 import os
 import shutil
@@ -24,7 +26,7 @@ from .conftest import ALA_PDB, REPO_ROOT, run_cli, template_module
 #: The AIS runtime. These assertions read source text because they are about what the code must
 #: NOT do -- a property no successful run can demonstrate. They followed the implementation from
 #: the retired `templates/ais_run.py` to its live home rather than being dropped with it.
-AIS_SOURCE = REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py"
+AIS_SOURCE = REPO_ROOT / "src" / "md_tools" / "ais" / "run.py"
 
 
 # --- 1. the production source is never hashed ---------------------------------------------------
@@ -53,7 +55,7 @@ def test_the_no_hashing_assertion_is_not_vacuous():
     assertion applied to code which does hash would fail.
     """
     root = REPO_ROOT / "src" / "md_tools"
-    hashing = (root / "runtime" / "stage.py").read_text()
+    hashing = (root / "md" / "stage.py").read_text()
     assert "sha256" in hashing, (
         "the positive control no longer hashes, so the absence check above proves nothing")
     assert "sha256" not in AIS_SOURCE.read_text()
@@ -192,7 +194,7 @@ def test_the_record_states_which_route_produced_it():
 
 def test_repeated_atom_names_do_not_make_two_topologies_the_same(tmp_path):
     """Every residue has an N, a CA, a C and an O. Names alone cannot tell residues apart."""
-    ais = template_module("source_ensemble")
+    ais = importlib.import_module("md_tools.remd.source_ensemble")
     from openmm.app import PDBFile
 
     original = PDBFile(str(ALA_PDB))
@@ -211,7 +213,7 @@ def test_the_identity_tuple_covers_chain_residue_and_element():
     The guard follows it rather than being relaxed: AIS and rREST2 must compare atoms the same
     way, and the whole point of one implementation is that this check covers both.
     """
-    source = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
+    source = (REPO_ROOT / "src" / "md_tools" / "remd"
           / "source_ensemble.py").read_text()
     start = source.index("def atom_identity")
     # `ATOM_FIELDS` is defined near the top of the shared helper, so slice to the NEXT definition
@@ -248,7 +250,7 @@ def test_a_reassigned_residue_is_caught_though_every_atom_name_is_identical(tmp_
     """The case atom names cannot see: same names, same order, different molecule."""
     from openmm.app import PDBFile
 
-    ais = template_module("source_ensemble")
+    ais = importlib.import_module("md_tools.remd.source_ensemble")
     original_text = ALA_PDB.read_text()
     original = PDBFile(str(ALA_PDB))
 
@@ -274,7 +276,7 @@ def test_changed_connectivity_is_caught(tmp_path):
     """Same atoms in the same order is not enough: different bonds is a different molecule."""
     from openmm.app import PDBFile
 
-    ais = template_module("source_ensemble")
+    ais = importlib.import_module("md_tools.remd.source_ensemble")
     mutated_path = tmp_path / "renamed.pdb"
     mutated_path.write_text(_renumber_residue(ALA_PDB.read_text(), old_seq=2, new_seq=2,
                                               new_name="GLY"))
@@ -316,9 +318,9 @@ def test_there_is_one_stage_fingerprint_implementation():
     definitions = sorted(path.relative_to(root).as_posix() for path in root.rglob("*.py")
                          if "def _config_fingerprint(" in path.read_text(encoding="utf-8")
                          or "def stage_config_sha256(" in path.read_text(encoding="utf-8"))
-    assert definitions == ["runtime/stage.py"], definitions
+    assert definitions == ["md/stage.py"], definitions
 
-    runtime = (root / "runtime" / "stage.py").read_text()
+    runtime = (root / "md" / "stage.py").read_text()
     assert "_config_fingerprint(stage, system_sha, topology_sha)" in runtime, \
         "the runtime no longer fingerprints the stage it is about to run"
 

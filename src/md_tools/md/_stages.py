@@ -118,22 +118,6 @@ def count_barostats(system):
                if "Barostat" in type(system.getForce(i)).__name__)
 
 
-def set_barostat_frequency(simulation, frequency):
-    """Turn the barostat on or off, and make the Context see it.
-
-    A Force property changed after the Context exists is invisible until the Context is
-    reinitialised; `preserveState=True` keeps positions, velocities and box.
-    """
-    system = simulation.context.getSystem()
-    changed = False
-    for index in range(system.getNumForces()):
-        force = system.getForce(index)
-        if "Barostat" in type(force).__name__:
-            force.setFrequency(int(frequency))
-            changed = True
-    if changed:
-        simulation.context.reinitialize(preserveState=True)
-    return changed
 
 
 def active_barostat_count(simulation):
@@ -149,8 +133,6 @@ def set_restraint(simulation, k_kcal_mol_a2):
         RESTRAINT_PARAMETER, float(k_kcal_mol_a2) * KCAL_PER_MOL_ANGSTROM2)
 
 
-def restraint_strength(simulation):
-    return simulation.context.getParameter(RESTRAINT_PARAMETER)
 
 
 def resolve_platform(forced=None):
@@ -178,19 +160,6 @@ def resolve_platform(forced=None):
     return "CUDA"
 
 
-def make_simulation(topology, system, *, temperature, friction, timestep, seed,
-                    platform_name=None, device=None):
-    integrator = LangevinMiddleIntegrator(temperature, friction, timestep)
-    integrator.setRandomNumberSeed(int(seed))
-    if platform_name:
-        platform = Platform.getPlatformByName(platform_name)
-        properties = {}
-        if platform_name == "CUDA":
-            properties = {"Precision": "mixed"}
-            if device is not None:
-                properties["DeviceIndex"] = str(device)
-        return Simulation(topology, system, integrator, platform, properties)
-    return Simulation(topology, system, integrator)
 
 
 def steps_for(picoseconds, timestep_fs):
@@ -203,53 +172,8 @@ def steps_for(picoseconds, timestep_fs):
     return int(round(exact))
 
 
-def require_parent_state(path, *, stage_name, command):
-    """The finalized state of the parent stage, or a refusal that says how to produce it.
-
-    A stage is never allowed to fall back to its parent's `checkpoint.chk`. A checkpoint is written
-    while a stage is still running, so consuming one as input means starting from a partially
-    completed parent while every artifact looks normal.
-    """
-    path = Path(path)
-    if not path.is_file():
-        raise SystemExit(
-            f"missing {path.name}: this stage reads {path}, which stage '{stage_name}' writes "
-            f"only when it finishes.\n"
-            f"Run it first:\n"
-            f"    cd {command} && ./run.sh")
-    return XmlSerializer.deserialize(path.read_text(encoding="utf-8"))
 
 
-def build_stage_system(inputs, *, implicit, restrained, barostat_active, pressure_bar,
-                       temperature, barostat_seed, barostat_frequency_steps, solute_indices,
-                       scale_system=None):
-    """The System a stage integrates, with its Force layout fixed before any state is loaded.
-
-    The restraint Force is always present, at zero strength when the stage is unrestrained, so a
-    State carrying a `restraint_k` parameter can be loaded into any stage's Context. The barostat
-    is present only under explicit solvent, and its frequency -- not its presence -- is what makes
-    a stage NVT or NPT.
-
-    `scale_system` applies a fixed-tau REST2 Hamiltonian scaling to the System as it comes off
-    disk. It runs FIRST, on the bare System, for two reasons: the scaler audits every force and
-    refuses one it cannot classify, and the restraint and barostat are stage machinery rather than
-    terms of the molecular Hamiltonian, so neither may be scaled. This is the same order
-    `REST2/run.py` uses -- scale, then restrain -- so a fixed-tau walker and the matching ladder
-    rung construct the identical System.
-    """
-    system = XmlSerializer.deserialize((Path(inputs) / "system.xml").read_text(encoding="utf-8"))
-    if scale_system is not None:
-        system = scale_system(system)
-    initial = XmlSerializer.deserialize(
-        (Path(inputs) / "initial_state.xml").read_text(encoding="utf-8"))
-    add_positional_restraint(system, initial.getPositions(), solute_indices)
-    if not implicit:
-        add_barostat(system, pressure_bar, temperature, barostat_seed,
-                     frequency=int(barostat_frequency_steps) if barostat_active else 0)
-    barostats = count_barostats(system)
-    if implicit and barostats:
-        raise SystemExit(f"implicit solvent must have no barostat in the System; found {barostats}")
-    return system
 
 
 def write_final_state(simulation, path):
@@ -331,19 +255,6 @@ def truncate_table(path, keep_rows):
     return keep_rows
 
 
-def trim_to_checkpoint(directory, done_steps, *, whole_every, solute_every, table_every):
-    """Discard reporter output past the checkpoint. Returns what each stream was cut to.
-
-    Reporters fire at multiples of their interval, so a checkpoint at step N means exactly
-    N // interval frames belong to the committed history.
-    """
-    directory = Path(directory)
-    kept = {
-        "whole_system.dcd": truncate_dcd(directory / "whole_system.dcd", done_steps // whole_every),
-        "solute.dcd": truncate_dcd(directory / "solute.dcd", done_steps // solute_every),
-        "production.csv": truncate_table(directory / "production.csv", done_steps // table_every),
-    }
-    return kept
 
 #: The runtime outputs a stage writes. `run.py`, `run.sh` and `stage.yaml` are inputs and are not
 #: in this list: removing them would delete the stage rather than its results.
@@ -367,10 +278,6 @@ STAGE_RUNTIME_OUTPUTS = ("stage.log", "stage.csv", "checkpoint.chk", "final_stat
 RECORD_FORMAT = "md-tools-runtime-record/v1"
 
 
-def utc_now():
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def sha256_file(path):
@@ -384,15 +291,6 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def file_record(path, *, digest=True):
-    """Name, size and optionally checksum. Missing files are recorded as null, not omitted."""
-    path = Path(path)
-    if not path.is_file():
-        return None
-    record = {"path": path.name, "bytes": path.stat().st_size}
-    if digest:
-        record["sha256"] = sha256_file(path)
-    return record
 
 
 def dcd_frame_count(path):
@@ -415,87 +313,16 @@ def dcd_frame_count(path):
         return None
 
 
-def trajectory_record(path, *, atom_scope, reporter_interval_steps=None, timestep_fs=None):
-    """Path, size, frame count -- and the frame-to-time map, recorded where it is known.
-
-    The time map is the part a later analysis cannot reconstruct safely on its own. A DCD frame
-    index is not a time, and a DCD header's own step fields describe how the file was written
-    rather than which production clock the frames belong to. What IS known here is the reporter
-    interval and the timestep, and OpenMM's DCDReporter writes its first frame at step `interval`
-    (not at step 0), so frame k sits at step (k+1)*interval. Writing that down once, at the point
-    it is decided, is what lets `MD/AIS/run.py` map a source frame to a physical time without
-    inferring anything.
-    """
-    path = Path(path)
-    if not path.is_file():
-        return None
-    record = {"path": path.name, "atom_scope": atom_scope, "bytes": path.stat().st_size,
-              "frames": dcd_frame_count(path)}
-    if reporter_interval_steps and timestep_fs:
-        interval_ps = float(reporter_interval_steps) * float(timestep_fs) / 1000.0
-        record["frame_time_map"] = {
-            "reporter_interval_steps": int(reporter_interval_steps),
-            "timestep_fs": float(timestep_fs),
-            # The first frame lands at step `interval`, so it is one interval into the run.
-            "first_frame_time_ps": round(interval_ps, 9),
-            "frame_interval_ps": round(interval_ps, 9),
-            "convention": ("frame k (0-based) is at step (k+1)*reporter_interval_steps; "
-                           "time_ps = first_frame_time_ps + k * frame_interval_ps"),
-        }
-    return record
 
 
-def append_jsonl(path, entry):
-    """One JSON object per line, appended.
-
-    Append-only on purpose: an invocation history that can be rewritten is not a history. Opening
-    in append mode means a crash mid-write costs the last line, never the earlier ones.
-    """
-    import json
-
-    path = Path(path)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, sort_keys=False) + "\n")
-    return path
 
 
-def next_invocation_index(path):
-    """How many invocations have already been recorded here."""
-    path = Path(path)
-    if not path.is_file():
-        return 0
-    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
 
 
-def project_identity(config):
-    """Which MD-tools generated this project, as carried in md.config.yaml."""
-    provenance = config.get("provenance") or {}
-    return {"md_tools_version": provenance.get("md_tools_version"),
-            "template_commit": provenance.get("template_commit"),
-            "installed_fingerprint": provenance.get("installed_fingerprint")}
 
 
-def write_yaml_atomic(path, document):
-    """Replace, never partially overwrite.
-
-    A completion record is read to decide whether a stage is finished. Half of one, left by an
-    interrupted write, would be read as a stage in a state it was never in.
-    """
-    import yaml
-
-    path = Path(path)
-    temporary = path.with_suffix(path.suffix + ".partial")
-    temporary.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
-    temporary.replace(path)
-    return path
 
 
-def write_final_pdb(simulation, path, *, implicit):
-    from openmm.app import PDBFile
-
-    state = simulation.context.getState(getPositions=True, enforcePeriodicBox=not implicit)
-    with Path(path).open("w", encoding="utf-8") as handle:
-        PDBFile.writeFile(simulation.topology, state.getPositions(), handle, keepIds=True)
 
 
 

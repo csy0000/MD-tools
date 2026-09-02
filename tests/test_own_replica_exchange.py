@@ -18,21 +18,20 @@ import numpy as np
 import pytest
 import yaml
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 openmm = pytest.importorskip("openmm")
-sys.path.insert(0, str(TEMPLATES))
 
-import exchange_rules                     # noqa: E402
-import replica_executor                          # noqa: E402
-import replica_statistics as statistics   # noqa: E402
-import replica_storage as storage         # noqa: E402
-import replica_validate as validate       # noqa: E402
-import rrest2_reservoir                   # noqa: E402
-import source_ensemble                    # noqa: E402
-from replica_engine import Configuration, exchange_log_acceptance   # noqa: E402
-from replica_protocol import ProtocolError, REST2Protocol           # noqa: E402
+from md_tools.remd import rules as exchange_rules
+from md_tools.remd import executor as replica_executor
+from md_tools.remd import statistics as statistics
+from md_tools.remd import storage as storage
+from md_tools.remd import validate as validate
+from md_tools.remd import reservoir as rrest2_reservoir
+from md_tools.remd import source_ensemble as source_ensemble
+from md_tools.remd.engine import Configuration, exchange_log_acceptance   # noqa: E402
+from md_tools.remd.protocol import ProtocolError, REST2Protocol           # noqa: E402
 
 
 # --- one executor -----------------------------------------------------------------------------
@@ -91,7 +90,7 @@ def test_a_group_file_is_parsed_with_shlex_and_never_evaluated(tmp_path):
 
 
 def test_group_parsing_uses_shlex_in_the_source():
-    source = (TEMPLATES / "replica_executor.py").read_text()
+    source = (TEMPLATES / "executor.py").read_text()
     tree = ast.parse(source)
     imported = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module}
     imported |= {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
@@ -310,7 +309,7 @@ def test_every_pair_in_one_sweep_is_disjoint():
 
 
 def test_the_rule_contract_is_not_a_registry():
-    source = (TEMPLATES / "exchange_rules.py").read_text()
+    source = (TEMPLATES / "rules.py").read_text()
     for forbidden in ("entry_points", "register(", "REGISTRY", "importlib.metadata"):
         assert forbidden not in source, f"exchange_rules grew a {forbidden}"
 
@@ -377,13 +376,13 @@ def test_the_protocol_records_that_it_is_not_temperature_remd():
 
 def test_no_runtime_module_rescales_velocities_on_exchange():
     """Velocity rescaling belongs to temperature REMD and would inject energy here."""
-    for name in ("replica_driver.py", "exchange_rules.py", "replica_engine.py"):
+    for name in ("driver.py", "rules.py", "engine.py"):
         source = (TEMPLATES / name).read_text()
         code = "\n".join(line for line in source.splitlines()
                          if not line.strip().startswith("#"))
-        assert "setVelocitiesToTemperature" not in code or name == "replica_engine.py", name
+        assert "setVelocitiesToTemperature" not in code or name == "engine.py", name
     # The one place it appears is the reservoir path, where a DCD supplies no velocities at all.
-    driver = (TEMPLATES / "replica_driver.py").read_text()
+    driver = (TEMPLATES / "driver.py").read_text()
     assert "set_velocities_to_temperature" in driver
     assert driver.index("set_velocities_to_temperature") > driver.index("_apply_reservoir")
 
@@ -637,7 +636,11 @@ def test_the_refresh_order_is_recorded_not_left_to_scheduling():
     rule, identity = exchange_rules.load_rule(TEMPLATES / "rrest2_exchange.py")
     assert identity["describe"]["refresh_order"] == "after_neighbouring_sweep"
     source = (TEMPLATES / "rrest2_exchange.py").read_text()
-    assert "REFRESH_ORDER" in source
+    # The constant moved with the rule into `md_tools.remd.reservoir`; the plug-in file
+    # is now only the worked example of the --exchange-rule contract.
+    from md_tools.remd import reservoir as _reservoir
+
+    assert "REFRESH_ORDER" in Path(_reservoir.__file__).read_text(encoding="utf-8")
 
 
 def test_a_refresh_carries_a_recorded_velocity_seed():
@@ -783,7 +786,7 @@ def test_a_manifest_from_a_different_run_is_rejected(tmp_path):
 
 def test_the_exchange_marker_is_written_after_the_row_it_describes():
     """An interrupted write must leave the counter on the previous, complete row."""
-    source = (TEMPLATES / "replica_storage.py").read_text()
+    source = (TEMPLATES / "storage.py").read_text()
     block = source[source.index("def write_exchange"):source.index("def write_frame")]
     assert block.rindex("last_exchange") > block.index("u_evaluated")
 
@@ -824,11 +827,11 @@ def test_generated_replica_inputs_contain_no_concrete_path():
     """A generated protocol file must name no path, so the directory it sits in can be moved.
 
     Ported from the retired `emit.replica_protocol_file`: `build-md` writes the ladder, and
-    `md_tools.runtime.replica` renders the protocol module the executor loads.
+    `md_tools.remd.generated` renders the protocol module the executor loads.
     """
     import ast as _ast
 
-    from md_tools.runtime.replica import protocol_file_text
+    from md_tools.remd.generated import protocol_file_text
 
     for protocol in ("REST2", "rREST2"):
         text = protocol_file_text(_ladder(protocol=protocol))

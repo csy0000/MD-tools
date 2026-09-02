@@ -1,11 +1,18 @@
-"""The runtime that generated MD scripts import.
+"""Compatibility only. Kept so a project generated before v0.5 still runs.
 
-A script written by `md-openmm build-md` is a small, readable entry point: it declares the stage's
-resolved settings as a literal dict and calls into this package. The physics lives here, in the
-installed distribution, so a generated directory can be copied anywhere, contains no absolute
-path, and never imports a source checkout.
+A pre-v0.5 generated script begins:
+
+    from md_tools.runtime.stage import stage_main
+    from md_tools.runtime.replica import replica_main
+    from md_tools.runtime.ais import ais_main
+
+Those modules moved -- to `md_tools.md`, `md_tools.remd` and `md_tools.ais` -- when the runtime
+stopped pretending to be a directory of templates. The names here re-export the new implementation
+and contain **no scientific logic of their own**, so there is no second authority to drift: a
+correction lands in one place and both entry points see it.
+
+New work must not import from here. `docs/openmm_methods/README.md` documents the current API.
 """
-
 from __future__ import annotations
 
-__all__ = ["stage"]
+__all__ = ["ais", "replica", "stage"]

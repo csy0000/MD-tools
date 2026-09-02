@@ -6,20 +6,22 @@ files that are copied into a generated project.
 """
 from __future__ import annotations
 
+import importlib
+
 import time
 
 import pytest
 
 from .conftest import template_module
 
-stages = template_module("md_stages")
+stages = importlib.import_module("md_tools.md._stages")
 from md_tools import rest2 as scaling
 
 #: The exchange mathematics moved out of the scaler to the ladder that uses it -- one
 #: implementation, verified bit-identical to the copy that was removed. These tests
 #: followed it rather than being deleted with the duplicate.
-exchange = template_module("replica_engine")
-rules = template_module("exchange_rules")
+exchange = importlib.import_module("md_tools.remd.engine")
+rules = importlib.import_module("md_tools.remd.rules")
 
 
 # --- seeds -----------------------------------------------------------------
@@ -280,7 +282,7 @@ def test_the_same_device_policy_serves_equilibration_and_production():
     choosers = sorted(path.relative_to(root).as_posix() for path in root.rglob("*.py")
                       if "def select_device_for_rank(" in path.read_text(encoding="utf-8")
                       or "def device_groups(" in path.read_text(encoding="utf-8"))
-    assert choosers == ["openmm/templates/replica_engine.py"], choosers
+    assert choosers == ["remd/engine.py"], choosers
 
 
 def test_one_device_is_chosen_per_rank_and_ranks_never_share():
@@ -290,7 +292,7 @@ def test_one_device_is_chosen_per_rank_and_ranks_never_share():
     """
     from .conftest import template_module
 
-    engine = template_module("replica_engine")
+    engine = importlib.import_module("md_tools.remd.engine")
     devices = [0, 1, 2, 3]
     # The engine returns the device index as OpenMM wants it -- a string for `DeviceIndex`.
     chosen = [engine.select_device_for_rank(rank, 4, devices)[0] for rank in range(4)]
@@ -316,8 +318,8 @@ def test_a_failing_replica_is_never_reported_as_a_finished_run():
     """
     from .conftest import REPO_ROOT
 
-    driver = (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
-              / "replica_driver.py").read_text(encoding="utf-8")
+    driver = (REPO_ROOT / "src" / "md_tools" / "remd"
+              / "driver.py").read_text(encoding="utf-8")
     handler = driver[driver.index("except BaseException as failure:"):]
     handler = handler[:handler.index("finally:")]
     assert '"interrupted" if interrupted else "failed"' in handler, \

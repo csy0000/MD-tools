@@ -17,11 +17,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
-sys.path.insert(0, str(TEMPLATES))
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
 
-import replica_statistics as statistics                            # noqa: E402
-from replica_protocol import REST2Protocol                         # noqa: E402
+from md_tools.remd import statistics as statistics
+from md_tools.remd.protocol import REST2Protocol                         # noqa: E402
 
 TAUS = [0.0, 0.1, 0.3, 0.5]
 

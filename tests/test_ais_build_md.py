@@ -90,7 +90,8 @@ def test_ais_has_no_equilibration_chain(tmp_path):
 def test_the_generated_script_imports_the_installed_runtime_and_names_no_absolute_path(tmp_path):
     _build_md(tmp_path, _base())
     text = (tmp_path / "md_script" / "AIS.py").read_text(encoding="utf-8")
-    assert "from md_tools.runtime.ais import ais_main" in text
+    assert "from md_tools.ais import run_generated_ais" in text
+    assert "run_generated_ais(__file__)" in text
     assert str(REPO) not in text, "the generated script names the source checkout"
     for line in text.splitlines():
         if line.strip().startswith("#") or '"""' in line:
@@ -128,7 +129,7 @@ def test_the_public_coordinate_is_tau_and_there_is_no_second_one(tmp_path):
     for forbidden in ("\ns:", "sqrt_s", "lambda"):
         assert forbidden not in text, f"the AIS config exposes {forbidden!r} as a coordinate"
 
-    from md_tools.runtime.ais import OBSERVATION_COLUMNS
+    from md_tools.ais.run import OBSERVATION_COLUMNS
     assert "tau" in OBSERVATION_COLUMNS
     assert "s" not in OBSERVATION_COLUMNS and "sqrt_s" not in OBSERVATION_COLUMNS
 
@@ -145,7 +146,7 @@ def test_every_length_is_an_integer_step_count(tmp_path):
 
 
 def test_the_schedule_includes_both_endpoints_and_observation_zero_precedes_work():
-    from md_tools.openmm.ais import switching_schedule
+    from md_tools.ais import switching_schedule
 
     schedule = switching_schedule(tau_start=0.5, tau_end=0.0, switching_steps=200,
                                   parameter_update_interval_steps=1,
@@ -187,7 +188,7 @@ def test_a_source_on_a_non_ais_protocol_is_refused(tmp_path):
 
 def test_asking_for_more_paths_than_frames_is_refused_not_silently_reused():
     """Two paths from one configuration are not two independent realisations."""
-    from md_tools.runtime.ais import choose_frames
+    from md_tools.ais.run import choose_frames
 
     with pytest.raises(SystemExit, match="independent realisations"):
         choose_frames(eligible=[0, 1, 2], count=10, selection="uniform_random",
@@ -198,7 +199,7 @@ def test_asking_for_more_paths_than_frames_is_refused_not_silently_reused():
 
 
 def test_paths_get_independent_deterministic_seeds():
-    from md_tools.openmm.templates.md_stages import derive_seed
+    from md_tools.md import derive_seed
 
     seeds = {(derive_seed(7, "ais", i, "integrator"), derive_seed(7, "ais", i, "velocity"))
              for i in range(20)}

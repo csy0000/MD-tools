@@ -26,18 +26,20 @@ import pytest
 
 from .conftest import EXCHANGES, TAUS    # noqa: F401 - re-exported for readers
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
+#: The checkout's `src`, for subprocesses. NOT the package directory: putting that on
+#: PYTHONPATH would let `remd/statistics.py` shadow the standard library.
+SRC = Path(__file__).resolve().parents[1] / "src"
 netCDF4 = pytest.importorskip("netCDF4")
 pytest.importorskip("openmm")
-sys.path.insert(0, str(TEMPLATES))
 
-import amber_trajectory as amber                                   # noqa: E402
+from md_tools.remd import amber_trajectory as amber
 
 
 def _run(work, *extra):
-    environment = dict(os.environ, PYTHONPATH=str(TEMPLATES), OPENMM_CPU_THREADS="1")
+    environment = dict(os.environ, PYTHONPATH=str(SRC), OPENMM_CPU_THREADS="1")
     return subprocess.run(
-        [sys.executable, str(TEMPLATES / "replica_executor.py"),
+        [sys.executable, "-m", "md_tools.remd.executor",
          "--groupfile", "ladder.group", "-ng", str(len(TAUS)),
          "-x", "exchange.nc", "-r", "restart.json", "--checkpoint", "checkpoint.nc",
          "-o", "run.out", "--rem", "rem.log", *extra],

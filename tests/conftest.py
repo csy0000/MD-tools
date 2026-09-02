@@ -106,14 +106,7 @@ def template_module(name: str):
     import importlib.util
     import sys
 
-    path = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates" / f"{name}.py"
-    # Several of these modules import each other by BARE name, which only resolves with the
-    # directory on sys.path -- the mechanism `md_tools.runtime.replica` sets up for the executor.
-    # A test loading one by path has to set up the same thing or it gets a ModuleNotFoundError
-    # that says nothing about what it was actually testing.
-    directory = str(path.parent)
-    if directory not in sys.path:
-        sys.path.insert(0, directory)
+    path = REPO_ROOT / "src" / "md_tools" / "remd" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(f"_template_{name}", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -225,7 +218,7 @@ EXCHANGES = 6
 
 
 PROTOCOL = f"""
-from replica_runtime import REST2Protocol
+from md_tools.remd.facade import REST2Protocol
 
 protocol = REST2Protocol(
     tau={TAUS!r},

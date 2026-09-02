@@ -14,34 +14,12 @@ from .conftest import REPO_ROOT
 
 pytestmark = pytest.mark.slow
 
-#: The runtime modules a generated replica script reaches through `md_tools.runtime.replica`,
-#: which puts this directory on sys.path so the executor's bare imports resolve FROM THE WHEEL.
-#: Derived from the driver's actual import closure rather than kept by hand, because a stale list
-#: here passed for a whole release while the wheel was quietly missing a module.
-def _template_files() -> set[str]:
-    import ast
-
-    templates = REPO_ROOT / "src" / "md_tools" / "openmm" / "templates"
-    local = {p.name for p in templates.glob("*.py")}
-    seen, queue = set(), ["replica_executor.py", "replica_driver.py", "replica_runtime.py"]
-    while queue:
-        name = queue.pop()
-        if name in seen or name not in local:
-            continue
-        seen.add(name)
-        tree = ast.parse((templates / name).read_text(encoding="utf-8"))
-        for node in tree.body:
-            modules = []
-            if isinstance(node, ast.Import):
-                modules = [a.name for a in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-                modules = [node.module]
-            queue.extend(f"{m.split('.')[0]}.py" for m in modules)
-    assert seen, "the replica driver imports nothing -- the closure stopped resolving"
-    return seen
-
-
-TEMPLATE_FILES = _template_files()
+#: The packages a generated script imports. They are ORDINARY PACKAGES now, so what the wheel must
+#: contain is decided by `[tool.setuptools.packages.find]` rather than by a hand-computed import
+#: closure over a directory of loose modules. The closure existed because the old layout put those
+#: modules on `sys.path` by hand and a missing one would only fail at run time; a package cannot be
+#: half-shipped that way.
+RUNTIME_PACKAGES = ("md_tools/md", "md_tools/rest2", "md_tools/remd", "md_tools/ais")
 
 
 def _declared_version() -> str:
@@ -93,20 +71,21 @@ def _outside(site, work, *args):
                           cwd=str(work), env=environment, timeout=600)
 
 
-def test_the_wheel_contains_every_generated_project_file(installed):
-    """Every runtime module a generated script reaches must be in the wheel, nothing dead."""
+def test_the_wheel_contains_every_runtime_package(installed):
+    """A generated script imports `md_tools.md`, `md_tools.remd` or `md_tools.ais`. All of them,
+    and the scaler they share, must be in the wheel or the script fails at its first line."""
     site, _ = installed
-    templates = site / "md_tools" / "openmm" / "templates"
-    assert templates.is_dir(), "the templates directory did not survive packaging"
-    present = {path.name for path in templates.iterdir() if path.is_file()}
-    assert TEMPLATE_FILES <= present, f"missing from the wheel: {TEMPLATE_FILES - present}"
+    for package in RUNTIME_PACKAGES:
+        directory = site / package
+        assert directory.is_dir(), f"{package} did not survive packaging"
+        assert (directory / "__init__.py").is_file(), f"{package} shipped without __init__.py"
+        assert any(directory.glob("*.py")), f"{package} shipped empty"
 
-    # A module in the wheel that no generated script can reach is dead weight, and usually a sign of a
-    # cached build tree shipping a file that was deleted from the checkout.
-    tracked = {path.name for path in
-               (REPO_ROOT / "src" / "md_tools" / "openmm" / "templates").iterdir()
-               if path.is_file()}
-    assert present <= tracked, f"the wheel carries files not in the checkout: {present - tracked}"
+    # The retired layout must not come back: `openmm/templates/` held installed runtime code
+    # under a name that said it held templates, and a stale build tree shipping it once caused a
+    # deleted module to reappear in a wheel.
+    assert not (site / "md_tools" / "openmm" / "templates").exists(), \
+        "openmm/templates/ is back in the wheel"
 
 
 def test_the_public_commands_import_from_the_wheel_rather_than_the_checkout(installed):
@@ -117,7 +96,7 @@ import md_tools
 from md_tools.build.top import build_topology
 from md_tools.build.md import build_scripts
 from md_tools.registry.register import register_dataset
-from md_tools.runtime.ais import ais_main
+from md_tools.ais import run_ais as ais_main
 assert callable(build_topology) and callable(build_scripts)
 assert callable(register_dataset) and callable(ais_main)
 print(md_tools.__file__)

@@ -118,7 +118,7 @@ def test_the_ais_runtime_never_walks_the_storage_root_or_hashes_a_trajectory():
     The AIS runtime is now the thing that opens a production trajectory, so it is the thing that
     has to stay bounded.
     """
-    source = (REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py").read_text()
+    source = (REPO_ROOT / "src" / "md_tools" / "ais" / "run.py").read_text()
     for forbidden in ("rglob", "os.walk", "glob.glob"):
         assert forbidden not in source, f"the AIS runtime uses {forbidden}"
     # It reads the one source trajectory it was given, by streaming it.
@@ -147,7 +147,7 @@ def test_the_path_start_must_equal_the_source_ensemble_tau():
     assert fields["tau_start"].default == 0.5
     assert "record is checked against this" in fields["tau_start"].doc
 
-    runtime = (REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py").read_text(encoding="utf-8")
+    runtime = (REPO_ROOT / "src" / "md_tools" / "ais" / "run.py").read_text(encoding="utf-8")
     assert '"source_tau": float(ais["tau_start"])' in runtime, \
         "the run no longer records which ensemble its paths started in"
 
@@ -157,7 +157,7 @@ def test_the_path_start_must_equal_the_source_ensemble_tau():
 
 def test_the_ais_runtime_never_calls_mdtraj_load():
     """`mdtraj.load` reads an entire trajectory into memory. An AIS source is a production run."""
-    source = (REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py").read_text()
+    source = (REPO_ROOT / "src" / "md_tools" / "ais" / "run.py").read_text()
     import re
 
     calls = re.findall(r"mdtraj\.load\s*\(", source)
@@ -172,7 +172,7 @@ def test_the_ais_runtime_never_serialises_coordinates():
     than positions. There is no plan file any more -- the runtime streams the source and records
     the frame it used -- so the guarantee is stated against what the rows actually carry.
     """
-    source = (REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py").read_text()
+    source = (REPO_ROOT / "src" / "md_tools" / "ais" / "run.py").read_text()
     assert '"positions_nm"' not in source
     assert "positions.tolist()" not in source and "getPositions().tolist()" not in source
     # A frame is identified by its index into the source trajectory, never copied out of it.
@@ -186,7 +186,7 @@ def test_the_starting_configurations_never_claim_to_hold_velocities():
     and that seed is what the record carries -- so the ensemble is reproducible without a restart
     file, and nobody can mistake a configuration for a full phase-space state.
     """
-    source = (REPO_ROOT / "src" / "md_tools" / "runtime" / "ais.py").read_text()
+    source = (REPO_ROOT / "src" / "md_tools" / "ais" / "run.py").read_text()
     assert "setVelocitiesToTemperature" in source
     assert 'derive_seed(int(dynamics["seed"]), "ais", index, "velocity")' in source
     assert '"velocity_seed": velocity_seed' in source

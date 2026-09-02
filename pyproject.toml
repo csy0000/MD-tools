@@ -33,10 +33,9 @@ where = ["src"]
 include = ["md_tools*"]
 
 [tool.setuptools.package-data]
-# The runtime modules a generated REST2/rREST2 script reaches through `md_tools.runtime.replica`,
-# which puts this directory on sys.path so the executor's bare imports resolve from the WHEEL
-# rather than from copies scattered into every generated project.
-"md_tools.openmm" = ["templates/*.py", "templates/*.sh"]
+# `openmm/templates/` is gone. What it held was installed runtime code, not templates, and it is
+# now ordinary packages -- md_tools.md, md_tools.rest2, md_tools.remd, md_tools.ais -- found by
+# `[tool.setuptools.packages.find]` above. Nothing here needs to list them.
 # The configuration examples are deliberately NOT package data, so they are not listed here. They
 # ship as wheel data files -- see [tool.setuptools.data-files] below -- which is what lets the
 # repository root hold exactly one browsable, hand-edited copy: no symlink, and no second mirror

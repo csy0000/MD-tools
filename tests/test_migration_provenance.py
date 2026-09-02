@@ -23,14 +23,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
 
 netCDF4 = pytest.importorskip("netCDF4")
-sys.path.insert(0, str(TEMPLATES))
 
-import replica_storage as storage                                  # noqa: E402
-import replica_validate as validate                                # noqa: E402
-from replica_engine import Configuration                           # noqa: E402
+from md_tools.remd import storage as storage
+from md_tools.remd import validate as validate
+from md_tools.remd.engine import Configuration                           # noqa: E402
 
 FIELD = "reservoir_velocity_seed"
 ZERO = np.zeros((2, 2), dtype=np.int64)
@@ -268,7 +267,7 @@ def test_current_storage_needs_no_migration_and_gains_no_event(tmp_path):
 # --- 7/11/12. the driver's contract, and manifest replacement -----------------------------------
 
 def test_the_driver_merges_every_authoritative_source():
-    source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     block = source[source.index("def _continue"):source.index("def _loop")]
     probe = source[source.index("def read_only_probe"):source.index("def _previous_manifest")]
     assert "merge_migration_histories" in block
@@ -282,7 +281,7 @@ def test_the_driver_merges_every_authoritative_source():
 def test_the_driver_never_writes_the_singular_field():
     """The driver writes only the plural history. The singular key survives in exactly one place
     -- the legacy reader -- because old records still have to be understood."""
-    driver = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    driver = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     for line in driver.splitlines():
         stripped = line.strip()
         if stripped.startswith("#"):
@@ -290,7 +289,7 @@ def test_the_driver_never_writes_the_singular_field():
         assert '"storage_migration"' not in stripped, stripped
         assert "storage_migration=" not in stripped, stripped
 
-    store = (TEMPLATES / "replica_storage.py").read_text(encoding="utf-8")
+    store = (TEMPLATES / "storage.py").read_text(encoding="utf-8")
     reader = store[store.index("def migration_history_of"):store.index("def merge_migration")]
     assert 'record.get("storage_migration")' in reader
     outside = store.replace(reader, "")
@@ -302,14 +301,14 @@ def test_the_driver_never_writes_the_singular_field():
 
 
 def test_an_interrupted_run_state_carries_the_history():
-    source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     block = source[source.index("def _record_interruption"):source.index("def _finish")]
     assert "storage_migrations" in block, (
         "an interrupted run does not record the history a resume will read")
 
 
 def test_completion_and_run_state_both_carry_the_plural_history():
-    source = (TEMPLATES / "replica_driver.py").read_text(encoding="utf-8")
+    source = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
     assert "storage_migrations=history" in source, "the run state does not carry the history"
     assert '"storage_migrations": list(state.get("storage_migrations") or [])' in source, (
         "the completion manifest does not carry the history")

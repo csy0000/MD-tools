@@ -15,9 +15,8 @@ from pathlib import Path
 
 import pytest
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates"
+TEMPLATES = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd"
 openmm = pytest.importorskip("openmm")
-sys.path.insert(0, str(TEMPLATES))
 
 # The internals of the scaling are what these tests exercise, so they name the
 # module rather than the package facade -- `md_tools.rest2` exports the public

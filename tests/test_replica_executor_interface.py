@@ -1,6 +1,6 @@
 """The replica executor's file interface: flags, precedence, refusals, and what it must never do.
 
-This is `templates/replica_executor.py`, reached as a FUNCTION from `md_tools.runtime.replica`.
+This is `templates/replica_executor.py`, reached as a FUNCTION from `md_tools.remd.generated`.
 It was once installed as a separate `openmm-md` executable and the file was named after it; both
 are retired, and the package installs exactly one executable, `md-openmm`.
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-RUNNER = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "openmm" / "templates" / "replica_executor.py"
+RUNNER = Path(__file__).resolve().parents[1] / "src" / "md_tools" / "remd" / "executor.py"
 
 TRIVIAL = textwrap.dedent('''
     from pathlib import Path
@@ -54,7 +54,7 @@ def _run(workspace, *args, env=None):
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     environment.update(env or {})
-    return subprocess.run([sys.executable, str(RUNNER), *args], capture_output=True, text=True,
+    return subprocess.run([sys.executable, "-m", "md_tools.remd.executor", *args], capture_output=True, text=True,
                           cwd=str(workspace), env=environment, timeout=300)
 
 
