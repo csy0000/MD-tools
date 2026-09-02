@@ -208,7 +208,6 @@ For this implementation, use one MPI rank per replica/state:
 
 - `-ng` is the number of replica groups/states;
 - MPI world size must equal `-ng`;
--ng`;
 - the input's replica count must equal `-ng`;
 - a mismatch is a preflight error naming all three values;
 - `-ng > 1` outside an MPI launch is an error;
