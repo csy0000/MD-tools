@@ -711,3 +711,41 @@ def test_an_unusable_root_is_refused_and_says_where_it_came_from(bad, expected, 
         resolve_md_data({}, override=bad)
     assert expected in str(refusal.value)
     assert "--md-data" in str(refusal.value)
+
+
+def test_an_empty_installed_configs_directory_does_not_shadow_the_source_tree(tmp_path,
+                                                                              monkeypatch):
+    """`pip install -e .` ships no data files, and `pip uninstall` leaves the directories behind.
+
+    An install-then-editable cycle therefore leaves an EMPTY `<prefix>/share/md-tools/configs`.
+    `example_root` accepted it because it existed, never reached the source-tree fallback below
+    it, and every caller got `ExamplesNotFound` from one level deeper -- naming a path that was
+    right about where the examples GO and wrong about whether they are there.
+
+    "The directory exists" is not "the examples are there".
+    """
+    from md_tools import configs
+
+    hollow = tmp_path / "share" / "md-tools" / "configs"
+    (hollow / "md").mkdir(parents=True)
+    monkeypatch.setattr(configs, "_from_distribution", lambda: None)
+    monkeypatch.setattr(configs, "_from_prefix", lambda: hollow)
+
+    root = configs.example_root()
+    assert root != hollow, "an empty configs directory shadowed the real one"
+    assert all((root / relative).is_file() for relative in configs.EXAMPLES)
+
+
+def test_when_nothing_holds_the_examples_the_refusal_says_where_it_looked(tmp_path, monkeypatch):
+    from md_tools import configs
+
+    hollow = tmp_path / "hollow"
+    hollow.mkdir()
+    monkeypatch.setattr(configs, "_from_distribution", lambda: None)
+    monkeypatch.setattr(configs, "_from_prefix", lambda: hollow)
+    monkeypatch.setattr(configs, "_from_source_tree", lambda: None)
+
+    with pytest.raises(configs.ExamplesNotFound) as refusal:
+        configs.example_root()
+    message = str(refusal.value)
+    assert str(hollow) in message and "does not hold all" in message, message

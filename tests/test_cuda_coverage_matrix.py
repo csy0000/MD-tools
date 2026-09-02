@@ -610,7 +610,15 @@ def test_explicit_solvent_npt_lane(built_explicit, hardware, tmp_path):
             detail=f"{record['stage']['steps']} production steps; box preserved in the restart")
 
 
-def _equilibrate(project: Path, topology: Path, system: Path, work: Path, run: Path) -> Path:
+def _equilibrate_chain(project: Path, topology: Path, system: Path, work: Path, run: Path, *,
+                       last: str) -> Path:
+    """Run a cMD project's whole chain, including its production stage, and return that stage."""
+    return _equilibrate(project, topology, system, work, run, script=f"{last}.py",
+                        include_last=True)
+
+
+def _equilibrate(project: Path, topology: Path, system: Path, work: Path, run: Path, *,
+                 script: str = "REST2.py", include_last: bool = False) -> Path:
     """Run the project's equilibration chain and return the state the ladder starts from.
 
     A ladder is refused without `-c`: every rung starts from the same equilibrated configuration,
@@ -620,7 +628,7 @@ def _equilibrate(project: Path, topology: Path, system: Path, work: Path, run: P
     """
     from md_tools.md.stage import load_generated_plan
 
-    plan, _config = load_generated_plan(project / "REST2.py")
+    plan, _config = load_generated_plan(project / script)
     previous = None
     for stage in plan:
         name = stage["name"]
@@ -682,13 +690,14 @@ def test_explicit_solvent_rest2_lane(built_explicit, hardware, tmp_path):
             detail=f"{len(trajectories)} state trajectories; exchanges attempted on CUDA")
 
 
-@pytest.mark.parametrize("states", [2, 4])
+@pytest.mark.parametrize("states", [2, 4, 6])
 def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_path):
     """Real `mpirun -n N` ladders on CUDA, one rank per state, one GPU per rank.
 
     Sizes rather than one size: `owned_states` and the neighbour exchange rule both depend on the
     state count's parity, and a ladder that only ever ran with 2 has never exercised the case
-    where a rank has a neighbour on both sides.
+    where a rank has a neighbour on both sides. 6 is the largest this machine's 9 devices allow
+    with a device to spare.
     """
     import shutil
 
@@ -739,6 +748,308 @@ def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_
             feature=f"REST2 implicit, {states} states, real mpirun -n {states}",
             precision="mixed", device=", ".join(str(d) for d in devices),
             detail=f"{len(trajectories)} state trajectories; one rank per device")
+
+
+def test_a_genuinely_absent_cuda_device_is_refused_without_any_seam(built, hardware, tmp_path):
+    """`CUDA_VISIBLE_DEVICES=""`. No seam, no monkeypatch: the driver really has no device.
+
+    `MD_TOOLS_FORCE_NO_CUDA` proves the refusal PATH, and it is our own code deciding to fail --
+    which is exactly the thing under test, so on its own it is a weak witness. Emptying
+    `CUDA_VISIBLE_DEVICES` makes the CUDA platform fail in OpenMM, in the driver, with
+    `CUDA_ERROR_NO_DEVICE`. That is the failure a machine with a busy or broken GPU actually
+    produces, and the run must refuse rather than quietly become a CPU run.
+    """
+    work = tmp_path / "nodevice"
+    work.mkdir()
+    (work / "cMD.config").write_text(yaml.safe_dump({
+        "protocol": "cMD", "solvent": "implicit",
+        "stages": {"minimization_iterations": 2, "production_steps": 5},
+        "reporting": {"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 5}}),
+        encoding="utf-8")
+    generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
+                                      "--config", str(work / "cMD.config")],
+                               capture_output=True, text=True, timeout=600)
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+
+    destination = work / "run"
+    done = subprocess.run(
+        [sys.executable, str(work / "project" / "cMD.py"),
+         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"), "-odir", str(destination)],
+        cwd=work, capture_output=True, text=True, timeout=900,
+        env=_environment(work, CUDA_VISIBLE_DEVICES="", **_machine()))
+    message = done.stdout + done.stderr
+    assert done.returncode != 0, message
+    assert not destination.exists(), (
+        f"the refusal created output: {sorted(p.name for p in destination.iterdir())}")
+    # And it refused for the right reason, naming the platform rather than something downstream.
+    assert "CUDA" in message, message[-2000:]
+    _record("test_a_genuinely_absent_cuda_device_is_refused_without_any_seam",
+            feature="CUDA genuinely unavailable (CUDA_VISIBLE_DEVICES=\"\"): refused, no fallback",
+            precision="-", device="none visible",
+            detail="real CUDA_ERROR_NO_DEVICE from the driver, not a test seam")
+
+
+def test_a_genuinely_unimportable_mpi4py_stops_a_plural_launch(built, hardware, tmp_path):
+    """A broken mpi4py, made broken the way a broken one is: it raises on import.
+
+    `MD_TOOLS_FORCE_NO_MPI4PY` proves the path and is again our own code choosing to fail. This
+    shadows the real package with one whose `__init__` raises the ImportError a missing
+    `libmpi.so` actually produces, so what runs is the genuine `except ImportError` branch in
+    `md_tools.remd.mpi` -- the one that must refuse a plural launch rather than let N ranks each
+    believe they are the whole world and write over one set of files.
+    """
+    import shutil
+
+    if shutil.which("mpirun") is None:
+        pytest.fail("no mpirun on PATH; the plural-launch lane is an unmet criterion")
+
+    work = tmp_path / "brokenmpi"
+    (work / "shadow" / "mpi4py").mkdir(parents=True)
+    (work / "shadow" / "mpi4py" / "__init__.py").write_text(
+        'raise ImportError("libmpi.so.40: cannot open shared object file: '
+        'No such file or directory")\n', encoding="utf-8")
+
+    (work / "REST2.config").write_text(yaml.safe_dump({
+        "protocol": "REST2", "solvent": "implicit",
+        "stages": {"minimization_iterations": 2, "production_steps": 10},
+        "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 5,
+                  "number_of_exchanges": 2},
+        "reporting": {"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 5}}),
+        encoding="utf-8")
+    generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
+                                      "--config", str(work / "REST2.config")],
+                               capture_output=True, text=True, timeout=600)
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+
+    environment = _environment(work, **_machine())
+    environment["PYTHONPATH"] = os.pathsep.join(
+        [str(work / "shadow"), environment.get("PYTHONPATH", "")])
+
+    destination = work / "run"
+    done = subprocess.run(
+        ["mpirun", "-n", "2", sys.executable, str(work / "project" / "REST2.py"),
+         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-odir", str(destination)],
+        cwd=work, capture_output=True, text=True, timeout=900, env=environment)
+    message = done.stdout + done.stderr
+    assert done.returncode != 0, message[-2000:]
+    assert "mpi4py" in message, message[-2000:]
+    assert not destination.exists(), (
+        "two uncoordinated ranks created output over one set of paths")
+    _record("test_a_genuinely_unimportable_mpi4py_stops_a_plural_launch",
+            feature="mpi4py genuinely unimportable under mpirun -n 2: refused, nothing written",
+            precision="-", device="-",
+            detail="the real ImportError branch, through a shadowing package, not a test seam")
+
+
+def test_multi_rank_rrest2_with_a_real_reservoir(built, hardware, tmp_path):
+    """rREST2 under real `mpirun -n 2` on CUDA, against a reservoir produced at the top rung.
+
+    The serial rREST2 lane lives in `test_rrest2_cuda_smoke.py`. This is the coordinated one:
+    the reservoir refresh is a COLLECTIVE operation -- rank 0 draws the sample and every rank has
+    to agree about which exchange it happened at -- and a refresh that works in one process says
+    nothing about one that has to be agreed across four.
+    """
+    import shutil
+
+    if shutil.which("mpirun") is None:
+        pytest.fail("no mpirun on PATH; the multi-rank rREST2 lane is an unmet criterion")
+    if len(hardware) < 2:
+        pytest.fail(f"2 states need 2 devices; {len(hardware)} visible")
+
+    work = tmp_path / "rrest2-mpi"
+    work.mkdir()
+    tau_max = 0.5
+
+    # The reservoir: a fixed-tau run AT THE LADDER'S TOP RUNG, streaming complete phase space.
+    # Anything else is a sample of a different distribution.
+    (work / "hot.config").write_text(yaml.safe_dump({
+        "protocol": "cMD", "solvent": "implicit",
+        "dynamics": {"tau": tau_max, "seed": 11, "phase_space_printout": 10},
+        "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 10,
+                   "production_steps": 40},
+        "reporting": {"solute_printout": 10, "system_printout": 20,
+                      "checkpoint_printout": 40}}, sort_keys=False), encoding="utf-8")
+    assert subprocess.run(CLI + ["build-md", "-odir", str(work / "hot"),
+                                 "--config", str(work / "hot.config")],
+                          capture_output=True, text=True, timeout=600).returncode == 0
+
+    hot_run = work / "hotrun"
+    _equilibrate_chain(work / "hot", built / "built.pdb", built / "built.xml", work, hot_run,
+                       last="cMD")
+    phase_space = sorted(hot_run.glob("*phase*"))
+    assert phase_space, f"no phase-space file: {sorted(p.name for p in hot_run.iterdir())}"
+    reservoir = phase_space[0]
+
+    (work / "rrest2.config").write_text(yaml.safe_dump({
+        "protocol": "rREST2", "solvent": "implicit",
+        "dynamics": {"seed": 13},
+        "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 10,
+                   "production_steps": 40},
+        "reporting": {"solute_printout": 10, "system_printout": 20,
+                      "checkpoint_printout": 40},
+        "rest2": {"number_of_replicas": 2, "tau_max": tau_max,
+                  "exchange_interval_steps": 20, "number_of_exchanges": 2},
+        "reservoir": {"enabled": True, "path": str(reservoir),
+                      "refresh_interval_exchanges": 1, "velocities": "inherit"}},
+        sort_keys=False), encoding="utf-8")
+    assert subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
+                                 "--config", str(work / "rrest2.config")],
+                          capture_output=True, text=True, timeout=600).returncode == 0
+
+    run = work / "run"
+    start = _equilibrate(work / "project", built / "built.pdb", built / "built.xml", work, run,
+                         script="rREST2.py")
+    done = subprocess.run(
+        ["mpirun", "-n", "2", sys.executable, str(work / "project" / "rREST2.py"),
+         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-c", str(start), "-odir", str(run), "-ng", "2"],
+        cwd=work, capture_output=True, text=True, timeout=3600,
+        env=_environment(work, **_machine()))
+    assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
+
+    trajectories = sorted(run.glob("remd*.nc"))
+    assert len(trajectories) == 2, [p.name for p in trajectories]
+    report = (run / "rREST2.out").read_text(encoding="utf-8")
+    assert "platform           : CUDA" in report, report[:1500]
+    assert "reservoir" in report.lower(), report[:2000]
+    _record("test_multi_rank_rrest2_with_a_real_reservoir",
+            feature="rREST2 implicit, 2 states, real mpirun -n 2, real reservoir refresh",
+            precision="mixed", device="0, 1",
+            detail=f"reservoir {reservoir.name}; {len(trajectories)} state trajectories")
+
+
+def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):
+    """AIS over a PME system on CUDA, and the decomposition identity with it.
+
+    Every other AIS lane is implicit. The identity's claim is that it survives the PME reciprocal
+    sum, the Ewald self-energy and the long-range dispersion correction -- and none of those exist
+    in an implicit system, so no implicit lane tests the part of the claim most likely to be wrong.
+    """
+    work = tmp_path / "ais-explicit"
+    work.mkdir()
+
+    import mdtraj
+
+    frames = mdtraj.load(str(built_explicit / "built.pdb"))
+    mdtraj.join([frames] * 8).save_dcd(str(work / "source.dcd"))
+
+    (work / "AIS.config").write_text(yaml.safe_dump({
+        "protocol": "AIS", "solvent": "explicit",
+        "ais": {"number_of_paths": 2, "switching_steps": 10,
+                "observation_interval_steps": 5, "parameter_update_interval_steps": 5},
+        "ais_source": {"trajectory": "../source.dcd"},
+        "reporting": {"solute_printout": 5, "system_printout": 5,
+                      "checkpoint_printout": 5}}), encoding="utf-8")
+    generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
+                                      "--config", str(work / "AIS.config")],
+                               capture_output=True, text=True, timeout=600)
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+
+    done = subprocess.run(
+        [sys.executable, str(work / "project" / "AIS.py"),
+         "-p", str(built_explicit / "built.pdb"), "-s", str(built_explicit / "built.xml"),
+         "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run")],
+        cwd=work, capture_output=True, text=True, timeout=3600,
+        env=_environment(work, **_machine()))
+    assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
+
+    import csv
+
+    from md_tools.ais.decomposition import reconstruction_tolerance
+    from md_tools.build.record import read_record
+
+    record = read_record(work / "run" / "AIS.log")
+    assert record["acceleration"]["resolved_platform"] == "CUDA"
+    assert record["implicit"] is False, "this lane is meant to be the explicit one"
+    precision = record["acceleration"].get("cuda_precision") or "mixed"
+
+    with (work / "run" / "AIS_work.csv").open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows
+    worst = 0.0
+    for row in rows:
+        total = float(row["total_work_kj_mol"])
+        parts = sum(float(row[name]) for name in
+                    ("total_work_unscaled_kj_mol", "total_work_linear_kj_mol",
+                     "total_work_quadratic_kj_mol"))
+        worst = max(worst, abs(parts - total))
+        allowed = reconstruction_tolerance(total, precision=precision) * len(rows)
+        assert abs(parts - total) <= max(allowed, 1e-6), (
+            f"explicit, step {row['switch_step']}: components sum to {parts} against {total}")
+
+    decomposition = record["decomposition"]
+    particles = record["inputs"]["system"].get("particles") if isinstance(
+        record["inputs"].get("system"), dict) else None
+    _record("test_ais_on_explicit_solvent",
+            feature="AIS explicit (PME), three-group identity through the reciprocal sum",
+            precision=precision, device=record["acceleration"].get("cuda_device_index") or "-",
+            detail=f"{len(rows)} rows, worst |sum - total| = {worst:.3e} kJ/mol; "
+                   f"{decomposition['switching_energy_evaluations']} probe evaluations in "
+                   f"{decomposition['switching_energy_evaluation_seconds']:.3f} s"
+                   + (f"; {particles} particles" if particles else ""))
+
+
+def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_explicit, hardware,
+                                                              tmp_path):
+    """What the three extra evaluations per update actually cost, implicit against explicit.
+
+    "The overhead is acceptable" is only a claim if it comes with a number, and a number from a
+    22-particle implicit system says nothing about a solvated one -- where the parameter pushes
+    (`updateParametersInContext` over every particle and every exception) dominate, not the energy
+    evaluation.
+    """
+    import csv
+
+    from md_tools.build.record import read_record
+
+    measured = {}
+    for label, root, solvent in (("implicit", built, "implicit"),
+                                 ("explicit", built_explicit, "explicit")):
+        work = tmp_path / f"cost-{label}"
+        work.mkdir()
+
+        import mdtraj
+
+        frames = mdtraj.load(str(root / "built.pdb"))
+        mdtraj.join([frames] * 8).save_dcd(str(work / "source.dcd"))
+        (work / "AIS.config").write_text(yaml.safe_dump({
+            "protocol": "AIS", "solvent": solvent,
+            "ais": {"number_of_paths": 1, "switching_steps": 20,
+                    "observation_interval_steps": 5,
+                    "parameter_update_interval_steps": 1},
+            "ais_source": {"trajectory": "../source.dcd"},
+            "reporting": {"solute_printout": 10, "system_printout": 10,
+                          "checkpoint_printout": 20}}), encoding="utf-8")
+        assert subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
+                                     "--config", str(work / "AIS.config")],
+                              capture_output=True, text=True, timeout=600).returncode == 0
+        done = subprocess.run(
+            [sys.executable, str(work / "project" / "AIS.py"),
+             "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+             "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run")],
+            cwd=work, capture_output=True, text=True, timeout=3600,
+            env=_environment(work, **_machine()))
+        assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+
+        record = read_record(work / "run" / "AIS.log")
+        assert record["acceleration"]["resolved_platform"] == "CUDA"
+        decomposition = record["decomposition"]
+        evaluations = int(decomposition["switching_energy_evaluations"])
+        seconds = float(decomposition["switching_energy_evaluation_seconds"])
+        assert evaluations > 0 and seconds > 0.0
+        measured[label] = (evaluations, seconds, seconds / evaluations)
+
+    for label, (evaluations, seconds, each) in measured.items():
+        _record("test_the_decomposition_cost_is_measured_on_a_large_system",
+                feature=f"decomposition overhead, AIS {label}, update interval 1 step",
+                precision="mixed", device="-",
+                detail=f"{evaluations} probe evaluations in {seconds:.3f} s "
+                       f"({each * 1000:.2f} ms each)")
+    # Not a performance assertion -- hardware varies and a threshold here would be a flaky test
+    # pretending to be a measurement. What is asserted is that the number EXISTS for both sizes,
+    # which is what "measured and documented" requires.
+    assert set(measured) == {"implicit", "explicit"}
 
 
 # --- the evidence document ------------------------------------------------------------------------

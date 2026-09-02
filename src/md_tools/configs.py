@@ -83,16 +83,35 @@ def _from_source_tree() -> Path | None:
     return candidate.resolve() if candidate.is_dir() else None
 
 
+def _holds_the_examples(candidate: Path) -> bool:
+    """A candidate counts only if the examples are actually IN it.
+
+    "The directory exists" is not "the examples are there", and the difference is not academic:
+    `pip uninstall` removes a wheel's data files but leaves the directories they lived in, and
+    `pip install -e .` does not install data files at all (setuptools does not, under PEP 660).
+    An install-then-editable cycle therefore leaves an EMPTY `<prefix>/share/md-tools/configs`,
+    which the old test accepted -- so the source-tree fallback below it was never reached, and
+    every caller got `ExamplesNotFound: <that empty path> does not exist` from one level deeper.
+    """
+    return candidate.is_dir() and all((candidate / relative).is_file() for relative in EXAMPLES)
+
+
 def example_root() -> Path:
     """The directory holding `machine/`, `sys/` and `md/`, wherever this is running."""
+    tried = []
     for locate in (_from_distribution, _from_prefix, _from_source_tree):
         found = locate()
-        if found is not None and found.is_dir():
+        if found is None:
+            continue
+        if _holds_the_examples(found):
             return found
+        tried.append(found)
+    where = ("\n  ".join(f"{path} (present, but does not hold all {len(EXAMPLES)} examples)"
+                         for path in tried)) if tried else "nowhere"
     raise ExamplesNotFound(
-        "the shipped configuration examples were not found. They install as wheel data files under "
-        f"<prefix>/{INSTALLED_PREFIX.as_posix()}; in a source checkout they are at the repository "
-        "root under configs/.")
+        "the shipped configuration examples were not found. They install as wheel data files "
+        f"under <prefix>/{INSTALLED_PREFIX.as_posix()}; in a source checkout they are at the "
+        f"repository root under configs/.\n  Looked at: {where}")
 
 
 def example(relative: str | Path) -> Path:
