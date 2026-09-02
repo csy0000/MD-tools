@@ -42,7 +42,7 @@ from . import rem_log as rem_log
 from . import state_trajectories as state_trajectories
 from .rules import (ExchangeContext, NeighbouringExchangeRule, builtin_rule_identity,
                             load_rule)
-from .engine import (Configuration, ReplicaEngine, resolve_platform,
+from .engine import (Configuration, ReplicaEngine, build_platform,
                             select_device_for_rank, visible_cuda_devices)
 from md_tools.rest2 import require_compatible_implementation
 
@@ -236,7 +236,7 @@ class ReplicaRun:
                 f"{self.files.trajectory} does not exist, so there is nothing to "
                 f"{'extend' if extend else 'resume'}.")
 
-        self._resolve_platform()
+        self._build_platform()
         context = self._run_context
         print(f"# platform           : {context['platform']} device={context['device_index']} "
               f"({context['device_policy']}), precision {context['precision']}")
@@ -313,7 +313,7 @@ class ReplicaRun:
               f"velocity_policy={self.reservoir.velocity_policy}")
         sys.stdout.flush()
 
-    def _resolve_platform(self):
+    def _build_platform(self):
         name = self.platform_request
         device, policy = None, "not a CUDA platform"
         if name in (None, "automatic"):
@@ -332,7 +332,7 @@ class ReplicaRun:
                         "to this rank. Refusing rather than letting every rank fall onto one GPU.")
             else:
                 policy = "single process: OpenMM selects the device"
-        self._platform, self._properties = resolve_platform(
+        self._platform, self._properties = build_platform(
             name, precision=self.precision, device_index=device)
         self._run_context = {
             "platform": name, "device_index": device, "device_policy": policy,

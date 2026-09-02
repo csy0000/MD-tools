@@ -81,8 +81,19 @@ _PREFIX = "md-tools/seed/v1"
 _MODULUS = 2 ** 31 - 2
 
 
-def derive_seed(master_seed: int, purpose: str) -> int:
-    """Return the seed for one named purpose. Deterministic, nonzero, and 32-bit safe."""
+def derive_build_seed(master_seed: int, purpose: str) -> int:
+    """The seed for one named BUILD-TIME purpose. Deterministic, nonzero, and 32-bit safe.
+
+    Not the same function as `md_tools.md.derive_seed`, and deliberately not renamed into it. This
+    is a SHA-256 of the inputs and is used while a System is being constructed -- ion placement,
+    initial velocities. The run-time one is the repository's older multiplicative hash and cannot
+    be changed: AIS selects its starting frames from `derive_seed(BASE_SEED, "AIS",
+    "source-selection")`, so a different derivation would silently change which configurations
+    every existing AIS project starts from.
+
+    Two different operations, two names. They shared one name until v0.5, which made it look as
+    though a single seed derivation existed and either could be used for either job.
+    """
     if not isinstance(master_seed, int) or isinstance(master_seed, bool):
         raise TypeError(f"master seed must be an integer, got {master_seed!r}")
     if not purpose:

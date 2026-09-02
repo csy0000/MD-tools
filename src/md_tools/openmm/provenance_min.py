@@ -22,12 +22,10 @@ FINGERPRINT_SUFFIXES = (".py", ".sh", ".yaml", ".yml", ".json")
 FINGERPRINT_EXCLUDED_DIRS = ("__pycache__", ".pytest_cache", ".git")
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+# `sha256_file` lives in `md_tools.md._stages`; the copy here was verified to produce the
+# same digest before it was removed.
+from ..build.record import sha256_file   # noqa: F401
+
 
 
 def sha256_bytes(data: bytes) -> str:

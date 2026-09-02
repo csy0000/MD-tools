@@ -280,15 +280,13 @@ RECORD_FORMAT = "md-tools-runtime-record/v1"
 
 
 
-def sha256_file(path):
-    """Streamed, so a multi-gigabyte checkpoint does not have to fit in memory."""
-    import hashlib
+# `sha256_file` is `md_tools.build.record.sha256_file`. It lived in four modules -- here,
+# `build/record.py`, `openmm/provenance_min.py` and `remd/source_ensemble.py` -- and all
+# four produced the same digest, verified before three of them were removed. The canonical
+# one is in `build/record.py` because hashing a file needs no OpenMM, and that module is
+# the lowest-level of the four: everything here already depends on it.
+from ..build.record import sha256_file   # noqa: F401
 
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 

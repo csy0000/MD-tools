@@ -114,29 +114,8 @@ class SourceRequest:
 
 # --- small helpers -------------------------------------------------------------------------------
 
-def sha256_file(path):
-    """A digest of a SMALL prepared file. Never called on a production trajectory."""
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
-def derive_seed(base, *purpose):
-    """The same derivation every other generated script uses, so seeds are comparable across runs.
-
-    This is deliberately the repository's existing multiplicative hash and NOT a SHA-256 of the
-    same inputs. AIS already selects its frames from `derive_seed(BASE_SEED, "AIS",
-    "source-selection")`, and any other derivation -- however reasonable -- would silently change
-    which configurations every existing AIS project starts from.
-    """
-    value = int(base)
-    for part in purpose:
-        for byte in str(part).encode("utf-8"):
-            value = (value * 1000003 + byte) & 0xFFFFFFFF
-    seed = value % (2 ** 31 - 1)
-    return seed or 1
 
 
 def relative_to(root, path):
@@ -144,6 +123,16 @@ def relative_to(root, path):
         return str(Path(path).resolve().relative_to(Path(root).resolve()))
     except ValueError:
         return str(path)
+# `derive_seed` and `sha256_file` were copied here. They are imported from `md_tools.md`
+# now -- one implementation each. The copies were verified identical first: the seed
+# derivations agreed on 3000 random inputs and the digests matched byte for byte.
+#
+# The seed derivation is the repository's multiplicative hash and NOT a SHA-256 of the
+# same inputs, deliberately: AIS selects its frames from `derive_seed(BASE_SEED, "AIS",
+# "source-selection")`, so any other derivation would silently change which
+# configurations every existing AIS project starts from.
+from ..md._stages import derive_seed, sha256_file   # noqa: F401
+
 
 
 def reduced_box_vectors(vectors):

@@ -154,3 +154,42 @@ def test_nothing_in_the_package_imports_the_compatibility_facades():
             if form in text:
                 offenders.append(f"{path.relative_to(SRC)}: {form}")
     assert not offenders, offenders
+
+
+# --- one implementation of each low-level operation ---------------------------------------------
+
+def test_there_is_one_file_digest_implementation():
+    """It lived in four modules. All four produced the same digest, which is exactly why nobody
+    noticed there were four."""
+    definitions = sorted(p.relative_to(SRC).as_posix() for p in SRC.rglob("*.py")
+                         if "def sha256_file" in p.read_text(encoding="utf-8"))
+    assert definitions == ["build/record.py"], definitions
+
+
+def test_the_two_seed_derivations_have_different_names():
+    """They are different algorithms for different jobs, and shared one name until v0.5.
+
+    The run-time one cannot be changed to match the build-time one: AIS selects its starting
+    frames from it, so a different derivation would silently change which configurations every
+    existing AIS project starts from. So they keep two implementations -- and two names.
+    """
+    from md_tools.md import derive_seed
+    from md_tools.openmm.seeds import derive_build_seed
+
+    assert derive_seed(7, "ions") != derive_build_seed(7, "ions"), (
+        "the two derivations now agree, so one of them changed; check which projects that moves")
+    definitions = sorted(p.relative_to(SRC).as_posix() for p in SRC.rglob("*.py")
+                         if "def derive_seed" in p.read_text(encoding="utf-8"))
+    assert definitions == ["md/_stages.py"], definitions
+
+
+def test_the_two_platform_functions_have_different_names():
+    """One decides a platform NAME and refuses a CPU fallback; the other CONSTRUCTS a Platform
+    from a name already decided. Sharing a name made them look interchangeable."""
+    from md_tools.md import resolve_platform
+    from md_tools.remd.engine import build_platform
+
+    assert callable(resolve_platform) and callable(build_platform)
+    definitions = sorted(p.relative_to(SRC).as_posix() for p in SRC.rglob("*.py")
+                         if "def resolve_platform" in p.read_text(encoding="utf-8"))
+    assert definitions == ["md/_stages.py"], definitions

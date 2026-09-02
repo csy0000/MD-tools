@@ -402,7 +402,7 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
     packing_model, substituted = resolve_packing_model(water_model)
     # Derived from the run's master seed like every other stream, so solvation is part of the
     # seed map rather than an unrecorded source of variation.
-    from .seeds import DEFAULT_MASTER_SEED, derive_seed
+    from .seeds import DEFAULT_MASTER_SEED, derive_build_seed as derive_seed
 
     master = (cfg.get("run") or {}).get("seed")
     solvation_seed = derive_seed(int(master if master is not None else DEFAULT_MASTER_SEED),

@@ -381,7 +381,7 @@ def protonate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path]
         # platform, which is single-threaded and reproducible. Together these are bit-identical
         # across builds. Reference is slower, but this minimises only the added hydrogens of a
         # solute -- a macrocycle or a small peptide here -- so the cost is seconds.
-        from .seeds import DEFAULT_MASTER_SEED, derive_seed
+        from .seeds import DEFAULT_MASTER_SEED, derive_build_seed as derive_seed
 
         master = (cfg.get("run") or {}).get("seed")
         hydrogen_seed = derive_seed(
