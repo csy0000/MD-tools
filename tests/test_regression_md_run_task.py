@@ -63,13 +63,21 @@ def test_a_matched_pair_produces_no_pairing_warning(protein, water):
 
 
 def test_ff19sb_with_gbn2_remains_a_hard_error():
-    """Softening the pairing policy must not soften a combination that cannot be built."""
-    from md_tools.build.strict import ConfigError
-    from md_tools.build.top import resolve_build_config
+    """Softening the pairing policy must not soften a combination that cannot be built.
 
+    Asserted through the PUBLIC path. `resolve_build_config` never refused this one -- its check
+    was skipped under implicit solvent -- and the refusal comes from `resolve_sys_config` further
+    in. Testing the resolver alone would have reported a guarantee the command does not get from
+    where the test looked.
+    """
+    from md_tools.build.strict import ConfigError
+    from md_tools.build.top import _sys_document, resolve_build_config
+    from md_tools.openmm.system_config import resolve_sys_config
+
+    resolved = resolve_build_config(_config(forcefield={"protein": "ff19SB"},
+                                            solvent={"model": "GBn2"}))
     with pytest.raises(ConfigError, match="not parameterised for"):
-        resolve_build_config(_config(forcefield={"protein": "ff19SB"},
-                                     solvent={"model": "GBn2"}))
+        resolve_sys_config(_sys_document(resolved))
 
 
 # --- 2. the md-run surface ------------------------------------------------------------------------

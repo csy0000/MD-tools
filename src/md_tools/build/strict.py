@@ -182,11 +182,62 @@ class Schema:
         path = Path(path)
         if not path.is_file():
             raise ConfigError(f"{path}: no such configuration file")
-        try:
-            document = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except yaml.YAMLError as exc:
-            raise ConfigError(f"{path}: not valid YAML -- {exc}") from None
+        document = load_yaml_strictly(path.read_text(encoding="utf-8"), source=str(path))
         try:
             return self.resolve(document)
         except ConfigError as exc:
             raise ConfigError(f"{path}: {exc}") from None
+
+
+# ---------------------------------------------------------------------------------------------
+# Loading YAML without letting a file say two things.
+# ---------------------------------------------------------------------------------------------
+
+class _DuplicateKeyLoader(yaml.SafeLoader):
+    """A SafeLoader that refuses a mapping with the same key twice.
+
+    PyYAML keeps the LAST value silently. That is the wrong default for a configuration whose
+    whole point is that a setting was chosen deliberately: a file can contain
+
+        solvent:
+          padding_nm: 1.5
+          padding_nm: 2.5
+
+    and run at 2.5 nm while its author reads 1.5 at the top of the block. The value that loses is
+    invisible -- it is not in the resolved document, not in the log, and not in the record.
+
+    Refusing costs nothing: nobody writes a key twice on purpose.
+    """
+
+
+def _no_duplicate_keys(loader, node, deep=False):
+    mapping = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            mark = key_node.start_mark
+            raise ConfigError(
+                f"duplicate key {key!r} at line {mark.line + 1}, column {mark.column + 1}. "
+                f"YAML keeps the last value silently, so the earlier one would be dropped without "
+                f"appearing anywhere -- not in the resolved configuration, not in the log, not in "
+                f"the record. Delete whichever of the two you did not mean.")
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_DuplicateKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicate_keys)
+
+
+def load_yaml_strictly(text: str, *, source: str) -> Any:
+    """Parse a configuration document, refusing duplicate keys.
+
+    The one place YAML is read for a configuration, so a duplicate cannot be accepted on one path
+    and refused on another.
+    """
+    try:
+        return yaml.load(text, Loader=_DuplicateKeyLoader)
+    except ConfigError as duplicate:
+        raise ConfigError(f"{source}: {duplicate}") from None
+    except yaml.YAMLError as broken:
+        raise ConfigError(f"{source}: not valid YAML -- {broken}") from None

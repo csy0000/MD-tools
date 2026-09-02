@@ -37,6 +37,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from ..openmm.platform_policy import (PlatformRequest, acceleration_record,
+                                      resolve_platform_request)
 from ..openmm.timestep import resolve_timestep_fs
 from ..build.record import LogWriter, file_facts, openmm_platform_facts, read_record
 
@@ -73,8 +75,13 @@ def stage_parser(description: str) -> argparse.ArgumentParser:
                         help="output checkpoint, written periodically for resume")
     parser.add_argument("-log", "--log", default=None, metavar="LOG",
                         help="readable log carrying this stage's machine record")
+    parser.add_argument("--cpu", action="store_true",
+                        help="run on the OpenMM CPU platform. CUDA is the default and is "
+                             "mandatory; this is the only way to ask for a CPU run, and the "
+                             "record says that you did")
     parser.add_argument("--platform", default=None,
-                        help="force an OpenMM platform (CUDA, OpenCL, CPU, Reference)")
+                        help="force a named OpenMM platform. CUDA is the default; there is no "
+                             "automatic fall back to anything else")
     parser.add_argument("--device", default=None, help="CUDA device index")
     parser.add_argument("--check", action="store_true",
                         help="validate inputs and settings, then exit without integrating")
@@ -258,22 +265,23 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         if implicit and count_barostats(system):
             raise SystemExit("implicit solvent must carry no barostat")
 
-        platform_name = args.platform or stage.get("platform")
+        # ONE platform decision, from `md_tools.openmm.platform_policy`, shared with REMD and AIS.
+        # CUDA unless `--cpu` was written; a CUDA that cannot open a Context is an error here,
+        # before minimisation, rather than a silent CPU run that finishes hours later.
+        acceleration = resolve_platform_request(
+            PlatformRequest.from_flags(cpu=bool(args.cpu),
+                                       platform=args.platform or stage.get("platform")),
+            device_index=int(args.device) if args.device is not None else None)
         integrator = LangevinMiddleIntegrator(
             float(stage["temperature_K"]) * unit.kelvin,
             float(stage["friction_per_ps"]) / unit.picosecond,
             timestep_fs * unit.femtosecond)
         integrator.setRandomNumberSeed(int(seed))
-        if platform_name:
-            platform = Platform.getPlatformByName(platform_name)
-            properties = {}
-            if platform_name == "CUDA":
-                properties = {"Precision": "mixed"}
-                if args.device is not None:
-                    properties["DeviceIndex"] = str(args.device)
-            simulation = Simulation(pdb.topology, system, integrator, platform, properties)
-        else:
-            simulation = Simulation(pdb.topology, system, integrator)
+        simulation = Simulation(pdb.topology, system, integrator,
+                                acceleration.platform, acceleration.properties)
+        log.update(acceleration=acceleration_record(acceleration))
+        log.field("acceleration", f"{acceleration.name} "
+                                  f"({acceleration_record(acceleration)['requested_policy']})")
         set_restraint(simulation, float(stage.get("restraint_kcal_per_mol_A2") or 0.0))
 
         system_sha = file_facts(system_path)["sha256"]

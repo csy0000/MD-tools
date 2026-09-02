@@ -5,7 +5,7 @@
 | Repository | MD-tools (`csy0000/MD-tools`), version 0.4.0.dev0 |
 | Applies to | the defaults `md-openmm build-top` and `md-openmm build-md` apply |
 | Date | 2026-08-27 |
-| References | `docs/md-defaults-references.bib` |
+| References | `docs/scientific-defaults.bib` |
 
 ---
 
@@ -768,7 +768,7 @@ default. Two tests assert this directly.
 ## 15. Sources
 
 Full entries, with the DOI of each verified against the Crossref REST API on 2026-08-27, are in
-`docs/md-defaults-references.bib`. Software documentation and dataset entries are labelled as such
+`docs/scientific-defaults.bib`. Software documentation and dataset entries are labelled as such
 there and in §2.
 
 Primary literature: [@maier2015ff14sb] ff14SB · [@tian2020ff19sb] ff19SB · [@jorgensen1983tip3p]

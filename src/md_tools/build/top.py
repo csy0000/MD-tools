@@ -31,7 +31,7 @@ import yaml
 
 from ..openmm.system_defaults import DEFAULT_PADDING_NM, SOLVENTS, canonical_solvent, is_implicit
 from .record import LogWriter, file_facts, openmm_platform_facts
-from .strict import ConfigError, Field, Schema, Section
+from .strict import ConfigError, Field, Schema, Section, load_yaml_strictly
 
 #: Protein force fields this command will load. `ff14SB` is the default; `ff19SB` is offered
 #: because it is the one that pairs with OPC, and pairing is checked rather than assumed.
@@ -163,11 +163,17 @@ def _check_pairings(resolved: dict[str, Any]) -> None:
                     f"solvent.{key} is set, but solvent.model is {solvent}, which is implicit: "
                     f"there is no box, no periodic boundary and no salt. Remove the key or "
                     f"choose an explicit water model.")
-    if resolved["forcefield"]["protein"] == "ff19SB" and not implicit and solvent != "OPC":
-        raise ConfigError(
-            f"forcefield.protein is ff19SB but solvent.model is {solvent}. ff19SB was "
-            f"parameterised against OPC water; pairing it with {solvent} is a combination neither "
-            f"force field was validated for. Use ff14SB with {solvent}, or OPC with ff19SB.")
+    # ff19SB with an explicit water model other than OPC used to be REFUSED here. It is not any
+    # more: a crossed explicit pair builds and warns. Refusing it made this tool the arbiter of
+    # somebody else's experiment -- reproducing a published ff19SB/TIP3P setup, or measuring the
+    # water-model sensitivity the pairing exposes, are things a competent user may deliberately
+    # want -- and the refusal fired BEFORE `pairing_warnings()` could see the combination, so the
+    # documented warning policy was unreachable for half the combinations it described.
+    #
+    # The warning is raised in `md_tools.openmm.system_config.pairing_warnings` and recorded by
+    # `build_topology`. Incoherent physics is still refused, elsewhere and deliberately: ff19SB
+    # with GBn2 has no parameterisation at all and `resolve_sys_config` refuses it, and explicit
+    # box or salt keys under GBn2 are refused above.
 
 
 def _refuse_retired_hmr_key(document: dict[str, Any]) -> None:
@@ -215,10 +221,7 @@ def resolve_build_config(path: Path | None) -> dict[str, Any]:
         path = Path(path)
         if not path.is_file():
             raise ConfigError(f"{path}: no such configuration file")
-        try:
-            document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except yaml.YAMLError as exc:
-            raise ConfigError(f"{path}: not valid YAML -- {exc}") from None
+        document = load_yaml_strictly(path.read_text(encoding="utf-8"), source=str(path)) or {}
         if not isinstance(document, dict):
             raise ConfigError(f"{path}: the document must be a mapping")
     _refuse_retired_hmr_key(document)

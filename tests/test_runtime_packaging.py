@@ -191,5 +191,9 @@ def test_the_two_platform_functions_have_different_names():
 
     assert callable(resolve_platform) and callable(build_platform)
     definitions = sorted(p.relative_to(SRC).as_posix() for p in SRC.rglob("*.py")
-                         if "def resolve_platform" in p.read_text(encoding="utf-8"))
+                         if "def resolve_platform(" in p.read_text(encoding="utf-8"))
+    # `openmm/platform_policy.resolve_platform_request` is a different name for a different job:
+    # it is the CENTRAL policy, and `md/_stages.resolve_platform` is the small name-only helper
+    # it superseded for stages. Matched on the exact `def resolve_platform(` so the substring
+    # does not collide.
     assert definitions == ["md/_stages.py"], definitions

@@ -169,7 +169,7 @@ class ReplicaRun:
 
     def __init__(self, *, protocol, files, base_system, topology, solute_indices,
                  excluded_bonds=(), platform=None, precision=None, rule_path=None,
-                 reservoir_declaration=None, identity_extra=None):
+                 reservoir_declaration=None, identity_extra=None, explicit_cpu=False):
         self.protocol = protocol
         self.files = files
         self.base_system = base_system
@@ -178,6 +178,9 @@ class ReplicaRun:
         self.excluded_bonds = list(excluded_bonds)
         self.platform_request = platform
         self.precision = precision
+        # `--cpu` is the ONLY way a ladder runs on the CPU. Carried here rather than inferred from
+        # `platform`, so the record can say a person chose it.
+        self.explicit_cpu = bool(explicit_cpu)
         self.rule_path = rule_path
         self.reservoir_declaration = reservoir_declaration
         self.identity_extra = dict(identity_extra or {})
@@ -192,6 +195,7 @@ class ReplicaRun:
         self.reservoir = None
         self._audit = None
         self._run_context = {}
+        self._acceleration = {}
         self._periodic = bool(base_system.usesPeriodicBoundaryConditions())
 
     # -- identity ---------------------------------------------------------------------------------
@@ -314,13 +318,14 @@ class ReplicaRun:
         sys.stdout.flush()
 
     def _build_platform(self):
+        # ONE platform decision, the same one an ordinary stage makes. This used to read
+        # `"CUDA" if "CUDA" in available else "CPU"` -- a ladder given no explicit platform fell
+        # back to the CPU where a stage refused, so the two disagreed about the only question that
+        # matters when a GPU is missing. There is no fallback now: CUDA unless `--cpu`.
         name = self.platform_request
         device, policy = None, "not a CUDA platform"
         if name in (None, "automatic"):
-            from openmm import Platform
-            available = {Platform.getPlatform(i).getName()
-                         for i in range(Platform.getNumPlatforms())}
-            name = "CUDA" if "CUDA" in available else "CPU"
+            name = "CPU" if self.explicit_cpu else "CUDA"
         if name == "CUDA":
             devices = visible_cuda_devices(probe=(self.coordinator.size > 1))
             if self.coordinator.size > 1:
@@ -332,10 +337,21 @@ class ReplicaRun:
                         "to this rank. Refusing rather than letting every rank fall onto one GPU.")
             else:
                 policy = "single process: OpenMM selects the device"
-        self._platform, self._properties = build_platform(
-            name, precision=self.precision, device_index=device)
+        from ..openmm.platform_policy import (PlatformRequest, acceleration_record,
+                                              resolve_platform_request)
+
+        resolution = resolve_platform_request(
+            PlatformRequest.from_flags(cpu=bool(self.explicit_cpu),
+                                       platform=None if self.explicit_cpu else name,
+                                       precision=self.precision),
+            device_index=device)
+        self._platform, self._properties = resolution.platform, resolution.properties
+        self._acceleration = acceleration_record(
+            resolution, mpi_rank=self.coordinator.rank, mpi_size=self.coordinator.size,
+            local_rank=getattr(self.coordinator, "local_rank", None))
         self._run_context = {
-            "platform": name, "device_index": device, "device_policy": policy,
+            "acceleration": self._acceleration,
+            "platform": resolution.name, "device_index": device, "device_policy": policy,
             "precision": self._properties.get("Precision"),
             "mpi_rank": self.coordinator.rank, "mpi_size": self.coordinator.size,
             "hostname": socket.gethostname(), "owned_states": list(self.owned),

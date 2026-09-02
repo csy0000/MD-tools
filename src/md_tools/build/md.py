@@ -298,6 +298,38 @@ def _check_ais(resolved: dict[str, Any]) -> None:
         raise ConfigError(
             "ais_source.trajectory is required for AIS. It is the equilibrium ensemble the "
             "switching paths start from -- there is no default, because it is data you produced.")
+
+    # EVERY enabled step interval must divide the switching path exactly.
+    #
+    # A path is a complete object: it starts at tau_start and ends at tau_end, and an interval
+    # that does not divide `switching_steps` cannot place a frame on the final step. The last
+    # frame would then be at some interior tau, and a reader comparing "the end of path A" with
+    # "the end of path B" would be comparing two different points along the switch. That is not a
+    # rounding inconvenience; it is a different measurement.
+    #
+    # Zero means disabled, and a disabled stream is exempt.
+    switching = int(resolved["ais"]["switching_steps"])
+    reporting = resolved["reporting"]
+    intervals = {
+        "ais.observation_interval_steps": int(resolved["ais"]["observation_interval_steps"]),
+        "reporting.solute_printout": int(reporting["solute_printout"]),
+        "reporting.system_printout": int(reporting["system_printout"]),
+        "reporting.checkpoint_printout": int(reporting["checkpoint_printout"]),
+    }
+    for key, interval in sorted(intervals.items()):
+        if interval == 0:
+            continue                                    # disabled; nothing to place
+        if switching % interval:
+            divisors = [d for d in range(1, switching + 1) if switching % d == 0]
+            near = [d for d in divisors if abs(d - interval) <= max(interval, 10)] or divisors
+            raise ConfigError(
+                f"{key} is {interval}, which does not divide ais.switching_steps = {switching} "
+                f"({switching} % {interval} = {switching % interval}).\n"
+                f"  A switching path has to end ON its final step: with this interval the last "
+                f"frame would fall at an interior tau, and the end of one path would not be "
+                f"comparable with the end of another.\n"
+                f"  Divisors of {switching} near {interval}: "
+                f"{', '.join(str(d) for d in sorted(near)[:12])}.")
     if (source["last_frame"] is not None
             and int(source["last_frame"]) < int(source["first_frame"])):
         raise ConfigError(
