@@ -511,14 +511,25 @@ def test_resume_and_overwrite_together_are_refused(workspace, tmp_path, good_con
     The two outcomes are "your previous work continues" and "your previous work is gone", and a
     person who typed both should be told rather than given whichever the implementation happened
     to check first.
+
+    cMD's --resume is refused BY NAME before this contradiction is even reached -- it is not a
+    cMD flag at all, so typing it alongside --overwrite is refused for that reason first, and the
+    "your previous work continues" half of the contradiction never had a cMD meaning to begin
+    with. AIS keeps --resume, so the contradiction check is what fires there.
     """
-    for mode in ("split", "AIS"):
-        destination = tmp_path / f"contradiction-{mode}"
-        before = _snapshot(destination)
-        done = _launch(workspace, mode, destination, "--resume", "--overwrite", *PROTOCOL_ONLY,
-                       environment=good_config)
-        _refused(done, fragment="contradict")
-        _untouched(destination, before)
+    destination = tmp_path / "contradiction-split"
+    before = _snapshot(destination)
+    done = _launch(workspace, "split", destination, "--resume", "--overwrite", *PROTOCOL_ONLY,
+                   environment=good_config)
+    _refused(done, fragment="not a cMD flag")
+    _untouched(destination, before)
+
+    destination = tmp_path / "contradiction-AIS"
+    before = _snapshot(destination)
+    done = _launch(workspace, "AIS", destination, "--resume", "--overwrite", *PROTOCOL_ONLY,
+                   environment=good_config)
+    _refused(done, fragment="contradict")
+    _untouched(destination, before)
 
 
 # --- AIS identity is decided before a single byte is written -------------------------------------

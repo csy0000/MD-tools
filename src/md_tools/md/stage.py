@@ -121,11 +121,7 @@ def stage_parser(description: str) -> argparse.ArgumentParser:
                         help="validate inputs and settings, then exit without integrating. "
                              "READ-ONLY: it creates nothing, not even the output directory")
     parser.add_argument("--resume", action="store_true",
-                        help="ACCEPTED AND INERT. An interrupted stage resumes automatically, so "
-                             "this flag has no distinct semantics; it exists only so a command "
-                             "line written for another protocol is not rejected. It cannot be "
-                             "used to bypass the collision check -- that needs a valid committed "
-                             "checkpoint, which is what 'interrupted' means")
+                        help=argparse.SUPPRESS)  # refused by name below; cMD resumes on its own
     parser.add_argument("--overwrite", action="store_true",
                         help="replace the stage's COMPLETE existing output inventory -- the "
                              "reports, the trajectory, the phase-space stream, the restart and "
@@ -200,6 +196,9 @@ def check_timestep_against_masses(timestep_fs: float, system, topology) -> None:
     implementation of the rule and one place the masses are read.
     """
     resolve_timestep_fs(float(timestep_fs), system, topology)
+
+
+from .completion import verify_completed_stage
 
 
 def _completion_gaps(previous: dict[str, Any], *, stage: dict[str, Any], name: str,
@@ -283,6 +282,12 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     name = stage["name"]
     topology_path = Path(args.topology)
     system_path = Path(args.system)
+    if getattr(args, "resume", False):
+        print("cMD workflow: --resume is not a cMD flag. An interrupted chain continues from "
+              "each stage's committed checkpoint automatically; re-run the same command. Pass "
+              "--overwrite to start over.", file=sys.stderr)
+        return 2
+
     base = Path(args.out_dir) if args.out_dir else Path(".")
     log_path = Path(args.log) if args.log else base / f"{name}.log"
     out_path = Path(args.output) if args.output else base / f"{name}.out"
@@ -340,14 +345,15 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         print(f"{refusal}", file=sys.stderr)
         return 2
 
-    try:
-        from ..run.preflight import reject_contradictory_continuation
-
-        reject_contradictory_continuation(resume=bool(getattr(args, "resume", False)),
-                                          overwrite=bool(getattr(args, "overwrite", False)),
-                                          what=f"stage {name}")
-    except PreflightError as refusal:
-        print(f"{refusal}", file=sys.stderr)
+    if getattr(args, "resume", False):
+        # NOT accepted-and-inert any more. A flag that is taken and does nothing is a flag whose
+        # absence and presence are indistinguishable, so a person who passes it believes they
+        # asked for something. cMD's contract is that an interrupted stage continues by itself.
+        print(f"stage {name}: --resume is not a cMD flag. An interrupted stage continues from "
+              f"its committed checkpoint automatically -- that is the cMD contract, and "
+              f"requiring a flag for it would mean a plain re-run silently discarded committed "
+              f"work. Re-run the same command to continue, or pass --overwrite to start over. "
+              f"(--resume remains a REST2, rREST2 and AIS flag.)", file=sys.stderr)
         return 2
 
     if args.check:
@@ -361,6 +367,19 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                             extra=[("ensemble", stage.get("ensemble") or "-"),
                                    ("steps", stage.get("steps") or 0)])
 
+    # A previous `--overwrite` that did not reach the end left a marker. The directory then holds
+    # part of one run's outputs and none of another's, and neither the completion check nor the
+    # resume branch below could tell that from an ordinary interrupted stage.
+    from ..run.overwrite import find_incomplete_replacement
+
+    interrupted_replacement = find_incomplete_replacement(log_path.parent)
+    if interrupted_replacement is not None and not args.overwrite:
+        print(f"stage {name}: {log_path.parent} holds a marker from an --overwrite that did not "
+              f"finish, so some of the previous run's outputs may still be present and some may "
+              f"not. Nothing here can be trusted as either run's. Re-run with --overwrite to "
+              f"replace it completely, or choose a different -odir.", file=sys.stderr)
+        return 2
+
     # -- already finished? -------------------------------------------------------------------
     # Now, with the inputs validated and this build's view of the stage established.
     if log_path.is_file() and not args.overwrite:
@@ -369,14 +388,35 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         except Exception:
             previous = None
         if previous and previous.get("status") == "completed":
-            missing = _completion_gaps(previous, stage=stage, name=name, restart=restart_path,
-                                       trajectory=traj_path)
-            if missing:
-                print(f"{name}: {log_path} says the stage completed, but {missing}. Refusing to "
-                      f"treat it as done; delete {log_path} to rerun, or restore the outputs.",
-                      file=sys.stderr)
+            # RECOMPUTED here, from the resolved scientific configuration and the digests of the
+            # topology and System this invocation was given. The check this replaces read the
+            # recorded fingerprint, asserted it was not None, and never compared it -- so a log
+            # written against another System skipped the stage as long as its copy of the stage
+            # dictionary matched.
+            from ..build.record import file_facts as _file_facts
+
+            current_print = _config_fingerprint(
+                stage,
+                _file_facts(system_path)["sha256"],
+                _file_facts(topology_path)["sha256"])
+            problems = verify_completed_stage(
+                previous, stage=stage, name=name, restart=restart_path,
+                trajectory=traj_path, log_path=log_path, fingerprint=current_print,
+                particles=(checked.prepared_system.getNumParticles()
+                           if getattr(checked, "prepared_system", None) is not None else None),
+                checkpoints=chk_path.parent / f"{chk_path.stem}.checkpoints",
+                inventory=getattr(checked, "inventory", None),
+                streams=stage_streams(trajectory=traj_path,
+                                      state_csv=log_path.with_suffix(".csv"),
+                                      collective_variables=cv_csv_path(traj_path, stage)))
+            if problems:
+                detail = "".join(f"\n  - {problem}" for problem in problems)
+                print(f"{name}: {log_path} says the stage completed, and it does not verify:"
+                      f"{detail}\n"
+                      f"  Refusing to treat it as done. Restore the outputs it names, or rerun "
+                      f"with --overwrite to replace this run completely.", file=sys.stderr)
                 return 2
-            print(f"{name}: already completed ({log_path}); not rerunning. "
+            print(f"{name}: already completed and verified ({log_path}); not rerunning. "
                   f"Delete {log_path} to force a rebuild.")
             return 0
 
@@ -408,13 +448,25 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     # short of this stage's step count.
     checkpoint_tree = chk_path.parent / f"{chk_path.stem}.checkpoints"
     if args.overwrite:
-        # `--overwrite` starts CLEANLY. Leaving the generations in place meant the resume branch
-        # below loaded one of them and continued a run the caller had just asked to replace --
-        # so `--overwrite` produced a run that was half the old one.
-        import shutil
+        # `--overwrite` starts CLEANLY, over the COMPLETE owned inventory, in one transaction,
+        # BEFORE any new output is opened.
+        #
+        # This used to remove the checkpoint tree and leave everything else to whichever reporter
+        # opened its file in `"w"`. A stream the new run does not write was then never truncated
+        # by anyone: turn phase-space reporting off and `--overwrite` on, and the previous
+        # `.phase_space.nc` survives, still named by the inventory, still looking like an output
+        # of the run that just finished.
+        from ..run.overwrite import ReplacementError, replace_owned_inventory
 
-        if checkpoint_tree.is_dir():
-            shutil.rmtree(checkpoint_tree)
+        try:
+            replaced = replace_owned_inventory(
+                checked.inventory, where=f"stage {name}", directory=log_path.parent)
+        except ReplacementError as refusal:
+            print(f"{refusal}", file=sys.stderr)
+            return 2
+        if replaced:
+            print(f"{name}: --overwrite replaced {len(replaced)} existing output(s): "
+                  f"{', '.join(sorted(replaced))}")
         committed_now = None
     else:
         try:
@@ -592,7 +644,8 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             # inferred from whichever file happens to be longest.
             trimmed = _truncate_streams_to_committed(
                 meta.get("streams") or {}, trajectory=traj_path,
-                state_csv=log_path.with_suffix(".csv"), log=log)
+                state_csv=log_path.with_suffix(".csv"), log=log,
+                collective_variables=cv_csv_path(traj_path, stage))
             log.heading("Resume")
             log.field("from checkpoint", f"generation {committed['generation']} at step {done}")
             for name, (was, now) in sorted(trimmed.items()):
@@ -704,10 +757,12 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                         streams={
                             name: (lambda key=name: _stream_counts(
                                 trajectory=traj_path,
-                                state_csv=log_path.with_suffix(".csv")).get(key, 0))
+                                state_csv=log_path.with_suffix(".csv"),
+                                collective_variables=cv_csv_path(traj_path, stage)).get(key, 0))
                             for name in stage_streams(
                                 trajectory=traj_path,
-                                state_csv=log_path.with_suffix(".csv"))}))
+                                state_csv=log_path.with_suffix(".csv"),
+                                collective_variables=cv_csv_path(traj_path, stage))}))
             if done == 0 and not args.continue_from and iterations == 0:
                 simulation.context.setVelocitiesToTemperature(
                     float(stage["temperature_K"]) * unit.kelvin, int(seed))
@@ -737,8 +792,9 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             write_checkpoint=lambda path: simulation.saveCheckpoint(str(path)),
             state={"fingerprint": fingerprint, "steps_done": steps,
                    **_checkpoint_identity(stage, name, seed, acceleration, timestep_fs),
-                   "streams": _stream_counts(trajectory=traj_path,
-                                             state_csv=log_path.with_suffix(".csv"))})
+                   "streams": _stream_counts(
+                       trajectory=traj_path, state_csv=log_path.with_suffix(".csv"),
+                       collective_variables=cv_csv_path(traj_path, stage))})
 
         log.heading("Outputs")
         reread = XmlSerializer.deserialize(restart_path.read_text(encoding="utf-8"))
@@ -766,6 +822,20 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         if phase_space.is_file():
             outputs["phase_space"] = file_facts(phase_space)
             log.field(phase_space.name, f"{phase_space}  (positions, velocities and box)")
+        # THE STATE CSV, which the record used to omit entirely. A file that is in no manifest is
+        # a file no completion check can look at: it could be truncated, half-written or from
+        # another run and the stage would still verify.
+        state_csv = log_path.with_suffix(".csv")
+        if state_csv.is_file():
+            outputs["state_csv"] = file_facts(state_csv)
+            log.field(state_csv.name, f"{state_csv}  (state table)")
+        cv_csv = cv_csv_path(traj_path, stage)
+        if cv_csv.is_file():
+            outputs["collective_variables"] = file_facts(cv_csv)
+            log.field(cv_csv.name, f"{cv_csv}  (collective variables)")
+            cv_sidecar = cv_csv.with_suffix(".yaml")
+            if cv_sidecar.is_file():
+                outputs["collective_variables_definition"] = file_facts(cv_sidecar)
         log.update(outputs=outputs)
         log.complete()
         log.heading("Summary")
@@ -807,20 +877,37 @@ def _checkpoint_identity(stage, name, seed, acceleration, timestep_fs) -> dict[s
             "precision": (acceleration.properties or {}).get("Precision")}
 
 
-def stage_streams(*, trajectory: Path, state_csv: Path) -> dict[str, Path]:
-    """The three appendable outputs a stage produces, by the name the checkpoint commits them as.
+def cv_csv_path(trajectory: Path, stage: dict[str, Any] | None = None) -> Path:
+    """Where a stage's collective-variable series lives: `<stage>.cv.csv` beside the trajectory.
 
-    THREE, not one. The commit recorded only the DCD, so a resume truncated the DCD and appended
-    to a state CSV and a phase-space NetCDF that were still carrying rows past the checkpoint.
-    The result is a directory whose three streams describe three different instants -- the
-    trajectory correct, the other two ahead of it -- and nothing in any of them says so.
+    Derived from the trajectory name so the whole stage's outputs share one stem, and returned
+    unconditionally: whether the file is WRITTEN is decided by the schedule, but where it would
+    be is a property of the stage and the inventory needs it either way.
     """
     trajectory = Path(trajectory)
-    return {
+    return trajectory.with_suffix(".cv.csv")
+
+
+def stage_streams(*, trajectory: Path, state_csv: Path,
+                  collective_variables: Path | None = None) -> dict[str, Path]:
+    """The appendable outputs a stage produces, by the name the checkpoint commits them as.
+
+    FOUR now, not one. The commit recorded only the DCD, so a resume truncated the DCD and
+    appended to a state CSV and a phase-space NetCDF that were still carrying rows past the
+    checkpoint. The result is a directory whose streams describe different instants -- the
+    trajectory correct, the others ahead of it -- and nothing in any of them says so. The CV
+    series is appendable in exactly the same way and joins them here rather than growing a
+    second truncation path of its own.
+    """
+    trajectory = Path(trajectory)
+    streams = {
         "trajectory": trajectory,
         "state_csv": Path(state_csv),
         "phase_space": trajectory.with_suffix(".phase_space.nc"),
     }
+    if collective_variables is not None:
+        streams["collective_variables"] = Path(collective_variables)
+    return streams
 
 
 def _count_stream(name: str, path: Path) -> int | None:
@@ -828,8 +915,9 @@ def _count_stream(name: str, path: Path) -> int | None:
     path = Path(path)
     if not path.is_file():
         return None
-    if name == "state_csv":
-        # A StateDataReporter CSV: one header line, then one row per report.
+    if name in ("state_csv", "collective_variables"):
+        # A CSV: one header line, then one row per report. The CV stream is counted the same way
+        # for the same reason -- it is appended to, and a resume has to cut it back.
         with path.open(encoding="utf-8") as handle:
             return max(sum(1 for _ in handle) - 1, 0)
     try:
@@ -840,7 +928,8 @@ def _count_stream(name: str, path: Path) -> int | None:
         return None
 
 
-def _stream_counts(*, trajectory: Path, state_csv: Path) -> dict[str, int]:
+def _stream_counts(*, trajectory: Path, state_csv: Path,
+                   collective_variables: Path | None = None) -> dict[str, int]:
     """How many records each appendable output holds RIGHT NOW, for the commit to vouch for.
 
     Read from the files rather than counted in memory: what a resume has to cut back to is what is
@@ -848,7 +937,8 @@ def _stream_counts(*, trajectory: Path, state_csv: Path) -> dict[str, int]:
     committed counts exist to resolve.
     """
     counts: dict[str, int] = {}
-    for name, path in stage_streams(trajectory=trajectory, state_csv=state_csv).items():
+    for name, path in stage_streams(trajectory=trajectory, state_csv=state_csv,
+                                    collective_variables=collective_variables).items():
         count = _count_stream(name, path)
         if count is not None:
             counts[name] = count
@@ -873,7 +963,9 @@ def _truncate_csv_rows(path: Path, keep: int) -> None:
 
 
 def _truncate_streams_to_committed(committed: dict[str, Any], *, trajectory: Path,
-                                   state_csv: Path, log) -> dict[str, tuple[int, int]]:
+                                   state_csv: Path, log,
+                                   collective_variables: Path | None = None
+                                   ) -> dict[str, tuple[int, int]]:
     """Cut EVERY appendable stream back to the count the checkpoint committed.
 
     Returns `{name: (before, after)}` for whatever actually moved, so the log can say so. A stream
@@ -889,14 +981,15 @@ def _truncate_streams_to_committed(committed: dict[str, Any], *, trajectory: Pat
     from ..openmm.trajectory import truncate_frames
 
     moved: dict[str, tuple[int, int]] = {}
-    for name, path in stage_streams(trajectory=trajectory, state_csv=state_csv).items():
+    for name, path in stage_streams(trajectory=trajectory, state_csv=state_csv,
+                                    collective_variables=collective_variables).items():
         wanted = committed.get(name)
         if wanted is None:
             continue
         have = _count_stream(name, path)
         if have is None or have <= int(wanted):
             continue
-        if name == "state_csv":
+        if name in ("state_csv", "collective_variables"):
             _truncate_csv_rows(path, int(wanted))
         else:
             truncate_frames(path, int(wanted))
@@ -1050,9 +1143,7 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
     parser.add_argument("--check", action="store_true",
                         help="validate every stage and exit without integrating. READ-ONLY: the "
                              "whole chain is checked and nothing at all is created")
-    parser.add_argument("--resume", action="store_true",
-                        help="continue each stage from its committed checkpoint, in order. The "
-                             "same contract a single stage's --resume follows")
+    parser.add_argument("--resume", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--overwrite", action="store_true",
                         help="replace each stage's complete existing output inventory")
     _add_refused_flags(parser, "a cMD workflow")
@@ -1142,8 +1233,9 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
             stage_argv.append("--cpu")
         if args.check:
             stage_argv += ["--check"]
-        # Forwarded, not reinvented: a `--resume` that reached the wrapper and stopped there
-        # silently restarted every stage from the beginning while the command reported success.
+        # `--resume` is refused for cMD, so it is NOT forwarded: forwarding it would make every
+        # stage refuse and the chain fail with a per-stage message about a flag the caller gave
+        # the workflow. The workflow refuses it once, below, in its own name.
         if args.resume:
             stage_argv.append("--resume")
         if args.overwrite:

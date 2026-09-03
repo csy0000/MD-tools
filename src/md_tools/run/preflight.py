@@ -810,6 +810,12 @@ def _stage_inventory(*, output, log, trajectory, restart, checkpoint) -> OutputI
         # streams a checkpoint commits counts for -- so it belongs in the inventory that decides
         # collisions and what `--overwrite` governs.
         roles["state_csv"] = Path(log).with_suffix(".csv")
+    if trajectory:
+        # The collective-variable series and the resolved definition beside it. Both are written
+        # by the stage, neither arrives as a flag, and an inventory that omits them is an
+        # `--overwrite` that leaves a previous cv.yaml's columns in place beside new ones.
+        roles["collective_variables"] = Path(trajectory).with_suffix(".cv.csv")
+        roles["collective_variables_definition"] = Path(trajectory).with_suffix(".cv.yaml")
     if checkpoint:
         checkpoint = Path(checkpoint)
         roles["checkpoints"] = checkpoint.parent / f"{checkpoint.stem}.checkpoints"

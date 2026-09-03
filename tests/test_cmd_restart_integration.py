@@ -346,14 +346,27 @@ def test_an_interrupted_stage_resumes_without_being_asked_to(project, reference,
     assert _digest(work / "cMD.xml") == reference_restart
 
 
-def test_passing_resume_explicitly_changes_nothing(project, reference, tmp_path):
+def test_resume_is_refused_by_name_for_cmd(project, reference, tmp_path):
+    """`--resume` is not a cMD flag; it is refused by name rather than accepted and ignored.
+
+    An interrupted stage continues from its committed checkpoint automatically -- that is the
+    whole cMD contract -- so a flag that pretends to control it, and does nothing, is worse than
+    one refused: it lets a caller believe they asked for something. Re-running the SAME command
+    WITHOUT the flag is how a crashed run continues.
+    """
     reference_work, reference_restart, _frames = reference
     work = tmp_path / "explicit-resume"
     work.mkdir()
     crashed = _run_stage(project, work, environment={FAULT_ENVIRONMENT: "after-pointer-replace",
                                                      FAULT_AFTER_ENVIRONMENT: "1"})
     assert crashed.returncode != 0
-    resumed = _run_stage(project, work, extra=["--resume"])
+
+    refused = _run_stage(project, work, extra=["--resume"])
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    message = refused.stdout + refused.stderr
+    assert "--resume is not a cMD flag" in message, message[-1500:]
+
+    resumed = _run_stage(project, work)
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
     assert _digest(work / "cMD.xml") == reference_restart
 
@@ -426,11 +439,12 @@ def test_a_resume_truncates_the_state_csv_as_well_as_the_trajectory(project, ref
 
 
 def test_resume_cannot_be_used_to_bypass_the_collision_check(project, reference, tmp_path):
-    """`--resume` on a directory with NO checkpoint must not excuse existing outputs.
+    """`--resume` cannot excuse existing outputs, because it is refused before that check runs.
 
-    Only a valid committed checkpoint short of the step count does, and that is a fact about the
-    directory rather than a claim on the command line. Accepting the flag as a substitute would
-    make `--resume` a way past the guard for a directory holding half a run nobody claimed.
+    Only a valid committed checkpoint short of the step count excuses them, and that is a fact
+    about the directory rather than a claim on the command line. `--resume` is refused BY NAME
+    for cMD before the collision check is even reached, which forecloses it as a bypass a
+    different way than the flag being accepted and simply not matching would.
     """
     work = tmp_path / "no-checkpoint"
     work.mkdir()
@@ -446,4 +460,10 @@ def test_resume_cannot_be_used_to_bypass_the_collision_check(project, reference,
     refused = _run_stage(project, work, extra=["--resume"])
     assert refused.returncode != 0, refused.stdout + refused.stderr
     message = refused.stdout + refused.stderr
+    assert "--resume is not a cMD flag" in message, message[-1500:]
+
+    # The collision check itself, reached without the flag in the way.
+    refused_again = _run_stage(project, work)
+    assert refused_again.returncode != 0, refused_again.stdout + refused_again.stderr
+    message = refused_again.stdout + refused_again.stderr
     assert "already exist" in message and "--overwrite" in message, message[-1500:]
