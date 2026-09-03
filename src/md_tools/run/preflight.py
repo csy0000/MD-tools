@@ -533,10 +533,16 @@ class AISPreflight(ExecutionPreflight):
     #: before anything exists -- see `disposition`.
     fingerprint: str | None = None
     identity: dict[str, Any] | None = None
-    #: What this invocation is: "fresh", "resume", "overwrite". Decided by inspecting the output
-    #: directory READ-ONLY and agreed across ranks, so an incompatible run refuses without having
-    #: changed a byte.
+    #: What this invocation is: "fresh", "verify", "resume", "overwrite". Decided by inspecting
+    #: the output directory READ-ONLY and agreed across ranks, so an incompatible run refuses
+    #: without having changed a byte. "verify" is a compatible run whose every selected path
+    #: already verifies complete -- distinct from "resume" so the boolean handed to
+    #: `run_one_path` is never "resume" when `--resume` was not actually given.
     disposition: str = "fresh"
+    #: The ALREADY-VALIDATED `AIS_run.json` this directory held, when one did. Carried forward so
+    #: `clear_run_directory` cleans up against the identity that was verified here, rather than
+    #: re-reading (and re-verifying) the file a second time after `-odir` exists.
+    previous_identity: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1106,7 +1112,7 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
     #
     # Everything below is read-only: digests of files that already exist, a document derived from
     # them, and one `is_file()` on the output directory.
-    from ..ais.run import RUN_IDENTITY, require_same_run, run_identity_document
+    from ..ais.run import decide_run_disposition, run_identity_document
 
     directory = Path(out_dir) if out_dir is not None else (
         Path(output).parent if output else Path("."))
@@ -1124,18 +1130,23 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
         resolved_config=resolved_config)
 
     def _decide():
-        if overwrite:
-            return "overwrite"
-        # Read-only inspection. `require_same_run` raises on an incompatible directory and
-        # returns on a compatible or absent one.
+        # Read-only: an absent directory is fresh, an orphaned one (owned-looking artefacts with
+        # no readable identity to prove what owns them) is refused, a compatible one with an
+        # unfinished path requires --resume, and --resume against nothing is refused. See
+        # `decide_run_disposition` for the complete state machine this single call replaces --
+        # it used to be "if overwrite: overwrite; elif the identity file exists: resume;
+        # else: fresh", which adopted an unidentified directory as fresh and labelled every
+        # compatible directory "resume" whether or not --resume was actually given.
         try:
-            require_same_run(directory, identity)
+            return decide_run_disposition(
+                directory, identity, resume=resume, overwrite=overwrite,
+                chosen=list(prepared["chosen_frames"]), fingerprint=fingerprint,
+                schedule=prepared["schedule"])
         except SystemExit as refusal:
             raise PreflightError(str(refusal)) from None
-        return "resume" if (directory / RUN_IDENTITY).is_file() else "fresh"
 
-    disposition = collectively(coordination, _decide,
-                               what="the AIS run-identity check")
+    disposition, previous_identity = collectively(coordination, _decide,
+                                                  what="the AIS run-identity check")
 
     prepared.pop("_topology_facts")
     prepared.pop("_system_facts")
@@ -1144,7 +1155,8 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
                         device_policy=str(machine.get("device_policy") or "local_rank"),
                         device_policy_detail=detail, particles=particles, loaded=loaded,
                         source=Path(source), source_format=source_format,
-                        fingerprint=fingerprint, identity=identity, disposition=disposition,
+                        fingerprint=fingerprint, identity=identity,
+                        previous_identity=previous_identity, disposition=disposition,
                         **prepared)
 
 

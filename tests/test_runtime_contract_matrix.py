@@ -16,6 +16,7 @@ the validation it is named for.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -445,6 +446,24 @@ def test_the_all_in_one_workflow_is_refused_under_a_plural_launch(workspace, tmp
 
 # --- AIS --overwrite is a complete fresh-run transaction ---------------------------------------
 
+def _identity_document(**overrides):
+    from md_tools.ais.run import RUN_IDENTITY_VERSION
+
+    document = {
+        "schema": "md-ais-run-identity", "schema_version": RUN_IDENTITY_VERSION,
+        "fingerprint": "f" * 64, "topology": {"name": "t.pdb", "sha256": "t" * 64},
+        "system": {"sha256": "s" * 64}, "source": {"sha256": "x" * 64, "format": "dcd"},
+        "tau": {"start": 0.5, "end": 0.0, "interpolation": "linear"},
+        "schedule": {"switching_steps": 10}, "reporting": {"solute_printout": 5},
+        "seed_policy": {"seed": 1, "derivation": "derive_seed(seed, 'ais', path_index, role)"},
+        "number_of_paths": 2, "selected_frames": [0, 1],
+        "observation_columns": [], "decomposition_schema": {"name": "ais", "version": 1},
+        "resolved_config": None,
+    }
+    document.update(overrides)
+    return document
+
+
 def test_ais_overwrite_removes_every_artefact_of_the_previous_run(tmp_path):
     """Removing only `AIS_run.json` was strictly worse than refusing.
 
@@ -452,24 +471,32 @@ def test_ais_overwrite_removes_every_artefact_of_the_previous_run(tmp_path):
     trajectory, checkpoint and aggregate table in place -- so the next invocation adopted them
     under a NEW identity, skipped them as "completed", and assembled one table out of two
     experiments. The refusal at least said something was wrong.
+
+    A VERIFIED identity is required now -- `clear_run_directory` refuses outright without one --
+    so this constructs the document a real preceding run would have written and left behind.
     """
-    from md_tools.ais.run import clear_run_directory
+    from md_tools.ais.run import RUN_IDENTITY, clear_run_directory
 
     out = tmp_path / "AIS"
     (out / "path_0000" / "checkpoints").mkdir(parents=True)
     (out / "path_0000" / "completed.json").write_text("{}", encoding="utf-8")
     (out / "path_0000" / "checkpoints" / "generation_000001.chk").write_bytes(b"x")
+    # A genuinely-started, not-yet-complete path: SOME MD-tools marker inside, not a bare
+    # directory -- an empty directory that merely shares the name is not this runtime's output
+    # (see `_path_is_md_tools_owned`), and a real interrupted path always has one.
     (out / "path_0001").mkdir()
-    for name in ("AIS_run.json", "AIS_work.csv", "AIS_paths.csv", "AIS_hs.csv",
+    (out / "path_0001" / "current_checkpoint.json").write_text("{}", encoding="utf-8")
+    for name in ("AIS_work.csv", "AIS_paths.csv", "AIS_hs.csv",
                  "selected_source_frames.csv", "AIS_traj0000.nc", "AIS_traj0001.nc"):
         (out / name).write_text("stale", encoding="utf-8")
+    (out / RUN_IDENTITY).write_text(json.dumps(_identity_document()), encoding="utf-8")
     # A straggler from a previous, LONGER run: it looks exactly like this run's own output.
     (out / "AIS_traj0099.nc").write_text("stale", encoding="utf-8")
     # Something this run did not write, which must survive: --overwrite is not a delete button.
     (out / "resolved.config").write_text("protocol: AIS\n", encoding="utf-8")
     (out / "notes.txt").write_text("mine", encoding="utf-8")
 
-    removed = clear_run_directory(out, paths=2)
+    removed = clear_run_directory(out, identity=_identity_document(), paths=2)
     assert removed >= 9, removed
     assert not (out / "path_0000").exists() and not (out / "path_0001").exists()
     for name in ("AIS_run.json", "AIS_work.csv", "AIS_paths.csv", "AIS_hs.csv",
@@ -596,22 +623,24 @@ def test_overwrite_deletes_only_names_this_run_owns(tmp_path):
     directory named `path_notes` beside the run would have gone with it. `--overwrite` is not a
     licence to delete a directory because its name is suggestive.
     """
-    from md_tools.ais.run import clear_run_directory
+    from md_tools.ais.run import RUN_IDENTITY, clear_run_directory
 
     out = tmp_path / "AIS"
     (out / "path_0000" / "checkpoints").mkdir(parents=True)
-    (out / "path_0001").mkdir()
-    (out / "path_notes").mkdir()                            # NOT owned: five characters in common
     (out / "path_0000" / "completed.json").write_text("{}", encoding="utf-8")
+    (out / "path_0001").mkdir()
+    (out / "path_0001" / "current_checkpoint.json").write_text("{}", encoding="utf-8")
+    (out / "path_notes").mkdir()                            # NOT owned: five characters in common
     (out / "path_notes" / "todo.md").write_text("mine", encoding="utf-8")
-    for name in ("AIS_run.json", "AIS_work.csv", "AIS_paths.csv", "AIS_hs.csv",
+    for name in ("AIS_work.csv", "AIS_paths.csv", "AIS_hs.csv",
                  "selected_source_frames.csv", "AIS_traj0000.nc", "AIS_traj0099.nc",
                  "AIS.out", "AIS.out.rank05", "AIS.log", "AIS.log.rank05"):
         (out / name).write_text("stale", encoding="utf-8")
+    (out / RUN_IDENTITY).write_text(json.dumps(_identity_document()), encoding="utf-8")
     (out / "AIS_traj_notes.nc").write_text("not the schema", encoding="utf-8")
     (out / "resolved.config").write_text("protocol: AIS\n", encoding="utf-8")
 
-    removed = clear_run_directory(out, paths=2, ranks=2)
+    removed = clear_run_directory(out, identity=_identity_document(), paths=2, ranks=2)
 
     assert not (out / "path_0000").exists() and not (out / "path_0001").exists()
     assert (out / "path_notes" / "todo.md").read_text(encoding="utf-8") == "mine", (
@@ -627,6 +656,63 @@ def test_overwrite_deletes_only_names_this_run_owns(tmp_path):
     assert not (out / "AIS.out.rank05").exists()
     assert not (out / "AIS.log.rank05").exists()
     assert removed >= 11, removed
+
+
+def test_overwrite_without_a_verified_identity_refuses_automated_cleanup(tmp_path):
+    """No identity, some AIS-shaped artefacts present: refuse rather than guess whose they are.
+
+    This is the orphan case for CLEANUP specifically, distinct from the orphan case for
+    disposition (`decide_run_disposition` refuses even earlier, before `-odir` is even opened).
+    `clear_run_directory` re-asserts the same gate rather than trusting a caller unconditionally.
+    """
+    from md_tools.ais.run import clear_run_directory
+
+    out = tmp_path / "AIS"
+    (out / "path_0000").mkdir(parents=True)
+    (out / "path_0000" / "completed.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="[Nn]o verified identity"):
+        clear_run_directory(out, identity=None)
+    assert (out / "path_0000" / "completed.json").is_file(), (
+        "a refused cleanup must not have touched anything")
+
+
+def test_a_content_free_path_directory_is_never_treated_as_owned(tmp_path):
+    """`path_0000` with nothing MD-tools would have written inside it is not this run's output.
+
+    A person can create their own four-digit-named directory as easily as `path_notes`; the name
+    alone was the whole defect. Even WITH a verified identity present, a bare directory survives.
+    """
+    from md_tools.ais.run import RUN_IDENTITY, clear_run_directory
+
+    out = tmp_path / "AIS"
+    (out / "path_0000").mkdir(parents=True)
+    (out / "path_0000" / "my_notes.txt").write_text("not md-tools", encoding="utf-8")
+    (out / RUN_IDENTITY).write_text(json.dumps(_identity_document()), encoding="utf-8")
+
+    removed = clear_run_directory(out, identity=_identity_document())
+    assert (out / "path_0000" / "my_notes.txt").is_file(), (
+        "a content-free path_0000 was deleted although nothing inside it was ours")
+    # AIS_run.json itself is still owned and removed.
+    assert removed >= 1
+
+
+def test_a_corrupt_identity_refuses_every_disposition(tmp_path):
+    """Unreadable JSON, present artefacts: refused as fresh, as resume, and as overwrite alike."""
+    from md_tools.ais.run import RUN_IDENTITY, decide_run_disposition
+
+    out = tmp_path / "AIS"
+    (out / "path_0000").mkdir(parents=True)
+    (out / "path_0000" / "completed.json").write_text("{}", encoding="utf-8")
+    (out / RUN_IDENTITY).write_text("{not json", encoding="utf-8")
+
+    for resume, overwrite in ((False, False), (True, False), (False, True)):
+        with pytest.raises(SystemExit, match="[Oo]wnership"):
+            decide_run_disposition(out, _identity_document(), resume=resume, overwrite=overwrite,
+                                   chosen=[0, 1], fingerprint="f" * 64,
+                                   schedule={"switching_steps": 10})
+        assert (out / "path_0000" / "completed.json").is_file(), (
+            "a refused disposition decision must not have touched anything")
 
 
 # --- the all-in-one chain is planned in full before stage 1 runs --------------------------------

@@ -468,60 +468,256 @@ def require_same_run(out: Path, document: dict[str, Any]) -> None:
 PATH_DIRECTORY = re.compile(r"^path_(\d{4})$")
 PATH_TRAJECTORY = re.compile(r"^AIS_traj(\d{4})\.nc$")
 
+#: The keys `run_identity_document` always writes. A file missing any of these -- truncated by a
+#: crash mid-write, or hand-edited -- is treated the same as one that will not parse: nothing
+#: about the directory it describes can be trusted.
+RUN_IDENTITY_REQUIRED_KEYS = frozenset({
+    "schema", "schema_version", "fingerprint", "topology", "system", "source", "tau",
+    "schedule", "reporting", "seed_policy", "number_of_paths", "selected_frames",
+    "observation_columns", "decomposition_schema",
+})
+
+#: Names inside a `path_NNNN/` directory that only THIS RUNTIME writes. A directory matching the
+#: naming schema is not, by itself, proof that MD-tools created it -- a person can name their own
+#: working directory `path_0000` just as easily as the four characters `path_` before it. This is
+#: the second gate: what is actually INSIDE it.
+_PATH_OWNERSHIP_MARKERS = (
+    "completed.json",       # COMPLETION_NAME, restated: this module is read top-to-bottom once
+    "frames.partial.nc",    # STAGED_TRAJECTORY
+    "observations.csv",     # OBSERVATIONS_CSV
+    "system.csv",           # STATE_CSV
+    "final_state.xml",
+    "current_checkpoint.json",
+)
+
+
+def _path_is_md_tools_owned(directory: Path) -> bool:
+    """Whether `directory` holds something only the AIS runtime would have written.
+
+    Matching the `path_NNNN` NAME is necessary and not sufficient -- see `clear_run_directory`.
+    This is what makes a user's own empty or foreign `path_0000` survive an `--overwrite`: it has
+    none of these inside, so it never reaches the first gate's candidate list as owned.
+    """
+    return any((Path(directory) / name).exists() for name in _PATH_OWNERSHIP_MARKERS)
+
+
+def _ais_owned_candidates(out: Path) -> list[Path]:
+    """Every path in `out`, RIGHT NOW, that both gates recognise as AIS output.
+
+    Independent of any specific run's inventory -- this is "could this be AIS output" by name and
+    content shape alone, which is what decides whether an ABSENT or unreadable `AIS_run.json`
+    makes a directory ORPHANED rather than fresh, and what `clear_run_directory` deletes once a
+    verified identity says the directory may be cleaned at all.
+    """
+    out = Path(out)
+    if not out.is_dir():
+        return []
+    found: list[Path] = []
+    for entry in sorted(out.iterdir()):
+        if entry.is_dir() and PATH_DIRECTORY.match(entry.name):
+            if _path_is_md_tools_owned(entry):
+                found.append(entry)
+            # else: shares the NAME only. Not a candidate -- see `_path_is_md_tools_owned`.
+        elif entry.is_file() and PATH_TRAJECTORY.match(entry.name):
+            found.append(entry)
+        elif entry.is_file() and entry.name in (RUN_IDENTITY, WORK_TABLE, WORK_SUMMARY, HS_TABLE,
+                                                 "selected_source_frames.csv"):
+            found.append(entry)
+        elif entry.is_file() and (entry.name.startswith("AIS.out")
+                                  or entry.name.startswith("AIS.log")):
+            found.append(entry)
+    return found
+
+
+def _read_previous_identity(out: Path) -> dict[str, Any] | None:
+    """The `AIS_run.json` already in `out`, parsed. `None` only when the file is ABSENT.
+
+    Anything else wrong -- unreadable JSON, a schema this build does not write, a truncated
+    document missing a field `run_identity_document` always includes -- raises, because those are
+    exactly the states in which nothing about the directory's ownership can be trusted. An absent
+    file is a fact about the directory; an unreadable one is a fact that forecloses every
+    automated action on it, fresh, resume, AND overwrite alike.
+    """
+    path = Path(out) / RUN_IDENTITY
+    if not path.is_file():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        raise SystemExit(
+            f"{path} is not readable JSON. Ownership of {Path(out)} cannot be established from "
+            f"it, so this directory can be adopted as neither fresh, a resume target, nor an "
+            f"--overwrite target. Choose a new -odir, or remove its contents by hand.") from None
+    if not isinstance(document, dict) or document.get("schema") != "md-ais-run-identity":
+        raise SystemExit(
+            f"{path} does not carry the AIS run-identity schema. Ownership of {Path(out)} cannot "
+            f"be established from it. Choose a new -odir, or remove its contents by hand.")
+    if document.get("schema_version") != RUN_IDENTITY_VERSION:
+        raise SystemExit(
+            f"{path} was written under run-identity schema v{document.get('schema_version')}, "
+            f"and this build writes v{RUN_IDENTITY_VERSION}. Ownership of {Path(out)} cannot be "
+            f"established from it. Choose a new -odir, or remove its contents by hand.")
+    missing = sorted(RUN_IDENTITY_REQUIRED_KEYS - set(document))
+    if missing:
+        raise SystemExit(
+            f"{path} is missing {missing}. It is an incomplete or truncated identity record, so "
+            f"ownership of {Path(out)} cannot be established from it. Choose a new -odir, or "
+            f"remove its contents by hand.")
+    return document
+
+
+def _incomplete_started_paths(out: Path, chosen: list[int], *, fingerprint: str,
+                              schedule: dict[str, Any]) -> list[int]:
+    """Which of THIS identity's paths have been started but do not yet verify complete.
+
+    Read-only, unlike `run_one_path`: it never removes an orphaned publication, it only asks the
+    question a disposition decision needs answered before a single byte is touched. A marker that
+    exists and does not verify still raises -- that is a genuine problem with THIS identity's own
+    claimed work, not an ordinary "not finished yet".
+    """
+    from . import path_trajectory_name
+
+    incomplete: list[int] = []
+    total = len(chosen)
+    for index, frame in enumerate(chosen):
+        directory = out / f"path_{index:04d}"
+        trajectory_name = path_trajectory_name(index, total)
+        published = out / trajectory_name
+        marker = directory / COMPLETION_NAME
+        if marker.is_file():
+            _verified_completion(marker, directory=directory, published=published,
+                                 fingerprint=fingerprint, index=index, frame=frame,
+                                 trajectory_name=trajectory_name, schedule=schedule)
+            continue
+        if directory.is_dir() or published.is_file():
+            incomplete.append(index)
+    return incomplete
+
+
+def decide_run_disposition(out: Path, document: dict[str, Any], *, resume: bool, overwrite: bool,
+                           chosen: list[int], fingerprint: str,
+                           schedule: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    """What this invocation IS. Decided READ-ONLY, before a single byte changes.
+
+    Four outcomes:
+
+      "fresh"      nothing here at all;
+      "verify"     a compatible run whose every selected path already verifies complete;
+      "resume"     a compatible run, with --resume given (whether or not anything is actually
+                   incomplete -- a marker-verified path is skipped before its resume branch is
+                   ever reached, so this is never destructive);
+      "overwrite"  --overwrite, of a directory whose ownership could be established.
+
+    Refused, before anything is touched:
+
+      an owned-looking artefact with no readable identity to prove what owns it -- ORPHANED,
+      even under --overwrite, because automated cleanup cannot be trusted to remove exactly the
+      right files without first knowing what it is looking at;
+      a compatible run with an unfinished path and no --resume -- an interrupted path must never
+      be restarted destructively because --resume was omitted;
+      --resume against a directory with nothing in it to resume.
+
+    Returns `(disposition, previous_identity)`. `previous_identity` is the validated document
+    already on disk, carried forward so a later `--overwrite` cleans up against the identity that
+    was actually verified here rather than re-reading the file a second time.
+    """
+    out = Path(out)
+    previous = _read_previous_identity(out)
+
+    if previous is None:
+        owned = _ais_owned_candidates(out)
+        if owned:
+            names = ", ".join(sorted(entry.name for entry in owned)[:8])
+            raise SystemExit(
+                f"{out} holds AIS-shaped artefact(s) ({names}) with no {RUN_IDENTITY} to prove "
+                f"what they belong to. This directory cannot be adopted as fresh, resumed, or "
+                f"cleaned up automatically by --overwrite: ownership of what it holds cannot be "
+                f"established. Choose a new -odir, or remove its contents by hand.")
+        if resume:
+            raise SystemExit(
+                f"{out} is empty; there is nothing here for --resume to continue. Omit --resume "
+                f"to start a fresh run, or point -odir at the directory the run you mean to "
+                f"resume actually wrote to.")
+        return ("fresh", None)
+
+    if overwrite:
+        # Compatibility with THIS invocation is not required to overwrite: --overwrite means
+        # start over, and a verified (even if different) previous identity is exactly what lets
+        # `clear_run_directory` trust what it is about to remove.
+        return ("overwrite", previous)
+
+    require_same_run(out, document)
+
+    incomplete = _incomplete_started_paths(out, chosen, fingerprint=fingerprint, schedule=schedule)
+    if incomplete:
+        if not resume:
+            raise SystemExit(
+                f"{out} holds a compatible AIS run with {len(incomplete)} path(s) not yet "
+                f"complete (e.g. path_{incomplete[0]:04d}). --resume continues the committed "
+                f"paths in place; --overwrite starts the whole run over. Neither was given, so "
+                f"nothing here has been touched.")
+        return ("resume", previous)
+
+    return ("resume" if resume else "verify", previous)
+
 
 def clear_run_directory(out: Path, *, identity: dict[str, Any] | None = None, paths: int = 0,
                         ranks: int = 1) -> int:
     """Remove every artefact THIS RUN OWNS from `out`. Returns how many were removed.
 
-    What `--overwrite` has to mean: a fresh run must inherit nothing -- not a path directory with
-    its checkpoints and manifest, not a published trajectory, not the selected-frame table, not
-    an aggregate table, not a rank report, not the run identity. Any one surviving lets the new
-    identity adopt an old measurement.
+    Two gates, both required, not one:
 
-    OWNERSHIP IS BY NAME SCHEMA, NOT BY PREFIX. The previous version globbed `path_*` and deleted
-    every directory that matched, which would take `path_notes/` -- somebody's working directory
-    that happens to start with those five characters -- with it. `--overwrite` is not a licence to
-    delete a directory because its name is suggestive. Only `path_0000`-style names (exactly four
-    digits) and `AIS_trajNNNN.nc` are owned, plus the named tables and the rank reports this run's
-    world size implies.
+      OWNERSHIP BY NAME SCHEMA. The previous version globbed `path_*` and deleted every directory
+      that matched, which would take `path_notes/` -- somebody's working directory that happens
+      to start with those five characters -- with it. Only `path_0000`-style names (exactly four
+      digits), `AIS_trajNNNN.nc`, the named global tables, and this directory's rank reports are
+      even CANDIDATES. `_ais_owned_candidates` is that gate, and it is the same function an absent
+      identity is checked against for orphan detection -- one definition of "looks like AIS
+      output", used both places.
 
-    Stragglers from a LONGER previous run are removed too -- a 100-path directory overwritten by a
-    4-path one leaves `AIS_traj0004.nc..0099.nc`, and those look exactly like this run's own
-    output -- but only because they match the schema, not because of a wildcard.
+      OWNERSHIP BY CONTENT. A directory can share the four-digit NAME without being one this
+      runtime wrote -- a person can create their own `path_0000` as easily as `path_notes`. A
+      `path_NNNN` candidate is included only when it also contains something only the AIS runtime
+      writes (`_path_is_md_tools_owned`): a completion manifest, a staged or committed trajectory,
+      the observation or state table. Content-free NAME matches are never candidates at all.
+
+    `identity is None` with candidates present is refused outright, unconditionally: without a
+    verified `AIS_run.json` establishing that SOMETHING legitimate was ever here, there is no way
+    to tell "this run's own stragglers from when it had more paths" from "an unrelated directory
+    that happens to match a naming pattern", and guessing wrong deletes somebody's work. The
+    caller is expected to have obtained `identity` from `decide_run_disposition`, which is where
+    that verification actually happens; `clear_run_directory` re-asserts the gate rather than
+    trusting the caller unconditionally passed a genuine one.
+
+    Stragglers from a LONGER previous run of the SAME identity are removed too -- a 100-path
+    directory overwritten by a 4-path one leaves `AIS_traj0004.nc..0099.nc` and `path_0004` through
+    `path_0099` -- because the scan is over everything present, not bounded by this invocation's
+    OWN path count.
     """
     import shutil
 
-    from ..remd.executor import report_path_for_rank
-
-    removed = 0
     out = Path(out)
     if not out.is_dir():
         return 0
 
-    for entry in sorted(out.iterdir()):
-        if entry.is_dir() and PATH_DIRECTORY.match(entry.name):
+    candidates = _ais_owned_candidates(out)
+    if not candidates:
+        return 0
+    if identity is None:
+        names = ", ".join(sorted(entry.name for entry in candidates)[:8])
+        raise SystemExit(
+            f"{out} holds artefact(s) matching the AIS ownership schema ({names}) and no "
+            f"verified identity was supplied to establish ownership against. Refusing automated "
+            f"cleanup: choose a new -odir, or remove its contents by hand.")
+
+    removed = 0
+    for entry in candidates:
+        if entry.is_dir():
             shutil.rmtree(entry)
-            removed += 1
-        elif entry.is_file() and PATH_TRAJECTORY.match(entry.name):
+        else:
             entry.unlink()
-            removed += 1
-
-    for name in (RUN_IDENTITY, WORK_TABLE, WORK_SUMMARY, HS_TABLE,
-                 "selected_source_frames.csv"):
-        target = out / name
-        if target.is_file():
-            target.unlink()
-            removed += 1
-
-    # Rank reports, INCLUDING those of a previous, larger world. An overwrite that dropped from
-    # six ranks to two left `AIS.out.rank05` beside the new `AIS.out`, equally current-looking and
-    # describing a run that no longer exists.
-    for base in ("AIS.out", "AIS.log"):
-        for candidate in sorted(out.glob(f"{base}*")):
-            if candidate.is_file():
-                candidate.unlink()
-                removed += 1
-    del report_path_for_rank, ranks
+        removed += 1
+    del paths, ranks
     return removed
 
 
@@ -1496,7 +1692,13 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         cleared = None
         if rank == 0:
             try:
-                cleared = clear_run_directory(out, identity=checked.identity,
+                # The PREVIOUS identity -- already read and verified by `decide_run_disposition`,
+                # inside the preflight, before `-odir` existed -- not `checked.identity`, which
+                # is the NEW run about to be written and proves nothing about what is currently
+                # on disk. `clear_run_directory` refuses outright when this is `None` and the
+                # directory holds anything AIS-shaped: an --overwrite of a directory with no
+                # readable identity is exactly the case verified ownership cannot establish.
+                cleared = clear_run_directory(out, identity=checked.previous_identity,
                                               paths=len(checked.chosen_frames),
                                               ranks=coordination.size)
             except BaseException as broken:                 # noqa: BLE001 - reported collectively
@@ -1750,7 +1952,14 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                     topology=pdb.topology, source_path=source_path, mdtraj_top=top,
                     implicit=implicit, acceleration=acceleration),
                 dynamics=dynamics, ais=ais, beta=beta, temperature=temperature,
-                rank=rank, resume=bool(args.resume), fingerprint=path_fingerprint, log=log)
+                # THE preflight's decision, not `args.resume` re-read here. `checked.disposition`
+                # is what was actually verified against this directory -- "resume" only when a
+                # compatible run was found AND --resume was given. Passing `args.resume` directly
+                # let a directory get LABELLED resume by the preflight while every path in it was
+                # then started fresh here, because this boolean disagreed with that label: an
+                # interrupted path restarted destructively with no flag telling it to.
+                rank=rank, resume=(checked.disposition == "resume"),
+                fingerprint=path_fingerprint, log=log)
             if record is not None:
                 completed.append(record)
                 sim_out.table_row(
