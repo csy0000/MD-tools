@@ -144,8 +144,40 @@ the path is *behaving* while the Hamiltonian moves, which shows a switch is too 
 the work distribution does.
 
 The four cadences are independent and each must divide `switching_steps` exactly. Work every 10
-steps with frames every 50 is an ordinary thing to want. See
+steps with frames every 50 is an ordinary thing to want. A fifth, collective-variable observations,
+is described in [Collective variables](../../collective_variables/README.md); it is on the
+parameter-update grid and also divides `switching_steps`. See
 [Running](../../md-run.md#ais) for the resume contract.
+
+### The λ-basis decomposition, and the columns it is read from
+
+`U(τ, x) = U_non_scaled + √λ · U_sqrt_scaled + λ · U_lin_scaled`, with `λ = (1 − τ)²`. The three
+components are recovered from three energy evaluations at amplitudes `a ∈ {0, ½, 1}` and are
+checked against a directly measured potential every time they are taken — a run refuses rather
+than record components that do not reproduce `U(τ)`.
+
+They are written as separate columns rather than folded into a total, because that is what makes
+a reweighting at a τ the run never visited possible without rerunning it:
+
+| column group | columns |
+|---|---|
+| incremental work | `delta_work_non_scaled_kj_mol`, `delta_work_sqrt_scaled_kj_mol`, `delta_work_lin_scaled_kj_mol` |
+| cumulative work | `total_work_non_scaled_kj_mol`, `total_work_sqrt_scaled_kj_mol`, `total_work_lin_scaled_kj_mol` |
+| observation potential | `potential_non_scaled_kj_mol`, `potential_sqrt_scaled_kj_mol`, `potential_lin_scaled_kj_mol` |
+| the check | `potential_reconstructed_kj_mol`, `potential_direct_kj_mol` |
+
+**`lin_scaled` is never spelled `scaled`.** Three components carry a scaling and a bare "scaled"
+does not say which, so the ambiguity would land in exactly the files a reweighting is built from.
+
+`AIS_hs.csv` is the **frame-aligned subset**: only rows whose coordinate was actually saved, so
+every HS row's potentials and its work describe *one* configuration. A row without a stored frame
+has empty potential cells by schema, and including it would put those empty cells in front of a
+reweighting with no way to notice.
+
+Two probes, never confused: the work-basis probe is taken at the frozen **pre-switch** coordinate
+`x_j`, where work is defined; the observation-potential probe is taken at the **saved** coordinate
+`x_t`. They are the same arithmetic at different configurations, and the failure they guard
+against — attaching one's numbers to the other's coordinate — is invisible in the output.
 
 ## Limitations
 
