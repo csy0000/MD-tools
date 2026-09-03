@@ -35,7 +35,12 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        shell: bash -el {0}
+        # `-o pipefail` is not decoration. Without it a pipeline's exit status is the LAST
+        # command's, so `pytest ... | tee pytest.log` reports `tee`'s success and `-e` never
+        # fires. This job was displayed as green for a run in which pytest printed
+        # "14 failed, 1108 passed" -- the worst possible failure mode for a CI job, because it
+        # is the one nobody investigates.
+        shell: bash -elo pipefail {0}
     steps:
       - uses: actions/checkout@v4
 
@@ -322,6 +327,23 @@ jobs:
               print(f"{which}: {path.name} matches its model")
           PY
 
+      - name: prove this job cannot be green while a piped command fails
+        # The guard on the guard. Every step below pipes through `tee`, and for one release this
+        # job reported success while pytest printed "14 failed". A comment saying "pipefail is
+        # set" is not evidence that it is set in the shell these steps actually run in, so this
+        # asserts it from inside that shell -- and asserts the FIX, not the setting: a failing
+        # command upstream of a pipe must make the step fail.
+        run: |
+          echo "shell options: $-"
+          case "$-" in *e*) ;; *) echo "::error::errexit is not set"; exit 1;; esac
+          [[ -o pipefail ]] || { echo "::error::pipefail is not set"; exit 1; }
+          # A subshell, because the failure has to be observed rather than inherited.
+          if ( set -eo pipefail; false | tee /dev/null ); then
+            echo "::error title=CI can mask failures::a failing command upstream of tee did not fail the pipeline"
+            exit 1
+          fi
+          echo "a failing command upstream of tee correctly fails the pipeline"
+
       - name: the non-GPU test lane
         run: |
           python -m pytest tests -m "not slow and not gpu" -q -rs --tb=short | tee pytest.log
@@ -335,7 +357,7 @@ jobs:
       - name: state plainly what this job did NOT validate
         if: always()
         run: |
-          echo "::notice title=No simulation validation::This job validated packaging, the three-command interface, the shipped examples, bundle generation and the schemas. It ran no dynamics. GPU/scientific validation is a separate locally recorded lane; see docs/release-notes/."
+          echo "::notice title=No simulation validation::This job validated packaging, the FOUR-command interface (build-top, build-md, md-run, data-register), the shipped examples, bundle generation and the schemas. It ran no dynamics. GPU/scientific validation is a separate locally recorded lane; see docs/release-notes/."
 
       - name: upload logs on failure
         if: failure()

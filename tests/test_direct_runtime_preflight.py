@@ -82,6 +82,20 @@ def _config(directory: Path, name: str, document) -> Path:
 
 VALID_USER = {"person_id": "someone", "name": "Some One", "orcid": None, "affiliation": None}
 
+#: Passed by every test whose subject is the PROTOCOL rather than the platform.
+#:
+#: The preflight resolves the platform before it looks inside `-p` and `-s`, so on a machine with
+#: no GPU -- every CI runner -- a CUDA refusal arrives first and the test then passes for entirely
+#: the wrong reason, or fails, depending on which way it was written. Fourteen tests did exactly
+#: that, and the workflow that ran them was reported green because its pytest was piped through
+#: `tee` without `pipefail`.
+#:
+#: `--cpu` is the honest fix: it says "this test is about particle counts / trajectory formats /
+#: HMR / collisions / `--check`, and the accelerator is not the variable". Tests of CUDA POLICY
+#: never use it -- they are in the GPU lane and must fail if CUDA is missing, which is the point
+#: of them.
+PROTOCOL_ONLY = ["--cpu"]
+
 
 # --- one built system and one generated project per protocol -------------------------------------
 
@@ -247,7 +261,8 @@ def test_a_topology_and_system_that_describe_different_particle_counts_are_refus
     destination = tmp_path / "never"
     script, needed = ENTRY[mode]
     done = _run([sys.executable, str(workspace / script),
-                 "-p", str(stub), "-s", "../built.xml", "-odir", str(destination), *needed],
+                 "-p", str(stub), "-s", "../built.xml", "-odir", str(destination), *needed,
+                 *PROTOCOL_ONLY],
                 cwd=workspace / Path(script).parent)
     _refused(done, fragment="particle")
     assert _snapshot(destination) is None
@@ -259,7 +274,7 @@ def test_an_ais_source_that_is_not_a_trajectory_is_refused_before_output(workspa
     destination = tmp_path / "never"
     done = _run([sys.executable, str(workspace / "AIS/AIS.py"),
                  "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
-                 "-source-traj", str(mislabelled)],
+                 "-source-traj", str(mislabelled), *PROTOCOL_ONLY],
                 cwd=workspace / "AIS")
     _refused(done, fragment="neither a DCD nor a NetCDF")
     assert _snapshot(destination) is None

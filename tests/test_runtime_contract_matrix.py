@@ -24,8 +24,9 @@ import pytest
 # `tests` is a package, so the harness is imported relatively. Shared rather than copied: two
 # copies of `_refused` would drift, and the copy that stopped rejecting argparse errors would be
 # the one whose tests still passed.
-from .test_direct_runtime_preflight import (ENTRY, MODES, VALID_USER, _config,  # noqa: F401
-                                            _launch, _refused, _run, _snapshot, workspace)
+from .test_direct_runtime_preflight import (ENTRY, MODES, PROTOCOL_ONLY,  # noqa: F401
+                                            VALID_USER, _config, _launch, _refused, _run,
+                                            _snapshot, workspace)
 
 CONFIG = "MD_TOOLS_CONFIG"
 
@@ -106,7 +107,8 @@ def test_the_all_in_one_check_still_allows_the_parent_a_later_stage_will_write(
     """
     destination = tmp_path / "check-chain"
     before = _snapshot(destination)
-    done = _launch(workspace, "allinone", destination, "--check", environment=good_config)
+    done = _launch(workspace, "allinone", destination, "--check", *PROTOCOL_ONLY,
+                   environment=good_config)
     assert done.returncode == 0, done.stdout + done.stderr
     # `--check` on the whole chain must also write nothing at all.
     _untouched(destination, before)
@@ -118,7 +120,7 @@ def test_a_first_stage_continuation_must_exist_even_under_check(workspace, tmp_p
     destination = tmp_path / "check-first-c"
     before = _snapshot(destination)
     done = _launch(workspace, "allinone", destination, "--check", "-c", "not_here.xml",
-                   environment=good_config)
+                   *PROTOCOL_ONLY, environment=good_config)
     _refused(done, fragment="not_here.xml")
     _untouched(destination, before)
 
@@ -135,8 +137,11 @@ def test_check_writes_nothing_at_all(mode, workspace, tmp_path, good_config):
     """
     destination = tmp_path / f"check-{mode}"
     before = _snapshot(destination)
-    extra = ["--check"]
-    done = _launch(workspace, mode, destination, *extra, environment=good_config)
+    # `--cpu`, because the subject is what `--check` WRITES, not which accelerator it would have
+    # used. Without it this asserted `returncode == 0` on a machine with no GPU and failed for a
+    # reason that has nothing to do with the contract under test.
+    done = _launch(workspace, mode, destination, "--check", *PROTOCOL_ONLY,
+                   environment=good_config)
     assert done.returncode == 0, f"{mode}: --check failed:\n{done.stdout}{done.stderr}"
     _untouched(destination, before)
 
@@ -234,7 +239,7 @@ def test_a_run_refuses_to_write_over_an_existing_one_and_says_which_files(worksp
     destination = tmp_path / "twice"
     first = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
                   "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
-                  "-odir", str(destination)],
+                  "-odir", str(destination), *PROTOCOL_ONLY],
                  cwd=workspace / "split", environment=good_config)
     assert first.returncode == 0, first.stdout + first.stderr
 
@@ -242,7 +247,7 @@ def test_a_run_refuses_to_write_over_an_existing_one_and_says_which_files(worksp
     # stays a success: it is how a chain is safely re-driven.
     second = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
                    "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
-                   "-odir", str(destination)],
+                   "-odir", str(destination), *PROTOCOL_ONLY],
                   cwd=workspace / "split", environment=good_config)
     assert second.returncode == 0, second.stdout + second.stderr
     assert "already completed" in second.stdout + second.stderr
@@ -253,7 +258,7 @@ def test_a_run_refuses_to_write_over_an_existing_one_and_says_which_files(worksp
         log.unlink()
     third = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
                   "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
-                  "-odir", str(destination)],
+                  "-odir", str(destination), *PROTOCOL_ONLY],
                  cwd=workspace / "split", environment=good_config)
     assert third.returncode != 0, third.stdout + third.stderr
     message = third.stdout + third.stderr
@@ -261,7 +266,7 @@ def test_a_run_refuses_to_write_over_an_existing_one_and_says_which_files(worksp
 
     fourth = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
                    "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
-                   "-odir", str(destination), "--overwrite"],
+                   "-odir", str(destination), "--overwrite", *PROTOCOL_ONLY],
                   cwd=workspace / "split", environment=good_config)
     assert fourth.returncode == 0, fourth.stdout + fourth.stderr
 

@@ -121,3 +121,50 @@ def test_no_test_hard_codes_a_path_on_one_machine():
                 offenders.append(f"{path.name}:{number}: {stripped[:90]}")
     assert not offenders, (
         "tests must not hard-code a path on one machine:\n  " + "\n  ".join(offenders))
+
+
+# --- the workflow may not be able to hide a failure ---------------------------------------------
+
+WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
+
+
+def test_the_workflow_shell_sets_pipefail():
+    """A CI job that cannot report a failure is worse than no CI job.
+
+    The workflow ran `pytest ... | tee pytest.log` under `bash -el`. A pipeline's exit status is
+    its LAST command's, so `tee` succeeded, `-e` never fired, and the run was displayed as green
+    for a commit where pytest printed "14 failed, 1108 passed". Nobody investigates a green run.
+
+    Asserted on the file rather than only inside the job, so the property survives someone editing
+    the `defaults:` block without running CI.
+    """
+    if not WORKFLOW.is_file():
+        raise AssertionError(f"{WORKFLOW} is missing; the CI contract cannot be checked")
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "pipefail" in text, "the workflow shell does not set pipefail"
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("shell:") and "bash" in stripped:
+            assert "pipefail" in stripped, (
+                f"a workflow shell without pipefail can hide a failing pytest: {stripped}")
+
+
+def test_every_workflow_pipeline_is_protected():
+    """Any `|` in a `run:` block is a place an exit status can be lost.
+
+    Not a style rule: each one is a specific opportunity for the failure above. They are allowed
+    only under a shell that sets pipefail, which the test above pins.
+    """
+    text = WORKFLOW.read_text(encoding="utf-8")
+    piped = [line.strip() for line in text.splitlines()
+             if "|" in line and not line.strip().startswith("#")
+             and any(token in line for token in ("tee ", "grep ", "head ", "tail "))]
+    assert piped, "no pipelines found; this test has stopped watching anything"
+    assert "shell: bash -elo pipefail {0}" in text, (
+        f"{len(piped)} pipeline(s) run under a shell that does not set pipefail")
+
+
+def test_the_workflow_does_not_claim_a_three_command_interface():
+    """`md-openmm` has four public commands, and the job's own summary said three."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "three-command" not in text, "the workflow still calls this a three-command interface"

@@ -451,9 +451,12 @@ def test_a_large_timestep_without_hmr_is_refused_before_integrating(scripts):
     document.setdefault("dynamics", {})["timestep_fs"] = 4.0
     config.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     try:
+        # `--cpu` because the subject is the MASSES, not the accelerator. The preflight resolves
+        # the platform before it opens the System, so on a machine with no GPU the CUDA refusal
+        # arrived first and this test failed without ever reaching the check it is named for.
         result = subprocess.run(
             [sys.executable, "min.py", "-p", "../built.pdb", "-s", "../built.xml",
-             "-log", "fast.log"], cwd=work, capture_output=True, text=True, timeout=600)
+             "-log", "fast.log", "--cpu"], cwd=work, capture_output=True, text=True, timeout=600)
         combined = result.stdout + result.stderr
         assert result.returncode != 0, combined
         assert "hydrogen mass repartitioning was NOT applied" in combined, combined[-800:]
