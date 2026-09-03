@@ -401,6 +401,77 @@ def test_a_rank_local_failure_after_preflight_stops_the_whole_ais_run(failing_ra
     assert not (destination / "AIS_hs.csv").exists()
 
 
+# --- a rank-local failure INSIDE the dynamics loop itself -----------------------------------------
+#
+# Every phase above is guarded by `coordination.phase(...)` in the OUTER script (`generated.py`).
+# The dynamics loop is not: it runs inside `ReplicaRun.run()`, called from `run_grouped`, called
+# from `executor.main()` -- which used to catch every exception itself and turn it into a local
+# integer status code, with no `Abort()` on the path a standalone `python -m md_tools.remd.executor`
+# launch takes. A rank that fails there returned home from `main()` quietly while every other rank
+# sat in whatever collective it reached next (a `barrier()`, an `allgather()`) waiting for a
+# participant that would never call it again -- rescued only if and until something eventually
+# noticed the bad status code and called `Abort()` itself. `ReplicaRun.run()` now calls
+# `coordinator.fail()` itself, at the point the exception is caught, so nothing else has to.
+
+PROPAGATION_FAIL_RANKS = "MD_TOOLS_FAIL_PROPAGATION_ON_RANKS"
+
+
+@pytest.fixture(scope="module")
+def initial_state(projects):
+    """A real serialized State (positions, velocities, box), for `-c`.
+
+    Propagation is never reached without one -- `-c` is required, and this is the one thing the
+    `projects` fixture does not build, since no other test here runs a ladder far enough to need
+    it.
+    """
+    import openmm
+    from openmm import XmlSerializer, unit
+    from openmm.app import PDBFile
+
+    pdb = PDBFile(str(projects / "built.pdb"))
+    system = XmlSerializer.deserialize((projects / "built.xml").read_text(encoding="utf-8"))
+    integrator = openmm.VerletIntegrator(1.0 * unit.femtosecond)
+    context = openmm.Context(system, integrator, openmm.Platform.getPlatformByName("Reference"))
+    context.setPositions(pdb.positions)
+    context.setVelocitiesToTemperature(300.0 * unit.kelvin, 1)
+    state = context.getState(getPositions=True, getVelocities=True,
+                             enforcePeriodicBox=system.usesPeriodicBoundaryConditions())
+    path = projects / "initial_state.xml"
+    path.write_text(XmlSerializer.serialize(state), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("failing_rank", [0, 1])
+def test_a_rank_local_failure_during_propagation_stops_the_whole_ladder_without_a_hang(
+        failing_rank, projects, initial_state, tmp_path):
+    """A real REST2 ladder, two ranks, one fails mid-loop. Neither rank may survive or hang."""
+    _require_mpirun()
+    project = projects / "REST2"
+    destination = tmp_path / f"propagation-fail-{failing_rank}"
+
+    done = subprocess.run(
+        ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
+         "-p", "../built.pdb", "-s", "../built.xml", "-c", str(initial_state),
+         "-odir", str(destination)],
+        cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
+        env=_environment(**{PROPAGATION_FAIL_RANKS: str(failing_rank)}))
+    message = done.stdout + done.stderr
+    assert done.returncode != 0, message[-2000:]
+    # `Coordination.fail` prints from the failing rank and then calls `comm.Abort()`; Open MPI's
+    # own report of WHICH rank called `Abort()` is what appears on the launcher's stdout/stderr --
+    # `coordinator.fail`'s own message went to the rank's redirected `.out`/`.out.rankNN`, which
+    # `executor.main` captures as the run's report, not to the process's real stderr.
+    assert f"rank {failing_rank}" in message, message[-3000:]
+    reports = "\n".join(path.read_text(encoding="utf-8", errors="replace")
+                        for path in sorted(destination.glob("REST2.out*")) if path.is_file())
+    assert "MD_TOOLS_FAIL_PROPAGATION_ON_RANKS" in reports, reports[-3000:]
+    # No authoritative completion manifest and no "completed" marker survive a failed launch --
+    # the per-state trajectories exist (`_begin` creates them before propagation starts on every
+    # run, healthy or not), but nothing claims the run they belong to finished.
+    assert not (destination / "restart.json").exists()
+    assert "run_status: completed" not in reports, reports[-3000:]
+
+
 def test_the_phase_guard_is_the_only_mpi_authority():
     """`md_tools.remd.mpi` stays the one module that imports or controls mpi4py."""
     import inspect

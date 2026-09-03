@@ -313,8 +313,13 @@ def test_a_failing_replica_is_never_reported_as_a_finished_run():
     """A ladder with a dead rung must not be declared complete and then produced from.
 
     `propagate_segment` awaited every thread and let exceptions out. The ladder is MPI now, so the
-    same guarantee lives in the driver: any failure records the run as failed or interrupted and
-    is then re-raised, and only the path that did NOT raise reaches `_finish`.
+    same guarantee lives in the driver: any failure goes through `_fail_closed` (which records the
+    run as failed or interrupted and takes the whole communicator down) and is then re-raised, and
+    only the path that did NOT raise reaches `_finish`.
+
+    Shape-level, deliberately: the BEHAVIOUR of `_fail_closed` is tested directly in
+    `test_mpi_fail_closed.py`, and this pins the one thing that cannot be observed from behaviour
+    alone -- that `_finish` is unreachable from the failure path.
     """
     from .conftest import REPO_ROOT
 
@@ -322,12 +327,17 @@ def test_a_failing_replica_is_never_reported_as_a_finished_run():
               / "driver.py").read_text(encoding="utf-8")
     handler = driver[driver.index("except BaseException as failure:"):]
     handler = handler[:handler.index("finally:")]
-    assert '"interrupted" if interrupted else "failed"' in handler, \
-        "a failed run no longer records that it failed"
+    assert "self._fail_closed(" in handler, \
+        "the failure path no longer routes through the fail-closed handler"
     assert handler.rstrip().endswith("raise"), \
         "the driver swallows the failure instead of re-raising it"
-    # `_finish` -- which writes the completion manifest -- is reachable only after the try block.
-    assert "return self._finish(" in driver[driver.index("finally:"):]
+    # `_finish` -- which writes the completion manifest -- is reachable only from INSIDE the try
+    # block, so an exception anywhere before it (construction, propagation, exchange, reservoir
+    # refresh, reporting, checkpointing, or `_finish` itself) skips it entirely; it must never be
+    # called from the `except` handler, which is the failure path this test pins.
+    body = driver[driver.index("def run(self,"):driver.index("except BaseException as failure:")]
+    assert "self._finish(" in body
+    assert "self._finish(" not in handler
 
 
 # --- the nonpolar term is worth knowing the size of --------------------------

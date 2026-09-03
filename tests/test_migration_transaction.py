@@ -506,10 +506,16 @@ def test_every_run_state_write_in_the_driver_carries_the_history():
     assert not missing, f"run-state writes with no migration history: {missing}"
 
 
-def test_the_exception_handler_skips_the_write_when_provenance_is_unreadable():
+def test_the_failure_handler_skips_the_write_when_provenance_is_unreadable():
+    """The failure path must not overwrite the run state with a record that lost the history.
+
+    Reads `_fail_closed`, which is where the driver's failure handling lives -- `run()`'s `except`
+    delegates to it so the same handling can be tested behaviourally (see
+    `test_driver_fail_closed.py`) rather than only by scanning text as this does.
+    """
     source = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
-    handler = source[source.index("except BaseException as failure:"):
-                     source.index("raise", source.index("except BaseException as failure:"))]
+    start = source.index("def _fail_closed(self")
+    handler = source[start:source.index("\n    def ", start + 1)]
     assert "_recover_history_readonly()" in handler
     assert "if history is not None:" in handler, (
         "an unreadable provenance would still overwrite the run state")

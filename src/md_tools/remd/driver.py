@@ -237,6 +237,7 @@ class ReplicaRun:
 
         interruption = _Interruption().install()
         state = None
+        result = None
         try:
             state = self._begin(identity, systems, rule_identity, resume=resume,
                                 extend=extend, extend_from=extend_from)
@@ -244,8 +245,47 @@ class ReplicaRun:
             if self.reservoir is not None:
                 self.reservoir.check_box_matches(state["configurations"][0].box)
             self._loop(state, rule, interruption)
+            if state.get("interrupted"):
+                # A CLEAN, COLLECTIVELY REACHED interruption: every rank left `_loop` together via
+                # `coordinator.any_true`, not because one of them raised. It keeps its own distinct
+                # resumable status rather than falling into the failure handling below -- this is
+                # `_finish`'s sibling, not a failure, and `_finish` is deliberately not reached.
+                result = self._record_interruption(state, identity)
+            else:
+                # Manifest writing belongs INSIDE this try. It used to run after it, unguarded: an
+                # exception here on rank 0 left every other rank -- which had already returned
+                # from `_finish`'s `if rank != 0: return` above and exited normally -- reporting
+                # "completed" while the coordinated run wrote no manifest at all.
+                result = self._finish(state, identity, rule_identity, started)
         except BaseException as failure:
-            if self.coordinator.is_root:
+            self._fail_closed(state, identity, failure)
+            raise
+        finally:
+            interruption.restore()
+        return result
+
+    def _fail_closed(self, state, identity, failure):
+        """Report what happened if that is possible, and stop the whole communicator regardless.
+
+        THE ORDER, AND WHY IT IS THIS ORDER
+
+            By the time this runs, every other rank is blocked in a collective this one will never
+            reach, so the clock on a hung job is already running. The per-rank report is worth a
+            bounded attempt -- it is the only record of WHY the run stopped -- but it is never
+            worth the job. So the report is best-effort and wrapped, and the abort happens whether
+            it succeeded, failed, or was skipped entirely.
+
+            The wrapping is not defensive habit. A second failure while writing the report is the
+            LIKELY case, not the exotic one: a full disk or a stalled filesystem is often the
+            reason the first failure happened, and both of those surface again here. Letting that
+            escape would skip the abort and leave the communicator waiting on a rank that has
+            already given up -- turning a stopped job into a hung one at exactly the moment the
+            code was trying to be helpful.
+
+        Only the root writes the run-state record (it owns that file); every rank aborts.
+        """
+        if self.coordinator.is_root:
+            try:
                 # This record REPLACES whatever run state exists, so writing one without the
                 # migration history would erase the only note that a legacy file had been
                 # migrated -- from the very path that runs when something went wrong.
@@ -265,14 +305,28 @@ class ReplicaRun:
                               "be continued with --resume; no completion manifest exists"))
                 # If it could not be read, the existing run state is left exactly as it is. An
                 # incomplete claim about provenance is worse than a slightly stale true one, and
-                # the exception below is the thing that actually needs reporting.
-            raise
-        finally:
-            interruption.restore()
+                # the exception the caller re-raises is the thing that actually needs reporting.
+            except BaseException as while_reporting:        # noqa: BLE001 - never masks the abort
+                print(f"[rank {self.coordinator.rank}/{self.coordinator.size}] could not record "
+                      f"the failure state: "
+                      f"{type(while_reporting).__name__}: {while_reporting}",
+                      file=sys.stderr, flush=True)
 
-        if state.get("interrupted"):
-            return self._record_interruption(state, identity)
-        return self._finish(state, identity, rule_identity, started)
+        if self.coordinator.size > 1:
+            # ANY unexpected exception in a plural launch -- during Context construction,
+            # propagation, energy evaluation, exchange, reservoir refresh, trajectory reporting,
+            # checkpointing, or manifest writing -- invokes the ONE shared communicator
+            # fail/abort authority. It used to just `raise`: the exception unwound out of `run()`
+            # untouched, and whatever called it converted it into a local integer status code with
+            # no `Abort()` anywhere on that path. A rank that fails inside `_begin`, before the
+            # barrier at the end of its non-continuation branch, shows why that is not good
+            # enough: every OTHER rank is already blocked in that barrier waiting for a
+            # participant that will never call it again, and nothing rescues them until something,
+            # somewhere, decides the run failed and calls `Abort()`.
+            #
+            # `fail` prints the reason from the rank that has it, calls `Abort`, and does not
+            # return -- so the caller's `raise` is the serial path's behaviour, unchanged.
+            self.coordinator.fail(f"{type(failure).__name__}: {failure}")
 
     # -- setup ------------------------------------------------------------------------------------------
 
@@ -931,6 +985,24 @@ class ReplicaRun:
             self.engine.set_configuration(
                 index, state["configurations"][state["state_to_walker"][index]])
 
+    #: Test seam: raise a rank-local RuntimeError inside the dynamics loop on named ranks, as
+    #: "0,3". This is what a real mid-run failure looks like -- a NaN energy, a device error, a
+    #: disk full on a checkpoint write -- and it cannot be provoked reliably any other way in a
+    #: real multi-rank launch. Never set in normal use.
+    FAIL_PROPAGATION_ENVIRONMENT = "MD_TOOLS_FAIL_PROPAGATION_ON_RANKS"
+
+    def _fail_propagation_if_asked(self):
+        import os
+
+        wanted = os.environ.get(self.FAIL_PROPAGATION_ENVIRONMENT)
+        if not wanted:
+            return
+        if self.coordinator.rank in {int(part) for part in wanted.replace(",", " ").split()}:
+            raise RuntimeError(
+                f"{self.FAIL_PROPAGATION_ENVIRONMENT} names this rank: simulating a rank-local "
+                f"failure inside the dynamics loop on rank {self.coordinator.rank} of "
+                f"{self.coordinator.size}")
+
     def _loop(self, state, rule, interruption):
         schedule = state["schedule"]
         self._install_owned(state)
@@ -940,6 +1012,7 @@ class ReplicaRun:
             if target is None:
                 break
             span = target - state["step"]
+            self._fail_propagation_if_asked()
             for index in self.owned:
                 self.engine.propagate(index, span)
             state["step"] = target
