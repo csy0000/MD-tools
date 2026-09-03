@@ -1,0 +1,221 @@
+"""A REST2 ladder writes one CV series per THERMODYNAMIC STATE, with the walker recorded.
+
+WHY PER STATE
+
+    The same reason the trajectories are. A ladder's result is a property of a rung -- "the
+    distribution at tau = 0.3" -- and a walker visits many rungs, so a per-walker series is a
+    series over a changing Hamiltonian and is not an ensemble average of anything.
+
+    `remd2.cv.csv` therefore holds whatever configuration OCCUPIED state 2 at each step, and
+    `walker_index` says which walker supplied it. Getting that backwards produces files that look
+    perfect and describe the wrong ensembles, which is what the tests here exist to exclude.
+
+PLATFORM_POLICY_EXEMPTION: the ladder runs under `--cpu`. What is under test is which
+configuration is written to which file and when -- bookkeeping, identical on every platform.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+import yaml
+
+REPO = Path(__file__).resolve().parents[1]
+CLI = [sys.executable, "-m", "md_tools.cli.md_openmm"]
+ALA = REPO / "tests" / "data" / "ALA.pdb"
+
+pytestmark = pytest.mark.slow
+
+CV_YAML = """\
+schema_version: 1
+collective_variables:
+  - name: phi
+    type: torsion
+    atom_indices: [4, 6, 8, 14]
+"""
+
+
+@pytest.fixture(scope="module")
+def project(tmp_path_factory):
+    if not ALA.is_file():
+        pytest.skip("no ALA fixture")
+    root = tmp_path_factory.mktemp("remd-cv")
+    (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
+    built = subprocess.run(
+        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
+               "-log", "built.log", "--config", str(root / "sys.config")],
+        cwd=root, capture_output=True, text=True, timeout=1800)
+    assert built.returncode == 0, built.stdout + built.stderr
+
+    (root / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
+    (root / "REST2.config").write_text(yaml.safe_dump({
+        "protocol": "REST2", "solvent": "implicit",
+        "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 0,
+                   "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
+                   "production_steps": 0},
+        "rest2": {"number_of_replicas": 3, "exchange_interval_steps": 10,
+                  "number_of_exchanges": 4},
+        "reporting": {"solute_printout": 10, "system_printout": 10, "checkpoint_printout": 10},
+        # Finer than the exchange interval, and dividing it exactly.
+        "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
+    }), encoding="utf-8")
+    done = subprocess.run(
+        CLI + ["build-md", "-odir", "./REST2", "--config", str(root / "REST2.config")],
+        cwd=root, capture_output=True, text=True, timeout=600)
+    assert done.returncode == 0, done.stdout + done.stderr
+    return root
+
+
+@pytest.fixture(scope="module")
+def completed(project, tmp_path_factory):
+    import openmm
+    from openmm import XmlSerializer, unit
+    from openmm.app import PDBFile
+
+    pdb = PDBFile(str(project / "built.pdb"))
+    system = XmlSerializer.deserialize((project / "built.xml").read_text(encoding="utf-8"))
+    integrator = openmm.VerletIntegrator(1.0 * unit.femtosecond)
+    context = openmm.Context(system, integrator, openmm.Platform.getPlatformByName("Reference"))
+    context.setPositions(pdb.positions)
+    context.setVelocitiesToTemperature(300.0 * unit.kelvin, 1)
+    initial = project / "initial_state.xml"
+    initial.write_text(XmlSerializer.serialize(
+        context.getState(getPositions=True, getVelocities=True)), encoding="utf-8")
+
+    destination = tmp_path_factory.mktemp("remd-cv-run") / "run"
+    base = dict(os.environ)
+    base["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO / "src"), *([base["PYTHONPATH"]] if base.get("PYTHONPATH") else [])])
+    user = project / "user.config"
+    user.write_text(yaml.safe_dump(
+        {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
+    base["MD_TOOLS_CONFIG"] = str(user)
+    done = subprocess.run(
+        [sys.executable, str(project / "REST2" / "REST2.py"),
+         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+         "-c", str(initial), "-odir", str(destination), "--cpu"],
+        cwd=project / "REST2", capture_output=True, text=True, timeout=1800, env=base)
+    assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
+    return destination
+
+
+def _rows(path: Path):
+    lines = path.read_text(encoding="utf-8").splitlines()
+    header = lines[0].split(",")
+    return header, [dict(zip(header, line.split(","))) for line in lines[1:]]
+
+
+def test_there_is_one_series_per_state_named_for_the_state(completed):
+    found = sorted(p.name for p in completed.glob("remd*.cv.csv"))
+    assert found == ["remd0.cv.csv", "remd1.cv.csv", "remd2.cv.csv"], found
+
+
+def test_the_columns_are_the_documented_ones(completed):
+    header, _rows_ = _rows(completed / "remd0.cv.csv")
+    assert header == ["step", "time_ps", "exchange_attempt", "state_index", "tau",
+                      "walker_index", "exchange_phase", "trajectory_frame_index", "phi"]
+
+
+def test_each_file_reports_its_own_fixed_state_and_tau(completed):
+    """A state file must never report another state's index or another rung's tau."""
+    taus = {}
+    for index in range(3):
+        _header, rows = _rows(completed / f"remd{index}.cv.csv")
+        assert {row["state_index"] for row in rows} == {str(index)}
+        tau_values = {row["tau"] for row in rows}
+        assert len(tau_values) == 1, f"state {index} reported several taus: {tau_values}"
+        taus[index] = float(tau_values.pop())
+    # A linear ladder, cold first. If a file were written against a walker rather than a state,
+    # its tau would change as the walker moved.
+    assert taus[0] == 0.0 and taus[0] < taus[1] < taus[2]
+
+
+def test_the_cadence_is_finer_than_the_exchange_interval_and_lands_on_the_grid(completed):
+    """5-step observations inside a 10-step exchange interval, 4 exchanges: steps 5..40."""
+    _header, rows = _rows(completed / "remd0.cv.csv")
+    steps = [int(row["step"]) for row in rows]
+    assert steps == [5, 10, 15, 20, 25, 30, 35, 40], steps
+    assert len(steps) == len(set(steps)), "a step was observed twice"
+
+
+def test_every_state_file_has_the_same_steps(completed):
+    """They are written together; a file that drifted would misalign every later row."""
+    reference = [row["step"] for row in _rows(completed / "remd0.cv.csv")[1]]
+    for index in (1, 2):
+        assert [row["step"] for row in _rows(completed / f"remd{index}.cv.csv")[1]] == reference
+
+
+def test_the_walker_index_is_a_permutation_of_the_walkers_at_every_step(completed):
+    """THE state/walker claim.
+
+    At any step each walker occupies exactly one state, so reading the walker_index column across
+    the three files at a fixed step must give a permutation of {0, 1, 2}. A bug that wrote the
+    state index into the walker column, or that failed to follow an accepted swap, breaks this.
+    """
+    per_state = {index: _rows(completed / f"remd{index}.cv.csv")[1] for index in range(3)}
+    for position in range(len(per_state[0])):
+        walkers = sorted(int(per_state[index][position]["walker_index"]) for index in range(3))
+        assert walkers == [0, 1, 2], (
+            f"at step {per_state[0][position]['step']} the walkers were {walkers}")
+
+
+def test_the_walkers_actually_move_between_states(completed):
+    """Otherwise the permutation test above would pass on a ladder that never exchanged.
+
+    A ladder with no accepted exchange is a legitimate outcome of a short run, but it would make
+    every state/walker assertion here vacuous -- so this states plainly whether the run under test
+    exercised the case, and skips rather than passing silently if it did not.
+    """
+    _header, rows = _rows(completed / "remd0.cv.csv")
+    seen = {int(row["walker_index"]) for row in rows}
+    if len(seen) == 1:
+        pytest.skip(f"no accepted exchange in this short run; state 0 held walker {seen} "
+                    f"throughout, so the mapping was never exercised")
+    assert len(seen) > 1
+
+
+def test_every_row_is_marked_pre_exchange(completed):
+    """One convention, everywhere, written into the file rather than left to be inferred."""
+    for index in range(3):
+        _header, rows = _rows(completed / f"remd{index}.cv.csv")
+        assert {row["exchange_phase"] for row in rows} == {"pre-exchange"}
+
+
+def test_the_sidecar_states_the_convention_and_what_the_columns_mean(completed):
+    body = json.loads((completed / "remd1.cv.json").read_text(encoding="utf-8"))
+    assert body["state_index"] == 1
+    assert body["series_follows"] == "thermodynamic state"
+    assert body["exchange_phase"] == "pre-exchange"
+    assert "before any swap" in body["exchange_phase_meaning"]
+    assert "which walker supplied" in body["walker_index_meaning"]
+    assert body["units"] == "degrees"
+
+
+def test_a_cv_interval_that_does_not_divide_the_exchange_interval_is_refused(project, tmp_path):
+    """The grid has to be exact, or observations sit at different offsets in each interval."""
+    configuration = yaml.safe_load((project / "REST2.config").read_text(encoding="utf-8"))
+    configuration["collective_variables"]["interval_steps"] = 3      # 10 % 3 != 0
+    (tmp_path / "bad.config").write_text(yaml.safe_dump(configuration), encoding="utf-8")
+
+    done = subprocess.run(
+        CLI + ["build-md", "-odir", str(tmp_path / "bad"),
+               "--config", str(tmp_path / "bad.config")],
+        cwd=project, capture_output=True, text=True, timeout=600)
+    message = done.stdout + done.stderr
+    if done.returncode == 0:
+        # Refused at run time instead of build time is acceptable; refused nowhere is not.
+        base = dict(os.environ)
+        base["PYTHONPATH"] = str(REPO / "src")
+        base["MD_TOOLS_CONFIG"] = str(project / "user.config")
+        done = subprocess.run(
+            [sys.executable, str(tmp_path / "bad" / "REST2.py"),
+             "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+             "-odir", str(tmp_path / "bad-run"), "--cpu", "--check"],
+            cwd=tmp_path / "bad", capture_output=True, text=True, timeout=900, env=base)
+        message = done.stdout + done.stderr
+    assert done.returncode != 0, message[-3000:]
+    assert "does not divide" in message, message[-3000:]

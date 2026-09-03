@@ -78,15 +78,31 @@ def test_schedules_are_independent_and_land_on_exact_integer_steps():
 
 
 def test_simultaneous_events_resolve_in_one_fixed_order():
-    """When several schedules coincide, the order has to be defined once. Exchange first, so a
-    frame written at that step is the post-exchange state, and the checkpoint last, so it can
-    describe everything already written."""
+    """When several schedules coincide, the order has to be defined once.
+
+    Collective variables FIRST, so a row on an exchange boundary describes the configuration as
+    propagated rather than one that arrived from another rung; exchange next, so a frame written
+    at that step is the post-exchange state; and the checkpoint last, so it can describe
+    everything already written.
+    """
     schedule = EventSchedule(timestep_fs=2.0, exchange_interval_ps=2.0, number_of_exchanges=2,
                              whole_output_interval_ps=2.0, solute_output_interval_ps=2.0,
-                             checkpoint_interval_ps=2.0)
+                             checkpoint_interval_ps=2.0, cv_interval_steps=1_000)
     at = schedule.events_at(1_000)
     assert at == [kind for kind in EVENT_ORDER if kind in at]
-    assert set(at) == set(EVENT_ORDER)
+    assert set(at) == set(EVENT_ORDER), "a scheduled event kind is missing from this coincidence"
+    # The two orderings the conventions actually depend on, asserted rather than implied by the
+    # tuple's spelling.
+    assert at.index("cv") < at.index("exchange"), "CV rows would become post-exchange"
+    assert at.index("exchange") < at.index("whole") < at.index("checkpoint")
+
+
+def test_a_schedule_without_collective_variables_simply_has_no_cv_events():
+    """Reporting is off by default, and an absent interval must schedule nothing at all."""
+    schedule = EventSchedule(timestep_fs=2.0, exchange_interval_ps=2.0, number_of_exchanges=2,
+                             whole_output_interval_ps=2.0, checkpoint_interval_ps=2.0)
+    assert schedule.cv_steps is None
+    assert "cv" not in schedule.events_at(1_000)
 
 
 def test_propagation_never_steps_past_an_event():

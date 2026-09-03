@@ -175,6 +175,9 @@ class ReplicaRun:
         # The N per-state Amber trajectories. Root-only: only the root writes frames, so only the
         # root holds writers, and every other rank leaves this None for the whole run.
         self.trajectories = None
+        #: Per-thermodynamic-state collective-variable series. Root-only, like the trajectories:
+        #: only the root holds the gathered configurations every state's row is written from.
+        self.cv_states = None
         self.reservoir = None
         self._audit = None
         self._run_context = {}
@@ -261,6 +264,11 @@ class ReplicaRun:
             raise
         finally:
             interruption.restore()
+            if self.cv_states is not None:
+                # Closed on EVERY exit -- completion, interruption and failure alike. A series
+                # left open on the failure path would lose whatever the last buffer held, which is
+                # exactly the region a person reads to find out what went wrong.
+                self.cv_states.close()
         return result
 
     def _rung_systems(self):
@@ -288,6 +296,29 @@ class ReplicaRun:
                 f"describes {self.protocol.n_states} states. The plan and the ladder must be the "
                 f"same ladder; neither is inferred from the other.")
         return list(prepared_rungs), getattr(self.prepared, "force_audit", None)
+
+    def _open_cv_states(self, *, committed_rows=0):
+        """Open one collective-variable series per thermodynamic state, on the root.
+
+        Root-only for the same reason the trajectories are: only the root holds the gathered
+        configurations from which every state's row is written. A non-root rank opening these
+        would be N processes writing one set of paths.
+        """
+        if not self.coordinator.is_root:
+            return None
+        interval = getattr(self.protocol.schedule, "cv_steps", None)
+        if not interval:
+            return None
+        definition = getattr(self.prepared, "cv_definition", None)
+        if definition is None:
+            return None
+        from .cv_states import StateCVSet
+
+        return StateCVSet(
+            Path(self.files.trajectory).parent, definition,
+            taus=self.protocol.tau, interval_steps=int(interval),
+            fingerprint=getattr(self.prepared, "fingerprint", None),
+        ).open(committed_rows=int(committed_rows))
 
     def _fail_closed(self, state, identity, failure):
         """Report what happened if that is possible, and stop the whole communicator regardless.
@@ -455,6 +486,7 @@ class ReplicaRun:
                 taus=self.protocol.tau, n_atoms=configurations[0].n_atoms,
                 temperature_k=self.protocol.temperature_k, periodic=self._periodic,
                 program_version=environment_versions().get("md_tools", "0"))
+            self.cv_states = self._open_cv_states()
         self.coordinator.barrier()
 
         state = {
@@ -1044,6 +1076,20 @@ class ReplicaRun:
             state["configurations"] = self._gather_configurations(state)
 
             events = schedule.events_at(target)
+            # BEFORE the exchange, deliberately. `cv` precedes `exchange` in EVENT_ORDER and this
+            # call precedes `_exchange` here: a row landing on an exchange boundary describes the
+            # configuration the walker actually PROPAGATED to this step, not one that arrived
+            # from another rung and was never integrated at this tau. Writing it after the swap
+            # would put values from trajectories that never visited a state into that state's
+            # series. See `md_tools.remd.cv_states`.
+            if "cv" in events and self.cv_states is not None and self.coordinator.is_root:
+                self.cv_states.observe(
+                    step=target, time_ps=schedule.step_to_ps(target),
+                    exchange_attempt=state["exchange_index"],
+                    state_to_walker=state["state_to_walker"],
+                    configurations=state["configurations"],
+                    frame_index=state.get("frame_index") if "whole" in events else None)
+
             reservoir_event = None
             if "exchange" in events:
                 reservoir_event = self._exchange(state, rule, target, schedule)

@@ -532,6 +532,9 @@ class LadderPreflight(ExecutionPreflight):
     reservoir_digest: str | None = None
     #: What the source phase-space file actually proved: its path, frame count and time window.
     reservoir_source: dict[str, Any] | None = None
+    #: The validated collective-variable definition, parsed before any output exists so a
+    #: malformed cv.yaml refuses the run rather than failing at the first observation.
+    cv_definition: Any = None
 
 
 @dataclass(frozen=True)
@@ -1123,6 +1126,56 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                                 verified=collectively(coordination, _validate_source,
                                                       what="the rREST2 reservoir source"))
 
+    # -- the collective-variable definition ------------------------------------------------------
+    #
+    # Parsed HERE, before -odir exists. Left to the driver it would be read after the run
+    # directory, both logs and every helper were on disk, and a typo in an atom selector would
+    # refuse a ladder that had already written output.
+    cv_definition = None
+    cv_block = (ladder or {}).get("collective_variables") or {}
+    if cv_block.get("file") and int(cv_block.get("interval_steps") or 0) > 0 and loaded is not None:
+        def _definition():
+            from ..cv import CVDefinitionError, load_cv_definition
+
+            path = Path(cv_block["file"])
+            if not path.is_absolute():
+                # Relative to the directory holding `resolved.config` -- the GENERATED directory,
+                # where `build-md` put the content-addressed copy. Not `-odir`, which is where
+                # this run's output goes and holds no definition, and not the working directory,
+                # which only happens to be right when the script is launched from beside itself.
+                beside = (ladder or {}).get("resolved_config")
+                base = Path(beside).parent if beside else (
+                    Path(out_dir) if out_dir else Path("."))
+                path = base / path
+            try:
+                return load_cv_definition(path, topology=loaded.pdb.topology,
+                                          particles=loaded.system.getNumParticles())
+            except CVDefinitionError as refusal:
+                raise PreflightError(f"{protocol}: {refusal}") from None
+
+        cv_definition = collectively(coordination, _definition,
+                                     what="the collective-variable definition")
+
+        # The CADENCE, checked here too. `EventSchedule` enforces it, but it is constructed when
+        # the generated `_protocol.py` is loaded -- which `--check` never reaches, so an interval
+        # that does not divide the exchange interval passed `--check` and then failed the run.
+        # A preflight that cannot refuse what the run will refuse is not a preflight.
+        def _cadence():
+            from ..cv import CVScheduleError, check_divides
+
+            exchange = int((ladder or {}).get("exchange_interval_steps") or 0)
+            if exchange <= 0:
+                return None
+            try:
+                check_divides(int(cv_block["interval_steps"]), exchange,
+                              where=protocol,
+                              what=f"exchange_interval_steps ({exchange})")
+            except CVScheduleError as refusal:
+                raise PreflightError(f"{protocol}: {refusal}") from None
+            return None
+
+        collectively(coordination, _cadence, what="the collective-variable cadence")
+
     return LadderPreflight(coordination=coordination, machine=machine,
                            acceleration=acceleration, device_index=index,
                            device_policy=str(machine.get("device_policy") or "local_rank"),
@@ -1134,7 +1187,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                            tau_list=rungs_tau, rung_systems=rung_systems,
                            excluded_bonds=tuple(tuple(int(a) for a in b) for b in excluded_bonds),
                            reservoir_declaration=declaration, reservoir_digest=digest,
-                           reservoir_source=source_facts,
+                           reservoir_source=source_facts, cv_definition=cv_definition,
                            notes={"solute_document": solute_record} if solute_record else {})
 
 

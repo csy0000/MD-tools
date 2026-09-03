@@ -118,6 +118,7 @@ protocol = REST2Protocol(
     equilibration_ps={equilibration_ps},
     random_seed={seed},
     hydrogen_mass_amu=None,
+    cv_interval_steps={cv_interval_steps!r},
     platform={platform!r},
     precision=None,
 )
@@ -200,7 +201,9 @@ def protocol_file_text(ladder: dict[str, Any]) -> str:
         exchange_ps=exchange_ps, whole_ps=exchange_ps, solute_ps=exchange_ps,
         exchanges=int(ladder["number_of_exchanges"]),
         friction=float(dynamics["friction_per_ps"]), equilibration_ps=0.0,
-        seed=int(dynamics["seed"]), platform=dynamics.get("platform"))
+        seed=int(dynamics["seed"]), platform=dynamics.get("platform"),
+        cv_interval_steps=(int((ladder.get("collective_variables") or {}).get(
+            "interval_steps") or 0) or None))
 
 
 def replica_parser(description: str = "one coordinated replica-exchange ladder"):
@@ -684,6 +687,7 @@ def ladder_from_resolved(resolved: dict[str, Any], protocol: str) -> dict[str, A
         "neighbour_acceptance_report": resolved["rest2"]["neighbour_acceptance_report"],
         "reservoir": dict(resolved["reservoir"]),
         "dynamics": dict(resolved["dynamics"]),
+        "collective_variables": dict(resolved.get("collective_variables") or {}),
     }
 
 

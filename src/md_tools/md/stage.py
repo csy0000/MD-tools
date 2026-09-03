@@ -747,9 +747,16 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
 
                 interval = int(cv_block["interval_steps"])
                 observation_steps(steps, interval, where=f"stage {name}")
+                cv_path = Path(cv_block["file"])
+                if not cv_path.is_absolute():
+                    # Beside `resolved.config`, which is the generated directory `build-md`
+                    # copied the content-addressed definition into. Resolving against the working
+                    # directory only happens to work when the script is launched from beside
+                    # itself, and silently finds nothing -- or the wrong file -- otherwise.
+                    beside = stage.get("resolved_config")
+                    cv_path = (Path(beside).parent if beside else Path(".")) / cv_path
                 definition = load_cv_definition(
-                    cv_block["file"], topology=pdb.topology,
-                    particles=system.getNumParticles())
+                    cv_path, topology=pdb.topology, particles=system.getNumParticles())
                 cv_series = CVSeries(
                     cv_csv_path(traj_path, stage), definition,
                     extra_columns=("step", "time_ps", "trajectory_frame_index"),

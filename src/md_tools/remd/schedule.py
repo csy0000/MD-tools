@@ -36,7 +36,18 @@ SIMULTANEOUS EVENTS
 
 #: The event kinds, in the order they execute when they coincide. Do not reorder without changing
 #: the documented contract and the tests that assert it.
-EVENT_ORDER = ("exchange", "whole", "solute", "checkpoint")
+#: `cv` comes FIRST, and that ordering is the documented pre-exchange convention.
+#:
+#: A collective-variable row that lands on an exchange boundary describes the configuration the
+#: walker actually PROPAGATED to that step -- taken before any swap is applied. The alternative
+#: (post-exchange) would report, against a step, a configuration that arrived from another rung
+#: and was never integrated there, so a CV time series for one state would contain values from
+#: trajectories that never visited it at that step. Recording before the swap keeps every row
+#: attributable to dynamics that actually happened at that state's tau.
+#:
+#: One convention, used everywhere, and stated in the sidecar of every series so a reader never
+#: has to infer it.
+EVENT_ORDER = ("cv", "exchange", "whole", "solute", "checkpoint")
 
 
 class ScheduleError(ValueError):
@@ -73,7 +84,7 @@ class EventSchedule:
 
     def __init__(self, *, timestep_fs, exchange_interval_ps, number_of_exchanges,
                  whole_output_interval_ps=None, solute_output_interval_ps=None,
-                 checkpoint_interval_ps=None, equilibration_ps=0.0):
+                 checkpoint_interval_ps=None, equilibration_ps=0.0, cv_interval_steps=None):
         self.timestep_fs = float(timestep_fs)
         self.number_of_exchanges = int(number_of_exchanges)
         if self.number_of_exchanges < 1:
@@ -104,6 +115,22 @@ class EventSchedule:
         self.checkpoint_steps = exact_steps(self.checkpoint_interval_ps, self.timestep_fs,
                                             what="the checkpoint interval")
 
+        # Collective variables are scheduled in STEPS, not ps: the interval is required to divide
+        # the exchange interval exactly, and expressing that requirement in ps would put a
+        # floating-point conversion between the requirement and the check.
+        self.cv_steps = None if cv_interval_steps in (None, 0) else int(cv_interval_steps)
+        if self.cv_steps is not None:
+            if self.cv_steps < 1:
+                raise ScheduleError(
+                    f"the collective-variable interval must be >= 1 step; got {self.cv_steps}")
+            if self.exchange_steps % self.cv_steps:
+                raise ScheduleError(
+                    f"collective_variables.interval_steps = {self.cv_steps} does not divide the "
+                    f"exchange interval ({self.exchange_steps} steps). Every exchange interval "
+                    f"must hold a whole number of collective-variable observations, so that each "
+                    f"one lands on the same grid relative to its exchange boundary and the "
+                    f"spacing is uniform across the whole run.")
+
         self.equilibration_ps = float(equilibration_ps)
         self.equilibration_steps = (0 if self.equilibration_ps <= 0 else
                                     exact_steps(self.equilibration_ps, self.timestep_fs,
@@ -117,8 +144,9 @@ class EventSchedule:
 
     @property
     def intervals(self):
-        return {"exchange": self.exchange_steps, "whole": self.whole_steps,
-                "solute": self.solute_steps, "checkpoint": self.checkpoint_steps}
+        return {"cv": self.cv_steps, "exchange": self.exchange_steps,
+                "whole": self.whole_steps, "solute": self.solute_steps,
+                "checkpoint": self.checkpoint_steps}
 
     def step_to_ps(self, step):
         return step * self.timestep_fs / 1000.0

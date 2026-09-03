@@ -93,7 +93,7 @@ class REST2Protocol:
                  solute_output_interval_ps=None, checkpoint_interval_ps=None,
                  pressure_bar=None, friction_per_ps=1.0, equilibration_ps=0.0, random_seed=None,
                  hydrogen_mass_amu=None, constraint_tolerance=1.0e-8,
-                 platform=None, precision=None, **legacy):
+                 platform=None, precision=None, cv_interval_steps=None, **legacy):
         if "segment_ps" in legacy:
             raise ProtocolError(
                 "`segment_ps` is no longer a scientific input and its old meaning does not map "
@@ -147,7 +147,8 @@ class REST2Protocol:
                 whole_output_interval_ps=whole_output_interval_ps,
                 solute_output_interval_ps=solute_output_interval_ps,
                 checkpoint_interval_ps=checkpoint_interval_ps,
-                equilibration_ps=equilibration_ps)
+                equilibration_ps=equilibration_ps,
+                cv_interval_steps=cv_interval_steps)
         except ScheduleError as bad_schedule:
             # The schedule is built from protocol input, so a bad interval is a protocol error to
             # everyone holding a protocol. The message is the schedule's own, unchanged.
