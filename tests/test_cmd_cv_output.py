@@ -287,3 +287,58 @@ def test_enabling_cvs_changes_no_force_and_no_energy(project, tmp_path):
         energies.append(context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
             unit.kilojoule_per_mole))
     assert energies[0] == energies[1], f"the single-point energy differs: {energies}"
+
+
+def test_the_definition_is_copied_in_content_addressed_and_the_tree_is_movable(project,
+                                                                              tmp_path):
+    """The generated directory must carry its own definition, not a path to someone else's.
+
+    A generated tree is meant to be moved -- copied to a cluster, archived beside its results --
+    and an absolute path to a cv.yaml elsewhere survives none of that. It survives it SILENTLY
+    when the path happens to exist on the target machine and holds a different file, which is the
+    case this copy exists to make impossible.
+    """
+    import hashlib
+    import shutil
+
+    copies = sorted((project / "cMD").glob("cv.*.yaml"))
+    assert len(copies) == 1, f"expected one content-addressed definition, got {copies}"
+    digest = hashlib.sha256((project / "cv.yaml").read_bytes()).hexdigest()
+    assert copies[0].name == f"cv.{digest[:12]}.yaml", copies[0].name
+    assert copies[0].read_bytes() == (project / "cv.yaml").read_bytes()
+
+    resolved = yaml.safe_load((project / "cMD" / "resolved.config").read_text(encoding="utf-8"))
+    assert resolved["collective_variables"]["file"] == copies[0].name, (
+        "resolved.config still points outside the generated directory")
+
+    # The provenance is recorded, in the build record where the rest of it lives.
+    record = json.loads((project / "cMD" / "build-md.log.json").read_text(encoding="utf-8")) \
+        if (project / "cMD" / "build-md.log.json").is_file() else None
+    if record is not None:
+        facts = record.get("collective_variable_definition") or {}
+        assert facts.get("source_sha256") == digest
+        assert facts.get("source_path", "").endswith("cv.yaml")
+
+    # And the whole point: move the tree somewhere the original cv.yaml is not, and run it.
+    moved = tmp_path / "elsewhere"
+    moved.mkdir()
+    shutil.copytree(project / "cMD", moved / "cMD")
+    for name in ("built.pdb", "built.xml"):
+        shutil.copy(project / name, moved / name)
+    user = moved / "user.config"
+    user.write_text(yaml.safe_dump(
+        {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
+
+    base = dict(os.environ)
+    base["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO / "src"), *([base["PYTHONPATH"]] if base.get("PYTHONPATH") else [])])
+    base["MD_TOOLS_CONFIG"] = str(user)
+    destination = moved / "run"
+    done = subprocess.run(
+        [sys.executable, str(moved / "cMD" / "md.py"),
+         "-p", str(moved / "built.pdb"), "-s", str(moved / "built.xml"),
+         "-odir", str(destination), "--cpu"],
+        cwd=moved / "cMD", capture_output=True, text=True, timeout=1800, env=base)
+    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+    assert sorted(destination.rglob("*.cv.csv")), (
+        "the moved tree produced no CV series, so it was not self-contained")

@@ -887,6 +887,43 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
             f"and results that were produced by different settings side by side.")
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # -- the collective-variable definition, resolved and copied in -----------------------------
+    #
+    # Resolved relative to THE CONFIGURATION FILE, not the working directory: a run generated from
+    # `configs/md/cMD.config` naming `cv.yaml` means the one beside that config, and resolving
+    # against the caller's cwd makes the same configuration mean different things depending on
+    # where `build-md` was invoked from.
+    #
+    # Then COPIED IN, content-addressed. The generated directory is meant to be movable -- copied
+    # to a cluster, archived beside its results -- and an absolute path to a definition file
+    # somewhere else survives none of that. Worse, it survives it SILENTLY when the path happens
+    # to exist on the target machine and holds a different file. The copy is named by its digest
+    # so a definition that changed cannot quietly replace one a previous run used.
+    cv_provenance = None
+    cv_block = resolved.get("collective_variables") or {}
+    if cv_block.get("file"):
+        from ..cv import load_cv_definition
+
+        source = Path(cv_block["file"])
+        if not source.is_absolute() and config_path is not None:
+            source = (Path(config_path).parent / source).resolve()
+        # Parsed here, so a malformed definition is refused at BUILD time rather than by every
+        # generated script at run time -- and refused once, with the path the person wrote.
+        definition = load_cv_definition(source)
+        copied = out_dir / f"cv.{definition.digest[:12]}.yaml"
+        copied.write_bytes(source.read_bytes())
+        # Only `file` changes in the resolved configuration -- it is a SETTINGS document, and its
+        # schema rightly refuses keys that are not settings. Where the definition came from and
+        # what it hashed to are provenance of the BUILD, and are recorded in the build record
+        # below, which is where the rest of this generation's provenance already lives.
+        resolved["collective_variables"] = dict(cv_block, file=copied.name)
+        cv_provenance = {
+            "source_path": str(source),
+            "source_sha256": definition.digest,
+            "copied_as": copied.name,
+            "collective_variables": list(definition.names),
+        }
+
     plan = stage_plan(resolved)
     protocol = resolved["protocol"]
     log = LogWriter(out_dir / "build-md.log", record_type="build-md", echo=echo)
@@ -1029,7 +1066,8 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
     log.update(protocol=protocol, solvent=resolved["solvent"],
                all_in_one=bool(all_in_one), resolved_config=resolved,
                stages=[{k: v for k, v in s.items()} for s in plan],
-               files=written)
+               files=written,
+               **({"collective_variable_definition": cv_provenance} if cv_provenance else {}))
     log.complete()
     log.heading("Summary")
     log(f"  generated {len(written)} files in {out_dir}")
