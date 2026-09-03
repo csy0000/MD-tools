@@ -14,6 +14,32 @@ executable and three commands. Every detail, with the tests that verify it, is i
   executable, and the `md-template` environment installer. `pip install md-tools` replaces the
   installer; nothing replaces the rest, because the three commands cover what they did.
 
+### Torsion collective variables
+
+- new `collective_variables: {file, interval_steps}` section on every MD protocol, off by
+  default; supplying only one of the two keys is an error rather than a guess
+- a strict `cv.yaml` (v1: torsions only) naming atoms by zero-based index or by
+  chain/residue/atom selector; ambiguous selectors, duplicate names, unknown fields, duplicate
+  YAML keys and unsupported types are all refused rather than resolved
+- **observation only**: no `Force` is added, and `md_tools.cv` imports no OpenMM at all. The suite
+  asserts that enabling reporting leaves the System serialisation, force inventory, force groups
+  and single-point energy identical
+- degrees, wrapped to `[-180, 180)`, IUPAC/MDTraj sign, triclinic minimum image applied to the
+  three sequential bond vectors
+- a cadence independent of the trajectory and state-data intervals and possibly finer, required
+  to divide exactly: the cMD stage length, the REST2/rREST2 exchange interval, and for AIS to sit
+  on the parameter-update grid *and* divide `switching_steps`
+- one CSV per cMD stage, per REST2/rREST2 **thermodynamic state** (with `walker_index` and a
+  documented **pre-exchange** boundary convention), and per AIS path plus a verified-manifest-only
+  `AIS_cv.csv` aggregate; each with a JSON sidecar carrying units, conventions, digest and
+  resolved indices
+- the definition is resolved against the MD configuration file and copied content-addressed into
+  the generated directory, so a generated tree stays movable; on resume the series is truncated to
+  the checkpoint's committed count before appending
+- CV evaluation count and wall time are recorded under `cv_*`, never merged into energy evaluations
+
+See [`docs/collective_variables/README.md`](docs/collective_variables/README.md).
+
 ### Configuration
 
 - `configs/{machine,sys,md}/` are ordinary browsable files at the repository root, one copy each,

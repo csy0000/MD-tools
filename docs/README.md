@@ -20,6 +20,10 @@ is current is here.
 
 Each method page carries a minimal, runnable `example.config` beside it.
 
+| page | |
+|---|---|
+| [Collective variables](collective_variables/README.md) | torsion CV reporting: the `cv.yaml` schema, conventions, cadences and outputs |
+
 ## Science
 
 | page | |

@@ -100,7 +100,7 @@ Six browsable examples at the repository root, one copy each, shipped as wheel d
 ```text
 configs/machine/user.config.example        identity, $MD_DATA and the machine's OpenMM defaults
 configs/sys/build-top.config               force fields, solvent, box, ions, constraints, HMR
-configs/md/{cMD,REST2,rREST2,AIS}.config   protocol, stage lengths, reporting
+configs/md/{cMD,REST2,rREST2,AIS}.config   protocol, stage lengths, reporting, collective variables
 ```
 
 They are YAML despite the `.config` suffix, unknown keys are refused with a suggestion, and every
@@ -113,6 +113,7 @@ duration is an integer step count. Smaller, task-sized examples live beside each
 |---|---|
 | [Running](docs/md-run.md) | `md-run`: the flags, the `.in` language, CUDA policy, MPI ladders, AIS paths and their outputs |
 | [Methods](docs/openmm_methods/README.md) | cMD, REST2, rREST2 and AIS: purpose, inputs, generated files, restart, limitations |
+| [Collective variables](docs/collective_variables/README.md) | torsion CV reporting: the `cv.yaml` schema, conventions, exact cadences, outputs per protocol |
 | [Scientific defaults](docs/scientific-defaults.md) | every consequential default, the evidence for it, and what that evidence does not support |
 | [Data registration](docs/data_register/README.md) | `--init`, canonical paths, the transaction, extensions |
 | [The dataset contract](docs/data-contract.md) | the schema-level authority for records |

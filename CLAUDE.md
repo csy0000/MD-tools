@@ -238,6 +238,37 @@ Do not change these without a failing test that demonstrates a defect.
 * **A scaled run (`dynamics.tau > 0`) is fixed-volume throughout**, equilibration included, and
   its pressure-coupled stages are RENAMED exactly as the implicit ones are — never NPT with the
   pressure ignored.
+* **Collective-variable reporting is OBSERVATION, and adds no Force.** v1 is torsions only, read
+  from a strict `cv.yaml`. Nothing in `md_tools.cv` imports OpenMM — a test asserts it through the
+  AST — and the evaluation is arithmetic over positions the reporting point already had. Adding a
+  `CustomTorsionForce` would change the System's serialisation, its force groups and the
+  checkpoint that records them, so a CV-enabled run would stop being the same experiment as a
+  CV-disabled one and every comparison between them would be invalid. The suite asserts the
+  System, force inventory, force groups and a single-point energy are *identical* with reporting
+  on and off.
+* **A CV cadence is independent of every other cadence, and must be exact.** It may be finer than
+  the trajectory — that is the point of a separate series. `interval_steps` divides the cMD stage
+  length, the REST2/rREST2 `exchange_interval_steps`, and for AIS is a multiple of
+  `parameter_update_interval_steps` *and* divides `switching_steps`. Step 0 and the final step
+  appear exactly once; minimisation produces no series, because its iterations have no timestep
+  and a `time_ps` for them would be a fiction. An interval that does not divide is refused, never
+  rounded: a final partial gap breaks the uniform spacing every downstream time-series analysis
+  assumes and none can detect.
+* **A CV series follows a thermodynamic STATE, as trajectories do.** `remd2.cv.csv` holds
+  whatever configuration occupied state 2, and `walker_index` says which walker supplied it. Rows
+  on an exchange boundary are **pre-exchange** — the configuration as propagated, before any swap
+  — so a state's series never contains values from a trajectory that never visited it. The
+  convention is enforced structurally (`cv` precedes `exchange` in `EVENT_ORDER`) and written
+  into every row and sidecar rather than left to be inferred.
+* **An AIS CV row aligned to an observation was measured on exactly that saved coordinate.**
+  `observation_index` and `coordinate_frame_index` are empty when the cadence does not coincide
+  with one, never filled with a nearest neighbour. Attaching a CV measured at `x_j` to a
+  different observation's coordinate is the same class of error the two-probe separation exists
+  to prevent, and it is invisible in the output.
+* **CV output failure is simulation failure.** Reporting is never silently disabled, and CV
+  evaluation count and wall time are recorded under their own `cv_*` names — a position-only
+  torsion is not an energy evaluation, and folding it into that total would corrupt the one
+  number that says how expensive the Hamiltonian is.
 
 ## Test lanes
 
