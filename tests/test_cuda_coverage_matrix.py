@@ -267,6 +267,42 @@ def test_the_inventory_looks_for_more_than_constructors():
         assert kind in seen, f"no source site performs {kind!r}; the matcher is not matching"
 
 
+def test_an_unclassified_reporter_site_actually_fails_the_inventory(tmp_path, monkeypatch):
+    """The guard on the guard, run against a site that does not exist yet.
+
+    `test_every_cuda_operation_in_the_source_is_in_this_matrix` passes today. That is exactly the
+    state a broken matcher produces too: a pattern that matches nothing classifies nothing and
+    reports no unclassified sites. So this ADDS a source file with a reporter that pulls CUDA
+    state off the device, leaves it out of both tables, and requires the inventory to say so.
+
+    A reporter is the case worth pinning: it is attached once and then runs on every reporting
+    step for the rest of the simulation, which makes it the highest-frequency CUDA consumer in
+    the package and the easiest one to add without noticing.
+    """
+    package = tmp_path / "md_tools"
+    (package / "md").mkdir(parents=True)
+    (package / "md" / "new_reporter.py").write_text(
+        "class DensityReporter:\n"
+        "    def report(self, simulation, state):\n"
+        "        volume = state.getPeriodicBoxVolume()\n"
+        "        return volume\n"
+        "\n"
+        "def attach(simulation, path):\n"
+        "    simulation.reporters.append(DCDReporter(path, 100))\n",
+        encoding="utf-8")
+
+    monkeypatch.setattr(sys.modules[__name__], "SRC", package)
+    found = _cuda_operation_sites()
+    unclassified = set(found) - (set(CUDA_SITES) | set(NON_CUDA_CONTEXT_SITES))
+    assert "md/new_reporter.py::DensityReporter.report" in unclassified, (
+        "a reporter reading CUDA box state was not detected as a CUDA-relevant site; the matcher "
+        "is matching nothing and the matrix's completeness claim is empty")
+    assert "md/new_reporter.py::attach" in unclassified, (
+        "a reporter CONSTRUCTION site was not detected")
+    assert found["md/new_reporter.py::DensityReporter.report"] == {"derive"}
+    assert found["md/new_reporter.py::attach"] == {"report"}
+
+
 def test_every_matrix_entry_still_names_a_function_that_exists():
     """The other direction: an entry left behind after a rename claims coverage of nothing."""
     stale = []
@@ -1509,3 +1545,32 @@ def test_write_the_coverage_evidence(hardware, request):
                      f"{entry['device']} | {entry['result']} | {entry['detail']} |")
     Path(destination).write_text("\n".join(lines) + "\n", encoding="utf-8")
     assert Path(destination).is_file()
+
+    # THE MACHINE-READABLE ARTEFACT, beside the prose. A table is for a person deciding whether to
+    # trust the run; this is for anything that has to compare two runs, or check a claim in a
+    # report against what the lanes actually did, without parsing markdown.
+    import datetime
+    import platform
+
+    evidence = {
+        "commit": commit,
+        "dirty": dirty,
+        "generated_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "python": platform.python_version(),
+        "openmm": openmm_version.full_version,
+        "driver": hardware[0]["driver"] if hardware else None,
+        "devices": hardware,
+        "source_sites": {
+            "total": len(found),
+            "exercised_by_a_lane": len(CUDA_SITES),
+            "classified_as_not_reaching_a_device": len(NON_CUDA_CONTEXT_SITES),
+            "unclassified": 0,
+            "by_operation": by_kind,
+            "sites": {site: sorted(kinds) for site, kinds in sorted(found.items())},
+            "lanes_for_site": {site: lane for site, (_what, lane) in sorted(CUDA_SITES.items())},
+        },
+        "lanes": RESULTS,
+    }
+    machine = Path(destination).with_suffix(".json")
+    machine.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    assert machine.is_file()
