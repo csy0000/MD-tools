@@ -406,6 +406,10 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
             # moment later. It was in no inventory, so a launch that found a stale one from
             # another ladder would have drawn its probability-one transfers from it.
             reservoir=bool(ladder.get("reservoir", {}).get("enabled")),
+            # The ladder description and the output directory, so the reservoir declaration is
+            # BUILT AND VALIDATED HERE -- before `-odir` exists. It used to be built at helper
+            # publication time, below, with the run directory already created.
+            ladder=ladder, out_dir=out,
             tau=float(ladder["tau_max"]))
     except PreflightError as refusal:
         print(f"{protocol_name}: {refusal}", file=sys.stderr)
@@ -496,11 +500,14 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
                                                protocol_file, solute_yaml)
     reservoir_file = None
     if ladder.get("reservoir", {}).get("enabled"):
-        # Validated HERE, by every rank, from the file itself -- and written by rank 0 alone.
-        # `reservoir.yaml` is read by every rank a moment later, so a concurrent rewrite is a rank
-        # parsing another rank's half-written YAML.
+        # CONSUMED from the preflight, which built this text and validated the source before the
+        # run directory existed. It used to call `reservoir_declaration_text(ladder, out)` right
+        # here -- opening the phase-space file for the first time with `-odir` already created,
+        # so a reservoir that was missing, empty or unreadable was discovered too late to say
+        # nothing had been started. Rank 0 still publishes it alone and every rank verifies the
+        # bytes, which is what the digest below is for.
         reservoir_file = out / "reservoir.yaml"
-        helpers[reservoir_file] = reservoir_declaration_text(ladder, out)
+        helpers[reservoir_file] = checked.reservoir_declaration
 
     if args.verify_only:
         from ..remd import executor as replica_executor

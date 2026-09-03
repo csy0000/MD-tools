@@ -44,9 +44,12 @@ destroyed the thing it was protecting.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 __all__ = ["PreflightError", "ExecutionPreflight", "StagePreflight", "LadderPreflight",
            "AISPreflight", "preflight_stage", "preflight_ladder", "preflight_ais",
@@ -508,6 +511,17 @@ class LadderPreflight(ExecutionPreflight):
     force_audit: dict[str, Any] | None = None
     scaled_system: Any = None
     excluded_bonds: tuple = ()
+    #: The solute selection this ladder scales, as resolved here. Carried as a field rather than
+    #: left in `notes` so the executor can CONSUME it instead of re-deriving it from `solute.yaml`.
+    solute_indices: tuple = ()
+    #: rREST2 only. The exact `reservoir.yaml` text rank 0 will publish, built and validated
+    #: BEFORE `-odir` exists -- see `preflight_ladder`. Carried here so the source is opened once,
+    #: by the preflight, rather than reopened after output creation to rediscover the same facts.
+    reservoir_declaration: str | None = None
+    #: sha256 of `reservoir_declaration`, so every rank can verify it reads the bytes rank 0 wrote.
+    reservoir_digest: str | None = None
+    #: What the source phase-space file actually proved: its path, frame count and time window.
+    reservoir_source: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -944,7 +958,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                      protocol="this ladder", pending_parent=None, timestep_fs=None,
                      ensemble=None, tau=0.0, solute_indices=None, excluded_bonds=(),
                      route=None, source_trajectory=None,
-                     reservoir=False) -> LadderPreflight:
+                     reservoir=False, ladder=None, out_dir=None) -> LadderPreflight:
     """A REST2 or rREST2 ladder. `-ng`, the configured state count and the world must agree."""
     if source_trajectory is not None:
         _reject_flags_outside_their_protocol(protocol_name="a REST2/rREST2 ladder",
@@ -999,6 +1013,63 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
         audit, scaled = check_scaling_plan(loaded, solute_indices=solute_indices,
                                            excluded_bonds=excluded_bonds, tau=tau, where=protocol)
 
+    # -- the rREST2 reservoir, validated HERE ---------------------------------------------------
+    #
+    # It used to be built at helper-publication time, after `out.mkdir()`: a reservoir that did
+    # not exist, held no frames, or could not be read as phase space was discovered with the run
+    # directory already created. Worse, the same source was then opened AGAIN by the driver, after
+    # `_begin` had created the analysis file and the per-state trajectories, to rediscover facts
+    # this step had already established -- two readings of one file, either of which could be the
+    # one that refuses.
+    #
+    # Everything predictable about the source is therefore settled before a single byte of output
+    # exists, and the exact text rank 0 will publish is carried out of here with its digest.
+    declaration = digest = source_facts = None
+    if reservoir and ladder is not None:
+        def _declare():
+            from ..remd.generated import reservoir_declaration_text
+
+            try:
+                return reservoir_declaration_text(ladder, Path(out_dir) if out_dir else Path("."))
+            except SystemExit as refusal:
+                raise PreflightError(f"{protocol}: {refusal}") from None
+
+        # Collectively: a reservoir every rank can see is a different failure from one only some
+        # ranks can, and a plural launch must refuse as a whole rather than have rank 3 alone walk
+        # into a barrier the others already left.
+        declaration = collectively(coordination, _declare, what="the rREST2 reservoir")
+        digest = hashlib.sha256(declaration.encode("utf-8")).hexdigest()
+        source_facts = (yaml.safe_load(declaration) or {}).get("source")
+
+        # And the DEEPER checks, still read-only, still before any output: that the source records
+        # the same Hamiltonian as the top rung this ladder will refresh, holds the velocities the
+        # policy needs, and describes this molecule. Those used to run only from the driver's
+        # `_prepare`, after `_begin` had created the analysis file and the per-state
+        # trajectories -- so a source recorded at another tau failed a ladder that had already
+        # written output. `_prepare` still checks them (it is what materialises the reservoir, and
+        # a check that runs only elsewhere can be bypassed); this is the same code called early.
+        if scaled is not None:
+            def _validate_source():
+                from ..remd.reservoir import ReservoirError, validate_source_read_only
+
+                try:
+                    return validate_source_read_only(
+                        yaml.safe_load(declaration),
+                        # The declaration records `phase_space` relative to the run directory's
+                        # PARENT, which is what `_prepare` resolves it against too.
+                        declaration_directory=(Path(out_dir).parent if out_dir else Path(".")),
+                        system=scaled, tau_max=float(tau),
+                        temperature_k=float(ladder["dynamics"]["temperature_K"]),
+                        solute_indices=solute_indices or (),
+                        excluded_bonds=excluded_bonds or (),
+                        periodic=bool(scaled.usesPeriodicBoundaryConditions()))
+                except ReservoirError as refusal:
+                    raise PreflightError(f"{protocol}: {refusal}") from None
+
+            source_facts = dict(source_facts or {},
+                                verified=collectively(coordination, _validate_source,
+                                                      what="the rREST2 reservoir source"))
+
     return LadderPreflight(coordination=coordination, machine=machine,
                            acceleration=acceleration, device_index=index,
                            device_policy=str(machine.get("device_policy") or "local_rank"),
@@ -1006,7 +1077,10 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                            timestep=resolved_timestep, replicas=int(replicas),
                            inventory=inventory,
                            force_audit=audit, scaled_system=scaled,
+                           solute_indices=tuple(int(i) for i in (solute_indices or ())),
                            excluded_bonds=tuple(tuple(int(a) for a in b) for b in excluded_bonds),
+                           reservoir_declaration=declaration, reservoir_digest=digest,
+                           reservoir_source=source_facts,
                            notes={"solute_document": solute_record} if solute_record else {})
 
 

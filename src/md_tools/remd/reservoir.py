@@ -540,3 +540,74 @@ class ReservoirRefreshRule:
             "state": top_state, "frame": frame, "interval_exchanges": interval}
         return outcome
 
+
+
+def validate_source_read_only(declaration, *, declaration_directory, system, tau_max,
+                              temperature_k, solute_indices, excluded_bonds, periodic):
+    """Every predictable fact about a reservoir source, checked WITHOUT writing anything.
+
+    WHY THIS EXISTS SEPARATELY FROM `_prepare`
+
+        `_prepare` does these checks too, and it has to -- it is the thing that materialises the
+        reservoir, and a check that only runs somewhere else is a check that can be bypassed. But
+        `_prepare` runs from the driver, after `_begin` has created the analysis file and the
+        per-state trajectories, which is far too late for the answer to be useful: a source
+        recording a different Hamiltonian, holding no velocities, or describing another molecule
+        is knowable from the source and the ladder alone, before a single output exists.
+
+        So the PREDICTABLE subset runs here, from the preflight. Same helpers, same refusals, same
+        messages -- this deliberately calls `require_same_hamiltonian` and `reader.validate`
+        rather than restating their rules, so the early check and the late one cannot drift into
+        disagreeing about what a usable reservoir is.
+
+    Read-only in the strict sense: it opens the source, reads it, and closes it. Nothing is
+    created, and no directory is made.
+    """
+    policy = str(declaration.get("velocity_policy", DEFAULT_VELOCITY_POLICY)).lower()
+    if policy not in VELOCITY_POLICIES:
+        raise ReservoirError(
+            f"velocity_policy {policy!r} is not one of {list(VELOCITY_POLICIES)}. `stored` is the "
+            f"default and installs the recorded momentum; `maxwell` must be asked for explicitly.")
+
+    source = declaration["source"]
+    configured = str(source["phase_space"])
+    source_path = Path(configured)
+    if not source_path.is_absolute():
+        source_path = (Path(declaration_directory) / configured).resolve()
+    if not source_path.is_file():
+        raise ReservoirError(
+            f"rREST2.reservoir.source.phase_space = {configured!r} does not resolve to a file.\n"
+            f"  Looked for: {source_path}\n"
+            f"  A phase-space reservoir needs a source that RECORDED velocities. A fixed-tau cMD "
+            f"run writes one when its phase-space interval is set; a DCD cannot be used.")
+
+    with phase_space.PhaseSpaceReader(source_path) as reader:
+        problems = reader.validate(expect_atoms=system.getNumParticles(),
+                                   expect_periodic=periodic,
+                                   require_velocities=(policy == "stored"))
+        if problems:
+            raise ReservoirError(
+                "the phase-space source is not usable:\n  - " + "\n  - ".join(problems))
+
+        # The source must sample the distribution it will refresh: the TOP rung, at the ladder's
+        # tau_max. A source recorded at another tau, temperature or solute selection is a
+        # different distribution wearing the same file name, and the resulting transfers would be
+        # accepted with probability one into a state they were never drawn from.
+        recorded = (reader.identity or {}).get("hamiltonian")
+        current = hamiltonian_identity.identity_record(
+            system, tau=float(tau_max), temperature_k=float(temperature_k), ensemble="NVT",
+            solute_indices=list(solute_indices), excluded_bonds=list(excluded_bonds))
+        hamiltonian_identity.require_same_hamiltonian(recorded, current, what="reservoir source")
+
+        times = reader.times()
+        frames = int(reader.n_frames)
+
+    if frames < 1:
+        raise ReservoirError(f"{source_path} holds no frames; there is nothing to refresh from.")
+    return {
+        "path": str(source_path),
+        "frames": frames,
+        "start_time_ps": float(min(times)) if len(times) else 0.0,
+        "end_time_ps": float(max(times)) if len(times) else 0.0,
+        "velocity_policy": policy,
+    }

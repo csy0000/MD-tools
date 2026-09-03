@@ -157,6 +157,46 @@ def workspace(tmp_path_factory):
 
     frames = mdtraj.load(str(root / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
+
+    # A GENUINE PHASE-SPACE RESERVOIR, for exactly the reason the DCD above is genuine.
+    #
+    # The rREST2 declaration is now built and validated by the PREFLIGHT, before `-odir` exists,
+    # rather than at helper-publication time with the run directory already created. That means
+    # `--check` -- which is preflight and nothing else -- now opens this file, counts its frames
+    # and reads its time axis. A path that merely does not exist tested nothing once the check
+    # moved ahead of the output; it now correctly refuses.
+    from md_tools.md.phase_space import PhaseSpaceWriter
+    from md_tools.remd.generated import solute_document
+    from md_tools.rest2 import identity as hamiltonian_identity
+    from md_tools.run.preflight import check_scaling_plan, load_inputs
+
+    # The identity has to be the TOP RUNG's, because that is the distribution a refresh would
+    # draw from and the preflight now checks it. Built through the same helpers the ladder uses:
+    # restating it by hand would only prove the fixture and the checker agree about a dictionary.
+    loaded = load_inputs(str(root / "built.pdb"), str(root / "built.xml"))
+    document = solute_document(loaded.pdb.topology, loaded.system, route=None)
+    span = document.get("solute_atom_range")
+    if span and document.get("solute_atom_indices_are_contiguous", False):
+        indices = list(range(int(span[0]), int(span[1]) + 1))
+    else:
+        indices = list(range(int(document["n_solute_atoms"])))
+    excluded = [tuple(int(a) for a in pair)
+                for pair in (document.get("rest2") or {}).get("omega_excluded_bonds", [])]
+    _audit, top_rung = check_scaling_plan(loaded, solute_indices=indices,
+                                          excluded_bonds=excluded, tau=0.5, where="fixture")
+
+    positions = frames.xyz[0]
+    writer = PhaseSpaceWriter(
+        root / "reservoir.nc", n_atoms=positions.shape[0], periodic=False,
+        identity={"hamiltonian": hamiltonian_identity.identity_record(
+            top_rung, tau=0.5, temperature_k=300.0, ensemble="NVT",
+            solute_indices=indices, excluded_bonds=excluded)})
+    try:
+        for index in range(4):
+            writer.append(positions=positions, velocities=positions * 0.0, box=None,
+                          step=index * 5, time_ps=float(index))
+    finally:
+        writer.close()
     return root
 
 
