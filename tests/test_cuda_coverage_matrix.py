@@ -526,9 +526,19 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
     record = read_record(work / "run" / "AIS.log")
     assert record["acceleration"]["resolved_platform"] == "CUDA", record["acceleration"]
     decomposition = record["decomposition"]
-    assert decomposition["potential_energy_evaluations_per_update"] == 3
-    assert decomposition["switching_energy_evaluations"] > 0
-    assert decomposition["switching_energy_evaluation_seconds"] > 0.0
+    assert decomposition["potential_energy_evaluations_per_probe"] == 3
+    counters = decomposition["evaluation_counters"]
+    # Four counters and their sum, not one number: the old `switching_energy_evaluations` counted
+    # basis probes and omitted the two direct evaluations every switch already performed.
+    assert counters["basis_probe_energy_evaluations"] > 0
+    assert counters["direct_work_energy_evaluations"] > 0
+    assert counters["observation_energy_evaluations"] > 0
+    assert counters["total_potential_energy_evaluations"] == (
+        counters["basis_probe_energy_evaluations"]
+        + counters["direct_work_energy_evaluations"]
+        + counters["observation_energy_evaluations"])
+    assert counters["parameter_updates"] > 0
+    assert counters["probe_seconds"] > 0.0
 
     with (work / "run" / "AIS_work.csv").open(newline="") as handle:
         rows = list(csv.DictReader(handle))
@@ -555,8 +565,12 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
             feature="AIS implicit, three-group decomposition and work-sum identity",
             precision=precision, device=record["acceleration"].get("cuda_device_index") or "-",
             detail=f"{checked} rows checked; "
-                   f"{decomposition['switching_energy_evaluations']} probe evaluations in "
-                   f"{decomposition['switching_energy_evaluation_seconds']:.3f} s")
+                   f"{counters['total_potential_energy_evaluations']} energy evaluations "
+                   f"({counters['basis_probe_energy_evaluations']} probe, "
+                   f"{counters['direct_work_energy_evaluations']} work, "
+                   f"{counters['observation_energy_evaluations']} observation), "
+                   f"{counters['parameter_updates']} parameter updates in "
+                   f"{counters['probe_seconds']:.3f} s")
 
 
 def test_ais_reads_a_netcdf_source_on_cuda(built, hardware, tmp_path):
@@ -1085,8 +1099,11 @@ def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):
             feature="AIS explicit (PME), three-group identity through the reciprocal sum",
             precision=precision, device=record["acceleration"].get("cuda_device_index") or "-",
             detail=f"{len(rows)} rows, worst |sum - total| = {worst:.3e} kJ/mol; "
-                   f"{decomposition['switching_energy_evaluations']} probe evaluations in "
-                   f"{decomposition['switching_energy_evaluation_seconds']:.3f} s"
+                   f"{decomposition['evaluation_counters']['total_potential_energy_evaluations']}"
+                   f" energy evaluations, "
+                   f"{decomposition['evaluation_counters']['parameter_updates']} parameter "
+                   f"updates in "
+                   f"{decomposition['evaluation_counters']['probe_seconds']:.3f} s"
                    + (f"; {particles} particles" if particles else ""))
 
 
@@ -1134,18 +1151,19 @@ def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_expli
 
         record = read_record(work / "run" / "AIS.log")
         assert record["acceleration"]["resolved_platform"] == "CUDA"
-        decomposition = record["decomposition"]
-        evaluations = int(decomposition["switching_energy_evaluations"])
-        seconds = float(decomposition["switching_energy_evaluation_seconds"])
-        assert evaluations > 0 and seconds > 0.0
-        measured[label] = (evaluations, seconds, seconds / evaluations)
+        counters = record["decomposition"]["evaluation_counters"]
+        evaluations = int(counters["total_potential_energy_evaluations"])
+        pushes = int(counters["parameter_updates"])
+        seconds = float(counters["probe_seconds"])
+        assert evaluations > 0 and pushes > 0 and seconds > 0.0
+        measured[label] = (evaluations, pushes, seconds, seconds / max(evaluations, 1))
 
-    for label, (evaluations, seconds, each) in measured.items():
+    for label, (evaluations, pushes, seconds, each) in measured.items():
         _record("test_the_decomposition_cost_is_measured_on_a_large_system",
                 feature=f"decomposition overhead, AIS {label}, update interval 1 step",
                 precision="mixed", device="-",
-                detail=f"{evaluations} probe evaluations in {seconds:.3f} s "
-                       f"({each * 1000:.2f} ms each)")
+                detail=f"{evaluations} energy evaluations and {pushes} parameter updates in "
+                       f"{seconds:.3f} s of probing ({each * 1000:.2f} ms per evaluation)")
     # Not a performance assertion -- hardware varies and a threshold here would be a flaky test
     # pretending to be a measurement. What is asserted is that the number EXISTS for both sizes,
     # which is what "measured and documented" requires.

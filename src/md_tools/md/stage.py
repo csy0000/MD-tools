@@ -121,10 +121,8 @@ def stage_parser(description: str) -> argparse.ArgumentParser:
                         help="validate inputs and settings, then exit without integrating. "
                              "READ-ONLY: it creates nothing, not even the output directory")
     parser.add_argument("--resume", action="store_true",
-                        help="continue this stage from its committed checkpoint. The one cMD "
-                             "resume contract: the committed pointer is followed, the "
-                             "configuration fingerprint must match, and the appendable streams "
-                             "are cut back to the counts that checkpoint vouches for")
+                        help="accepted for symmetry with the other protocols and NOT required: "
+                             "an interrupted stage resumes automatically. See the contract below")
     parser.add_argument("--overwrite", action="store_true",
                         help="replace the stage's COMPLETE existing output inventory -- the "
                              "reports, the trajectory, the phase-space stream, the restart and "
@@ -303,6 +301,16 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         print(f"{refusal}", file=sys.stderr)
         return 2
 
+    try:
+        from ..run.preflight import reject_contradictory_continuation
+
+        reject_contradictory_continuation(resume=bool(getattr(args, "resume", False)),
+                                          overwrite=bool(getattr(args, "overwrite", False)),
+                                          what=f"stage {name}")
+    except PreflightError as refusal:
+        print(f"{refusal}", file=sys.stderr)
+        return 2
+
     if args.check:
         # READ-ONLY, and it returns HERE. `--check` used to create `-odir`, the `.out` and the
         # `.log`, validate, and write `status: checked` -- leaving behind exactly the directory
@@ -340,18 +348,40 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
     from ..openmm.checkpoint import read_committed as _read_committed
     from ..run.preflight import check_existing_outputs
 
-    # INTERRUPTED, which is not the same as "has a checkpoint". A stage that finished commits a
-    # final generation too, so the presence of one says nothing on its own -- the discriminator is
-    # whether that generation is short of this stage's step count.
+    # THE ONE cMD RESUME CONTRACT, stated here because this is where it is decided:
     #
-    # An interrupted run continues, and that is not something `--overwrite` has to be asked for.
-    # That is the one cMD resume contract: an interrupted stage continues from its committed
-    # pointer, a completed one is skipped, and only a directory that is neither -- half a run
-    # nobody claimed -- has to be answered for.
-    try:
-        committed_now = _read_committed(chk_path.parent / f"{chk_path.stem}.checkpoints")
-    except _CheckpointError:
+    #   an INTERRUPTED stage -- one whose committed checkpoint is short of its step count --
+    #   continues from that checkpoint, automatically, with every appendable stream truncated to
+    #   the counts that generation vouches for;
+    #
+    #   a COMPLETED stage -- whose log verifies and whose outputs are present and match -- is
+    #   skipped;
+    #
+    #   anything else, a directory holding half a run nobody claimed, is refused until
+    #   `--overwrite` says to replace it.
+    #
+    # `--resume` is therefore NOT required, and is accepted only so the four protocols take the
+    # same flags. Requiring it would mean an interrupted stage that is simply re-run silently
+    # starts over, discarding committed work -- the failure the checkpoint exists to prevent.
+    #
+    # "Interrupted" is not "has a checkpoint": a stage that FINISHED commits a final generation
+    # too, so the presence of one says nothing. The discriminator is whether that generation is
+    # short of this stage's step count.
+    checkpoint_tree = chk_path.parent / f"{chk_path.stem}.checkpoints"
+    if args.overwrite:
+        # `--overwrite` starts CLEANLY. Leaving the generations in place meant the resume branch
+        # below loaded one of them and continued a run the caller had just asked to replace --
+        # so `--overwrite` produced a run that was half the old one.
+        import shutil
+
+        if checkpoint_tree.is_dir():
+            shutil.rmtree(checkpoint_tree)
         committed_now = None
+    else:
+        try:
+            committed_now = _read_committed(checkpoint_tree)
+        except _CheckpointError:
+            committed_now = None
     interrupted = (committed_now is not None
                    and int(committed_now["state"].get("steps_done", 0))
                    < int(stage.get("steps") or 0))

@@ -499,3 +499,19 @@ def test_a_supplied_group_file_does_not_cause_a_default_one_to_be_written(worksp
     assert not (destination / "REST2.group").exists(), (
         "a default group file was written although one was supplied:\n"
         + (done.stdout + done.stderr)[-1500:])
+
+
+def test_resume_and_overwrite_together_are_refused(workspace, tmp_path, good_config):
+    """One says continue, the other says start over. Precedence is the wrong way to settle that.
+
+    The two outcomes are "your previous work continues" and "your previous work is gone", and a
+    person who typed both should be told rather than given whichever the implementation happened
+    to check first.
+    """
+    for mode in ("split", "AIS"):
+        destination = tmp_path / f"contradiction-{mode}"
+        before = _snapshot(destination)
+        done = _launch(workspace, mode, destination, "--resume", "--overwrite", *PROTOCOL_ONLY,
+                       environment=good_config)
+        _refused(done, fragment="contradict")
+        _untouched(destination, before)

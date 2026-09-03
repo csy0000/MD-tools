@@ -97,7 +97,7 @@ def _user_config(directory: Path) -> dict[str, str]:
     return {"MD_TOOLS_CONFIG": str(path)}
 
 
-def _run_stage(project_root: Path, work: Path, *, environment=None, timeout=900):
+def _run_stage(project_root: Path, work: Path, *, environment=None, timeout=900, extra=()):
     """The production stage, in its own directory, as a subprocess."""
     base = dict(os.environ)
     base["PYTHONPATH"] = os.pathsep.join(
@@ -107,7 +107,7 @@ def _run_stage(project_root: Path, work: Path, *, environment=None, timeout=900)
     return subprocess.run(
         [sys.executable, str(project_root / "project" / "cMD.py"),
          "-p", str(project_root / "built.pdb"), "-s", str(project_root / "built.xml"),
-         "-odir", str(work)],
+         "-odir", str(work), *extra],
         cwd=work, capture_output=True, text=True, timeout=timeout, env=base)
 
 
@@ -318,3 +318,108 @@ def test_a_completed_log_from_another_configuration_is_not_treated_as_done(proje
         cwd=work, capture_output=True, text=True, timeout=900, env=base)
     assert again.returncode != 0, again.stdout + again.stderr
     assert "different configuration" in (again.stdout + again.stderr), again.stderr
+
+
+# --- the resume contract, and what --overwrite means ---------------------------------------------
+
+def test_an_interrupted_stage_resumes_without_being_asked_to(project, reference, tmp_path):
+    """THE contract: interrupted resumes automatically, `--resume` is not required.
+
+    The alternative -- requiring `--resume` -- means an interrupted stage that is simply re-run
+    silently starts over and discards committed work, which is the failure the checkpoint exists
+    to prevent. `--resume` is accepted so the four protocols take the same flags, and it changes
+    nothing here.
+    """
+    reference_work, reference_restart, reference_frames = reference
+    work = tmp_path / "auto-resume"
+    work.mkdir()
+    crashed = _run_stage(project, work, environment={FAULT_ENVIRONMENT: "after-pointer-replace",
+                                                     FAULT_AFTER_ENVIRONMENT: "1"})
+    assert crashed.returncode != 0
+    committed = read_committed(_checkpoints(work))
+    assert 0 < int(committed["state"]["steps_done"]) < PRODUCTION_STEPS
+
+    # No `--resume` anywhere.
+    resumed = _run_stage(project, work)
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert "Resume" in (work / "cMD.log").read_text(encoding="utf-8")
+    assert _digest(work / "cMD.xml") == reference_restart
+
+
+def test_passing_resume_explicitly_changes_nothing(project, reference, tmp_path):
+    reference_work, reference_restart, _frames = reference
+    work = tmp_path / "explicit-resume"
+    work.mkdir()
+    crashed = _run_stage(project, work, environment={FAULT_ENVIRONMENT: "after-pointer-replace",
+                                                     FAULT_AFTER_ENVIRONMENT: "1"})
+    assert crashed.returncode != 0
+    resumed = _run_stage(project, work, extra=["--resume"])
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    assert _digest(work / "cMD.xml") == reference_restart
+
+
+def test_overwrite_starts_clean_and_does_not_load_an_old_checkpoint(project, reference, tmp_path):
+    """`--overwrite` that resumed from the generations it was asked to replace is not overwrite.
+
+    It produced a run that was half the old one -- and reported success, because every count and
+    every hash was internally consistent with a run nobody asked for.
+    """
+    reference_work, reference_restart, reference_frames = reference
+    work = tmp_path / "overwrite-clean"
+    work.mkdir()
+    crashed = _run_stage(project, work, environment={FAULT_ENVIRONMENT: "after-pointer-replace",
+                                                     FAULT_AFTER_ENVIRONMENT: "1"})
+    assert crashed.returncode != 0
+    assert read_committed(_checkpoints(work)) is not None
+
+    fresh = _run_stage(project, work, extra=["--overwrite"])
+    assert fresh.returncode == 0, fresh.stdout + fresh.stderr
+    log = (work / "cMD.log").read_text(encoding="utf-8")
+    assert "Resume" not in log, "--overwrite continued from the checkpoint it was replacing"
+    # A clean run of the same stage lands where the uninterrupted reference does.
+    assert _digest(work / "cMD.xml") == reference_restart
+    assert _frames(work / "cMD.dcd") == reference_frames
+
+
+def test_the_checkpoint_commits_all_three_appendable_streams(project, reference):
+    """DCD, state CSV and phase-space NetCDF, not just the trajectory.
+
+    Committing one meant a resume truncated that one and appended to the other two, leaving three
+    streams describing three different instants in files that read perfectly.
+    """
+    work, _restart, _frames = reference
+    streams = read_committed(_checkpoints(work))["state"]["streams"]
+    assert "trajectory" in streams, streams
+    assert "state_csv" in streams, (
+        f"the state CSV is not committed; a resume cannot truncate it: {streams}")
+    # The phase-space stream is only present when the stage was configured to write one.
+    if (work / "cMD.phase_space.nc").is_file():
+        assert "phase_space" in streams, streams
+
+
+def test_a_resume_truncates_the_state_csv_as_well_as_the_trajectory(project, reference, tmp_path):
+    """The sharp case for the CSV: it is flushed per row and outlives the checkpoint."""
+    reference_work, reference_restart, reference_frames = reference
+    work = tmp_path / "csv-truncation"
+    work.mkdir()
+    crashed = _run_stage(project, work, environment={FAULT_ENVIRONMENT: "after-checkpoint-write",
+                                                     FAULT_AFTER_ENVIRONMENT: "1"})
+    assert crashed.returncode != 0
+
+    committed = read_committed(_checkpoints(work))["state"]["streams"]
+    csv_path = work / "cMD.csv"
+    if not csv_path.is_file() or "state_csv" not in committed:
+        pytest.skip("this stage wrote no state CSV, so there is nothing to truncate")
+
+    with csv_path.open(encoding="utf-8") as handle:
+        before = max(sum(1 for _ in handle) - 1, 0)
+    assert before >= committed["state_csv"], "the CSV went backwards before recovery"
+
+    resumed = _run_stage(project, work)
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    with (reference_work / "cMD.csv").open(encoding="utf-8") as handle:
+        expected = max(sum(1 for _ in handle) - 1, 0)
+    with csv_path.open(encoding="utf-8") as handle:
+        after = max(sum(1 for _ in handle) - 1, 0)
+    assert after == expected, (
+        f"the recovered state CSV holds {after} rows against the uninterrupted run's {expected}")

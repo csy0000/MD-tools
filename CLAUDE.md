@@ -123,15 +123,30 @@ Do not change these without a failing test that demonstrates a defect.
   Work is `ΔW_j = U(τ_{j+1}, x_j) − U(τ_j, x_j)`: parameters move at frozen coordinates, then the
   configuration propagates. Observation 0 precedes all work and has exactly zero. Switching is at
   fixed volume; a barostat in the System is refused.
-* **The potential is exactly quadratic in `a = 1 − τ`.** Unscaled terms carry `a⁰`,
-  solute–environment terms `a¹`, solute–solute terms `a²`, so at frozen coordinates
-  `U(τ,x) = U_unscaled + a·U_linear + a²·U_quadratic` is an IDENTITY — including the PME reciprocal
-  sum, the Ewald self-energy and the dispersion correction, each a quadratic form in the charges
-  or in `sqrt(ε)`. `md_tools.ais.decomposition` measures it with three energy evaluations per
-  update at `a ∈ {0, ½, 1}` and one exact quadratic through them. The total work stays measured
-  directly from the Hamiltonian and the components are derived independently; the run then
-  REQUIRES `ΔW_total = ΔW_u + ΔW_l + ΔW_q` and refuses otherwise. Deriving the total from the
-  components would make that identity true by construction and test nothing.
+* **The potential is exactly quadratic in `a = 1 − τ`, and there are TWO probes of it.** With
+  `λ = a²`: unscaled terms carry `λ⁰`, solute–environment terms `sqrt(λ) = a`, solute–solute terms
+  `λ = a²`, so
+  `U(τ,x) = U_non_scaled + sqrt(λ)·U_sqrt_scaled + λ·U_lin_scaled` is an IDENTITY — including the
+  PME reciprocal sum, the Ewald self-energy and the dispersion correction. `md_tools.ais.
+  decomposition` measures it with three energy evaluations at `a ∈ {0, ½, 1}` and one exact
+  quadratic.
+  The **work-basis probe** runs at the frozen pre-switch `x_j`, which is where the work convention
+  defines work. The **observation-potential probe** runs at the coordinate a row SAVES, under that
+  row's τ, which is what Hummer–Szabo reweighting consumes. They are different coordinates and
+  must never be confused: writing the first under names that read as the second pairs the work of
+  one configuration with the energy of another, silently. A row naming a `coordinate_frame_index`
+  carries potentials recomputed at that frame; a row with no saved coordinate leaves them EMPTY
+  rather than borrowing a neighbour's. `AIS_hs.csv` is the frame-aligned subset.
+  Both totals are written — `potential_reconstructed_kj_mol` and `potential_direct_kj_mol` — so
+  the identity is checkable from the file.
+* **One cMD resume contract, and `--resume` is not required.** An INTERRUPTED stage — one whose
+  committed checkpoint is short of its step count — continues automatically, with every appendable
+  stream (DCD, state CSV, phase-space NetCDF) truncated to the counts that generation vouches for.
+  A COMPLETED stage that verifies is skipped. Anything else is refused until `--overwrite`, which
+  starts CLEAN and does not load the generations it was asked to replace. Requiring `--resume`
+  would mean a re-run silently discards committed work, which is what the checkpoint prevents.
+* **A serial protocol under a plural launch is refused.** `mpirun -n 8` on a cMD stage is eight
+  simulations over one set of paths, interleaved, with nothing saying so.
 * **An interrupted AIS path resumes mid-path**, from its last committed generation. The older
   claim that a switching path has no meaningful mid-path restart had the premise right (the work
   integral is defined along a whole path) and the conclusion wrong: a resume continues *that*

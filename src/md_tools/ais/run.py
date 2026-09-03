@@ -1292,6 +1292,15 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     rank, size = coordination.rank, coordination.size
     source_format = checked.source_format
 
+    from ..run.preflight import reject_contradictory_continuation
+
+    try:
+        reject_contradictory_continuation(resume=bool(args.resume),
+                                          overwrite=bool(args.overwrite), what="AIS")
+    except PreflightError as refusal:
+        print(f"AIS: {refusal}", file=sys.stderr)
+        return 2
+
     if args.check:
         # READ-ONLY, and it returns HERE, before `-odir` is created. `--check` used to make the
         # directory, both reports and `selected_source_frames.csv`, then say nothing was
@@ -1447,28 +1456,11 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             implicit=bool(implicit),
         )
 
-        # Written BEFORE any dynamics, so which frame each path started from is recorded even if
-        # the run is interrupted. Every rank computes the SAME table -- `choose_frames` is a pure
-        # function of the window, the count and the run seed -- so only rank 0 writes it, and the
-        # others would otherwise race to truncate the file rank 0 is writing.
-        if rank == 0:
-            # Not rewritten over an existing one. `require_same_run` has already established that
-            # the selection is unchanged, so rewriting could only ever produce the same bytes --
-            # and a write that can only be a no-op is a write that can still be interrupted.
-            table = out / "selected_source_frames.csv"
-            if not table.is_file():
-                write_selected_frames(table, chosen, seed=int(dynamics["seed"]))
-
-        if args.check:
-            log.heading("Preflight")
-            log("  --check: schedule, source and Force layout validated; nothing was switched.")
-            log.record["status"] = "checked"
-            log.save()
-            sim_out.heading("Preflight")
-            sim_out.write("  --check: schedule, source and Force layout validated; nothing was "
-                          "switched.")
-            sim_out.completed("checked; no paths were run")
-            return 0
+        # `--check` used to return HERE, having written `-odir`, both reports and the
+        # selected-frame table. It returns before any of that now -- see the `report_check` call
+        # above, which prints from the preflight result and creates nothing -- so there is
+        # nothing left to do at this point and this branch is gone rather than left as a second
+        # answer to the same question.
 
         # --- run the paths -------------------------------------------------------------------
         # The preflight already resolved this -- machine settings, device policy, rank placement
@@ -1530,6 +1522,23 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                              json.dumps(identity_document, indent=2, sort_keys=True) + "\n")
         coordination.barrier()
         log.update(run_identity=identity_document)
+
+        # AFTER the identity, never before it. `--overwrite` clears this directory, so a
+        # selected-frame table written earlier was deleted a moment later and the run then failed
+        # hashing a file it had removed itself. The identity is what says whether this directory
+        # is this run at all; nothing may be written until it does.
+        #
+        # Every rank computes the SAME table -- `choose_frames` is a pure function of the window,
+        # the count and the run seed -- so only rank 0 writes it, and the others would otherwise
+        # race to truncate the file rank 0 is writing. An existing one is left alone:
+        # `require_same_run` has already established that the selection is unchanged, so
+        # rewriting could only produce the same bytes, and a write that can only be a no-op is a
+        # write that can still be interrupted.
+        if rank == 0:
+            table = out / "selected_source_frames.csv"
+            if not table.is_file():
+                write_selected_frames(table, chosen, seed=int(dynamics["seed"]))
+        coordination.barrier()
 
         # The switcher the preflight built and audited, not a second one over the same System.
         switcher = checked.switcher

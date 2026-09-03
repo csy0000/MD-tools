@@ -258,7 +258,14 @@ def test_path_identity_does_not_depend_on_the_worker_count(built, source):
 
 
 def test_a_rerun_does_not_touch_a_path_that_already_completed(built, source):
-    """A completed path is skipped, never appended to and never silently redone."""
+    """A completed path is skipped, never appended to and never silently redone.
+
+    MIGRATED. This used to prove that by passing `--overwrite`, which is the flag whose entire
+    job is to say "redo it" -- so the assertion was that `--overwrite` did NOT overwrite. That
+    was the behaviour then (it removed `AIS_run.json` and nothing else) and it was the defect:
+    the next run adopted the old paths under a new identity. The plain rerun is what must be a
+    no-op, and that is what is asserted here; `--overwrite` gets its own test below.
+    """
     out = _ais_project(built, "ais_restart", 4)
     argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
             "-source-traj", "../source/cMD.dcd", "-odir", ".", "-log", "AIS.log")
@@ -272,9 +279,39 @@ def test_a_rerun_does_not_touch_a_path_that_already_completed(built, source):
     assert len(before) == 4
     frames_before = (out / "selected_source_frames.csv").read_text(encoding="utf-8")
 
-    assert _md_run(out, *argv, "--overwrite").returncode == 0
-    assert fingerprint() == before, "a completed path's trajectory was rewritten"
+    assert _md_run(out, *argv).returncode == 0
+    assert fingerprint() == before, "a completed path's trajectory was rewritten by a rerun"
     assert (out / "selected_source_frames.csv").read_text(encoding="utf-8") == frames_before
+
+
+def test_overwrite_starts_the_ais_directory_over(built, source):
+    """The other half: `--overwrite` REDOES the paths rather than adopting them.
+
+    Removing `AIS_run.json` alone left every path directory, trajectory, checkpoint and aggregate
+    table in place, so the next run skipped them as completed and assembled one table out of two
+    experiments. What `--overwrite` has to mean is that nothing of the old run survives to be
+    adopted.
+    """
+    out = _ais_project(built, "ais_overwrite", 4)
+    argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
+            "-source-traj", "../source/cMD.dcd", "-odir", ".", "-log", "AIS.log")
+    assert _md_run(out, *argv).returncode == 0
+    assert len(sorted(out.glob("AIS_traj*.nc"))) == 4
+
+    marker = out / "path_0000" / "completed.json"
+    before = marker.stat().st_mtime_ns
+    # A file from a previous, LONGER run: it must not survive into the new one.
+    (out / "AIS_traj0099.nc").write_text("stale", encoding="utf-8")
+
+    done = _md_run(out, *argv, "--overwrite")
+    assert done.returncode == 0, done.stderr[-2000:]
+    assert "already completed" not in done.stdout, (
+        "--overwrite adopted the previous run's completed paths:\n" + done.stdout[-1500:])
+    assert marker.stat().st_mtime_ns != before, "the path was not rerun"
+    assert not (out / "AIS_traj0099.nc").exists(), (
+        "a trajectory from a longer previous run survived --overwrite")
+    assert sorted(p.name for p in out.glob("AIS_traj*.nc")) == [
+        f"AIS_traj{i:04d}.nc" for i in range(4)]
 
 
 # --- the corrections: formats, cadences, resume, machine platform, output separation ----------
@@ -444,7 +481,10 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
     assert not (out / committed["state"]["trajectory"]).exists(), \
         "a half-written path was published under its final name"
 
-    finished = _md_run(out, *argv, "--resume", "--overwrite")
+    # `--resume` ALONE. This passed `--overwrite` as well, which was harmless when overwrite did
+    # almost nothing and is now a contradiction -- one says continue, the other says start over --
+    # and the combination is refused outright.
+    finished = _md_run(out, *argv, "--resume")
     assert finished.returncode == 0, finished.stdout[-3000:] + finished.stderr[-3000:]
     assert "resuming at step" in finished.stdout, finished.stdout[-2000:]
 
@@ -494,7 +534,9 @@ def test_a_completed_path_is_not_touched_by_a_resume(built, source):
               for p in sorted(out.glob("AIS_traj*.nc"))}
     assert len(before) == 2, sorted(before)
 
-    done = _md_run(out, *argv, "--resume", "--overwrite")
+    # `--resume` ALONE. `--overwrite` was passed here too, which is the one flag that makes this
+    # assertion false by design -- it says to redo the work, and it now does.
+    done = _md_run(out, *argv, "--resume")
     assert done.returncode == 0, done.stderr[-2000:]
     assert "already completed" in done.stdout, done.stdout[-1500:]
 

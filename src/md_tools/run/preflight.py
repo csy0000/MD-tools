@@ -53,7 +53,8 @@ __all__ = ["PreflightError", "ExecutionPreflight", "StagePreflight", "LadderPref
            "check_output_collisions", "check_input_files", "resolve_launch",
            "check_topology_matches_system", "LoadedInputs", "load_inputs", "PendingParent",
            "check_ensemble", "check_scaling_plan", "report_check", "collectively",
-           "OutputInventory", "check_existing_outputs", "reject_plural_launch"]
+           "OutputInventory", "check_existing_outputs", "reject_plural_launch",
+           "reject_contradictory_continuation"]
 
 
 class PreflightError(SystemExit):
@@ -739,6 +740,20 @@ def _resolve_timestep(loaded: LoadedInputs, requested, *, where: str) -> dict[st
         return resolve_timestep_fs(requested, loaded.system, loaded.pdb.topology)
     except (ValueError, SystemExit) as refusal:
         raise PreflightError(f"{where}: {refusal}") from None
+
+
+def reject_contradictory_continuation(*, resume: bool, overwrite: bool, what: str) -> None:
+    """`--resume` and `--overwrite` together ask for opposite things.
+
+    One says continue the run that is there; the other says there is no run to continue, replace
+    it. Silently letting either win is how a person who typed both gets the one they did not mean
+    -- and the two outcomes are "your previous work continues" and "your previous work is gone",
+    which is not a difference to resolve by precedence.
+    """
+    if resume and overwrite:
+        raise PreflightError(
+            f"{what}: --resume and --overwrite contradict each other. --resume continues the run "
+            f"already in this directory; --overwrite deletes it and starts a new one. Pass one.")
 
 
 def reject_plural_launch(coordination, *, what: str) -> None:
