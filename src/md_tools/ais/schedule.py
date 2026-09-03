@@ -77,7 +77,8 @@ def switching_schedule(*, tau_start: float, tau_end: float, switching_steps: int
                        timestep_fs: float,
                        trajectory_interval_steps: int | None = None,
                        state_interval_steps: int = 0,
-                       checkpoint_interval_steps: int = 0) -> dict[str, Any]:
+                       checkpoint_interval_steps: int = 0,
+                       cv_interval_steps: int = 0) -> dict[str, Any]:
     """Every tau the path visits, and which of them are observed.
 
     EVERY LENGTH HERE IS AN INTEGER STEP COUNT. A step count is exact; a duration in picoseconds is
@@ -202,9 +203,31 @@ def switching_schedule(*, tau_start: float, tau_end: float, switching_steps: int
             # alternative coordinate a reader could take as authoritative.
         })
 
+    # Collective variables: on the parameter-update grid, and dividing the switching length.
+    #
+    # Both, not either. Dividing `switching_steps` alone would allow an observation between two
+    # updates, at a tau the path never actually held -- the tau is piecewise constant across an
+    # update interval, so a row there would report a value against a Hamiltonian that was never
+    # in force. Sitting on the update grid alone would allow a final partial gap.
+    cv_every = int(cv_interval_steps or 0)
+    if cv_every:
+        if cv_every % interval:
+            raise ValueError(
+                f"collective_variables.interval_steps = {cv_every} is not a multiple of the "
+                f"parameter update interval ({interval} steps). tau is piecewise constant across "
+                f"an update, so an observation between two updates would report a value against a "
+                f"Hamiltonian the path never held.")
+        if steps % cv_every:
+            raise ValueError(
+                f"collective_variables.interval_steps = {cv_every} does not divide "
+                f"switching_steps ({steps}). It would leave a final partial gap, so the last "
+                f"observation would sit at an irregular spacing from the one before it.")
+
     return {
         "timestep_fs": float(timestep_fs),
         "switching_steps": steps,
+        "cv_interval_steps": cv_every,
+        "number_of_cv_rows": (steps // cv_every + 1) if cv_every else 0,
         "parameter_update_interval_steps": interval,
         "observation_interval_steps": observe_every,
         "number_of_updates": updates,

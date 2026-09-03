@@ -94,6 +94,20 @@ OBSERVATIONS_CSV = "observations.csv"
 #: from the work: how the path is BEHAVING while the Hamiltonian moves, which is what tells you a
 #: switch is too fast long before the work distribution does.
 STATE_CSV = "system.csv"
+#: The per-path collective-variable series. Its cadence is independent of the observation and
+#: frame cadences and may be finer than either -- so `observation_index` and
+#: `coordinate_frame_index` are EMPTY on rows that do not coincide with one. They are never filled
+#: with a nearest neighbour: attaching a CV measured at one coordinate to a different saved
+#: coordinate is precisely the misattribution the AIS two-probe separation exists to prevent.
+CV_CSV = "cv.csv"
+CV_COLUMNS = ("path_index", "source_frame_index", "protocol_step", "time_ps", "tau",
+              "observation_index", "coordinate_frame_index")
+
+#: The aggregate, assembled ONLY from paths whose completion manifest verified. A path that
+#: crashed mid-write has a plausible-looking cv.csv and no manifest, and including it would put
+#: rows from an unfinished switch into the run's headline table.
+CV_TABLE = "AIS_cv.csv"
+
 STATE_COLUMNS = ("path_index", "protocol_step", "switching_time_ps", "tau",
                  "potential_energy_kj_mol", "kinetic_energy_kj_mol", "total_energy_kj_mol",
                  "temperature_kelvin", "volume_nm3", "density_g_per_ml")
@@ -315,6 +329,8 @@ def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     summary: list[dict[str, Any]] = []
     hs_rows: list[dict[str, Any]] = []
+    cv_rows: list[dict[str, Any]] = []
+    cv_names: list[str] = []
     for path_id in range(len(chosen)):
         directory = out / f"path_{path_id:04d}"
         marker = directory / COMPLETION_NAME
@@ -364,8 +380,21 @@ def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
                                 for name in HS_COLUMNS})
             previous_tau = entry["tau"]
 
+        # The collective-variable series, from the SAME verified-manifest gate as everything else
+        # above. A path that crashed mid-write has a plausible-looking cv.csv and no manifest, and
+        # including it would put rows from an unfinished switch into the run's headline table.
+        cv_path = directory / CV_CSV
+        if cv_path.is_file():
+            with cv_path.open(newline="") as handle:
+                reader = csv.DictReader(handle)
+                for name in (reader.fieldnames or []):
+                    if name not in CV_COLUMNS and name not in cv_names:
+                        cv_names.append(name)
+                cv_rows.extend(reader)
+
     rows.sort(key=lambda row: (row["path_id"], row["switch_step"]))
     hs_rows.sort(key=lambda row: (row["path_id"], int(row["switch_step"])))
+    cv_rows.sort(key=lambda row: (int(row["path_index"]), int(row["protocol_step"])))
 
     # ATOMIC. These tables are rewritten from scratch every time rank 0 assembles them, and
     # opening the real path with "w" truncates it first: a reader arriving during the rewrite --
@@ -373,16 +402,22 @@ def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
     # one failure a table cannot signal. Written to a temporary and moved into place instead.
     import io
 
-    for path, columns, payload in ((out / WORK_TABLE, WORK_COLUMNS, rows),
-                                   (out / WORK_SUMMARY, SUMMARY_COLUMNS, summary),
-                                   (out / HS_TABLE, HS_COLUMNS, hs_rows)):
+    tables = [(out / WORK_TABLE, WORK_COLUMNS, rows),
+              (out / WORK_SUMMARY, SUMMARY_COLUMNS, summary),
+              (out / HS_TABLE, HS_COLUMNS, hs_rows)]
+    if cv_rows:
+        # Only when there is something to aggregate: an empty AIS_cv.csv beside a run that never
+        # asked for collective variables would suggest reporting had been requested and produced
+        # nothing, which is the one thing a CV failure must never look like.
+        tables.append((out / CV_TABLE, tuple(CV_COLUMNS) + tuple(cv_names), cv_rows))
+    for path, columns, payload in tables:
         buffer = io.StringIO()
         writer = csv.DictWriter(buffer, fieldnames=list(columns))
         writer.writeheader()
         writer.writerows(payload)
         write_atomically(path, buffer.getvalue())
     return {"rows": len(rows), "paths": len(summary), "requested": len(chosen),
-            "hs_rows": len(hs_rows)}
+            "hs_rows": len(hs_rows), "cv_rows": len(cv_rows)}
 
 
 def run_identity_document(*, fingerprint, topology_facts, system_facts, source_facts,
@@ -1014,7 +1049,8 @@ def _verified_completion(marker: Path, *, directory: Path, published: Path, fing
 def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str, Any],
                  taus, switcher, simulation_inputs: dict[str, Any], dynamics: dict[str, Any],
                  ais: dict[str, Any], beta: float, temperature: float, rank: int,
-                 resume: bool, fingerprint: str, log) -> dict[str, Any] | None:
+                 resume: bool, fingerprint: str, log,
+                 cv_definition=None) -> dict[str, Any] | None:
     """Run (or finish) one switching path. Returns its completion record, or None if it failed."""
     import os
 
@@ -1346,6 +1382,10 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                 "work_rows": rows_emitted,
                 "frames": frames_emitted,
                 "state_rows": state_rows_emitted,
+                # The CV series is an appendable stream like the others, so the generation has to
+                # vouch for its length too -- otherwise a resume cannot tell a committed row from
+                # one written after the checkpoint by a process that then died.
+                "cv_rows": (cv_series.rows_written if cv_series is not None else 0),
                 "integrator_seed": integrator_seed,
                 "velocity_seed": velocity_seed,
                 "trajectory": trajectory_name,
@@ -1368,6 +1408,57 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             write_state(0, 0.0, taus[0])
 
     # -- the switch ------------------------------------------------------------------------------
+    # -- the collective-variable series ---------------------------------------------------------
+    #
+    # Its cadence is independent of the observation and frame cadences and may be finer than
+    # either; it is required to sit on the parameter-update grid and to divide `switching_steps`,
+    # so every row lands at a tau the path actually held rather than between two of them.
+    cv_series = None
+    cv_every = schedule.get("cv_interval_steps") or 0
+    if cv_every and cv_definition is not None:
+        from ..cv import CVSeries
+
+        cv_series = CVSeries(
+            directory / CV_CSV, cv_definition, extra_columns=CV_COLUMNS,
+            sidecar_extra={"path_index": index, "source_frame_index": frame,
+                           "interval_steps": int(cv_every), "fingerprint": fingerprint,
+                           "tau_start": float(taus[0]), "tau_end": float(taus[-1]),
+                           "observation_index_meaning": (
+                               "empty unless this step is also an AIS observation; when present, "
+                               "the values were measured on exactly that saved coordinate")})
+        # Truncated to what the committed generation vouches for, exactly as the observation and
+        # state tables are above -- rows past it belong to updates about to be repeated.
+        cv_series.open(append_from=int(
+            (state_of_path or {}).get("cv_rows", 0) if state_of_path else 0))
+
+    def write_cv(protocol_step: int, tau_now: float, *,
+                 observation_index=None, frame_index=None) -> None:
+        """One CV row. `observation_index`/`frame_index` are empty unless this step IS one.
+
+        No nearest-neighbour filling: a CV measured at one coordinate attached to a different
+        saved coordinate is the exact misattribution the AIS two-probe separation exists to
+        prevent, and it would be invisible in the output.
+        """
+        if cv_series is None:
+            return
+        # The same coordinates the frame writer sees at this step: nothing propagates between
+        # them, so `getState` here and there return the same positions by construction.
+        current = simulation.context.getState(getPositions=True, enforcePeriodicBox=False)
+        positions = current.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+        box = None
+        if not implicit:
+            box = np.asarray(current.getPeriodicBoxVectors(asNumpy=True).value_in_unit(
+                unit.nanometer), dtype=float)
+        cv_series.write(
+            (index, frame, protocol_step, time_of(protocol_step), float(tau_now),
+             observation_index, frame_index),
+            cv_series.evaluate(positions, box))
+
+    if cv_series is not None and updates_done == 0:
+        # STEP 0: the source configuration at tau_start, before any update. Observation 0 is
+        # written at this step too, so the indices are filled rather than empty.
+        write_cv(0, taus[0], observation_index=0, frame_index=0)
+
     for update in range(updates_done, updates):
         tau_before, tau_after = taus[update], taus[update + 1]
 
@@ -1419,6 +1510,14 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             since_components = ComponentWork.zero()
         if state_every and step % state_every == 0:
             write_state(step, time_of(step), tau_after)
+        if cv_every and step % cv_every == 0:
+            # Written AFTER the frame and the observation for this step, so the indices it
+            # records name rows that already exist. `wrote` says whether a frame landed here;
+            # `frames_emitted` and `rows_emitted` have already been advanced by those writers, so
+            # the index of the record just written is one less than the count.
+            write_cv(step, tau_after,
+                     observation_index=(rows_emitted - 1) if step % observe_every == 0 else None,
+                     frame_index=(frames_emitted - 1) if wrote else None)
         if checkpoint_every and step % checkpoint_every == 0:
             save_checkpoint(update + 1)
 
@@ -1427,6 +1526,8 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                                         getParameters=True, enforcePeriodicBox=False)
     (directory / "final_state.xml").write_text(XmlSerializer.serialize(final), encoding="utf-8")
     netcdf.close()
+    if cv_series is not None:
+        cv_series.close()
 
     if rows_emitted != schedule["number_of_observations"]:
         raise SystemExit(f"path {index} wrote {rows_emitted} observations, expected "
@@ -1506,6 +1607,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         "observations": rows_emitted,
         "frames": frames_emitted,
         "state_rows": state_rows_emitted,
+        "cv_rows": (cv_series.rows_written if cv_series is not None else 0),
         "total_work_kj_mol": cumulative,
         "total_reduced_work": beta * cumulative,
         "decomposition_schema": {"name": DECOMPOSITION_SCHEMA["name"],
@@ -1646,6 +1748,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             # been created, so an incompatible source was refused by a run that had already
             # produced a directory indistinguishable from one that started.
             out_dir=out, resolved_config=run.get("resolved_config"),
+            collective_variables=run.get("collective_variables"),
             overwrite=bool(args.overwrite), resume=bool(args.resume))
     except PreflightError as refusal:
         print(f"AIS: {refusal}", file=sys.stderr)
@@ -1959,6 +2062,10 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                 # then started fresh here, because this boolean disagreed with that label: an
                 # interrupted path restarted destructively with no flag telling it to.
                 rank=rank, resume=(checked.disposition == "resume"),
+                # A parsed object, so it travels as its own argument rather than inside the
+                # schedule -- the schedule is written into records as JSON, and an object in it
+                # makes every one of those writes fail.
+                cv_definition=checked.cv_definition,
                 fingerprint=path_fingerprint, log=log)
             if record is not None:
                 completed.append(record)
@@ -2058,6 +2165,7 @@ def run_generated_ais(script: str | Path, argv: list[str] | None = None) -> int:
         # left behind, so `system_printout` and `checkpoint_printout` were settings a person wrote
         # that nothing ever read.
         "reporting": dict(resolved["reporting"]),
+        "collective_variables": dict(resolved.get("collective_variables") or {}),
         "resolved_config": str(config_path),
     }
     return ais_main(run, argv)

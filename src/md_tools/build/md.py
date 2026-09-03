@@ -369,7 +369,11 @@ def _check_ais(resolved: dict[str, Any]) -> None:
             # step schedule, and the run re-derives the real duration once it reads the masses.
             timestep_fs=(float(resolved["dynamics"]["timestep_fs"])
                          if isinstance(resolved["dynamics"]["timestep_fs"], (int, float))
-                         else ORDINARY_TIMESTEP_FS))
+                         else ORDINARY_TIMESTEP_FS),
+            # Refused at BUILD time, with the numbers that would fix it, rather than by every
+            # generated script the first time it is run.
+            cv_interval_steps=int(
+                (resolved.get("collective_variables") or {}).get("interval_steps") or 0))
     except ValueError as error:
         raise ConfigError(str(error)) from None
 

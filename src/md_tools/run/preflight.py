@@ -566,6 +566,9 @@ class AISPreflight(ExecutionPreflight):
     #: already verifies complete -- distinct from "resume" so the boolean handed to
     #: `run_one_path` is never "resume" when `--resume` was not actually given.
     disposition: str = "fresh"
+    #: The validated collective-variable definition, parsed before `-odir` exists. Its own field
+    #: rather than a key in `schedule`, which is serialised into the run records.
+    cv_definition: Any = None
     #: The ALREADY-VALIDATED `AIS_run.json` this directory held, when one did. Carried forward so
     #: `clear_run_directory` cleans up against the identity that was verified here, rather than
     #: re-reading (and re-verifying) the file a second time after `-odir` exists.
@@ -1249,7 +1252,7 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
                   reporting=None, source_config=None, groupfile=None, trajectory=None,
                   coordinates=None, restart=None, checkpoint=None,
                   out_dir=None, resolved_config=None, overwrite=False,
-                  resume=False) -> AISPreflight:
+                  resume=False, collective_variables=None) -> AISPreflight:
     """AIS switching paths. The source ensemble is validated by CONTENT, not by suffix.
 
     When the resolved configuration is supplied -- which the runtime always does -- every
@@ -1283,8 +1286,13 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
                             device_policy_detail=detail, particles=particles,
                             source=Path(source), source_format=source_format)
 
-    prepared = _prepare_ais(loaded, source=Path(source), dynamics=dynamics, ais=ais,
-                            reporting=reporting, source_config=source_config)
+    prepared = _prepare_ais(
+        loaded, source=Path(source), dynamics=dynamics, ais=ais,
+        reporting=reporting, source_config=source_config,
+        collective_variables=collective_variables,
+        # Beside `resolved.config` -- the generated directory holding the content-addressed
+        # definition copy, not `-odir` and not the working directory.
+        config_directory=(Path(resolved_config).parent if resolved_config else None))
 
     # THE IDENTITY, HERE. It used to be built after `-odir` and both rank reports existed, so an
     # incompatible source or schedule was refused by a run that had already created the directory
@@ -1406,7 +1414,8 @@ def _ais_inventory(*, output, log, paths: int, ranks: int = 1) -> OutputInventor
                                "selected_frames"}))
 
 
-def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting, source_config):
+def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting, source_config,
+                 collective_variables=None, config_directory=None):
     """Every AIS refusal that needs the System or the source file, before any output exists."""
     import mdtraj
 
@@ -1435,9 +1444,28 @@ def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting
             timestep_fs=float(timestep["timestep_fs"]),
             trajectory_interval_steps=int(reporting["solute_printout"]),
             state_interval_steps=int(reporting["system_printout"]),
-            checkpoint_interval_steps=int(reporting["checkpoint_printout"]))
+            checkpoint_interval_steps=int(reporting["checkpoint_printout"]),
+            cv_interval_steps=int((collective_variables or {}).get("interval_steps") or 0))
     except (ValueError, SystemExit) as refusal:
         raise PreflightError(f"{where}: {refusal}") from None
+
+    # Parsed here, before -odir exists. Carried on the preflight and passed to `run_one_path` as
+    # its own argument -- NOT inside `schedule`, which is serialised into the run records, where a
+    # parsed object makes every write fail.
+    cv_definition = None
+    cv_block = collective_variables or {}
+    if cv_block.get("file") and int(cv_block.get("interval_steps") or 0) > 0:
+        from ..cv import CVDefinitionError, load_cv_definition
+
+        cv_path = Path(cv_block["file"])
+        if not cv_path.is_absolute():
+            cv_path = (Path(config_directory) if config_directory else Path(".")) / cv_path
+        try:
+            cv_definition = load_cv_definition(
+                cv_path, topology=loaded.pdb.topology,
+                particles=loaded.system.getNumParticles())
+        except CVDefinitionError as refusal:
+            raise PreflightError(f"{where}: {refusal}") from None
 
     solute = solute_atom_indices(loaded.pdb.topology)
     omega = classify_omega_bonds(loaded.pdb.topology, solute, route="peptide", ligand_sdf=None)
@@ -1493,6 +1521,7 @@ def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting
     from ..build.record import file_facts
 
     return {"timestep": timestep, "schedule": schedule, "solute": tuple(int(i) for i in solute),
+            "cv_definition": cv_definition,
             "excluded_bonds": excluded, "switcher": switcher, "chosen_frames": tuple(chosen),
             "eligible_frames": len(eligible), "source_frames": n_frames,
             "source_atoms": source_atoms, "force_audit": audit,
