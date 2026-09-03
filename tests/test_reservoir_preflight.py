@@ -189,7 +189,14 @@ def test_an_empty_reservoir_is_refused_before_the_output_directory_exists(projec
     reservoir = project / "reservoir.nc"
     writer = PhaseSpaceWriter(reservoir, n_atoms=22, periodic=False, identity={"tau": 0.5})
     writer.close()
-    assert netCDF4.Dataset(str(reservoir)).dimensions["frame"].size == 0
+    # CLOSED, not merely opened. A netCDF handle left open holds the file, and the next test in
+    # this module rewrites this very path -- which failed with a PermissionError only when the
+    # whole lane ran in one process, never when this file ran alone.
+    dataset = netCDF4.Dataset(str(reservoir))
+    try:
+        assert dataset.dimensions["frame"].size == 0
+    finally:
+        dataset.close()
 
     destination = tmp_path / "empty-reservoir"
     done = _run(project, destination)

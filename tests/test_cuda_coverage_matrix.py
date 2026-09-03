@@ -51,6 +51,12 @@ pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 #: Every entry is a place a CUDA kernel actually runs. The mapping is data rather than prose so
 #: `test_every_cuda_site_in_the_source_is_in_this_matrix` can hold it to the source.
 CUDA_SITES = {
+    "ais/run.py::run_one_path.write_cv": (
+        "calls `context.getState(getPositions=True)` to observe a collective variable, which on "
+        "CUDA is a device synchronise and a device-to-host copy of the positions. Deliberately "
+        "positions only -- never `getEnergy` -- so a CV observation costs no Hamiltonian "
+        "evaluation and cannot be confused with one in the run's cost accounting",
+        "test_ais_cv_output.py, and the AIS lanes in test_md_run_mpi_gpu.py"),
     "openmm/platform_policy.py::_prove_cuda_initialises": (
         "opens a one-particle CUDA Context to prove the platform works before any output exists",
         "test_platform_policy.py, and every preflight in every lane below"),
@@ -142,6 +148,17 @@ CUDA_SITES = {
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
 #: named exemption rather than an omission -- and the reason is checkable by reading the callsite.
 NON_CUDA_CONTEXT_SITES = {
+    "md/completion.py::verify_completed_stage":
+        "deserialises the final State FROM XML ON DISK to re-read its particle count. The same "
+        "getPositions spelling as a live Context, but the object is a file's contents -- the "
+        "verifier is entirely read-only and creates no Context at all.",
+    "md/cv_report.py::CVReporter.observe":
+        "reads positions and box off a State it is HANDED -- by OpenMM's reporter protocol, or by "
+        "the caller for the step-0 observation -- and evaluates torsions on the host in numpy. It "
+        "constructs nothing, asks the Context for nothing, and requests no energy: "
+        "`describeNextReport` asks for positions only, which is what keeps a CV-enabled run the "
+        "same experiment as a CV-disabled one. The device work that produced the State belongs to "
+        "whoever created it (`md/stage.py::stage_main`).",
     "openmm/system.py::protonate":
         "names the Reference platform explicitly, to add hydrogens deterministically while "
         "building a System. No dynamics, and deliberately platform-independent so a structure "
