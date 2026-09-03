@@ -636,15 +636,23 @@ def test_the_completion_record_carries_the_component_totals_and_the_evaluation_c
                                       schedule["observation_interval_steps"])
                if step % schedule["trajectory_interval_steps"] == 0]
     assert len(aligned) == 3, aligned
-    assert counters["basis_probe_energy_evaluations"] == 3 * (
-        schedule["number_of_updates"] + len(aligned))
+    # Each probe is three evaluations; the WORK probe runs once per update, the OBSERVATION
+    # probe once per frame-aligned row, and each observation adds one direct evaluation too.
+    assert counters["work_basis_probe_energy_evaluations"] == 3 * schedule["number_of_updates"]
+    assert counters["observation_potential_energy_evaluations"] == 4 * len(aligned)
     assert counters["direct_work_energy_evaluations"] == 2 * schedule["number_of_updates"]
-    assert counters["observation_energy_evaluations"] == len(aligned)
-    assert counters["total_potential_energy_evaluations"] == (
-        counters["basis_probe_energy_evaluations"]
-        + counters["direct_work_energy_evaluations"]
-        + counters["observation_energy_evaluations"])
-    assert counters["parameter_updates"] > counters["basis_probe_energy_evaluations"]
+    assert counters["useful_total_energy_evaluations"] == (
+        counters["direct_work_energy_evaluations"]
+        + counters["work_basis_probe_energy_evaluations"]
+        + counters["observation_potential_energy_evaluations"]
+        + counters["other_useful_energy_evaluations"])
+    assert counters["paid_total_energy_evaluations"] == (
+        counters["useful_total_energy_evaluations"]
+        + counters["known_discarded_energy_evaluations"])
+    # An uninterrupted path knows its whole cost.
+    assert counters["known_discarded_energy_evaluations"] == 0
+    assert counters["discarded_is_complete"] is True
+    assert counters["parameter_updates"] > counters["work_basis_probe_energy_evaluations"]
     assert counters["probe_seconds"] > 0.0
     assert abs(sum(record[name] for name in COMPONENT_TOTALS)
                - record["total_work_kj_mol"]) < 1e-6
@@ -833,3 +841,83 @@ def test_a_resolved_config_path_alone_does_not_make_it_a_different_run(tmp_path)
     (tmp_path / RUN_IDENTITY).write_text(json.dumps(document("/old/resolved.config")),
                                          encoding="utf-8")
     require_same_run(tmp_path, document("/new/resolved.config"))
+
+
+# --- the cost accounting, and what cannot be known after a crash --------------------------------
+
+def test_a_resumed_path_restores_its_useful_counters_rather_than_calling_them_discarded(
+        harness, tmp_path, monkeypatch):
+    """The accounting bug, stated as its own test.
+
+    Committed counters were being ADDED to `discarded`. Those evaluations produced the committed
+    work, observations, frames and state rows the resume continues from -- they are the definition
+    of useful. Calling them discarded made a resumed path report its own work as waste, and gave
+    it a different useful total from an identical uninterrupted path, which is exactly the
+    comparison the counters exist to support.
+    """
+    call, out, schedule = harness
+    reference = call()
+    reference_counters = reference["evaluation_counters"]
+    assert reference_counters["known_discarded_energy_evaluations"] == 0
+    assert reference_counters["discarded_is_complete"] is True
+
+    second = tmp_path / "AIS-resumed"
+    second.mkdir()
+    _read_frame_source(monkeypatch)
+    import md_tools.openmm.checkpoint as _checkpoint
+
+    def run(**kwargs):
+        _checkpoint._passed.clear()
+        return ais_run.run_one_path(
+            index=0, chosen=[7, 9], out=second, schedule=schedule, taus=schedule["taus"],
+            switcher=_switcher(),
+            simulation_inputs={"topology": object(), "source_path": tmp_path / "source.dcd",
+                               "mdtraj_top": object(), "implicit": False,
+                               "acceleration": _Acceleration()},
+            dynamics={"seed": 3, "friction_per_ps": 1.0, "timestep_fs": 2.0,
+                      "temperature_K": 300.0},
+            ais={"tau_start": 0.5, "tau_end": 0.0}, beta=0.4, temperature=300.0,
+            rank=0, fingerprint="fixed-fingerprint", log=lambda *a: None, **kwargs)
+
+    monkeypatch.setenv(FAULT_ENVIRONMENT, "after-pointer-replace")
+    monkeypatch.setenv(FAULT_AFTER_ENVIRONMENT, "1")
+    with pytest.raises(RuntimeError):
+        run(resume=False)
+    monkeypatch.delenv(FAULT_ENVIRONMENT)
+    monkeypatch.delenv(FAULT_AFTER_ENVIRONMENT)
+
+    resumed = run(resume=True)
+    assert resumed["resumed"] is True
+    counters = resumed["evaluation_counters"]
+
+    # THE POINT: the same useful total as the uninterrupted path, component by component.
+    for name in ("direct_work_energy_evaluations", "work_basis_probe_energy_evaluations",
+                 "observation_potential_energy_evaluations", "useful_total_energy_evaluations"):
+        assert counters[name] == reference_counters[name], (
+            f"{name}: resumed {counters[name]} against uninterrupted "
+            f"{reference_counters[name]}")
+
+    # And the cost that genuinely cannot be recovered is reported as unknown, not as zero and not
+    # by relabelling committed work.
+    assert counters["discarded_is_complete"] is False, (
+        "a resumed path claimed to know its complete discarded cost; a committed checkpoint "
+        "cannot know how much work happened after it before the crash")
+    assert counters["known_discarded_energy_evaluations"] == 0
+    assert counters["paid_total_energy_evaluations"] == (
+        counters["useful_total_energy_evaluations"]
+        + counters["known_discarded_energy_evaluations"])
+
+
+def test_the_counter_identities_hold_on_every_completion_record(harness):
+    call, out, schedule = harness
+    record = call()
+    counters = record["evaluation_counters"]
+    assert counters["useful_total_energy_evaluations"] == sum(
+        counters[name] for name in ("direct_work_energy_evaluations",
+                                    "work_basis_probe_energy_evaluations",
+                                    "observation_potential_energy_evaluations",
+                                    "other_useful_energy_evaluations"))
+    assert counters["paid_total_energy_evaluations"] == (
+        counters["useful_total_energy_evaluations"]
+        + counters["known_discarded_energy_evaluations"])
+    assert "relationships" in counters and len(counters["relationships"]) == 2

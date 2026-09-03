@@ -507,6 +507,17 @@ class AISPreflight(ExecutionPreflight):
     source_frames: int = 0
     source_atoms: int | None = None
     force_audit: dict[str, Any] | None = None
+    #: The source trajectory's digest and size, computed ONCE here. The runtime reuses it for the
+    #: record and for the fingerprint rather than reading a production-sized file a second time.
+    source_facts: dict[str, Any] | None = None
+    #: The per-path checkpoint fingerprint and the whole-directory identity document, both built
+    #: before anything exists -- see `disposition`.
+    fingerprint: str | None = None
+    identity: dict[str, Any] | None = None
+    #: What this invocation is: "fresh", "resume", "overwrite". Decided by inspecting the output
+    #: directory READ-ONLY and agreed across ranks, so an incompatible run refuses without having
+    #: changed a byte.
+    disposition: str = "fresh"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -913,7 +924,9 @@ def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, c
 def preflight_ais(*, topology, system, source, number_of_groups=None, output=None, log=None,
                   cpu=False, device=None, machine_config=None, dynamics=None, ais=None,
                   reporting=None, source_config=None, groupfile=None, trajectory=None,
-                  coordinates=None, restart=None, checkpoint=None) -> AISPreflight:
+                  coordinates=None, restart=None, checkpoint=None,
+                  out_dir=None, resolved_config=None, overwrite=False,
+                  resume=False) -> AISPreflight:
     """AIS switching paths. The source ensemble is validated by CONTENT, not by suffix.
 
     When the resolved configuration is supplied -- which the runtime always does -- every
@@ -949,16 +962,81 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
 
     prepared = _prepare_ais(loaded, source=Path(source), dynamics=dynamics, ais=ais,
                             reporting=reporting, source_config=source_config)
+
+    # THE IDENTITY, HERE. It used to be built after `-odir` and both rank reports existed, so an
+    # incompatible source or schedule was refused by a run that had already created the directory
+    # it was refusing to write into -- and on a plain rerun that directory is indistinguishable
+    # from a run that started.
+    #
+    # Everything below is read-only: digests of files that already exist, a document derived from
+    # them, and one `is_file()` on the output directory.
+    from ..ais.run import RUN_IDENTITY, require_same_run, run_identity_document
+
+    directory = Path(out_dir) if out_dir is not None else (
+        Path(output).parent if output else Path("."))
     prepared["inventory"] = _ais_inventory(output=output, log=log,
-                                           paths=len(prepared["chosen_frames"]))
+                                           paths=len(prepared["chosen_frames"]),
+                                           ranks=coordination.size)
+    fingerprint = _ais_fingerprint(loaded, prepared, dynamics=dynamics,
+                                   resolved_config=resolved_config)
+    identity = run_identity_document(
+        fingerprint=fingerprint,
+        topology_facts=prepared["_topology_facts"], system_facts=prepared["_system_facts"],
+        source_facts=prepared["source_facts"], source_format=source_format,
+        schedule=prepared["schedule"], ais=ais, dynamics=dynamics,
+        chosen=list(prepared["chosen_frames"]), reporting=reporting,
+        resolved_config=resolved_config)
+
+    def _decide():
+        if overwrite:
+            return "overwrite"
+        # Read-only inspection. `require_same_run` raises on an incompatible directory and
+        # returns on a compatible or absent one.
+        try:
+            require_same_run(directory, identity)
+        except SystemExit as refusal:
+            raise PreflightError(str(refusal)) from None
+        return "resume" if (directory / RUN_IDENTITY).is_file() else "fresh"
+
+    disposition = collectively(coordination, _decide,
+                               what="the AIS run-identity check")
+
+    prepared.pop("_topology_facts")
+    prepared.pop("_system_facts")
     return AISPreflight(coordination=coordination, machine=machine, acceleration=acceleration,
                         device_index=index,
                         device_policy=str(machine.get("device_policy") or "local_rank"),
                         device_policy_detail=detail, particles=particles, loaded=loaded,
-                        source=Path(source), source_format=source_format, **prepared)
+                        source=Path(source), source_format=source_format,
+                        fingerprint=fingerprint, identity=identity, disposition=disposition,
+                        **prepared)
 
 
-def _ais_inventory(*, output, log, paths: int) -> OutputInventory:
+def _ais_fingerprint(loaded, prepared, *, dynamics, resolved_config) -> str:
+    """What a mid-path checkpoint has to match before it may be resumed from.
+
+    Built here rather than in the runtime so the identity that decides whether this directory may
+    be written to is the same string the checkpoints are stamped with. Two derivations of one
+    fingerprint is two chances to disagree, and the one that decides is whichever runs later.
+    """
+    import hashlib
+    import json as _json
+
+    schedule = prepared["schedule"]
+    return hashlib.sha256(_json.dumps({
+        "system": prepared["_system_facts"]["sha256"],
+        "topology": prepared["_topology_facts"]["sha256"],
+        "source": prepared["source_facts"]["sha256"],
+        "schedule": {k: v for k, v in schedule.items()
+                     if k not in ("observations", "taus", "note")},
+        "temperature_K": float(dynamics["temperature_K"]),
+        "friction_per_ps": float(dynamics["friction_per_ps"]),
+        "seed": int(dynamics["seed"]),
+        "resolved_config": resolved_config,
+    }, sort_keys=True).encode()).hexdigest()
+
+
+def _ais_inventory(*, output, log, paths: int, ranks: int = 1) -> OutputInventory:
     """AIS's complete inventory: the global tables AND every per-path artefact.
 
     A path directory holds a staged trajectory, two CSVs, a checkpoint generation tree and a
@@ -968,11 +1046,18 @@ def _ais_inventory(*, output, log, paths: int) -> OutputInventory:
     from ..ais import path_trajectory_name
 
     directory = Path(output).parent if output else Path(".")
+    from ..remd.executor import report_path_for_rank
+
     roles: dict[str, Path] = {}
-    if output:
-        roles["out"] = Path(output)
-    if log:
-        roles["log"] = Path(log)
+    # The reports as they are ACTUALLY named. Every rank keeps its own, suffixed `.rankNN`, and
+    # listing only rank 0's meant `--overwrite` after a size change left rank 05's report from a
+    # six-rank run sitting beside a two-rank one, looking equally current.
+    for role, value in (("out", output), ("log", log)):
+        if not value:
+            continue
+        for rank in range(max(int(ranks), 1)):
+            name = f"{role}" if rank == 0 else f"{role}_rank{rank:02d}"
+            roles[name] = Path(report_path_for_rank(str(value), rank))
     roles["run_identity"] = directory / "AIS_run.json"
     roles["work_table"] = directory / "AIS_work.csv"
     roles["work_summary"] = directory / "AIS_paths.csv"
@@ -1073,9 +1158,17 @@ def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting
     except (ValueError, SystemExit) as refusal:
         raise PreflightError(f"{where}: {refusal}") from None
 
+    # Hashed ONCE, here. A production source is large and is already read frame by frame above;
+    # digesting it twice would double that for a number that has one value -- and the runtime
+    # needs the same number for the record AND for the fingerprint.
+    from ..build.record import file_facts
+
     return {"timestep": timestep, "schedule": schedule, "solute": tuple(int(i) for i in solute),
             "excluded_bonds": excluded, "switcher": switcher, "chosen_frames": tuple(chosen),
             "eligible_frames": len(eligible), "source_frames": n_frames,
             "source_atoms": source_atoms, "force_audit": audit,
+            "source_facts": file_facts(source),
+            "_topology_facts": file_facts(loaded.topology_path),
+            "_system_facts": file_facts(loaded.system_path),
             "notes": {"omega": omega, "first_frame": first, "last_frame": last,
                       "frame_stride": stride}}

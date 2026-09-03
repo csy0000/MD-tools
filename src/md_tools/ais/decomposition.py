@@ -368,68 +368,129 @@ def reconstruction_tolerance(scale: float, *, precision: str = "mixed") -> float
 
 @dataclass
 class EvaluationCounters:
-    """What the decomposition and the work actually cost, counted rather than estimated.
+    """What a path's energy evaluations actually cost, split so no number double-counts another.
 
-    Four counters, because one could only mislead. The baseline reported a single
-    `switching_energy_evaluations` that counted basis probes and silently omitted the two direct
-    evaluations every switch already performed -- so the figure understated a path's true cost by
-    exactly the part that existed before the decomposition was added.
+    THE ACCOUNTING BUG THIS REPLACES. The previous version added the counters restored from a
+    committed checkpoint to `discarded_energy_evaluations`. Those evaluations are not discarded:
+    they produced the committed work, observations, frames and state rows that the resume is
+    continuing from. Calling them discarded made a resumed path report a cost profile in which
+    its own useful work had vanished into waste -- and made the useful total of a resumed path
+    differ from that of an identical uninterrupted one, which is exactly the comparison the
+    counters exist to support.
 
-    A "potential energy evaluation" here is one `Context.getState(getEnergy=True)` call. Parameter
-    pushes are counted SEPARATELY, because on a solvated system they dominate: a push walks every
-    particle and every exception of the NonbondedForce, and there are four per basis probe (three
-    amplitudes plus the restore) against three energy evaluations.
+    THE RELATIONSHIPS, and they are checked:
+
+        useful_total = direct_work + work_basis_probe + observation_potential + other_useful
+        paid_total   = useful_total + known_discarded
+
+    WHAT CANNOT BE KNOWN. A committed checkpoint records what had been done WHEN IT COMMITTED. It
+    cannot know how much further work a process performed before it died, because recording that
+    would itself require a durable write after every evaluation. So the evaluations between the
+    last commit and the crash are real, were paid for, and are UNOBSERVABLE.
+
+    `known_discarded` counts only what durable evidence proves, and `discarded_is_complete` says
+    whether that evidence is complete. Reporting an unknown as zero would understate the cost;
+    reporting committed useful work as discarded -- the previous behaviour -- overstates it and
+    corrupts the useful total as well. Saying "unknown" is the only honest option, and it is
+    written down rather than left to be inferred from a suspiciously round number.
     """
 
-    #: `getState(getEnergy=True)` inside basis probes, work and observation alike.
-    basis_probe_energy_evaluations: int = 0
     #: The two direct evaluations each switch performs: U(tau_j, x_j) and U(tau_{j+1}, x_j).
     direct_work_energy_evaluations: int = 0
+    #: `getState(getEnergy=True)` inside the WORK-basis probe, at the frozen pre-switch coordinate.
+    work_basis_probe_energy_evaluations: int = 0
     #: The direct evaluation at each frame-aligned observation, which the reconstruction is
-    #: checked against.
-    observation_energy_evaluations: int = 0
-    #: `updateParametersInContext` / `setParameter` pushes: the expensive half.
+    #: checked against, plus that row's own basis probe.
+    observation_potential_energy_evaluations: int = 0
+    #: Anything else with a stated scientific reason. Zero today; present so a future evaluation
+    #: has somewhere honest to go instead of being folded into one of the three above.
+    other_useful_energy_evaluations: int = 0
+    #: Evaluations that durable evidence proves were performed and then thrown away.
+    known_discarded_energy_evaluations: int = 0
+    #: False once a resume has happened without attempt-level evidence: some cost is unobservable.
+    discarded_is_complete: bool = True
+    #: `updateParametersInContext` / `setParameter` pushes: the expensive half on a solvated
+    #: system, and not an energy evaluation, so counted apart from all of the above.
     parameter_updates: int = 0
-    #: Evaluations performed by generations that were interrupted and re-run. Counted, because
-    #: work that was discarded was still paid for, and a cost report that omits it flatters.
-    discarded_energy_evaluations: int = 0
     #: Wall-clock seconds inside the probes.
     probe_seconds: float = 0.0
 
     @property
-    def total_potential_energy_evaluations(self) -> int:
-        return (self.basis_probe_energy_evaluations + self.direct_work_energy_evaluations
-                + self.observation_energy_evaluations)
+    def useful_total(self) -> int:
+        return (self.direct_work_energy_evaluations
+                + self.work_basis_probe_energy_evaluations
+                + self.observation_potential_energy_evaluations
+                + self.other_useful_energy_evaluations)
+
+    @property
+    def paid_total(self) -> int:
+        return self.useful_total + self.known_discarded_energy_evaluations
 
     def record(self) -> dict[str, Any]:
         return {
-            "basis_probe_energy_evaluations": self.basis_probe_energy_evaluations,
             "direct_work_energy_evaluations": self.direct_work_energy_evaluations,
-            "observation_energy_evaluations": self.observation_energy_evaluations,
-            "total_potential_energy_evaluations": self.total_potential_energy_evaluations,
+            "work_basis_probe_energy_evaluations": self.work_basis_probe_energy_evaluations,
+            "observation_potential_energy_evaluations":
+                self.observation_potential_energy_evaluations,
+            "other_useful_energy_evaluations": self.other_useful_energy_evaluations,
+            "useful_total_energy_evaluations": self.useful_total,
+            "known_discarded_energy_evaluations": self.known_discarded_energy_evaluations,
+            "paid_total_energy_evaluations": self.paid_total,
+            "discarded_is_complete": bool(self.discarded_is_complete),
             "parameter_updates": self.parameter_updates,
-            "discarded_energy_evaluations": self.discarded_energy_evaluations,
             "probe_seconds": round(self.probe_seconds, 6),
+            "relationships": [
+                "useful_total = direct_work + work_basis_probe + observation_potential "
+                "+ other_useful",
+                "paid_total = useful_total + known_discarded",
+            ],
             "counter_definitions": {
                 "energy_evaluation": "one Context.getState(getEnergy=True) call",
                 "parameter_update": ("one Force.updateParametersInContext or "
                                      "Context.setParameter push"),
-                "discarded": ("evaluations performed before an interruption whose generation was "
-                              "not committed, and which a resume therefore repeats"),
+                "known_discarded": ("evaluations that durable evidence proves were performed and "
+                                    "thrown away"),
+                "discarded_is_complete": ("false when a resume occurred: a committed checkpoint "
+                                          "cannot know how much work happened after it before "
+                                          "the crash, so that cost is real and unobservable"),
             },
         }
 
+    @staticmethod
+    def from_record(entry) -> "EvaluationCounters":
+        """Restore committed counters. They come back as USEFUL, which is what they are."""
+        entry = entry or {}
+        return EvaluationCounters(
+            direct_work_energy_evaluations=int(
+                entry.get("direct_work_energy_evaluations", 0)),
+            work_basis_probe_energy_evaluations=int(
+                entry.get("work_basis_probe_energy_evaluations", 0)),
+            observation_potential_energy_evaluations=int(
+                entry.get("observation_potential_energy_evaluations", 0)),
+            other_useful_energy_evaluations=int(
+                entry.get("other_useful_energy_evaluations", 0)),
+            known_discarded_energy_evaluations=int(
+                entry.get("known_discarded_energy_evaluations", 0)),
+            discarded_is_complete=bool(entry.get("discarded_is_complete", True)),
+            parameter_updates=int(entry.get("parameter_updates", 0)),
+            probe_seconds=float(entry.get("probe_seconds", 0.0)))
+
     def __add__(self, other: "EvaluationCounters") -> "EvaluationCounters":
         return EvaluationCounters(
-            basis_probe_energy_evaluations=(self.basis_probe_energy_evaluations
-                                            + other.basis_probe_energy_evaluations),
             direct_work_energy_evaluations=(self.direct_work_energy_evaluations
                                             + other.direct_work_energy_evaluations),
-            observation_energy_evaluations=(self.observation_energy_evaluations
-                                            + other.observation_energy_evaluations),
+            work_basis_probe_energy_evaluations=(self.work_basis_probe_energy_evaluations
+                                                 + other.work_basis_probe_energy_evaluations),
+            observation_potential_energy_evaluations=(
+                self.observation_potential_energy_evaluations
+                + other.observation_potential_energy_evaluations),
+            other_useful_energy_evaluations=(self.other_useful_energy_evaluations
+                                             + other.other_useful_energy_evaluations),
+            known_discarded_energy_evaluations=(self.known_discarded_energy_evaluations
+                                                + other.known_discarded_energy_evaluations),
+            discarded_is_complete=bool(self.discarded_is_complete
+                                       and other.discarded_is_complete),
             parameter_updates=self.parameter_updates + other.parameter_updates,
-            discarded_energy_evaluations=(self.discarded_energy_evaluations
-                                          + other.discarded_energy_evaluations),
             probe_seconds=self.probe_seconds + other.probe_seconds)
 
 
@@ -456,8 +517,14 @@ class ComponentProbe:
                 f"amplitudes; got {len(self.amplitudes)}")
         self.counters = counters if counters is not None else EvaluationCounters()
 
-    def measure(self, context, *, restore_tau: float) -> Components:
-        """Three evaluations at the CURRENT coordinates, then the exact quadratic through them."""
+    def measure(self, context, *, restore_tau: float, observation: bool = False) -> Components:
+        """Three evaluations at the CURRENT coordinates, then the exact quadratic through them.
+
+        `observation` says which counter these three belong to. The work-basis probe and the
+        observation-potential probe are the same arithmetic at different coordinates, and a cost
+        report that merged them could not answer "what did the HS output cost?" -- which is the
+        question the frame-aligned probe was added by, and therefore the one worth answering.
+        """
         import time
 
         from openmm import unit
@@ -470,7 +537,10 @@ class ComponentProbe:
                 self.counters.parameter_updates += 1
                 energies.append(context.getState(getEnergy=True).getPotentialEnergy(
                     ).value_in_unit(unit.kilojoule_per_mole))
-                self.counters.basis_probe_energy_evaluations += 1
+                if observation:
+                    self.counters.observation_potential_energy_evaluations += 1
+                else:
+                    self.counters.work_basis_probe_energy_evaluations += 1
         finally:
             # Unconditional: an exception mid-probe must not leave the path at a probe amplitude.
             self.switcher.set_tau(context, self.system, restore_tau)

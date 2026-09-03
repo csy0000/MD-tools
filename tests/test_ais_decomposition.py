@@ -356,12 +356,24 @@ def test_the_probe_counts_its_evaluations_and_its_cost():
     probe.components()
     probe.components()
     counters = probe.probe.counters
-    assert counters.basis_probe_energy_evaluations == 2 * len(BASIS_PROBE_AMPLITUDES) == 6
+    assert counters.work_basis_probe_energy_evaluations == 2 * len(BASIS_PROBE_AMPLITUDES) == 6
     # Four pushes per probe: three amplitudes plus the restore. Counted separately from the
     # energy evaluations, because on a solvated system the pushes are the expensive half.
     assert counters.parameter_updates == 2 * (len(BASIS_PROBE_AMPLITUDES) + 1) == 8
     assert counters.probe_seconds > 0.0
-    assert counters.total_potential_energy_evaluations == 6
+    # The relationships, checked rather than assumed: no counter double-counts another.
+    assert counters.useful_total == 6
+    assert counters.paid_total == counters.useful_total + counters.known_discarded_energy_evaluations
+    assert counters.known_discarded_energy_evaluations == 0 and counters.discarded_is_complete
+    record = counters.record()
+    assert record["useful_total_energy_evaluations"] == (
+        record["direct_work_energy_evaluations"]
+        + record["work_basis_probe_energy_evaluations"]
+        + record["observation_potential_energy_evaluations"]
+        + record["other_useful_energy_evaluations"])
+    assert record["paid_total_energy_evaluations"] == (
+        record["useful_total_energy_evaluations"]
+        + record["known_discarded_energy_evaluations"])
 
 
 def test_three_repeated_nodes_are_refused_rather_than_producing_a_number():

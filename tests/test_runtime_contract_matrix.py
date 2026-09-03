@@ -519,3 +519,100 @@ def test_resume_and_overwrite_together_are_refused(workspace, tmp_path, good_con
                        environment=good_config)
         _refused(done, fragment="contradict")
         _untouched(destination, before)
+
+
+# --- AIS identity is decided before a single byte is written -------------------------------------
+
+def test_an_incompatible_ais_source_refuses_without_creating_the_directory(workspace, tmp_path,
+                                                                           good_config):
+    """The identity used to be checked AFTER `-odir` and both rank reports existed.
+
+    So an incompatible source was refused by a run that had already produced a directory which,
+    to anyone looking at it afterwards, is indistinguishable from a run that started. The check is
+    in the preflight now: the source digest, the fingerprint, the identity document and the
+    decision about what this invocation is all happen before anything is created.
+    """
+    import mdtraj
+
+    destination = tmp_path / "identity"
+    destination.mkdir()
+
+    # A completed run in the directory, then the same command with a DIFFERENT source.
+    first = _launch(workspace, "AIS", destination, *PROTOCOL_ONLY, environment=good_config)
+    assert first.returncode == 0, first.stdout[-2000:] + first.stderr[-2000:]
+    before = _snapshot(destination)
+    assert before and any(name == "AIS_run.json" for name in before)
+
+    other = tmp_path / "other_source.dcd"
+    frames = mdtraj.load(str(workspace / "built.pdb"))
+    mdtraj.join([frames] * 5).save_dcd(str(other))          # a different length, so a different digest
+
+    done = _run([sys.executable, str(workspace / "AIS" / "AIS.py"),
+                 "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
+                 "-source-traj", str(other), *PROTOCOL_ONLY],
+                cwd=workspace / "AIS", environment=good_config)
+    _refused(done, fragment="different AIS run")
+    _untouched(destination, before)
+
+
+def test_an_ais_refusal_on_a_fresh_directory_leaves_it_absent(workspace, tmp_path, good_config):
+    """No directory, no reports, no frame table -- the refusal happens before `mkdir`."""
+    import mdtraj
+
+    destination = tmp_path / "never-made"
+    # A source of the wrong system: refused by the atom-count check, which is inside the plan.
+    wrong = tmp_path / "wrong.dcd"
+    import numpy
+
+    import mdtraj.core.element as element  # noqa: F401
+
+    frames = mdtraj.load(str(workspace / "built.pdb"))
+    sliced = frames.atom_slice(list(range(frames.n_atoms - 1)))
+    mdtraj.join([sliced] * 4).save_dcd(str(wrong))
+
+    done = _run([sys.executable, str(workspace / "AIS" / "AIS.py"),
+                 "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
+                 "-source-traj", str(wrong), *PROTOCOL_ONLY],
+                cwd=workspace / "AIS", environment=good_config)
+    assert done.returncode != 0, done.stdout + done.stderr
+    assert not destination.exists(), sorted(p.name for p in destination.iterdir())
+
+
+def test_overwrite_deletes_only_names_this_run_owns(tmp_path):
+    """`path_notes/` is not `path_0000/`, and a wildcard cannot tell them apart.
+
+    The previous cleanup globbed `path_*` and removed every directory that matched -- so a working
+    directory named `path_notes` beside the run would have gone with it. `--overwrite` is not a
+    licence to delete a directory because its name is suggestive.
+    """
+    from md_tools.ais.run import clear_run_directory
+
+    out = tmp_path / "AIS"
+    (out / "path_0000" / "checkpoints").mkdir(parents=True)
+    (out / "path_0001").mkdir()
+    (out / "path_notes").mkdir()                            # NOT owned: five characters in common
+    (out / "path_0000" / "completed.json").write_text("{}", encoding="utf-8")
+    (out / "path_notes" / "todo.md").write_text("mine", encoding="utf-8")
+    for name in ("AIS_run.json", "AIS_work.csv", "AIS_paths.csv", "AIS_hs.csv",
+                 "selected_source_frames.csv", "AIS_traj0000.nc", "AIS_traj0099.nc",
+                 "AIS.out", "AIS.out.rank05", "AIS.log", "AIS.log.rank05"):
+        (out / name).write_text("stale", encoding="utf-8")
+    (out / "AIS_traj_notes.nc").write_text("not the schema", encoding="utf-8")
+    (out / "resolved.config").write_text("protocol: AIS\n", encoding="utf-8")
+
+    removed = clear_run_directory(out, paths=2, ranks=2)
+
+    assert not (out / "path_0000").exists() and not (out / "path_0001").exists()
+    assert (out / "path_notes" / "todo.md").read_text(encoding="utf-8") == "mine", (
+        "--overwrite deleted a directory it does not own")
+    assert (out / "AIS_traj_notes.nc").is_file(), (
+        "--overwrite deleted a file whose name does not match the trajectory schema")
+    assert (out / "resolved.config").is_file()
+    for name in ("AIS_run.json", "AIS_work.csv", "AIS_hs.csv", "AIS_traj0000.nc",
+                 "AIS_traj0099.nc", "AIS.out", "AIS.log"):
+        assert not (out / name).exists(), name
+    # Rank reports from a LARGER previous world go too: an overwrite from six ranks to two left
+    # rank05's report beside the new one, equally current-looking.
+    assert not (out / "AIS.out.rank05").exists()
+    assert not (out / "AIS.log.rank05").exists()
+    assert removed >= 11, removed

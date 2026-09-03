@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import json
 import sys
 from pathlib import Path
@@ -291,17 +292,15 @@ def _source_atom_count(path: Path) -> int | None:
 
 
 def _summed_counters(completed) -> dict[str, Any]:
-    """Add up every path's counters into one record for the run."""
+    """Add up every path's counters into one record for the run.
+
+    `discarded_is_complete` is AND-ed: one path that was resumed makes the run's discarded figure
+    incomplete, and a run-level summary that claimed completeness because most paths had it would
+    be the least useful kind of wrong.
+    """
     total = EvaluationCounters()
     for record in completed:
-        entry = record.get("evaluation_counters") or {}
-        total = total + EvaluationCounters(
-            basis_probe_energy_evaluations=int(entry.get("basis_probe_energy_evaluations", 0)),
-            direct_work_energy_evaluations=int(entry.get("direct_work_energy_evaluations", 0)),
-            observation_energy_evaluations=int(entry.get("observation_energy_evaluations", 0)),
-            parameter_updates=int(entry.get("parameter_updates", 0)),
-            discarded_energy_evaluations=int(entry.get("discarded_energy_evaluations", 0)),
-            probe_seconds=float(entry.get("probe_seconds", 0.0)))
+        total = total + EvaluationCounters.from_record(record.get("evaluation_counters"))
     return total.record()
 
 
@@ -463,49 +462,65 @@ def require_same_run(out: Path, document: dict[str, Any]) -> None:
         f"experiments -- readable, and describing neither. Use a new -odir.")
 
 
-def clear_run_directory(out: Path, *, paths: int) -> int:
-    """Remove every artefact of a previous AIS run from `out`. Returns how many were removed.
+#: The EXACT names an AIS run owns. A directory is removed only if it matches this, and a file
+#: only if it matches the trajectory schema or is one of the named tables.
+PATH_DIRECTORY = re.compile(r"^path_(\d{4})$")
+PATH_TRAJECTORY = re.compile(r"^AIS_traj(\d{4})\.nc$")
 
-    What `--overwrite` has to mean. A fresh run must not inherit ANY of: a path directory with its
-    checkpoints and completion manifest, a published trajectory, the selected-frame table, the
-    aggregate tables, or the run identity. Any one of them surviving lets the new identity adopt
-    the old measurements.
 
-    Deliberately enumerated rather than `rmtree(out)`: the output directory may legitimately hold
-    things this run did not write -- a `resolved.config` md-run just placed there, a person's
-    notes -- and deleting a directory because we are about to write into it is how `--overwrite`
-    becomes a data-loss button.
+def clear_run_directory(out: Path, *, identity: dict[str, Any] | None = None, paths: int = 0,
+                        ranks: int = 1) -> int:
+    """Remove every artefact THIS RUN OWNS from `out`. Returns how many were removed.
+
+    What `--overwrite` has to mean: a fresh run must inherit nothing -- not a path directory with
+    its checkpoints and manifest, not a published trajectory, not the selected-frame table, not
+    an aggregate table, not a rank report, not the run identity. Any one surviving lets the new
+    identity adopt an old measurement.
+
+    OWNERSHIP IS BY NAME SCHEMA, NOT BY PREFIX. The previous version globbed `path_*` and deleted
+    every directory that matched, which would take `path_notes/` -- somebody's working directory
+    that happens to start with those five characters -- with it. `--overwrite` is not a licence to
+    delete a directory because its name is suggestive. Only `path_0000`-style names (exactly four
+    digits) and `AIS_trajNNNN.nc` are owned, plus the named tables and the rank reports this run's
+    world size implies.
+
+    Stragglers from a LONGER previous run are removed too -- a 100-path directory overwritten by a
+    4-path one leaves `AIS_traj0004.nc..0099.nc`, and those look exactly like this run's own
+    output -- but only because they match the schema, not because of a wildcard.
     """
     import shutil
 
-    from . import path_trajectory_name
+    from ..remd.executor import report_path_for_rank
 
     removed = 0
     out = Path(out)
-    for index in range(int(paths)):
-        directory = out / f"path_{index:04d}"
-        if directory.is_dir():
-            shutil.rmtree(directory)
+    if not out.is_dir():
+        return 0
+
+    for entry in sorted(out.iterdir()):
+        if entry.is_dir() and PATH_DIRECTORY.match(entry.name):
+            shutil.rmtree(entry)
             removed += 1
-        published = out / path_trajectory_name(index, int(paths))
-        if published.is_file():
-            published.unlink()
+        elif entry.is_file() and PATH_TRAJECTORY.match(entry.name):
+            entry.unlink()
             removed += 1
+
     for name in (RUN_IDENTITY, WORK_TABLE, WORK_SUMMARY, HS_TABLE,
                  "selected_source_frames.csv"):
         target = out / name
         if target.is_file():
             target.unlink()
             removed += 1
-    # Any straggler from a previous path count: a run of 100 paths overwritten by one of 4 would
-    # otherwise leave AIS_traj0004.nc..0099.nc behind, and they look exactly like this run's.
-    for straggler in sorted(out.glob("AIS_traj*.nc")):
-        straggler.unlink()
-        removed += 1
-    for straggler in sorted(out.glob("path_*")):
-        if straggler.is_dir():
-            shutil.rmtree(straggler)
-            removed += 1
+
+    # Rank reports, INCLUDING those of a previous, larger world. An overwrite that dropped from
+    # six ranks to two left `AIS.out.rank05` beside the new `AIS.out`, equally current-looking and
+    # describing a run that no longer exists.
+    for base in ("AIS.out", "AIS.log"):
+        for candidate in sorted(out.glob(f"{base}*")):
+            if candidate.is_file():
+                candidate.unlink()
+                removed += 1
+    del report_path_for_rank, ranks
     return removed
 
 
@@ -790,7 +805,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         return simulation.context.getState(getEnergy=True).getPotentialEnergy(
             ).value_in_unit(unit.kilojoule_per_mole)
 
-    def measure_components(tau: float, *, what: str):
+    def measure_components(tau: float, *, what: str, observation: bool = False):
         """The three basis components at the CURRENT coordinates, checked against U(tau).
 
         `what` names which coordinate this is -- the frozen pre-switch one, or the saved
@@ -804,7 +819,11 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         difference between a refused run and a work integral for a Hamiltonian nothing ran under.
         """
         measured = direct_potential()
-        components = probe.measure(simulation.context, restore_tau=tau)
+        if observation:
+            counters.observation_potential_energy_evaluations += 1
+        else:
+            counters.direct_work_energy_evaluations += 1
+        components = probe.measure(simulation.context, restore_tau=tau, observation=observation)
         reconstructed = components.total_at(tau)
         allowed = reconstruction_tolerance(measured, precision=precision)
         if abs(reconstructed - measured) > allowed:
@@ -833,8 +852,8 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         """
         if not wrote_frame:
             return {name: "" for name in OBSERVATION_POTENTIAL_COLUMNS}
-        components, measured = measure_components(tau, what="the saved observation coordinate")
-        counters.observation_energy_evaluations += 1
+        components, measured = measure_components(tau, what="the saved observation coordinate",
+                                                  observation=True)
         return components.row(tau, measured)
 
     # -- resume, or start ----------------------------------------------------------------------
@@ -884,12 +903,20 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             state_of_path["cumulative_component_work_kj_mol"])
         since_components = ComponentWork.from_mapping(
             state_of_path["component_work_since_last_observation_kj_mol"])
-        # Everything the interrupted attempt evaluated past this generation was discarded, and a
-        # resume pays for it again. Carried forward as `discarded` so the total cost of producing
-        # this path is the truth rather than the cost of the last attempt.
-        previous_counters = state_of_path.get("evaluation_counters") or {}
-        counters.discarded_energy_evaluations += int(
-            previous_counters.get("total_potential_energy_evaluations", 0))
+        # RESTORED AS USEFUL, because that is what they are: those evaluations produced the
+        # committed work, observations, frames and state rows this resume is continuing from.
+        # They were previously added to `discarded`, which made a resumed path report its own
+        # committed work as waste and gave it a different useful total from an identical
+        # uninterrupted path -- the exact comparison the counters exist for.
+        #
+        # What IS lost is whatever the dead process evaluated after this generation committed,
+        # and a checkpoint cannot know that number: recording it would need a durable write after
+        # every evaluation. So it is marked unobservable rather than guessed at or silently
+        # counted as zero.
+        restored = EvaluationCounters.from_record(state_of_path.get("evaluation_counters"))
+        restored.discarded_is_complete = False
+        counters = restored
+        probe.counters = counters
         rows_emitted = int(state_of_path["work_rows"])
         frames_emitted = int(state_of_path["frames"])
         state_rows_emitted = int(state_of_path["state_rows"])
@@ -1068,7 +1095,6 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         # defined, and it is NOT where this update's observation potentials come from -- those are
         # measured after the propagation below, at the coordinate the row actually saves.
         components, before = measure_components(tau_before, what="the frozen pre-switch coordinate")
-        counters.direct_work_energy_evaluations += 1
 
         switcher.set_tau(simulation.context, system, tau_after)
         counters.parameter_updates += 1
@@ -1283,7 +1309,14 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             # was validated rather than a second one built from the same inputs.
             dynamics=dynamics, ais=ais, reporting=reporting, source_config=source_cfg,
             trajectory=args.trajectory, coordinates=args.coordinates, restart=args.restart,
-            checkpoint=args.checkpoint, groupfile=args.groupfile)
+            checkpoint=args.checkpoint, groupfile=args.groupfile,
+            # The identity is decided HERE, before `-odir` exists: the source digest, the
+            # fingerprint, the run document, and what this invocation IS -- fresh, resume or
+            # overwrite. It used to be settled after the directory and both rank reports had
+            # been created, so an incompatible source was refused by a run that had already
+            # produced a directory indistinguishable from one that started.
+            out_dir=out, resolved_config=run.get("resolved_config"),
+            overwrite=bool(args.overwrite), resume=bool(args.resume))
     except PreflightError as refusal:
         print(f"AIS: {refusal}", file=sys.stderr)
         return 2
@@ -1321,6 +1354,28 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                                  f"{schedule['number_of_updates']} updates, "
                                  f"{schedule['number_of_observations']} observations"),
                    ("ensemble", "fixed volume; no barostat")])
+
+    # OVERWRITE FIRST, before anything is created, and only on rank 0 with every rank agreeing.
+    # Clearing after the reports were opened meant `--overwrite` deleted files the same
+    # invocation had just written.
+    if checked.disposition == "overwrite":
+        cleared = None
+        if rank == 0:
+            try:
+                cleared = clear_run_directory(out, identity=checked.identity,
+                                              paths=len(checked.chosen_frames),
+                                              ranks=coordination.size)
+            except BaseException as broken:                 # noqa: BLE001 - reported collectively
+                cleared = f"failed: {type(broken).__name__}: {broken}"
+        if size > 1:
+            for message in coordination.allgather(
+                    cleared if isinstance(cleared, str) else None):
+                if message:
+                    coordination.fail(f"AIS: rank 0 could not clear {out}: {message}")
+        elif isinstance(cleared, str):
+            print(f"AIS: {cleared}", file=sys.stderr)
+            return 2
+        coordination.barrier()
 
     out.mkdir(parents=True, exist_ok=True)
     # Every rank keeps its own pair. An explicitly named -log or -o is suffixed the same way an
@@ -1408,7 +1463,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         # Hashed ONCE, here, and reused by both the record and the resume fingerprint. A
         # production trajectory is large and is already read frame by frame; digesting it twice
         # would double that for a number that has one value.
-        source_facts = file_facts(source_path)
+        source_facts = checked.source_facts
 
         log.heading("Source ensemble")
         log.field("trajectory", f"{source_path}  ({source_format.upper()})")
@@ -1476,52 +1531,19 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         log.field("device policy", device_policy)
         log.update(acceleration=checked.record())
 
-        # What a mid-path checkpoint has to match before it may be resumed from. The System, the
-        # topology, the source ensemble and the whole schedule: a checkpoint carries positions and
-        # velocities for one particular simulation, and resuming it against another produces
-        # right-looking numbers for the wrong thing.
-        import hashlib
-
-        path_fingerprint = hashlib.sha256(json.dumps({
-            "system": file_facts(system_path)["sha256"],
-            "topology": file_facts(topology_path)["sha256"],
-            "source": source_facts["sha256"],
-            "schedule": {k: v for k, v in schedule.items()
-                         if k not in ("observations", "taus", "note")},
-            "temperature_K": float(dynamics["temperature_K"]),
-            "friction_per_ps": float(dynamics["friction_per_ps"]),
-            "seed": int(dynamics["seed"]),
-            "resolved_config": run.get("resolved_config"),
-        }, sort_keys=True).encode()).hexdigest()
-
-        # THE RUN IDENTITY. Established before any path runs, and refused if this directory
-        # already holds a different one. Every rank computes the same document -- every input to
-        # it is either a file digest or a resolved setting -- so every rank can check it, and
-        # only rank 0 writes it.
-        identity_document = run_identity_document(
-            fingerprint=path_fingerprint,
-            topology_facts=file_facts(topology_path), system_facts=file_facts(system_path),
-            source_facts=source_facts, source_format=source_format, schedule=schedule,
-            ais=ais, dynamics=dynamics, chosen=chosen, reporting=reporting,
-            resolved_config=run.get("resolved_config"))
-        if args.overwrite:
-            # A COMPLETE fresh-run transaction. Removing only `AIS_run.json` was not overwrite:
-            # it deleted the one record that said which run the directory held and left every
-            # path directory, published trajectory, checkpoint generation and aggregate table in
-            # place -- so the next invocation adopted them under a NEW identity, skipped them as
-            # "completed", and assembled one table out of two experiments. Strictly worse than
-            # refusing, because the refusal at least said something was wrong.
-            if rank == 0:
-                removed = clear_run_directory(out, paths=len(chosen))
-                log.field("overwrite", f"removed {removed} artefact(s) from a previous run")
-            coordination.barrier()
-        else:
-            require_same_run(out, identity_document)
+        # CONSUMED from the plan. The fingerprint and the identity document were built by the
+        # preflight, from the same digests, before this directory existed -- and the decision
+        # about whether this directory may be written to at all was made and agreed there.
+        # Rebuilding either here would be a second derivation of one string, and the one that
+        # decides would be whichever ran later.
+        path_fingerprint = checked.fingerprint
+        identity_document = checked.identity
         if rank == 0 and not (out / RUN_IDENTITY).is_file():
             write_atomically(out / RUN_IDENTITY,
                              json.dumps(identity_document, indent=2, sort_keys=True) + "\n")
         coordination.barrier()
-        log.update(run_identity=identity_document)
+        log.field("disposition", checked.disposition)
+        log.update(run_identity=identity_document, disposition=checked.disposition)
 
         # AFTER the identity, never before it. `--overwrite` clears this directory, so a
         # selected-frame table written earlier was deleted a moment later and the run then failed
