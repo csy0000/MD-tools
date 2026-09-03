@@ -1511,7 +1511,8 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             return 2
         coordination.barrier()
 
-    out.mkdir(parents=True, exist_ok=True)
+    with coordination.phase("AIS: creating the output directory"):
+        out.mkdir(parents=True, exist_ok=True)
     # Every rank keeps its own pair. An explicitly named -log or -o is suffixed the same way an
     # unnamed one is: without that, N ranks race to rename the same temporary and the run dies
     # with a FileNotFoundError that says nothing about the cause. A rank that failed to bind its
@@ -1526,8 +1527,10 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
 
     from ..build.simout import SimulationOutput
 
-    sim_out = SimulationOutput(out_path, title=f"AIS: {ais['number_of_paths']} switching paths",
-                               log_path=log_path)
+    with coordination.phase("AIS: opening the rank reports"):
+        sim_out = SimulationOutput(out_path,
+                                   title=f"AIS: {ais['number_of_paths']} switching paths",
+                                   log_path=log_path)
     sim_out.heading("Inputs")
     sim_out.field("topology", topology_path)
     sim_out.field("system", system_path)

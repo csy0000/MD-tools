@@ -419,7 +419,12 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
                    ("forces", ", ".join(f"{n}" for _i, n in
                                         (checked.force_audit or {}).get("scaled", [])) or "-")])
 
-    out.mkdir(parents=True, exist_ok=True)
+    # PHASE-GUARDED from here on. Everything after the preflight is rank-local again -- a
+    # directory that cannot be created on this node, a report that cannot be opened, a helper that
+    # cannot be published -- and each is a place one rank fails alone while the others walk into
+    # the next collective.
+    with coordination.phase(f"{protocol_name}: creating the output directory"):
+        out.mkdir(parents=True, exist_ok=True)
 
     if args.cpu:
         # `platform` reaches the driver through the protocol file, and `from_flags` records that a
@@ -571,7 +576,8 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
 
     log_path = Path(report_path_for_rank(
         str(Path(args.log) if args.log else out / f"{protocol_name}.log"), rank))
-    log = LogWriter(log_path, record_type=f"md-replica:{protocol_name}", echo=False)
+    with coordination.phase(f"{protocol_name}: opening the rank report"):
+        log = LogWriter(log_path, record_type=f"md-replica:{protocol_name}", echo=False)
     log(f"md-openmm {protocol_name}")
     log("=" * 68)
     log.heading("Ladder")
@@ -589,7 +595,8 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     # otherwise resolve a second platform after every file on disk already existed.
     from .executor import INTERRUPTED_STATUS
 
-    code = int(replica_executor.main(executor_argv, prepared=checked) or 0)
+    with coordination.phase(f"{protocol_name}: running the ladder"):
+        code = int(replica_executor.main(executor_argv, prepared=checked) or 0)
 
     # The executor owns the run and writes its own authoritative records. This log exists so that
     # every artefact this package produces carries the SAME machine record, and so registration

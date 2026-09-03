@@ -83,7 +83,10 @@ def projects(tmp_path_factory):
     import mdtraj
 
     frames = mdtraj.load(str(root / "built.pdb"))
-    mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
+    # Enough eligible frames for the default 100 paths. With eight, the AIS preflight refused on
+    # the frame count and every test using this fixture stopped BEFORE the runtime behaviour it
+    # was written for -- passing on the return code while never reaching the phase under test.
+    mdtraj.join([frames] * 128).save_dcd(str(root / "source.dcd"))
     return root
 
 
@@ -341,3 +344,73 @@ def test_the_reservoir_declaration_is_written_by_rank_zero_alone():
             f"reservoir_declaration_text writes to the filesystem ({forbidden}); it must return "
             f"text and leave the writing to the rank-0 helper path")
     assert "reservoir_file" in inspect.getsource(generated.replica_main)
+
+
+# --- rank-local failures AFTER the preflight -----------------------------------------------------
+#
+# Preflight agreement is not enough. Everything after it is rank-local again -- creating a
+# directory, opening a report, publishing a helper, running the ladder -- and each is a place ONE
+# rank can fail while the others walk into the next collective and wait there for a participant
+# that has already gone. The launcher then reports nothing and the job holds its GPUs until a wall
+# clock kills it.
+#
+# The TIMEOUT is the assertion in every test here.
+
+FAIL_PHASE = "MD_TOOLS_FAIL_PHASE"
+
+
+@pytest.mark.parametrize("failing_rank", [0, 1])
+@pytest.mark.parametrize("phase", ["creating the output directory", "opening the rank report"])
+def test_a_rank_local_failure_after_preflight_stops_the_whole_ladder(failing_rank, phase,
+                                                                     projects, tmp_path):
+    """Rank 0 AND a nonzero rank, at two phases. Neither may leave the other waiting."""
+    _require_mpirun()
+    project = projects / "REST2"
+    destination = tmp_path / f"phase-{failing_rank}-{phase.replace(' ', '-')}"
+
+    done = subprocess.run(
+        ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
+         "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination)],
+        cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
+        env=_environment(**{FAIL_PHASE: f"REST2: {phase}:{failing_rank}"}))
+    message = done.stdout + done.stderr
+    assert done.returncode != 0, message[-2000:]
+    assert f"rank {failing_rank}" in message, message[-2500:]
+    # No authoritative completion output survives a failed launch.
+    assert not sorted(destination.glob("remd*.nc")), sorted(destination.glob("remd*.nc"))
+    assert not (destination / "restart.json").exists()
+
+
+@pytest.mark.parametrize("failing_rank", [0, 1])
+def test_a_rank_local_failure_after_preflight_stops_the_whole_ais_run(failing_rank, projects,
+                                                                      tmp_path):
+    _require_mpirun()
+    project = projects / "AIS"
+    destination = tmp_path / f"ais-phase-{failing_rank}"
+
+    done = subprocess.run(
+        ["mpirun", "-n", "2", sys.executable, str(project / "AIS.py"),
+         "-p", "../built.pdb", "-s", "../built.xml", "-source-traj", "../source.dcd",
+         "-odir", str(destination)],
+        cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
+        env=_environment(**{FAIL_PHASE: f"AIS: opening the rank reports:{failing_rank}"}))
+    message = done.stdout + done.stderr
+    assert done.returncode != 0, message[-2000:]
+    assert f"rank {failing_rank}" in message, message[-2500:]
+    assert not sorted(destination.glob("AIS_traj*.nc"))
+    assert not (destination / "AIS_hs.csv").exists()
+
+
+def test_the_phase_guard_is_the_only_mpi_authority():
+    """`md_tools.remd.mpi` stays the one module that imports or controls mpi4py."""
+    import inspect
+
+    from md_tools.ais import run as ais_module
+    from md_tools.remd import generated as ladder_module
+
+    for module in (ais_module, ladder_module):
+        source = inspect.getsource(module)
+        for forbidden in ("from mpi4py", "import mpi4py"):
+            assert forbidden not in source, f"{module.__name__} has its own `{forbidden}`"
+        assert "coordination.phase(" in source, (
+            f"{module.__name__} does not guard its post-preflight phases")

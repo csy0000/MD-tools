@@ -218,6 +218,70 @@ class Coordination:
                 f"the ranks disagree about {what}: {sorted(set(values))[:4]}. Continuing would "
                 f"propagate different states under one record.")
 
+    #: Test seam: fail inside a named phase on named ranks, as `PHASE:0,3`. A rank-local failure
+    #: after the preflight -- a directory that cannot be created, a report that cannot be opened,
+    #: a reporter that cannot be constructed, a checkpoint that will not load -- is the case this
+    #: machinery exists for, and it cannot be provoked reliably any other way.
+    FAIL_PHASE_ENVIRONMENT = "MD_TOOLS_FAIL_PHASE"
+
+    def phase(self, name: str):
+        """A context manager that makes a rank-local failure everyone's failure.
+
+        `if rank == 0: ...` followed by a collective is a deadlock waiting for a bad input: the
+        failing rank raises, exits, and every other rank waits at the next collective for a
+        participant that has already gone. The launcher then reports nothing and the job holds its
+        GPUs until a wall clock kills it.
+
+        Preflight agreement is not enough. Everything AFTER it is rank-local again -- creating a
+        directory, opening a report, publishing a helper, constructing a reporter, loading a
+        checkpoint, building a Simulation, finalising outputs -- and each is a place one rank can
+        fail alone. Wrapping each phase in this is what turns those into a stopped job rather than
+        a hung one.
+
+        Every rank must enter the same phases in the same order: the `allgather` inside is itself
+        a collective, so a phase entered by only some ranks would be the very deadlock it
+        prevents.
+        """
+        import contextlib
+
+        @contextlib.contextmanager
+        def _guard():
+            failure = None
+            try:
+                self._fail_here_if_asked(name)
+                yield
+            except BaseException as broken:                # noqa: BLE001 - reported collectively
+                failure = f"{type(broken).__name__}: {broken}"
+            if self.size > 1:
+                reports = self.allgather(failure)
+                bad = [(rank, message) for rank, message in enumerate(reports) if message]
+                if bad:
+                    detail = "; ".join(f"rank {rank}: {message}" for rank, message in bad[:4])
+                    self.fail(f"{name} failed on {len(bad)} of {self.size} rank(s): {detail}")
+            elif failure:
+                raise SystemExit(f"{name}: {failure}")
+
+        return _guard()
+
+    def _fail_here_if_asked(self, name: str) -> None:
+        """Honour the phase-failure test seam. A no-op in every normal run."""
+        import os
+
+        wanted = os.environ.get(self.FAIL_PHASE_ENVIRONMENT)
+        if not wanted or ":" not in wanted:
+            return
+        # rpartition, not partition: a phase name contains a colon ("REST2: opening the rank
+        # report"), and splitting on the first one made every request name the protocol and never
+        # match a phase -- so the seam silently did nothing and the tests using it passed for the
+        # wrong reason.
+        phase_name, _, ranks = wanted.rpartition(":")
+        if phase_name != name:
+            return
+        if self.rank in {int(part) for part in ranks.replace(",", " ").split()}:
+            raise RuntimeError(
+                f"{self.FAIL_PHASE_ENVIRONMENT} names this rank: simulating a rank-local failure "
+                f"in {name!r} on rank {self.rank} of {self.size}")
+
     def fail(self, message: str, *, code: int = 1):
         """A rank-local fatal error, made collective.
 
