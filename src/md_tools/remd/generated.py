@@ -124,8 +124,13 @@ protocol = REST2Protocol(
 '''
 
 
-def write_reservoir_declaration(ladder: dict[str, Any], out: Path) -> Path:
-    """Turn the config's reservoir block into the declaration the runtime reads.
+def reservoir_declaration_text(ladder: dict[str, Any], out: Path) -> str:
+    """Turn the config's reservoir block into the declaration the runtime reads, AS TEXT.
+
+    It returns text and writes nothing. It used to write `reservoir.yaml` itself, and it was
+    called by EVERY rank -- so under `mpirun -n 8` eight processes truncated and rewrote one
+    file while other ranks were reading it. It goes through the same rank-0-writes,
+    everyone-verifies path as the other helpers now.
 
     `reservoir.path` names a PHASE-SPACE file: complete samples with positions, velocities and
     box, which is what the Boltzmann contract requires and what a plain trajectory cannot supply.
@@ -174,9 +179,7 @@ def write_reservoir_declaration(ladder: dict[str, Any], out: Path) -> Path:
             "frames": frames,
         },
     }
-    path = out / "reservoir.yaml"
-    path.write_text(yaml.safe_dump(declaration, sort_keys=False), encoding="utf-8")
-    return path
+    return yaml.safe_dump(declaration, sort_keys=False)
 
 
 def protocol_file_text(ladder: dict[str, Any]) -> str:
@@ -468,6 +471,13 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     if not args.groupfile:
         helpers[group_file] = _group_file_text(protocol_name, states, ladder, args,
                                                protocol_file, solute_yaml)
+    reservoir_file = None
+    if ladder.get("reservoir", {}).get("enabled"):
+        # Validated HERE, by every rank, from the file itself -- and written by rank 0 alone.
+        # `reservoir.yaml` is read by every rank a moment later, so a concurrent rewrite is a rank
+        # parsing another rank's half-written YAML.
+        reservoir_file = out / "reservoir.yaml"
+        helpers[reservoir_file] = reservoir_declaration_text(ladder, out)
 
     if args.verify_only:
         from ..remd import executor as replica_executor
@@ -486,10 +496,28 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
             "--groupfile", str(group_file), "--verify-only"]) or 0)
         return code
 
+    # Rank 0 prepares; the outcome is AGREED before anyone proceeds.
+    #
+    # `if rank == 0: ...` followed by a barrier is a deadlock waiting for a bad input: rank 0
+    # raises inside the writer, exits, and ranks 1..N-1 wait at the barrier for a participant that
+    # has already gone. The launcher then reports nothing and the job holds its GPUs until a wall
+    # clock kills it.
+    failure = None
     if rank == 0:
-        for destination, text in helpers.items():
-            _write_helper_if_compatible(destination, text,
-                                        force=bool(args.force or args.overwrite))
+        try:
+            for destination, text in helpers.items():
+                _write_helper_if_compatible(destination, text,
+                                            force=bool(args.force or args.overwrite))
+        except BaseException as broken:                    # noqa: BLE001 - reported collectively
+            failure = f"{type(broken).__name__}: {broken}"
+    if coordination.size > 1:
+        for message in coordination.allgather(failure):
+            if message:
+                coordination.fail(f"{protocol_name}: rank 0 could not prepare the shared "
+                                  f"helpers: {message}")
+    elif failure:
+        print(f"{protocol_name}: {failure}", file=sys.stderr)
+        return 2
     coordination.barrier()
 
     # EVERY rank verifies, after the barrier: rank 0 writing correctly and rank 5 reading a file
@@ -519,8 +547,8 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     ]
     if ladder.get("rem_log", True):
         executor_argv += ["--rem", str(out / "rem.log")]
-    if ladder.get("reservoir", {}).get("enabled"):
-        executor_argv += ["--reservoir", str(write_reservoir_declaration(ladder, out))]
+    if reservoir_file is not None:
+        executor_argv += ["--reservoir", str(reservoir_file)]
     if args.resume:
         executor_argv.append("--resume")
     if args.verify_only:

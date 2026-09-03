@@ -289,3 +289,55 @@ def test_the_collective_agreement_is_the_one_in_the_mpi_authority():
         assert forbidden not in source, f"the preflight has its own `{forbidden}`"
     assert "coordination.allgather" in source, (
         "the agreement does not go through the Coordination object")
+
+
+# --- rank-zero preparation failures are collective ----------------------------------------------
+
+def test_a_rank_zero_helper_failure_stops_every_rank_rather_than_hanging_them(projects,
+                                                                              tmp_path):
+    """`if rank == 0: prepare` then a barrier is a deadlock waiting for a bad input.
+
+    Rank 0 raises inside the writer, exits, and every other rank waits at the barrier for a
+    participant that has already gone. The launcher reports nothing and the job holds its GPUs
+    until a wall clock kills it. The TIMEOUT is the assertion here.
+
+    Provoked with a stale, incompatible `_protocol.py` that rank 0 refuses to overwrite -- the
+    real reason a preparation fails, and one only rank 0 encounters.
+    """
+    _require_mpirun()
+    project = projects / "REST2"
+    destination = tmp_path / "hung"
+    destination.mkdir()
+    # A helper from another ladder: content-addressed, so rank 0 refuses it rather than replacing
+    # it, and refuses it in the one place only rank 0 reaches.
+    (destination / "_protocol.py").write_text("n_states = 99\n", encoding="utf-8")
+
+    done = subprocess.run(
+        ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
+         "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination)],
+        cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
+        env=_environment())
+    message = done.stdout + done.stderr
+    assert done.returncode != 0, message[-2000:]
+    assert "rank 0 could not prepare" in message or "generated from different content" in message, (
+        message[-2500:])
+
+
+def test_the_reservoir_declaration_is_written_by_rank_zero_alone():
+    """Every rank used to write `reservoir.yaml`, then every rank read it.
+
+    Eight processes truncating and rewriting one small YAML file while others parse it is an
+    intermittent failure that looks like a corrupt configuration. It goes through the same
+    rank-0-writes / everyone-verifies-the-digest path as the other helpers now, and the function
+    that builds it returns TEXT so it cannot write anything by itself.
+    """
+    import inspect
+
+    from md_tools.remd import generated
+
+    source = inspect.getsource(generated.reservoir_declaration_text)
+    for forbidden in ("write_text", "open(", "os.replace"):
+        assert forbidden not in source, (
+            f"reservoir_declaration_text writes to the filesystem ({forbidden}); it must return "
+            f"text and leave the writing to the rank-0 helper path")
+    assert "reservoir_file" in inspect.getsource(generated.replica_main)
