@@ -253,7 +253,10 @@ def replica_parser(description: str = "one coordinated replica-exchange ladder")
     parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("--extend", type=int, default=0, metavar="N")
     parser.add_argument("--extend-from", default=None, metavar="DIRECTORY")
-    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--force", action="store_true",
+                        help="the executor's spelling of --overwrite, accepted here for symmetry "
+                             "with the direct executor. The two are one policy: either replaces "
+                             "the helpers AND the outputs")
     parser.add_argument("--overwrite", action="store_true",
                         help="replace the ladder's COMPLETE existing output inventory -- the "
                              "reports, the per-state trajectories, the restart manifest, "
@@ -399,6 +402,10 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
             # file exists. An unclassifiable force used to surface with three files on disk.
             timestep_fs=ladder["dynamics"]["timestep_fs"],
             route=args.route,
+            # rREST2 writes `reservoir.yaml` into the run directory and every rank reads it a
+            # moment later. It was in no inventory, so a launch that found a stale one from
+            # another ladder would have drawn its probability-one transfers from it.
+            reservoir=bool(ladder.get("reservoir", {}).get("enabled")),
             tau=float(ladder["tau_max"]))
     except PreflightError as refusal:
         print(f"{protocol_name}: {refusal}", file=sys.stderr)
@@ -424,7 +431,18 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     # cannot be published -- and each is a place one rank fails alone while the others walk into
     # the next collective.
     with coordination.phase(f"{protocol_name}: creating the output directory"):
-        out.mkdir(parents=True, exist_ok=True)
+        if args.verify_only:
+            # READ-ONLY, and that begins HERE. `--verify-only` created the directory it had been
+            # asked to inspect, so verifying a run that never happened reported "does not hold a
+            # ladder" while LEAVING BEHIND the empty directory that says one was started here.
+            # The next `--resume` then has a directory to find. Absent is a verification result,
+            # not a thing to fix.
+            if not out.is_dir():
+                raise SystemExit(
+                    f"{protocol_name}: --verify-only cannot run: {out} does not exist, so there "
+                    f"is no ladder here to verify. Nothing was created.")
+        else:
+            out.mkdir(parents=True, exist_ok=True)
 
     if args.cpu:
         # `platform` reaches the driver through the protocol file, and `from_flags` records that a
@@ -496,9 +514,13 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
                 print(f"{protocol_name}: --verify-only cannot run: {destination} does not exist, "
                       f"so this directory does not hold a ladder to verify.", file=sys.stderr)
                 return 2
-        code = int(replica_executor.main([
-            "-x", str(args.trajectory or out / f"{protocol_name}.nc"),
-            "--groupfile", str(group_file), "--verify-only"]) or 0)
+        # The SAME plan the run itself would execute. Without it the executor ran a second
+        # preflight of its own -- resolving a platform, re-reading the topology -- to inspect a
+        # directory whose contents are already fixed. Two derivations of one ladder is two
+        # answers waiting to disagree.
+        code = int(replica_executor.main(
+            ["-x", str(args.trajectory or out / f"{protocol_name}.nc"),
+             "--groupfile", str(group_file), "--verify-only"], prepared=checked) or 0)
         return code
 
     # Rank 0 prepares; the outcome is AGREED before anyone proceeds.
@@ -558,7 +580,12 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
         executor_argv.append("--resume")
     if args.verify_only:
         executor_argv.append("--verify-only")
-    if args.force:
+    if args.force or args.overwrite:
+        # ONE overwrite policy, reaching the executor. `--overwrite` updated the helpers here and
+        # then did NOT reach the executor, which refuses existing outputs under `--force` -- so
+        # `--overwrite` regenerated `solute.yaml`, `_protocol.py` and the group file and was then
+        # turned away by the run they were prepared for. The user is told to pass a second flag
+        # for the same intent, having already had the first one partially applied.
         executor_argv.append("--force")
     if args.extend:
         executor_argv += ["--extend", str(args.extend)]

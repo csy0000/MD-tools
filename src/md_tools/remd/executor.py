@@ -357,6 +357,16 @@ def validate(files, arguments, *, rank=0, groups=None):
     if arguments.number_of_groups is not None and not grouped:
         problems.append("-ng describes a group file and has no meaning without --groupfile")
     if not grouped:
+        # THE ONE ROUTE. Without a group file the executor used to import `files.input` and call
+        # `.run(files)` on it -- no ladder plan, no preflight, no platform resolution, no output
+        # rules beyond the ones above. That was a second contract for the same runtime, reachable
+        # only by calling this module directly, and it is exactly the one nothing validates. A
+        # coordinated run is described by its group file; there is no other description.
+        problems.append(
+            "a run is described by its group file: pass --groupfile (with -ng). Running a "
+            "protocol module directly is not supported -- it would execute with no ladder plan "
+            "and no preflight, and nothing would have checked the platform, the ensemble or the "
+            "outputs. `md-openmm md-run` and the generated `run.sh` both pass one")
         for flag, value in (("--exchange-rule", arguments.exchange_rule),
                             ("--reservoir", arguments.reservoir),
                             ("--rem", getattr(files, "rem", None))):
@@ -521,16 +531,6 @@ def load_module(path, name):
         raise RuntimeError(f"{path} could not be loaded as a Python file")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module
-
-
-def load_protocol(path):
-    """A single-run protocol file: one `run(files)` function."""
-    module = load_module(path, "md_tools_protocol")
-    if not hasattr(module, "run"):
-        raise RuntimeError(
-            f"{path} defines no run(files). A single-run protocol file is one function taking the "
-            f"resolved paths; see the generated stages for the shape.")
     return module
 
 
@@ -782,11 +782,10 @@ def main(argv=None, *, prepared=None):
     with open(report, mode, encoding="utf-8", buffering=1) as handle:
         with contextlib.redirect_stdout(handle), contextlib.redirect_stderr(handle):
             try:
-                if groups is not None:
-                    _announce(arguments, files, groups, rank, size)
-                    status = run_grouped(files, arguments, groups, prepared=prepared)
-                else:
-                    load_protocol(files.input).run(files)
+                # Grouped is the only route past `validate`, which refuses an ungrouped launch
+                # above -- before any directory is created.
+                _announce(arguments, files, groups, rank, size)
+                status = run_grouped(files, arguments, groups, prepared=prepared)
             except SystemExit as exit_request:
                 status = int(exit_request.code or 0)
             except BaseException:                       # noqa: BLE001 - the .out is the report

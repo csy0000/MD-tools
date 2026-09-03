@@ -106,6 +106,13 @@ CUDA_SITES = {
     "md/stage.py::_CheckpointWithFingerprint.report": (
         "commits a CUDA checkpoint generation with every stream's committed counts",
         "test_cmd_restart_integration.py, test_cuda_precision_lane"),
+    "md/phase_space.py::PhaseSpaceReporter.report": (
+        "pulls CUDA positions, velocities and box vectors off the device on every phase-space "
+        "step -- the reservoir stream a probability-one rREST2 transfer is drawn from, so a "
+        "wrong frame here is a wrong acceptance, not a cosmetic defect",
+        "test_multi_rank_rrest2_with_a_real_reservoir (writes the stream on CUDA and consumes "
+        "it as a reservoir), test_cmd_restart_integration.py (its committed counts across a "
+        "resume)"),
     "remd/engine.py::ReplicaEngine.propagate": (
         "integrates every owned state on CUDA between exchanges",
         "test_md_run_mpi_gpu.py, test_multi_rank_rest2_ladders_of_several_sizes"),
@@ -142,6 +149,12 @@ NON_CUDA_CONTEXT_SITES = {
     "remd/driver.py::ReplicaRun._begin":
         "constructs an ExchangeContext, which is bookkeeping around Simulations the engine "
         "already created on CUDA -- the kernels are the engine's, and are covered by its entry.",
+    "openmm/solvation.py::solvate":
+        "reads box vectors off a Topology while building the solvated system. A Topology is "
+        "geometry on the host; no Context exists yet, and nothing has been computed on a device.",
+    "remd/driver.py::ReplicaRun._read_initial_configuration":
+        "reads positions and velocities out of a State DESERIALISED FROM XML on disk. The same "
+        "getPositions spelling as a live Context, but the object is a file's contents.",
 }
 
 
@@ -167,6 +180,22 @@ CUDA_OPERATIONS = {
     # persistence of CUDA-derived state
     "saveCheckpoint": "checkpoint", "loadCheckpoint": "checkpoint",
     "createCheckpoint": "checkpoint", "setState": "checkpoint",
+    # REPORTERS. A reporter is attached once and then runs on EVERY reporting step for the rest of
+    # the simulation, pulling state off the device each time -- the single highest-frequency CUDA
+    # consumer in the package, and none of it was classified. A reporter that writes the wrong
+    # frames, or writes them at the wrong stride, is a corrupt trajectory that the run reports as
+    # a success.
+    "DCDReporter": "report", "NetCDFReporter": "report", "XTCReporter": "report",
+    "PDBReporter": "report", "PDBxReporter": "report", "StateDataReporter": "report",
+    "CheckpointReporter": "report",
+    # CUDA-DERIVED OUTPUT. What the device computed, on its way to a file or a decision: every
+    # coordinate written to a trajectory, every energy in a work table, every box vector in an
+    # NPT record. `getState` above says a state was read; these say what was taken OUT of it,
+    # and they are the values the scientific output is made of.
+    "getPositions": "derive", "getVelocities": "derive", "getForces": "derive",
+    "getPotentialEnergy": "derive", "getKineticEnergy": "derive",
+    "getPeriodicBoxVectors": "derive", "getPeriodicBoxVolume": "derive",
+    "getParameters": "derive",
 }
 
 
@@ -226,14 +255,15 @@ def test_the_inventory_looks_for_more_than_constructors():
     """The guard on the guard: the operation set must cover what the task enumerates."""
     kinds = set(CUDA_OPERATIONS.values())
     assert {"construct", "integrate", "minimize", "evaluate", "parameters",
-            "checkpoint"} <= kinds, kinds
+            "checkpoint", "report", "derive"} <= kinds, kinds
     found = _cuda_operation_sites()
     seen = set()
     for operations in found.values():
         seen |= operations
     # Every category must actually be FOUND somewhere in the source, or the pattern is watching
     # for something that is spelled differently and silently matching nothing.
-    for kind in ("construct", "integrate", "evaluate", "parameters", "checkpoint"):
+    for kind in ("construct", "integrate", "evaluate", "parameters", "checkpoint",
+                 "report", "derive"):
         assert kind in seen, f"no source site performs {kind!r}; the matcher is not matching"
 
 
@@ -1422,11 +1452,33 @@ def test_write_the_coverage_evidence(hardware, request):
     if not destination:
         pytest.skip("no --cuda-evidence=<path> given; the lanes above ran, nothing to write")
 
+    import subprocess
+
     from openmm import version as openmm_version
+
+    # THE EXACT COMMIT. A coverage table with no commit on it is a claim about "the code" and
+    # cannot be checked against anything -- it stays true-looking across every change that
+    # invalidates it. `-dirty` is the honest answer when the tree that ran differs from any
+    # commit, and it means the table describes something not published anywhere.
+    def git(*arguments, default="unknown"):
+        try:
+            return subprocess.run(("git", *arguments), cwd=Path(__file__).resolve().parent,
+                                  capture_output=True, text=True, timeout=30,
+                                  check=True).stdout.strip() or default
+        except (OSError, subprocess.SubprocessError):
+            return default
+
+    commit = git("rev-parse", "HEAD")
+    dirty = bool(git("status", "--porcelain", default=""))
 
     lines = ["# CUDA coverage matrix", "",
              "Generated by `tests/test_cuda_coverage_matrix.py`. Every row is a real run on the "
-             "hardware named below.", "", "## Hardware", ""]
+             "hardware named below.", "",
+             f"* commit: `{commit}`" + ("  **-dirty: the tree that ran differs from this commit, "
+                                        "so this table describes code that is not published**"
+                                        if dirty else ""),
+             f"* generated by: `{git('rev-parse', '--abbrev-ref', 'HEAD')}`",
+             "", "## Hardware", ""]
     lines += [f"* device {device['index']}: {device['name']}, driver {device['driver']}, "
               f"{device['memory']}" for device in hardware]
     lines += ["", f"* OpenMM {openmm_version.full_version}", ""]
@@ -1434,6 +1486,22 @@ def test_write_the_coverage_evidence(hardware, request):
               "| source function or branch | what runs on CUDA | lane |", "|---|---|---|"]
     for site, (what, lane) in sorted(CUDA_SITES.items()):
         lines.append(f"| `{site}` | {what} | {lane} |")
+    # The COUNTS, so the table can be checked for completeness rather than read for reassurance.
+    found = _cuda_operation_sites()
+    by_kind: dict[str, int] = {}
+    for kinds in found.values():
+        for kind in kinds:
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+    lines += ["", "### Coverage counts", "",
+              f"* {len(found)} source functions perform a CUDA-relevant operation",
+              f"* {len(CUDA_SITES)} are exercised by a lane below; "
+              f"{len(NON_CUDA_CONTEXT_SITES)} are classified as not reaching a device, with the "
+              f"reason recorded in the test",
+              "* 0 unclassified -- `test_every_cuda_operation_in_the_source_is_in_this_matrix` "
+              "fails the suite if that is ever not true",
+              "* by operation: " + ", ".join(f"{kind} {count}"
+                                             for kind, count in sorted(by_kind.items())),
+              ""]
     lines += ["", "## Lanes executed in this run", "",
               "| lane | feature | precision | device | result | detail |", "|---|---|---|---|---|---|"]
     for entry in RESULTS:

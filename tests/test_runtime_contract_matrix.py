@@ -687,3 +687,98 @@ def test_two_stages_writing_one_path_are_refused(tmp_path):
     complaint = cross_stage_collision(plans)
     assert complaint is not None
     assert "min" in complaint and "prod" in complaint and "a.dcd" in complaint
+
+
+# --- the ladder's overwrite is one policy --------------------------------------------------------
+
+def test_generated_overwrite_reaches_the_executor():
+    """`--overwrite` regenerated the helpers and then did not reach the run they were for.
+
+    The executor refuses existing outputs unless told otherwise, and only `--force` told it. So
+    `--overwrite` rewrote `solute.yaml`, `_protocol.py` and the group file and was then turned
+    away -- leaving the user to pass a second flag for the same intent, with the first already
+    partially applied.
+    """
+    import inspect
+
+    from md_tools.remd import generated
+
+    source = inspect.getsource(generated.replica_main)
+    assert "args.force or args.overwrite" in source, (
+        "--overwrite does not reach the executor, so it can update the helpers and then be "
+        "refused by the run they were prepared for")
+
+
+def test_verify_only_is_read_only_on_an_absent_target(workspace, tmp_path, good_config):
+    """A verification that creates what it was asked to verify has verified nothing."""
+    destination = tmp_path / "verify-absent"
+    before = _snapshot(destination)
+    done = _launch(workspace, "REST2", destination, "--verify-only", *PROTOCOL_ONLY,
+                   environment=good_config)
+    assert done.returncode != 0, done.stdout + done.stderr
+    assert _snapshot(destination) == before, (
+        f"--verify-only created {sorted((_snapshot(destination) or {}).keys())} in a directory "
+        f"that held no ladder")
+
+
+def test_verify_only_is_read_only_on_a_corrupt_target(workspace, tmp_path, good_config):
+    """And on a directory holding a damaged ladder, which is when it is actually used."""
+    destination = tmp_path / "verify-corrupt"
+    destination.mkdir()
+    (destination / "solute.yaml").write_text("n_solute_atoms: 1\n", encoding="utf-8")
+    (destination / "_protocol.py").write_text("n_states = 2\n", encoding="utf-8")
+    (destination / "REST2.group").write_text("# truncated\n", encoding="utf-8")
+    (destination / "REST2.nc").write_bytes(b"not a netcdf file at all")
+    before = _snapshot(destination)
+
+    done = _launch(workspace, "REST2", destination, "--verify-only", *PROTOCOL_ONLY,
+                   environment=good_config)
+    assert done.returncode != 0, done.stdout + done.stderr
+    assert _snapshot(destination) == before, (
+        "--verify-only modified the damaged ladder it was inspecting")
+
+
+# --- the ladder inventory names everything a ladder writes ---------------------------------------
+
+def test_the_ladder_inventory_names_every_artefact_a_ladder_writes(tmp_path):
+    """An output nothing names is an output nothing can check.
+
+    A ladder writes far more than `-x`, `-r` and `-o`: a helper protocol, a solute selection, a
+    group file, a reservoir declaration, one report PER RANK, one trajectory per state, a
+    checkpoint generation tree, a rem log and a provenance record. Each one missing from the
+    inventory is a file `--overwrite` leaves behind and existing-output checking cannot see -- so
+    a two-state ladder run over a six-state one keeps four stale state trajectories and four
+    stale rank reports, all looking equally current.
+    """
+    from md_tools.run.preflight import _ladder_inventory
+
+    out = tmp_path / "REST2.out"
+    inventory = _ladder_inventory(
+        protocol="rREST2", replicas=4, output=out, log=tmp_path / "REST2.log",
+        trajectory=tmp_path / "REST2.nc", restart=tmp_path / "restart.json",
+        checkpoint=tmp_path / "REST2.chk", groupfile=None, reservoir=True)
+    named = {path.name for path in inventory.roles.values()}
+
+    for required in ("reservoir.yaml", "solute.yaml", "_protocol.py", "rREST2.group",
+                     "rem.log", "machine.yaml", "restart.json", "REST2.chk",
+                     "REST2.checkpoints", "REST2.out", "REST2.log", "REST2.nc"):
+        assert required in named, f"{required} is written and is in no inventory: {sorted(named)}"
+    for state in range(4):
+        assert f"remd{state}.nc" in named, f"state {state}'s trajectory is unnamed"
+    for rank in range(1, 4):
+        assert f"REST2.out.rank{rank:02d}" in named, (
+            f"rank {rank}'s report is unnamed -- it is the file a rank that failed to bind its "
+            f"device writes into")
+
+    # The checkpoint tree is READ by a resume, so its presence must never be the refusal.
+    assert "checkpoints" in inventory.resumable
+
+
+def test_a_ladder_without_a_reservoir_does_not_claim_one(tmp_path):
+    """The other direction: naming a file the run never writes refuses a directory for nothing."""
+    from md_tools.run.preflight import _ladder_inventory
+
+    inventory = _ladder_inventory(
+        protocol="REST2", replicas=2, output=tmp_path / "REST2.out", log=None,
+        trajectory=None, restart=None, checkpoint=None, groupfile=None, reservoir=False)
+    assert "reservoir_declaration" not in inventory.roles

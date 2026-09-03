@@ -316,8 +316,22 @@ def test_validation_happens_before_any_output_is_touched(tmp_path):
     source = (TEMPLATES / "executor.py").read_text(encoding="utf-8")
     refusal_index = source.index("def validate(")
     mkdir_index = source.index("Path(value).parent.mkdir")
-    import_index = source.index("load_protocol(files.input)")
-    assert refusal_index < mkdir_index < import_index
+    run_index = source.index("status = run_grouped(")
+    assert refusal_index < mkdir_index < run_index
+
+
+def test_an_ungrouped_launch_is_refused():
+    """There is ONE route through the executor, and it carries a ladder plan.
+
+    Without a group file the executor imported `files.input` and called `.run(files)` on it: no
+    plan, no preflight, no platform resolution. A second contract for the same runtime, reachable
+    by calling this module directly, and the one nothing validated.
+    """
+    files = _Files(Path("/nonexistent"))
+    problems = replica_executor.validate(files, _Arguments(), rank=0, groups=None)
+    assert any("--groupfile" in problem for problem in problems), problems
+    assert not hasattr(replica_executor, "load_protocol"), (
+        "the ungrouped protocol loader is still reachable")
 
 
 def test_an_existing_output_is_untouched_by_a_refused_continuation(tmp_path):

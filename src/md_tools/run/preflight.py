@@ -931,7 +931,8 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                      number_of_groups=None, cpu=False, device=None, machine_config=None,
                      protocol="this ladder", pending_parent=None, timestep_fs=None,
                      ensemble=None, tau=0.0, solute_indices=None, excluded_bonds=(),
-                     route=None, source_trajectory=None) -> LadderPreflight:
+                     route=None, source_trajectory=None,
+                     reservoir=False) -> LadderPreflight:
     """A REST2 or rREST2 ladder. `-ng`, the configured state count and the world must agree."""
     if source_trajectory is not None:
         _reject_flags_outside_their_protocol(protocol_name="a REST2/rREST2 ladder",
@@ -943,7 +944,8 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
         inputs["groupfile"] = groupfile
     inventory = _ladder_inventory(protocol=protocol, replicas=int(replicas), output=output,
                                   log=log, trajectory=trajectory, restart=restart,
-                                  checkpoint=checkpoint, groupfile=groupfile)
+                                  checkpoint=checkpoint, groupfile=groupfile,
+                                  reservoir=bool(reservoir))
 
     coordination, machine, acceleration, index, detail, particles, loaded = _common(
         topology=topology, system=system,
@@ -997,18 +999,35 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
 
 
 def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, checkpoint,
-                      groupfile) -> OutputInventory:
-    """A ladder's complete inventory: the run-level files AND the per-state ones.
+                      groupfile, reservoir=False) -> OutputInventory:
+    """A ladder's complete inventory: the run-level files AND every per-state and per-rank one.
 
     `remd0.nc .. remdN-1.nc` are the scientific result and were not in any inventory at all --
     one per thermodynamic state, written by the root, and silently replaceable. So were
     `solute.yaml`, `_protocol.py`, the group file and `rem.log`.
+
+    Nor were the ones a PLURAL launch writes. A ladder of N states runs on N ranks and each keeps
+    its own `.rankNN` report; listing only rank 0's meant `--overwrite` after a size change left
+    rank 05's report from a six-state ladder sitting beside a two-state one, looking equally
+    current -- and it is the file a rank that failed to bind its device writes into. The
+    checkpoint GENERATION TREE and the completion and provenance manifests were missing for the
+    same reason: nothing named them, so nothing could check them.
     """
+    from ..remd.executor import report_path_for_rank
+
     roles: dict[str, Path] = {}
-    for role, value in (("out", output), ("log", log), ("trajectory", trajectory),
-                        ("restart", restart), ("checkpoint", checkpoint)):
+    for role, value in (("trajectory", trajectory), ("restart", restart),
+                        ("checkpoint", checkpoint)):
         if value:
             roles[role] = Path(value)
+    # One entry per rank, named the way the rank actually names it. A ladder's world size is its
+    # state count (or one process for the whole ladder), so N states is N possible reports.
+    for role, value in (("out", output), ("log", log)):
+        if not value:
+            continue
+        for rank in range(max(int(replicas), 1)):
+            name = role if rank == 0 else f"{role}_rank{rank:02d}"
+            roles[name] = Path(report_path_for_rank(str(value), rank))
     directory = Path(output).parent if output else Path(".")
     roles["solute"] = directory / "solute.yaml"
     roles["protocol_helper"] = directory / "_protocol.py"
@@ -1016,10 +1035,20 @@ def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, c
         # A group file the caller NAMED is an INPUT -- it is read, not written -- and listing it
         # among the outputs made it collide with itself.
         roles["group_file"] = directory / f"{protocol}.group"
+    if reservoir:
+        # Written by rank 0 and read by every rank a moment later; an rREST2 launch that found a
+        # stale one from another ladder would draw its probability-one transfers from it.
+        roles["reservoir_declaration"] = directory / "reservoir.yaml"
     roles["rem_log"] = directory / "rem.log"
+    roles["provenance"] = directory / "machine.yaml"
     for state in range(int(replicas)):
         roles[f"state_trajectory_{state}"] = directory / f"remd{state}.nc"
-    return OutputInventory(roles=roles)
+    if checkpoint:
+        # What a `--resume` READS. Its presence is never itself the reason to refuse a
+        # continuation, which is what `resumable` says.
+        stem = Path(checkpoint)
+        roles["checkpoints"] = stem.parent / f"{stem.stem}.checkpoints"
+    return OutputInventory(roles=roles, resumable=frozenset({"checkpoints"}))
 
 
 def preflight_ais(*, topology, system, source, number_of_groups=None, output=None, log=None,
