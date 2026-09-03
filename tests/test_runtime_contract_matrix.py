@@ -616,3 +616,74 @@ def test_overwrite_deletes_only_names_this_run_owns(tmp_path):
     assert not (out / "AIS.out.rank05").exists()
     assert not (out / "AIS.log.rank05").exists()
     assert removed >= 11, removed
+
+
+# --- the all-in-one chain is planned in full before stage 1 runs --------------------------------
+
+def test_an_invalid_last_stage_stops_the_chain_before_stage_one_writes_anything(
+        workspace, tmp_path, good_config):
+    """Only the FIRST stage used to be preflighted.
+
+    So a chain whose later stages are invalid ran every earlier stage to completion and then
+    refused -- leaving those stages' output on disk and no way to finish. That is exactly what
+    `--check` on a chain is supposed to make impossible, and the run itself had none of it.
+
+    The invalid stage here is produced by real configuration rather than by corrupting one: an
+    EXPLICIT-solvent project (whose later stages are NPT) run against the IMPLICIT System this
+    workspace built. `min` is NVT and fine; the first NPT stage has no volume to control.
+    """
+    import yaml as _yaml
+
+    project = tmp_path / "explicit-plan"
+    (tmp_path / "explicit.config").write_text(_yaml.safe_dump({
+        "protocol": "cMD", "solvent": "explicit",
+        "stages": {"minimization_iterations": 2, "restrained_nvt_steps": 5,
+                   "restrained_npt_steps": 5, "unrestrained_npt_steps": 5,
+                   "production_steps": 5},
+        "reporting": {"solute_printout": 5, "system_printout": 5,
+                      "checkpoint_printout": 5}}), encoding="utf-8")
+    built = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "build-md",
+                  "-odir", str(project), "--config", str(tmp_path / "explicit.config"),
+                  "--all-in-one"], cwd=tmp_path, environment=good_config)
+    assert built.returncode == 0, built.stdout + built.stderr
+
+    destination = tmp_path / "chain-out"
+    before = _snapshot(destination)
+    done = _run([sys.executable, str(project / "md.py"),
+                 "-p", str(workspace / "built.pdb"), "-s", str(workspace / "built.xml"),
+                 "-odir", str(destination), *PROTOCOL_ONLY],
+                cwd=project, environment=good_config)
+    message = done.stdout + done.stderr
+    assert done.returncode != 0, message[-2000:]
+    assert "no volume to control" in message, message[-2500:]
+    # THE POINT: `min` is a perfectly valid stage and it produced nothing, because the chain was
+    # planned in full before any of it ran.
+    assert _snapshot(destination) == before, (
+        f"the chain ran before validating its later stages: "
+        f"{sorted((_snapshot(destination) or {}).keys())}")
+
+
+def test_two_stages_writing_one_path_are_refused(tmp_path):
+    """A cross-stage collision no single stage's own inventory can see.
+
+    Exercised directly: the generator gives every stage a distinct name, so this state cannot
+    arise from a valid project, and a test that corrupted a configuration to reach it would be
+    testing the corruption rather than the guard.
+    """
+    from md_tools.md.stage import cross_stage_collision
+    from md_tools.run.preflight import OutputInventory
+
+    class _Plan:
+        def __init__(self, roles):
+            self.inventory = OutputInventory(roles=roles)
+
+    plans = {
+        "min": _Plan({"trajectory": tmp_path / "a.dcd", "restart": tmp_path / "min.xml"}),
+        "prod": _Plan({"trajectory": tmp_path / "b.dcd", "restart": tmp_path / "prod.xml"}),
+    }
+    assert cross_stage_collision(plans) is None
+
+    plans["prod"].inventory.roles["trajectory"] = tmp_path / "a.dcd"
+    complaint = cross_stage_collision(plans)
+    assert complaint is not None
+    assert "min" in complaint and "prod" in complaint and "a.dcd" in complaint

@@ -474,9 +474,28 @@ class ExecutionPreflight:
 
 @dataclass(frozen=True)
 class StagePreflight(ExecutionPreflight):
-    """One conventional stage: a trajectory, a restart, a checkpoint, an out and a log."""
+    """One conventional stage: a trajectory, a restart, a checkpoint, an out and a log.
+
+    Carries the FULLY PREPARED System -- scaled for fixed tau if asked, restrained, and
+    barostatted -- so `stage_main` constructs a Simulation from it rather than rebuilding the
+    scientific policy after its reports are open. Every refusal that construction can produce
+    then happens before the first file exists.
+    """
 
     trajectory: Path | None = None
+    #: The System a Simulation is built from: `build_scaled_system` at this stage's tau, then the
+    #: positional restraint, then the barostat -- in that order, which is the order the REST2
+    #: ladder uses. Scaling last would scale the restraint and the barostat, and a fixed-tau
+    #: walker would construct a different System from the rung it is meant to match.
+    prepared_system: Any = None
+    solute: tuple = ()
+    excluded_bonds: tuple = ()
+    implicit: bool = False
+    seed: int = 0
+    restrained: bool = False
+    #: The molecular Hamiltonian's identity, taken BEFORE the restraint and barostat are added,
+    #: for a phase-space stream a reservoir will later be built from.
+    hamiltonian_identity: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -648,7 +667,7 @@ def _common(*, topology, system, outputs, inputs, cpu, device, number_of_groups,
 def preflight_stage(*, topology, system, coordinates=None, trajectory=None, restart=None,
                     checkpoint=None, output=None, log=None, cpu=False, device=None,
                     machine_config=None, protocol="this stage", pending_parent=None,
-                    timestep_fs=None, ensemble=None, tau=0.0,
+                    timestep_fs=None, ensemble=None, tau=0.0, stage=None,
                     number_of_groups=None, groupfile=None,
                     source_trajectory=None) -> StagePreflight:
     """A conventional stage, including every stage of an all-in-one workflow."""
@@ -676,19 +695,101 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
     reject_plural_launch(coordination, what=protocol)
 
     resolved_timestep = None
+    prepared: dict[str, Any] = {}
     if timestep_fs is not None:
         # 4 fs on hydrogens that were never repartitioned, and every other mass/timestep
         # incompatibility, refused HERE. It used to be found after the `.out` and the `.log` had
         # been created, which is a directory that reads as a run that started.
         resolved_timestep = _resolve_timestep(loaded, timestep_fs, where=protocol)
         check_ensemble(loaded, ensemble=ensemble, tau=tau, where=protocol)
+    if stage is not None:
+        prepared = _prepare_stage(loaded, stage=stage, name=stage.get("name") or protocol,
+                                  where=protocol)
 
     return StagePreflight(coordination=coordination, machine=machine, acceleration=acceleration,
                           device_index=index,
                           device_policy=str(machine.get("device_policy") or "local_rank"),
                           device_policy_detail=detail, particles=particles, loaded=loaded,
                           timestep=resolved_timestep, inventory=inventory,
-                          trajectory=Path(trajectory) if trajectory else None)
+                          trajectory=Path(trajectory) if trajectory else None, **prepared)
+
+
+def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
+                   where: str) -> dict[str, Any]:
+    """Build the System a stage will actually integrate, and refuse here if it cannot be built.
+
+    Everything below used to run AFTER the `.out` and the `.log` were open: the solute selection,
+    the omega classification, `build_scaled_system` with its force audit, the implicit/NPT and
+    fixed-tau/NPT checks, the restraint, and the barostat. Each is a refusal that arrived attached
+    to a directory that reads as a run that started -- and `build_scaled_system` in particular
+    refuses a System carrying a force the convention cannot place, which is not a rare case on a
+    hand-built System.
+    """
+    from ..md._stages import add_barostat, add_positional_restraint, count_barostats, derive_seed
+    from ..md.stage import solute_atom_indices
+    from ..openmm.system import classify_omega_bonds
+
+    system = loaded.system
+    implicit = loaded.implicit
+    solute = solute_atom_indices(loaded.pdb.topology)
+    seed = derive_seed(int(stage["seed"]), name)
+    tau = float(stage.get("tau") or 0.0)
+    excluded: list = []
+
+    if implicit and stage.get("ensemble") not in (None, "NVT"):
+        raise PreflightError(
+            f"{where} declares ensemble {stage['ensemble']}, but the System is not periodic. "
+            f"Implicit solvent has no volume to control, so there is no NPT here.")
+
+    # SCALE FIRST, on the bare System, then restrain, then add the barostat. The scaler audits
+    # every force and refuses one it cannot classify; the restraint and the barostat are stage
+    # machinery rather than terms of the molecular Hamiltonian, so neither may be scaled. Scaling
+    # last would scale them, and a fixed-tau walker would then build a different System from the
+    # ladder rung it is supposed to match.
+    if tau > 0.0:
+        if stage.get("ensemble") != "NVT":
+            raise PreflightError(
+                f"{where} runs at tau={tau} but declares ensemble {stage.get('ensemble')}. A "
+                f"scaled run samples the fixed-volume ensemble of the ladder rung it sits at; a "
+                f"barostat would sample a different distribution.")
+        omega = classify_omega_bonds(loaded.pdb.topology, solute, route="peptide", ligand_sdf=None)
+        excluded = [tuple(int(a) for a in bond)
+                    for bond in omega.get("omega_unscaled_bonds", [])]
+        _audit, system = check_scaling_plan(loaded, solute_indices=solute,
+                                            excluded_bonds=excluded, tau=tau,
+                                            where=f"{where} fixed-tau scaling")
+    else:
+        from ..rest2.scaler import clone_system
+
+        # A copy, so a plan never hands the runtime the object `LoadedInputs` holds: the restraint
+        # and the barostat below mutate it in place, and two plans built from one `LoadedInputs`
+        # would otherwise accumulate each other's machinery.
+        system = clone_system(system)
+
+    hamiltonian_identity = None
+    if stage.get("phase_space_interval_steps"):
+        from ..rest2 import identity_record
+
+        # Taken BEFORE the restraint and barostat: they are properties of how this stage is run,
+        # not terms of the energy the ensemble is defined by. An identity taken after them claims
+        # a CustomExternalForce the ladder rung a reservoir refreshes does not have.
+        hamiltonian_identity = identity_record(
+            system, tau=tau, temperature_k=float(stage["temperature_K"]),
+            ensemble=stage.get("ensemble"), solute_indices=solute, excluded_bonds=excluded)
+
+    add_positional_restraint(system, loaded.pdb.positions, solute)
+    if not implicit:
+        active = stage.get("ensemble") == "NPT"
+        add_barostat(system, float(stage["pressure_bar"]), float(stage["temperature_K"]),
+                     derive_seed(int(stage["seed"]), name, "barostat"),
+                     frequency=int(stage["barostat_interval_steps"]) if active else 0)
+    if implicit and count_barostats(system):
+        raise PreflightError(f"{where}: implicit solvent must carry no barostat")
+
+    return {"prepared_system": system, "solute": tuple(int(i) for i in solute),
+            "excluded_bonds": tuple(excluded), "implicit": bool(implicit), "seed": int(seed),
+            "restrained": float(stage.get("restraint_kcal_per_mol_A2") or 0.0) > 0.0,
+            "hamiltonian_identity": hamiltonian_identity}
 
 
 def _stage_inventory(*, output, log, trajectory, restart, checkpoint) -> OutputInventory:

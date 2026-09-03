@@ -423,3 +423,27 @@ def test_a_resume_truncates_the_state_csv_as_well_as_the_trajectory(project, ref
         after = max(sum(1 for _ in handle) - 1, 0)
     assert after == expected, (
         f"the recovered state CSV holds {after} rows against the uninterrupted run's {expected}")
+
+
+def test_resume_cannot_be_used_to_bypass_the_collision_check(project, reference, tmp_path):
+    """`--resume` on a directory with NO checkpoint must not excuse existing outputs.
+
+    Only a valid committed checkpoint short of the step count does, and that is a fact about the
+    directory rather than a claim on the command line. Accepting the flag as a substitute would
+    make `--resume` a way past the guard for a directory holding half a run nobody claimed.
+    """
+    work = tmp_path / "no-checkpoint"
+    work.mkdir()
+    done = _run_stage(project, work)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    # Outputs present, log gone, checkpoints gone: not completed, not interrupted.
+    import shutil
+
+    (work / "cMD.log").unlink()
+    shutil.rmtree(_checkpoints(work))
+
+    refused = _run_stage(project, work, extra=["--resume"])
+    assert refused.returncode != 0, refused.stdout + refused.stderr
+    message = refused.stdout + refused.stderr
+    assert "already exist" in message and "--overwrite" in message, message[-1500:]

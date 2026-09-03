@@ -121,8 +121,11 @@ def stage_parser(description: str) -> argparse.ArgumentParser:
                         help="validate inputs and settings, then exit without integrating. "
                              "READ-ONLY: it creates nothing, not even the output directory")
     parser.add_argument("--resume", action="store_true",
-                        help="accepted for symmetry with the other protocols and NOT required: "
-                             "an interrupted stage resumes automatically. See the contract below")
+                        help="ACCEPTED AND INERT. An interrupted stage resumes automatically, so "
+                             "this flag has no distinct semantics; it exists only so a command "
+                             "line written for another protocol is not rejected. It cannot be "
+                             "used to bypass the collision check -- that needs a valid committed "
+                             "checkpoint, which is what 'interrupted' means")
     parser.add_argument("--overwrite", action="store_true",
                         help="replace the stage's COMPLETE existing output inventory -- the "
                              "reports, the trajectory, the phase-space stream, the restart and "
@@ -242,8 +245,39 @@ def _completion_gaps(previous: dict[str, Any], *, stage: dict[str, Any], name: s
     return ""
 
 
-def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
-    """Run one stage. `stage` is the resolved settings the generated script declares."""
+def cross_stage_collision(plans) -> str | None:
+    """Two stages of one chain writing the same path. Returns the complaint, or None.
+
+    No single stage's own inventory can see this: each is internally consistent, and the clash is
+    only visible when the chain is considered as a whole. The consequence is a chain that
+    overwrites its own inputs, with the run continuing from whichever stage happened to go last.
+
+    Separate from `run_generated_workflow` so it can be exercised directly -- the generator gives
+    every stage a distinct name, so this state cannot be produced from a valid project, and a
+    test that had to corrupt a configuration to reach it would be testing the corruption.
+    """
+    claimed: dict[str, tuple[str, str]] = {}
+    for entry_name, prepared in plans.items():
+        roles = prepared.inventory.roles if getattr(prepared, "inventory", None) else {}
+        for role, path in roles.items():
+            resolved = str(Path(path).resolve(strict=False))
+            if resolved in claimed and claimed[resolved][0] != entry_name:
+                other, other_role = claimed[resolved]
+                return (f"stages {other} and {entry_name} both write {resolved} "
+                        f"({other_role} and {role}). One would overwrite the other's output, and "
+                        f"the chain would continue from whichever ran last.")
+            claimed[resolved] = (entry_name, role)
+    return None
+
+
+def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared=None) -> int:
+    """Run one stage. `stage` is the resolved settings the generated script declares.
+
+    `prepared` is a `StagePreflight` a caller has ALREADY validated -- the all-in-one chain plans
+    every stage before running any of them, and re-planning here would both duplicate the work
+    and open the possibility of the two plans differing. When it is None this function plans for
+    itself, which is what a split script does.
+    """
     args = stage_parser(stage.get("description", "one MD stage")).parse_args(argv)
 
     name = stage["name"]
@@ -281,7 +315,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
     from ..run.preflight import PreflightError, preflight_stage
 
     try:
-        checked = preflight_stage(
+        checked = prepared if prepared is not None else preflight_stage(
             topology=topology_path, system=system_path, coordinates=args.continue_from,
             trajectory=traj_path, restart=restart_path, checkpoint=chk_path,
             output=out_path, log=log_path, cpu=bool(args.cpu),
@@ -294,7 +328,12 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
             # against ITS masses -- so 4 fs on hydrogens that were never repartitioned is refused
             # before the `.out` and the `.log` exist rather than after.
             timestep_fs=stage.get("timestep_fs"),
-            ensemble=stage.get("ensemble"), tau=float(stage.get("tau") or 0.0))
+            ensemble=stage.get("ensemble"), tau=float(stage.get("tau") or 0.0),
+            # The WHOLE stage, so the plan can build the System this run will integrate: the
+            # fixed-tau scaling with its force audit, the omega classification, the restraint and
+            # the barostat. Every refusal those produce then happens before the first file exists
+            # rather than after both reports are open.
+            stage=dict(stage, name=name))
     except PreflightError as refusal:
         # No `{name}:` prefix here: `protocol=f"stage {name}"` is already inside the message, and
         # printing both produced "cMD: stage cMD: -c ... does not exist".
@@ -385,10 +424,13 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
     interrupted = (committed_now is not None
                    and int(committed_now["state"].get("steps_done", 0))
                    < int(stage.get("steps") or 0))
+    # `--resume` does NOT excuse existing outputs. Only a valid committed checkpoint short of the
+    # step count does -- which is what "interrupted" means, and is a fact about the directory
+    # rather than a claim on the command line. Letting the flag stand in for it would turn
+    # `--resume` into a way past the collision check for a directory with no checkpoint at all.
     try:
         check_existing_outputs(checked.inventory, overwrite=bool(getattr(args, "overwrite", False)),
-                               resume=bool(getattr(args, "resume", False)) or interrupted,
-                               where=f"stage {name}")
+                               resume=interrupted, where=f"stage {name}")
     except PreflightError as refusal:
         print(f"{refusal}", file=sys.stderr)
         return 2
@@ -422,17 +464,13 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
 
     try:
         pdb = PDBFile(str(topology_path))
-        system = XmlSerializer.deserialize(system_path.read_text(encoding="utf-8"))
-        if pdb.topology.getNumAtoms() != system.getNumParticles():
-            raise SystemExit(f"{topology_path} has {pdb.topology.getNumAtoms()} atoms but "
-                             f"{system_path} has {system.getNumParticles()} particles")
-
-        implicit = not system.usesPeriodicBoundaryConditions()
-        # Derived from the topology rather than carried in the config. `build-top` writes the
-        # solute first, so a count would work, but deriving it here means a hand-edited script
-        # cannot restrain the wrong atoms by stating a stale number.
-        solute = solute_atom_indices(pdb.topology)
-        seed = derive_seed(int(stage["seed"]), name)
+        # CONSUMED, not rebuilt. The preflight deserialised the pair, compared the counts,
+        # selected the solute, classified the omega bonds, scaled the System for a fixed tau,
+        # restrained it and added the barostat -- all before this function created anything.
+        system = checked.prepared_system
+        implicit = checked.implicit
+        solute = list(checked.solute)
+        seed = checked.seed
 
         log.heading("Resolved settings")
         for key in ("ensemble", "steps", "timestep_fs", "temperature_K", "pressure_bar",
@@ -445,7 +483,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         # loaded -- not upstream in `build-md`, which never opens built.xml and would have to
         # trust a configuration's claim about hydrogen mass repartitioning. Step counts stay
         # authoritative; a physical duration is only derived once this returns.
-        timestep = resolve_timestep_fs(stage["timestep_fs"], system, pdb.topology)
+        timestep = checked.timestep
         timestep_fs = timestep["timestep_fs"]
         steps = int(stage.get("steps") or 0)
         log.field("timestep", f"{timestep_fs} fs (requested {timestep['requested']!r}, "
@@ -455,10 +493,6 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                                   f"{steps * timestep_fs / 1000.0:g} ps "
                                   f"({steps * timestep_fs / 1e6:g} ns)")
         log.update(timestep=timestep)
-        if implicit and stage["ensemble"] != "NVT":
-            raise SystemExit(
-                f"stage {name} declares ensemble {stage['ensemble']}, but the System is not "
-                f"periodic. Implicit solvent has no volume to control, so there is no NPT here.")
         log.field("solvent", "implicit (no barostat possible)" if implicit else "explicit")
 
         # -- the Force layout, fixed before any state is loaded -----------------------------
@@ -470,19 +504,8 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         # them, and a fixed-tau walker would then construct a different System from the ladder
         # rung it is supposed to match.
         tau = float(stage.get("tau") or 0.0)
-        excluded: list = []
+        excluded = list(checked.excluded_bonds)
         if tau > 0.0:
-            if stage["ensemble"] != "NVT":
-                raise SystemExit(
-                    f"stage {name} runs at tau={tau} but declares ensemble "
-                    f"{stage['ensemble']}. A scaled run samples the fixed-volume ensemble of the "
-                    f"ladder rung it sits at; a barostat would sample a different distribution.")
-            from ..openmm.system import classify_omega_bonds
-            from ..rest2 import build_scaled_system
-            omega = classify_omega_bonds(pdb.topology, solute, route="peptide", ligand_sdf=None)
-            excluded = [tuple(int(a) for a in bond)
-                        for bond in omega.get("omega_unscaled_bonds", [])]
-            system = build_scaled_system(system, solute, tau, excluded_bonds=excluded)
             log.field("tau", f"{tau}  (fixed REST2 scaling; ordinary amide omega left unscaled, "
                              f"{len(excluded)} bond(s) excluded)")
 
@@ -495,22 +518,9 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
         #
         # Computed now rather than holding a reference: `add_positional_restraint` mutates the
         # System in place, so a reference would be fingerprinted after the restraint anyway.
-        hamiltonian_identity_record = None
-        if stage.get("phase_space_interval_steps"):
-            from ..rest2 import identity_record
-            hamiltonian_identity_record = identity_record(
-                system, tau=tau, temperature_k=float(stage["temperature_K"]),
-                ensemble=stage["ensemble"], solute_indices=solute, excluded_bonds=excluded)
-
-        restrained = float(stage.get("restraint_kcal_per_mol_A2") or 0.0) > 0.0
-        add_positional_restraint(system, pdb.positions, solute)
-        if not implicit:
-            barostat_active = stage["ensemble"] == "NPT"
-            add_barostat(system, float(stage["pressure_bar"]), float(stage["temperature_K"]),
-                         derive_seed(int(stage["seed"]), name, "barostat"),
-                         frequency=int(stage["barostat_interval_steps"]) if barostat_active else 0)
-        if implicit and count_barostats(system):
-            raise SystemExit("implicit solvent must carry no barostat")
+        hamiltonian_identity_record = checked.hamiltonian_identity
+        restrained = checked.restrained
+        barostat_active = (not implicit) and stage.get("ensemble") == "NPT"
 
         # ONE platform decision, from `md_tools.openmm.platform_policy`, shared with REMD and AIS.
         # CUDA unless `--cpu` was written; a CUDA that cannot open a Context is an error here,
@@ -1060,18 +1070,51 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
     # chain produces itself are allowed to be missing, and those are stated per stage below.
     from ..run.preflight import PendingParent, PreflightError, preflight_stage
 
+    # EVERY STAGE, planned before the first one runs.
+    #
+    # Only the first stage was preflighted, so a chain whose LAST stage asks for 4 fs on
+    # unrepartitioned masses, or declares NPT on an implicit System, ran three stages to
+    # completion and then refused -- leaving three stages of output and no way to finish. The
+    # whole point of `--check` on a chain is that this cannot happen, and the run itself had none
+    # of that protection.
+    #
+    # The prepared plans are kept and handed to `stage_main`, so nothing is validated twice and
+    # nothing is re-resolved between planning and running.
+    prepared_plans: dict[str, Any] = {}
+    previous_name = None
     try:
-        preflight_stage(
-            topology=args.topology, system=args.system, coordinates=args.continue_from,
-            output=args.output or base / f"{plan[0]['name']}.out",
-            log=args.log or base / f"{plan[0]['name']}.log",
-            cpu=bool(args.cpu),
-            device=int(args.device) if args.device is not None else None,
-            protocol=f"the {len(plan)}-stage workflow",
-            number_of_groups=args.number_of_groups, groupfile=args.groupfile,
-            source_trajectory=args.source_trajectory)
+        for position, entry in enumerate(plan):
+            entry_name = entry["name"]
+            parent = None if position == 0 else base / f"{previous_name}.xml"
+            prepared_plans[entry_name] = preflight_stage(
+                topology=args.topology, system=args.system,
+                coordinates=str(parent) if parent is not None else args.continue_from,
+                trajectory=base / f"{entry_name}.dcd",
+                restart=base / f"{entry_name}.xml",
+                checkpoint=base / f"{entry_name}.chk",
+                output=(args.output if position == 0 and args.output
+                        else base / f"{entry_name}.out"),
+                log=(args.log if position == 0 and args.log else base / f"{entry_name}.log"),
+                cpu=bool(args.cpu),
+                device=int(args.device) if args.device is not None else None,
+                protocol=f"stage {entry_name} of the {len(plan)}-stage workflow",
+                # The one legitimate missing continuation, and only here: an earlier stage of
+                # THIS chain writes it. Named, so nothing else falls through the exemption.
+                pending_parent=(PendingParent(path=parent, produced_by=previous_name)
+                                if parent is not None else None),
+                timestep_fs=entry.get("timestep_fs"), ensemble=entry.get("ensemble"),
+                tau=float(entry.get("tau") or 0.0),
+                stage=dict(entry, name=entry_name),
+                number_of_groups=args.number_of_groups, groupfile=args.groupfile,
+                source_trajectory=args.source_trajectory)
+            previous_name = entry_name
     except PreflightError as refusal:
         print(f"{Path(script).name}: {refusal}", file=sys.stderr)
+        return 2
+
+    collision = cross_stage_collision(prepared_plans)
+    if collision is not None:
+        print(f"{Path(script).name}: {collision}", file=sys.stderr)
         return 2
 
     previous = previous_name = None
@@ -1106,7 +1149,8 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
         if args.overwrite:
             stage_argv.append("--overwrite")
         code = stage_main(dict(stage, resolved_config=str(config_path),
-                               pending_parent=pending), stage_argv)
+                               pending_parent=pending), stage_argv,
+                          prepared=prepared_plans.get(name))
         if code != 0:
             print(f"{Path(script).name}: stage {name} failed with exit code {code}",
                   file=sys.stderr)
