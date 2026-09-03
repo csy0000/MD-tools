@@ -250,21 +250,47 @@ class REST2Protocol:
         return records
 
     def build_systems(self, base_system, solute_indices, excluded_bonds=()):
-        """One scaled System per rung, from the audited REST2 scaling implementation."""
-        audit = audit_force_classes(base_system, where="REST2 ladder construction")
-        if self.pressure_bar is not None:
-            raise ProtocolError(
-                "this runtime is NVT and installs no barostat, but a pressure was requested. "
-                "Exchanging complete configurations under NPT would also have to exchange volumes "
-                "and carry the pV work; that is deliberately not implemented rather than "
-                "approximated.")
-        systems = [build_scaled_system(base_system, solute_indices, tau,
-                                       excluded_bonds=excluded_bonds)
-                   for tau in self.tau]
-        # What the omega exclusion actually did, in terms of the torsions it protected, recorded
-        # against the SAME System the ladder was built from. A stored pair of atom indices needs
-        # a force field to mean anything; this says which torsion terms it left alone.
-        audit["omega_exclusion"] = torsion_exclusion_report(
-            base_system, solute_indices, excluded_bonds)
-        audit["rest2_implementation"] = dict(REST2_IMPLEMENTATION)
-        return systems, audit
+        """One scaled System per rung, from the audited REST2 scaling implementation.
+
+        Delegates to the module-level `build_rung_systems` so that the preflight -- which builds
+        these BEFORE any output exists, and hands them to the driver to consume -- and this
+        method cannot construct different Systems from the same inputs. See that function.
+        """
+        return build_rung_systems(base_system, solute_indices, self.tau,
+                                  excluded_bonds=excluded_bonds,
+                                  pressure_bar=self.pressure_bar)
+
+
+def build_rung_systems(base_system, solute_indices, taus, *, excluded_bonds=(),
+                       pressure_bar=None):
+    """One scaled System per tau rung, plus the complete force audit. THE one implementation.
+
+    Called from two places, deliberately: `Protocol.build_systems` (the driver's route) and the
+    preflight, which builds the ladder's rungs before any output exists and carries them on
+    `LadderPreflight` for the driver to consume.
+
+    Two implementations of "what System is rung i" is two answers waiting to disagree, and the
+    disagreement would be invisible: both produce a plausible ladder, and only the numbers differ.
+    One subtlety makes that concrete -- `build_scaled_system`'s `prepare_for_switching` changes
+    what rung 0 IS (an untouched clone, versus one carrying the CustomGBForce global parameter),
+    and it is deliberately left at its default here. A caller that reached for
+    `check_scaling_plan` instead, which passes `prepare_for_switching=True` because AIS needs it,
+    would build a DIFFERENT rung 0 while looking like it had built the same one.
+    """
+    audit = audit_force_classes(base_system, where="REST2 ladder construction")
+    if pressure_bar is not None:
+        raise ProtocolError(
+            "this runtime is NVT and installs no barostat, but a pressure was requested. "
+            "Exchanging complete configurations under NPT would also have to exchange volumes "
+            "and carry the pV work; that is deliberately not implemented rather than "
+            "approximated.")
+    systems = [build_scaled_system(base_system, solute_indices, tau,
+                                   excluded_bonds=excluded_bonds)
+               for tau in taus]
+    # What the omega exclusion actually did, in terms of the torsions it protected, recorded
+    # against the SAME System the ladder was built from. A stored pair of atom indices needs
+    # a force field to mean anything; this says which torsion terms it left alone.
+    audit["omega_exclusion"] = torsion_exclusion_report(
+        base_system, solute_indices, excluded_bonds)
+    audit["rest2_implementation"] = dict(REST2_IMPLEMENTATION)
+    return systems, audit

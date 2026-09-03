@@ -600,24 +600,42 @@ def run_grouped(files, arguments, groups, *, prepared=None):
             f"inferred from the other.")
 
     first = groups[0]
-    topology = PDBFile(first["topology"]).topology
-    base_system = XmlSerializer.deserialize(
-        Path(first["system"]).read_text(encoding="utf-8"))
 
-    solute_indices, excluded_bonds = [], []
-    if first.get("solute"):
-        document = yaml.safe_load(Path(first["solute"]).read_text(encoding="utf-8"))
-        count = int(document["n_solute_atoms"])
-        span = document.get("solute_atom_range")
-        if span and document.get("solute_atom_indices_are_contiguous", False):
-            solute_indices = list(range(int(span[0]), int(span[1]) + 1))
-        else:
-            solute_indices = list(range(count))
-        excluded_bonds = [tuple(int(a) for a in pair)
-                          for pair in (document.get("rest2") or {}).get(
-                              "omega_excluded_bonds", [])]
+    # CONSUMED from the plan when there is one. The preflight already deserialised this System and
+    # resolved this selection -- before any output existed -- so redoing both here was a second
+    # derivation of the same scientific facts, from files on disk, with nothing making the two
+    # agree. The System matters most: the ladder's rungs are built FROM it, and a second
+    # deserialisation is a second object that the preflight never audited.
+    loaded = getattr(prepared, "loaded", None) if prepared is not None else None
+    if loaded is not None:
+        topology = loaded.pdb.topology
+        base_system = loaded.system
     else:
-        solute_indices = list(range(base_system.getNumParticles()))
+        topology = PDBFile(first["topology"]).topology
+        base_system = XmlSerializer.deserialize(
+            Path(first["system"]).read_text(encoding="utf-8"))
+
+    solute_indices = list(getattr(prepared, "solute_indices", ()) or ()) if prepared else []
+    excluded_bonds = [tuple(int(a) for a in pair)
+                      for pair in (getattr(prepared, "excluded_bonds", ()) or ())] if prepared \
+        else []
+    if not solute_indices:
+        # No plan, or a plan that did not resolve a selection: a direct caller that built the
+        # group file itself. The group file's own `solute.yaml` is then the only description of
+        # the selection there is, and reading it here is the fallback rather than the default.
+        if first.get("solute"):
+            document = yaml.safe_load(Path(first["solute"]).read_text(encoding="utf-8"))
+            count = int(document["n_solute_atoms"])
+            span = document.get("solute_atom_range")
+            if span and document.get("solute_atom_indices_are_contiguous", False):
+                solute_indices = list(range(int(span[0]), int(span[1]) + 1))
+            else:
+                solute_indices = list(range(count))
+            excluded_bonds = [tuple(int(a) for a in pair)
+                              for pair in (document.get("rest2") or {}).get(
+                                  "omega_excluded_bonds", [])]
+        else:
+            solute_indices = list(range(base_system.getNumParticles()))
 
     # The reservoir is opened by the driver, which owns the MPI coordinator: preparation happens
     # once, on rank 0, behind a barrier, and every rank then reads the same prepared file.

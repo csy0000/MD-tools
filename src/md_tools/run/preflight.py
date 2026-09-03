@@ -514,6 +514,16 @@ class LadderPreflight(ExecutionPreflight):
     #: The solute selection this ladder scales, as resolved here. Carried as a field rather than
     #: left in `notes` so the executor can CONSUME it instead of re-deriving it from `solute.yaml`.
     solute_indices: tuple = ()
+    #: The ladder's exact tau list, rung 0 first. Nothing carried this before, so "which
+    #: Hamiltonian schedule is this" was answerable only by rebuilding it.
+    tau_list: tuple = ()
+    #: ONE PREPARED SYSTEM PER RUNG, in tau order, built before any output exists and consumed by
+    #: the driver. The preflight used to build ONLY the top rung -- to validate the force layout --
+    #: and the driver then called `protocol.build_systems` again at runtime, so rungs 0..N-2 were
+    #: never validated until propagation was about to start, with every output file already
+    #: created. An unclassifiable force in a middle rung surfaced attached to a tree that looks
+    #: exactly like a run that started.
+    rung_systems: tuple = ()
     #: rREST2 only. The exact `reservoir.yaml` text rank 0 will publish, built and validated
     #: BEFORE `-odir` exists -- see `preflight_ladder`. Carried here so the source is opened once,
     #: by the preflight, rather than reopened after output creation to rediscover the same facts.
@@ -1013,6 +1023,49 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
         audit, scaled = check_scaling_plan(loaded, solute_indices=solute_indices,
                                            excluded_bonds=excluded_bonds, tau=tau, where=protocol)
 
+    # -- EVERY rung, not just the top one -------------------------------------------------------
+    #
+    # `check_scaling_plan` above validates the force layout using one System at `tau`. That is not
+    # the ladder: a ladder is N Systems, and the driver used to build all of them itself, at
+    # runtime, after every output file existed. So a force that classifies at tau_max and fails at
+    # an intermediate rung was found in the worst possible place.
+    #
+    # These are built through `build_rung_systems` -- the SAME function `Protocol.build_systems`
+    # delegates to -- and not through `check_scaling_plan`, whose `prepare_for_switching=True`
+    # makes a different rung 0. The driver consumes exactly these.
+    rung_systems = ()
+    rungs_tau = ()
+    if solute_indices is not None and ladder is not None and loaded is not None:
+        from ..remd.generated import tau_ladder
+
+        rungs_tau = tuple(float(t) for t in
+                          tau_ladder(int(replicas), float(ladder["tau_max"])))
+
+        def _rungs():
+            from ..remd.protocol import ProtocolError, build_rung_systems
+
+            try:
+                built, full_audit = build_rung_systems(
+                    loaded.system, list(solute_indices), rungs_tau,
+                    excluded_bonds=list(excluded_bonds),
+                    # NOT the config's `dynamics.pressure_bar`. A REST2/rREST2 runtime is NVT by
+                    # contract and the `Protocol` this ladder becomes carries `pressure_bar=None`;
+                    # the config block may still name a pressure for the equilibration stages that
+                    # precede the ladder. Reading it here refused every healthy explicit-solvent
+                    # ladder for requesting a barostat nobody had asked the ladder for.
+                    pressure_bar=None)
+            except ProtocolError as refusal:
+                raise PreflightError(f"{protocol}: {refusal}") from None
+            except Exception as broken:
+                raise PreflightError(
+                    f"{protocol}: the ladder's rung Systems could not be constructed: "
+                    f"{type(broken).__name__}: {broken}") from None
+            return built, full_audit
+
+        built_systems, audit = collectively(coordination, _rungs,
+                                            what="the ladder's rung Systems")
+        rung_systems = tuple(built_systems)
+
     # -- the rREST2 reservoir, validated HERE ---------------------------------------------------
     #
     # It used to be built at helper-publication time, after `out.mkdir()`: a reservoir that did
@@ -1078,6 +1131,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                            inventory=inventory,
                            force_audit=audit, scaled_system=scaled,
                            solute_indices=tuple(int(i) for i in (solute_indices or ())),
+                           tau_list=rungs_tau, rung_systems=rung_systems,
                            excluded_bonds=tuple(tuple(int(a) for a in b) for b in excluded_bonds),
                            reservoir_declaration=declaration, reservoir_digest=digest,
                            reservoir_source=source_facts,

@@ -232,8 +232,7 @@ class ReplicaRun:
         print(f"# host               : {context['hostname']}")
         sys.stdout.flush()
 
-        systems, self._audit = self.protocol.build_systems(
-            self.base_system, self.solute_indices, self.excluded_bonds)
+        systems, self._audit = self._rung_systems()
 
         interruption = _Interruption().install()
         state = None
@@ -263,6 +262,32 @@ class ReplicaRun:
         finally:
             interruption.restore()
         return result
+
+    def _rung_systems(self):
+        """The N Systems this ladder propagates, and the force audit describing them.
+
+        CONSUMED from the preflight when it prepared them -- one System per rung, built before any
+        output existed and already validated there. Rebuilding them here was the defect: the
+        preflight validated ONLY the top rung, so an unclassifiable force in an intermediate rung
+        surfaced at this point, with every output file already created.
+
+        No clone. These are handed straight to the engine, so the Systems propagated are the exact
+        objects the preflight audited; a copy would be one more construction that could differ
+        from what was checked, which is the failure mode being removed.
+        """
+        prepared_rungs = tuple(getattr(self.prepared, "rung_systems", ()) or ())
+        if not prepared_rungs:
+            # No prepared plan: a direct caller that constructed this object itself. Same
+            # function, same Systems -- `Protocol.build_systems` delegates to the one the
+            # preflight uses, so this branch cannot build a different ladder.
+            return self.protocol.build_systems(
+                self.base_system, self.solute_indices, self.excluded_bonds)
+        if len(prepared_rungs) != self.protocol.n_states:
+            raise DriverError(
+                f"the preflight prepared {len(prepared_rungs)} rung System(s) and this protocol "
+                f"describes {self.protocol.n_states} states. The plan and the ladder must be the "
+                f"same ladder; neither is inferred from the other.")
+        return list(prepared_rungs), getattr(self.prepared, "force_audit", None)
 
     def _fail_closed(self, state, identity, failure):
         """Report what happened if that is possible, and stop the whole communicator regardless.
