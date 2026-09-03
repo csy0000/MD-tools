@@ -27,6 +27,7 @@ from .conftest import ALA_PDB, REPO_ROOT, run_cli, template_module
 #: NOT do -- a property no successful run can demonstrate. They followed the implementation from
 #: the retired `templates/ais_run.py` to its live home rather than being dropped with it.
 AIS_SOURCE = REPO_ROOT / "src" / "md_tools" / "ais" / "run.py"
+PREFLIGHT_SOURCE = REPO_ROOT / "src" / "md_tools" / "run" / "preflight.py"
 
 
 # --- 1. the production source is hashed exactly once ---------------------------------------------
@@ -45,9 +46,20 @@ def test_the_ais_runtime_hashes_the_source_once_and_records_it():
     and the fingerprint, never per path and never inside the frame loop.
     """
     source = AIS_SOURCE.read_text()
+    preflight = PREFLIGHT_SOURCE.read_text(encoding="utf-8")
 
-    # One call, at run scope. `file_facts` is what computes the digest.
-    assert source.count('file_facts(source_path)') == 1, (
+    # MIGRATED to where the hashing now happens. The digest moved into the preflight, because the
+    # run identity has to be decided BEFORE `-odir` exists and the identity is built from it --
+    # so the runtime consumes `checked.source_facts` and hashes nothing at all.
+    #
+    # The property is unchanged and is now more strongly true: exactly one hash of the source, at
+    # run scope, before any output.
+    assert source.count("file_facts(source_path)") == 0, (
+        "the runtime hashes the source again; it is hashed once in the preflight and carried "
+        "on the plan")
+    assert source.count("checked.source_facts") == 1, (
+        "the runtime does not consume the digest the preflight computed")
+    assert preflight.count("file_facts(source)") == 1, (
         "the source is hashed more than once; a production trajectory is read enough already")
 
     # And nothing inside the per-path function reads THE SOURCE again.
@@ -66,12 +78,18 @@ def test_the_ais_runtime_hashes_the_source_once_and_records_it():
 
 def test_the_fingerprint_binds_the_source_the_system_and_the_schedule():
     """What a mid-path checkpoint is matched against, asserted as a set rather than by inspection."""
-    source = AIS_SOURCE.read_text()
-    fingerprint = source[source.index("path_fingerprint = hashlib.sha256("):]
+    # MIGRATED with the fingerprint itself, which is built in the preflight now: the string that
+    # decides whether this directory may be written to has to exist before the directory does,
+    # and deriving it in two places is two chances for the two to disagree.
+    preflight = PREFLIGHT_SOURCE.read_text(encoding="utf-8")
+    fingerprint = preflight[preflight.index("def _ais_fingerprint("):]
     fingerprint = fingerprint[:fingerprint.index(").hexdigest()")]
     for bound in ('"system"', '"topology"', '"source"', '"schedule"', '"seed"',
                   '"resolved_config"'):
         assert bound in fingerprint, f"{bound} is not bound into the resume fingerprint"
+    # And the runtime uses that one rather than building a second.
+    assert "path_fingerprint = checked.fingerprint" in AIS_SOURCE.read_text(), (
+        "the runtime derives its own fingerprint instead of consuming the plan's")
 
 
 # --- 2. physical truncation, with the header left alone -----------------------------------------

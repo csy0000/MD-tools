@@ -921,3 +921,132 @@ def test_the_counter_identities_hold_on_every_completion_record(harness):
         counters["useful_total_energy_evaluations"]
         + counters["known_discarded_energy_evaluations"])
     assert "relationships" in counters and len(counters["relationships"]) == 2
+
+
+# --- finalization is crash-atomic ----------------------------------------------------------------
+#
+# Publishing a path is several steps -- fsync, digest, link to the stable name, write the manifest,
+# commit it, drop the checkpoints -- and every gap between them is a state a crash can leave.
+#
+# The sharp one is between the stable trajectory appearing and the completion manifest committing.
+# The old code did `os.replace(staged, published)` there, so a crash left a PUBLISHED trajectory,
+# no completion record, and no staged file for the resume to continue from. That state was not
+# recoverable: the stable name existing was, by itself, a dead end.
+
+from md_tools.openmm.checkpoint import FINALIZE_BOUNDARIES  # noqa: E402
+
+
+@pytest.mark.parametrize("boundary", FINALIZE_BOUNDARIES)
+def test_a_crash_at_a_finalization_boundary_finishes_identically_on_the_next_invocation(
+        boundary, harness, tmp_path, monkeypatch):
+    """Crash at each of the ten, then run again: identical outputs, or a clear refusal.
+
+    Never a half-published path, never a duplicated row or frame, and never a failure whose only
+    cause is that the stable trajectory had already been renamed.
+    """
+    call, out, schedule = harness
+    reference = call()
+    reference_rows = _counts(out)["observations"]
+    reference_frames = _counts(out)["frames"]
+
+    second = tmp_path / f"final-{boundary}"
+    second.mkdir()
+    _read_frame_source(monkeypatch)
+    import md_tools.openmm.checkpoint as _checkpoint
+
+    def run(**kwargs):
+        _checkpoint._passed.clear()
+        return ais_run.run_one_path(
+            index=0, chosen=[7, 9], out=second, schedule=schedule, taus=schedule["taus"],
+            switcher=_switcher(),
+            simulation_inputs={"topology": object(), "source_path": tmp_path / "source.dcd",
+                               "mdtraj_top": object(), "implicit": False,
+                               "acceleration": _Acceleration()},
+            dynamics={"seed": 3, "friction_per_ps": 1.0, "timestep_fs": 2.0,
+                      "temperature_K": 300.0},
+            ais={"tau_start": 0.5, "tau_end": 0.0}, beta=0.4, temperature=300.0,
+            rank=0, fingerprint="fixed-fingerprint", log=lambda *a: None, **kwargs)
+
+    monkeypatch.setenv(FAULT_ENVIRONMENT, boundary)
+    monkeypatch.setenv(FAULT_AFTER_ENVIRONMENT, "0")
+    crashed = None
+    try:
+        run(resume=False)
+    except RuntimeError:
+        crashed = True
+    monkeypatch.delenv(FAULT_ENVIRONMENT)
+    monkeypatch.delenv(FAULT_AFTER_ENVIRONMENT)
+    assert crashed, f"{boundary}: the injected fault did not stop finalization"
+
+    marker = second / "path_0000" / "completed.json"
+    published = second / "AIS_traj0000.nc"
+    committed = marker.is_file()
+    if not committed:
+        # Not committed: whatever is at the stable name is debris, and the next invocation must
+        # say so rather than adopt it.
+        assert (second / "path_0000" / "frames.partial.nc").is_file(), (
+            f"{boundary}: the staged generation was destroyed before the commit, so the "
+            f"interruption is unrecoverable")
+
+    finished = run(resume=True)
+    assert finished["status"] == "completed", boundary
+    assert marker.is_file() and published.is_file(), boundary
+
+    rows = _counts(second)["observations"]
+    assert len(rows) == len(reference_rows), f"{boundary}: {len(rows)} rows"
+    steps = [int(r["protocol_step"]) for r in rows]
+    assert steps == sorted(set(steps)), f"{boundary}: a step is duplicated"
+    assert _counts(second)["frames"] == reference_frames, boundary
+    assert abs(float(rows[-1]["cumulative_work_kj_mol"])
+               - float(reference_rows[-1]["cumulative_work_kj_mol"])) < 1e-6, boundary
+    # And the staged generation is gone once the path is durably complete.
+    assert not (second / "path_0000" / "frames.partial.nc").is_file() or committed
+
+
+def test_a_stable_trajectory_without_a_committed_manifest_is_discarded(harness):
+    """THE state the old finalization could not recover from, constructed directly."""
+    call, out, schedule = harness
+    call()
+    marker = out / "path_0000" / "completed.json"
+    published = out / "AIS_traj0000.nc"
+    assert published.is_file()
+
+    # A published trajectory with no committed manifest: exactly what a crash between the two
+    # used to leave, and what the code then had no way to continue from.
+    record = json.loads(marker.read_text(encoding="utf-8"))
+    marker.unlink()
+    (out / "path_0000" / "frames.partial.nc").write_bytes(published.read_bytes())
+
+    lines = []
+    ais_run._discard_orphan_publication(published, marker, lines.append)
+    assert not published.exists(), "the orphaned publication was kept"
+    assert any("interrupted finalization" in line for line in lines), lines
+    del record
+
+
+def test_a_completion_manifest_missing_a_mandatory_key_is_refused(harness):
+    """The exact key set, not a superset and not a subset."""
+    call, out, schedule = harness
+    call()
+    marker = out / "path_0000" / "completed.json"
+    record = json.loads(marker.read_text(encoding="utf-8"))
+    assert set(record["outputs"]) >= {"trajectory", "observations", "final_state"}
+
+    for dropped in ("trajectory", "observations", "final_state"):
+        broken = json.loads(json.dumps(record))
+        broken["outputs"].pop(dropped)
+        marker.write_text(json.dumps(broken), encoding="utf-8")
+        with pytest.raises(SystemExit, match="mandatory output"):
+            call()
+    marker.write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_a_completion_manifest_with_an_unknown_key_is_refused(harness):
+    call, out, schedule = harness
+    call()
+    marker = out / "path_0000" / "completed.json"
+    record = json.loads(marker.read_text(encoding="utf-8"))
+    record["outputs"]["something_else"] = {"sha256": "0" * 64}
+    marker.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(SystemExit, match="does not produce"):
+        call()

@@ -57,7 +57,7 @@ from typing import Any, Callable
 
 __all__ = ["CheckpointError", "POINTER_NAME", "GENERATIONS_DIR", "commit_generation",
            "read_committed", "clear_committed", "fault", "BOUNDARIES",
-           "STREAM_BOUNDARIES", "write_durably"]
+           "STREAM_BOUNDARIES", "FINALIZE_BOUNDARIES", "write_durably"]
 
 POINTER_NAME = "current_checkpoint.json"
 GENERATIONS_DIR = "checkpoints"
@@ -85,6 +85,18 @@ BOUNDARIES = ("after-checkpoint-write", "after-checkpoint-sync", "after-sidecar-
 #: the checkpoint that vouches for it is the case the committed counters exist for.
 STREAM_BOUNDARIES = ("before-frame", "after-frame", "before-work-row", "after-work-row",
                      "before-state-row", "after-state-row")
+
+#: The FINALIZATION boundaries. Publishing a path is several steps -- flush, digest, link to the
+#: stable name, write the manifest, commit it, drop the checkpoints -- and every gap between them
+#: is a state a crash can leave behind. The sharp one is between the stable trajectory appearing
+#: and the completion manifest committing: the old code did a `os.replace(staged, published)`
+#: there, so a crash left a published trajectory, no completion record, and no staged file for
+#: the resume to continue from.
+FINALIZE_BOUNDARIES = ("before-final-fsync", "after-final-fsync",
+                       "before-publish-link", "after-publish-link",
+                       "before-completion-write", "after-completion-write",
+                       "before-completion-commit", "after-completion-commit",
+                       "before-checkpoint-cleanup", "after-checkpoint-cleanup")
 
 #: How many times each boundary has been passed in this process, so `FAULT_AFTER` can count.
 _passed: dict[str, int] = {}

@@ -50,8 +50,9 @@ from __future__ import annotations
 
 import argparse
 import csv
-import re
 import json
+import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -663,6 +664,75 @@ def _state_row(simulation, *, index, protocol_step, switching_time_ps, tau, impl
     }
 
 
+def _sync_directory(path: Path) -> None:
+    """fsync a directory, so the NAMES in it are durable and not only the file contents."""
+    handle = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(handle)
+    except OSError:
+        pass                                               # some filesystems refuse; not fatal
+    finally:
+        os.close(handle)
+
+
+#: The output keys a completed AIS path MUST claim. `system_table` is added when the schedule
+#: asks for one. Anything missing means the manifest does not describe a finished path; anything
+#: extra means it was written by a build with a different schema, and neither may be skipped past.
+MANDATORY_COMPLETION_OUTPUTS = ("trajectory", "observations", "final_state")
+
+
+def _expected_completion_outputs(*, state_every: bool) -> set[str]:
+    return set(MANDATORY_COMPLETION_OUTPUTS) | ({"system_table"} if state_every else set())
+
+
+def _discard_orphan_publication(published: Path, marker: Path, log) -> None:
+    """Remove a stable trajectory that no committed manifest vouches for.
+
+    The one state the old finalization could not recover from: it moved the staged trajectory to
+    its public name and only afterwards wrote `completed.json`, so a crash in between left a
+    published file, no completion record, and nothing staged to continue from.
+
+    Publication is a LINK now, so the staged generation survives it -- and a stable name with no
+    committed manifest beside it is, by definition, from an interrupted publication. It is removed
+    so the path can be resumed or redone, rather than left to be mistaken for finished work by
+    anyone globbing the run root.
+    """
+    if published.is_file() and not marker.is_file():
+        published.unlink()
+        log(f"  path: discarded {published.name}, published by an interrupted finalization "
+            f"with no committed completion record beside it")
+
+
+def _validate_completion_manifest(completion: dict[str, Any], *, directory: Path,
+                                  published: Path, schedule: dict[str, Any],
+                                  state_every: bool) -> None:
+    """Refuse a manifest that does not describe the files beside it, BEFORE committing it.
+
+    The exact key set, not a superset and not a subset: a manifest that omits the trajectory, the
+    observations, the final state or a required state table is not a description of a finished
+    path, and one carrying a key this build does not produce came from a different schema.
+    """
+    outputs = completion.get("outputs") or {}
+    expected = _expected_completion_outputs(state_every=state_every)
+    missing = sorted(expected - set(outputs))
+    unknown = sorted(set(outputs) - expected)
+    if missing or unknown:
+        raise SystemExit(
+            f"path {completion.get('path_index')}: the completion manifest does not carry the "
+            f"exact output set this run produces"
+            + (f"; missing {missing}" if missing else "")
+            + (f"; unexpected {unknown}" if unknown else "")
+            + ". Refusing to commit it rather than publishing a record a later invocation would "
+              "trust.")
+    if int(completion.get("frames", -1)) != int(schedule["number_of_frames"]):
+        raise SystemExit(f"path {completion.get('path_index')}: the manifest claims "
+                         f"{completion.get('frames')} frames against the schedule's "
+                         f"{schedule['number_of_frames']}")
+    if not published.is_file():
+        raise SystemExit(f"path {completion.get('path_index')}: {published.name} is missing at "
+                         f"the moment the manifest would be committed")
+
+
 def _verified_completion(marker: Path, *, directory: Path, published: Path, fingerprint: str,
                          index: int, frame: int, trajectory_name: str,
                          schedule: dict[str, Any]) -> dict[str, Any]:
@@ -709,7 +779,16 @@ def _verified_completion(marker: Path, *, directory: Path, published: Path, fing
                "observations": directory / OBSERVATIONS_CSV,
                "final_state": directory / "final_state.xml",
                "system_table": directory / STATE_CSV}
-    for name, facts in (record.get("outputs") or {}).items():
+    outputs = record.get("outputs") or {}
+    expected = _expected_completion_outputs(
+        state_every=bool(schedule.get("state_interval_steps")))
+    missing = sorted(expected - set(outputs))
+    if missing:
+        raise SystemExit(
+            f"{marker} omits the mandatory output(s) {missing}. A manifest that does not claim "
+            f"the trajectory, the observations, the final state and any required state table is "
+            f"not a description of a finished path; refusing to skip it.")
+    for name, facts in outputs.items():
         where = claimed.get(name)
         if where is None:
             raise SystemExit(
@@ -760,6 +839,11 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
     marker = directory / COMPLETION_NAME
     trajectory_name = path_trajectory_name(index, len(chosen))
     published = out / trajectory_name
+
+    # Before anything else: a stable trajectory with no committed manifest is debris from an
+    # interrupted publication, and leaving it would let a later `--resume` or a directory listing
+    # treat an unfinished path as finished.
+    _discard_orphan_publication(published, marker, log)
 
     if marker.is_file():
         # A completion record is only believed once its claims are checked. "status: completed" is
@@ -1179,14 +1263,45 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             f"The difference {final_components - final_total:.3e} exceeds {allowed:.3e} "
             f"(per-update {precision} tolerance accumulated over {rows_emitted} rows).")
 
-    # The staged trajectory becomes the published one only now, in one atomic move. Until this
-    # point nothing at the run root could be mistaken for a finished path.
-    os.replace(staged, published)
-    with mdtraj.formats.NetCDFTrajectoryFile(str(published)) as handle:
-        published_frames = len(handle)
-    if published_frames != schedule["number_of_frames"]:
-        raise SystemExit(f"path {index}: {published.name} holds {published_frames} frames, "
+    # --- FINALIZATION, in an order a crash cannot corrupt ---------------------------------------
+    #
+    # This used to be `os.replace(staged, published)` followed, some lines later, by writing
+    # `completed.json`. A crash in between left a PUBLISHED trajectory, no completion record, and
+    # no staged file -- and the resume path looks for the staged one, so that state could not be
+    # continued or recognised. The stable name existing was, by itself, unrecoverable.
+    #
+    # Now: fsync everything staged, digest it, LINK (not move) to the stable name so the staged
+    # file survives, write the manifest, and commit it last. The manifest is the commit point.
+    # Anything before it can be undone, because the staged generation is still there; anything
+    # after it is complete. `_discard_orphan_publication` at the top of this function removes a
+    # stable name that no committed manifest vouches for.
+    fault("before-final-fsync")
+    for produced in (staged, directory / OBSERVATIONS_CSV, directory / "final_state.xml",
+                     directory / STATE_CSV):
+        if produced.is_file():
+            with produced.open("rb") as handle:
+                os.fsync(handle.fileno())
+    _sync_directory(directory)
+    fault("after-final-fsync")
+
+    with mdtraj.formats.NetCDFTrajectoryFile(str(staged)) as handle:
+        staged_frames = len(handle)
+    if staged_frames != schedule["number_of_frames"]:
+        raise SystemExit(f"path {index}: the staged trajectory holds {staged_frames} frames, "
                          f"expected {schedule['number_of_frames']}")
+
+    fault("before-publish-link")
+    published.unlink(missing_ok=True)
+    try:
+        os.link(staged, published)
+    except OSError:
+        # Different filesystems, or a filesystem with no hard links. Copy instead: the point is
+        # that the staged file SURVIVES publication, not the mechanism.
+        import shutil
+
+        shutil.copy2(staged, published)
+    _sync_directory(published.parent)
+    fault("after-publish-link")
 
     completion = {
         "status": "completed",
@@ -1225,13 +1340,32 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                if (directory / STATE_CSV).is_file() else {}),
         },
     }
-    # Atomic, and last. Until this file lands the path is incomplete, and a half-written marker
-    # would be read as a finished path by the very next invocation.
+    # THE COMMIT POINT. Atomic, and last. Until this file lands the path is incomplete: the
+    # stable trajectory beside it is an orphan a later invocation removes, and the staged
+    # generation is what a resume continues from.
     from ..openmm.checkpoint import write_durably
 
-    write_durably(marker, (json.dumps(completion, indent=2, sort_keys=True) + "\n").encode())
-    # The transaction has served its purpose; leaving it would invite a resume of finished work.
+    fault("before-completion-write")
+    staging_marker = marker.with_name(marker.name + ".staging")
+    write_durably(staging_marker,
+                  (json.dumps(completion, indent=2, sort_keys=True) + "\n").encode())
+    fault("after-completion-write")
+
+    # Validate the staged generation against itself before committing it. A manifest that does
+    # not describe the files beside it must never become the committed one.
+    _validate_completion_manifest(completion, directory=directory, published=published,
+                                  schedule=schedule, state_every=bool(state_every))
+
+    fault("before-completion-commit")
+    os.replace(staging_marker, marker)
+    _sync_directory(directory)
+    fault("after-completion-commit")
+    # Only NOW. The checkpoints are what a crash before the commit above resumes from, so
+    # removing them earlier would turn a recoverable interruption into an unrecoverable one.
+    fault("before-checkpoint-cleanup")
     clear_committed(directory)
+    staged.unlink(missing_ok=True)
+    fault("after-checkpoint-cleanup")
     log(f"  path {index:4d}: frame {frame}, {rows_emitted} observations, {frames_emitted} "
         f"frames, W = {cumulative:.4f} kJ/mol (reduced {beta * cumulative:.4f})")
     return completion
