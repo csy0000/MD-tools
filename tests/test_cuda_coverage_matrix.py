@@ -594,15 +594,24 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
     decomposition = record["decomposition"]
     assert decomposition["potential_energy_evaluations_per_probe"] == 3
     counters = decomposition["evaluation_counters"]
-    # Four counters and their sum, not one number: the old `switching_energy_evaluations` counted
-    # basis probes and omitted the two direct evaluations every switch already performed.
-    assert counters["basis_probe_energy_evaluations"] > 0
+    # The counters, on a real CUDA run, in the relationship the record itself states. The two
+    # probe counters are separate because they are taken at DIFFERENT COORDINATES: the work-basis
+    # probe at the frozen pre-switch x_j, the observation probe at the saved coordinate x_t. A
+    # single "probe" count could not tell those apart, and the old one also omitted the two
+    # direct evaluations every switch already performs.
+    assert counters["work_basis_probe_energy_evaluations"] > 0
+    assert counters["observation_potential_energy_evaluations"] > 0
     assert counters["direct_work_energy_evaluations"] > 0
-    assert counters["observation_energy_evaluations"] > 0
-    assert counters["total_potential_energy_evaluations"] == (
-        counters["basis_probe_energy_evaluations"]
-        + counters["direct_work_energy_evaluations"]
-        + counters["observation_energy_evaluations"])
+    useful = (counters["direct_work_energy_evaluations"]
+              + counters["work_basis_probe_energy_evaluations"]
+              + counters["observation_potential_energy_evaluations"]
+              + counters["other_useful_energy_evaluations"])
+    assert counters["useful_total_energy_evaluations"] == useful, counters
+    assert counters["paid_total_energy_evaluations"] == useful + counters["known_discarded_energy_evaluations"], (
+        counters)
+    # An uninterrupted run observed all of its own cost; nothing was thrown away unseen.
+    assert counters["known_discarded_energy_evaluations"] == 0, counters
+    assert counters["discarded_is_complete"] is True, counters
     assert counters["parameter_updates"] > 0
     assert counters["probe_seconds"] > 0.0
 
@@ -648,10 +657,10 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
             feature="AIS implicit, three-group decomposition and work-sum identity",
             precision=precision, device=record["acceleration"].get("cuda_device_index") or "-",
             detail=f"{checked} rows checked, {aligned} frame-aligned; "
-                   f"{counters['total_potential_energy_evaluations']} energy evaluations "
-                   f"({counters['basis_probe_energy_evaluations']} probe, "
+                   f"{counters['paid_total_energy_evaluations']} energy evaluations "
+                   f"({counters['work_basis_probe_energy_evaluations']} work-basis probe, "
                    f"{counters['direct_work_energy_evaluations']} work, "
-                   f"{counters['observation_energy_evaluations']} observation), "
+                   f"{counters['observation_potential_energy_evaluations']} observation), "
                    f"{counters['parameter_updates']} parameter updates in "
                    f"{counters['probe_seconds']:.3f} s")
 
@@ -1182,7 +1191,7 @@ def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):
             feature="AIS explicit (PME), three-group identity through the reciprocal sum",
             precision=precision, device=record["acceleration"].get("cuda_device_index") or "-",
             detail=f"{len(rows)} rows, worst |sum - total| = {worst:.3e} kJ/mol; "
-                   f"{decomposition['evaluation_counters']['total_potential_energy_evaluations']}"
+                   f"{decomposition['evaluation_counters']['paid_total_energy_evaluations']}"
                    f" energy evaluations, "
                    f"{decomposition['evaluation_counters']['parameter_updates']} parameter "
                    f"updates in "
@@ -1235,7 +1244,7 @@ def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_expli
         record = read_record(work / "run" / "AIS.log")
         assert record["acceleration"]["resolved_platform"] == "CUDA"
         counters = record["decomposition"]["evaluation_counters"]
-        evaluations = int(counters["total_potential_energy_evaluations"])
+        evaluations = int(counters["paid_total_energy_evaluations"])
         pushes = int(counters["parameter_updates"])
         seconds = float(counters["probe_seconds"])
         assert evaluations > 0 and pushes > 0 and seconds > 0.0
@@ -1325,10 +1334,10 @@ def test_hs_rows_match_recomputation_on_cuda(solvent, built, built_explicit, har
             precision=record["acceleration"].get("cuda_precision") or "mixed",
             device=record["acceleration"].get("cuda_device_index") or "-",
             detail=f"{len(rows)} rows, max |recorded - recomputed| = {worst:.3e} kJ/mol; "
-                   f"{counters['total_potential_energy_evaluations']} energy evaluations "
-                   f"({counters['basis_probe_energy_evaluations']} probe, "
+                   f"{counters['paid_total_energy_evaluations']} energy evaluations "
+                   f"({counters['work_basis_probe_energy_evaluations']} work-basis probe, "
                    f"{counters['direct_work_energy_evaluations']} work, "
-                   f"{counters['observation_energy_evaluations']} observation), "
+                   f"{counters['observation_potential_energy_evaluations']} observation), "
                    f"{counters['parameter_updates']} parameter updates")
 
 
