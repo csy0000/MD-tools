@@ -441,13 +441,13 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
     for row in rows:
         total = float(row["total_work_kj_mol"])
         parts = sum(float(row[name]) for name in
-                    ("total_work_unscaled_kj_mol", "total_work_linear_kj_mol",
-                     "total_work_quadratic_kj_mol"))
+                    ("total_work_non_scaled_kj_mol", "total_work_sqrt_scaled_kj_mol",
+                     "total_work_lin_scaled_kj_mol"))
         allowed = reconstruction_tolerance(total, precision=precision) * len(rows)
         assert abs(parts - total) <= max(allowed, 1e-6), (
             f"step {row['switch_step']}: components sum to {parts} against a measured "
             f"{total} at {precision} precision")
-        reconstructed = float(row["potential_total_reconstructed_kj_mol"])
+        reconstructed = float(row["potential_reconstructed_kj_mol"])
         assert reconstructed == reconstructed, "a NaN reached the reconstruction"
         checked += 1
     assert checked >= 2
@@ -971,8 +971,8 @@ def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):
     for row in rows:
         total = float(row["total_work_kj_mol"])
         parts = sum(float(row[name]) for name in
-                    ("total_work_unscaled_kj_mol", "total_work_linear_kj_mol",
-                     "total_work_quadratic_kj_mol"))
+                    ("total_work_non_scaled_kj_mol", "total_work_sqrt_scaled_kj_mol",
+                     "total_work_lin_scaled_kj_mol"))
         worst = max(worst, abs(parts - total))
         allowed = reconstruction_tolerance(total, precision=precision) * len(rows)
         assert abs(parts - total) <= max(allowed, 1e-6), (

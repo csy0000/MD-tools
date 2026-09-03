@@ -1,6 +1,7 @@
-"""The three-group tau basis is exact, and each group holds the physics it claims.
+"""The three-group lambda basis is exact, and each group holds the physics it claims.
 
-`U(tau, x) = U_unscaled(x) + a U_linear(x) + a^2 U_quadratic(x)`, with `a = 1 - tau`.
+`U(tau, x) = U_non_scaled(x) + sqrt(lambda) U_sqrt_scaled(x) + lambda U_lin_scaled(x)`,
+with `a = 1 - tau` and `lambda = a^2`, so `sqrt(lambda) = a`.
 
 The claim is an IDENTITY, not a fit, so these tests are not "the residual is small": they build
 systems in which the answer is known term by term, and check that each term lands in the group the
@@ -168,7 +169,7 @@ def test_the_unscaled_group_is_what_survives_at_zero_amplitude():
     probe.switcher.set_amplitude(probe.context, probe.system, 0.0)
     at_zero = probe.context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
         unit.kilojoule_per_mole)
-    assert abs(components.unscaled - at_zero) < TOLERANCE
+    assert abs(components.non_scaled - at_zero) < TOLERANCE
 
 
 # --- each group holds the physics it claims ------------------------------------------------------
@@ -186,16 +187,16 @@ def test_bonds_and_angles_alone_are_wholly_unscaled():
     system.addForce(angles)
 
     components = _Probe(system, (0, 1, 2, 3)).components()
-    assert abs(components.linear) < TOLERANCE
-    assert abs(components.quadratic) < TOLERANCE
-    assert abs(components.unscaled) > 1.0, "the test system carries no energy to classify"
+    assert abs(components.sqrt_scaled) < TOLERANCE
+    assert abs(components.lin_scaled) < TOLERANCE
+    assert abs(components.non_scaled) > 1.0, "the test system carries no energy to classify"
 
 
 def test_an_all_environment_system_has_no_scaled_components():
     """Nothing is solute, so nothing scales, whatever forces are present."""
     components = _Probe(_mixed_system(), solute=()).components()
-    assert abs(components.linear) < TOLERANCE
-    assert abs(components.quadratic) < TOLERANCE
+    assert abs(components.sqrt_scaled) < TOLERANCE
+    assert abs(components.lin_scaled) < TOLERANCE
 
 
 def test_generalized_born_appears_in_the_linear_basis():
@@ -216,9 +217,9 @@ def test_generalized_born_appears_in_the_linear_basis():
             without.removeForce(index)
     without_gb = _Probe(without, solute).components()
 
-    assert abs(without_gb.linear) < TOLERANCE, "a pure NonbondedForce solute has no linear term"
-    assert abs(with_gb.linear) > 1.0, "the GB energy did not reach the linear group"
-    assert abs(with_gb.quadratic - without_gb.quadratic) < TOLERANCE, (
+    assert abs(without_gb.sqrt_scaled) < TOLERANCE, "a pure NonbondedForce solute has no linear term"
+    assert abs(with_gb.sqrt_scaled) > 1.0, "the GB energy did not reach the linear group"
+    assert abs(with_gb.lin_scaled - without_gb.lin_scaled) < TOLERANCE, (
         "GB leaked into the quadratic group, which is the v1 Hamiltonian, not this one")
 
 
@@ -226,24 +227,24 @@ def test_solute_solute_nonbonded_and_one_four_land_in_the_quadratic_group():
     """Remove the 1-4 exceptions and only the quadratic group may move."""
     with_exceptions = _Probe(_mixed_system(with_exceptions=True), SOLUTE).components()
     without = _Probe(_mixed_system(with_exceptions=False), SOLUTE).components()
-    assert abs(with_exceptions.quadratic - without.quadratic) > 1e-3, (
+    assert abs(with_exceptions.lin_scaled - without.lin_scaled) > 1e-3, (
         "the solute-solute 1-4 exception made no difference to the quadratic group")
     # The solute-environment exception moves the linear group; the unscaled group must not move.
-    assert abs(with_exceptions.unscaled - without.unscaled) < TOLERANCE
+    assert abs(with_exceptions.non_scaled - without.non_scaled) < TOLERANCE
 
 
 def test_eligible_solute_torsions_are_quadratic_and_reach_only_that_group():
     with_torsions = _Probe(_mixed_system(with_torsions=True), SOLUTE).components()
     without = _Probe(_mixed_system(with_torsions=False), SOLUTE).components()
-    assert abs(with_torsions.quadratic - without.quadratic) > 1e-3
-    assert abs(with_torsions.linear - without.linear) < TOLERANCE
+    assert abs(with_torsions.lin_scaled - without.lin_scaled) > 1e-3
+    assert abs(with_torsions.sqrt_scaled - without.sqrt_scaled) < TOLERANCE
 
 
 def test_solute_cmap_is_quadratic():
     with_cmap = _Probe(_mixed_system(with_cmap=True), SOLUTE).components()
     without = _Probe(_mixed_system(with_cmap=False), SOLUTE).components()
-    assert abs(with_cmap.quadratic - without.quadratic) > 1e-3
-    assert abs(with_cmap.linear - without.linear) < TOLERANCE
+    assert abs(with_cmap.lin_scaled - without.lin_scaled) > 1e-3
+    assert abs(with_cmap.sqrt_scaled - without.sqrt_scaled) < TOLERANCE
 
 
 def test_an_excluded_omega_torsion_moves_from_the_quadratic_group_to_the_unscaled_one():
@@ -256,9 +257,9 @@ def test_an_excluded_omega_torsion_moves_from_the_quadratic_group_to_the_unscale
     scaled = _Probe(_mixed_system(), SOLUTE).components()
     excluded = _Probe(_mixed_system(), SOLUTE, excluded_bonds=((1, 2),)).components()
 
-    moved = scaled.quadratic - excluded.quadratic
+    moved = scaled.lin_scaled - excluded.lin_scaled
     assert moved > 1e-3, "excluding the omega bond did not remove the torsion from the quadratic"
-    assert abs((excluded.unscaled - scaled.unscaled) - moved) < TOLERANCE, (
+    assert abs((excluded.non_scaled - scaled.non_scaled) - moved) < TOLERANCE, (
         "the excluded torsion's energy did not reappear in the unscaled group")
     assert abs(excluded.total_at(0.0) - scaled.total_at(0.0)) < TOLERANCE, (
         "the physical (tau = 0) Hamiltonian must be the same either way")
@@ -279,8 +280,8 @@ def test_the_component_works_sum_to_the_directly_measured_work():
 def test_the_unscaled_component_work_is_zero_and_is_written_as_such():
     probe = _Probe(_mixed_system(), SOLUTE)
     work = probe.components().work_between(0.5, 0.1)
-    assert work.unscaled == 0.0
-    assert abs(work.linear) > 1e-6 and abs(work.quadratic) > 1e-6, (
+    assert work.non_scaled == 0.0
+    assert abs(work.sqrt_scaled) > 1e-6 and abs(work.lin_scaled) > 1e-6, (
         "a switch that moved nothing cannot demonstrate that the unscaled part stayed put")
 
 
@@ -290,7 +291,7 @@ def test_reverse_switching_negates_every_component():
     components = probe.components()
     forward = components.work_between(0.5, 0.0)
     reverse = components.work_between(0.0, 0.5)
-    for name in ("unscaled", "linear", "quadratic"):
+    for name in ("non_scaled", "sqrt_scaled", "lin_scaled"):
         assert abs(getattr(forward, name) + getattr(reverse, name)) < TOLERANCE, name
 
 
@@ -303,7 +304,7 @@ def test_frozen_coordinate_work_telescopes_to_the_endpoint_difference():
     probe = _Probe(_mixed_system(), SOLUTE)
     components = probe.components()
     taus = [0.5 - 0.05 * i for i in range(11)]            # 0.5 -> 0.0 in ten steps
-    accumulated = {"unscaled": 0.0, "linear": 0.0, "quadratic": 0.0}
+    accumulated = {"non_scaled": 0.0, "sqrt_scaled": 0.0, "lin_scaled": 0.0}
     for before, after in zip(taus, taus[1:]):
         step = components.work_between(before, after)
         for name in accumulated:
@@ -354,8 +355,13 @@ def test_the_probe_counts_its_evaluations_and_its_cost():
     probe = _Probe(_mixed_system(), SOLUTE)
     probe.components()
     probe.components()
-    assert probe.probe.evaluations == 2 * len(BASIS_PROBE_AMPLITUDES) == 6
-    assert probe.probe.seconds > 0.0
+    counters = probe.probe.counters
+    assert counters.basis_probe_energy_evaluations == 2 * len(BASIS_PROBE_AMPLITUDES) == 6
+    # Four pushes per probe: three amplitudes plus the restore. Counted separately from the
+    # energy evaluations, because on a solvated system the pushes are the expensive half.
+    assert counters.parameter_updates == 2 * (len(BASIS_PROBE_AMPLITUDES) + 1) == 8
+    assert counters.probe_seconds > 0.0
+    assert counters.total_potential_energy_evaluations == 6
 
 
 def test_three_repeated_nodes_are_refused_rather_than_producing_a_number():
@@ -378,7 +384,7 @@ def test_a_record_written_before_the_basis_existed_is_refused_by_name():
 
 
 def test_a_record_from_another_basis_version_is_refused():
-    with pytest.raises(DecompositionError, match="not summable"):
+    with pytest.raises(DecompositionError, match="not one this build implements"):
         require_compatible_schema(
             {"decomposition_schema": {"name": DECOMPOSITION_SCHEMA["name"], "version": 99}})
 
@@ -389,7 +395,7 @@ def test_the_current_schema_is_accepted():
 
 
 def test_components_carry_the_contributions_and_the_basis_separately():
-    components = Components(unscaled=1.0, linear=10.0, quadratic=100.0)
+    components = Components(non_scaled=1.0, sqrt_scaled=10.0, lin_scaled=100.0)
     linear, quadratic = components.contributions_at(0.25)
     assert linear == pytest.approx(0.75 * 10.0)
     assert quadratic == pytest.approx(0.75 * 0.75 * 100.0)

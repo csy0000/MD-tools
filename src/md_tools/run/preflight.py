@@ -927,6 +927,7 @@ def _ais_inventory(*, output, log, paths: int) -> OutputInventory:
     roles["run_identity"] = directory / "AIS_run.json"
     roles["work_table"] = directory / "AIS_work.csv"
     roles["work_summary"] = directory / "AIS_paths.csv"
+    roles["hs_table"] = directory / "AIS_hs.csv"
     roles["selected_frames"] = directory / "selected_source_frames.csv"
     for index in range(int(paths)):
         roles[f"path_{index:04d}"] = directory / f"path_{index:04d}"
@@ -938,7 +939,7 @@ def _ais_inventory(*, output, log, paths: int) -> OutputInventory:
         roles=roles,
         resumable=frozenset({role for role in roles
                              if role.startswith(("path_", "trajectory_"))}
-                            | {"run_identity", "work_table", "work_summary",
+                            | {"run_identity", "work_table", "work_summary", "hs_table",
                                "selected_frames"}))
 
 

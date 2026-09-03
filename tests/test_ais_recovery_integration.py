@@ -470,8 +470,8 @@ def test_a_checkpoint_from_a_different_run_is_refused(harness, tmp_path):
 # the resulting file still satisfies `dW_u + dW_l + dW_q == dW_total` on every INDIVIDUAL row
 # while the cumulative columns are short by everything before the crash.
 
-COMPONENT_TOTALS = ("total_work_unscaled_kj_mol", "total_work_linear_kj_mol",
-                    "total_work_quadratic_kj_mol")
+COMPONENT_TOTALS = ("total_work_non_scaled_kj_mol", "total_work_sqrt_scaled_kj_mol",
+                    "total_work_lin_scaled_kj_mol")
 
 
 def _final_row(out: Path):
@@ -484,8 +484,8 @@ def test_the_components_sum_to_the_total_on_every_row_of_an_uninterrupted_path(h
     call()
     for row in _counts(out)["observations"]:
         parts = sum(float(row[name]) for name in
-                    ("delta_work_unscaled_kj_mol", "delta_work_linear_kj_mol",
-                     "delta_work_quadratic_kj_mol"))
+                    ("delta_work_non_scaled_kj_mol", "delta_work_sqrt_scaled_kj_mol",
+                     "delta_work_lin_scaled_kj_mol"))
         assert abs(parts - float(row["incremental_work_kj_mol"])) < 1e-6, row["protocol_step"]
         cumulative = sum(float(row[name]) for name in COMPONENT_TOTALS)
         assert abs(cumulative - float(row["cumulative_work_kj_mol"])) < 1e-6, row["protocol_step"]
@@ -496,24 +496,39 @@ def test_the_unscaled_component_work_is_zero_on_every_row(harness):
     call, out, schedule = harness
     call()
     for row in _counts(out)["observations"]:
-        assert float(row["delta_work_unscaled_kj_mol"]) == 0.0, row["protocol_step"]
-        assert float(row["total_work_unscaled_kj_mol"]) == 0.0, row["protocol_step"]
+        assert float(row["delta_work_non_scaled_kj_mol"]) == 0.0, row["protocol_step"]
+        assert float(row["total_work_non_scaled_kj_mol"]) == 0.0, row["protocol_step"]
 
 
-def test_the_reconstructed_potential_is_written_and_agrees_with_its_own_components(harness):
+def test_the_observation_potentials_reconstruct_and_match_a_direct_measurement(harness):
+    """Both identities, on every row that has a saved coordinate.
+
+    `potential_reconstructed_kj_mol` from the three groups, and `potential_direct_kj_mol` from a
+    separate `getState(getEnergy=True)` at the same coordinate and tau. Two independent numbers in
+    the file, so a reader checks the identity themselves instead of trusting that somebody did.
+    """
     call, out, schedule = harness
     call()
+    checked = 0
     for row in _counts(out)["observations"]:
+        if row["coordinate_frame_index"] == "":
+            # No saved coordinate: the potential cells are empty by schema, never a neighbour's.
+            for name in ("potential_non_scaled_kj_mol", "potential_sqrt_scaled_kj_mol",
+                         "potential_lin_scaled_kj_mol", "potential_reconstructed_kj_mol",
+                         "potential_direct_kj_mol"):
+                assert row[name] == "", (name, row["protocol_step"])
+            continue
         tau = float(row["tau"])
         amplitude = 1.0 - tau
-        expected = (float(row["potential_unscaled_kj_mol"])
-                    + amplitude * float(row["potential_linear_basis_kj_mol"])
-                    + amplitude * amplitude * float(row["potential_quadratic_basis_kj_mol"]))
-        assert abs(expected - float(row["potential_total_reconstructed_kj_mol"])) < 1e-6
-        assert abs(amplitude * float(row["potential_linear_basis_kj_mol"])
-                   - float(row["potential_linear_contribution_kj_mol"])) < 1e-9
-        assert abs(amplitude ** 2 * float(row["potential_quadratic_basis_kj_mol"])
-                   - float(row["potential_quadratic_contribution_kj_mol"])) < 1e-9
+        reconstructed = (float(row["potential_non_scaled_kj_mol"])
+                         + amplitude * float(row["potential_sqrt_scaled_kj_mol"])
+                         + amplitude * amplitude * float(row["potential_lin_scaled_kj_mol"]))
+        assert abs(reconstructed - float(row["potential_reconstructed_kj_mol"])) < 1e-6
+        assert abs(reconstructed - float(row["potential_direct_kj_mol"])) < 1e-6, (
+            f"step {row['protocol_step']}: reconstructed {reconstructed} against direct "
+            f"{row['potential_direct_kj_mol']}")
+        checked += 1
+    assert checked >= 2, "no frame-aligned row was checked"
 
 
 def test_the_components_are_non_trivial_so_these_checks_can_fail(harness):
@@ -521,9 +536,9 @@ def test_the_components_are_non_trivial_so_these_checks_can_fail(harness):
     call, out, schedule = harness
     call()
     row = _final_row(out)
-    assert abs(float(row["total_work_linear_kj_mol"])) > 1e-9
-    assert abs(float(row["total_work_quadratic_kj_mol"])) > 1e-9
-    assert abs(float(row["potential_quadratic_basis_kj_mol"])) > 1e-9
+    assert abs(float(row["total_work_sqrt_scaled_kj_mol"])) > 1e-9
+    assert abs(float(row["total_work_lin_scaled_kj_mol"])) > 1e-9
+    assert abs(float(row["potential_lin_scaled_kj_mol"])) > 1e-9
 
 
 @pytest.mark.parametrize("boundary", BOUNDARIES)
@@ -599,18 +614,38 @@ def test_a_checkpoint_from_another_basis_version_is_refused_on_resume(harness):
     document = json.loads(sidecar.read_text(encoding="utf-8"))
     document["state"]["decomposition_schema"]["version"] = 99
     sidecar.write_text(json.dumps(document), encoding="utf-8")
-    with pytest.raises(Exception, match="not summable"):
+    with pytest.raises(Exception, match="not one this build implements"):
         call(resume=True)
 
 
 def test_the_completion_record_carries_the_component_totals_and_the_evaluation_count(harness):
     call, out, schedule = harness
     record = call()
-    assert record["decomposition_schema"]["version"] == 1
-    assert record["potential_energy_evaluations_per_update"] == 3
-    # One probe per update, plus the one at observation 0, three evaluations each.
-    assert record["switching_energy_evaluations"] == 3 * (schedule["number_of_updates"] + 1)
-    assert record["switching_energy_evaluation_seconds"] > 0.0
+    assert record["decomposition_schema"]["version"] == 2
+    counters = record["evaluation_counters"]
+    # One WORK probe per update. The observation probes are per FRAME-ALIGNED OBSERVATION ROW,
+    # which is a third cadence again -- and getting that arithmetic right is the correction.
+    #
+    # This harness switches every 10 steps, observes every 20 and writes a frame every 50, over
+    # 200 steps. Frames land at 0, 50, 100, 150, 200; observations at every multiple of 20. Only
+    # 0, 100 and 200 are both, so three rows carry potentials and two frames (50, 150) exist in
+    # the trajectory with no observation row naming them. That is not a defect -- it is what
+    # independent cadences mean -- and it is why the count is neither the frame count nor the
+    # observation count.
+    aligned = [step for step in range(0, schedule["switching_steps"] + 1,
+                                      schedule["observation_interval_steps"])
+               if step % schedule["trajectory_interval_steps"] == 0]
+    assert len(aligned) == 3, aligned
+    assert counters["basis_probe_energy_evaluations"] == 3 * (
+        schedule["number_of_updates"] + len(aligned))
+    assert counters["direct_work_energy_evaluations"] == 2 * schedule["number_of_updates"]
+    assert counters["observation_energy_evaluations"] == len(aligned)
+    assert counters["total_potential_energy_evaluations"] == (
+        counters["basis_probe_energy_evaluations"]
+        + counters["direct_work_energy_evaluations"]
+        + counters["observation_energy_evaluations"])
+    assert counters["parameter_updates"] > counters["basis_probe_energy_evaluations"]
+    assert counters["probe_seconds"] > 0.0
     assert abs(sum(record[name] for name in COMPONENT_TOTALS)
                - record["total_work_kj_mol"]) < 1e-6
 
@@ -635,7 +670,7 @@ def test_an_observation_interval_wider_than_the_update_interval_sums_several_upd
     # observation is sum_j (a_{j+1} - a_j) * U_linear(x_j), which is NOT (a_end - a_start) * U_l
     # unless the coordinates were frozen -- so the check here is the cheaper, sharper one: the
     # cumulative columns must be the running sum of the incremental ones, per component.
-    running = {"unscaled": 0.0, "linear": 0.0, "quadratic": 0.0}
+    running = {"non_scaled": 0.0, "sqrt_scaled": 0.0, "lin_scaled": 0.0}
     for row in rows[1:]:
         for name in running:
             running[name] += float(row[f"delta_work_{name}_kj_mol"])

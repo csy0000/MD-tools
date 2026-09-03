@@ -1,29 +1,38 @@
-"""The REST2 potential split into its three tau-basis components, for Hummer-Szabo reweighting.
+"""The REST2 potential split into its three lambda-basis groups, for Hummer-Szabo reweighting.
 
 WHY A DECOMPOSITION AT ALL
 
 A switching path records one number per update: the total work. Reweighting a nonequilibrium
 ensemble back onto a *different* Hamiltonian -- a different tau schedule, a different endpoint, or
-a Jarzynski/Hummer-Szabo estimator evaluated at a tau the path never visited -- needs the potential
-as a FUNCTION of tau, not its value at the one tau that was run. A single total is not enough
+a Hummer-Szabo estimator evaluated at a tau the path never visited -- needs the potential as a
+FUNCTION of tau, not its value at the one tau that was run. A single total is not enough
 information to produce that function, and re-running the path at another tau is not reweighting.
 
 THE EXACT BASIS
 
-Write the coupling amplitude as
+Write the coupling amplitude and the REST2 scaling parameter as
 
-    a = 1 - tau
+    a      = 1 - tau
+    lambda = a^2
 
-Every scale factor in this convention (`md_tools.rest2.scaler`) is a power of `a`:
+Every scale factor in this convention (`md_tools.rest2.scaler`) is a power of `a`, and the group
+names below say which power of LAMBDA that is -- because "linear" and "quadratic" are ambiguous
+until you say linear in WHAT:
 
-    unscaled terms          a^0    bonds, angles, excluded omega torsions, environment-environment
-    solute-environment      a^1    solute-environment nonbonded, the whole generalised-Born energy
-    solute-solute           a^2    solute-solute nonbonded and 1-4, eligible solute torsions,
-                                   solute CMAP
+    non_scaled     lambda^0 = a^0     bonds, angles, excluded omega torsions,
+                                      environment-environment nonbonded
+    sqrt_scaled    sqrt(lambda) = a   solute-environment nonbonded, the whole generalised-Born
+                                      energy
+    lin_scaled     lambda = a^2       solute-solute nonbonded and 1-4, eligible solute torsions,
+                                      solute CMAP
 
 so at FROZEN COORDINATES the potential is exactly a quadratic polynomial in `a`:
 
-    U(tau, x) = U_unscaled(x) + a U_linear(x) + a^2 U_quadratic(x)
+    U(tau, x) = U_non_scaled(x)
+              + sqrt(lambda) * U_sqrt_scaled(x)
+              + lambda       * U_lin_scaled(x)
+
+              = U_non_scaled(x) + a * U_sqrt_scaled(x) + a^2 * U_lin_scaled(x)
 
 This is an identity, not an approximation, and it holds for the whole `NonbondedForce` including
 the PME reciprocal sum, the Ewald self-energy and the long-range dispersion correction. Each of
@@ -32,47 +41,66 @@ multiplies solute charges by `a` and solute epsilons by `a^2`; a pair term there
 `a^(number of solute partners)`, which is exactly the three-way split above. Nothing needs to be
 decomposed per-pair, and the validated force construction is not touched.
 
-HOW IT IS MEASURED
+TWO PROBES, AT TWO DIFFERENT COORDINATES
+
+This is the distinction the first implementation got wrong, and it is the whole reason this module
+has the shape it has.
+
+A switching update does two things in sequence: it moves the PARAMETERS at frozen coordinates
+`x_j`, and then it propagates the CONFIGURATION to `x_{j+1}`. Those are different coordinates, and
+they answer different questions:
+
+    WORK-BASIS PROBE          at the frozen pre-switch `x_j`, for the switch tau_j -> tau_{j+1}.
+                              Decomposes the incremental and accumulated WORK. That is the right
+                              coordinate for work precisely because the convention is
+                              `dW_j = U(tau_{j+1}, x_j) - U(tau_j, x_j)`, at frozen `x_j`.
+
+    OBSERVATION-POTENTIAL     at the coordinate actually SAVED on the row, `x_t`, under the tau
+    PROBE                     reported on that row. Supplies the energy basis a Hummer-Szabo
+                              reweighting uses together with `W_t`.
+
+The first implementation wrote a trajectory frame for `x_{j+1}` and put the work-basis values --
+measured at `x_j`, one propagation earlier -- on that same row, under names that read like
+potentials at that frame. Anyone reweighting from that file would have been pairing the work of
+one configuration with the energy of another. Nothing raises; every number is plausible.
+
+So: a row that names a `coordinate_frame_index` carries observation potentials recomputed AT THAT
+FRAME. A row with no saved coordinate -- when the trajectory cadence is not the observation
+cadence -- leaves those fields EMPTY rather than borrowing a neighbour's, and is excluded from the
+frame-aligned HS table entirely.
+
+HOW EACH PROBE IS MEASURED
 
 Three potential-energy evaluations at three controlled amplitudes, at frozen coordinates, then one
 quadratic fit. Three points determine a quadratic exactly, so the fit introduces no model error:
 the only error is the floating-point error of the three evaluations themselves.
 
-The amplitudes are `0`, `1/2` and `1`, chosen to be as far apart as the domain allows -- the fit
-divides by their differences, so widely separated nodes are the difference between a stable
-measurement and one dominated by cancellation. `a = 0` is worth having on its own: it switches
-every scaled term off, so it reads `U_unscaled` directly rather than inferring it.
-
-This costs three extra energy evaluations per switching update and no extra integration steps.
-The count and its measured wall-clock cost are recorded in provenance
-(`potential_energy_evaluations_per_update`, `switching_energy_evaluations`) rather than left for a
-reader to guess.
+The amplitudes are `0`, `1/2` and `1`, as far apart as the domain allows -- the fit divides by
+their differences, so widely separated nodes are the difference between a stable measurement and
+one dominated by cancellation. `a = 0` is worth having on its own: it switches every scaled term
+off, so it reads `U_non_scaled` directly rather than inferring it.
 
 WHAT IS CHECKED RATHER THAN ASSUMED
 
 The total work stays what it always was: `U(tau_{j+1}, x_j) - U(tau_j, x_j)`, measured directly
 from two evaluations of the real Hamiltonian. The component works are derived independently, from
-the fit. The two are then required to agree:
+the work-basis fit. The two are then required to agree.
 
-    delta_W_total = delta_W_unscaled + delta_W_linear + delta_W_quadratic
-
-Deriving the total FROM the components would make that identity true by construction and it would
-test nothing. Measured separately, it is a genuine check on the whole chain -- and it fails if any
-force ever acquires a tau dependence the three-group model does not describe.
-
-`delta_W_unscaled` is identically zero: the unscaled component does not depend on tau, and a
-parameter update happens at frozen coordinates. The column is kept anyway, because "this number is
-zero" is a fact a reader should be able to confirm from the file rather than take on trust, and
-because a nonzero value there is the signature of exactly the defect above.
+The observation potentials are checked the same way and separately: the reconstruction
+`U_non + a U_sqrt + a^2 U_lin` is compared against a DIRECT `getState(getEnergy=True)` at the same
+coordinate and tau. Both numbers are written -- `potential_reconstructed_kj_mol` and
+`potential_direct_kj_mol` -- so a reader can check the identity in the file rather than trust that
+somebody checked it once.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
-__all__ = ["BASIS_PROBE_AMPLITUDES", "POTENTIAL_ENERGY_EVALUATIONS_PER_UPDATE",
-           "DECOMPOSITION_SCHEMA", "COMPONENT_OBSERVATION_COLUMNS", "COMPONENT_WORK_COLUMNS",
-           "COMPONENT_SUMMARY_COLUMNS", "Components", "ComponentWork", "ComponentProbe",
+__all__ = ["BASIS_PROBE_AMPLITUDES", "POTENTIAL_ENERGY_EVALUATIONS_PER_PROBE",
+           "DECOMPOSITION_SCHEMA", "WORK_COMPONENT_COLUMNS", "OBSERVATION_POTENTIAL_COLUMNS",
+           "COMPONENT_SUMMARY_COLUMNS", "HS_COLUMNS", "GROUPS",
+           "Components", "ComponentWork", "ComponentProbe", "EvaluationCounters",
            "quadratic_through", "reconstruction_tolerance", "require_compatible_schema",
            "RECONSTRUCTION_TOLERANCES", "DecompositionError"]
 
@@ -81,53 +109,84 @@ __all__ = ["BASIS_PROBE_AMPLITUDES", "POTENTIAL_ENERGY_EVALUATIONS_PER_UPDATE",
 #: the fit divides by their pairwise differences.
 BASIS_PROBE_AMPLITUDES = (0.0, 0.5, 1.0)
 
-#: Extra potential-energy evaluations per switching update, beyond the two the total work already
-#: needs. Recorded in provenance because it is a real cost, not an implementation detail.
-POTENTIAL_ENERGY_EVALUATIONS_PER_UPDATE = 3
+#: Energy evaluations one basis probe costs. Named for what it is: a probe is three evaluations,
+#: and a run performs one probe per switching update and another per frame-aligned observation.
+POTENTIAL_ENERGY_EVALUATIONS_PER_PROBE = 3
+
+#: The three groups, by the power of LAMBDA they carry. One vocabulary for the work columns and
+#: the observation-potential columns alike, so a reader learns it once.
+GROUPS = ("non_scaled", "sqrt_scaled", "lin_scaled")
 
 #: The schema of the component columns. Written into every record that carries them, and checked
-#: on resume: accumulating components measured under one basis definition onto totals measured
-#: under another would produce a work integral for a Hamiltonian nothing ever ran.
+#: on resume.
+#:
+#: VERSION 2, and version 1 is refused rather than continued. v1 wrote the pre-switch work basis
+#: under names that read as potentials at the row's saved frame. That is not a renaming: the
+#: numbers describe a different coordinate, so v1 rows and v2 rows cannot be mixed in one table
+#: and a v1 checkpoint cannot be resumed into a v2 run.
 DECOMPOSITION_SCHEMA = {
-    "name": "rest2-tau-quadratic-basis",
-    "version": 1,
+    "name": "rest2-lambda-basis",
+    "version": 2,
     "state_coordinate": "tau",
     "amplitude": "a = 1 - tau",
-    "identity": "U(tau, x) = U_unscaled(x) + a*U_linear(x) + a^2*U_quadratic(x)",
-    "work_identity": "dW_total = dW_unscaled + dW_linear + dW_quadratic",
-    "unscaled_terms": ["bonds", "angles", "excluded omega torsions",
-                       "environment-environment nonbonded"],
-    "linear_terms": ["solute-environment nonbonded", "generalized Born"],
-    "quadratic_terms": ["solute-solute nonbonded", "solute-solute 1-4",
-                        "eligible solute torsions", "solute CMAP"],
+    "lambda": "lambda = a^2",
+    "identity": ("U(tau, x) = U_non_scaled(x) + sqrt(lambda)*U_sqrt_scaled(x) "
+                 "+ lambda*U_lin_scaled(x)"),
+    "work_identity": "dW_total = dW_non_scaled + dW_sqrt_scaled + dW_lin_scaled",
+    "non_scaled_terms": ["bonds", "angles", "excluded omega torsions",
+                         "environment-environment nonbonded"],
+    "sqrt_scaled_terms": ["solute-environment nonbonded", "generalized Born"],
+    "lin_scaled_terms": ["solute-solute nonbonded", "solute-solute 1-4",
+                         "eligible solute torsions", "solute CMAP"],
     "probe_amplitudes": list(BASIS_PROBE_AMPLITUDES),
-    "potential_energy_evaluations_per_update": POTENTIAL_ENERGY_EVALUATIONS_PER_UPDATE,
+    "potential_energy_evaluations_per_probe": POTENTIAL_ENERGY_EVALUATIONS_PER_PROBE,
+    "work_basis_coordinate": "x_j, frozen, before the parameter switch",
+    "observation_potential_coordinate": "x_t, the coordinate saved on this row",
+    "delta_work_meaning": ("the sum of every switch since the previous emitted work observation; "
+                           "equal to one switch when the work and switching cadences agree"),
     "units": "kJ/mol",
 }
 
-#: Added to every per-path observation row. Appended after the existing columns, never inserted
-#: among them: a reader keyed on position must keep reading the same numbers it always did.
-COMPONENT_OBSERVATION_COLUMNS = (
-    "potential_unscaled_kj_mol",
-    "potential_linear_basis_kj_mol",
-    "potential_quadratic_basis_kj_mol",
-    "potential_linear_contribution_kj_mol",
-    "potential_quadratic_contribution_kj_mol",
-    "potential_total_reconstructed_kj_mol",
-    "delta_work_unscaled_kj_mol",
-    "delta_work_linear_kj_mol",
-    "delta_work_quadratic_kj_mol",
-    "total_work_unscaled_kj_mol",
-    "total_work_linear_kj_mol",
-    "total_work_quadratic_kj_mol",
+#: Superseded schemas, refused by name with the reason. A record written under one of these is
+#: left exactly as it is; nothing here rewrites history.
+HISTORICAL_SCHEMAS = {
+    ("rest2-tau-quadratic-basis", 1): (
+        "v1 wrote the pre-switch WORK basis -- measured at x_j -- into columns named as if they "
+        "were potentials at the row's saved coordinate x_t, one propagation later. Reweighting "
+        "from those rows pairs the work of one configuration with the energy of another. The "
+        "numbers are not convertible, so a v1 path cannot be continued into a v2 run."),
+}
+
+#: The incremental and cumulative WORK components, measured at the frozen pre-switch coordinate
+#: where the work convention defines them.
+WORK_COMPONENT_COLUMNS = tuple(
+    [f"delta_work_{group}_kj_mol" for group in GROUPS]
+    + [f"total_work_{group}_kj_mol" for group in GROUPS])
+
+#: The OBSERVATION potentials, at the coordinate this row names. Empty when the row saved no
+#: coordinate -- see the module docstring; they are never borrowed from a neighbouring frame.
+OBSERVATION_POTENTIAL_COLUMNS = (
+    "potential_non_scaled_kj_mol",
+    "potential_sqrt_scaled_kj_mol",
+    "potential_lin_scaled_kj_mol",
+    "potential_reconstructed_kj_mol",
+    "potential_direct_kj_mol",
 )
 
-#: The same twelve on the global work table, which is assembled from those rows.
-COMPONENT_WORK_COLUMNS = COMPONENT_OBSERVATION_COLUMNS
-
 #: Final per-path totals, on `AIS_paths.csv`.
-COMPONENT_SUMMARY_COLUMNS = ("total_work_unscaled_kj_mol", "total_work_linear_kj_mol",
-                             "total_work_quadratic_kj_mol", "decomposition_schema_version")
+COMPONENT_SUMMARY_COLUMNS = tuple(
+    [f"total_work_{group}_kj_mol" for group in GROUPS] + ["decomposition_schema_version"])
+
+#: The frame-aligned table a Hummer-Szabo reweighting reads. ONLY rows whose coordinate was
+#: actually saved appear in it, so every row's potentials and work belong to the same
+#: configuration and no reader has to filter first -- or forget to.
+HS_COLUMNS = (
+    "path_id", "source_frame", "observation_index", "switch_step",
+    "coordinate_frame_index", "tau", "total_work_kj_mol",
+    "potential_non_scaled_kj_mol", "potential_sqrt_scaled_kj_mol",
+    "potential_lin_scaled_kj_mol", "potential_reconstructed_kj_mol",
+    "potential_direct_kj_mol",
+)
 
 
 class DecompositionError(ValueError):
@@ -144,9 +203,9 @@ def require_compatible_schema(recorded: Any, *, what: str = "this run") -> None:
     if not isinstance(recorded, dict) or "decomposition_schema" not in recorded:
         raise DecompositionError(
             f"{what} carries no component-decomposition schema, so it was written before the "
-            f"tau-basis columns existed. Its cumulative component work is unknown and cannot be "
-            f"continued -- resuming would add components measured now onto a total measured under "
-            f"no decomposition at all.\n"
+            f"lambda-basis columns existed. Its cumulative component work is unknown and cannot "
+            f"be continued -- resuming would add components measured now onto a total measured "
+            f"under no decomposition at all.\n"
             f"  Delete the path directory to rerun it from its source frame, or read the old run "
             f"as it stands; this build writes "
             f"{DECOMPOSITION_SCHEMA['name']}/v{DECOMPOSITION_SCHEMA['version']}.")
@@ -155,10 +214,11 @@ def require_compatible_schema(recorded: Any, *, what: str = "this run") -> None:
     version = schema.get("version") if isinstance(schema, dict) else None
     if (name, version) == (DECOMPOSITION_SCHEMA["name"], DECOMPOSITION_SCHEMA["version"]):
         return
+    reason = HISTORICAL_SCHEMAS.get((name, version))
     raise DecompositionError(
         f"{what} records the decomposition schema {name}/v{version}, but this build implements "
-        f"{DECOMPOSITION_SCHEMA['name']}/v{DECOMPOSITION_SCHEMA['version']}. The component "
-        f"definitions differ, so the two sets of numbers are not summable.\n"
+        f"{DECOMPOSITION_SCHEMA['name']}/v{DECOMPOSITION_SCHEMA['version']}.\n"
+        f"  {reason or 'That basis is not one this build implements.'}\n"
         f"  The recorded run is left exactly as it is. Start a new dataset rather than continuing "
         f"one written under a different basis.")
 
@@ -177,16 +237,16 @@ def quadratic_through(nodes, values):
         raise DecompositionError(
             f"the three probe amplitudes must be distinct; got {(a0, a1, a2)}. Repeated nodes "
             f"leave the quadratic undetermined rather than merely ill-conditioned.")
-    nodes = (a0, a1, a2)
+    nodes_tuple = (a0, a1, a2)
     others = ((a1, a2), (a0, a2), (a0, a1))
     c0 = c1 = c2 = 0.0
     for position in range(3):
-        own = nodes[position]
+        own = nodes_tuple[position]
         other, third = others[position]
         value = float(values[position])
         denominator = (own - other) * (own - third)
-        # (a - other)(a - third) / denominator, expanded: the Lagrange basis polynomial for
-        # this node, weighted by its value.
+        # (a - other)(a - third) / denominator, expanded: the Lagrange basis polynomial for this
+        # node, weighted by its value.
         c2 += value / denominator
         c1 += -value * (other + third) / denominator
         c0 += value * other * third / denominator
@@ -195,90 +255,99 @@ def quadratic_through(nodes, values):
 
 @dataclass(frozen=True)
 class Components:
-    """`U_unscaled`, `U_linear` and `U_quadratic` at one configuration, in kJ/mol.
+    """The three basis values at ONE configuration, in kJ/mol.
 
-    Coordinate-dependent and tau-independent: this IS the potential as a function of tau, which is
-    the whole point of measuring it.
+    Coordinate-dependent and tau-independent: this IS the potential as a function of tau at that
+    configuration, which is the whole point of measuring it. WHICH configuration is the caller's
+    business, and it is exactly what the two probes differ in.
     """
 
-    unscaled: float
-    linear: float
-    quadratic: float
+    non_scaled: float
+    sqrt_scaled: float
+    lin_scaled: float
 
     @staticmethod
     def from_probe(amplitudes, energies) -> "Components":
         c0, c1, c2 = quadratic_through(amplitudes, energies)
-        return Components(unscaled=c0, linear=c1, quadratic=c2)
+        return Components(non_scaled=c0, sqrt_scaled=c1, lin_scaled=c2)
 
     def contributions_at(self, tau: float) -> tuple[float, float]:
-        """The two scaled contributions AS THEY ENTER the potential at this tau.
-
-        Distinct from the basis values: the basis is what multiplies the amplitude, the
-        contribution is the product. A reader comparing energies wants the second; a reader
-        reweighting to another tau wants the first. Both are written, because deriving one from
-        the other requires knowing which convention produced the column.
-        """
+        """`sqrt(lambda)*U_sqrt_scaled` and `lambda*U_lin_scaled`, with `lambda = (1-tau)^2`."""
         amplitude = 1.0 - float(tau)
-        return amplitude * self.linear, amplitude * amplitude * self.quadratic
+        return amplitude * self.sqrt_scaled, amplitude * amplitude * self.lin_scaled
 
     def total_at(self, tau: float) -> float:
-        """`U(tau)` reconstructed from the components. Compared against the measured total."""
-        linear, quadratic = self.contributions_at(tau)
-        return self.unscaled + linear + quadratic
+        """`U(tau)` reconstructed from the components. Compared against a direct measurement."""
+        sqrt_part, lin_part = self.contributions_at(tau)
+        return self.non_scaled + sqrt_part + lin_part
 
     def work_between(self, tau_before: float, tau_after: float) -> "ComponentWork":
         """The three incremental works for a parameter change at these frozen coordinates.
 
-        `unscaled` is exactly `0.0`, and it is written as the literal it is. The unscaled
-        component carries `a^0`, the coordinates did not move, so there is no arithmetic here that
-        could produce anything else -- and computing it as `self.unscaled - self.unscaled` to make
-        the column look measured would be dressing up a tautology as evidence.
+        `non_scaled` is exactly `0.0`, and it is written as the literal it is. That group carries
+        `lambda^0`, the coordinates did not move, so no arithmetic here could produce anything
+        else -- and computing it as `self.non_scaled - self.non_scaled` to make the column look
+        measured would be dressing up a tautology as evidence.
 
-        What actually has content is the SUM identity, checked by the caller against a total work
-        measured independently from two evaluations of the real Hamiltonian:
-
-            delta_W_total  ==  0 + delta_W_linear + delta_W_quadratic
-
-        A force that secretly depended on tau -- the defect this column exists to expose -- would
-        move the measured total away from the component sum and fail that check. The column is
-        kept so the zero is visible in the file rather than implied by its absence.
+        What has content is the SUM identity, which the caller checks against a total work
+        measured independently from two evaluations of the real Hamiltonian.
         """
-        before_linear, before_quadratic = self.contributions_at(tau_before)
-        after_linear, after_quadratic = self.contributions_at(tau_after)
-        return ComponentWork(unscaled=0.0,
-                             linear=after_linear - before_linear,
-                             quadratic=after_quadratic - before_quadratic)
+        before_sqrt, before_lin = self.contributions_at(tau_before)
+        after_sqrt, after_lin = self.contributions_at(tau_after)
+        return ComponentWork(non_scaled=0.0,
+                             sqrt_scaled=after_sqrt - before_sqrt,
+                             lin_scaled=after_lin - before_lin)
+
+    def row(self, tau: float, direct: float) -> dict[str, float]:
+        """The five observation-potential columns for a row at this tau and this coordinate."""
+        return {
+            "potential_non_scaled_kj_mol": self.non_scaled,
+            "potential_sqrt_scaled_kj_mol": self.sqrt_scaled,
+            "potential_lin_scaled_kj_mol": self.lin_scaled,
+            "potential_reconstructed_kj_mol": self.total_at(tau),
+            "potential_direct_kj_mol": direct,
+        }
 
     def record(self) -> dict[str, float]:
-        return {"unscaled_kj_mol": self.unscaled, "linear_basis_kj_mol": self.linear,
-                "quadratic_basis_kj_mol": self.quadratic}
+        return {f"{group}_kj_mol": getattr(self, group) for group in GROUPS}
 
 
 @dataclass(frozen=True)
 class ComponentWork:
     """Three works that must sum to the independently measured total."""
 
-    unscaled: float
-    linear: float
-    quadratic: float
+    non_scaled: float
+    sqrt_scaled: float
+    lin_scaled: float
 
     @property
     def total(self) -> float:
-        return self.unscaled + self.linear + self.quadratic
+        return self.non_scaled + self.sqrt_scaled + self.lin_scaled
 
     def __add__(self, other: "ComponentWork") -> "ComponentWork":
-        return ComponentWork(self.unscaled + other.unscaled, self.linear + other.linear,
-                             self.quadratic + other.quadratic)
+        return ComponentWork(self.non_scaled + other.non_scaled,
+                             self.sqrt_scaled + other.sqrt_scaled,
+                             self.lin_scaled + other.lin_scaled)
 
     @staticmethod
     def zero() -> "ComponentWork":
         return ComponentWork(0.0, 0.0, 0.0)
 
+    def row(self, prefix: str) -> dict[str, float]:
+        return {f"{prefix}_{group}_kj_mol": getattr(self, group) for group in GROUPS}
+
+    def mapping(self) -> dict[str, float]:
+        return {group: getattr(self, group) for group in GROUPS}
+
+    @staticmethod
+    def from_mapping(mapping) -> "ComponentWork":
+        return ComponentWork(*(float(mapping[group]) for group in GROUPS))
+
 
 #: Documented numerical tolerance for both identities, as `(relative, absolute floor)` in kJ/mol,
 #: by OpenMM precision mode. The reconstruction is a fixed linear combination of three energies
-#: measured on one Context, so its error is that of the energies themselves, amplified by the
-#: fit coefficients (whose magnitudes are 1, 3 and 4 for these nodes).
+#: measured on one Context, so its error is that of the energies themselves, amplified by the fit
+#: coefficients (whose magnitudes are 1, 3 and 4 for these nodes).
 #:
 #: `single` is deliberately loose. A solvated system's potential is order 1e5 kJ/mol and a
 #: single-precision nonbonded sum carries roughly 1e-6 relative error, so a tolerance tighter than
@@ -297,33 +366,98 @@ def reconstruction_tolerance(scale: float, *, precision: str = "mixed") -> float
     return max(abs(float(scale)) * relative, floor)
 
 
+@dataclass
+class EvaluationCounters:
+    """What the decomposition and the work actually cost, counted rather than estimated.
+
+    Four counters, because one could only mislead. The baseline reported a single
+    `switching_energy_evaluations` that counted basis probes and silently omitted the two direct
+    evaluations every switch already performed -- so the figure understated a path's true cost by
+    exactly the part that existed before the decomposition was added.
+
+    A "potential energy evaluation" here is one `Context.getState(getEnergy=True)` call. Parameter
+    pushes are counted SEPARATELY, because on a solvated system they dominate: a push walks every
+    particle and every exception of the NonbondedForce, and there are four per basis probe (three
+    amplitudes plus the restore) against three energy evaluations.
+    """
+
+    #: `getState(getEnergy=True)` inside basis probes, work and observation alike.
+    basis_probe_energy_evaluations: int = 0
+    #: The two direct evaluations each switch performs: U(tau_j, x_j) and U(tau_{j+1}, x_j).
+    direct_work_energy_evaluations: int = 0
+    #: The direct evaluation at each frame-aligned observation, which the reconstruction is
+    #: checked against.
+    observation_energy_evaluations: int = 0
+    #: `updateParametersInContext` / `setParameter` pushes: the expensive half.
+    parameter_updates: int = 0
+    #: Evaluations performed by generations that were interrupted and re-run. Counted, because
+    #: work that was discarded was still paid for, and a cost report that omits it flatters.
+    discarded_energy_evaluations: int = 0
+    #: Wall-clock seconds inside the probes.
+    probe_seconds: float = 0.0
+
+    @property
+    def total_potential_energy_evaluations(self) -> int:
+        return (self.basis_probe_energy_evaluations + self.direct_work_energy_evaluations
+                + self.observation_energy_evaluations)
+
+    def record(self) -> dict[str, Any]:
+        return {
+            "basis_probe_energy_evaluations": self.basis_probe_energy_evaluations,
+            "direct_work_energy_evaluations": self.direct_work_energy_evaluations,
+            "observation_energy_evaluations": self.observation_energy_evaluations,
+            "total_potential_energy_evaluations": self.total_potential_energy_evaluations,
+            "parameter_updates": self.parameter_updates,
+            "discarded_energy_evaluations": self.discarded_energy_evaluations,
+            "probe_seconds": round(self.probe_seconds, 6),
+            "counter_definitions": {
+                "energy_evaluation": "one Context.getState(getEnergy=True) call",
+                "parameter_update": ("one Force.updateParametersInContext or "
+                                     "Context.setParameter push"),
+                "discarded": ("evaluations performed before an interruption whose generation was "
+                              "not committed, and which a resume therefore repeats"),
+            },
+        }
+
+    def __add__(self, other: "EvaluationCounters") -> "EvaluationCounters":
+        return EvaluationCounters(
+            basis_probe_energy_evaluations=(self.basis_probe_energy_evaluations
+                                            + other.basis_probe_energy_evaluations),
+            direct_work_energy_evaluations=(self.direct_work_energy_evaluations
+                                            + other.direct_work_energy_evaluations),
+            observation_energy_evaluations=(self.observation_energy_evaluations
+                                            + other.observation_energy_evaluations),
+            parameter_updates=self.parameter_updates + other.parameter_updates,
+            discarded_energy_evaluations=(self.discarded_energy_evaluations
+                                          + other.discarded_energy_evaluations),
+            probe_seconds=self.probe_seconds + other.probe_seconds)
+
+
 class ComponentProbe:
-    """Measures the three basis components on a live Context.
+    """Measures the three basis components on a live Context, at whatever coordinate it holds.
 
     The probe drives the SAME switcher the path switches with, so a probe amplitude and a real tau
     reach the Context through one implementation. It always restores the amplitude it was told to
     restore, in a `finally`, because a probe that leaked its last amplitude would leave the path
     integrating under a Hamiltonian nobody chose -- and at `a = 1` or `a = 0` that failure is
     silent and enormous.
+
+    It does not know or care WHICH coordinate it is measuring at. The caller decides that, and the
+    caller is where the work/observation distinction lives.
     """
 
-    def __init__(self, switcher, system, *, amplitudes=BASIS_PROBE_AMPLITUDES):
+    def __init__(self, switcher, system, *, amplitudes=BASIS_PROBE_AMPLITUDES, counters=None):
         self.switcher = switcher
         self.system = system
         self.amplitudes = tuple(float(a) for a in amplitudes)
-        if len(self.amplitudes) != POTENTIAL_ENERGY_EVALUATIONS_PER_UPDATE:
+        if len(self.amplitudes) != POTENTIAL_ENERGY_EVALUATIONS_PER_PROBE:
             raise DecompositionError(
-                f"the basis needs exactly {POTENTIAL_ENERGY_EVALUATIONS_PER_UPDATE} probe "
+                f"the basis needs exactly {POTENTIAL_ENERGY_EVALUATIONS_PER_PROBE} probe "
                 f"amplitudes; got {len(self.amplitudes)}")
-        #: Every probe evaluation this object has performed. Reported in provenance.
-        self.evaluations = 0
-        #: Wall-clock seconds spent inside `measure`, including the parameter pushes and the
-        #: restore. The overhead is stated as a measurement rather than as an estimate, which is
-        #: the only form in which "this is acceptable" means anything.
-        self.seconds = 0.0
+        self.counters = counters if counters is not None else EvaluationCounters()
 
     def measure(self, context, *, restore_tau: float) -> Components:
-        """Three evaluations at frozen coordinates, then the exact quadratic through them."""
+        """Three evaluations at the CURRENT coordinates, then the exact quadratic through them."""
         import time
 
         from openmm import unit
@@ -333,11 +467,13 @@ class ComponentProbe:
         try:
             for amplitude in self.amplitudes:
                 self.switcher.set_amplitude(context, self.system, amplitude)
+                self.counters.parameter_updates += 1
                 energies.append(context.getState(getEnergy=True).getPotentialEnergy(
                     ).value_in_unit(unit.kilojoule_per_mole))
-                self.evaluations += 1
+                self.counters.basis_probe_energy_evaluations += 1
         finally:
             # Unconditional: an exception mid-probe must not leave the path at a probe amplitude.
             self.switcher.set_tau(context, self.system, restore_tau)
-            self.seconds += time.perf_counter() - started
+            self.counters.parameter_updates += 1
+            self.counters.probe_seconds += time.perf_counter() - started
         return Components.from_probe(self.amplitudes, energies)
