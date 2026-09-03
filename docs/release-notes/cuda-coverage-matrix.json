@@ -1,5 +1,5 @@
 {
-  "commit": "b4ba1461c695a5ebcf0040a57dc3de834f9e1dc9",
+  "commit": "c87a3ec90e6036e43ea8655a05961cf717d18d83",
   "devices": [
     {
       "driver": "580.173.02",
@@ -58,7 +58,7 @@
   ],
   "dirty": false,
   "driver": "580.173.02",
-  "generated_utc": "2026-09-03T12:03:04.526979+00:00",
+  "generated_utc": "2026-09-03T22:31:28.519196+00:00",
   "lanes": [
     {
       "detail": "minimisation, restrained NVT, production, DCD, restart, checkpoint",
@@ -101,7 +101,7 @@
       "result": "passed"
     },
     {
-      "detail": "6 rows checked, 6 frame-aligned; 64 energy evaluations (24 work-basis probe, 16 work, 24 observation), 64 parameter updates in 0.498 s",
+      "detail": "6 rows checked, 6 frame-aligned; 64 energy evaluations (24 work-basis probe, 16 work, 24 observation), 64 parameter updates in 0.647 s",
       "device": "-",
       "feature": "AIS implicit, three-group decomposition and work-sum identity",
       "lane": "test_ais_decomposition_lane",
@@ -189,7 +189,7 @@
       "result": "passed"
     },
     {
-      "detail": "6 rows, worst |sum - total| = 1.082e-04 kJ/mol; 44 energy evaluations, 44 parameter updates in 4.176 s",
+      "detail": "6 rows, worst |sum - total| = 2.332e-04 kJ/mol; 44 energy evaluations, 44 parameter updates in 2.328 s",
       "device": "-",
       "feature": "AIS explicit (PME), three-group identity through the reciprocal sum",
       "lane": "test_ais_on_explicit_solvent",
@@ -197,7 +197,7 @@
       "result": "passed"
     },
     {
-      "detail": "112 energy evaluations and 112 parameter updates in 0.831 s of probing (7.42 ms per evaluation)",
+      "detail": "112 energy evaluations and 112 parameter updates in 1.062 s of probing (9.48 ms per evaluation)",
       "device": "-",
       "feature": "decomposition overhead, AIS implicit, update interval 1 step",
       "lane": "test_the_decomposition_cost_is_measured_on_a_large_system",
@@ -205,7 +205,7 @@
       "result": "passed"
     },
     {
-      "detail": "112 energy evaluations and 112 parameter updates in 9.413 s of probing (84.05 ms per evaluation)",
+      "detail": "112 energy evaluations and 112 parameter updates in 5.431 s of probing (48.49 ms per evaluation)",
       "device": "-",
       "feature": "decomposition overhead, AIS explicit, update interval 1 step",
       "lane": "test_the_decomposition_cost_is_measured_on_a_large_system",
@@ -221,7 +221,7 @@
       "result": "passed"
     },
     {
-      "detail": "3 rows, max |recorded - recomputed| = 4.488e-01 kJ/mol; 162 energy evaluations (90 work-basis probe, 60 work, 12 observation), 162 parameter updates",
+      "detail": "3 rows, max |recorded - recomputed| = 4.511e-01 kJ/mol; 162 energy evaluations (90 work-basis probe, 60 work, 12 observation), 162 parameter updates",
       "device": "-",
       "feature": "AIS explicit, HS rows recomputed at their own saved frames",
       "lane": "test_hs_rows_match_recomputation_on_cuda",
@@ -251,25 +251,26 @@
     "by_operation": {
       "checkpoint": 6,
       "construct": 6,
-      "derive": 11,
-      "evaluate": 9,
+      "derive": 14,
+      "evaluate": 11,
       "integrate": 3,
       "minimize": 2,
       "parameters": 7,
       "report": 1
     },
-    "classified_as_not_reaching_a_device": 2,
+    "classified_as_not_reaching_a_device": 4,
     "documented_with_a_lane_but_not_flagged_by_the_matcher": [
       "openmm/platform_policy.py::resolve_platform_request",
       "remd/driver.py::ReplicaRun._build_platform"
     ],
-    "exercised_by_a_lane": 24,
+    "exercised_by_a_lane": 25,
     "lanes_for_site": {
       "ais/decomposition.py::ComponentProbe.measure": "test_ais_decomposition_lane, test_ais_on_explicit_solvent",
       "ais/run.py::_state_row": "test_ais_decomposition_lane (system_printout is set in every AIS lane)",
       "ais/run.py::run_one_path": "test_md_run_mpi_gpu.py, test_ais_decomposition_lane",
       "ais/run.py::run_one_path.direct_potential": "test_ais_decomposition_lane, test_hs_rows_match_recomputation_on_cuda",
       "ais/run.py::run_one_path.save_checkpoint": "test_md_run_mpi_gpu.py resume tests, test_hs_rows_match_recomputation_on_cuda",
+      "ais/run.py::run_one_path.write_cv": "test_ais_cv_output.py, and the AIS lanes in test_md_run_mpi_gpu.py",
       "ais/run.py::run_one_path.write_frame": "test_ais_reads_a_netcdf_source_on_cuda, test_ais_decomposition_lane",
       "md/_stages.py::set_restraint": "test_cmd_cuda_smoke.py, test_cuda_precision_lane (restrained NVT)",
       "md/_stages.py::write_final_state": "every cMD lane; asserted in test_explicit_solvent_npt_lane",
@@ -316,6 +317,10 @@
       "ais/run.py::run_one_path.save_checkpoint": [
         "checkpoint"
       ],
+      "ais/run.py::run_one_path.write_cv": [
+        "derive",
+        "evaluate"
+      ],
       "ais/run.py::run_one_path.write_frame": [
         "derive",
         "evaluate"
@@ -325,6 +330,12 @@
       ],
       "md/_stages.py::write_final_state": [
         "evaluate"
+      ],
+      "md/completion.py::verify_completed_stage": [
+        "derive"
+      ],
+      "md/cv_report.py::CVReporter.observe": [
+        "derive"
       ],
       "md/phase_space.py::PhaseSpaceReporter.report": [
         "derive"
@@ -336,6 +347,7 @@
         "checkpoint",
         "construct",
         "derive",
+        "evaluate",
         "integrate",
         "minimize",
         "parameters",
@@ -391,7 +403,7 @@
         "parameters"
       ]
     },
-    "total_performing_a_cuda_operation": 26,
+    "total_performing_a_cuda_operation": 29,
     "unclassified": 0
   }
 }
