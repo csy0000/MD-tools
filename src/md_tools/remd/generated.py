@@ -444,7 +444,10 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
 
     solute_yaml = out / "solute.yaml"
     protocol_file = out / "_protocol.py"
-    group_file = out / f"{protocol_name}.group"
+    # A group file the caller SUPPLIED is an input. Writing a default one beside it created a file
+    # nothing would ever read -- and left it behind for a later run to pick up as though this
+    # ladder had produced it.
+    group_file = Path(args.groupfile) if args.groupfile else out / f"{protocol_name}.group"
 
     # THE HELPERS. Rank 0 alone writes them, atomically; every rank then verifies it sees the
     # same bytes.
@@ -461,8 +464,27 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
 
     solute_text = _yaml_text(checked.notes["solute_document"])
     protocol_text = protocol_file_text(ladder)
-    group_text = _group_file_text(protocol_name, states, ladder, args, protocol_file, solute_yaml)
-    helpers = {solute_yaml: solute_text, protocol_file: protocol_text, group_file: group_text}
+    helpers = {solute_yaml: solute_text, protocol_file: protocol_text}
+    if not args.groupfile:
+        helpers[group_file] = _group_file_text(protocol_name, states, ladder, args,
+                                               protocol_file, solute_yaml)
+
+    if args.verify_only:
+        from ..remd import executor as replica_executor
+
+        # READ-ONLY. `--verify-only` inspects a run that already happened; it wrote solute.yaml,
+        # `_protocol.py` and a group file first, so verifying a finished ladder MODIFIED it --
+        # and a verification that changes what it verifies is not one. Everything it needs is
+        # either already in the directory or in the preflight result.
+        for destination in helpers:
+            if not destination.is_file():
+                print(f"{protocol_name}: --verify-only cannot run: {destination} does not exist, "
+                      f"so this directory does not hold a ladder to verify.", file=sys.stderr)
+                return 2
+        code = int(replica_executor.main([
+            "-x", str(args.trajectory or out / f"{protocol_name}.nc"),
+            "--groupfile", str(group_file), "--verify-only"]) or 0)
+        return code
 
     if rank == 0:
         for destination, text in helpers.items():
@@ -475,6 +497,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     for destination, text in helpers.items():
         if not destination.is_file():
             coordination.fail(f"{destination} was not written by rank 0")
+
         actual = file_facts(destination)["sha256"]
         stamped = f"{HELPER_FINGERPRINT}{hashlib.sha256(text.encode()).hexdigest()}\n{text}"
         expected = hashlib.sha256(stamped.encode("utf-8")).hexdigest()

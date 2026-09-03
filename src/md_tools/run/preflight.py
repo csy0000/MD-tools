@@ -53,7 +53,7 @@ __all__ = ["PreflightError", "ExecutionPreflight", "StagePreflight", "LadderPref
            "check_output_collisions", "check_input_files", "resolve_launch",
            "check_topology_matches_system", "LoadedInputs", "load_inputs", "PendingParent",
            "check_ensemble", "check_scaling_plan", "report_check", "collectively",
-           "OutputInventory", "check_existing_outputs"]
+           "OutputInventory", "check_existing_outputs", "reject_plural_launch"]
 
 
 class PreflightError(SystemExit):
@@ -658,6 +658,11 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
         inputs=inputs, cpu=cpu, device=device, number_of_groups=None, replicas=None,
         protocol=protocol, machine_config=machine_config, load=timestep_fs is not None)
 
+    # A cMD stage is serial by construction. Checked HERE, after the coordination is open and
+    # before anything is created, so a plural launch stops at the preflight with every rank
+    # agreeing rather than partway through with N writers.
+    reject_plural_launch(coordination, what=protocol)
+
     resolved_timestep = None
     if timestep_fs is not None:
         # 4 fs on hydrogens that were never repartitioned, and every other mass/timestep
@@ -687,6 +692,11 @@ def _stage_inventory(*, output, log, trajectory, restart, checkpoint) -> OutputI
             roles[role] = Path(value)
     if trajectory:
         roles["phase_space"] = Path(trajectory).with_suffix(".phase_space.nc")
+    if log:
+        # The StateDataReporter CSV sits beside the log, is appended to, and is one of the three
+        # streams a checkpoint commits counts for -- so it belongs in the inventory that decides
+        # collisions and what `--overwrite` governs.
+        roles["state_csv"] = Path(log).with_suffix(".csv")
     if checkpoint:
         checkpoint = Path(checkpoint)
         roles["checkpoints"] = checkpoint.parent / f"{checkpoint.stem}.checkpoints"
@@ -729,6 +739,30 @@ def _resolve_timestep(loaded: LoadedInputs, requested, *, where: str) -> dict[st
         return resolve_timestep_fs(requested, loaded.system, loaded.pdb.topology)
     except (ValueError, SystemExit) as refusal:
         raise PreflightError(f"{where}: {refusal}") from None
+
+
+def reject_plural_launch(coordination, *, what: str) -> None:
+    """A serial protocol launched under `mpirun -n N` is N runs over ONE set of output paths.
+
+    Nothing coordinates them, nothing partitions them, and every rank opens the same trajectory,
+    the same state CSV and the same checkpoint tree. The files that result are interleaved from N
+    simulations and there is no record anywhere that says so -- the run "completes", and the
+    trajectory is a splice of N different walkers.
+
+    Refused rather than tolerated, and refused for the WHOLE world: a rank that exited alone would
+    leave the others writing.
+    """
+    if coordination.size <= 1:
+        return
+    raise PreflightError(
+        f"{what} was launched under a plural MPI world ({coordination.size} ranks), and it is a "
+        f"serial protocol.\n"
+        f"  Nothing here partitions work across ranks, so all {coordination.size} would integrate "
+        f"the same stage and write the same trajectory, state table and checkpoint -- producing "
+        f"one set of files interleaved from {coordination.size} independent simulations, with "
+        f"nothing in them saying so.\n"
+        f"  Run it in one process, or use a protocol that coordinates: REST2/rREST2 place one "
+        f"rank per thermodynamic state, and AIS distributes paths by `paths_for_rank`.")
 
 
 def _reject_flags_outside_their_protocol(*, protocol_name, number_of_groups=None, groupfile=None,

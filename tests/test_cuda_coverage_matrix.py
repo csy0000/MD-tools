@@ -80,6 +80,56 @@ CUDA_SITES = {
     "rest2/scaler.py::TauSwitcher.set_amplitude": (
         "pushes scaled parameters into a live CUDA Context via updateParametersInContext",
         "test_ais_decomposition_lane"),
+
+    # --- operations the constructor-only inventory never saw ---------------------------------
+    "ais/decomposition.py::ComponentProbe.measure": (
+        "three CUDA energy evaluations per probe, at controlled amplitudes",
+        "test_ais_decomposition_lane, test_ais_on_explicit_solvent"),
+    "ais/run.py::run_one_path.direct_potential": (
+        "the direct CUDA energy behind every work value and every observation row",
+        "test_ais_decomposition_lane, test_hs_rows_match_recomputation_on_cuda"),
+    "ais/run.py::run_one_path.write_frame": (
+        "reads CUDA positions and box vectors into the path trajectory",
+        "test_ais_reads_a_netcdf_source_on_cuda, test_ais_decomposition_lane"),
+    "ais/run.py::run_one_path.save_checkpoint": (
+        "saves a CUDA Context into a committed checkpoint generation",
+        "test_md_run_mpi_gpu.py resume tests, test_hs_rows_match_recomputation_on_cuda"),
+    "ais/run.py::_state_row": (
+        "reads CUDA potential, kinetic and box state into system.csv",
+        "test_ais_decomposition_lane (system_printout is set in every AIS lane)"),
+    "md/_stages.py::set_restraint": (
+        "pushes the positional-restraint force constant into a live CUDA Context",
+        "test_cmd_cuda_smoke.py, test_cuda_precision_lane (restrained NVT)"),
+    "md/_stages.py::write_final_state": (
+        "reads CUDA positions, velocities and parameters into the restart",
+        "every cMD lane; asserted in test_explicit_solvent_npt_lane"),
+    "md/stage.py::_CheckpointWithFingerprint.report": (
+        "commits a CUDA checkpoint generation with every stream's committed counts",
+        "test_cmd_restart_integration.py, test_cuda_precision_lane"),
+    "remd/engine.py::ReplicaEngine.propagate": (
+        "integrates every owned state on CUDA between exchanges",
+        "test_md_run_mpi_gpu.py, test_multi_rank_rest2_ladders_of_several_sizes"),
+    "remd/engine.py::ReplicaEngine.minimise": (
+        "CUDA minimisation of a ladder rung",
+        "test_multi_rank_rest2_ladders_of_several_sizes (its equilibration chain)"),
+    "remd/engine.py::ReplicaEngine.potential_energy": (
+        "the CROSS-Hamiltonian energies an exchange decision is made from",
+        "test_md_run_mpi_gpu.py, test_multi_rank_rest2_ladders_of_several_sizes"),
+    "remd/engine.py::ReplicaEngine.get_configuration": (
+        "reads CUDA positions/box out of a rung for storage or exchange",
+        "test_multi_rank_rest2_ladders_of_several_sizes, test_explicit_solvent_rest2_lane"),
+    "remd/engine.py::ReplicaEngine.set_configuration": (
+        "writes a configuration into a CUDA rung -- the swap itself, and reservoir refresh",
+        "test_multi_rank_rrest2_with_a_real_reservoir"),
+    "remd/engine.py::ReplicaEngine.set_velocities_to_temperature": (
+        "draws momenta on a CUDA rung",
+        "test_multi_rank_rest2_ladders_of_several_sizes"),
+    "remd/engine.py::ReplicaEngine.integrator_state": (
+        "reads CUDA integrator state for the ladder checkpoint",
+        "test_md_run_mpi_gpu.py ladder resume"),
+    "remd/engine.py::ReplicaEngine.load_integrator_state": (
+        "restores CUDA integrator state on ladder resume",
+        "test_md_run_mpi_gpu.py ladder resume"),
 }
 
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
@@ -95,16 +145,42 @@ NON_CUDA_CONTEXT_SITES = {
 }
 
 
-def _context_creating_functions() -> dict[str, str]:
-    """Every function in the package that constructs a `Simulation` or a `Context`.
+#: Every CUDA-relevant OPERATION, not merely the constructors.
+#:
+#: The previous inventory looked for `Context(` and `Simulation(` and claimed to cover "every CUDA
+#: operation". It did not: a function that steps an integrator, pushes parameters into a Context
+#: somebody else built, reads forces, or saves a checkpoint runs CUDA kernels without constructing
+#: anything, and none of those were being classified at all.
+#:
+#: Grouped by what the kernel does, because that is what a lane has to exercise.
+CUDA_OPERATIONS = {
+    # construction
+    "Context": "construct", "Simulation": "construct",
+    # dynamics
+    "step": "integrate", "minimizeEnergy": "minimize",
+    # energies and forces
+    "getState": "evaluate",
+    # parameters -- REST2/AIS switching, and the reinitialisation that follows a System change
+    "setParameter": "parameters", "updateParametersInContext": "parameters",
+    "reinitialize": "parameters", "setPositions": "parameters",
+    "setVelocitiesToTemperature": "parameters", "setPeriodicBoxVectors": "parameters",
+    # persistence of CUDA-derived state
+    "saveCheckpoint": "checkpoint", "loadCheckpoint": "checkpoint",
+    "createCheckpoint": "checkpoint", "setState": "checkpoint",
+}
+
+
+def _cuda_operation_sites() -> dict[str, set[str]]:
+    """Every function in the package that performs a CUDA-relevant operation, and which ones.
 
     Found by walking the AST rather than by grepping, so a call spread over several lines, or one
-    inside a nested function, is found the same way as a one-liner.
+    inside a nested function, is found the same way as a one-liner. Attribute calls count:
+    `simulation.step(n)` and `context.getState(...)` are the common spellings and neither is a
+    bare name.
     """
-    found: dict[str, str] = {}
+    found: dict[str, set[str]] = {}
     for module in sorted(SRC.rglob("*.py")):
         tree = ast.parse(module.read_text(encoding="utf-8"))
-        stack: list[str] = []
 
         def walk(node, stack):
             for child in ast.iter_child_nodes(node):
@@ -113,28 +189,52 @@ def _context_creating_functions() -> dict[str, str]:
                     continue
                 if isinstance(child, ast.Call):
                     name = getattr(child.func, "id", None) or getattr(child.func, "attr", None)
-                    if name in ("Simulation", "Context") and stack:
+                    if name in CUDA_OPERATIONS and stack:
                         key = f"{module.relative_to(SRC).as_posix()}::{'.'.join(stack)}"
-                        found.setdefault(key, name)
+                        found.setdefault(key, set()).add(CUDA_OPERATIONS[name])
                 walk(child, stack)
 
-        walk(tree, stack)
+        walk(tree, [])
     return found
 
 
-def test_every_cuda_site_in_the_source_is_in_this_matrix():
-    """A new Context-creating function must be classified, not silently left untested.
+def _context_creating_functions() -> dict[str, str]:
+    """Kept as the narrow question: which functions CONSTRUCT a Context or a Simulation."""
+    return {site: "construct" for site, kinds in _cuda_operation_sites().items()
+            if "construct" in kinds}
 
-    This is what keeps the matrix from becoming a table that was true once. Adding a function that
-    opens a Context and forgetting to say which lane exercises it fails HERE, at the point the
-    function is added, rather than in six months when its CUDA branch turns out never to have run.
+
+def test_every_cuda_operation_in_the_source_is_in_this_matrix():
+    """A new CUDA-relevant operation must be classified, not silently left untested.
+
+    This is what keeps the matrix from becoming a table that was true once. The previous version
+    looked only for `Context(` and `Simulation(` while claiming to cover "every CUDA operation" --
+    and a function that steps an integrator, pushes parameters into a Context somebody else built,
+    reads forces, or saves a checkpoint runs CUDA kernels without constructing anything. Sixteen
+    such sites were unclassified when this was widened.
     """
-    found = _context_creating_functions()
+    found = _cuda_operation_sites()
     classified = set(CUDA_SITES) | set(NON_CUDA_CONTEXT_SITES)
     unclassified = sorted(set(found) - classified)
     assert not unclassified, (
-        "these functions construct an OpenMM Context and appear in neither CUDA_SITES nor "
-        "NON_CUDA_CONTEXT_SITES:\n  " + "\n  ".join(unclassified))
+        "these functions perform a CUDA-relevant operation and appear in neither CUDA_SITES nor "
+        "NON_CUDA_CONTEXT_SITES:\n  " + "\n  ".join(
+            f"{site} {sorted(found[site])}" for site in unclassified))
+
+
+def test_the_inventory_looks_for_more_than_constructors():
+    """The guard on the guard: the operation set must cover what the task enumerates."""
+    kinds = set(CUDA_OPERATIONS.values())
+    assert {"construct", "integrate", "minimize", "evaluate", "parameters",
+            "checkpoint"} <= kinds, kinds
+    found = _cuda_operation_sites()
+    seen = set()
+    for operations in found.values():
+        seen |= operations
+    # Every category must actually be FOUND somewhere in the source, or the pattern is watching
+    # for something that is spelled differently and silently matching nothing.
+    for kind in ("construct", "integrate", "evaluate", "parameters", "checkpoint"):
+        assert kind in seen, f"no source site performs {kind!r}; the matcher is not matching"
 
 
 def test_every_matrix_entry_still_names_a_function_that_exists():
@@ -1050,6 +1150,225 @@ def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_expli
     # pretending to be a measurement. What is asserted is that the number EXISTS for both sizes,
     # which is what "measured and documented" requires.
     assert set(measured) == {"implicit", "explicit"}
+
+
+# --- Hummer-Szabo frame alignment, on real CUDA ---------------------------------------------
+
+@pytest.mark.parametrize("solvent", ["implicit", "explicit"])
+def test_hs_rows_match_recomputation_on_cuda(solvent, built, built_explicit, hardware, tmp_path):
+    """Reopen the frames a CUDA run wrote, rebuild a Context, recompute, compare.
+
+    The alignment is platform-independent algebra, and it is verified on the CPU lane too. What
+    this adds is that the CUDA run's own numbers -- written by CUDA kernels, at CUDA precision --
+    survive the round trip through the file and still describe the frame they name. Explicit PME
+    is the half that exercises the reciprocal sum and the dispersion correction.
+    """
+    import csv
+
+    from .test_ais_hs_frame_alignment import frame_roundtrip_tolerance, recompute_at_frame
+
+    root = built if solvent == "implicit" else built_explicit
+    work = tmp_path / f"hs-cuda-{solvent}"
+    work.mkdir()
+
+    import mdtraj
+
+    frames = mdtraj.load(str(root / "built.pdb"))
+    mdtraj.join([frames] * 6).save_dcd(str(work / "source.dcd"))
+
+    # Five distinct cadences again, so frame-aligned and unaligned rows both occur on CUDA.
+    (work / "AIS.config").write_text(yaml.safe_dump({
+        "protocol": "AIS", "solvent": solvent,
+        "ais": {"number_of_paths": 1, "switching_steps": 60,
+                "observation_interval_steps": 6, "parameter_update_interval_steps": 2},
+        "ais_source": {"trajectory": "../source.dcd"},
+        "reporting": {"solute_printout": 10, "system_printout": 20,
+                      "checkpoint_printout": 15}}), encoding="utf-8")
+    assert subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
+                                 "--config", str(work / "AIS.config")],
+                          capture_output=True, text=True, timeout=600).returncode == 0
+
+    done = subprocess.run(
+        [sys.executable, str(work / "project" / "AIS.py"),
+         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+         "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run")],
+        cwd=work, capture_output=True, text=True, timeout=3600,
+        env=_environment(work, **_machine()))
+    assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
+
+    from md_tools.build.record import read_record
+
+    record = read_record(work / "run" / "AIS.log")
+    assert record["acceleration"]["resolved_platform"] == "CUDA", record["acceleration"]
+
+    with (work / "run" / "AIS_hs.csv").open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows, "the CUDA run produced no frame-aligned HS rows"
+
+    worst = 0.0
+    for row in rows:
+        components, direct = recompute_at_frame(
+            root, work / "run", path_id=int(row["path_id"]),
+            frame_index=int(row["coordinate_frame_index"]), tau=float(row["tau"]))
+        allowed = frame_roundtrip_tolerance(float(row["potential_direct_kj_mol"]))
+        for group in ("non_scaled", "sqrt_scaled", "lin_scaled"):
+            error = abs(float(row[f"potential_{group}_kj_mol"]) - getattr(components, group))
+            worst = max(worst, error)
+            assert error < allowed, (solvent, group, row["coordinate_frame_index"])
+        error = abs(float(row["potential_direct_kj_mol"]) - direct)
+        worst = max(worst, error)
+        assert error < allowed
+    counters = record["decomposition"]["evaluation_counters"]
+    _record("test_hs_rows_match_recomputation_on_cuda",
+            feature=f"AIS {solvent}, HS rows recomputed at their own saved frames",
+            precision=record["acceleration"].get("cuda_precision") or "mixed",
+            device=record["acceleration"].get("cuda_device_index") or "-",
+            detail=f"{len(rows)} rows, max |recorded - recomputed| = {worst:.3e} kJ/mol; "
+                   f"{counters['total_potential_energy_evaluations']} energy evaluations "
+                   f"({counters['basis_probe_energy_evaluations']} probe, "
+                   f"{counters['direct_work_energy_evaluations']} work, "
+                   f"{counters['observation_energy_evaluations']} observation), "
+                   f"{counters['parameter_updates']} parameter updates")
+
+
+# --- a hundred paths, and multi-rank ownership ------------------------------------------------
+
+def test_a_hundred_paths_under_real_mpi_produce_exactly_their_own_files(built, hardware,
+                                                                        tmp_path):
+    """AIS_traj0000.nc .. AIS_traj0099.nc, no duplicates and none missing, across 4 ranks.
+
+    Path identity is a pure function of `(rank, size, total)`, so which rank runs a path must not
+    change which file it writes. Four ranks and a hundred paths is where an off-by-one in that
+    partition shows up as two ranks claiming one id -- or as an id nobody claims, which is worse
+    because the run still reports success.
+    """
+    import shutil
+
+    if shutil.which("mpirun") is None:
+        pytest.fail("no mpirun on PATH; the multi-rank AIS lane is an unmet criterion")
+    if len(hardware) < 4:
+        pytest.fail(f"4 ranks need 4 devices; {len(hardware)} visible")
+
+    work = tmp_path / "hundred"
+    work.mkdir()
+
+    import mdtraj
+
+    frames = mdtraj.load(str(built / "built.pdb"))
+    mdtraj.join([frames] * 128).save_dcd(str(work / "source.dcd"))
+
+    (work / "AIS.config").write_text(yaml.safe_dump({
+        "protocol": "AIS", "solvent": "implicit",
+        "ais": {"number_of_paths": 100, "switching_steps": 4,
+                "observation_interval_steps": 2, "parameter_update_interval_steps": 2},
+        "ais_source": {"trajectory": "../source.dcd", "allow_repeated_frames": True},
+        "reporting": {"solute_printout": 2, "system_printout": 4,
+                      "checkpoint_printout": 4}}), encoding="utf-8")
+    assert subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
+                                 "--config", str(work / "AIS.config")],
+                          capture_output=True, text=True, timeout=600).returncode == 0
+
+    done = subprocess.run(
+        ["mpirun", "-n", "4", sys.executable, str(work / "project" / "AIS.py"),
+         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run"), "-ng", "4"],
+        cwd=work, capture_output=True, text=True, timeout=7200,
+        env=_environment(work, **_machine()))
+    assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
+
+    produced = sorted(p.name for p in (work / "run").glob("AIS_traj*.nc"))
+    expected = [f"AIS_traj{index:04d}.nc" for index in range(100)]
+    assert produced == expected, (
+        f"{len(produced)} trajectories; missing "
+        f"{sorted(set(expected) - set(produced))[:5]}, unexpected "
+        f"{sorted(set(produced) - set(expected))[:5]}")
+
+    import csv
+
+    with (work / "run" / "AIS_paths.csv").open(newline="") as handle:
+        summary = list(csv.DictReader(handle))
+    assert len(summary) == 100
+    assert sorted(int(row["path_index"]) for row in summary) == list(range(100))
+    ranks = {row["mpi_rank"] for row in summary}
+    assert len(ranks) == 4, f"paths were not shared out: {ranks}"
+    _record("test_a_hundred_paths_under_real_mpi_produce_exactly_their_own_files",
+            feature="AIS implicit, 100 paths, real mpirun -n 4, deterministic path ownership",
+            precision="mixed", device="0-3",
+            detail=f"AIS_traj0000.nc..AIS_traj0099.nc, no duplicates or gaps; "
+                   f"{len(ranks)} ranks contributed")
+
+
+# --- direct wrapper against md-run ------------------------------------------------------------
+
+def test_the_generated_wrapper_and_md_run_agree_for_a_stage(built, hardware, tmp_path):
+    """Two entry points into one runtime must produce the same science, on the same GPU.
+
+    `md-openmm md-run` and the generated `cMD.py` call `stage_main` with different argv. A
+    difference in what they forward is invisible until the two produce different trajectories --
+    which is exactly how `--resume` came to be dropped by one of them.
+    """
+    work = tmp_path / "parity"
+    work.mkdir()
+    (work / "cMD.config").write_text(yaml.safe_dump({
+        "protocol": "cMD", "solvent": "implicit",
+        "stages": {"minimization_iterations": 2, "restrained_nvt_steps": 5,
+                   "production_steps": 20},
+        "reporting": {"solute_printout": 10, "system_printout": 10,
+                      "checkpoint_printout": 20}}), encoding="utf-8")
+    assert subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
+                                 "--config", str(work / "cMD.config")],
+                          capture_output=True, text=True, timeout=600).returncode == 0
+
+    environment = _environment(work, **_machine())
+    wrapper = subprocess.run(
+        [sys.executable, str(work / "project" / "cMD.py"),
+         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-odir", str(work / "wrapper")],
+        cwd=work, capture_output=True, text=True, timeout=1800, env=environment)
+    assert wrapper.returncode == 0, wrapper.stdout[-3000:] + wrapper.stderr[-3000:]
+
+    through_md_run = subprocess.run(
+        CLI + ["md-run", "-i", str(work / "project" / "cMD.in"),
+               "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+               "-odir", str(work / "mdrun")],
+        cwd=work, capture_output=True, text=True, timeout=1800, env=environment)
+    assert through_md_run.returncode == 0, (
+        through_md_run.stdout[-3000:] + through_md_run.stderr[-3000:])
+
+    import hashlib
+
+    import numpy
+
+    from md_tools.build.record import read_record
+
+    # The restart is compared byte for byte: it is a serialised State with no metadata of its own.
+    wrapper_digest = hashlib.sha256((work / "wrapper" / "cMD.xml").read_bytes()).hexdigest()
+    md_run_digest = hashlib.sha256((work / "mdrun" / "cMD.xml").read_bytes()).hexdigest()
+    assert wrapper_digest == md_run_digest, (
+        "the final state differs between the generated wrapper and md-run: the two entry points "
+        "do not forward the same settings")
+
+    # The DCD is compared FRAME BY FRAME, not byte by byte. Its header carries a creation
+    # timestamp -- the two runs differ in exactly one byte of it, the wall-clock second they
+    # started -- so a digest comparison would be asserting that two processes started in the same
+    # second. What has to be identical is the science, and that is the coordinates.
+    import mdtraj
+
+    top = str(built / "built.pdb")
+    left = mdtraj.load(str(work / "wrapper" / "cMD.dcd"), top=top)
+    right = mdtraj.load(str(work / "mdrun" / "cMD.dcd"), top=top)
+    assert left.n_frames == right.n_frames > 0, (left.n_frames, right.n_frames)
+    assert numpy.array_equal(left.xyz, right.xyz), (
+        "the trajectories differ between the generated wrapper and md-run: "
+        f"max |dx| = {float(numpy.abs(left.xyz - right.xyz).max())}")
+    both = [read_record(work / where / "cMD.log")["acceleration"]["resolved_platform"]
+            for where in ("wrapper", "mdrun")]
+    assert both == ["CUDA", "CUDA"], both
+    _record("test_the_generated_wrapper_and_md_run_agree_for_a_stage",
+            feature="direct wrapper vs md-run parity, cMD implicit",
+            precision="mixed", device="-",
+            detail="cMD.xml identical byte for byte; DCD identical frame for frame "
+                   "(its header carries a creation timestamp)")
 
 
 # --- the evidence document ------------------------------------------------------------------------

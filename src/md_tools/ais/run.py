@@ -463,6 +463,52 @@ def require_same_run(out: Path, document: dict[str, Any]) -> None:
         f"experiments -- readable, and describing neither. Use a new -odir.")
 
 
+def clear_run_directory(out: Path, *, paths: int) -> int:
+    """Remove every artefact of a previous AIS run from `out`. Returns how many were removed.
+
+    What `--overwrite` has to mean. A fresh run must not inherit ANY of: a path directory with its
+    checkpoints and completion manifest, a published trajectory, the selected-frame table, the
+    aggregate tables, or the run identity. Any one of them surviving lets the new identity adopt
+    the old measurements.
+
+    Deliberately enumerated rather than `rmtree(out)`: the output directory may legitimately hold
+    things this run did not write -- a `resolved.config` md-run just placed there, a person's
+    notes -- and deleting a directory because we are about to write into it is how `--overwrite`
+    becomes a data-loss button.
+    """
+    import shutil
+
+    from . import path_trajectory_name
+
+    removed = 0
+    out = Path(out)
+    for index in range(int(paths)):
+        directory = out / f"path_{index:04d}"
+        if directory.is_dir():
+            shutil.rmtree(directory)
+            removed += 1
+        published = out / path_trajectory_name(index, int(paths))
+        if published.is_file():
+            published.unlink()
+            removed += 1
+    for name in (RUN_IDENTITY, WORK_TABLE, WORK_SUMMARY, HS_TABLE,
+                 "selected_source_frames.csv"):
+        target = out / name
+        if target.is_file():
+            target.unlink()
+            removed += 1
+    # Any straggler from a previous path count: a run of 100 paths overwritten by one of 4 would
+    # otherwise leave AIS_traj0004.nc..0099.nc behind, and they look exactly like this run's.
+    for straggler in sorted(out.glob("AIS_traj*.nc")):
+        straggler.unlink()
+        removed += 1
+    for straggler in sorted(out.glob("path_*")):
+        if straggler.is_dir():
+            shutil.rmtree(straggler)
+            removed += 1
+    return removed
+
+
 def write_atomically(path: Path, text: str) -> None:
     """Write through a temporary and `os.replace`, so a reader never sees half a file.
 
@@ -644,9 +690,16 @@ def _verified_completion(marker: Path, *, directory: Path, published: Path, fing
                 f"{expected!r}. This directory holds a path from a different run. Refusing to "
                 f"skip it as though it were this one.")
 
+    claimed = {"trajectory": published,
+               "observations": directory / OBSERVATIONS_CSV,
+               "final_state": directory / "final_state.xml",
+               "system_table": directory / STATE_CSV}
     for name, facts in (record.get("outputs") or {}).items():
-        where = published if name == "trajectory" else directory / (
-            OBSERVATIONS_CSV if name == "observations" else STATE_CSV)
+        where = claimed.get(name)
+        if where is None:
+            raise SystemExit(
+                f"{marker} claims an output named {name!r} that this build does not produce. "
+                f"Refusing to skip a path whose manifest describes a different schema.")
         if not where.is_file():
             raise SystemExit(
                 f"{marker} says path {index} completed, but its {name} ({where}) is missing. "
@@ -1138,6 +1191,10 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         "outputs": {
             "trajectory": file_facts(published),
             "observations": file_facts(directory / OBSERVATIONS_CSV),
+            # The final state is an artefact this path CLAIMS, so it is hashed with the rest.
+            # Leaving it out meant a completed path could be skipped while the one file describing
+            # where it ended had been truncated or replaced.
+            "final_state": file_facts(directory / "final_state.xml"),
             **({"system_table": file_facts(directory / STATE_CSV)}
                if (directory / STATE_CSV).is_file() else {}),
         },
@@ -1456,11 +1513,15 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             ais=ais, dynamics=dynamics, chosen=chosen, reporting=reporting,
             resolved_config=run.get("resolved_config"))
         if args.overwrite:
-            # Explicitly asked for: this directory becomes a new run. Rank 0 removes the old
-            # identity so the record below is written afresh; the paths themselves are then
-            # refused by their own completion checks, which name what differs.
+            # A COMPLETE fresh-run transaction. Removing only `AIS_run.json` was not overwrite:
+            # it deleted the one record that said which run the directory held and left every
+            # path directory, published trajectory, checkpoint generation and aggregate table in
+            # place -- so the next invocation adopted them under a NEW identity, skipped them as
+            # "completed", and assembled one table out of two experiments. Strictly worse than
+            # refusing, because the refusal at least said something was wrong.
             if rank == 0:
-                (out / RUN_IDENTITY).unlink(missing_ok=True)
+                removed = clear_run_directory(out, paths=len(chosen))
+                log.field("overwrite", f"removed {removed} artefact(s) from a previous run")
             coordination.barrier()
         else:
             require_same_run(out, identity_document)

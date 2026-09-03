@@ -392,3 +392,110 @@ def test_the_group_file_is_written_with_paths_relative_to_itself(tmp_path):
     # Relative, not absolute: the directory has to stay movable, for the same reason a generated
     # script contains no absolute path.
     assert "/tmp" not in text and str(tmp_path) not in text, text
+
+
+# --- a serial protocol under a plural launch -------------------------------------------------
+
+def test_a_cmd_stage_launched_under_mpirun_is_refused(workspace, tmp_path, good_config):
+    """N ranks running one serial stage is N simulations over ONE set of output paths.
+
+    Nothing partitions the work and nothing coordinates the writers, so the trajectory, the state
+    table and the checkpoint are interleaved from N walkers -- and no file says so. The run
+    "completes". This is the failure that is worst to discover late, because the output looks
+    exactly like a successful run.
+    """
+    import shutil
+
+    if shutil.which("mpirun") is None:
+        pytest.skip("no mpirun on PATH; this contract is checked under a real launcher only")
+
+    destination = tmp_path / "plural-cmd"
+    before = _snapshot(destination)
+    done = _run(["mpirun", "-n", "2", sys.executable, str(workspace / "split" / "min.py"),
+                 "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
+                 *PROTOCOL_ONLY],
+                cwd=workspace / "split", environment=good_config)
+    message = done.stdout + done.stderr
+    assert done.returncode != 0, message[-2000:]
+    assert "serial protocol" in message, message[-2000:]
+    _untouched(destination, before)
+
+
+def test_the_all_in_one_workflow_is_refused_under_a_plural_launch(workspace, tmp_path,
+                                                                   good_config):
+    import shutil
+
+    if shutil.which("mpirun") is None:
+        pytest.skip("no mpirun on PATH; this contract is checked under a real launcher only")
+
+    destination = tmp_path / "plural-chain"
+    before = _snapshot(destination)
+    done = _run(["mpirun", "-n", "2", sys.executable, str(workspace / "allinone" / "md.py"),
+                 "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
+                 *PROTOCOL_ONLY],
+                cwd=workspace / "allinone", environment=good_config)
+    assert done.returncode != 0
+    assert "serial protocol" in (done.stdout + done.stderr)
+    _untouched(destination, before)
+
+
+# --- AIS --overwrite is a complete fresh-run transaction ---------------------------------------
+
+def test_ais_overwrite_removes_every_artefact_of_the_previous_run(tmp_path):
+    """Removing only `AIS_run.json` was strictly worse than refusing.
+
+    It deleted the one record saying which run the directory held and left every path directory,
+    trajectory, checkpoint and aggregate table in place -- so the next invocation adopted them
+    under a NEW identity, skipped them as "completed", and assembled one table out of two
+    experiments. The refusal at least said something was wrong.
+    """
+    from md_tools.ais.run import clear_run_directory
+
+    out = tmp_path / "AIS"
+    (out / "path_0000" / "checkpoints").mkdir(parents=True)
+    (out / "path_0000" / "completed.json").write_text("{}", encoding="utf-8")
+    (out / "path_0000" / "checkpoints" / "generation_000001.chk").write_bytes(b"x")
+    (out / "path_0001").mkdir()
+    for name in ("AIS_run.json", "AIS_work.csv", "AIS_paths.csv", "AIS_hs.csv",
+                 "selected_source_frames.csv", "AIS_traj0000.nc", "AIS_traj0001.nc"):
+        (out / name).write_text("stale", encoding="utf-8")
+    # A straggler from a previous, LONGER run: it looks exactly like this run's own output.
+    (out / "AIS_traj0099.nc").write_text("stale", encoding="utf-8")
+    # Something this run did not write, which must survive: --overwrite is not a delete button.
+    (out / "resolved.config").write_text("protocol: AIS\n", encoding="utf-8")
+    (out / "notes.txt").write_text("mine", encoding="utf-8")
+
+    removed = clear_run_directory(out, paths=2)
+    assert removed >= 9, removed
+    assert not (out / "path_0000").exists() and not (out / "path_0001").exists()
+    for name in ("AIS_run.json", "AIS_work.csv", "AIS_paths.csv", "AIS_hs.csv",
+                 "selected_source_frames.csv", "AIS_traj0000.nc", "AIS_traj0001.nc",
+                 "AIS_traj0099.nc"):
+        assert not (out / name).exists(), name
+    assert (out / "resolved.config").is_file(), "--overwrite deleted a file it did not write"
+    assert (out / "notes.txt").read_text(encoding="utf-8") == "mine"
+
+
+# --- a supplied group file is an input ----------------------------------------------------------
+
+def test_a_supplied_group_file_does_not_cause_a_default_one_to_be_written(workspace, tmp_path,
+                                                                          good_config):
+    """It is read, not written. A default beside it is a file nothing reads and a later run adopts."""
+    from md_tools.remd.executor import GroupFileError, parse_group_file  # noqa: F401
+
+    destination = tmp_path / "supplied-group"
+    destination.mkdir()
+    supplied = destination / "mine.group"
+    supplied.write_text(
+        "-i _protocol.py -p ../built.pdb -s ../built.xml -c start.xml "
+        "--solute solute.yaml --group-index 0\n"
+        "-i _protocol.py -p ../built.pdb -s ../built.xml -c start.xml "
+        "--solute solute.yaml --group-index 1\n", encoding="utf-8")
+
+    done = _launch(workspace, "REST2", destination, "--groupfile", str(supplied),
+                   *PROTOCOL_ONLY, environment=good_config)
+    # It will refuse for some reason (the group file names inputs that do not exist here); what
+    # matters is that it did not manufacture a REST2.group beside the one it was handed.
+    assert not (destination / "REST2.group").exists(), (
+        "a default group file was written although one was supplied:\n"
+        + (done.stdout + done.stderr)[-1500:])

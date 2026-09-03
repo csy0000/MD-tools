@@ -550,8 +550,9 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
             # checkpoint describing it; keeping those extra frames would put the coordinates
             # permanently ahead of the step count and misattribute every later frame. Never
             # inferred from whichever file happens to be longest.
-            trimmed = _truncate_streams_to_committed(meta.get("streams") or {},
-                                                     trajectory=traj_path, log=log)
+            trimmed = _truncate_streams_to_committed(
+                meta.get("streams") or {}, trajectory=traj_path,
+                state_csv=log_path.with_suffix(".csv"), log=log)
             log.heading("Resume")
             log.field("from checkpoint", f"generation {committed['generation']} at step {done}")
             for name, (was, now) in sorted(trimmed.items()):
@@ -657,8 +658,16 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
                         fingerprint=fingerprint, offset=done,
                         identity=_checkpoint_identity(stage, name, seed, acceleration,
                                                       timestep_fs),
-                        streams={"trajectory": lambda: _stream_counts(
-                            trajectory=traj_path).get("trajectory", 0)}))
+                        # A callable per stream, read at commit time: the counts a generation
+                        # vouches for have to be what is on disk WHEN it commits, not what was
+                        # there when the reporter was constructed.
+                        streams={
+                            name: (lambda key=name: _stream_counts(
+                                trajectory=traj_path,
+                                state_csv=log_path.with_suffix(".csv")).get(key, 0))
+                            for name in stage_streams(
+                                trajectory=traj_path,
+                                state_csv=log_path.with_suffix(".csv"))}))
             if done == 0 and not args.continue_from and iterations == 0:
                 simulation.context.setVelocitiesToTemperature(
                     float(stage["temperature_K"]) * unit.kelvin, int(seed))
@@ -688,7 +697,8 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None) -> int:
             write_checkpoint=lambda path: simulation.saveCheckpoint(str(path)),
             state={"fingerprint": fingerprint, "steps_done": steps,
                    **_checkpoint_identity(stage, name, seed, acceleration, timestep_fs),
-                   "streams": _stream_counts(trajectory=traj_path)})
+                   "streams": _stream_counts(trajectory=traj_path,
+                                             state_csv=log_path.with_suffix(".csv"))})
 
         log.heading("Outputs")
         reread = XmlSerializer.deserialize(restart_path.read_text(encoding="utf-8"))
@@ -757,43 +767,100 @@ def _checkpoint_identity(stage, name, seed, acceleration, timestep_fs) -> dict[s
             "precision": (acceleration.properties or {}).get("Precision")}
 
 
-def _stream_counts(*, trajectory: Path) -> dict[str, int]:
+def stage_streams(*, trajectory: Path, state_csv: Path) -> dict[str, Path]:
+    """The three appendable outputs a stage produces, by the name the checkpoint commits them as.
+
+    THREE, not one. The commit recorded only the DCD, so a resume truncated the DCD and appended
+    to a state CSV and a phase-space NetCDF that were still carrying rows past the checkpoint.
+    The result is a directory whose three streams describe three different instants -- the
+    trajectory correct, the other two ahead of it -- and nothing in any of them says so.
+    """
+    trajectory = Path(trajectory)
+    return {
+        "trajectory": trajectory,
+        "state_csv": Path(state_csv),
+        "phase_space": trajectory.with_suffix(".phase_space.nc"),
+    }
+
+
+def _count_stream(name: str, path: Path) -> int | None:
+    """How many records this stream holds right now, or None when it does not exist yet."""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    if name == "state_csv":
+        # A StateDataReporter CSV: one header line, then one row per report.
+        with path.open(encoding="utf-8") as handle:
+            return max(sum(1 for _ in handle) - 1, 0)
+    try:
+        from ..openmm.trajectory import count_frames
+
+        return int(count_frames(path))
+    except Exception:                                      # noqa: BLE001 - unreadable is not zero
+        return None
+
+
+def _stream_counts(*, trajectory: Path, state_csv: Path) -> dict[str, int]:
     """How many records each appendable output holds RIGHT NOW, for the commit to vouch for.
 
-    Read from the files rather than counted in memory: what a resume has to cut back to is what
-    is on disk, and an in-memory counter that disagrees with the file is exactly the discrepancy
-    the committed counts exist to resolve.
+    Read from the files rather than counted in memory: what a resume has to cut back to is what is
+    on disk, and an in-memory counter that disagrees with the file is exactly the discrepancy the
+    committed counts exist to resolve.
     """
     counts: dict[str, int] = {}
-    if Path(trajectory).is_file():
-        try:
-            from ..openmm.trajectory import count_frames
-
-            counts["trajectory"] = int(count_frames(trajectory))
-        except Exception:                                  # noqa: BLE001 - absence is not failure
-            pass
+    for name, path in stage_streams(trajectory=trajectory, state_csv=state_csv).items():
+        count = _count_stream(name, path)
+        if count is not None:
+            counts[name] = count
     return counts
 
 
-def _truncate_streams_to_committed(committed: dict[str, Any], *, trajectory: Path,
-                                   log) -> dict[str, tuple[int, int]]:
-    """Cut each appendable stream back to the count the checkpoint committed.
+def _truncate_csv_rows(path: Path, keep: int) -> None:
+    """Keep the header and the first `keep` data rows. Written through a temporary.
 
-    Returns `{name: (before, after)}` for whatever actually moved, so the log can say so. A
-    stream that is already at or below its committed count is left alone: shorter than committed
-    means the crash lost records the checkpoint believes exist, which is a different failure and
-    is reported by the caller's own count checks rather than papered over here.
+    Rewritten and moved into place rather than truncated in situ, for the same reason the
+    trajectory is: a truncation that is itself interrupted must not destroy the file it was
+    repairing.
     """
-    moved: dict[str, tuple[int, int]] = {}
-    wanted = committed.get("trajectory")
-    if wanted is None or not Path(trajectory).is_file():
-        return moved
-    from ..openmm.trajectory import count_frames, truncate_frames
+    import os
 
-    have = int(count_frames(trajectory))
-    if have > int(wanted):
-        truncate_frames(trajectory, int(wanted))
-        moved["trajectory"] = (have, int(wanted))
+    path = Path(path)
+    with path.open(encoding="utf-8") as handle:
+        lines = handle.readlines()
+    staging = path.with_name(path.name + ".partial")
+    staging.write_text("".join(lines[:keep + 1]), encoding="utf-8")
+    os.replace(staging, path)
+
+
+def _truncate_streams_to_committed(committed: dict[str, Any], *, trajectory: Path,
+                                   state_csv: Path, log) -> dict[str, tuple[int, int]]:
+    """Cut EVERY appendable stream back to the count the checkpoint committed.
+
+    Returns `{name: (before, after)}` for whatever actually moved, so the log can say so. A stream
+    already at or below its committed count is left alone: shorter than committed means the crash
+    lost records the checkpoint believes exist, which is a different failure and is reported by
+    the caller's own count checks rather than papered over here.
+
+    All three streams, not just the trajectory. They are flushed independently and at different
+    cadences, so after a crash they are routinely at three different lengths -- and truncating one
+    of them leaves the other two permanently ahead of the step count, misattributing every later
+    record in files that open and read perfectly.
+    """
+    from ..openmm.trajectory import truncate_frames
+
+    moved: dict[str, tuple[int, int]] = {}
+    for name, path in stage_streams(trajectory=trajectory, state_csv=state_csv).items():
+        wanted = committed.get(name)
+        if wanted is None:
+            continue
+        have = _count_stream(name, path)
+        if have is None or have <= int(wanted):
+            continue
+        if name == "state_csv":
+            _truncate_csv_rows(path, int(wanted))
+        else:
+            truncate_frames(path, int(wanted))
+        moved[name] = (have, int(wanted))
     return moved
 
 
