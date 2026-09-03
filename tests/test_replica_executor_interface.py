@@ -198,17 +198,27 @@ def test_the_ungrouped_route_is_gone(workspace):
         "the refused ungrouped launch created an .out")
 
 
+#: What the fixture's ladder is BUILT FROM. Everything else in that directory is output.
+LADDER_INPUTS = ("topology.pdb", "system.xml", "coordinates.xml", "protocol.py", "ladder.group")
+
+
 @pytest.fixture
 def ladder(prepared, tmp_path):
-    """A private copy of the real two-state ladder, so a run may mutate it."""
+    """A private copy of the real two-state ladder, so a run may mutate it.
+
+    Copies the INPUTS, not the tree. `prepared` is session-scoped and other modules run in it, so
+    a `copytree` brought their `remd0.nc`, `exchange.runstate.json` and checkpoint tree along --
+    and the executor then correctly refused to write a new run over existing state trajectories.
+    The refusal was right; the fixture was wrong. Naming what an input IS cannot rot the way a
+    list of files to delete does: a new output appears and is simply not copied.
+    """
     import shutil
 
     source, _atoms, _unit = prepared
     work = tmp_path / "ladder"
-    shutil.copytree(source, work)
-    for stale in ("run.out", "run.out.rank01", "exchange.nc", "restart.json",
-                  "checkpoint.nc", "rem.log"):
-        (work / stale).unlink(missing_ok=True)
+    work.mkdir()
+    for name in LADDER_INPUTS:
+        shutil.copy2(source / name, work / name)
     return work
 
 

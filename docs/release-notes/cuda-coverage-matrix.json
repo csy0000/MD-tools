@@ -1,0 +1,393 @@
+{
+  "commit": "44355a4939b5bad4ce241121cb4b075661222898",
+  "devices": [
+    {
+      "driver": "580.173.02",
+      "index": "0",
+      "memory": "24564 MiB",
+      "name": "NVIDIA RTX A5000"
+    },
+    {
+      "driver": "580.173.02",
+      "index": "1",
+      "memory": "10240 MiB",
+      "name": "NVIDIA GeForce RTX 3080"
+    },
+    {
+      "driver": "580.173.02",
+      "index": "2",
+      "memory": "10240 MiB",
+      "name": "NVIDIA GeForce RTX 3080"
+    },
+    {
+      "driver": "580.173.02",
+      "index": "3",
+      "memory": "10240 MiB",
+      "name": "NVIDIA GeForce RTX 3080"
+    },
+    {
+      "driver": "580.173.02",
+      "index": "4",
+      "memory": "10240 MiB",
+      "name": "NVIDIA GeForce RTX 3080"
+    },
+    {
+      "driver": "580.173.02",
+      "index": "5",
+      "memory": "10240 MiB",
+      "name": "NVIDIA GeForce RTX 3080"
+    },
+    {
+      "driver": "580.173.02",
+      "index": "6",
+      "memory": "10240 MiB",
+      "name": "NVIDIA GeForce RTX 3080"
+    },
+    {
+      "driver": "580.173.02",
+      "index": "7",
+      "memory": "10240 MiB",
+      "name": "NVIDIA GeForce RTX 3080"
+    },
+    {
+      "driver": "580.173.02",
+      "index": "8",
+      "memory": "10240 MiB",
+      "name": "NVIDIA GeForce RTX 3080"
+    }
+  ],
+  "dirty": false,
+  "driver": "580.173.02",
+  "generated_utc": "2026-09-03T09:57:01.522821+00:00",
+  "lanes": [
+    {
+      "detail": "minimisation, restrained NVT, production, DCD, restart, checkpoint",
+      "device": "OpenMM-selected",
+      "feature": "cMD implicit, single precision",
+      "lane": "test_cuda_precision_lane",
+      "precision": "single",
+      "result": "passed"
+    },
+    {
+      "detail": "minimisation, restrained NVT, production, DCD, restart, checkpoint",
+      "device": "OpenMM-selected",
+      "feature": "cMD implicit, mixed precision",
+      "lane": "test_cuda_precision_lane",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "minimisation, restrained NVT, production, DCD, restart, checkpoint",
+      "device": "OpenMM-selected",
+      "feature": "cMD implicit, double precision",
+      "lane": "test_cuda_precision_lane",
+      "precision": "double",
+      "result": "passed"
+    },
+    {
+      "detail": "both halves on CUDA",
+      "device": "-",
+      "feature": "cMD implicit, 4 fs with HMR; 4 fs refused without",
+      "lane": "test_hmr_timestep_lane",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "9 devices visible; ran on the last",
+      "device": "8",
+      "feature": "cMD implicit, --device placement",
+      "lane": "test_explicit_device_placement_lane",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "6 rows checked, 6 frame-aligned; 64 energy evaluations (24 work-basis probe, 16 work, 24 observation), 64 parameter updates in 0.243 s",
+      "device": "-",
+      "feature": "AIS implicit, three-group decomposition and work-sum identity",
+      "lane": "test_ais_decomposition_lane",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "source format decided from content, not suffix",
+      "device": "-",
+      "feature": "AIS implicit, NetCDF source ensemble",
+      "lane": "test_ais_reads_a_netcdf_source_on_cuda",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "CUDA made unavailable through the deterministic seam",
+      "device": "-",
+      "feature": "no automatic CPU fallback",
+      "lane": "test_there_is_no_automatic_cpu_fallback_on_this_machine",
+      "precision": "-",
+      "result": "passed"
+    },
+    {
+      "detail": "20 production steps; box preserved in the restart",
+      "device": "-",
+      "feature": "cMD explicit (PME), NPT with an active barostat",
+      "lane": "test_explicit_solvent_npt_lane",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "2 state trajectories; exchanges attempted on CUDA",
+      "device": "-",
+      "feature": "REST2 explicit (PME), 2 states, serial",
+      "lane": "test_explicit_solvent_rest2_lane",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "2 state trajectories; one rank per device",
+      "device": "0, 1",
+      "feature": "REST2 implicit, 2 states, real mpirun -n 2",
+      "lane": "test_multi_rank_rest2_ladders_of_several_sizes",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "4 state trajectories; one rank per device",
+      "device": "0, 1, 2, 3",
+      "feature": "REST2 implicit, 4 states, real mpirun -n 4",
+      "lane": "test_multi_rank_rest2_ladders_of_several_sizes",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "6 state trajectories; one rank per device",
+      "device": "0, 1, 2, 3, 4, 5",
+      "feature": "REST2 implicit, 6 states, real mpirun -n 6",
+      "lane": "test_multi_rank_rest2_ladders_of_several_sizes",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "real CUDA_ERROR_NO_DEVICE from the driver, not a test seam",
+      "device": "none visible",
+      "feature": "CUDA genuinely unavailable (CUDA_VISIBLE_DEVICES=\"\"): refused, no fallback",
+      "lane": "test_a_genuinely_absent_cuda_device_is_refused_without_any_seam",
+      "precision": "-",
+      "result": "passed"
+    },
+    {
+      "detail": "the real ImportError branch, through a shadowing package, not a test seam",
+      "device": "-",
+      "feature": "mpi4py genuinely unimportable under mpirun -n 2: refused, nothing written",
+      "lane": "test_a_genuinely_unimportable_mpi4py_stops_a_plural_launch",
+      "precision": "-",
+      "result": "passed"
+    },
+    {
+      "detail": "reservoir cMD.phase_space.nc; 2 state trajectories",
+      "device": "0, 1",
+      "feature": "rREST2 implicit, 2 states, real mpirun -n 2, real reservoir refresh",
+      "lane": "test_multi_rank_rrest2_with_a_real_reservoir",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "6 rows, worst |sum - total| = 1.092e-04 kJ/mol; 44 energy evaluations, 44 parameter updates in 2.079 s",
+      "device": "-",
+      "feature": "AIS explicit (PME), three-group identity through the reciprocal sum",
+      "lane": "test_ais_on_explicit_solvent",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "112 energy evaluations and 112 parameter updates in 0.306 s of probing (2.73 ms per evaluation)",
+      "device": "-",
+      "feature": "decomposition overhead, AIS implicit, update interval 1 step",
+      "lane": "test_the_decomposition_cost_is_measured_on_a_large_system",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "112 energy evaluations and 112 parameter updates in 4.563 s of probing (40.74 ms per evaluation)",
+      "device": "-",
+      "feature": "decomposition overhead, AIS explicit, update interval 1 step",
+      "lane": "test_the_decomposition_cost_is_measured_on_a_large_system",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "3 rows, max |recorded - recomputed| = 8.275e-05 kJ/mol; 162 energy evaluations (90 work-basis probe, 60 work, 12 observation), 162 parameter updates",
+      "device": "-",
+      "feature": "AIS implicit, HS rows recomputed at their own saved frames",
+      "lane": "test_hs_rows_match_recomputation_on_cuda",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "3 rows, max |recorded - recomputed| = 4.503e-01 kJ/mol; 162 energy evaluations (90 work-basis probe, 60 work, 12 observation), 162 parameter updates",
+      "device": "-",
+      "feature": "AIS explicit, HS rows recomputed at their own saved frames",
+      "lane": "test_hs_rows_match_recomputation_on_cuda",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "AIS_traj0000.nc..AIS_traj0099.nc, no duplicates or gaps; 4 ranks contributed",
+      "device": "0-3",
+      "feature": "AIS implicit, 100 paths, real mpirun -n 4, deterministic path ownership",
+      "lane": "test_a_hundred_paths_under_real_mpi_produce_exactly_their_own_files",
+      "precision": "mixed",
+      "result": "passed"
+    },
+    {
+      "detail": "cMD.xml identical byte for byte; DCD identical frame for frame (its header carries a creation timestamp)",
+      "device": "-",
+      "feature": "direct wrapper vs md-run parity, cMD implicit",
+      "lane": "test_the_generated_wrapper_and_md_run_agree_for_a_stage",
+      "precision": "mixed",
+      "result": "passed"
+    }
+  ],
+  "openmm": "8.6.0.dev-c6173db",
+  "python": "3.12.14",
+  "source_sites": {
+    "by_operation": {
+      "checkpoint": 6,
+      "construct": 6,
+      "derive": 11,
+      "evaluate": 9,
+      "integrate": 3,
+      "minimize": 2,
+      "parameters": 7,
+      "report": 1
+    },
+    "classified_as_not_reaching_a_device": 4,
+    "exercised_by_a_lane": 26,
+    "lanes_for_site": {
+      "ais/decomposition.py::ComponentProbe.measure": "test_ais_decomposition_lane, test_ais_on_explicit_solvent",
+      "ais/run.py::_state_row": "test_ais_decomposition_lane (system_printout is set in every AIS lane)",
+      "ais/run.py::run_one_path": "test_md_run_mpi_gpu.py, test_ais_decomposition_lane",
+      "ais/run.py::run_one_path.direct_potential": "test_ais_decomposition_lane, test_hs_rows_match_recomputation_on_cuda",
+      "ais/run.py::run_one_path.save_checkpoint": "test_md_run_mpi_gpu.py resume tests, test_hs_rows_match_recomputation_on_cuda",
+      "ais/run.py::run_one_path.write_frame": "test_ais_reads_a_netcdf_source_on_cuda, test_ais_decomposition_lane",
+      "md/_stages.py::set_restraint": "test_cmd_cuda_smoke.py, test_cuda_precision_lane (restrained NVT)",
+      "md/_stages.py::write_final_state": "every cMD lane; asserted in test_explicit_solvent_npt_lane",
+      "md/phase_space.py::PhaseSpaceReporter.report": "test_multi_rank_rrest2_with_a_real_reservoir (writes the stream on CUDA and consumes it as a reservoir), test_cmd_restart_integration.py (its committed counts across a resume)",
+      "md/stage.py::_CheckpointWithFingerprint.report": "test_cmd_restart_integration.py, test_cuda_precision_lane",
+      "md/stage.py::stage_main": "test_cmd_cuda_smoke.py, test_cmd_restart_integration.py, test_cuda_precision_lane, test_hmr_timestep_lane",
+      "openmm/builders.py::_write_initial_state": "build-top in every lane's fixture",
+      "openmm/platform_policy.py::_prove_cuda_initialises": "test_platform_policy.py, and every preflight in every lane below",
+      "openmm/platform_policy.py::resolve_platform_request": "test_cuda_precision_lane, test_explicit_device_placement_lane",
+      "remd/driver.py::ReplicaRun._build_platform": "test_md_run_mpi_gpu.py::test_each_rank_kept_its_own_record_and_ran_on_cuda",
+      "remd/engine.py::ReplicaEngine.__init__": "test_md_run_mpi_gpu.py, test_rrest2_cuda_smoke.py",
+      "remd/engine.py::ReplicaEngine.get_configuration": "test_multi_rank_rest2_ladders_of_several_sizes, test_explicit_solvent_rest2_lane",
+      "remd/engine.py::ReplicaEngine.integrator_state": "test_md_run_mpi_gpu.py ladder resume",
+      "remd/engine.py::ReplicaEngine.load_integrator_state": "test_md_run_mpi_gpu.py ladder resume",
+      "remd/engine.py::ReplicaEngine.minimise": "test_multi_rank_rest2_ladders_of_several_sizes (its equilibration chain)",
+      "remd/engine.py::ReplicaEngine.potential_energy": "test_md_run_mpi_gpu.py, test_multi_rank_rest2_ladders_of_several_sizes",
+      "remd/engine.py::ReplicaEngine.propagate": "test_md_run_mpi_gpu.py, test_multi_rank_rest2_ladders_of_several_sizes",
+      "remd/engine.py::ReplicaEngine.set_configuration": "test_multi_rank_rrest2_with_a_real_reservoir",
+      "remd/engine.py::ReplicaEngine.set_velocities_to_temperature": "test_multi_rank_rest2_ladders_of_several_sizes",
+      "remd/engine.py::count_cuda_devices": "test_explicit_device_placement_lane",
+      "rest2/scaler.py::TauSwitcher.set_amplitude": "test_ais_decomposition_lane"
+    },
+    "sites": {
+      "ais/decomposition.py::ComponentProbe.measure": [
+        "derive",
+        "evaluate"
+      ],
+      "ais/run.py::_state_row": [
+        "derive",
+        "evaluate"
+      ],
+      "ais/run.py::run_one_path": [
+        "checkpoint",
+        "construct",
+        "derive",
+        "evaluate",
+        "integrate",
+        "parameters"
+      ],
+      "ais/run.py::run_one_path.direct_potential": [
+        "derive",
+        "evaluate"
+      ],
+      "ais/run.py::run_one_path.save_checkpoint": [
+        "checkpoint"
+      ],
+      "ais/run.py::run_one_path.write_frame": [
+        "derive",
+        "evaluate"
+      ],
+      "md/_stages.py::set_restraint": [
+        "parameters"
+      ],
+      "md/_stages.py::write_final_state": [
+        "evaluate"
+      ],
+      "md/phase_space.py::PhaseSpaceReporter.report": [
+        "derive"
+      ],
+      "md/stage.py::_CheckpointWithFingerprint.report": [
+        "checkpoint"
+      ],
+      "md/stage.py::stage_main": [
+        "checkpoint",
+        "construct",
+        "derive",
+        "integrate",
+        "minimize",
+        "parameters",
+        "report"
+      ],
+      "openmm/builders.py::_write_initial_state": [
+        "construct",
+        "evaluate",
+        "parameters"
+      ],
+      "openmm/platform_policy.py::_prove_cuda_initialises": [
+        "construct"
+      ],
+      "openmm/solvation.py::solvate": [
+        "derive"
+      ],
+      "remd/driver.py::ReplicaRun._read_initial_configuration": [
+        "derive"
+      ],
+      "remd/engine.py::ReplicaEngine.__init__": [
+        "construct"
+      ],
+      "remd/engine.py::ReplicaEngine.get_configuration": [
+        "derive",
+        "evaluate"
+      ],
+      "remd/engine.py::ReplicaEngine.integrator_state": [
+        "checkpoint"
+      ],
+      "remd/engine.py::ReplicaEngine.load_integrator_state": [
+        "checkpoint"
+      ],
+      "remd/engine.py::ReplicaEngine.minimise": [
+        "minimize"
+      ],
+      "remd/engine.py::ReplicaEngine.potential_energy": [
+        "derive",
+        "evaluate"
+      ],
+      "remd/engine.py::ReplicaEngine.propagate": [
+        "integrate"
+      ],
+      "remd/engine.py::ReplicaEngine.set_configuration": [
+        "parameters"
+      ],
+      "remd/engine.py::ReplicaEngine.set_velocities_to_temperature": [
+        "parameters"
+      ],
+      "remd/engine.py::count_cuda_devices": [
+        "construct"
+      ],
+      "rest2/scaler.py::TauSwitcher.set_amplitude": [
+        "parameters"
+      ]
+    },
+    "total": 26,
+    "unclassified": 0
+  }
+}
