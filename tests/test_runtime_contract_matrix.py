@@ -396,6 +396,7 @@ def test_the_group_file_is_written_with_paths_relative_to_itself(tmp_path):
 
 # --- a serial protocol under a plural launch -------------------------------------------------
 
+@pytest.mark.slow
 def test_a_cmd_stage_launched_under_mpirun_is_refused(workspace, tmp_path, good_config):
     """N ranks running one serial stage is N simulations over ONE set of output paths.
 
@@ -407,7 +408,9 @@ def test_a_cmd_stage_launched_under_mpirun_is_refused(workspace, tmp_path, good_
     import shutil
 
     if shutil.which("mpirun") is None:
-        pytest.skip("no mpirun on PATH; this contract is checked under a real launcher only")
+        pytest.fail("no mpirun on PATH. This test is in the slow lane precisely because it needs "
+                    "a real launcher; a missing one there is an unmet criterion, not a neutral "
+                    "absence.")
 
     destination = tmp_path / "plural-cmd"
     before = _snapshot(destination)
@@ -421,12 +424,13 @@ def test_a_cmd_stage_launched_under_mpirun_is_refused(workspace, tmp_path, good_
     _untouched(destination, before)
 
 
+@pytest.mark.slow
 def test_the_all_in_one_workflow_is_refused_under_a_plural_launch(workspace, tmp_path,
                                                                    good_config):
     import shutil
 
     if shutil.which("mpirun") is None:
-        pytest.skip("no mpirun on PATH; this contract is checked under a real launcher only")
+        pytest.fail("no mpirun on PATH; see the note on the test above.")
 
     destination = tmp_path / "plural-chain"
     before = _snapshot(destination)
