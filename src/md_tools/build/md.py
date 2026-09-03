@@ -126,6 +126,17 @@ MD_SCHEMA = Schema(
                       "from, and it is written with a fingerprint of the configuration that "
                       "produced it so it cannot be resumed under different settings."),
         ], doc="Output intervals, in steps."),
+        Section("collective_variables", [
+            Field("file", str, default=None, nullable=True,
+                  doc="Path to a cv.yaml defining the torsions to report, resolved relative to "
+                      "THIS configuration file. Null disables collective-variable reporting."),
+            Field("interval_steps", int, default=0, minimum=0, unit="steps",
+                  doc="Steps between collective-variable observations. Independent of the "
+                      "trajectory and state-data intervals, and may be more frequent than "
+                      "either. 0 disables collective-variable reporting."),
+        ], doc="Torsion collective-variable reporting. Observation only: no Force is added and "
+               "the Hamiltonian is unchanged. Both keys disable it by default, and supplying "
+               "only one of them is an error rather than a guess."),
         Section("rest2", [
             Field("number_of_replicas", int, default=4, minimum=2, maximum=64,
                   doc="States in the ladder. Every state runs at the same physical temperature."),
@@ -363,7 +374,33 @@ def _check_ais(resolved: dict[str, Any]) -> None:
         raise ConfigError(str(error)) from None
 
 
-MD_SCHEMA.checks = (_check_protocol, _check_timestep)
+def _check_collective_variables(resolved: dict[str, Any]) -> None:
+    """`file` and `interval_steps` are given together or not at all.
+
+    Either one alone is a configuration that cannot be honoured, and both plausible readings of it
+    are wrong. A file with no interval names torsions nobody asked to be measured; an interval
+    with no file asks for observations of nothing. Choosing a default for the missing half would
+    silently produce a run that reports on a schedule its author never wrote, or a run that
+    quietly reports nothing at all while the configuration says otherwise -- and CV output
+    failures are simulation failures, never a silent disabling.
+    """
+    block = resolved.get("collective_variables") or {}
+    path = block.get("file")
+    interval = int(block.get("interval_steps") or 0)
+    if (path is None) == (interval == 0):
+        return                                       # both off, or both on: a complete statement
+    if path is None:
+        raise ConfigError(
+            f"collective_variables.interval_steps = {interval} asks for observations every "
+            f"{interval} steps, but collective_variables.file is null, so there is nothing to "
+            f"measure. Give a cv.yaml, or set interval_steps to 0 to disable reporting.")
+    raise ConfigError(
+        f"collective_variables.file = {path!r} names torsions to report, but "
+        f"collective_variables.interval_steps is 0, which disables reporting. Set an interval, "
+        f"or set file to null to disable reporting deliberately.")
+
+
+MD_SCHEMA.checks = (_check_protocol, _check_timestep, _check_collective_variables)
 
 
 def _refuse_retired_platform(document: dict[str, Any]) -> None:
@@ -599,13 +636,16 @@ raise SystemExit(run_generated_workflow(__file__))
 #: Which sections a protocol's inputs carry, and which resolved blocks feed each one. Overlapping
 #: keys (timestep_fs, temperature_K and the reporting intervals are readable in &cntrl and &AIS
 #: alike) are emitted in &cntrl only, so an input never states one setting twice.
+#: `collective_variables` rides in &cntrl for every protocol: the cadence and the definition file
+#: are properties of the run, not of the exchange ladder or the switching schedule, and every
+#: protocol reports them the same way.
 _IN_SECTIONS = {
-    "cMD": (("cntrl", ("", "dynamics", "stages", "reporting")),),
-    "REST2": (("cntrl", ("", "dynamics", "stages", "reporting")),
+    "cMD": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables")),),
+    "REST2": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables")),
               ("remd", ("rest2", "reservoir"))),
-    "rREST2": (("cntrl", ("", "dynamics", "stages", "reporting")),
+    "rREST2": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables")),
                ("remd", ("rest2", "reservoir"))),
-    "AIS": (("cntrl", ("", "dynamics", "reporting")),
+    "AIS": (("cntrl", ("", "dynamics", "reporting", "collective_variables")),
             ("AIS", ("ais", "ais_source"))),
 }
 

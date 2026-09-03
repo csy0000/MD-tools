@@ -61,6 +61,10 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "solute_printout": "reporting.solute_printout",
         "system_printout": "reporting.system_printout",
         "checkpoint_printout": "reporting.checkpoint_printout",
+        # Torsion collective-variable reporting. `cv_file` rather than `file`, because a bare
+        # `file` in an &cntrl block reads as "the input file" to anyone who has written an mdin.
+        "cv_file": "collective_variables.file",
+        "cv_interval_steps": "collective_variables.interval_steps",
     },
     "remd": {
         "number_of_replicas": "rest2.number_of_replicas",
@@ -97,6 +101,10 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "solute_printout": "reporting.solute_printout",
         "system_printout": "reporting.system_printout",
         "checkpoint_printout": "reporting.checkpoint_printout",
+        # Torsion collective-variable reporting. `cv_file` rather than `file`, because a bare
+        # `file` in an &cntrl block reads as "the input file" to anyone who has written an mdin.
+        "cv_file": "collective_variables.file",
+        "cv_interval_steps": "collective_variables.interval_steps",
     },
 }
 

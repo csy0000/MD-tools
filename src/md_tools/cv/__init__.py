@@ -7,8 +7,11 @@ design and not an implementation detail.
 
 from .definition import (CVDefinition, CVDefinitionError, SCHEMA_VERSION, TorsionCV,
                          load_cv_definition, parse_cv_definition, resolve_selector)
+from .reporter import CVReportError, CVSeries
+from .schedule import CVScheduleError, check_divides, observation_steps
 from .torsion import TorsionError, minimum_image, torsion_degrees
 
-__all__ = ["CVDefinition", "CVDefinitionError", "SCHEMA_VERSION", "TorsionCV", "TorsionError",
-           "load_cv_definition", "minimum_image", "parse_cv_definition", "resolve_selector",
+__all__ = ["CVDefinition", "CVDefinitionError", "CVReportError", "CVScheduleError", "CVSeries",
+           "SCHEMA_VERSION", "TorsionCV", "TorsionError", "check_divides", "load_cv_definition",
+           "minimum_image", "observation_steps", "parse_cv_definition", "resolve_selector",
            "torsion_degrees"]
