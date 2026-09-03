@@ -1537,15 +1537,26 @@ def test_write_the_coverage_evidence(hardware, request):
     for kinds in found.values():
         for kind in kinds:
             by_kind[kind] = by_kind.get(kind, 0) + 1
+    # Counted against what the matcher ACTUALLY FOUND, not against the length of the tables. The
+    # two differ -- a table also documents functions the operation matcher does not flag, such as
+    # platform resolution, which builds a Platform rather than touching a Context -- and adding
+    # the table lengths together produced a total larger than the number of sites there are.
+    exercised = sorted(set(found) & set(CUDA_SITES))
+    not_a_device = sorted(set(found) & set(NON_CUDA_CONTEXT_SITES))
+    also_documented = sorted(set(CUDA_SITES) - set(found))
     lines += ["", "### Coverage counts", "",
-              f"* {len(found)} source functions perform a CUDA-relevant operation",
-              f"* {len(CUDA_SITES)} are exercised by a lane below; "
-              f"{len(NON_CUDA_CONTEXT_SITES)} are classified as not reaching a device, with the "
-              f"reason recorded in the test",
+              f"* {len(found)} source functions perform a CUDA-relevant operation, by the "
+              f"operation matcher in `CUDA_OPERATIONS`",
+              f"* of those, {len(exercised)} are exercised by a lane below and "
+              f"{len(not_a_device)} are classified as not reaching a device, with the reason "
+              f"recorded in the test",
               "* 0 unclassified -- `test_every_cuda_operation_in_the_source_is_in_this_matrix` "
               "fails the suite if that is ever not true",
-              "* by operation: " + ", ".join(f"{kind} {count}"
-                                             for kind, count in sorted(by_kind.items())),
+              f"* {len(also_documented)} further function(s) carry a lane without being flagged "
+              f"by the matcher (they resolve a Platform rather than touch a Context): "
+              + ", ".join(f"`{site}`" for site in also_documented),
+              "* by operation, counting a function once per operation kind it performs: "
+              + ", ".join(f"{kind} {count}" for kind, count in sorted(by_kind.items())),
               ""]
     lines += ["", "## Lanes executed in this run", "",
               "| lane | feature | precision | device | result | detail |", "|---|---|---|---|---|---|"]
@@ -1570,10 +1581,11 @@ def test_write_the_coverage_evidence(hardware, request):
         "driver": hardware[0]["driver"] if hardware else None,
         "devices": hardware,
         "source_sites": {
-            "total": len(found),
-            "exercised_by_a_lane": len(CUDA_SITES),
-            "classified_as_not_reaching_a_device": len(NON_CUDA_CONTEXT_SITES),
+            "total_performing_a_cuda_operation": len(found),
+            "exercised_by_a_lane": len(exercised),
+            "classified_as_not_reaching_a_device": len(not_a_device),
             "unclassified": 0,
+            "documented_with_a_lane_but_not_flagged_by_the_matcher": also_documented,
             "by_operation": by_kind,
             "sites": {site: sorted(kinds) for site, kinds in sorted(found.items())},
             "lanes_for_site": {site: lane for site, (_what, lane) in sorted(CUDA_SITES.items())},
