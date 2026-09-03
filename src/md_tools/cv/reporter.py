@@ -114,9 +114,10 @@ class CVSeries:
         body = dict(self.definition.resolved())
         body["column_order"] = self.columns()
         body.update(self._sidecar_extra)
-        sidecar = self.path.with_suffix("").with_suffix(SIDECAR_SUFFIX) \
-            if self.path.suffixes[-2:] == [".cv", ".csv"] else \
-            self.path.with_suffix(SIDECAR_SUFFIX)
+        # `<stem>.cv.csv` -> `<stem>.cv.json`. Spelled by string rather than `with_suffix`,
+        # which would have to be applied twice for a two-part suffix and reads as a bug either way.
+        sidecar = Path(str(self.path)[:-len(".csv")] + ".json") \
+            if str(self.path).endswith(".cv.csv") else self.path.with_suffix(SIDECAR_SUFFIX)
         try:
             sidecar.write_text(json.dumps(body, indent=2, sort_keys=False) + "\n",
                                encoding="utf-8")

@@ -516,6 +516,14 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
         "friction_per_ps": dyn["friction_per_ps"],
         "barostat_interval_steps": dyn["barostat_interval_steps"],
         "seed": dyn["seed"],
+        # In `common`, so EVERY dynamics stage reports the same collective variables on the same
+        # cadence. Unlike phase space -- which is production-only because a reservoir must sample
+        # the ladder's own distribution and the equilibration stages are restrained and not yet at
+        # equilibrium -- a CV is an observation of whatever the stage is actually doing, and
+        # watching a torsion relax through equilibration is a legitimate thing to want. The
+        # minimisation stage still produces no series: it has `steps == 0`, and the schedule
+        # refuses to invent a time axis for iterations that have no timestep.
+        "collective_variables": dict(resolved.get("collective_variables") or {}),
     }
     plan: list[dict[str, Any]] = []
     if resolved["protocol"] == "AIS":

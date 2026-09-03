@@ -732,6 +732,64 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                                       kineticEnergy=True, totalEnergy=True, temperature=True,
                                       volume=not implicit, density=not implicit, speed=True,
                                       separator="  "))
+            # -- collective variables ------------------------------------------------------
+            #
+            # Its own cadence, independent of the trajectory and the state CSV and possibly finer
+            # than both -- that independence is the whole reason for a separate series. The
+            # interval is required to divide the stage's step count exactly, so that step 0 and
+            # the final step each appear once and the spacing is uniform; a partial final gap
+            # would break every downstream time-series analysis silently.
+            cv_series = cv_reporter = None
+            cv_block = stage.get("collective_variables") or {}
+            if int(cv_block.get("interval_steps") or 0) > 0:
+                from ..cv import CVSeries, load_cv_definition, observation_steps
+                from .cv_report import CVReporter
+
+                interval = int(cv_block["interval_steps"])
+                observation_steps(steps, interval, where=f"stage {name}")
+                definition = load_cv_definition(
+                    cv_block["file"], topology=pdb.topology,
+                    particles=system.getNumParticles())
+                cv_series = CVSeries(
+                    cv_csv_path(traj_path, stage), definition,
+                    extra_columns=("step", "time_ps", "trajectory_frame_index"),
+                    sidecar_extra={"stage": name, "interval_steps": interval,
+                                   "fingerprint": fingerprint})
+                # On a resume, append after what is already there. The truncation back to the
+                # count the selected generation committed has ALREADY happened, above, in
+                # `_truncate_streams_to_committed` -- which cuts every appendable stream together,
+                # because they flush at different cadences and trimming one alone leaves the
+                # others permanently ahead of the step count. So the rows present here are exactly
+                # the committed ones, and re-deriving that number would be a second truncation
+                # rule that could disagree with the first.
+                existing = 0
+                if done:
+                    existing = _count_stream("collective_variables",
+                                             cv_csv_path(traj_path, stage)) or 0
+                cv_series.open(append_from=existing)
+
+                trajectory_interval = int(stage.get("trajectory_interval_steps") or 0)
+
+                def _frame_for(step, _interval=trajectory_interval):
+                    # DCD frames are written every `_interval` steps and the first lands at the
+                    # first such step, not at 0. Empty (None) whenever no frame exists here --
+                    # never 0 or -1, both of which are real frame indices.
+                    if _interval <= 0 or step <= 0 or step % _interval:
+                        return None
+                    return step // _interval - 1
+
+                cv_reporter = CVReporter(
+                    cv_series, interval, periodic=not implicit, timestep_fs=timestep_fs,
+                    step_offset=done, frame_index_for_step=_frame_for)
+                # STEP 0, written here because an OpenMM reporter cannot fire before the first
+                # step. Only on a fresh start: on a resume, step 0 was written by the segment
+                # that began the stage and is already in the file.
+                if done == 0:
+                    cv_reporter.observe(
+                        simulation.context.getState(getPositions=True,
+                                                    enforcePeriodicBox=not implicit), 0)
+                simulation.reporters.append(cv_reporter)
+
             if hamiltonian_identity_record is not None:
                 from ..md.phase_space import PhaseSpaceReporter
 
@@ -833,7 +891,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         if cv_csv.is_file():
             outputs["collective_variables"] = file_facts(cv_csv)
             log.field(cv_csv.name, f"{cv_csv}  (collective variables)")
-            cv_sidecar = cv_csv.with_suffix(".yaml")
+            cv_sidecar = Path(str(cv_csv)[:-len(".csv")] + ".json")
             if cv_sidecar.is_file():
                 outputs["collective_variables_definition"] = file_facts(cv_sidecar)
         log.update(outputs=outputs)
