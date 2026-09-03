@@ -44,3 +44,5 @@ Each method page carries a minimal, runnable `example.config` beside it.
 | page | |
 |---|---|
 | [v0.5.0](release-notes/v0.5.0.md) | the current development cycle: what changed and what was verified |
+| [Runtime closure and CV evidence](release-notes/20260904-cv-and-runtime-closure-evidence.md) | the measured lanes, hardware, wheel and CUDA coverage behind the collective-variable and runtime-closure work |
+| [CUDA coverage matrix](release-notes/cuda-coverage-matrix.md) | every CUDA-relevant source site and the lane that exercises it, generated from a real run |
