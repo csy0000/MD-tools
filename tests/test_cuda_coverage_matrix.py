@@ -547,7 +547,7 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
     from md_tools.ais.decomposition import reconstruction_tolerance
 
     precision = record["acceleration"].get("cuda_precision") or "mixed"
-    checked = 0
+    checked = aligned = 0
     for row in rows:
         total = float(row["total_work_kj_mol"])
         parts = sum(float(row[name]) for name in
@@ -557,14 +557,31 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
         assert abs(parts - total) <= max(allowed, 1e-6), (
             f"step {row['switch_step']}: components sum to {parts} against a measured "
             f"{total} at {precision} precision")
-        reconstructed = float(row["potential_reconstructed_kj_mol"])
-        assert reconstructed == reconstructed, "a NaN reached the reconstruction"
+        # The observation potentials are present only on rows whose coordinate was SAVED. An
+        # unaligned row has them empty by schema -- that is the correction, not a gap -- so the
+        # identity is checked where it applies and the emptiness is asserted where it does not.
+        if str(row.get("coordinate_frame_index", "")).strip() == "":
+            for name in ("potential_non_scaled_kj_mol", "potential_sqrt_scaled_kj_mol",
+                         "potential_lin_scaled_kj_mol", "potential_reconstructed_kj_mol",
+                         "potential_direct_kj_mol"):
+                assert row[name] == "", (row["switch_step"], name)
+            continue
+        amplitude = 1.0 - float(row["tau_after"])
+        expected = (float(row["potential_non_scaled_kj_mol"])
+                    + amplitude * float(row["potential_sqrt_scaled_kj_mol"])
+                    + amplitude * amplitude * float(row["potential_lin_scaled_kj_mol"]))
+        direct = float(row["potential_direct_kj_mol"])
+        assert abs(expected - float(row["potential_reconstructed_kj_mol"])) < 1e-3
+        assert abs(expected - direct) <= reconstruction_tolerance(direct, precision=precision), (
+            f"step {row['switch_step']}: reconstructed {expected} against direct {direct}")
+        aligned += 1
         checked += 1
     assert checked >= 2
+    assert aligned >= 1, "no frame-aligned row carried observation potentials"
     _record("test_ais_decomposition_lane",
             feature="AIS implicit, three-group decomposition and work-sum identity",
             precision=precision, device=record["acceleration"].get("cuda_device_index") or "-",
-            detail=f"{checked} rows checked; "
+            detail=f"{checked} rows checked, {aligned} frame-aligned; "
                    f"{counters['total_potential_energy_evaluations']} energy evaluations "
                    f"({counters['basis_probe_energy_evaluations']} probe, "
                    f"{counters['direct_work_energy_evaluations']} work, "
