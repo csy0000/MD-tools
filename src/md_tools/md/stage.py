@@ -642,6 +642,12 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             # checkpoint describing it; keeping those extra frames would put the coordinates
             # permanently ahead of the step count and misattribute every later frame. Never
             # inferred from whichever file happens to be longest.
+            # THE CV PREFIX, validated BEFORE anything is cut. A row count detects a short file;
+            # it does not detect a committed row that was edited in place, and a continuation
+            # that has already truncated cannot decide afterwards that it should have refused.
+            _validate_cv_prefix(meta.get("cv_prefix"), stage=stage, trajectory=traj_path,
+                                fingerprint=fingerprint)
+
             trimmed = _truncate_streams_to_committed(
                 meta.get("streams") or {}, trajectory=traj_path,
                 state_csv=log_path.with_suffix(".csv"), log=log,
@@ -710,6 +716,11 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             out.field("minimisation", f"{iterations} iterations")
             simulation.minimizeEnergy(maxIterations=iterations)
 
+        # Declared BEFORE the dynamics block, because the completion record below reads them and
+        # a minimisation (`remaining == 0`) never enters that block at all. They stay None there,
+        # which is the truthful answer: a stage with no dynamics writes no CV series.
+        cv_series = cv_reporter = None
+
         remaining = steps - done
         if remaining > 0:
             if stage.get("trajectory_interval_steps"):
@@ -739,7 +750,6 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             # interval is required to divide the stage's step count exactly, so that step 0 and
             # the final step each appear once and the spacing is uniform; a partial final gap
             # would break every downstream time-series analysis silently.
-            cv_series = cv_reporter = None
             cv_block = stage.get("collective_variables") or {}
             if int(cv_block.get("interval_steps") or 0) > 0:
                 from ..cv import CVSeries, load_cv_definition, observation_steps
@@ -827,7 +837,11 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                             for name in stage_streams(
                                 trajectory=traj_path,
                                 state_csv=log_path.with_suffix(".csv"),
-                                collective_variables=cv_csv_path(traj_path, stage))}))
+                                collective_variables=cv_csv_path(traj_path, stage))},
+                        # A callable, read AT COMMIT TIME like the stream counts: the digest has
+                        # to cover the rows that exist when the generation commits, not the ones
+                        # that existed when the reporter was constructed.
+                        cv_prefix=(lambda: _cv_prefix_record(cv_series))))
             if done == 0 and not args.continue_from and iterations == 0:
                 simulation.context.setVelocitiesToTemperature(
                     float(stage["temperature_K"]) * unit.kelvin, int(seed))
@@ -904,6 +918,32 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             if cv_sidecar.is_file():
                 outputs["collective_variables_definition"] = file_facts(cv_sidecar)
         log.update(outputs=outputs)
+        # CV COST, recorded separately from any energy-evaluation counter. A position-only torsion
+        # is not an energy evaluation, and folding it into that total would corrupt the one number
+        # that says how expensive the Hamiltonian is. `cv_rows` counts written rows and
+        # `cv_evaluations` counts torsions evaluated -- for several named torsions those differ,
+        # and conflating them would understate the cost by exactly the multiplicity.
+        if cv_series is not None:
+            cost = dict(cv_series.cost())
+            # On a resumed stage the in-memory counters cover THIS segment only. The committed
+            # prefix carries what earlier segments spent, so the run's total is their sum and both
+            # halves stay visible rather than one silently replacing the other.
+            earlier = ((committed or {}).get("state", {}).get("cv_prefix") or {}).get("cost") \
+                if done else None
+            if earlier:
+                cost = {
+                    "cv_evaluations": int(earlier.get("cv_evaluations", 0))
+                    + int(cost["cv_evaluations"]),
+                    "cv_rows": int(cv_series.rows_written),
+                    "cv_seconds": round(float(earlier.get("cv_seconds", 0.0))
+                                        + float(cost["cv_seconds"]), 6),
+                    "segment_cv_evaluations": int(cv_series.evaluations),
+                    "segment_cv_seconds": round(float(cv_series.seconds), 6),
+                }
+            log.update(collective_variable_cost=cost)
+            log.field("CV evaluations", f"{cost['cv_evaluations']} "
+                                        f"({cost['cv_rows']} row(s), "
+                                        f"{cost['cv_seconds']:.3f} s)")
         log.complete()
         log.heading("Summary")
         log(f"  {name}: {steps} steps completed, {steps * timestep_fs / 1000.0:g} ps")
@@ -942,6 +982,45 @@ def _checkpoint_identity(stage, name, seed, acceleration, timestep_fs) -> dict[s
     return {"stage": name, "seed": int(seed), "timestep_fs": float(timestep_fs),
             "ensemble": stage.get("ensemble"), "platform": acceleration.name,
             "precision": (acceleration.properties or {}).get("Precision")}
+
+
+def _validate_cv_prefix(entry, *, stage, trajectory, fingerprint):
+    """Refuse a continuation whose committed CV rows are not the rows that were committed.
+
+    Silent when this stage reports no collective variables -- there is nothing to protect. A
+    stage that DOES report them and finds no recorded prefix refuses with a compatibility
+    message rather than guessing, because "which rows are durable" is exactly what the record
+    exists to say.
+    """
+    if int((stage.get("collective_variables") or {}).get("interval_steps") or 0) <= 0:
+        return
+    from ..cv import prefix as cv_prefix
+    from ..run.preflight import cv_sidecar_path
+
+    path = cv_csv_path(Path(trajectory), stage)
+    if not path.is_file():
+        raise SystemExit(
+            f"{path} is missing, and this stage's checkpoint vouches for a committed "
+            f"collective-variable prefix. Delete the checkpoint tree to start the stage over.")
+    try:
+        cv_prefix.validate(path, entry, sidecar=cv_sidecar_path(path))
+    except cv_prefix.CVPrefixError as refusal:
+        raise SystemExit(f"this stage cannot be continued: {refusal}") from None
+
+
+def _cv_prefix_record(series):
+    """The committed CV prefix for the checkpoint, or None when reporting is disabled.
+
+    Read from the FILE rather than the writer's counters: the digest must describe the bytes on
+    disk at the instant the generation commits, which is the only thing a resume can check.
+    """
+    if series is None:
+        return None
+    from ..cv import prefix as cv_prefix
+
+    rows = int(series.rows_written)
+    return cv_prefix.record(series.path, rows=rows, sidecar=series.sidecar,
+                            definition=series.definition, cost=series.cost())
 
 
 def _trajectory_holds_frames(path: Path) -> bool:
@@ -1115,13 +1194,15 @@ class _CheckpointWithFingerprint:
     """
 
     def __init__(self, directory, interval: int, *, fingerprint: str,
-                 identity=None, streams=None) -> None:
+                 identity=None, streams=None, cv_prefix=None) -> None:
         self._directory = Path(directory)
         self._interval = int(interval)
         self._fingerprint = fingerprint
         self._identity = dict(identity or {})
         #: name -> callable returning the committed count for that stream, read at commit time.
         self._streams = dict(streams or {})
+        #: callable returning the committed CV prefix record, or None when CVs are disabled.
+        self._cv_prefix = cv_prefix
 
     def describeNextReport(self, simulation):
         steps = self._interval - simulation.currentStep % self._interval
@@ -1136,7 +1217,10 @@ class _CheckpointWithFingerprint:
             state={"fingerprint": self._fingerprint,
                    "steps_done": int(simulation.currentStep),
                    **self._identity,
-                   "streams": {name: int(count()) for name, count in self._streams.items()}})
+                   "streams": {name: int(count()) for name, count in self._streams.items()},
+                   # In the SAME generation transaction as the Context state, so the prefix a
+                   # resume trusts and the coordinates it restores were committed together.
+                   "cv_prefix": (self._cv_prefix() if self._cv_prefix else None)})
 
 
 # ---------------------------------------------------------------------------------------------
