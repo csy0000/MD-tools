@@ -91,7 +91,8 @@ The schedule must be exact, and is refused rather than rounded:
 | REST2 / rREST2 | divides `rest2.exchange_interval_steps` |
 | AIS | a multiple of `ais.parameter_update_interval_steps` **and** divides `ais.switching_steps` |
 
-Step 0 and the final step appear exactly once each. Minimisation produces no series — its
+Step 0 and the final step appear exactly once each, in **every** protocol including the REST2
+and rREST2 ladders. Minimisation produces no series — its
 iterations have no timestep, so a `time_ps` for them would be a fiction, and the intermediate
 geometries lie on no physical trajectory.
 
@@ -115,8 +116,8 @@ readable without the topology or the definition that produced it.
 
 | protocol | file | leading columns |
 |---|---|---|
-| cMD | `<stage>.cv.csv` | `step,time_ps,trajectory_frame_index` |
-| REST2 / rREST2 | `remd<N>.cv.csv` | `step,time_ps,exchange_attempt,state_index,tau,walker_index,exchange_phase,trajectory_frame_index` |
+| cMD | `<stage>.cv.csv` + `<stage>.cv.json` | `step,time_ps,trajectory_frame_index` |
+| REST2 / rREST2 | `remd<N>.cv.csv` + `remd<N>.cv.json` | `step,time_ps,exchange_attempt,state_index,tau,walker_index,exchange_phase,trajectory_frame_index` |
 | AIS | `path_NNNN/cv.csv` | `path_index,source_frame_index,protocol_step,time_ps,tau,observation_index,coordinate_frame_index` |
 | AIS | `AIS_cv.csv` | the aggregate, same columns |
 
@@ -141,6 +142,24 @@ state's series would contain values from trajectories that never visited it.
 The convention is enforced structurally (`cv` precedes `exchange` in `EVENT_ORDER`), written into
 every row as `exchange_phase`, and stated in every sidecar, so a reader never has to infer it and
 a future post-exchange row would be distinguishable rather than silently mixed in.
+
+Step 0 carries `exchange_attempt = -1`, because no attempt has been made yet, and the identity
+state-to-walker mapping in a fresh run.
+
+### What `trajectory_frame_index` means in a ladder
+
+**A row that names frame `k` was evaluated on exactly `remdN.nc[k]`.** That is the whole meaning
+of the column, and it is why the field is often empty at a step where a frame *was* written.
+
+The state trajectory frame is written from the **post-exchange** occupant; the CV row describes
+the **pre-exchange** one. For a state whose walker the exchange did not move, those are the same
+configuration and the frame is named. For a state that was swapped, they are different
+configurations — no frame in that file holds what that row measured — and the field is left
+empty. It is a **per-state** decision at the same step: at one exchange, some states name the
+frame and others do not.
+
+The field is never `-1`. `-1` is not a frame index, and writing it invites a reader to index from
+the end of the file.
 
 ### AIS alignment
 
@@ -168,6 +187,20 @@ series is truncated to the count the selected checkpoint generation committed be
 a continuation produces neither a duplicate row nor a gap; a series *shorter* than the checkpoint
 claims is refused rather than having the missing rows invented.
 
+**Steps are absolute.** OpenMM's `loadCheckpoint` restores the Context's step count, so
+`simulation.currentStep` is the single authority after a restore and nothing adds the
+already-completed count to it. A resumed run's grid is identical to an uninterrupted one's.
+
+**A ladder checkpoint records the committed CV row count.** A checkpoint that does not — one
+written by a build that reported CVs without binding their count into the transaction — refuses
+continuation with a compatibility message rather than guessing from the file length. Which rows
+are durable is exactly what the count exists to say.
+
+A changed definition refuses continuation: different atom indices, a reordered definition, a
+different interval, units, wrapping, sign or periodic convention, exchange-boundary convention,
+state index, tau, definition digest, or column set. Each would make the appended rows a different
+measurement sharing a column heading with the old ones.
+
 **CV output failure is simulation failure.** Reporting is never silently disabled.
 
 ## Cost
@@ -176,3 +209,24 @@ Evaluation count and wall time are recorded under their own `cv_*` names, delibe
 any energy-evaluation counter. A position-only torsion is not an energy evaluation, and folding it
 in would corrupt the one number that says how expensive the Hamiltonian is — the number used to
 compare protocols and to size a machine allocation.
+
+
+## Where the sidecar is, and what it is not
+
+The output sidecar is `<name>.cv.json`, beside the CSV it describes. Three files are deliberately
+not conflated:
+
+| file | what it is |
+|---|---|
+| `cv.yaml` | the **input** definition a person writes |
+| `cv.<digest>.yaml` | the content-addressed **copy** in the generated directory, which makes the tree movable |
+| `<name>.cv.json` | the **output** sidecar saying how to read the CSV beside it |
+
+Every one of them is named in exactly one place in the code. The inventory once named
+`<stage>.cv.yaml` — a file that never existed — so the real sidecar was in no inventory: not
+collision-checked, not removed by `--overwrite`, and free to survive a definition change and
+describe the new CSV with the old atom mapping.
+
+`md-openmm md-run` writes its own `resolved.config` into `-odir` and carries the definition there
+with it, so `-odir` holds everything needed to read its own output and both routes resolve the
+definition by the same single rule: *beside `resolved.config`*.

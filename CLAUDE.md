@@ -250,7 +250,8 @@ Do not change these without a failing test that demonstrates a defect.
   the trajectory — that is the point of a separate series. `interval_steps` divides the cMD stage
   length, the REST2/rREST2 `exchange_interval_steps`, and for AIS is a multiple of
   `parameter_update_interval_steps` *and* divides `switching_steps`. Step 0 and the final step
-  appear exactly once; minimisation produces no series, because its iterations have no timestep
+  appear exactly once **in every protocol, ladders included** — a ladder observes step 0 before a
+  single step is propagated, with `exchange_attempt = -1`; minimisation produces no series, because its iterations have no timestep
   and a `time_ps` for them would be a fiction. An interval that does not divide is refused, never
   rounded: a final partial gap breaks the uniform spacing every downstream time-series analysis
   assumes and none can detect.
@@ -265,6 +266,25 @@ Do not change these without a failing test that demonstrates a defect.
   with one, never filled with a nearest neighbour. Attaching a CV measured at `x_j` to a
   different observation's coordinate is the same class of error the two-probe separation exists
   to prevent, and it is invisible in the output.
+* **A REMD `trajectory_frame_index` names a frame holding exactly that row's configuration, and
+  is otherwise EMPTY.** The state frame is written from the post-exchange occupant and the CV row
+  describes the pre-exchange one, so at an accepted swap those are different configurations and
+  no frame in that file holds what the row measured. The decision is therefore PER STATE at the
+  same step. Never `-1`: that is not a frame index, and writing it invites a reader to index from
+  the end of the file.
+* **`simulation.currentStep` is the only absolute-step authority after a checkpoint restore.**
+  OpenMM's `loadCheckpoint` restores the Context's step count, so nothing may add the
+  already-completed count to it. Two step conventions in one runtime is the defect; an inert
+  offset argument left behind is the next person's bug, so such parameters are removed rather
+  than defaulted to zero.
+* **Every appendable CV stream has a committed count in the checkpoint that vouches for it.** A
+  continuation validates read-only before touching anything, truncates to that count, and appends.
+  A checkpoint with no recorded count REFUSES with a compatibility message rather than guessing
+  from file length -- which rows are durable is exactly what the count exists to say.
+* **The CV output sidecar is `<name>.cv.json`**, and is named in one place. It is not the input
+  `cv.yaml`, and not the content-addressed copy in the generated directory. The inventory once
+  named a `.cv.yaml` that never existed, so the real sidecar was governed by no collision or
+  overwrite policy at all.
 * **CV output failure is simulation failure.** Reporting is never silently disabled, and CV
   evaluation count and wall time are recorded under their own `cv_*` names — a position-only
   torsion is not an energy evaluation, and folding it into that total would corrupt the one
