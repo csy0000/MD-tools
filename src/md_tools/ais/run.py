@@ -2372,6 +2372,21 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             outputs["work_table"] = file_facts(out / WORK_TABLE, relative_to=out)
             outputs["work_summary"] = file_facts(out / WORK_SUMMARY, relative_to=out)
             outputs["hs_table"] = file_facts(out / HS_TABLE, relative_to=out)
+            # The aggregate CV table and the cost that produced it. Both were computed and
+            # then dropped: `write_work_table` returns the summed cost with its per-path records
+            # and nothing recorded it, so the global figure existed only inside the call. The
+            # file was likewise absent from the output inventory, which is what a downstream
+            # reader consults to find a run's artefacts.
+            cv_table = out / CV_TABLE
+            if cv_table.is_file():
+                outputs["collective_variables"] = file_facts(cv_table, relative_to=out)
+            if table.get("collective_variable_cost"):
+                log.update(collective_variable_cost=table["collective_variable_cost"])
+                total = table["collective_variable_cost"]["cumulative"]
+                log.field("CV cost", f"{total['cv_evaluations']} scalar evaluation(s) over "
+                                     f"{total['cv_observations']} observation(s), summed over "
+                                     f"{len(table['collective_variable_cost']['per_path'])} "
+                                     f"completed path(s)")
 
         log.heading("Outputs")
         log.field("paths completed", f"{len(completed)} of {len(chosen)}")
