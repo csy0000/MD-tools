@@ -1,5 +1,5 @@
 {
-  "commit": "129585c9dc28e5018b7198cec27c499a6c16c670",
+  "commit": "1cb47ebb8ef59a9ed1b015877d82bb98a89f3df8",
   "devices": [
     {
       "driver": "580.173.02",
@@ -58,7 +58,7 @@
   ],
   "dirty": false,
   "driver": "580.173.02",
-  "generated_utc": "2026-09-04T13:51:34.909952+00:00",
+  "generated_utc": "2026-09-04T21:04:01.743661+00:00",
   "lanes": [
     {
       "detail": "minimisation, restrained NVT, production, DCD, restart, checkpoint",
@@ -101,7 +101,7 @@
       "result": "passed"
     },
     {
-      "detail": "6 rows checked, 6 frame-aligned; 64 energy evaluations (24 work-basis probe, 16 work, 24 observation), 64 parameter updates in 0.506 s",
+      "detail": "6 rows checked, 6 frame-aligned; 64 energy evaluations (24 work-basis probe, 16 work, 24 observation), 64 parameter updates in 0.231 s",
       "device": "-",
       "feature": "AIS implicit, three-group decomposition and work-sum identity",
       "lane": "test_ais_decomposition_lane",
@@ -189,7 +189,7 @@
       "result": "passed"
     },
     {
-      "detail": "6 rows, worst |sum - total| = 1.319e-04 kJ/mol; 44 energy evaluations, 44 parameter updates in 2.046 s",
+      "detail": "6 rows, worst |sum - total| = 1.679e-04 kJ/mol; 44 energy evaluations, 44 parameter updates in 1.778 s",
       "device": "-",
       "feature": "AIS explicit (PME), three-group identity through the reciprocal sum",
       "lane": "test_ais_on_explicit_solvent",
@@ -197,7 +197,7 @@
       "result": "passed"
     },
     {
-      "detail": "112 energy evaluations and 112 parameter updates in 0.859 s of probing (7.67 ms per evaluation)",
+      "detail": "112 energy evaluations and 112 parameter updates in 0.286 s of probing (2.56 ms per evaluation)",
       "device": "-",
       "feature": "decomposition overhead, AIS implicit, update interval 1 step",
       "lane": "test_the_decomposition_cost_is_measured_on_a_large_system",
@@ -205,7 +205,7 @@
       "result": "passed"
     },
     {
-      "detail": "112 energy evaluations and 112 parameter updates in 4.658 s of probing (41.59 ms per evaluation)",
+      "detail": "112 energy evaluations and 112 parameter updates in 3.807 s of probing (33.99 ms per evaluation)",
       "device": "-",
       "feature": "decomposition overhead, AIS explicit, update interval 1 step",
       "lane": "test_the_decomposition_cost_is_measured_on_a_large_system",
@@ -221,7 +221,7 @@
       "result": "passed"
     },
     {
-      "detail": "3 rows, max |recorded - recomputed| = 4.494e-01 kJ/mol; 162 energy evaluations (90 work-basis probe, 60 work, 12 observation), 162 parameter updates",
+      "detail": "3 rows, max |recorded - recomputed| = 4.486e-01 kJ/mol; 162 energy evaluations (90 work-basis probe, 60 work, 12 observation), 162 parameter updates",
       "device": "-",
       "feature": "AIS explicit, HS rows recomputed at their own saved frames",
       "lane": "test_hs_rows_match_recomputation_on_cuda",
@@ -283,12 +283,12 @@
       "remd/driver.py::ReplicaRun._build_platform": "test_md_run_mpi_gpu.py::test_each_rank_kept_its_own_record_and_ran_on_cuda",
       "remd/engine.py::ReplicaEngine.__init__": "test_md_run_mpi_gpu.py, test_rrest2_cuda_smoke.py",
       "remd/engine.py::ReplicaEngine.get_configuration": "test_multi_rank_rest2_ladders_of_several_sizes, test_explicit_solvent_rest2_lane",
-      "remd/engine.py::ReplicaEngine.integrator_state": "test_md_run_mpi_gpu.py ladder resume",
-      "remd/engine.py::ReplicaEngine.load_integrator_state": "test_md_run_mpi_gpu.py ladder resume",
+      "remd/engine.py::ReplicaEngine.integrator_state": "test_cv_mpi_cuda_rrest2.py::test_interruption_and_resume_through_mpi_reproduce_the_reference, test_cv_mpi_cuda_lanes.py::test_cv_continuation_under_mpi_on_cuda",
+      "remd/engine.py::ReplicaEngine.load_integrator_state": "test_cv_mpi_cuda_rrest2.py::test_interruption_and_resume_through_mpi_reproduce_the_reference, test_cv_mpi_cuda_lanes.py::test_cv_continuation_under_mpi_on_cuda",
       "remd/engine.py::ReplicaEngine.minimise": "test_multi_rank_rest2_ladders_of_several_sizes (its equilibration chain)",
       "remd/engine.py::ReplicaEngine.potential_energy": "test_md_run_mpi_gpu.py, test_multi_rank_rest2_ladders_of_several_sizes",
       "remd/engine.py::ReplicaEngine.propagate": "test_md_run_mpi_gpu.py, test_multi_rank_rest2_ladders_of_several_sizes",
-      "remd/engine.py::ReplicaEngine.set_configuration": "test_multi_rank_rrest2_with_a_real_reservoir",
+      "remd/engine.py::ReplicaEngine.set_configuration": "test_multi_rank_rrest2_with_a_real_reservoir, test_cv_mpi_cuda_rrest2.py (a forced refresh at every exchange, with CV reporting on, under mpirun)",
       "remd/engine.py::ReplicaEngine.set_velocities_to_temperature": "test_multi_rank_rest2_ladders_of_several_sizes",
       "remd/engine.py::count_cuda_devices": "test_explicit_device_placement_lane",
       "rest2/scaler.py::TauSwitcher.set_amplitude": "test_ais_decomposition_lane"
