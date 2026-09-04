@@ -56,7 +56,10 @@ CUDA_SITES = {
         "CUDA is a device synchronise and a device-to-host copy of the positions. Deliberately "
         "positions only -- never `getEnergy` -- so a CV observation costs no Hamiltonian "
         "evaluation and cannot be confused with one in the run's cost accounting",
-        "test_ais_cv_output.py, and the AIS lanes in test_md_run_mpi_gpu.py"),
+        # NOT `test_ais_cv_output.py`: that file invokes `--cpu`, so it exercises this function
+        # on the CPU platform and is not CUDA evidence for it. It was cited here anyway, which is
+        # worse than an empty cell -- a gap invites work, a false entry closes the question.
+        "test_cv_cuda_lanes.py::test_ais_cv_and_decomposition_on_cuda_fresh_and_resumed"),
     "openmm/platform_policy.py::_prove_cuda_initialises": (
         "opens a one-particle CUDA Context to prove the platform works before any output exists",
         "test_platform_policy.py, and every preflight in every lane below"),
