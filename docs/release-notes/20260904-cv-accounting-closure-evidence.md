@@ -120,7 +120,52 @@ qualified in place, and the two missing methods have lanes of their own.
 
 ## Test lanes
 
-Filled from the runs recorded below; see the final report for the complete command list.
+| lane | command | result | wall |
+|---|---|---|---:|
+| fast / non-GPU | `pytest -q -m "not slow"` | **1282 passed**, 0 failed | 194.7 s |
+| ladder CV cost and two-interruption resume | `pytest tests/test_ladder_cv_cost_resume.py` | **6 passed** (REST2 and rREST2) | 45.9 s |
+| ladder walker identity and permutation | `pytest tests/test_ladder_walker_validation.py` | **8 passed** | 8.0 s |
+| ladder CV provenance | `pytest tests/test_ladder_cv_provenance.py` | **5 passed** | 21.5 s |
+| AIS pre-completion validation | `pytest tests/test_ais_precompletion_cv.py` | **12 passed** | 12.7 s |
+| AIS decomposition and CV resume | `pytest tests/test_ais_decomposition_resume.py` | **11 passed** | 43.0 s |
+| cMD committed prefix and two-interruption resume | `pytest tests/test_cv_committed_prefix.py` | **13 passed** | 21.0 s |
+| real MPI + CUDA, **REST2** | `pytest tests/test_cv_mpi_cuda_lanes.py` | **9 passed** | 91.0 s |
+| real MPI + CUDA, **rREST2** | `pytest tests/test_cv_mpi_cuda_rrest2.py` | **14 passed** (3 ranks × both velocity policies) | 92.1 s |
+| real MPI + CUDA, **AIS** | `pytest tests/test_cv_mpi_cuda_ais.py` | **6 passed** (2 ranks, 4 globally numbered paths) | 41.4 s |
+
+No `--cpu` appears in any of the three MPI+CUDA lanes; each fails rather than substituting a CPU
+platform when no device is available. Nothing was xfailed, skipped or deselected by hand.
+
+### Restoring the defects
+
+Each change was checked by putting the defect back and confirming the tests fail:
+
+* ladder context blobs disabled → both two-interruption tests fail, REST2 on diverging `phi`;
+* walker validation removed → all six negative cases fail, every one because the old code
+  returned an empty problem list;
+* AIS pre-completion validation reverted → the four new rules and the ordering assertion fail,
+  and the seven older rules still pass, which is the point: they were never wrong, only late;
+* ladder CV provenance reverted → the inventory and foreign-file tests fail.
+
+## Installed wheel, outside the checkout
+
+`md_tools-0.5.0.dev0-py3-none-any.whl`, sha256
+`99ac8fe0f1ff0788df615646ff1d589865b6e60a620ccd78e7206b69fe6a05f2`, installed into a fresh
+virtualenv and run from a directory outside the checkout. Import origin:
+`…/wheelenv2/lib/python3.12/site-packages/md_tools/__init__.py`.
+
+Both runs used a two-torsion definition and **no `--cpu`**, on `CUDA_VISIBLE_DEVICES=7`
+(NVIDIA GeForce RTX 3080, mixed precision).
+
+| run | invocations | result |
+|---|---|---|
+| cMD fresh | 1 | completed on CUDA; segment == cumulative == 13 observations / **26** scalar evaluations |
+| cMD multiply resumed | crash (5 rows) → crash (9 rows) → complete (13 rows) | series **byte-identical** to the uninterrupted reference; segment 4 obs / 8 evals, cumulative 13 obs / 26 evals |
+| AIS fresh | 1 | completed on CUDA; 5 rows, 10 scalar evaluations per path |
+| AIS multiply resumed | crash `after-work-row` → crash `after-frame` → complete | per-path `cv.csv` and the global `AIS_cv.csv` **byte-identical** to the uninterrupted reference; segment 3 obs / 6 evals, cumulative 5 obs / 10 evals; aggregate "sum over completed paths", 10 obs / 20 evals over 2 paths |
+
+The cumulative counter is exactly `rows × 2` in every case, which a reporter-call counter cannot
+produce — that is what the two-torsion definition is for.
 
 ## Hardware, MPI and versions
 
