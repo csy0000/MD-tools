@@ -337,7 +337,14 @@ def verify_manifest_entries(directory, record):
     """
     directory = Path(directory)
     problems: list[str] = []
-    for entry in (record or {}).get("series") or []:
+    entries = list((record or {}).get("series") or [])
+    n_states = len(entries)
+    #: state index -> {observation step: walker}, filled only for series that parsed cleanly.
+    #: The permutation check below runs across whatever this collected: a state whose file is
+    #: missing or malformed has already been reported by name, and re-reporting it as a broken
+    #: permutation would bury the real fault under a derived one.
+    occupancy: dict[int, dict[int, int]] = {}
+    for entry in entries:
         index = entry.get("state_index")
         csv_path = directory / str(entry.get("csv"))
         sidecar = directory / str(entry.get("sidecar"))
@@ -387,33 +394,112 @@ def verify_manifest_entries(directory, record):
                 f"state {index}: the step grid is wrong ({'; '.join(detail)}). It must be "
                 f"0, {entry.get('interval_steps')}, ..., {expected[-1]} exactly once")
         columns = entry.get("columns") or []
+        mine: dict[int, int] = {}
+        intact = True
         for position, row in enumerate(rows):
             if len(row) != len(columns):
                 problems.append(
                     f"state {index}: row {position} has {len(row)} field(s), not {len(columns)}")
+                intact = False
                 break
             if int(row[3]) != int(index):
                 problems.append(
                     f"state {index}: row {position} reports state_index {row[3]}")
+                intact = False
                 break
             if abs(float(row[4]) - float(entry.get("tau"))) > 1e-12:
                 problems.append(f"state {index}: row {position} reports tau {row[4]}")
+                intact = False
                 break
             if row[6] != PHASE:
                 problems.append(
                     f"state {index}: row {position} reports exchange phase {row[6]!r}")
+                intact = False
                 break
+            # THE WALKER. Which walker supplied the configuration occupying this rung is what
+            # makes the series joinable to a walker-centric analysis, and nothing checked it:
+            # a walker column of -1, of `n_states`, of "2.5", or one naming the same walker in
+            # two rungs at once read back perfectly and meant a ladder that never existed.
+            walker = row[5].strip()
+            if not walker.lstrip("-").isdigit():
+                problems.append(
+                    f"state {index}: row {position} reports walker {row[5]!r}, which is not an "
+                    f"integer. A walker is an identity, not a measurement")
+                intact = False
+                break
+            walker = int(walker)
+            if not 0 <= walker < n_states:
+                problems.append(
+                    f"state {index}: row {position} reports walker {walker}, and this ladder has "
+                    f"{n_states} walker(s), numbered 0 to {n_states - 1}")
+                intact = False
+                break
+            mine[int(row[0])] = walker
             named = row[7].strip()
             if named and (not named.lstrip("-").isdigit() or int(named) < 0):
                 problems.append(
                     f"state {index}: row {position} names trajectory frame {named!r}")
+                intact = False
                 break
             for value in row[len(COLUMNS):]:
                 number = float(value)
                 if number != number or number in (float("inf"), float("-inf")):
                     problems.append(
                         f"state {index}: row {position} carries a non-finite value {value!r}")
+                    intact = False
                     break
+        if intact and isinstance(index, int):
+            occupancy[index] = mine
+
+    problems.extend(_permutation_problems(occupancy, n_states))
+    return problems
+
+
+def _permutation_problems(occupancy, n_states):
+    """Every step at which the ladder's walkers are not a permutation of 0 .. n_states - 1.
+
+    An exchange PERMUTES walkers among rungs; it never creates, destroys or duplicates one. So at
+    any step every rung is occupied, and by a different walker. Each series on its own can satisfy
+    every other check in this file and still be wrong in a way only the SET reveals: two states
+    both claiming walker 1 at one step, or a walker that occupies no rung at all at one step.
+    Neither is visible from inside a single file, where every row is internally consistent, on the
+    right step, at the right tau, and carries a walker in range.
+
+    (A whole-file swap is a different fault and is already refused upstream -- the swapped rows
+    report the other state's `state_index`, and the digests no longer match the manifest. This
+    check is for the cases that survive all of that.)
+
+    Reported per step, with the walkers seen, because "not a permutation" without the offending
+    assignment sends the reader back to the CSVs to work out which rung was wrong.
+    """
+    if not occupancy or len(occupancy) != int(n_states):
+        # Not every state parsed. Those failures are already reported by name; a permutation
+        # complaint derived from a partial set would be noise.
+        return []
+    problems: list[str] = []
+    steps = sorted({step for mine in occupancy.values() for step in mine})
+    wanted = set(range(int(n_states)))
+    for step in steps:
+        seen = {index: mine[step] for index, mine in sorted(occupancy.items()) if step in mine}
+        if len(seen) != int(n_states):
+            absent = sorted(set(range(int(n_states))) - set(seen))
+            problems.append(
+                f"step {step}: state(s) {absent} record no observation, and every state observes "
+                f"at every step on the reporting interval")
+            continue
+        if set(seen.values()) != wanted:
+            duplicated = sorted({w for w in seen.values()
+                                 if list(seen.values()).count(w) > 1})
+            missing = sorted(wanted - set(seen.values()))
+            detail = []
+            if duplicated:
+                detail.append(f"walker(s) {duplicated} occupy more than one state")
+            if missing:
+                detail.append(f"walker(s) {missing} occupy none")
+            problems.append(
+                f"step {step}: the walkers across the ladder are {seen} "
+                f"(state -> walker), which is not a permutation of 0 to {int(n_states) - 1} "
+                f"({'; '.join(detail)})")
     return problems
 
 
