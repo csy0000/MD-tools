@@ -136,16 +136,26 @@ CUDA_SITES = {
         "test_multi_rank_rest2_ladders_of_several_sizes, test_explicit_solvent_rest2_lane"),
     "remd/engine.py::ReplicaEngine.set_configuration": (
         "writes a configuration into a CUDA rung -- the swap itself, and reservoir refresh",
-        "test_multi_rank_rrest2_with_a_real_reservoir"),
+        "test_multi_rank_rrest2_with_a_real_reservoir, test_cv_mpi_cuda_rrest2.py (a forced "
+        "refresh at every exchange, with CV reporting on, under mpirun)"),
     "remd/engine.py::ReplicaEngine.set_velocities_to_temperature": (
         "draws momenta on a CUDA rung",
         "test_multi_rank_rest2_ladders_of_several_sizes"),
+    # CORRECTED. These two rows previously cited `test_md_run_mpi_gpu.py ladder resume`, and
+    # that was false in a way worth stating: until the ladder checkpoint began storing per-rung
+    # context checkpoints, NOTHING called either function. They were written for exactly this
+    # purpose and left unwired, so the matrix claimed CUDA coverage for dead code -- which is
+    # worse than a gap, because a gap invites work and a false entry closes the question.
     "remd/engine.py::ReplicaEngine.integrator_state": (
-        "reads CUDA integrator state for the ladder checkpoint",
-        "test_md_run_mpi_gpu.py ladder resume"),
+        "reads a CUDA rung's OpenMM context checkpoint into the ladder checkpoint, so a "
+        "continuation reproduces the trajectory rather than merely a valid one",
+        "test_cv_mpi_cuda_rrest2.py::test_interruption_and_resume_through_mpi_reproduce_the_"
+        "reference, test_cv_mpi_cuda_lanes.py::test_cv_continuation_under_mpi_on_cuda"),
     "remd/engine.py::ReplicaEngine.load_integrator_state": (
-        "restores CUDA integrator state on ladder resume",
-        "test_md_run_mpi_gpu.py ladder resume"),
+        "restores a CUDA rung's context checkpoint on resume, including the integrator's "
+        "pseudo-random stream position, which coordinates alone do not carry",
+        "test_cv_mpi_cuda_rrest2.py::test_interruption_and_resume_through_mpi_reproduce_the_"
+        "reference, test_cv_mpi_cuda_lanes.py::test_cv_continuation_under_mpi_on_cuda"),
 }
 
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
