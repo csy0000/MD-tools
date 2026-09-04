@@ -120,9 +120,15 @@ qualified in place, and the two missing methods have lanes of their own.
 
 ## Test lanes
 
+All of the following ran on `db443bf`, the commit that completes the implementation. The final
+implementation SHA adds only this document's results to that tree; `git diff` between the two
+touches no code and no test.
+
 | lane | command | result | wall |
 |---|---|---|---:|
-| fast / non-GPU | `pytest -q -m "not slow"` | **1282 passed**, 0 failed | 194.7 s |
+| fast / non-GPU | `pytest -q -m "not slow"` | **1282 passed**, 0 failed | 183.1 s |
+| slow / GPU, complete | `pytest -q -m "slow"` | **384 passed**, 0 failed, 1 skipped | 1815.5 s (30:15) |
+| CUDA coverage matrix | `pytest tests/test_cuda_coverage_matrix.py --cuda-evidence=...` | **27 passed** on real devices | 423.5 s |
 | ladder CV cost and two-interruption resume | `pytest tests/test_ladder_cv_cost_resume.py` | **6 passed** (REST2 and rREST2) | 45.9 s |
 | ladder walker identity and permutation | `pytest tests/test_ladder_walker_validation.py` | **8 passed** | 8.0 s |
 | ladder CV provenance | `pytest tests/test_ladder_cv_provenance.py` | **5 passed** | 21.5 s |
@@ -133,7 +139,9 @@ qualified in place, and the two missing methods have lanes of their own.
 | real MPI + CUDA, **rREST2** | `pytest tests/test_cv_mpi_cuda_rrest2.py` | **14 passed** (3 ranks × both velocity policies) | 92.1 s |
 | real MPI + CUDA, **AIS** | `pytest tests/test_cv_mpi_cuda_ais.py` | **6 passed** (2 ranks, 4 globally numbered paths) | 41.4 s |
 
-No `--cpu` appears in any of the three MPI+CUDA lanes; each fails rather than substituting a CPU
+The single skip is `test_write_the_coverage_evidence`, which writes the matrix only when
+`--cuda-evidence` is given, so an ordinary GPU run does not rewrite a committed file; it is
+exercised in the matrix row above. No `--cpu` appears in any of the three MPI+CUDA lanes; each fails rather than substituting a CPU
 platform when no device is available. Nothing was xfailed, skipped or deselected by hand.
 
 ### Restoring the defects
