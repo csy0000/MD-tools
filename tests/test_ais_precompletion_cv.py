@@ -143,17 +143,6 @@ def _copy(finished, tmp_path):
     return destination
 
 
-def _check(directory: Path):
-    """Run the pre-commit validation exactly as the committing process runs it."""
-    from md_tools.ais.run import CV_CSV, _verify_cv_series
-
-    path = directory / "path_0000"
-    record = json.loads((path / "completed.json").read_text(encoding="utf-8"))
-    schedule = {"cv_interval_steps": CV_EVERY, "switching_steps": SWITCHING}
-    _verify_cv_series(path / CV_CSV, record, schedule=schedule, index=0, frame=None,
-                      marker=path / "completed.json.staging")
-
-
 def _cv(directory: Path) -> Path:
     return directory / "path_0000" / "cv.csv"
 
@@ -176,31 +165,35 @@ def _frame(directory: Path) -> int:
     return int(_rows(_cv(directory))[0]["source_frame_index"])
 
 
+def _verify(directory: Path, record: dict):
+    """Run the pre-commit validation exactly as the committing process runs it.
+
+    The marker passed is the STAGING one, which is the point: reaching this call means
+    `os.replace(staging, marker)` has not happened, so a refusal here is a completion marker
+    that never becomes authoritative.
+    """
+    from md_tools.ais.run import CV_CSV, _verify_cv_series
+
+    _verify_cv_series(directory / "path_0000" / CV_CSV, record,
+                      schedule={"cv_interval_steps": CV_EVERY, "switching_steps": SWITCHING},
+                      index=0, frame=_frame(directory),
+                      marker=directory / "path_0000" / "completed.json.staging")
+
+
 def _expect_refusal(directory: Path, fragment: str):
     record = json.loads((directory / "path_0000" / "completed.json").read_text(encoding="utf-8"))
     with pytest.raises(SystemExit) as refusal:
-        from md_tools.ais.run import CV_CSV, _verify_cv_series
-
-        _verify_cv_series(directory / "path_0000" / CV_CSV, record,
-                          schedule={"cv_interval_steps": CV_EVERY,
-                                    "switching_steps": SWITCHING},
-                          index=0, frame=_frame(directory),
-                          marker=directory / "path_0000" / "completed.json.staging")
+        _verify(directory, record)
     assert fragment in str(refusal.value), refusal.value
 
 
 def test_a_healthy_path_is_accepted(finished, tmp_path):
     """The control. Without it every case below could pass by refusing everything."""
     directory = _copy(finished, tmp_path)
-    _expect = json.loads(
+    record = json.loads(
         (directory / "path_0000" / "completed.json").read_text(encoding="utf-8"))
-    assert int(_expect["cv_rows"]) == EXPECTED_ROWS
-    from md_tools.ais.run import CV_CSV, _verify_cv_series
-
-    _verify_cv_series(directory / "path_0000" / CV_CSV, _expect,
-                      schedule={"cv_interval_steps": CV_EVERY, "switching_steps": SWITCHING},
-                      index=0, frame=_frame(directory),
-                      marker=directory / "path_0000" / "completed.json.staging")
+    assert int(record["cv_rows"]) == EXPECTED_ROWS
+    _verify(directory, record)
 
 
 def test_a_truncated_series_is_refused(finished, tmp_path):
