@@ -1,5 +1,5 @@
 {
-  "commit": "c87a3ec90e6036e43ea8655a05961cf717d18d83",
+  "commit": "411d9d555e78f31a8327980f21b9b0e6999e340b",
   "devices": [
     {
       "driver": "580.173.02",
@@ -58,7 +58,7 @@
   ],
   "dirty": false,
   "driver": "580.173.02",
-  "generated_utc": "2026-09-03T22:31:28.519196+00:00",
+  "generated_utc": "2026-09-04T09:57:52.334864+00:00",
   "lanes": [
     {
       "detail": "minimisation, restrained NVT, production, DCD, restart, checkpoint",
@@ -101,7 +101,7 @@
       "result": "passed"
     },
     {
-      "detail": "6 rows checked, 6 frame-aligned; 64 energy evaluations (24 work-basis probe, 16 work, 24 observation), 64 parameter updates in 0.647 s",
+      "detail": "6 rows checked, 6 frame-aligned; 64 energy evaluations (24 work-basis probe, 16 work, 24 observation), 64 parameter updates in 0.674 s",
       "device": "-",
       "feature": "AIS implicit, three-group decomposition and work-sum identity",
       "lane": "test_ais_decomposition_lane",
@@ -189,7 +189,7 @@
       "result": "passed"
     },
     {
-      "detail": "6 rows, worst |sum - total| = 2.332e-04 kJ/mol; 44 energy evaluations, 44 parameter updates in 2.328 s",
+      "detail": "6 rows, worst |sum - total| = 9.006e-05 kJ/mol; 44 energy evaluations, 44 parameter updates in 2.362 s",
       "device": "-",
       "feature": "AIS explicit (PME), three-group identity through the reciprocal sum",
       "lane": "test_ais_on_explicit_solvent",
@@ -197,7 +197,7 @@
       "result": "passed"
     },
     {
-      "detail": "112 energy evaluations and 112 parameter updates in 1.062 s of probing (9.48 ms per evaluation)",
+      "detail": "112 energy evaluations and 112 parameter updates in 1.092 s of probing (9.75 ms per evaluation)",
       "device": "-",
       "feature": "decomposition overhead, AIS implicit, update interval 1 step",
       "lane": "test_the_decomposition_cost_is_measured_on_a_large_system",
@@ -205,7 +205,7 @@
       "result": "passed"
     },
     {
-      "detail": "112 energy evaluations and 112 parameter updates in 5.431 s of probing (48.49 ms per evaluation)",
+      "detail": "112 energy evaluations and 112 parameter updates in 5.328 s of probing (47.57 ms per evaluation)",
       "device": "-",
       "feature": "decomposition overhead, AIS explicit, update interval 1 step",
       "lane": "test_the_decomposition_cost_is_measured_on_a_large_system",
@@ -221,7 +221,7 @@
       "result": "passed"
     },
     {
-      "detail": "3 rows, max |recorded - recomputed| = 4.511e-01 kJ/mol; 162 energy evaluations (90 work-basis probe, 60 work, 12 observation), 162 parameter updates",
+      "detail": "3 rows, max |recorded - recomputed| = 4.496e-01 kJ/mol; 162 energy evaluations (90 work-basis probe, 60 work, 12 observation), 162 parameter updates",
       "device": "-",
       "feature": "AIS explicit, HS rows recomputed at their own saved frames",
       "lane": "test_hs_rows_match_recomputation_on_cuda",
