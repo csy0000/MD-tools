@@ -1113,6 +1113,12 @@ def _verify_cv_series(path, record, *, schedule, index, frame, marker):
     `expected = switching_steps / cv_interval_steps + 1` -- both endpoints included, each exactly
     once. Derived from the schedule rather than read from the file, so a file that is
     self-consistently wrong cannot satisfy it.
+
+    Run in BOTH directions of a path's life: before the completion marker is committed, and
+    again whenever a completed path is skipped. It used to run only on the skip, which is the
+    wrong half -- by then the marker is authoritative, and a series that was already wrong when
+    it was written had been published as finished. The same rules in both places is the point;
+    a path that could not be committed must not become one that is merely never re-read.
     """
     interval = int(schedule["cv_interval_steps"])
     total = int(schedule["switching_steps"])
@@ -1147,18 +1153,104 @@ def _verify_cv_series(path, record, *, schedule, index, frame, marker):
             + (f"; missing {missing[:6]}" if missing else "")
             + (f"; unexpected {extra[:6]}" if extra else "")
             + f". It must be 0, {interval}, ..., {total} exactly once.")
+    header = lines[0].split(",") if lines else []
+    if header[:len(CV_COLUMNS)] != list(CV_COLUMNS):
+        raise SystemExit(
+            f"{path.name}: the protocol columns are {header[:len(CV_COLUMNS)]} and this build "
+            f"writes {list(CV_COLUMNS)}. The column order carries the meaning of every field "
+            f"after it, so a series read under the wrong order is wrong in every row.")
+    n_cv = len(header) - len(CV_COLUMNS)
+    if n_cv < 1:
+        raise SystemExit(
+            f"{path.name}: the header names no collective variable after the protocol columns, "
+            f"and this path was run with CV reporting enabled.")
+
+    taus: list[float] = []
     for position, row in enumerate(rows):
         if int(row[0]) != int(index):
             raise SystemExit(f"{path.name}: row {position} reports path_index {row[0]}")
         if int(row[1]) != int(frame):
             raise SystemExit(f"{path.name}: row {position} reports source frame {row[1]}")
+        try:
+            tau = float(row[4])
+        except ValueError:
+            raise SystemExit(
+                f"{path.name}: row {position} has a non-numeric tau {row[4]!r}") from None
+        if tau != tau:
+            raise SystemExit(f"{path.name}: row {position} has a non-finite tau")
+        taus.append(tau)
+        # `observation_index` and `coordinate_frame_index` are EMPTY unless this step is also an
+        # AIS observation -- that emptiness is load-bearing, because a CV measured at one
+        # coordinate and attached to a different saved one is the exact misattribution the
+        # two-probe separation exists to prevent. Empty is allowed; a negative or non-integer
+        # reference is not, and neither is a value that is merely almost a number.
+        for column, cell in ((CV_COLUMNS[5], row[5]), (CV_COLUMNS[6], row[6])):
+            named = cell.strip()
+            if not named:
+                continue
+            if not named.isdigit():
+                raise SystemExit(
+                    f"{path.name}: row {position} reports {column} {cell!r}, which is neither "
+                    f"empty nor a non-negative integer")
         for value in row[len(CV_COLUMNS):]:
             number = float(value)
             if number != number or number in (float("inf"), float("-inf")):
                 raise SystemExit(f"{path.name}: row {position} carries a non-finite value")
+
     sidecar = cv_sidecar_path(path)
     if not sidecar.is_file():
         raise SystemExit(f"{sidecar} is missing, so {path.name} cannot be interpreted.")
+    try:
+        interpretation = json.loads(sidecar.read_text(encoding="utf-8"))
+    except ValueError as broken:
+        raise SystemExit(f"{sidecar.name} is not readable JSON ({broken}), so {path.name} "
+                         f"cannot be interpreted.") from None
+
+    # THE SCHEDULE, in the values themselves. AIS anneals tau from its start to its end and never
+    # back; a series whose taus wander, or whose endpoints are not the ones the sidecar records,
+    # is not this switching path however well-formed its grid is.
+    start = interpretation.get("tau_start")
+    end = interpretation.get("tau_end")
+    if start is not None and abs(taus[0] - float(start)) > 1e-9:
+        raise SystemExit(
+            f"{path.name}: the first row is at tau {taus[0]} and this path starts at {start}")
+    if end is not None and abs(taus[-1] - float(end)) > 1e-9:
+        raise SystemExit(
+            f"{path.name}: the last row is at tau {taus[-1]} and this path ends at {end}")
+    if start is not None and end is not None:
+        descending = float(start) >= float(end)
+        ordered = all((taus[i] >= taus[i + 1]) if descending else (taus[i] <= taus[i + 1])
+                      for i in range(len(taus) - 1))
+        if not ordered:
+            raise SystemExit(
+                f"{path.name}: tau is not monotonic from {start} to {end} ({taus[:6]}...), so "
+                f"the rows are not one switching path in schedule order")
+
+    # THE COST, against the rows it claims to have produced. `cv_evaluations` counts scalar
+    # torsions and `cv_observations` counts reporter calls, so for a fixed definition of n_cv
+    # variables the two are pinned to the row count and to each other. A cumulative counter that
+    # disagrees means a resume lost or double-counted a segment, and that is exactly the kind of
+    # damage that leaves every row on disk looking perfect.
+    cost = record.get("collective_variable_cost") or {}
+    cumulative = cost.get("cumulative") or {}
+    if cumulative:
+        observations = cumulative.get("cv_observations")
+        evaluations = cumulative.get("cv_evaluations")
+        if int(observations or 0) != expected_rows:
+            raise SystemExit(
+                f"{marker}: the cumulative CV cost records {observations} observation(s) and the "
+                f"series holds {expected_rows} row(s). A segment was lost or counted twice.")
+        if int(evaluations or 0) != expected_rows * n_cv:
+            raise SystemExit(
+                f"{marker}: the cumulative CV cost records {evaluations} scalar evaluation(s) "
+                f"and {expected_rows} observation(s) of {n_cv} collective variable(s) is "
+                f"{expected_rows * n_cv}.")
+        for scope in ("segment", "cumulative"):
+            for field, value in (cost.get(scope) or {}).items():
+                if isinstance(value, (int, float)) and (value != value or value < 0):
+                    raise SystemExit(
+                        f"{marker}: the {scope} CV cost reports {field} = {value!r}, and every "
+                        f"counter is finite and non-negative.")
 
 
 def _cv_prefix_record(series, *, index, frame):
@@ -1837,6 +1929,13 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
     # not describe the files beside it must never become the committed one.
     _validate_completion_manifest(completion, directory=directory, published=published,
                                   schedule=schedule, state_every=bool(state_every))
+    # And the CV output, in full, by the SAME rules that refuse a completed path when a later
+    # invocation skips it. Those rules used to run only on the skip, which is the wrong half of
+    # the path's life: by then the marker is authoritative and a series that was already wrong
+    # when it was written has been published as finished. Committing is the moment to refuse.
+    if int(schedule.get("cv_interval_steps") or 0):
+        _verify_cv_series(directory / CV_CSV, completion, schedule=schedule, index=index,
+                          frame=frame, marker=staging_marker)
 
     fault("before-completion-commit")
     os.replace(staging_marker, marker)
