@@ -1,5 +1,14 @@
 # Runtime closure and torsion collective variables: what was corrected, and the evidence
 
+> **SUPERSEDED IN PART.** This record's lane numbers are accurate for the commit it names, but
+> its implicit claim that the CV work was finished was premature. A later pass
+> ([`20260904-cv-lifecycle-closure-evidence.md`](20260904-cv-lifecycle-closure-evidence.md))
+> found and fixed ten defects this one did not reach -- among them a doubled absolute step count
+> after every checkpoint restore, a REST2 series that silently omitted step 0, a resumed ladder
+> that wrote no CV rows at all, and a `trajectory_frame_index` that named a frame holding a
+> different configuration. Read that record for the current state; this one is kept because the
+> measurements in it were real and the reasoning it records still stands.
+
 Baseline `0498c22`; instruction `597cf97`. Every number here was measured on this
 machine, at a named commit, with real CUDA devices, a real MPI launcher and a real
 installed wheel. Where a claim has no measurement behind it, it is not made.
