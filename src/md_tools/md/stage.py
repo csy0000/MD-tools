@@ -779,11 +779,19 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                 # others permanently ahead of the step count. So the rows present here are exactly
                 # the committed ones, and re-deriving that number would be a second truncation
                 # rule that could disagree with the first.
-                existing = 0
+                # Rows AND the cost that produced them, from the committed prefix. The
+                # truncation back to the committed count has already happened above; what the
+                # prefix adds here is the cumulative counters, which a rows-only restore dropped.
+                from ..cv.cost import CommittedPrefix
+
+                committed_prefix = CommittedPrefix()
                 if done:
                     existing = _count_stream("collective_variables",
                                              cv_csv_path(traj_path, stage)) or 0
-                cv_series.open(append_from=existing)
+                    prefix = (committed or {}).get("state", {}).get("cv_prefix") or {}
+                    committed_prefix = CommittedPrefix.from_record(
+                        {"rows": existing, "cost": prefix.get("cost")})
+                cv_series.open(committed=committed_prefix)
 
                 trajectory_interval = int(stage.get("trajectory_interval_steps") or 0)
 
@@ -918,32 +926,25 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             if cv_sidecar.is_file():
                 outputs["collective_variables_definition"] = file_facts(cv_sidecar)
         log.update(outputs=outputs)
-        # CV COST, recorded separately from any energy-evaluation counter. A position-only torsion
-        # is not an energy evaluation, and folding it into that total would corrupt the one number
-        # that says how expensive the Hamiltonian is. `cv_rows` counts written rows and
-        # `cv_evaluations` counts torsions evaluated -- for several named torsions those differ,
-        # and conflating them would understate the cost by exactly the multiplicity.
+        # CV COST, in two scopes and recorded separately from any energy-evaluation counter. A
+        # position-only torsion is not an energy evaluation, and folding it into that total would
+        # corrupt the one number that says how expensive the Hamiltonian is.
+        #
+        # `cv_observations` counts configurations the set was evaluated on; `cv_evaluations`
+        # counts the SCALAR values that produced -- for N named torsions those differ by N, and
+        # the old single counter reported the first under the second's name.
+        #
+        # The accumulation is `CVSeries`' own: it restored the committed cumulative cost when it
+        # reopened, so `cost()` already carries both scopes. This used to be re-derived here from
+        # loose keys, which is how a resume could restore rows and drop counters.
         if cv_series is not None:
-            cost = dict(cv_series.cost())
-            # On a resumed stage the in-memory counters cover THIS segment only. The committed
-            # prefix carries what earlier segments spent, so the run's total is their sum and both
-            # halves stay visible rather than one silently replacing the other.
-            earlier = ((committed or {}).get("state", {}).get("cv_prefix") or {}).get("cost") \
-                if done else None
-            if earlier:
-                cost = {
-                    "cv_evaluations": int(earlier.get("cv_evaluations", 0))
-                    + int(cost["cv_evaluations"]),
-                    "cv_rows": int(cv_series.rows_written),
-                    "cv_seconds": round(float(earlier.get("cv_seconds", 0.0))
-                                        + float(cost["cv_seconds"]), 6),
-                    "segment_cv_evaluations": int(cv_series.evaluations),
-                    "segment_cv_seconds": round(float(cv_series.seconds), 6),
-                }
+            cost = cv_series.cost()
             log.update(collective_variable_cost=cost)
-            log.field("CV evaluations", f"{cost['cv_evaluations']} "
-                                        f"({cost['cv_rows']} row(s), "
-                                        f"{cost['cv_seconds']:.3f} s)")
+            log.field("CV cost",
+                      f"{cost['cumulative']['cv_evaluations']} scalar evaluation(s) over "
+                      f"{cost['cumulative']['cv_observations']} observation(s), "
+                      f"{cost['cumulative']['wall_seconds']:.3f} s cumulative "
+                      f"({cost['segment']['cv_evaluations']} this segment)")
         log.complete()
         log.heading("Summary")
         log(f"  {name}: {steps} steps completed, {steps * timestep_fs / 1000.0:g} ps")

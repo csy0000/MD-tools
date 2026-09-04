@@ -299,7 +299,7 @@ class ReplicaRun:
                 f"same ladder; neither is inferred from the other.")
         return list(prepared_rungs), getattr(self.prepared, "force_audit", None)
 
-    def _open_cv_states(self, *, committed_rows=0):
+    def _open_cv_states(self, *, committed_rows=0, committed=None):
         """Open one collective-variable series per thermodynamic state, on the root.
 
         Root-only for the same reason the trajectories are: only the root holds the gathered
@@ -320,7 +320,7 @@ class ReplicaRun:
             Path(self.files.trajectory).parent, definition,
             taus=self.protocol.tau, interval_steps=int(interval),
             fingerprint=getattr(self.prepared, "fingerprint", None),
-        ).open(committed_rows=int(committed_rows))
+        ).open(committed_rows=int(committed_rows), committed=committed)
 
     def _cv_prefix_record(self):
         """The committed CV prefix for this generation, or None when reporting is disabled."""
@@ -331,7 +331,8 @@ class ReplicaRun:
         return prefix_records(
             Path(self.files.trajectory).parent, self.cv_states.definition,
             taus=self.protocol.tau, interval_steps=int(self.cv_states.interval_steps),
-            rows=self.cv_states.rows_written(), cost=self.cv_states.cost())
+            rows=self.cv_states.rows_written(), cost=self.cv_states.cost(),
+            per_state_cost=[series.cost() for series in self.cv_states.series])
 
     def _continue_cv_states(self, checkpoint):
         """Validate the per-state CV series against this run, then reopen at the committed count.
@@ -367,7 +368,12 @@ class ReplicaRun:
         # Only now is anything cut: everything past the committed prefix belongs to steps whose
         # dynamics are about to be repeated.
         truncate_to(directory, taus=self.protocol.tau, rows=rows)
-        return self._open_cv_states(committed_rows=rows)
+        # Rows AND cost, together. Restoring rows alone left a resumed ladder whose series was
+        # correct and whose cumulative counters had silently reset to this segment's work.
+        from .cv_states import committed_prefixes
+
+        return self._open_cv_states(
+            committed=committed_prefixes(extra.get("cv_prefix"), self.protocol.n_states))
 
     def _cv_manifest(self, state):
         """The completion manifest's record of this ladder's CV series, or None if disabled."""

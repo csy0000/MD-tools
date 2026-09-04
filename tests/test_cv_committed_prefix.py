@@ -235,17 +235,15 @@ def test_a_real_stage_refuses_a_mutated_committed_prefix(tmp_path):
 # --- CV cost accounting, persisted and accumulated ---------------------------------------------
 
 @pytest.mark.slow
-def test_cv_cost_is_persisted_and_survives_a_resume(tmp_path):
-    """`cv_evaluations`, `cv_rows` and `cv_seconds` are recorded, and a resume neither resets
-    nor double-counts them.
+def test_cv_cost_is_persisted_and_survives_two_interruptions(tmp_path):
+    """Cumulative cost survives REPEATED resume without loss or double counting.
 
-    A resumed run's in-memory counters cover THAT SEGMENT only. The committed prefix carries what
-    earlier segments spent, so the run's total is their sum -- and both halves stay visible, since
-    a single number that silently replaced the other would make an interrupted run look cheaper
-    than an identical uninterrupted one.
+    Two consecutive interruptions, not one: a single resume can pass while the accumulation is
+    "restore the prefix and add this segment", which is right, or "take the prefix" / "take this
+    segment", which are both wrong in ways one resume can hide. The second resume separates them.
 
-    Two named torsions per row, so `cv_evaluations` and `cv_rows` are DIFFERENT numbers and
-    conflating them cannot pass.
+    TWO named torsions throughout, so `cv_observations` and `cv_evaluations` are different
+    numbers and a call-count implementation cannot pass.
     """
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
@@ -268,7 +266,7 @@ def test_cv_cost_is_persisted_and_survives_a_resume(tmp_path):
         "protocol": "cMD", "solvent": "implicit",
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 0,
                    "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
-                   "production_steps": 40},
+                   "production_steps": 60},
         "reporting": {"solute_printout": 20, "system_printout": 20, "checkpoint_printout": 10},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
         "dynamics": {"seed": 20260904},
@@ -294,30 +292,47 @@ def test_cv_cost_is_persisted_and_survives_a_resume(tmp_path):
             cwd=root / "cMD", capture_output=True, text=True, timeout=1800,
             env={**base, **(environment or {})})
 
+    n_cv, interval, steps = 2, 5, 60
+    expected_rows = steps // interval + 1
+
     clean = tmp_path / "clean"
     assert _launch(clean).returncode == 0
     reference = read_record(clean / "cMD.log")["collective_variable_cost"]
+    assert reference["cumulative"]["cv_observations"] == expected_rows
+    assert reference["cumulative"]["cv_evaluations"] == expected_rows * n_cv
+    assert reference["segment"] == reference["cumulative"], "a fresh run's scopes are equal"
 
-    expected_rows = 40 // 5 + 1
-    assert reference["cv_rows"] == expected_rows
-    assert reference["cv_evaluations"] == expected_rows, (
-        "one evaluate() call per row returns both torsions; the counter counts calls")
-    assert reference["cv_seconds"] >= 0.0
-    assert not any("energy" in key for key in reference), sorted(reference)
-
+    # TWO interruptions, at different committed generations.
     resumed = tmp_path / "resumed"
-    crashed = _launch(resumed, {FAULT_ENVIRONMENT: "after-pointer-replace",
-                                FAULT_AFTER_ENVIRONMENT: "6"})
-    assert crashed.returncode != 0
+    first = _launch(resumed, {FAULT_ENVIRONMENT: "after-pointer-replace",
+                              FAULT_AFTER_ENVIRONMENT: "5"})
+    assert first.returncode != 0
+    second = _launch(resumed, {FAULT_ENVIRONMENT: "after-pointer-replace",
+                               FAULT_AFTER_ENVIRONMENT: "2"})
+    assert second.returncode != 0
     assert _launch(resumed).returncode == 0
-    after = read_record(resumed / "cMD.log")["collective_variable_cost"]
 
-    assert after["cv_rows"] == expected_rows, (
-        f"a resumed run recorded {after['cv_rows']} rows against {expected_rows}")
-    assert after["cv_evaluations"] >= reference["cv_evaluations"], (
-        "the resume reset the accumulated evaluation count")
-    assert "segment_cv_evaluations" in after, (
-        "the segment-local cost is not distinguishable from the cumulative cost")
-    assert after["segment_cv_evaluations"] < after["cv_evaluations"], (
-        "the segment cost equals the total, so earlier segments were not carried")
-    assert after["cv_seconds"] >= 0.0
+    after = read_record(resumed / "cMD.log")["collective_variable_cost"]
+    assert after["cumulative"]["cv_observations"] == expected_rows, (
+        f"after two resumes the cumulative observations are "
+        f"{after['cumulative']['cv_observations']}, not {expected_rows}: earlier work was lost "
+        f"or counted twice")
+    assert after["cumulative"]["cv_evaluations"] == expected_rows * n_cv
+    assert after["segment"]["cv_observations"] < after["cumulative"]["cv_observations"], (
+        "the segment equals the cumulative, so earlier segments were not carried")
+    assert after["segment"]["cv_observations"] > 0
+    assert after["cumulative"]["wall_seconds"] >= after["segment"]["wall_seconds"] >= 0.0
+
+    # The series itself matches the uninterrupted reference exactly.
+    a = (clean / "cMD.cv.csv").read_text(encoding="utf-8").splitlines()
+    b = (resumed / "cMD.cv.csv").read_text(encoding="utf-8").splitlines()
+    assert a[0] == b[0], "headers differ"
+    assert [r.split(",")[0] for r in a[1:]] == [r.split(",")[0] for r in b[1:]]
+    assert len(b) - 1 == expected_rows
+
+    # Re-entering a completed run performs no new CV evaluation.
+    before_reentry = after["cumulative"]["cv_evaluations"]
+    assert _launch(resumed).returncode == 0
+    again = read_record(resumed / "cMD.log")["collective_variable_cost"]
+    assert again["cumulative"]["cv_evaluations"] == before_reentry, (
+        "re-entering a completed run evaluated collective variables again")

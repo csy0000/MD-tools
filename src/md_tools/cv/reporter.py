@@ -27,6 +27,7 @@ import json
 import time
 from pathlib import Path
 
+from .cost import CVCost, cost_record
 from .torsion import torsion_degrees
 
 
@@ -58,15 +59,20 @@ class CVSeries:
         self.definition = definition
         self.extra_columns = tuple(extra_columns)
         self.rows_written = 0
-        #: Cost accounting, kept apart from any energy-evaluation counter. See the module note.
+        #: THIS INVOCATION's cost. Kept apart from any energy-evaluation counter, and split from
+        #: the cumulative figure below because either alone misleads -- see `md_tools.cv.cost`.
+        self.observations = 0
         self.evaluations = 0
         self.seconds = 0.0
+        #: What earlier invocations spent, restored from the committed prefix on a continuation.
+        #: Zero on a fresh run, which is why segment and cumulative are equal there.
+        self.restored = CVCost()
         self._handle = None
         self._sidecar_extra = dict(sidecar_extra or {})
 
     # -- lifecycle ---------------------------------------------------------------------------
 
-    def open(self, *, append_from: int = 0):
+    def open(self, *, append_from: int = 0, committed=None):
         """Create or reopen the CSV. `append_from` truncates to that many committed rows first.
 
         Truncation is what makes a resume produce no duplicate and no gap: the checkpoint says how
@@ -74,6 +80,12 @@ class CVSeries:
         are about to be repeated. Keeping them would double-count; deleting the file would lose
         the committed ones.
         """
+        # ONE object carrying rows AND the cost that produced them. They used to be separate
+        # arguments, and a caller that restored the rows while forgetting the counters produced a
+        # resumed run whose series was correct and whose cost had silently reset.
+        if committed is not None:
+            append_from = int(committed.rows)
+            self.restored = committed.cumulative
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             if append_from and self.path.is_file():
@@ -158,8 +170,14 @@ class CVSeries:
             raise CVReportError(
                 f"a collective variable could not be evaluated: "
                 f"{type(broken).__name__}: {broken}") from None
+        # Timed around the evaluation ONLY: serialisation, hashing and validation are not CV
+        # work and counting them would make the number unusable for sizing anything.
         self.seconds += time.perf_counter() - started
-        self.evaluations += 1
+        self.observations += 1
+        # SCALARS, not calls. One observation of a definition with N torsions is N evaluations.
+        # This incremented by one regardless of N, so the number said "observations" while the
+        # name said "evaluations" -- and the two coincide only for the single-CV case.
+        self.evaluations += len(self.definition.variables)
         return values
 
     def write(self, leading, values) -> None:
@@ -188,11 +206,20 @@ class CVSeries:
                 f"{self.path}: a collective-variable row could not be written: {broken}") from None
         self.rows_written += 1
 
-    def cost(self) -> dict[str, float]:
-        """What the reporting cost, for the run record. Never merged into energy evaluations."""
-        return {"cv_evaluations": int(self.evaluations),
-                "cv_seconds": round(float(self.seconds), 6),
-                "cv_rows": int(self.rows_written)}
+    def segment_cost(self) -> CVCost:
+        """What THIS invocation evaluated."""
+        return CVCost(observations=int(self.observations),
+                      evaluations=int(self.evaluations),
+                      wall_seconds=float(self.seconds))
+
+    def cumulative_cost(self) -> CVCost:
+        """What the whole logical run has evaluated, this invocation included."""
+        return self.restored.plus(self.segment_cost())
+
+    def cost(self) -> dict:
+        """The two-scope record. Never merged into any energy-evaluation total."""
+        return cost_record(self.segment_cost(), self.cumulative_cost(),
+                           rows=int(self.rows_written))
 
 
 def _field(value) -> str:

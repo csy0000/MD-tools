@@ -68,9 +68,17 @@ class StateCVSet:
                         "step"),
                     **({"fingerprint": fingerprint} if fingerprint else {})}))
 
-    def open(self, *, committed_rows=0):
-        for series in self.series:
-            series.open(append_from=int(committed_rows))
+    def open(self, *, committed_rows=0, committed=None):
+        """Open every state's series, restoring rows AND cost together.
+
+        `committed` is the typed per-state prefix; `committed_rows` remains for the fresh-run
+        call that has no cost to restore. A caller cannot restore one without the other.
+        """
+        for index, series in enumerate(self.series):
+            if committed is not None:
+                series.open(committed=committed[index])
+            else:
+                series.open(append_from=int(committed_rows))
         return self
 
     def observe(self, *, step, time_ps, exchange_attempt, state_to_walker, configurations,
@@ -105,15 +113,40 @@ class StateCVSet:
                 f"they are written together and must stay in step")
         return counts.pop() if counts else 0
 
-    def cost(self):
-        total = {"cv_evaluations": 0, "cv_seconds": 0.0, "cv_rows": 0}
+    def segment_cost(self):
+        """This invocation's cost, SUMMED OVER STATES. Per-state records are kept below."""
+        from ..cv.cost import CVCost
+
+        total = CVCost()
         for series in self.series:
-            one = series.cost()
-            total["cv_evaluations"] += one["cv_evaluations"]
-            total["cv_seconds"] += one["cv_seconds"]
-            total["cv_rows"] += one["cv_rows"]
-        total["cv_seconds"] = round(total["cv_seconds"], 6)
+            total = total.plus(series.segment_cost())
         return total
+
+    def cumulative_cost(self):
+        from ..cv.cost import CVCost
+
+        total = CVCost()
+        for series in self.series:
+            total = total.plus(series.cumulative_cost())
+        return total
+
+    def cost(self):
+        """The ladder's two-scope record.
+
+        The headline figures are the SUM over states, and the per-state records are retained
+        beside them so the total is auditable rather than a number a reader has to trust. A
+        ladder's cost is genuinely the sum: every state evaluates the same definition on its own
+        configuration at every observation step.
+        """
+        from ..cv.cost import cost_record
+
+        record = cost_record(self.segment_cost(), self.cumulative_cost(),
+                             rows=sum(series.rows_written for series in self.series))
+        record["aggregation"] = "sum over thermodynamic states"
+        record["per_state"] = [
+            {"state_index": index, "tau": self.taus[index], **series.cost()}
+            for index, series in enumerate(self.series)]
+        return record
 
     def close(self):
         for series in self.series:
@@ -240,6 +273,7 @@ def manifest_entries(directory, definition, *, taus, interval_steps, total_steps
     the field".
     """
     directory = Path(directory)
+    self_costs = list(per_state_cost) if per_state_cost else None
     entries = []
     for index, tau in enumerate(taus):
         csv_path = directory / f"remd{index}.cv.csv"
@@ -384,7 +418,8 @@ def verify_manifest_entries(directory, record):
     return problems
 
 
-def prefix_records(directory, definition, *, taus, interval_steps, rows, cost=None):
+def prefix_records(directory, definition, *, taus, interval_steps, rows, cost=None,
+                   per_state_cost=None):
     """What a ladder checkpoint generation stores about its CV series: one prefix per state.
 
     Per state rather than one aggregate digest, because the states are separate files and a
@@ -394,6 +429,7 @@ def prefix_records(directory, definition, *, taus, interval_steps, rows, cost=No
     from ..cv import prefix as cv_prefix
 
     directory = Path(directory)
+    self_costs = list(per_state_cost) if per_state_cost else None
     entries = []
     for index, tau in enumerate(taus):
         csv_path = directory / f"remd{index}.cv.csv"
@@ -402,6 +438,9 @@ def prefix_records(directory, definition, *, taus, interval_steps, rows, cost=No
             definition=definition)
         entry["state_index"] = index
         entry["tau"] = float(tau)
+        # The cost that produced THIS state's committed rows, so a continuation restores rows and
+        # counters together rather than one without the other.
+        entry["cost"] = self_costs[index] if self_costs else None
         entries.append(entry)
     record = {"rows": int(rows), "interval_steps": int(interval_steps), "states": entries}
     if cost:
@@ -451,3 +490,14 @@ def truncate_to(directory, *, taus, rows):
     directory = Path(directory)
     for index in range(len(taus)):
         cv_prefix.truncate(directory / f"remd{index}.cv.csv", int(rows))
+
+
+def committed_prefixes(block, n_states):
+    """The typed per-state prefix from a checkpoint block: rows AND restored cumulative cost."""
+    from ..cv.cost import CommittedPrefix
+
+    entries = {int(e["state_index"]): e for e in (block or {}).get("states", [])}
+    rows = int((block or {}).get("rows", 0))
+    return [CommittedPrefix.from_record({"rows": rows,
+                                         "cost": (entries.get(index) or {}).get("cost")})
+            for index in range(int(n_states))]

@@ -155,11 +155,66 @@ def test_the_evaluation_cost_is_recorded_separately_from_energy_evaluations(defi
         for step in range(7):
             series.write((step,), series.evaluate(_positions(step * 5.0)))
     cost = series.cost()
-    assert cost["cv_evaluations"] == 7
+    assert cost["cumulative"]["cv_observations"] == 7
     assert cost["cv_rows"] == 7
-    assert cost["cv_seconds"] >= 0.0
-    assert not any("energy" in key for key in cost), (
-        "CV cost must not be reported under any energy-evaluation name")
+    assert cost["cumulative"]["wall_seconds"] >= 0.0
+    assert not any("energy" in key for key in cost), sorted(cost)
+
+
+def test_observations_and_scalar_evaluations_are_different_numbers(tmp_path):
+    """THE misnomer this replaces.
+
+    The counter incremented once per reporter call, so for a definition with two torsions it
+    reported one where two scalar values had been computed: the name said "evaluations" and the
+    number said "observations". They coincide only for the single-CV case -- which is the case
+    the original test used, so the test passed and the misnomer became a contract.
+
+    Two torsions here, deliberately, so a call-count implementation cannot pass.
+    """
+    two = parse_cv_definition(
+        "schema_version: 1\ncollective_variables:\n"
+        "  - {name: phi, type: torsion, atom_indices: [0, 1, 2, 3]}\n"
+        "  - {name: psi, type: torsion, atom_indices: [1, 2, 3, 0]}\n", particles=4)
+    path = tmp_path / "two.cv.csv"
+    with CVSeries(path, two, extra_columns=("step",)).open() as series:
+        for step in range(5):
+            series.write((step,), series.evaluate(_positions(step * 7.0)))
+    cost = series.cost()
+    assert cost["cumulative"]["cv_observations"] == 5
+    assert cost["cumulative"]["cv_evaluations"] == 10, (
+        "five observations of a two-torsion definition are ten scalar evaluations")
+    assert cost["cv_rows"] == 5
+
+
+def test_a_fresh_run_reports_equal_segment_and_cumulative(definition, tmp_path):
+    path = tmp_path / "fresh.cv.csv"
+    with CVSeries(path, definition, extra_columns=("step",)).open() as series:
+        for step in range(3):
+            series.write((step,), series.evaluate(_positions(step * 10.0)))
+    cost = series.cost()
+    assert cost["segment"] == cost["cumulative"]
+    assert cost["schema_version"] == 2
+
+
+def test_a_restored_prefix_carries_cost_into_the_cumulative_scope(definition, tmp_path):
+    """Rows and counters travel as ONE object, so a restore cannot drop half of it."""
+    from md_tools.cv.cost import CVCost, CommittedPrefix
+
+    path = tmp_path / "resumed.cv.csv"
+    with CVSeries(path, definition, extra_columns=("step",)).open() as series:
+        for step in range(4):
+            series.write((step,), series.evaluate(_positions(step * 3.0)))
+    earlier = series.cumulative_cost()
+    assert earlier.observations == 4
+
+    reopened = CVSeries(path, definition, extra_columns=("step",))
+    reopened.open(committed=CommittedPrefix(rows=4, cumulative=earlier))
+    reopened.write((4,), reopened.evaluate(_positions(12.0)))
+    cost = reopened.cost()
+    assert cost["segment"]["cv_observations"] == 1, "the segment covers only this invocation"
+    assert cost["cumulative"]["cv_observations"] == 5, "the cumulative carries the earlier work"
+    assert cost["cumulative"]["cv_evaluations"] == 5 * len(definition.variables)
+    reopened.close()
 
 
 def test_a_row_of_the_wrong_width_is_refused(definition, tmp_path):
