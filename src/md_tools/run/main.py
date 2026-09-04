@@ -186,7 +186,38 @@ def _write_resolved(out_dir: Path, run_input, *, overwrite: bool) -> Path:
                 f"outputs there are meant to be replaced.")
         return path
     path.write_text(header + document, encoding="utf-8")
+    _carry_cv_definition(run_input, out_dir)
     return path
+
+
+def _carry_cv_definition(run_input, out_dir):
+    """Copy the collective-variable definition beside the `resolved.config` we just wrote.
+
+    The definition is resolved relative to the directory holding `resolved.config` -- one rule,
+    used by every route. `build-md` satisfies it by copying the content-addressed definition into
+    the generated directory. `md-run` writes its OWN resolved.config into `-odir`, so without
+    this the rule pointed at a directory the copy had never been put in, and a CV-enabled input
+    that ran perfectly as a generated script failed under `md-run` with "no such
+    collective-variable definition file".
+
+    Copied rather than resolved by a second rule: `-odir` then holds everything needed to read
+    its own output, which is the same property that makes a generated tree movable.
+    """
+    from pathlib import Path as _Path
+
+    block = (run_input.resolved or {}).get("collective_variables") or {}
+    name = block.get("file")
+    if not name:
+        return
+    named = _Path(name)
+    if named.is_absolute():
+        return                      # an absolute definition is found wherever it is
+    destination = _Path(out_dir) / named.name
+    if destination.is_file():
+        return
+    source = _Path(run_input.path).parent / named
+    if source.is_file():
+        destination.write_bytes(source.read_bytes())
 
 
 def _forward(args, *, names) -> list[str]:
