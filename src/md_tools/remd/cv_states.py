@@ -477,7 +477,7 @@ def validate_prefixes(directory, definition, *, taus, interval_steps, block):
                 value_columns=list(definition.names),
                 identifiers={"state_index": index, "tau": float(entry["tau"]),
                              "exchange_phase": PHASE},
-                interval=int(interval_steps))
+                interval=int(interval_steps), step_column="step")
         except cv_prefix.CVPrefixError as refusal:
             raise CVContinuationError(str(refusal)) from None
     return rows

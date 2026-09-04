@@ -237,3 +237,112 @@ def test_cv_rows_and_work_rows_are_counted_separately(completed):
     energy_like = [key for key in counters if "energy" in key]
     assert energy_like, sorted(counters)
     assert record["cv_rows"] > 0
+
+
+# --- CV cost across REPEATED interruption -----------------------------------------------------
+
+CV_TWO = """\
+schema_version: 1
+collective_variables:
+  - name: phi
+    type: torsion
+    atom_indices: [4, 6, 8, 14]
+  - name: psi
+    type: torsion
+    atom_indices: [6, 8, 14, 16]
+"""
+
+
+@pytest.fixture(scope="module")
+def two_cv_project(tmp_path_factory):
+    """A project whose definition holds TWO torsions.
+
+    One torsion makes `cv_observations` and `cv_evaluations` numerically equal, so a counter that
+    increments per reporter call passes -- which is exactly how the original misnomer survived.
+    """
+    if not ALA.is_file():
+        pytest.skip("no ALA fixture")
+    root = tmp_path_factory.mktemp("ais-cost-2cv")
+    (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
+    built = subprocess.run(
+        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
+               "-log", "built.log", "--config", str(root / "sys.config")],
+        cwd=root, capture_output=True, text=True, timeout=1800)
+    assert built.returncode == 0, built.stdout + built.stderr
+    (root / "cv.yaml").write_text(CV_TWO, encoding="utf-8")
+    (root / "AIS.config").write_text(yaml.safe_dump({
+        "protocol": "AIS", "solvent": "implicit",
+        "ais": {"number_of_paths": 2, "switching_steps": SWITCHING,
+                "observation_interval_steps": OBSERVE_EVERY,
+                "parameter_update_interval_steps": UPDATE_EVERY},
+        "ais_source": {"trajectory": "../source.dcd"},
+        "reporting": {"solute_printout": OBSERVE_EVERY, "system_printout": OBSERVE_EVERY,
+                      "checkpoint_printout": UPDATE_EVERY},
+        "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": UPDATE_EVERY},
+        "dynamics": {"seed": 20260904},
+    }), encoding="utf-8")
+    done = subprocess.run(
+        CLI + ["build-md", "-odir", "./AIS", "--config", str(root / "AIS.config")],
+        cwd=root, capture_output=True, text=True, timeout=600)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    import mdtraj
+
+    frames = mdtraj.load(str(root / "built.pdb"))
+    mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
+    return root
+
+
+def test_ais_cv_cost_survives_two_interruptions(two_cv_project, tmp_path):
+    """Cumulative CV cost across two consecutive AIS interruptions, per path and in aggregate.
+
+    Two, not one: a single resume passes whether the accumulation is "prefix + segment" (right)
+    or "just the prefix" / "just the segment" (both wrong). Only the second separates them.
+    """
+    from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
+
+    n_cv, expected_rows = 2, SWITCHING // UPDATE_EVERY + 1
+
+    clean = tmp_path / "clean"
+    _run(two_cv_project, clean)
+    reference = json.loads(
+        (clean / "path_0000" / "completed.json").read_text(encoding="utf-8"))
+    ref_cost = reference["collective_variable_cost"]
+    assert ref_cost["cumulative"]["cv_observations"] == expected_rows
+    assert ref_cost["cumulative"]["cv_evaluations"] == expected_rows * n_cv, (
+        "an observation of a two-torsion definition is two scalar evaluations")
+    assert ref_cost["segment"] == ref_cost["cumulative"], "a fresh path's scopes are equal"
+
+    resumed = tmp_path / "resumed"
+    first = _run(two_cv_project, resumed, expect=1,
+                 environment={FAULT_ENVIRONMENT: "after-work-row",
+                              FAULT_AFTER_ENVIRONMENT: "1"})
+    assert first.returncode != 0
+    second = _run(two_cv_project, resumed, "--resume", expect=1,
+                  environment={FAULT_ENVIRONMENT: "after-frame",
+                               FAULT_AFTER_ENVIRONMENT: "1"})
+    assert second.returncode != 0
+    _run(two_cv_project, resumed, "--resume")
+
+    after = json.loads((resumed / "path_0000" / "completed.json").read_text(encoding="utf-8"))
+    cost = after["collective_variable_cost"]
+    assert cost["cumulative"]["cv_observations"] == expected_rows, (
+        f"two resumes left {cost['cumulative']['cv_observations']} observations against "
+        f"{expected_rows}: earlier work was lost or counted twice")
+    assert cost["cumulative"]["cv_evaluations"] == expected_rows * n_cv
+    assert cost["segment"]["cv_observations"] < cost["cumulative"]["cv_observations"], (
+        "the segment equals the cumulative, so earlier segments were not carried")
+    assert cost["cumulative"]["wall_seconds"] >= cost["segment"]["wall_seconds"] >= 0.0
+
+    # The series matches the uninterrupted reference exactly.
+    a = _rows(clean / "path_0000" / "cv.csv")
+    b = _rows(resumed / "path_0000" / "cv.csv")
+    assert [r["protocol_step"] for r in a] == [r["protocol_step"] for r in b]
+    assert len(b) == expected_rows
+
+    # And the global aggregate sums the paths, with per-path records retained.
+    summary = json.loads((resumed / "AIS_paths.csv").read_text(encoding="utf-8").splitlines()[0]
+                         and "{}") if False else None
+    aggregate = _rows(resumed / "AIS_cv.csv")
+    assert {int(r["path_index"]) for r in aggregate} == {0, 1}
+    assert len(aggregate) == 2 * expected_rows

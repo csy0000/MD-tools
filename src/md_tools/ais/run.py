@@ -338,6 +338,7 @@ def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
     summary: list[dict[str, Any]] = []
     hs_rows: list[dict[str, Any]] = []
     cv_rows: list[dict[str, Any]] = []
+    cv_costs: dict[int, dict[str, Any]] = {}
     cv_names: list[str] = []
     for path_id in range(len(chosen)):
         directory = out / f"path_{path_id:04d}"
@@ -399,10 +400,33 @@ def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
                     if name not in CV_COLUMNS and name not in cv_names:
                         cv_names.append(name)
                 cv_rows.extend(reader)
+        cost = record.get("collective_variable_cost")
+        if cost:
+            cv_costs[int(path_id)] = cost
 
     rows.sort(key=lambda row: (row["path_id"], row["switch_step"]))
     hs_rows.sort(key=lambda row: (row["path_id"], int(row["switch_step"])))
     cv_rows.sort(key=lambda row: (int(row["path_index"]), int(row["protocol_step"])))
+
+    # THE GLOBAL COST, summed over verified paths in path order. Deterministic across MPI worker
+    # counts and across resume for the same reason the tables are: it is assembled from the
+    # committed per-path manifests on disk, in path order, not from whatever this process happened
+    # to run. The per-path records are retained so the total is auditable.
+    from ..cv.cost import CVCost, cost_record
+
+    segment = cumulative_cost = CVCost()
+    per_path = []
+    for path_id in sorted(cv_costs):
+        record = cv_costs[path_id]
+        segment = segment.plus(CVCost.from_record(record.get("segment") or {}))
+        cumulative_cost = cumulative_cost.plus(CVCost.from_record(record.get("cumulative") or {}))
+        per_path.append({"path_index": path_id, **record})
+    cv_cost = None
+    if per_path:
+        cv_cost = cost_record(segment, cumulative_cost,
+                              rows=sum(int(r.get("cv_rows", 0)) for r in per_path))
+        cv_cost["aggregation"] = "sum over completed paths"
+        cv_cost["per_path"] = per_path
 
     # ATOMIC. These tables are rewritten from scratch every time rank 0 assembles them, and
     # opening the real path with "w" truncates it first: a reader arriving during the rewrite --
@@ -425,7 +449,8 @@ def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
         writer.writerows(payload)
         write_atomically(path, buffer.getvalue())
     return {"rows": len(rows), "paths": len(summary), "requested": len(chosen),
-            "hs_rows": len(hs_rows), "cv_rows": len(cv_rows)}
+            "hs_rows": len(hs_rows), "cv_rows": len(cv_rows),
+            "collective_variable_cost": cv_cost}
 
 
 def run_identity_document(*, fingerprint, topology_facts, system_facts, source_facts,
@@ -1157,7 +1182,7 @@ def _validate_cv_prefix(path, entry, *, definition, columns, index, frame, inter
             path, entry, sidecar=cv_sidecar_path(path), definition=definition,
             expect_columns=columns, value_columns=list(definition.names),
             identifiers={"path_index": int(index), "source_frame_index": int(frame)},
-            interval=int(interval))
+            interval=int(interval), step_column="protocol_step")
     except cv_prefix.CVPrefixError as refusal:
         raise SystemExit(f"path {index}: {refusal}") from None
 
@@ -1551,14 +1576,21 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         # as the observation and state tables are above -- rows past it belong to updates about
         # to be repeated. A continuation that has already truncated cannot decide afterwards that
         # it should have refused.
-        committed_cv = 0
+        from ..cv.cost import CommittedPrefix
+
+        committed_prefix = CommittedPrefix()
         if state_of_path:
-            committed_cv = int(state_of_path.get("cv_rows", 0))
+            entry = state_of_path.get("cv_prefix") or {}
             _validate_cv_prefix(
-                directory / CV_CSV, state_of_path.get("cv_prefix"), definition=cv_definition,
+                directory / CV_CSV, entry, definition=cv_definition,
                 columns=list(CV_COLUMNS) + list(cv_definition.names),
                 index=index, frame=frame, interval=int(cv_every))
-        cv_series.open(append_from=committed_cv)
+            # Rows AND the cost that produced them, as one object. A rows-only restore left a
+            # resumed path whose series was right and whose cumulative counters had reset to this
+            # segment's work -- and across two resumes that silently discards the middle one.
+            committed_prefix = CommittedPrefix.from_record(
+                {"rows": int(state_of_path.get("cv_rows", 0)), "cost": entry.get("cost")})
+        cv_series.open(committed=committed_prefix)
 
     def write_cv(protocol_step: int, tau_now: float, *,
                  observation_index=None, frame_index=None) -> None:
@@ -1583,9 +1615,15 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
              observation_index, frame_index),
             cv_series.evaluate(positions, box))
 
-    if cv_series is not None and updates_done == 0:
+    if cv_series is not None and cv_series.rows_written == 0:
         # STEP 0: the source configuration at tau_start, before any update. Observation 0 is
         # written at this step too, so the indices are filled rather than empty.
+        #
+        # Guarded on the SERIES, not on `updates_done`. A path interrupted before its first
+        # update committed resumes with `updates_done == 0` and a series that already holds step
+        # 0 from the previous invocation -- so the old guard wrote it a second time, and the
+        # committed steps read [0, 0]. The row count is the fact that actually answers "has step
+        # 0 been written", and it is the same idempotence rule the ladder uses.
         write_cv(0, taus[0], observation_index=0, frame_index=0)
 
     for update in range(updates_done, updates):
@@ -1742,6 +1780,9 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         "frames": frames_emitted,
         "state_rows": state_rows_emitted,
         "cv_rows": (cv_series.rows_written if cv_series is not None else 0),
+        # Two scopes, per path. The global aggregate sums these and keeps the per-path records,
+        # so the total is auditable rather than a number a reader has to trust.
+        "collective_variable_cost": (cv_series.cost() if cv_series is not None else None),
         "total_work_kj_mol": cumulative,
         "total_reduced_work": beta * cumulative,
         "decomposition_schema": {"name": DECOMPOSITION_SCHEMA["name"],

@@ -84,7 +84,7 @@ def record(path, *, rows: int, sidecar=None, definition=None, cost=None) -> dict
 
 
 def validate(path, entry, *, sidecar=None, definition=None, expect_columns=None,
-             identifiers=None, interval=None, value_columns=None):
+             identifiers=None, interval=None, value_columns=None, step_column=None):
     """Every reason this committed prefix may not be appended to. Raises, or returns the count.
 
     `identifiers` maps a column name to the value every row must carry -- the state index and tau
@@ -136,12 +136,19 @@ def validate(path, entry, *, sidecar=None, definition=None, expect_columns=None,
                 f"{Path(path).name}: committed row {position} has {len(fields)} field(s), "
                 f"not {len(header)}")
         cells = dict(zip(header, fields))
+        # The caller NAMES the step column. It used to be assumed to be the first one, which is
+        # true of the ladder (`step,...`) and false of AIS, whose first column is `path_index` --
+        # so every AIS prefix was validated by reading the path index as the step, saw a constant,
+        # and refused a perfectly good series for "not strictly increasing ([0, 0]...)".
+        column = step_column or header[0]
+        if column not in cells:
+            raise CVPrefixError(f"{Path(path).name}: no {column!r} column to read steps from")
         try:
-            steps.append(int(cells[header[0]]))
+            steps.append(int(cells[column]))
         except ValueError:
             raise CVPrefixError(
                 f"{Path(path).name}: committed row {position} has a non-integer step "
-                f"{cells[header[0]]!r}") from None
+                f"{cells[column]!r}") from None
         for column, expected in (identifiers or {}).items():
             if column not in cells:
                 raise CVPrefixError(f"{Path(path).name}: no {column!r} column to check")
