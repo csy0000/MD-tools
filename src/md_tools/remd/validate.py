@@ -70,6 +70,30 @@ def _check_manifest_paths(manifest_path, record, result):
             result.fail(f"manifest storage.{key}={name} does not exist beside the manifest")
 
 
+def _check_manifest_cv_series(manifest_path, record, result):
+    """The ladder's CV series must still be what the completion manifest says it was.
+
+    A manifest that CLAIMS a set of files and never re-reads them certifies nothing: deleting,
+    truncating, editing or swapping any of them after completion leaves a run that still validates
+    and whose CV column now describes something else. The digests catch any change at all; the
+    structural checks say WHICH fault it is, so a reader with a mismatch can tell a truncation
+    from a mutated value.
+
+    A record with no `collective_variables` key predates the field and is left alone -- that is a
+    compatibility question, not a corrupted run. `None` means the run reported none, which is a
+    statement, not an absence.
+    """
+    if not isinstance(record, dict) or "collective_variables" not in record:
+        return
+    block = record.get("collective_variables")
+    if block is None:
+        return
+    from .cv_states import verify_manifest_entries
+
+    for problem in verify_manifest_entries(Path(manifest_path).resolve().parent, block):
+        result.fail(f"collective variables: {problem}")
+
+
 def validate_replica_output(*, analysis, checkpoint=None, manifest=None, expect_completed=True,
                             reconcilable=False):
     """Open the storage and decide whether it is a complete, coherent replica-exchange run."""
@@ -82,6 +106,7 @@ def validate_replica_output(*, analysis, checkpoint=None, manifest=None, expect_
     record = None
     if manifest is not None:
         record = _load_manifest(manifest, result)
+        _check_manifest_cv_series(manifest, record, result)
         if record is not None:
             _check_manifest_paths(manifest, record, result)
 

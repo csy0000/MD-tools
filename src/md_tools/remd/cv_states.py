@@ -225,3 +225,160 @@ def validate_for_continuation(directory, definition, *, taus, interval_steps, co
             "the collective-variable series cannot be continued:\n  - "
             + "\n  - ".join(problems))
     return committed_rows
+
+
+def manifest_entries(directory, definition, *, taus, interval_steps, total_steps, cost=None):
+    """What the completion manifest records about every state's CV series. READ FROM DISK.
+
+    Read from the files rather than from the writer's in-memory counters on purpose: the manifest
+    has to describe what is actually on disk at the moment completion is claimed, which is the
+    only thing a later reader can check it against. A count carried out of the writer would agree
+    with itself after a partial flush.
+
+    `None` when this run reported no collective variables -- and that is recorded explicitly
+    rather than by omission, so a reader can tell "this run had none" from "this manifest predates
+    the field".
+    """
+    directory = Path(directory)
+    entries = []
+    for index, tau in enumerate(taus):
+        csv_path = directory / f"remd{index}.cv.csv"
+        sidecar = directory / f"remd{index}.cv.json"
+        lines = csv_path.read_text(encoding="utf-8").splitlines() if csv_path.is_file() else []
+        rows = [line.split(",") for line in lines[1:]]
+        steps = [int(row[0]) for row in rows] if rows else []
+        entries.append({
+            "state_index": index,
+            "tau": float(tau),
+            "csv": csv_path.name,
+            "csv_sha256": _digest(csv_path),
+            "csv_bytes": csv_path.stat().st_size if csv_path.is_file() else None,
+            "rows": len(rows),
+            "header": lines[0] if lines else None,
+            "first_step": steps[0] if steps else None,
+            "final_step": steps[-1] if steps else None,
+            "interval_steps": int(interval_steps),
+            "expected_steps": list(range(0, int(total_steps) + 1, int(interval_steps))),
+            "sidecar": sidecar.name,
+            "sidecar_sha256": _digest(sidecar),
+            "sidecar_bytes": sidecar.stat().st_size if sidecar.is_file() else None,
+            "schema_version": definition.schema_version,
+            "definition_sha256": definition.digest,
+            "atom_indices": [list(cv.indices) for cv in definition.variables],
+            "columns": list(COLUMNS) + list(definition.names),
+            "units": "degrees",
+            "wrapping": "[-180, 180)",
+            "periodic_convention": (
+                "triclinic minimum image applied to the three sequential bond vectors"),
+            "exchange_phase": PHASE,
+        })
+    record = {"series": entries, "interval_steps": int(interval_steps),
+              "definition_sha256": definition.digest}
+    if cost:
+        record["cost"] = dict(cost)
+    return record
+
+
+def _digest(path):
+    import hashlib
+
+    path = Path(path)
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_manifest_entries(directory, record):
+    """Every reason a completed ladder's CV series may not be believed. Returns a list of strings.
+
+    Called before completion is committed AND whenever a completed run is verified afterwards, so
+    a file edited after the fact is caught by the same rules that let it be written.
+
+    Structure as well as digests: a digest catches any change at all, but says nothing about
+    WHAT is wrong, and a reader who has only a mismatch cannot tell a truncation from a mutated
+    value. The structural checks below name the fault.
+    """
+    directory = Path(directory)
+    problems: list[str] = []
+    for entry in (record or {}).get("series") or []:
+        index = entry.get("state_index")
+        csv_path = directory / str(entry.get("csv"))
+        sidecar = directory / str(entry.get("sidecar"))
+
+        if not csv_path.is_file():
+            problems.append(f"state {index}: {csv_path.name} is missing")
+            continue
+        if not sidecar.is_file():
+            problems.append(f"state {index}: {sidecar.name} is missing")
+            continue
+        if _digest(csv_path) != entry.get("csv_sha256"):
+            problems.append(
+                f"state {index}: {csv_path.name} has changed since the run finished "
+                f"(sha256 does not match the manifest)")
+        if _digest(sidecar) != entry.get("sidecar_sha256"):
+            problems.append(
+                f"state {index}: {sidecar.name} has changed since the run finished")
+
+        lines = csv_path.read_text(encoding="utf-8").splitlines()
+        if not lines:
+            problems.append(f"state {index}: {csv_path.name} is empty")
+            continue
+        if entry.get("header") is not None and lines[0] != entry["header"]:
+            problems.append(f"state {index}: {csv_path.name} has a different header")
+            continue
+        rows = [line.split(",") for line in lines[1:]]
+        if len(rows) != int(entry.get("rows") or 0):
+            problems.append(
+                f"state {index}: {csv_path.name} holds {len(rows)} row(s) and the manifest "
+                f"records {entry.get('rows')}")
+        expected = [int(step) for step in (entry.get("expected_steps") or [])]
+        actual = [int(row[0]) for row in rows]
+        if expected and actual != expected:
+            # Name WHERE they diverge, not the first six of each. Truncating a series leaves two
+            # identical prefixes, and printing them side by side showed the reader two matching
+            # lists above the words "does not match".
+            missing = [step for step in expected if step not in set(actual)]
+            extra = [step for step in actual if step not in set(expected)]
+            detail = []
+            if missing:
+                detail.append(f"missing {missing[:6]}")
+            if extra:
+                detail.append(f"unexpected {extra[:6]}")
+            if not detail:
+                detail.append(f"out of order: {actual[:6]}...")
+            problems.append(
+                f"state {index}: the step grid is wrong ({'; '.join(detail)}). It must be "
+                f"0, {entry.get('interval_steps')}, ..., {expected[-1]} exactly once")
+        columns = entry.get("columns") or []
+        for position, row in enumerate(rows):
+            if len(row) != len(columns):
+                problems.append(
+                    f"state {index}: row {position} has {len(row)} field(s), not {len(columns)}")
+                break
+            if int(row[3]) != int(index):
+                problems.append(
+                    f"state {index}: row {position} reports state_index {row[3]}")
+                break
+            if abs(float(row[4]) - float(entry.get("tau"))) > 1e-12:
+                problems.append(f"state {index}: row {position} reports tau {row[4]}")
+                break
+            if row[6] != PHASE:
+                problems.append(
+                    f"state {index}: row {position} reports exchange phase {row[6]!r}")
+                break
+            named = row[7].strip()
+            if named and (not named.lstrip("-").isdigit() or int(named) < 0):
+                problems.append(
+                    f"state {index}: row {position} names trajectory frame {named!r}")
+                break
+            for value in row[len(COLUMNS):]:
+                number = float(value)
+                if number != number or number in (float("inf"), float("-inf")):
+                    problems.append(
+                        f"state {index}: row {position} carries a non-finite value {value!r}")
+                    break
+    return problems

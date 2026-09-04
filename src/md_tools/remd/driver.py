@@ -346,6 +346,19 @@ class ReplicaRun:
             raise storage.StorageError(str(refusal)) from None
         return self._open_cv_states(committed_rows=rows)
 
+    def _cv_manifest(self, state):
+        """The completion manifest's record of this ladder's CV series, or None if disabled."""
+        if self.cv_states is None:
+            return None
+        from .cv_states import manifest_entries
+
+        return manifest_entries(
+            Path(self.files.trajectory).parent, self.cv_states.definition,
+            taus=self.protocol.tau,
+            interval_steps=int(self.cv_states.interval_steps),
+            total_steps=int(state["schedule"].total_steps),
+            cost=self.cv_states.cost())
+
     def _fail_closed(self, state, identity, failure):
         """Report what happened if that is possible, and stop the whole communicator regardless.
 
@@ -673,6 +686,22 @@ class ReplicaRun:
                         f"{files['manifest']} names {files[name].name} as its {name}, and that "
                         f"file is not in {parent}. The parent is incomplete: refused read-only, "
                         f"before anything here is created.")
+
+            # The parent's CV series must still be what its manifest says. An extension
+            # concatenates onto that column, so a parent whose series was truncated or edited
+            # after completion produces an extended series that is the old measurement joined to
+            # a new one, with nothing in the file marking the join. Read-only, and before
+            # anything local exists.
+            if manifest.get("collective_variables") is not None:
+                from .cv_states import verify_manifest_entries
+
+                damaged = verify_manifest_entries(Path(parent),
+                                                  manifest["collective_variables"])
+                if damaged:
+                    raise DriverError(
+                        f"{parent} cannot be extended: its collective-variable output no longer "
+                        f"matches the completion manifest that describes it.\n  - "
+                        + "\n  - ".join(damaged))
 
             # PHASE 1 -- READ ONLY, and complete. Nothing local exists yet, so a refusal here
             # leaves no half-created extension directory behind to be mistaken for a run.
@@ -1595,6 +1624,24 @@ class ReplicaRun:
             "execution": self._run_context,
             "final_state_to_walker": list(state["state_to_walker"]),
         }
+        # THE CV SERIES, as authoritative outputs of this run.
+        #
+        # Recorded explicitly as `None` when reporting was disabled rather than omitted, so a
+        # reader can tell "this run had no collective variables" from "this manifest predates the
+        # field" -- and so a CV-disabled run cannot inherit a previous run's series by silence.
+        record["collective_variables"] = self._cv_manifest(state)
+        if record["collective_variables"] is not None:
+            from .cv_states import verify_manifest_entries
+
+            problems = verify_manifest_entries(Path(self.files.trajectory).parent,
+                                               record["collective_variables"])
+            if problems:
+                # BEFORE the manifest lands. A completion record that claims files it has not
+                # checked is exactly the record a later reader trusts.
+                raise DriverError(
+                    "this ladder's collective-variable output is not a completed set:\n  - "
+                    + "\n  - ".join(problems))
+
         if state.get("extends"):
             record["extends"] = self._extension_provenance(state, report)
         if self.reservoir is not None:
