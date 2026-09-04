@@ -152,12 +152,29 @@ def test_the_manifest_records_every_series_with_its_identity(completed):
 
 
 def test_the_manifest_records_the_cv_cost_separately(completed):
+    """Both scopes, and a scalar count that is rows TIMES the definition width.
+
+    This test used to assert `cv_evaluations == cv_rows`, under a comment noting that the
+    definition holds two named torsions -- encoding the very misnomer it looked like it was
+    guarding. The counter incremented once per reporter call whatever the definition held, so a
+    two-torsion run reported half the scalar work it had done. `cv_observations` counts the
+    calls; `cv_evaluations` counts the scalar values, and with two torsions the two cannot be
+    equal.
+    """
     cost = _manifest(completed)["collective_variables"].get("cost")
     assert cost, "no CV cost was recorded"
-    assert cost["cv_rows"] == STATES * (TOTAL // CV_EVERY + 1)
-    # Two named torsions per row, per state.
-    assert cost["cv_evaluations"] == cost["cv_rows"]
-    assert cost["cv_seconds"] >= 0.0
+    rows = STATES * (TOTAL // CV_EVERY + 1)
+    assert cost["cv_rows"] == rows
+    assert cost["cumulative"]["cv_observations"] == rows
+    assert cost["cumulative"]["cv_evaluations"] == rows * 2, (
+        "two named torsions per observation, per state")
+    assert cost["segment"] == cost["cumulative"], "an uninterrupted run's scopes are equal"
+    assert cost["cumulative"]["wall_seconds"] >= 0.0
+    assert cost["aggregation"] == "sum over thermodynamic states"
+    assert len(cost["per_state"]) == STATES, "the per-state records make the total auditable"
+    # Still deliberately apart from any energy counter: a position-only torsion is not an
+    # energy evaluation, and folding it in would corrupt the number that says how expensive
+    # the Hamiltonian is.
     assert not any("energy" in key for key in cost), sorted(cost)
 
 

@@ -36,13 +36,22 @@ ALA = REPO / "tests" / "data" / "ALA.pdb"
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 QUARTET = [4, 6, 8, 14]
+PSI_QUARTET = [6, 8, 14, 16]
+#: TWO torsions, deliberately. With one, `cv_observations` and `cv_evaluations` are numerically
+#: identical, so a counter that increments once per reporter call satisfies every cost assertion
+#: below -- which is exactly how that misnomer survived. The lane costs nothing extra for the
+#: second torsion and can no longer be passed by a call counter.
 CV_YAML = f"""\
 schema_version: 1
 collective_variables:
   - name: phi
     type: torsion
     atom_indices: {QUARTET}
+  - name: psi
+    type: torsion
+    atom_indices: {PSI_QUARTET}
 """
+N_CV = 2
 
 
 def _require_cuda():
@@ -191,8 +200,14 @@ def test_cmd_cv_resume_on_cuda_reproduces_the_grid_and_cost(cmd_project, tmp_pat
     assert [int(r["step"]) for r in _rows(series)] == EXPECTED
     cost = record["collective_variable_cost"]
     assert cost["cv_rows"] == len(EXPECTED)
-    assert cost["cv_evaluations"] >= len(EXPECTED)
-    assert cost["cv_seconds"] >= 0.0
+    # EXACT, and in both scopes. `>= len(EXPECTED)` was satisfied by a counter that had lost a
+    # segment as readily as by one that had carried it.
+    assert cost["cumulative"]["cv_observations"] == len(EXPECTED)
+    assert cost["cumulative"]["cv_evaluations"] == len(EXPECTED) * N_CV, (
+        "an observation of a two-torsion definition is two scalar evaluations")
+    assert cost["segment"]["cv_observations"] < cost["cumulative"]["cv_observations"], (
+        "this run was interrupted, so its final segment is a strict subset of the cumulative")
+    assert cost["cumulative"]["wall_seconds"] >= cost["segment"]["wall_seconds"] >= 0.0
 
 
 def test_fixed_tau_phase_space_and_cv_resume_on_cuda(cmd_project, tmp_path):
