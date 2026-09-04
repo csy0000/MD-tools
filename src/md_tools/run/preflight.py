@@ -828,6 +828,18 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
             "hamiltonian_identity": hamiltonian_identity}
 
 
+def cv_sidecar_path(csv_path) -> Path:
+    """The interpretation sidecar beside a CV series: `<name>.cv.csv` -> `<name>.cv.json`.
+
+    ONE definition of the name, used by the writer, the inventory, the completion check and the
+    registration path alike. They disagreed before -- the inventory said `.cv.yaml` and the writer
+    produced `.cv.json` -- which is the whole failure mode a shared helper removes.
+    """
+    csv_path = Path(csv_path)
+    return csv_path.with_suffix(".json") if csv_path.suffix == ".csv" \
+        else Path(str(csv_path) + ".json")
+
+
 def _stage_inventory(*, output, log, trajectory, restart, checkpoint) -> OutputInventory:
     """A stage's complete inventory, including the outputs it derives rather than is given.
 
@@ -850,8 +862,17 @@ def _stage_inventory(*, output, log, trajectory, restart, checkpoint) -> OutputI
         # The collective-variable series and the resolved definition beside it. Both are written
         # by the stage, neither arrives as a flag, and an inventory that omits them is an
         # `--overwrite` that leaves a previous cv.yaml's columns in place beside new ones.
+        # `.cv.json`, which is what `CVSeries` actually writes. The inventory named `.cv.yaml`
+        # -- a file that never existed -- so the real sidecar was in no inventory at all: not
+        # collision-checked, not removed by `--overwrite`, and free to survive a definition change
+        # and describe the new CSV with the old atom mapping.
+        #
+        # Three different files are deliberately not conflated: the INPUT `cv.yaml` a person
+        # writes, the content-addressed copy `build-md` puts in the generated directory, and this
+        # OUTPUT sidecar, which says how to read the CSV beside it.
         roles["collective_variables"] = Path(trajectory).with_suffix(".cv.csv")
-        roles["collective_variables_definition"] = Path(trajectory).with_suffix(".cv.yaml")
+        roles["collective_variables_definition"] = cv_sidecar_path(
+            Path(trajectory).with_suffix(".cv.csv"))
     if checkpoint:
         checkpoint = Path(checkpoint)
         roles["checkpoints"] = checkpoint.parent / f"{checkpoint.stem}.checkpoints"
@@ -1239,6 +1260,12 @@ def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, c
     roles["provenance"] = directory / "machine.yaml"
     for state in range(int(replicas)):
         roles[f"state_trajectory_{state}"] = directory / f"remd{state}.nc"
+        # The per-state CV series and its interpretation sidecar. In no inventory before, so a
+        # `--overwrite` left a previous CV-enabled run's `remdN.cv.csv` sitting beside the new
+        # ladder's output -- and a CV-DISABLED rerun left them there permanently, describing a
+        # calculation that no longer exists, with nothing in the directory saying so.
+        roles[f"state_cv_{state}"] = directory / f"remd{state}.cv.csv"
+        roles[f"state_cv_definition_{state}"] = directory / f"remd{state}.cv.json"
     if checkpoint:
         # What a `--resume` READS. Its presence is never itself the reason to refuse a
         # continuation, which is what `resumable` says.
@@ -1399,6 +1426,9 @@ def _ais_inventory(*, output, log, paths: int, ranks: int = 1) -> OutputInventor
     roles["work_table"] = directory / "AIS_work.csv"
     roles["work_summary"] = directory / "AIS_paths.csv"
     roles["hs_table"] = directory / "AIS_hs.csv"
+    # The aggregate CV table. In no inventory before, so a CV-disabled rerun over a CV-enabled
+    # directory left the old `AIS_cv.csv` in place, describing paths the new run did not measure.
+    roles["cv_table"] = directory / "AIS_cv.csv"
     roles["selected_frames"] = directory / "selected_source_frames.csv"
     for index in range(int(paths)):
         roles[f"path_{index:04d}"] = directory / f"path_{index:04d}"
@@ -1411,7 +1441,7 @@ def _ais_inventory(*, output, log, paths: int, ranks: int = 1) -> OutputInventor
         resumable=frozenset({role for role in roles
                              if role.startswith(("path_", "trajectory_"))}
                             | {"run_identity", "work_table", "work_summary", "hs_table",
-                               "selected_frames"}))
+                               "cv_table", "selected_frames"}))
 
 
 def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting, source_config,

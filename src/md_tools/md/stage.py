@@ -898,7 +898,9 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         if cv_csv.is_file():
             outputs["collective_variables"] = file_facts(cv_csv)
             log.field(cv_csv.name, f"{cv_csv}  (collective variables)")
-            cv_sidecar = Path(str(cv_csv)[:-len(".csv")] + ".json")
+            from ..run.preflight import cv_sidecar_path
+
+            cv_sidecar = cv_sidecar_path(cv_csv)
             if cv_sidecar.is_file():
                 outputs["collective_variables_definition"] = file_facts(cv_sidecar)
         log.update(outputs=outputs)

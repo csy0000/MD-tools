@@ -114,12 +114,12 @@ class CVSeries:
         body = dict(self.definition.resolved())
         body["column_order"] = self.columns()
         body.update(self._sidecar_extra)
-        # Swap the `.csv` extension for `.json`, whatever the rest of the name is. Both shapes
-        # this writer is given have to work: cMD's `<stage>.cv.csv` -> `<stage>.cv.json`, and
-        # AIS's bare `cv.csv` -> `cv.json`. An earlier version special-cased the first and left
-        # the second as `cv.cv.json`.
-        sidecar = self.path.with_suffix(".json") if self.path.suffix == ".csv" \
-            else Path(str(self.path) + ".json")
+        # ONE definition of this name, shared with the inventory and the completion check. They
+        # disagreed before -- the inventory said `.cv.yaml`, a file that never existed -- so the
+        # real sidecar was governed by no collision or overwrite policy at all.
+        from ..run.preflight import cv_sidecar_path
+
+        sidecar = cv_sidecar_path(self.path)
         try:
             sidecar.write_text(json.dumps(body, indent=2, sort_keys=False) + "\n",
                                encoding="utf-8")

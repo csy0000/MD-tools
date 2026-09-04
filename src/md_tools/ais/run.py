@@ -100,6 +100,14 @@ STATE_CSV = "system.csv"
 #: with a nearest neighbour: attaching a CV measured at one coordinate to a different saved
 #: coordinate is precisely the misattribution the AIS two-probe separation exists to prevent.
 CV_CSV = "cv.csv"
+
+
+def cv_sidecar_path(csv_path):
+    """`<name>.cv.csv` -> `<name>.cv.json`, from the one definition of that name."""
+    from ..run.preflight import cv_sidecar_path as _shared
+
+    return _shared(csv_path)
+
 CV_COLUMNS = ("path_index", "source_frame_index", "protocol_step", "time_ps", "tau",
               "observation_index", "coordinate_frame_index")
 
@@ -523,6 +531,7 @@ _PATH_OWNERSHIP_MARKERS = (
     "system.csv",           # STATE_CSV
     "final_state.xml",
     "current_checkpoint.json",
+    CV_CSV,                 # a path interrupted before its first observation still owns this
 )
 
 
@@ -556,7 +565,7 @@ def _ais_owned_candidates(out: Path) -> list[Path]:
         elif entry.is_file() and PATH_TRAJECTORY.match(entry.name):
             found.append(entry)
         elif entry.is_file() and entry.name in (RUN_IDENTITY, WORK_TABLE, WORK_SUMMARY, HS_TABLE,
-                                                 "selected_source_frames.csv"):
+                                                 CV_TABLE, "selected_source_frames.csv"):
             found.append(entry)
         elif entry.is_file() and (entry.name.startswith("AIS.out")
                                   or entry.name.startswith("AIS.log")):
@@ -912,8 +921,19 @@ def _sync_directory(path: Path) -> None:
 MANDATORY_COMPLETION_OUTPUTS = ("trajectory", "observations", "final_state")
 
 
-def _expected_completion_outputs(*, state_every: bool) -> set[str]:
-    return set(MANDATORY_COMPLETION_OUTPUTS) | ({"system_table"} if state_every else set())
+def _expected_completion_outputs(*, state_every: bool, cv: bool = False) -> set[str]:
+    """Which outputs a manifest MUST claim for this schedule.
+
+    Conditional on what the run actually asked for: a CV-disabled path claims no CV files and
+    must not be required to, while a CV-enabled one must claim both -- a manifest that omits them
+    lets a path be skipped as complete while its CV output has been truncated or deleted.
+    """
+    expected = set(MANDATORY_COMPLETION_OUTPUTS)
+    if state_every:
+        expected.add("system_table")
+    if cv:
+        expected |= {"collective_variables", "collective_variables_definition"}
+    return expected
 
 
 def _discard_orphan_publication(published: Path, marker: Path, log) -> None:
@@ -944,7 +964,12 @@ def _validate_completion_manifest(completion: dict[str, Any], *, directory: Path
     path, and one carrying a key this build does not produce came from a different schema.
     """
     outputs = completion.get("outputs") or {}
-    expected = _expected_completion_outputs(state_every=state_every)
+    expected = _expected_completion_outputs(
+        state_every=state_every,
+        # From the SCHEDULE, not from whether the files happen to exist. Reading it off the
+        # directory would let a run that was asked for CV output commit a manifest omitting it
+        # simply because the writer had failed.
+        cv=bool(schedule.get("cv_interval_steps")))
     missing = sorted(expected - set(outputs))
     unknown = sorted(set(outputs) - expected)
     if missing or unknown:
@@ -1009,10 +1034,13 @@ def _verified_completion(marker: Path, *, directory: Path, published: Path, fing
     claimed = {"trajectory": published,
                "observations": directory / OBSERVATIONS_CSV,
                "final_state": directory / "final_state.xml",
-               "system_table": directory / STATE_CSV}
+               "system_table": directory / STATE_CSV,
+               "collective_variables": directory / CV_CSV,
+               "collective_variables_definition": cv_sidecar_path(directory / CV_CSV)}
     outputs = record.get("outputs") or {}
     expected = _expected_completion_outputs(
-        state_every=bool(schedule.get("state_interval_steps")))
+        state_every=bool(schedule.get("state_interval_steps")),
+        cv=bool(schedule.get("cv_interval_steps")))
     missing = sorted(expected - set(outputs))
     if missing:
         raise SystemExit(
@@ -1574,7 +1602,12 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
     # stable name that no committed manifest vouches for.
     fault("before-final-fsync")
     for produced in (staged, directory / OBSERVATIONS_CSV, directory / "final_state.xml",
-                     directory / STATE_CSV):
+                     directory / STATE_CSV,
+                     # The CV series and its sidecar are artefacts this path claims, so they are
+                     # made durable BEFORE the manifest that vouches for them. Omitted before, so
+                     # a crash between the manifest landing and the page cache flushing could
+                     # leave a path recorded complete with a short or absent CV file.
+                     directory / CV_CSV, cv_sidecar_path(directory / CV_CSV)):
         if produced.is_file():
             with produced.open("rb") as handle:
                 os.fsync(handle.fileno())
@@ -1636,6 +1669,15 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             "final_state": file_facts(directory / "final_state.xml"),
             **({"system_table": file_facts(directory / STATE_CSV)}
                if (directory / STATE_CSV).is_file() else {}),
+            # The CV series and the sidecar that says how to read it. `cv_rows` was recorded and
+            # the FILES were not, so a completed path could be skipped while its CV output had
+            # been truncated, mutated or deleted -- the count agreed with itself and nothing
+            # looked at the bytes.
+            **({"collective_variables": file_facts(directory / CV_CSV)}
+               if (directory / CV_CSV).is_file() else {}),
+            **({"collective_variables_definition":
+                file_facts(cv_sidecar_path(directory / CV_CSV))}
+               if cv_sidecar_path(directory / CV_CSV).is_file() else {}),
         },
     }
     # THE COMMIT POINT. Atomic, and last. Until this file lands the path is incomplete: the
