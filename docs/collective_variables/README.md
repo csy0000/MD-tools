@@ -228,6 +228,27 @@ verification, and `validate_replica_output` re-reads them afterwards, so a file 
 fact is caught by the same rules that let it be written. An extension checks its parent read-only
 before anything local exists.
 
+**Walker identity and the ladder permutation.** Every ladder CV row's `walker_index` must be an
+integer with `0 <= walker < number_of_states`, and its state index, tau, exchange phase and
+observation step must match the owning series and the schedule. Across the set, at each common
+observation step the walkers in all state files must form an exact permutation of
+`0 .. number_of_states - 1`: an exchange permutes walkers among rungs and never creates, destroys
+or duplicates one. Two rungs claiming one walker, or a walker occupying none, is invisible from
+inside any single file — every row there is internally consistent, on the right step, at the
+right tau, with a walker in range. This runs before completion is committed, whenever a completed
+ladder is verified, and before an extension touches its parent.
+
+**Provenance.** A ladder's per-state CV CSV and sidecar are named in three places: the completion
+manifest, the outer machine-readable `-log` output inventory, and — being files under the run
+root — the registry's `SHA256SUMS`. The `-log` inventory is what `registry.discovery.check_lineage`
+indexes by digest to connect one stage's outputs to the next stage's inputs, so a series missing
+from it is invisible to every lineage check even while present on disk. Each record carries the
+path relative to the run root, the digest and byte size the manifest recorded, the state index and
+its tau, and the CV definition digest; CSV and sidecar are separate roles, because the sidecar is
+how the CSV is read. The inventory is built from the validated manifest and never from a glob: a
+`remd*.cv.csv` glob would record a file left behind by an earlier run into the same directory as
+this run's provenance.
+
 An AIS path validates its series structurally against the **schedule** rather than the file:
 `switching_steps / cv_interval_steps + 1` rows on the grid `0, interval, …, switching_steps`, both
 endpoints exactly once, with path and source-frame identity on every row. A file that is
@@ -238,11 +259,76 @@ indistinguishable from a manifest predating the field.
 
 ### Cost
 
-`cv_evaluations`, `cv_rows` and `cv_seconds` are persisted, separately from any energy counter. On
-a resumed run the in-memory counters cover that segment only, so the committed prefix carries what
-earlier segments spent and the total is their sum — with both halves kept visible, since a single
-number replacing the other would make an interrupted run look cheaper than an identical
-uninterrupted one.
+Three counters, with exact meanings, because two of them used to share a name:
+
+| field | meaning |
+|---|---|
+| `cv_observations` | configurations on which the reporter evaluated the **complete** configured CV set — one per reporter call |
+| `cv_evaluations` | **scalar** CV values evaluated. One observation of a definition holding `N_cv` torsions adds `N_cv` |
+| `wall_seconds` | measured time spent evaluating the CV set, excluding CSV serialisation, hashing and validation |
+
+`cv_evaluations` previously counted reporter *calls* — it incremented by one per observation
+regardless of how many torsions the definition held, so a two-torsion run reported half the
+scalar work it had done, under a name that says otherwise. The two counters are numerically
+identical for a single-CV definition, which is how the misnomer survived a full test suite; every
+test that asserts on them now uses at least two torsions, where a call counter and a scalar
+counter cannot agree.
+
+Each is recorded in **two scopes**:
+
+```yaml
+collective_variable_cost:
+  schema_version: 2
+  segment:                 # this invocation only
+    cv_observations: ...
+    cv_evaluations: ...
+    wall_seconds: ...
+  cumulative:              # the complete logical simulation, across every invocation
+    cv_observations: ...
+    cv_evaluations: ...
+    wall_seconds: ...
+```
+
+On a fresh run the two are equal. On a continuation the cumulative counters are restored from the
+committed prefix **before any new evaluation**, and only the segment counters reset — so a second
+or later interruption neither loses nor double-counts what earlier segments spent. Both halves
+stay visible: a single number replacing the pair would make an interrupted run look cheaper than
+an identical uninterrupted one. Verifying or skipping already-complete work counts as neither;
+re-entering a finished run leaves an empty segment.
+
+The counters are restored as one typed object (`CommittedPrefix`, carrying the row count *and*
+the cost) rather than as loosely related integers, so a caller cannot restore the rows while
+silently discarding the counters — which is exactly what one did.
+
+**Aggregation.** A ladder reports the **sum over thermodynamic states** and an AIS run the **sum
+over completed paths**; both say so in an `aggregation` field and both retain the per-state or
+per-path records beside the total, so the sum is auditable rather than a number to be trusted.
+Counters are integers; every counter is finite and non-negative, and an AIS path whose cumulative
+counters disagree with its row count and its `N_cv` is refused before its completion marker is
+committed.
+
+**A resume is the same trajectory, not merely a valid one.** Positions, velocities and box are
+the complete *physical* state of a Langevin walker, and they are what every checkpoint stores —
+which keeps a checkpoint readable on any device. They are not enough to continue a trajectory:
+the integrator's pseudo-random stream has a position within it that coordinates do not carry, so
+a walker resumed from coordinates alone draws different noise from that point on. The result is
+correct and statistically exact, and it is a *different* trajectory — which means a resumed CV
+series cannot be compared value-by-value with an uninterrupted reference.
+
+cMD and AIS always resumed through `loadCheckpoint` and so were always bitwise. The ladder did
+not, and every continued REST2/rREST2 run diverged from the resume point onward. Ladder
+checkpoints now store each rung's OpenMM context checkpoint **alongside** the coordinates,
+together with the platform and precision that produced them. They are an optimisation and never a
+requirement: a continuation that finds them, written by the platform it is running on, restores
+them and reproduces the reference exactly; one on a different device ignores them and falls back
+to coordinates exactly as before. The checkpoint is never made unusable on another machine, and
+which path was taken is announced on the run's output and recorded.
+
+One caveat belongs with this. OpenMM's **CPU platform** sums its force reductions in
+thread-completion order, so it is only reproducible at a fixed thread count: two replicate runs
+with the same pinned seed diverge by the first observation with the default pool. That is a
+property of the platform, not of any protocol here. Tests that compare series value-by-value pin
+`OPENMM_CPU_THREADS=1` and say why; nothing pins a thread count in production.
 
 **Steps are absolute.** OpenMM's `loadCheckpoint` restores the Context's step count, so
 `simulation.currentStep` is the single authority after a restore and nothing adds the

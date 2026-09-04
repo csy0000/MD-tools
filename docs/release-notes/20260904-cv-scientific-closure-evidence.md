@@ -60,9 +60,22 @@ state also names no trajectory frame, even though its walker index did not chang
 | local CPU / fast | `pytest tests -m "not slow and not gpu"` | **1279 passed**, 0 failed, 333 deselected | 171.7 s |
 | local CUDA + slow | `pytest tests -m "gpu or slow"` | **332 passed**, 0 failed, 1 skipped, 1279 deselected | 1944.0 s |
 | local real CUDA, CV enabled | `pytest tests/test_cv_cuda_lanes.py` | **6 passed**, 0 failed | 53.8 s |
-| real MPI + CUDA, CV enabled | `pytest tests/test_cv_mpi_cuda_lanes.py` | **9 passed**, 0 failed | 92.9 s |
+| real MPI + CUDA, **REST2 only**, CV enabled | `pytest tests/test_cv_mpi_cuda_lanes.py` | **9 passed**, 0 failed | 92.9 s |
 | installed wheel, outside the checkout | build + install + fresh and resumed CUDA CV runs | green | — |
 | exact-head GitHub CI | packaging and interface; **no CUDA runner** | see the final report | — |
+
+> **Correction (2026-09-04).** The MPI + CUDA row above originally read "real MPI + CUDA, CV
+> enabled", without qualification. `test_cv_mpi_cuda_lanes.py` runs **REST2 and only REST2**. At
+> the time this document was written, rREST2's reservoir refresh and distributed AIS had *not*
+> been executed on a device under MPI with collective variables enabled — the AIS cases in the
+> older MPI lane enable no CVs at all — so the unqualified row overstated the method coverage.
+> The row is now qualified, and the two missing methods have lanes of their own:
+> `tests/test_cv_mpi_cuda_rrest2.py` and `tests/test_cv_mpi_cuda_ais.py`. See
+> `20260904-cv-accounting-closure-evidence.md` for their results.
+>
+> The same document's account of cumulative cost persistence was also incomplete: the counters
+> were restored across a resume, but `cv_evaluations` counted reporter *calls* rather than scalar
+> torsion evaluations, and only one scope was reported. Both are corrected in the later document.
 
 Nothing was xfailed, skipped or deselected by hand. The one skip in the slow lane is
 `test_write_the_coverage_evidence`, which writes the matrix only when `--cuda-evidence` is given
