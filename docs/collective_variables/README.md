@@ -324,6 +324,13 @@ them and reproduces the reference exactly; one on a different device ignores the
 to coordinates exactly as before. The checkpoint is never made unusable on another machine, and
 which path was taken is announced on the run's output and recorded.
 
+This costs checkpoint size. A ladder checkpoint now carries one OpenMM context checkpoint per
+rung in addition to the coordinates, so the file grows roughly in proportion to the number of
+states — the checkpoint is rewritten whole and replaced atomically, as before, so the cost is
+per write rather than cumulative. The coordinates remain the authoritative record and a
+continuation never requires the blobs, so a deployment that would rather not pay this is
+losing bit-for-bit reproducibility and nothing else.
+
 One caveat belongs with this. OpenMM's **CPU platform** sums its force reductions in
 thread-completion order, so it is only reproducible at a fixed thread count: two replicate runs
 with the same pinned seed diverge by the first observation with the default pool. That is a
