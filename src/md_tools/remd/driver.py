@@ -178,6 +178,8 @@ class ReplicaRun:
         #: Per-thermodynamic-state collective-variable series. Root-only, like the trajectories:
         #: only the root holds the gathered configurations every state's row is written from.
         self.cv_states = None
+        #: Test-seam bookkeeping: how many times each armed boundary has been crossed.
+        self._fault_crossings = {}
         self.reservoir = None
         self._audit = None
         self._run_context = {}
@@ -319,6 +321,30 @@ class ReplicaRun:
             taus=self.protocol.tau, interval_steps=int(interval),
             fingerprint=getattr(self.prepared, "fingerprint", None),
         ).open(committed_rows=int(committed_rows))
+
+    def _continue_cv_states(self, checkpoint):
+        """Validate the per-state CV series against this run, then reopen at the committed count.
+
+        Returns None when this run has no CV reporting enabled -- in which case a series left by
+        an EARLIER, CV-enabled run of the same ladder is not continued and not silently extended;
+        it is stale output, and the overwrite policy owns it.
+        """
+        interval = getattr(self.protocol.schedule, "cv_steps", None)
+        definition = getattr(self.prepared, "cv_definition", None)
+        if not interval or definition is None:
+            return None
+
+        from .cv_states import CVContinuationError, validate_for_continuation
+
+        committed = (checkpoint.get("extra") or {}).get("cv_rows")
+        try:
+            rows = validate_for_continuation(
+                Path(self.files.trajectory).parent, definition,
+                taus=self.protocol.tau, interval_steps=int(interval),
+                committed_rows=committed)
+        except CVContinuationError as refusal:
+            raise storage.StorageError(str(refusal)) from None
+        return self._open_cv_states(committed_rows=rows)
 
     def _fail_closed(self, state, identity, failure):
         """Report what happened if that is possible, and stop the whole communicator regardless.
@@ -927,6 +953,16 @@ class ReplicaRun:
                 n_atoms=int(checkpoint["configurations"][0].n_atoms),
                 committed_frames=committed_frames)
 
+            # THE CV SERIES, reopened at the count the checkpoint vouches for.
+            #
+            # `_continue` used to leave `cv_states` as None, so a resumed ladder wrote no CV rows
+            # at all after the interruption: the run completed, every other stream continued
+            # correctly, and the CV files silently stopped at the crash. Validated read-only
+            # FIRST -- a continuation that has already truncated cannot decide afterwards that it
+            # should have refused -- then opened at the committed count, which truncates whatever
+            # was written after the last commit and appends from there.
+            self.cv_states = self._continue_cv_states(checkpoint)
+
             payload = {
                 "storage_migrations": migrations,
                 "step": int(checkpoint["step"]),
@@ -1048,21 +1084,68 @@ class ReplicaRun:
     #: real multi-rank launch. Never set in normal use.
     FAIL_PROPAGATION_ENVIRONMENT = "MD_TOOLS_FAIL_PROPAGATION_ON_RANKS"
 
-    def _fail_propagation_if_asked(self):
+    #: Test seam: how many times a named boundary may be crossed before it raises. Without it a
+    #: fault always lands on the FIRST crossing, so no generation is ever committed and there is
+    #: nothing to resume from -- which makes every continuation test untestable.
+    FAIL_AFTER_ENVIRONMENT = "MD_TOOLS_FAIL_PROPAGATION_AFTER"
+
+    #: Test seam: which boundary inside the ladder loop raises, as a name. A crash between a CV
+    #: row reaching the disk and the checkpoint that vouches for it is the case the committed
+    #: counts exist for, and it cannot be provoked any other way in a real launch.
+    FAIL_BOUNDARY_ENVIRONMENT = "MD_TOOLS_FAIL_LADDER_AT"
+    FAIL_BOUNDARIES = ("propagation", "before-cv-row", "after-cv-row",
+                       "before-checkpoint", "after-checkpoint")
+
+    def _fail_at(self, boundary):
+        """Raise a rank-local failure at a named boundary, if the tests armed it. Never in use."""
         import os
 
-        wanted = os.environ.get(self.FAIL_PROPAGATION_ENVIRONMENT)
-        if not wanted:
+        if boundary == "propagation":
+            wanted = os.environ.get(self.FAIL_PROPAGATION_ENVIRONMENT)
+            armed = os.environ.get(self.FAIL_BOUNDARY_ENVIRONMENT, "propagation") == "propagation"
+        else:
+            wanted = os.environ.get(self.FAIL_PROPAGATION_ENVIRONMENT)
+            armed = os.environ.get(self.FAIL_BOUNDARY_ENVIRONMENT) == boundary
+        if not wanted or not armed:
             return
-        if self.coordinator.rank in {int(part) for part in wanted.replace(",", " ").split()}:
-            raise RuntimeError(
-                f"{self.FAIL_PROPAGATION_ENVIRONMENT} names this rank: simulating a rank-local "
-                f"failure inside the dynamics loop on rank {self.coordinator.rank} of "
-                f"{self.coordinator.size}")
+        if self.coordinator.rank not in {int(part) for part in wanted.replace(",", " ").split()}:
+            return
+        allowed = int(os.environ.get(self.FAIL_AFTER_ENVIRONMENT) or 0)
+        self._fault_crossings[boundary] = self._fault_crossings.get(boundary, 0) + 1
+        if self._fault_crossings[boundary] <= allowed:
+            return
+        raise RuntimeError(
+            f"{self.FAIL_PROPAGATION_ENVIRONMENT} names this rank: simulating a rank-local "
+            f"failure at {boundary} on rank {self.coordinator.rank} of "
+            f"{self.coordinator.size}")
+
+    def _fail_propagation_if_asked(self):
+        self._fail_at("propagation")
 
     def _loop(self, state, rule, interruption):
         schedule = state["schedule"]
         self._install_owned(state)
+
+        # STEP 0, exactly once, before a single step is propagated.
+        #
+        # The contract is universal: every enabled CV series contains step 0 and the final step
+        # exactly once, with the intermediate rows on the declared cadence. This ladder used to
+        # observe only at schedule events, and `events_at` never returns anything at step 0, so a
+        # 40-step run at interval 5 wrote 5..40 and silently omitted the initial configuration --
+        # the one every later row is a displacement from.
+        #
+        # `exchange_attempt = -1` because no attempt has been made; the mapping is the identity in
+        # a fresh run; and `trajectory_frame_index` is empty because no state frame is written at
+        # step 0. Guarded on the row count rather than on a "is this a resume" flag, so it is
+        # idempotent: a continuation reopens at its committed count, which is already nonzero.
+        if (self.cv_states is not None and self.coordinator.is_root
+                and self.cv_states.rows_written() == 0):
+            self.cv_states.observe(
+                step=int(state["step"]), time_ps=schedule.step_to_ps(int(state["step"])),
+                exchange_attempt=-1,
+                state_to_walker=state["state_to_walker"],
+                configurations=state["configurations"],
+                frame_index=None)
 
         while state["step"] < schedule.total_steps:
             target = schedule.next_event_step(state["step"])
@@ -1082,17 +1165,47 @@ class ReplicaRun:
             # from another rung and was never integrated at this tau. Writing it after the swap
             # would put values from trajectories that never visited a state into that state's
             # series. See `md_tools.remd.cv_states`.
-            if "cv" in events and self.cv_states is not None and self.coordinator.is_root:
-                self.cv_states.observe(
-                    step=target, time_ps=schedule.step_to_ps(target),
-                    exchange_attempt=state["exchange_index"],
-                    state_to_walker=state["state_to_walker"],
-                    configurations=state["configurations"],
-                    frame_index=state.get("frame_index") if "whole" in events else None)
+            # THE PRE-EXCHANGE CONFIGURATIONS, frozen here, before `_exchange` can permute the
+            # mapping. The row's VALUES and its `walker_index` are the pre-exchange ones -- that
+            # convention is unchanged -- but the row is WRITTEN after the exchange, because
+            # whether it may name a state trajectory frame is only knowable once the exchange has
+            # decided.
+            observing = ("cv" in events and self.cv_states is not None
+                         and self.coordinator.is_root)
+            mapping_before = list(state["state_to_walker"]) if observing else None
 
+            reservoir_event = None
             reservoir_event = None
             if "exchange" in events:
                 reservoir_event = self._exchange(state, rule, target, schedule)
+
+            if observing:
+                self._fail_at("before-cv-row")
+                # Which states may name the frame about to be written, and which may not.
+                #
+                # The frame is written from the POST-exchange occupant; the CV row describes the
+                # PRE-exchange one. For a state the exchange did not move, those are the same
+                # configuration. For a state that was swapped, they are different, and naming the
+                # frame would attribute a value to coordinates it was not measured on -- which is
+                # exactly what happened before: the row named a frame holding another walker's
+                # configuration, and the number was plausible, in range, and wrong.
+                #
+                # Empty is the honest answer there. It says "no frame in this file holds what this
+                # row measured", which is true, and it is never -1.
+                forthcoming = int(state["frame_index"]) + 1
+                named = [
+                    (forthcoming if ("whole" in events
+                                     and mapping_before[index] == state["state_to_walker"][index])
+                     else None)
+                    for index in range(self.protocol.n_states)]
+                self.cv_states.observe(
+                    step=target, time_ps=schedule.step_to_ps(target),
+                    exchange_attempt=state["exchange_index"],
+                    state_to_walker=mapping_before,
+                    configurations=state["configurations"],
+                    frame_index_for_state=named)
+                self._fail_at("after-cv-row")
+
             if self.coordinator.is_root:
                 if "exchange" in events:
                     pass    # already written by _exchange
@@ -1107,9 +1220,19 @@ class ReplicaRun:
                         state_to_walker=state["state_to_walker"],
                         configurations=state["configurations"])
                     self.trajectories.sync()
+                    promised = int(state["frame_index"]) + 1
                     state["frame_index"] = self.reporter.write_frame(
                         step=target, time_ps=schedule.step_to_ps(target),
                         exchange_index=state["exchange_index"])
+                    if observing and int(state["frame_index"]) != promised:
+                        # The CV row written a moment ago named `promised`. If the writer
+                        # disagrees, a CV value is attributed to a frame holding a different
+                        # configuration -- silently, and in a file that reads perfectly.
+                        raise DriverError(
+                            f"the collective-variable row at step {target} names state trajectory "
+                            f"frame {promised}, and the frame just written is "
+                            f"{state['frame_index']}. Refusing rather than leaving a CV value "
+                            f"attributed to a configuration it was not measured on.")
                 if "solute" in events:
                     state["solute_frame_index"] = self.reporter.write_solute_frame(
                         step=target, time_ps=schedule.step_to_ps(target),
@@ -1117,7 +1240,9 @@ class ReplicaRun:
                         configurations=state["configurations"],
                         solute_indices=self.solute_indices)
                 if "checkpoint" in events:
+                    self._fail_at("before-checkpoint")
                     self._write_checkpoint(state, schedule)
+                    self._fail_at("after-checkpoint")
                     # Kept in step with the checkpoint: both describe committed rows.
                     self._write_rem_log()
             self.coordinator.barrier()
@@ -1278,7 +1403,14 @@ class ReplicaRun:
             rng_states={"exchange": _encode_rng(state["rng"])},
             rule_state=state["rule_state"], schedule=schedule.describe(),
             identity=self.reporter.identity,
-            extra={"configuration_digest": configuration_digest(state["configurations"])})
+            extra={"configuration_digest": configuration_digest(state["configurations"]),
+                   # The per-state CV files are coordinated appendable streams, so a generation
+                   # has to vouch for their length exactly as it does for the frame index --
+                   # otherwise a continuation cannot tell a committed row from one written after
+                   # the checkpoint by a process that then died. `rows_written` refuses if the
+                   # state files have drifted apart, so one number describes the whole set.
+                   "cv_rows": (self.cv_states.rows_written()
+                               if self.cv_states is not None else None)})
 
     # -- finishing ------------------------------------------------------------------------------------
 

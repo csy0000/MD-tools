@@ -135,11 +135,35 @@ def test_each_file_reports_its_own_fixed_state_and_tau(completed):
 
 
 def test_the_cadence_is_finer_than_the_exchange_interval_and_lands_on_the_grid(completed):
-    """5-step observations inside a 10-step exchange interval, 4 exchanges: steps 5..40."""
+    """5-step observations inside a 10-step exchange interval, 4 exchanges: steps 0..40.
+
+    THIS TEST USED TO ASSERT `[5, 10, ..., 40]`, which codified a defect rather than a contract.
+    The ladder observed only at schedule events, and `events_at` never returns anything at step 0,
+    so the initial configuration -- the one every later row is a displacement from -- was silently
+    absent from every state file. The universal contract is that step 0 and the final step each
+    appear exactly once.
+    """
     _header, rows = _rows(completed / "remd0.cv.csv")
     steps = [int(row["step"]) for row in rows]
-    assert steps == [5, 10, 15, 20, 25, 30, 35, 40], steps
+    assert steps == [0, 5, 10, 15, 20, 25, 30, 35, 40], steps
+    assert steps.count(0) == 1 and steps.count(40) == 1
     assert len(steps) == len(set(steps)), "a step was observed twice"
+
+
+def test_the_step_zero_row_is_the_initial_configuration_before_any_attempt(completed):
+    """Step 0 precedes every exchange attempt, and says so rather than claiming attempt 0."""
+    for index in range(3):
+        _header, rows = _rows(completed / f"remd{index}.cv.csv")
+        first = rows[0]
+        assert int(first["step"]) == 0
+        assert int(first["exchange_attempt"]) == -1, (
+            "step 0 happens before any attempt has been made; reporting 0 would claim the first "
+            "attempt had already occurred")
+        assert int(first["walker_index"]) == index, (
+            "a fresh run starts with the identity state-to-walker mapping")
+        assert first["trajectory_frame_index"] == "", (
+            "no state trajectory frame is written at step 0, so the field must be empty")
+        assert first["exchange_phase"] == "pre-exchange"
 
 
 def test_every_state_file_has_the_same_steps(completed):

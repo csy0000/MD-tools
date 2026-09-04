@@ -268,7 +268,10 @@ def test_current_storage_needs_no_migration_and_gains_no_event(tmp_path):
 
 def test_the_driver_merges_every_authoritative_source():
     source = (TEMPLATES / "driver.py").read_text(encoding="utf-8")
-    block = source[source.index("def _continue"):source.index("def _loop")]
+    # `def _continue(self` and not `def _continue` -- the loose prefix also matches
+    # `_continue_cv_states`, which sits earlier in the file, and the slice then spanned half the
+    # class and compared offsets from the wrong block.
+    block = source[source.index("def _continue(self"):source.index("def _loop(self")]
     probe = source[source.index("def read_only_probe"):source.index("def _previous_manifest")]
     assert "merge_migration_histories" in block
     assert "migration_history()" in probe, "the file's own durable history is not read"
