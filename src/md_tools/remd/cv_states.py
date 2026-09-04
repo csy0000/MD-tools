@@ -382,3 +382,72 @@ def verify_manifest_entries(directory, record):
                         f"state {index}: row {position} carries a non-finite value {value!r}")
                     break
     return problems
+
+
+def prefix_records(directory, definition, *, taus, interval_steps, rows, cost=None):
+    """What a ladder checkpoint generation stores about its CV series: one prefix per state.
+
+    Per state rather than one aggregate digest, because the states are separate files and a
+    single combined hash could not say WHICH of them changed -- and a swapped pair of files
+    would leave a combined hash unchanged while every state's series became another's.
+    """
+    from ..cv import prefix as cv_prefix
+
+    directory = Path(directory)
+    entries = []
+    for index, tau in enumerate(taus):
+        csv_path = directory / f"remd{index}.cv.csv"
+        entry = cv_prefix.record(
+            csv_path, rows=int(rows), sidecar=directory / f"remd{index}.cv.json",
+            definition=definition)
+        entry["state_index"] = index
+        entry["tau"] = float(tau)
+        entries.append(entry)
+    record = {"rows": int(rows), "interval_steps": int(interval_steps), "states": entries}
+    if cost:
+        record["cost"] = dict(cost)
+    return record
+
+
+def validate_prefixes(directory, definition, *, taus, interval_steps, block):
+    """Validate every state's committed prefix. Returns the committed row count, or raises.
+
+    Raised as `CVContinuationError` so a caller distinguishes "this cannot be continued" from a
+    programming fault, and so the message reaches the operator unchanged.
+    """
+    from ..cv import prefix as cv_prefix
+
+    if not block or block.get("rows") is None or not block.get("states"):
+        raise CVContinuationError(
+            "this run's checkpoint does not record a committed collective-variable prefix (per "
+            "state row count and digest). It was written by a build that reported CVs without "
+            "binding them into the checkpoint transaction, so which rows are durable cannot be "
+            "established and a continuation would either duplicate observations or silently keep "
+            "rows that were edited after the last commit. Start a fresh run with --overwrite.")
+
+    directory = Path(directory)
+    columns = list(COLUMNS) + list(definition.names)
+    rows = int(block["rows"])
+    for entry in block["states"]:
+        index = int(entry["state_index"])
+        try:
+            cv_prefix.validate(
+                directory / f"remd{index}.cv.csv", entry,
+                sidecar=directory / f"remd{index}.cv.json",
+                definition=definition, expect_columns=columns,
+                value_columns=list(definition.names),
+                identifiers={"state_index": index, "tau": float(entry["tau"]),
+                             "exchange_phase": PHASE},
+                interval=int(interval_steps))
+        except cv_prefix.CVPrefixError as refusal:
+            raise CVContinuationError(str(refusal)) from None
+    return rows
+
+
+def truncate_to(directory, *, taus, rows):
+    """Cut every state's series back to the committed prefix. Only after validation."""
+    from ..cv import prefix as cv_prefix
+
+    directory = Path(directory)
+    for index in range(len(taus)):
+        cv_prefix.truncate(directory / f"remd{index}.cv.csv", int(rows))

@@ -1065,6 +1065,14 @@ def _verified_completion(marker: Path, *, directory: Path, published: Path, fing
                 f"{now[:16]}.... It has changed since the path finished, so the record describes "
                 f"a file that no longer exists. Delete {directory} to rerun this path.")
 
+    # THE CV SERIES, structurally. The manifest already hashes it, which proves the bytes have
+    # not changed since completion; that says nothing about whether they were RIGHT when the
+    # manifest was written. A path whose series was short by a row, or whose grid skipped one,
+    # would be committed and then skipped as complete for ever after.
+    if int(schedule.get("cv_interval_steps") or 0):
+        _verify_cv_series(directory / CV_CSV, record, schedule=schedule, index=index, frame=frame,
+                          marker=marker)
+
     for field, expected in (("observations", schedule["number_of_observations"]),
                             ("frames", schedule["number_of_frames"])):
         if int(record[field]) != int(expected):
@@ -1072,6 +1080,86 @@ def _verified_completion(marker: Path, *, directory: Path, published: Path, fing
                 f"{marker} records {record[field]} {field} but this run's schedule calls for "
                 f"{expected}. The path was run under a different schedule.")
     return record
+
+
+def _verify_cv_series(path, record, *, schedule, index, frame, marker):
+    """Every structural reason a completed path's CV series may not be believed.
+
+    `expected = switching_steps / cv_interval_steps + 1` -- both endpoints included, each exactly
+    once. Derived from the schedule rather than read from the file, so a file that is
+    self-consistently wrong cannot satisfy it.
+    """
+    interval = int(schedule["cv_interval_steps"])
+    total = int(schedule["switching_steps"])
+    expected_rows = total // interval + 1
+    expected_steps = list(range(0, total + 1, interval))
+
+    claimed = record.get("cv_rows")
+    if claimed is None:
+        raise SystemExit(
+            f"{marker} claims a completed CV-enabled path and records no cv_rows. Refusing to "
+            f"skip it: nothing about its collective-variable output can be checked.")
+    if int(claimed) != expected_rows:
+        raise SystemExit(
+            f"{marker} records cv_rows = {claimed} and this schedule produces {expected_rows} "
+            f"({total} switching steps every {interval}, both endpoints included). Refusing to "
+            f"skip a path whose CV series is not the length its own schedule implies.")
+    if not path.is_file():
+        raise SystemExit(f"{marker} says path {index} completed, but {path} is missing.")
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    rows = [line.split(",") for line in lines[1:]]
+    if len(rows) != expected_rows:
+        raise SystemExit(
+            f"{path.name} holds {len(rows)} data row(s) and the manifest records {claimed}. "
+            f"Delete {path.parent} to rerun this path.")
+    steps = [int(row[2]) for row in rows]           # protocol_step
+    if steps != expected_steps:
+        missing = [step for step in expected_steps if step not in set(steps)]
+        extra = [step for step in steps if step not in set(expected_steps)]
+        raise SystemExit(
+            f"{path.name}: the step grid is wrong"
+            + (f"; missing {missing[:6]}" if missing else "")
+            + (f"; unexpected {extra[:6]}" if extra else "")
+            + f". It must be 0, {interval}, ..., {total} exactly once.")
+    for position, row in enumerate(rows):
+        if int(row[0]) != int(index):
+            raise SystemExit(f"{path.name}: row {position} reports path_index {row[0]}")
+        if int(row[1]) != int(frame):
+            raise SystemExit(f"{path.name}: row {position} reports source frame {row[1]}")
+        for value in row[len(CV_COLUMNS):]:
+            number = float(value)
+            if number != number or number in (float("inf"), float("-inf")):
+                raise SystemExit(f"{path.name}: row {position} carries a non-finite value")
+    sidecar = cv_sidecar_path(path)
+    if not sidecar.is_file():
+        raise SystemExit(f"{sidecar} is missing, so {path.name} cannot be interpreted.")
+
+
+def _cv_prefix_record(series, *, index, frame):
+    """The committed CV prefix for one path's generation."""
+    from ..cv import prefix as cv_prefix
+
+    entry = cv_prefix.record(series.path, rows=int(series.rows_written),
+                             sidecar=series.sidecar, definition=series.definition,
+                             cost=series.cost())
+    entry["path_index"] = int(index)
+    entry["source_frame_index"] = int(frame)
+    return entry
+
+
+def _validate_cv_prefix(path, entry, *, definition, columns, index, frame, interval):
+    """Refuse a path whose committed CV rows are not the rows that were committed."""
+    from ..cv import prefix as cv_prefix
+
+    try:
+        cv_prefix.validate(
+            path, entry, sidecar=cv_sidecar_path(path), definition=definition,
+            expect_columns=columns, value_columns=list(definition.names),
+            identifiers={"path_index": int(index), "source_frame_index": int(frame)},
+            interval=int(interval))
+    except cv_prefix.CVPrefixError as refusal:
+        raise SystemExit(f"path {index}: {refusal}") from None
 
 
 def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str, Any],
@@ -1414,6 +1502,11 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                 # vouch for its length too -- otherwise a resume cannot tell a committed row from
                 # one written after the checkpoint by a process that then died.
                 "cv_rows": (cv_series.rows_written if cv_series is not None else 0),
+                # The committed PREFIX, by digest. The count alone catches a truncation and not
+                # a committed row edited in place -- and a resumed path appends onto exactly
+                # those rows.
+                "cv_prefix": (_cv_prefix_record(cv_series, index=index, frame=frame)
+                              if cv_series is not None else None),
                 "integrator_seed": integrator_seed,
                 "velocity_seed": velocity_seed,
                 "trajectory": trajectory_name,
@@ -1454,10 +1547,18 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                            "observation_index_meaning": (
                                "empty unless this step is also an AIS observation; when present, "
                                "the values were measured on exactly that saved coordinate")})
-        # Truncated to what the committed generation vouches for, exactly as the observation and
-        # state tables are above -- rows past it belong to updates about to be repeated.
-        cv_series.open(append_from=int(
-            (state_of_path or {}).get("cv_rows", 0) if state_of_path else 0))
+        # Validated FIRST, then truncated to what the committed generation vouches for, exactly
+        # as the observation and state tables are above -- rows past it belong to updates about
+        # to be repeated. A continuation that has already truncated cannot decide afterwards that
+        # it should have refused.
+        committed_cv = 0
+        if state_of_path:
+            committed_cv = int(state_of_path.get("cv_rows", 0))
+            _validate_cv_prefix(
+                directory / CV_CSV, state_of_path.get("cv_prefix"), definition=cv_definition,
+                columns=list(CV_COLUMNS) + list(cv_definition.names),
+                index=index, frame=frame, interval=int(cv_every))
+        cv_series.open(append_from=committed_cv)
 
     def write_cv(protocol_step: int, tau_now: float, *,
                  observation_index=None, frame_index=None) -> None:

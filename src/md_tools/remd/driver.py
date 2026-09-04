@@ -322,6 +322,17 @@ class ReplicaRun:
             fingerprint=getattr(self.prepared, "fingerprint", None),
         ).open(committed_rows=int(committed_rows))
 
+    def _cv_prefix_record(self):
+        """The committed CV prefix for this generation, or None when reporting is disabled."""
+        if self.cv_states is None:
+            return None
+        from .cv_states import prefix_records
+
+        return prefix_records(
+            Path(self.files.trajectory).parent, self.cv_states.definition,
+            taus=self.protocol.tau, interval_steps=int(self.cv_states.interval_steps),
+            rows=self.cv_states.rows_written(), cost=self.cv_states.cost())
+
     def _continue_cv_states(self, checkpoint):
         """Validate the per-state CV series against this run, then reopen at the committed count.
 
@@ -336,14 +347,26 @@ class ReplicaRun:
 
         from .cv_states import CVContinuationError, validate_for_continuation
 
-        committed = (checkpoint.get("extra") or {}).get("cv_rows")
+        extra = checkpoint.get("extra") or {}
+        directory = Path(self.files.trajectory).parent
         try:
-            rows = validate_for_continuation(
-                Path(self.files.trajectory).parent, definition,
-                taus=self.protocol.tau, interval_steps=int(interval),
-                committed_rows=committed)
+            # Structure and identity first -- files present, columns and sidecars agreeing with
+            # this run's definition -- then the committed prefix itself, by digest. Both are
+            # read-only: a continuation that has already truncated cannot decide afterwards that
+            # it should have refused.
+            validate_for_continuation(
+                directory, definition, taus=self.protocol.tau,
+                interval_steps=int(interval), committed_rows=extra.get("cv_rows"))
+            from .cv_states import truncate_to, validate_prefixes
+
+            rows = validate_prefixes(
+                directory, definition, taus=self.protocol.tau,
+                interval_steps=int(interval), block=extra.get("cv_prefix"))
         except CVContinuationError as refusal:
             raise storage.StorageError(str(refusal)) from None
+        # Only now is anything cut: everything past the committed prefix belongs to steps whose
+        # dynamics are about to be repeated.
+        truncate_to(directory, taus=self.protocol.tau, rows=rows)
         return self._open_cv_states(committed_rows=rows)
 
     def _cv_manifest(self, state):
@@ -1483,7 +1506,12 @@ class ReplicaRun:
                    # the checkpoint by a process that then died. `rows_written` refuses if the
                    # state files have drifted apart, so one number describes the whole set.
                    "cv_rows": (self.cv_states.rows_written()
-                               if self.cv_states is not None else None)})
+                               if self.cv_states is not None else None),
+                   # PER STATE: a row count catches a truncation, and a per-state digest catches
+                   # a committed row edited in place -- and, unlike one combined hash over all
+                   # states, it also catches two states' files being swapped, which leaves any
+                   # aggregate unchanged while every series becomes another's.
+                   "cv_prefix": self._cv_prefix_record()})
 
     # -- finishing ------------------------------------------------------------------------------------
 
