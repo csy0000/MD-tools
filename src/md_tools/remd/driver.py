@@ -413,8 +413,29 @@ class ReplicaRun:
     # -- setup ------------------------------------------------------------------------------------------
 
     def _load_rule(self):
+        """The transition rule this ladder runs under.
+
+        An explicit `--exchange-rule` always wins: a person who named a rule file gets that rule.
+
+        Otherwise the rule follows the PROTOCOL. A declared reservoir means rREST2, and rREST2 IS
+        conventional REST2 plus the Boltzmann refresh at the top rung -- so the refresh rule is
+        what the ladder must run. It used to fall through to the plain neighbouring rule here,
+        because only `--exchange-rule` ever selected the refresh rule and the generated project
+        passes `--reservoir` without it. The consequence was silent and total: the reservoir was
+        opened, validated, reported in the run header as "6 phase-space sample(s)" -- and never
+        drawn from once. Every rREST2 run was a REST2 run wearing rREST2's output names, and
+        nothing in the output said so, because "0 refreshes accepted" is also what a legitimately
+        rejecting reservoir would print.
+
+        The probability-one rule itself is untouched; this only decides which rule object runs.
+        """
         if self.rule_path:
             return load_rule(self.rule_path)
+        if self.reservoir_declaration:
+            from .reservoir import ReservoirRefreshRule
+
+            rule = ReservoirRefreshRule()
+            return rule, builtin_rule_identity(rule)
         rule = NeighbouringExchangeRule()
         return rule, builtin_rule_identity(rule)
 
@@ -1173,8 +1194,23 @@ class ReplicaRun:
             observing = ("cv" in events and self.cv_states is not None
                          and self.coordinator.is_root)
             mapping_before = list(state["state_to_walker"]) if observing else None
+            # THE CONFIGURATIONS THEMSELVES, not merely the mapping.
+            #
+            # `_exchange` permutes `state_to_walker`, which a saved mapping is enough to undo. But
+            # under rREST2 it also calls `_apply_reservoir`, which REPLACES an entry in
+            # `state["configurations"]` outright -- the refreshed walker's coordinates become the
+            # reservoir sample. Evaluating the CV from that list afterwards produced a row
+            # labelled "pre-exchange" whose value was measured on a configuration the run never
+            # propagated at that state: it came out of the reservoir file.
+            #
+            # A deep copy, so no later exchange or refresh can mutate the positions or box this
+            # row is computed from. `Configuration.copy()` is the existing primitive and copies
+            # velocities too, which a torsion does not need -- clarity over saving one array on a
+            # path that runs once per CV observation, not once per step.
+            configurations_before = ([configuration.copy()
+                                      for configuration in state["configurations"]]
+                                     if observing else None)
 
-            reservoir_event = None
             reservoir_event = None
             if "exchange" in events:
                 reservoir_event = self._exchange(state, rule, target, schedule)
@@ -1193,16 +1229,24 @@ class ReplicaRun:
                 # Empty is the honest answer there. It says "no frame in this file holds what this
                 # row measured", which is true, and it is never -1.
                 forthcoming = int(state["frame_index"]) + 1
+                # A REFRESHED state names no frame either, even though its walker index did not
+                # change. The frame about to be written holds the reservoir sample; this row holds
+                # the configuration the state actually propagated. Same rule as an accepted swap
+                # -- no frame in that file holds what this row measured -- reached by a second
+                # route, because the mapping alone cannot see a reservoir replacement.
+                refreshed = {int(reservoir_event[0])} if reservoir_event else set()
                 named = [
-                    (forthcoming if ("whole" in events
-                                     and mapping_before[index] == state["state_to_walker"][index])
+                    (forthcoming
+                     if ("whole" in events
+                         and mapping_before[index] == state["state_to_walker"][index]
+                         and index not in refreshed)
                      else None)
                     for index in range(self.protocol.n_states)]
                 self.cv_states.observe(
                     step=target, time_ps=schedule.step_to_ps(target),
                     exchange_attempt=state["exchange_index"],
                     state_to_walker=mapping_before,
-                    configurations=state["configurations"],
+                    configurations=configurations_before,
                     frame_index_for_state=named)
                 self._fail_at("after-cv-row")
 
