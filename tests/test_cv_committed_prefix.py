@@ -283,6 +283,11 @@ def test_cv_cost_is_persisted_and_survives_two_interruptions(tmp_path):
     user.write_text(yaml.safe_dump(
         {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
     base["MD_TOOLS_CONFIG"] = str(user)
+    # OpenMM's CPU platform sums its force reductions in thread-completion order and is
+    # only reproducible at a fixed pool size, so comparing a resumed series to an
+    # uninterrupted one value-by-value needs the pool pinned. A property of the platform;
+    # nothing pins a thread count in production.
+    base["OPENMM_CPU_THREADS"] = "1"
 
     def _launch(destination, environment=None):
         return subprocess.run(
@@ -323,11 +328,17 @@ def test_cv_cost_is_persisted_and_survives_two_interruptions(tmp_path):
     assert after["segment"]["cv_observations"] > 0
     assert after["cumulative"]["wall_seconds"] >= after["segment"]["wall_seconds"] >= 0.0
 
-    # The series itself matches the uninterrupted reference exactly.
+    # The series itself matches the uninterrupted reference exactly -- EVERY COLUMN, not only
+    # the step grid. A continuation that restores coordinates but not the integrator's
+    # pseudo-random stream writes a correct, statistically exact and completely different
+    # trajectory onto a step grid that still lines up perfectly, and a comparison of step
+    # numbers alone waves it through. That is precisely the defect this file exists to catch.
     a = (clean / "cMD.cv.csv").read_text(encoding="utf-8").splitlines()
     b = (resumed / "cMD.cv.csv").read_text(encoding="utf-8").splitlines()
     assert a[0] == b[0], "headers differ"
-    assert [r.split(",")[0] for r in a[1:]] == [r.split(",")[0] for r in b[1:]]
+    assert a[1:] == b[1:], (
+        "the resumed series differs from the uninterrupted reference: the continuation did not "
+        "resume the trajectory, it started a new one")
     assert len(b) - 1 == expected_rows
 
     # Re-entering a completed run performs no new CV evaluation.

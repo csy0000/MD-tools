@@ -97,6 +97,11 @@ def _run(project: Path, destination: Path, *extra, environment=None, expect=0):
     user.write_text(yaml.safe_dump(
         {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
     base["MD_TOOLS_CONFIG"] = str(user)
+    # OpenMM's CPU platform sums its force reductions in thread-completion order and is only
+    # reproducible at a fixed pool size, so comparing a resumed path to an uninterrupted one
+    # value-by-value needs the pool pinned. A property of the platform; nothing pins a thread
+    # count in production.
+    base["OPENMM_CPU_THREADS"] = "1"
     base.update(environment or {})
     done = subprocess.run(
         [sys.executable, str(project / "AIS" / "AIS.py"),
@@ -334,15 +339,19 @@ def test_ais_cv_cost_survives_two_interruptions(two_cv_project, tmp_path):
         "the segment equals the cumulative, so earlier segments were not carried")
     assert cost["cumulative"]["wall_seconds"] >= cost["segment"]["wall_seconds"] >= 0.0
 
-    # The series matches the uninterrupted reference exactly.
+    # The series matches the uninterrupted reference exactly -- EVERY COLUMN, not only the
+    # switching-step grid. A continuation that restores coordinates but not the integrator's
+    # pseudo-random stream writes a correct, statistically exact and completely different path
+    # onto a grid that still lines up perfectly, and comparing step numbers alone waves it
+    # through.
     a = _rows(clean / "path_0000" / "cv.csv")
     b = _rows(resumed / "path_0000" / "cv.csv")
-    assert [r["protocol_step"] for r in a] == [r["protocol_step"] for r in b]
+    assert a == b, (
+        "the resumed path differs from the uninterrupted reference: the continuation did not "
+        "resume the switching path, it started a new one")
     assert len(b) == expected_rows
 
     # And the global aggregate sums the paths, with per-path records retained.
-    summary = json.loads((resumed / "AIS_paths.csv").read_text(encoding="utf-8").splitlines()[0]
-                         and "{}") if False else None
     aggregate = _rows(resumed / "AIS_cv.csv")
     assert {int(r["path_index"]) for r in aggregate} == {0, 1}
     assert len(aggregate) == 2 * expected_rows
