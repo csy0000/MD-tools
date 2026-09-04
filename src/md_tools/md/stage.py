@@ -715,7 +715,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             if stage.get("trajectory_interval_steps"):
                 simulation.reporters.append(
                     DCDReporter(str(traj_path), int(stage["trajectory_interval_steps"]),
-                                append=done > 0 and traj_path.is_file()))
+                                append=_trajectory_holds_frames(traj_path) if done else False))
             if stage.get("state_interval_steps"):
                 simulation.reporters.append(
                     StateDataReporter(str(log_path.with_suffix(".csv")),
@@ -787,7 +787,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
 
                 cv_reporter = CVReporter(
                     cv_series, interval, periodic=not implicit, timestep_fs=timestep_fs,
-                    step_offset=done, frame_index_for_step=_frame_for)
+                    frame_index_for_step=_frame_for)
                 # STEP 0, written here because an OpenMM reporter cannot fire before the first
                 # step. Only on a fresh start: on a resume, step 0 was written by the segment
                 # that began the stage and is already in the file.
@@ -808,12 +808,12 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                     str(traj_path.with_suffix(".phase_space.nc")),
                     int(stage["phase_space_interval_steps"]),
                     identity={"hamiltonian": hamiltonian_identity_record},
-                    periodic=not implicit, timestep_fs=timestep_fs, step_offset=done))
+                    periodic=not implicit, timestep_fs=timestep_fs))
             if stage.get("checkpoint_interval_steps"):
                 simulation.reporters.append(
                     _CheckpointWithFingerprint(
                         checkpoints, int(stage["checkpoint_interval_steps"]),
-                        fingerprint=fingerprint, offset=done,
+                        fingerprint=fingerprint,
                         identity=_checkpoint_identity(stage, name, seed, acceleration,
                                                       timestep_fs),
                         # A callable per stream, read at commit time: the counts a generation
@@ -940,6 +940,30 @@ def _checkpoint_identity(stage, name, seed, acceleration, timestep_fs) -> dict[s
     return {"stage": name, "seed": int(seed), "timestep_fs": float(timestep_fs),
             "ensemble": stage.get("ensemble"), "platform": acceleration.name,
             "precision": (acceleration.properties or {}).get("Precision")}
+
+
+def _trajectory_holds_frames(path: Path) -> bool:
+    """Whether `path` is a trajectory with at least one readable frame.
+
+    `path.is_file()` is not the question. A stage interrupted BEFORE its first trajectory frame
+    leaves a DCD that exists and contains no usable header -- the reporter creates the file when
+    it is constructed, not when it first writes -- and `DCDReporter(append=True)` over that fails
+    with "Cannot append to file with invalid DCD header", so a run interrupted early could not be
+    continued at all.
+
+    A file with no frames has nothing to preserve, so it is rewritten rather than appended to.
+    That is not data loss: the committed checkpoint vouches for zero frames, and the steps that
+    would have produced them are about to be repeated.
+    """
+    from ..openmm.trajectory import count_frames
+
+    path = Path(path)
+    if not path.is_file() or path.stat().st_size == 0:
+        return False
+    try:
+        return count_frames(path) > 0
+    except Exception:                                  # noqa: BLE001 - unreadable is "no frames"
+        return False
 
 
 def cv_csv_path(trajectory: Path, stage: dict[str, Any] | None = None) -> Path:
@@ -1088,12 +1112,11 @@ class _CheckpointWithFingerprint:
     the checkpoint vouches for instead of trusting whichever file happens to be longest.
     """
 
-    def __init__(self, directory, interval: int, *, fingerprint: str, offset: int = 0,
+    def __init__(self, directory, interval: int, *, fingerprint: str,
                  identity=None, streams=None) -> None:
         self._directory = Path(directory)
         self._interval = int(interval)
         self._fingerprint = fingerprint
-        self._offset = int(offset)
         self._identity = dict(identity or {})
         #: name -> callable returning the committed count for that stream, read at commit time.
         self._streams = dict(streams or {})

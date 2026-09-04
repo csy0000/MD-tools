@@ -304,8 +304,7 @@ class PhaseSpaceReporter:
     traceable to the exact step of the run that produced it even across a restart.
     """
 
-    def __init__(self, path, interval_steps, *, identity, periodic, timestep_fs,
-                 step_offset=0):
+    def __init__(self, path, interval_steps, *, identity, periodic, timestep_fs):
         self.path = Path(path)
         self.interval = int(interval_steps)
         if self.interval < 1:
@@ -313,7 +312,6 @@ class PhaseSpaceReporter:
         self.identity = identity
         self.periodic = bool(periodic)
         self.timestep_fs = float(timestep_fs)
-        self.step_offset = int(step_offset)
         self._writer = None
 
     def describeNextReport(self, simulation):          # noqa: N802 - OpenMM's interface
@@ -332,7 +330,11 @@ class PhaseSpaceReporter:
         if self.periodic:
             box = np.array(state.getPeriodicBoxVectors(asNumpy=True).value_in_unit(
                 unit.nanometer), dtype=float)
-        step = self.step_offset + int(simulation.currentStep)
+        # THE ABSOLUTE STEP, from the Context and nowhere else. `loadCheckpoint` restores the
+        # step count, so the `step_offset=done` that used to be added here double-counted every
+        # completed step after a resume -- a reservoir frame at step 25 came back labelled 50, and
+        # the reservoir's own time axis then disagreed with the run that produced it.
+        step = int(simulation.currentStep)
         self._writer.append(
             positions=state.getPositions(asNumpy=True).value_in_unit(unit.nanometer),
             velocities=state.getVelocities(asNumpy=True).value_in_unit(

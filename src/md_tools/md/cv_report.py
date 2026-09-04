@@ -40,7 +40,7 @@ class CVReporter:
     an observation stays traceable to the step of the run that produced it across a restart.
     """
 
-    def __init__(self, series, interval_steps, *, periodic, timestep_fs, step_offset=0,
+    def __init__(self, series, interval_steps, *, periodic, timestep_fs,
                  frame_index_for_step=None):
         self.series = series
         self.interval = int(interval_steps)
@@ -49,7 +49,6 @@ class CVReporter:
                              f"got {interval_steps}")
         self.periodic = bool(periodic)
         self.timestep_fs = float(timestep_fs)
-        self.step_offset = int(step_offset)
         #: Maps an absolute step to the trajectory frame written at it, or None when there is no
         #: frame there. Supplied by the caller, which is what knows the trajectory's cadence.
         self.frame_index_for_step = frame_index_for_step or (lambda _step: None)
@@ -61,8 +60,19 @@ class CVReporter:
         return (steps, True, False, False, False, self.periodic or None)
 
     def report(self, simulation, state):
-        step = self.step_offset + int(simulation.currentStep)
-        self.observe(state, step)
+        # `simulation.currentStep` IS the absolute step, and is the only authority for it.
+        #
+        # There used to be a `step_offset=done` added to it here. OpenMM's `loadCheckpoint`
+        # RESTORES the Context's step count -- a checkpoint taken at step 25 comes back with
+        # `currentStep == 25` -- so adding the already-completed count a second time labelled the
+        # first observation after a resume `2N + interval`. Measured: a resume from step 30 of a
+        # 40-step run put its next observation at step 65, past the budget entirely, in a file
+        # with the right header, the right column count and plausible monotonic numbers.
+        #
+        # The parameter is REMOVED rather than defaulted to zero. An inert argument that used to
+        # mean something is the next person's bug: two step conventions in one runtime is the
+        # defect, not the value that was passed.
+        self.observe(state, int(simulation.currentStep))
 
     # -- shared with the caller's step-0 write -------------------------------------------------
 
