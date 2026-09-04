@@ -277,10 +277,32 @@ Do not change these without a failing test that demonstrates a defect.
   already-completed count to it. Two step conventions in one runtime is the defect; an inert
   offset argument left behind is the next person's bug, so such parameters are removed rather
   than defaulted to zero.
-* **Every appendable CV stream has a committed count in the checkpoint that vouches for it.** A
-  continuation validates read-only before touching anything, truncates to that count, and appends.
-  A checkpoint with no recorded count REFUSES with a compatibility message rather than guessing
-  from file length -- which rows are durable is exactly what the count exists to say.
+* **Every appendable CV stream has a committed PREFIX in the checkpoint that vouches for it** --
+  a row count AND a digest of exactly the header plus those rows, in the same generation
+  transaction as the Context state. A count catches a truncation; it cannot catch a committed row
+  edited in place, and a continuation appends onto exactly those rows. Never a digest of the whole
+  file: after a crash the file is legitimately longer, and hashing the uncommitted tail would make
+  every ordinary crash look like corruption. Ladder prefixes are per state, because a combined
+  hash cannot say which file changed and would not notice two states' files being swapped. The
+  prefix is validated -- digest, columns, finite values, grid, identifiers -- BEFORE a byte is
+  truncated, and a checkpoint with no prefix record refuses with a compatibility message.
+* **An rREST2 CV row holds the configuration the state PROPAGATED, never the reservoir sample.**
+  The complete walker-indexed configurations are snapshotted before `_exchange`, because
+  `_apply_reservoir` replaces an entry in the list outright and a saved mapping cannot undo that.
+  A refreshed state also names no trajectory frame even though its walker index did not change:
+  the frame holds the sample, the row holds the propagated coordinates.
+* **A declared reservoir selects the refresh rule.** rREST2 IS REST2 plus the Boltzmann refresh,
+  so the protocol chooses the rule; only an explicit `--exchange-rule` overrides it. It used to
+  fall through to the plain neighbouring rule, so a generated rREST2 opened its reservoir,
+  reported it in the run header, and never drew from it once.
+* **A ladder's CV series are authoritative completed outputs.** `restart.json` records every
+  state's digests, sizes, row count, header, grid, definition and conventions; completion is
+  refused if any fails verification; `validate_replica_output` and extension-parent validation
+  re-read them. A CV-disabled run records `collective_variables: null` explicitly, because
+  omission is indistinguishable from a manifest predating the field.
+* **A CPU test is never CUDA evidence.** The coverage matrix must name a test that runs the
+  function on a device with the feature ENABLED. It once cited a `--cpu` file for the AIS CV
+  path, which is worse than an empty cell: a gap invites work, a false entry closes the question.
 * **The CV output sidecar is `<name>.cv.json`**, and is named in one place. It is not the input
   `cv.yaml`, and not the content-addressed copy in the generated directory. The inventory once
   named a `.cv.yaml` that never existed, so the real sidecar was governed by no collision or

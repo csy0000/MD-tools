@@ -161,6 +161,17 @@ frame and others do not.
 The field is never `-1`. `-1` is not a frame index, and writing it invites a reader to index from
 the end of the file.
 
+### rREST2: the reservoir refresh
+
+A refreshed state's CV row holds the configuration the state **propagated**, not the reservoir
+sample that replaced it. The complete walker-indexed configurations are snapshotted before the
+exchange, so no later swap or refresh can mutate what a row is computed from.
+
+A refreshed state also names **no** trajectory frame, even though its walker index did not change:
+the frame about to be written holds the reservoir sample, and the row holds the propagated
+coordinates. Same conclusion as an accepted swap, reached by a second route that the mapping alone
+cannot see.
+
 ### AIS alignment
 
 `observation_index` and `coordinate_frame_index` are **empty** on rows whose cadence does not
@@ -182,10 +193,56 @@ definition elsewhere survives none of that. It survives it *silently* in the wor
 path exists on the target machine and holds a different file.
 
 The definition and its schedule are bound into the run identity, the continuation fingerprints,
-the output inventories, the checkpoint stream counts and the completion manifests. On resume the
-series is truncated to the count the selected checkpoint generation committed before appending, so
-a continuation produces neither a duplicate row nor a gap; a series *shorter* than the checkpoint
-claims is refused rather than having the missing rows invented.
+the output inventories, the checkpoint generation and the completion manifests.
+
+### The committed prefix
+
+A checkpoint records more than a row count. A count detects a file that is *shorter* than it
+should be; it says nothing about whether the rows it does hold are still the rows that were
+committed. Edit a value in place, renumber a step, change an identifier — the count still agrees,
+the continuation appends onto them, and the finished series is part measurement and part edit with
+nothing marking the boundary.
+
+So the generation stores a **digest of exactly the header plus the committed rows**, in the same
+transaction as the Context state. Not of the whole file: after a crash the file is legitimately
+*longer* than the checkpoint, because rows are flushed as they are written and the commit happens
+afterwards, and hashing the uncommitted tail would make every ordinary crash look like corruption.
+
+Before appending, that prefix is validated — digest, exact columns, finite values, a strictly
+increasing grid on the declared interval, and the identifiers the series must carry (state index
+and tau for a ladder, path and source-frame index for AIS). All of it **before a byte is
+truncated**, because a continuation that has already truncated cannot decide afterwards that it
+should have refused. Ladder prefixes are recorded per state rather than as one combined hash: a
+combined hash cannot say which file changed, and two states' files being swapped would leave it
+unchanged while every series became another's.
+
+A checkpoint with no prefix record refuses with a compatibility message rather than guessing.
+
+### Completion
+
+A ladder's `restart.json` records, for every state: index and tau, CSV and sidecar names, digests
+and byte sizes, row count, exact header, first and final step, interval, expected grid, schema
+version and definition digest, resolved atom indices and column order, units, wrapping, periodic
+convention, exchange phase, and the CV cost. Completion is **refused** if any series fails
+verification, and `validate_replica_output` re-reads them afterwards, so a file edited after the
+fact is caught by the same rules that let it be written. An extension checks its parent read-only
+before anything local exists.
+
+An AIS path validates its series structurally against the **schedule** rather than the file:
+`switching_steps / cv_interval_steps + 1` rows on the grid `0, interval, …, switching_steps`, both
+endpoints exactly once, with path and source-frame identity on every row. A file that is
+self-consistently wrong cannot satisfy a requirement it did not supply.
+
+A CV-disabled run records `collective_variables: null` explicitly. Omission would be
+indistinguishable from a manifest predating the field.
+
+### Cost
+
+`cv_evaluations`, `cv_rows` and `cv_seconds` are persisted, separately from any energy counter. On
+a resumed run the in-memory counters cover that segment only, so the committed prefix carries what
+earlier segments spent and the total is their sum — with both halves kept visible, since a single
+number replacing the other would make an interrupted run look cheaper than an identical
+uninterrupted one.
 
 **Steps are absolute.** OpenMM's `loadCheckpoint` restores the Context's step count, so
 `simulation.currentStep` is the single authority after a restore and nothing adds the
