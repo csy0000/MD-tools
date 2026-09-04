@@ -363,6 +363,63 @@ def _write_helper_if_compatible(destination: Path, text: str, *, force: bool = F
     os.replace(staging, destination)
 
 
+def _cv_outputs(restart: Path, out: Path) -> dict[str, Any]:
+    """The per-state CV series and sidecars, for the outer machine record.
+
+    FROM THE COMPLETION MANIFEST, never from a glob. `restart.json` is written only after the
+    driver has validated every series -- its digests, its step grid, its walker permutation --
+    so the manifest is the one list of CV files this run vouches for. A `remd*.cv.csv` glob over
+    the directory would happily pick up a file left by an earlier run into the same place, or one
+    belonging to a state this ladder does not have, and record it as provenance for this one.
+
+    These files were absent here entirely. They were in `restart.json` and, being ordinary files
+    under the run root, in the registry's own `SHA256SUMS`; but the outer `-log` record is what
+    `md_tools.registry.discovery.check_lineage` indexes by digest to connect one stage's outputs
+    to the next stage's inputs, so a CV series was invisible to every completion and lineage
+    check that reads it.
+
+    Each record carries what distinguishes one series from another that is otherwise identically
+    shaped -- the state it belongs to and that state's tau -- and the digest of the definition
+    they were measured under, so a reader can tell that two states' series are the same
+    measurement without opening either. The CSV and its sidecar are separate roles, because they
+    are separate artefacts: the sidecar is how the CSV is READ, and a reader holding one without
+    the other has numbers whose units, wrapping and atom selection are unknown.
+    """
+    import json
+
+    try:
+        block = json.loads(restart.read_text(encoding="utf-8")).get("collective_variables")
+    except (OSError, ValueError):
+        # The manifest is the executor's artefact and it has already been written successfully
+        # for this branch to run. If it cannot be read here, the run's own records still stand;
+        # this log simply records no CV outputs rather than failing a completed run.
+        return {}
+    if not block:
+        # `None` is explicit: this run reported no collective variables. Not an omission.
+        return {}
+
+    records: dict[str, Any] = {}
+    for entry in block.get("series") or []:
+        index = entry.get("state_index")
+        shared = {"state_index": index, "tau": entry.get("tau"),
+                  "definition_sha256": entry.get("definition_sha256")}
+        for role, name, digest, size in (
+                (f"state_cv_{index}", entry.get("csv"),
+                 entry.get("csv_sha256"), entry.get("csv_bytes")),
+                (f"state_cv_definition_{index}", entry.get("sidecar"),
+                 entry.get("sidecar_sha256"), entry.get("sidecar_bytes"))):
+            if not name:
+                continue
+            path = out / str(name)
+            if not path.is_file():
+                continue
+            # The digest the manifest recorded, not a fresh one: the point of this record is to
+            # say what the validated manifest vouches for. Re-hashing here would quietly paper
+            # over a file that changed between the manifest landing and this log being written.
+            records[role] = {"path": str(name), "bytes": size, "sha256": digest, **shared}
+    return records
+
+
 def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     """Prepare the ladder's inputs and hand them to the validated executor."""
     import argparse
@@ -647,6 +704,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
                       out / "rem.log"):
             if extra.is_file():
                 outputs[extra.name] = file_facts(extra, relative_to=out)
+        outputs.update(_cv_outputs(restart, out))
         log.update(outputs=outputs, state_trajectories=len(list(out.glob("remd*.nc"))))
         log.complete()
         log.heading("Summary")
