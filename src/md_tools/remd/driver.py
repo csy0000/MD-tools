@@ -849,6 +849,8 @@ class ReplicaRun:
                 "number_of_exchanges": schedule.number_of_exchanges,
                 "configurations": [(c.positions, c.velocities, c.box)
                                    for c in checkpoint["configurations"]],
+                "context_blobs": checkpoint.get("context_blobs"),
+                "context_platform": checkpoint.get("context_platform"),
             }
         payload = self.coordinator.bcast(payload)
 
@@ -867,6 +869,8 @@ class ReplicaRun:
             "frame_index": -1, "solute_frame_index": -1,
             "state_to_walker": list(payload["state_to_walker"]),
             "configurations": [Configuration(p, v, b) for p, v, b in payload["configurations"]],
+            "restore_contexts": self._restorable_contexts(payload),
+            "announce_restore": True,
             "schedule": schedule,
             "rng": rng, "rule_state": dict(payload["rule_state"]),
             "resumed_from_step": payload["step"], "interrupted": False,
@@ -1055,6 +1059,8 @@ class ReplicaRun:
                 "number_of_exchanges": schedule.number_of_exchanges,
                 "configurations": [(c.positions, c.velocities, c.box)
                                    for c in checkpoint["configurations"]],
+                "context_blobs": checkpoint.get("context_blobs"),
+                "context_platform": checkpoint.get("context_platform"),
             }
         payload = self.coordinator.bcast(payload)
 
@@ -1070,6 +1076,8 @@ class ReplicaRun:
             "solute_frame_index": payload["solute_frame_index"],
             "state_to_walker": list(payload["state_to_walker"]),
             "configurations": [Configuration(p, v, b) for p, v, b in payload["configurations"]],
+            "restore_contexts": self._restorable_contexts(payload),
+            "announce_restore": True,
             "schedule": schedule,
             "rng": rng, "rule_state": dict(payload["rule_state"]),
             "resumed_from_step": payload["step"], "interrupted": False,
@@ -1153,9 +1161,88 @@ class ReplicaRun:
         return np.array([rows[i] for i in range(n)], dtype=float)
 
     def _install_owned(self, state):
+        """Put every owned rung's walker into its context.
+
+        `restore_contexts` is the bit-for-bit path. When the checkpoint carried OpenMM context
+        checkpoints AND they were written by the platform this process is running on, loading one
+        restores the integrator's pseudo-random stream along with the coordinates, so the
+        continuation reproduces the uninterrupted trajectory exactly. Positions and velocities
+        alone cannot: they are the complete PHYSICAL state, and the stream position is not part of
+        it, so a walker resumed from them is correct but different.
+
+        The fallback is never an error. A checkpoint from another device, or from a build that
+        wrote no blobs, resumes from positions and velocities as it always did.
+        """
+        blobs = state.pop("restore_contexts", None)
+        if state.pop("announce_restore", False):
+            print(f"# continuation       : {self.context_restore}")
+            sys.stdout.flush()
         for index in self.owned:
+            if blobs is not None and blobs[index]:
+                self.engine.load_integrator_state(index, blobs[index])
+                continue
             self.engine.set_configuration(
                 index, state["configurations"][state["state_to_walker"][index]])
+
+    def _context_signature(self):
+        """What a context checkpoint is bound to. Anything else must not load one.
+
+        OpenMM refuses a checkpoint from a different platform, and a checkpoint from the same
+        platform at a different precision is worse than a refusal -- it can load and mean
+        something subtly different. Both are compared before a blob is trusted.
+        """
+        return {
+            "platform": str(self._platform.getName()) if self._platform is not None else None,
+            "precision": self._properties.get("Precision"),
+            "n_states": int(self.protocol.n_states),
+        }
+
+    #: How the last continuation restored its walkers: "bitwise: ..." when every rung's OpenMM
+    #: context checkpoint was loaded and the trajectory therefore reproduces an uninterrupted
+    #: reference exactly, or "physical: <why not>" when it resumed from coordinates alone, which
+    #: is correct and statistically exact but is a DIFFERENT trajectory from here on. None on a
+    #: fresh run, which continues nothing.
+    context_restore = None
+
+    def _restorable_contexts(self, payload):
+        """The blobs this process may load, or None when it must resume from coordinates.
+
+        Refusing is the safe answer and costs only bit-for-bit reproducibility, so every doubt --
+        no blobs, a different platform, a different precision, a different ladder width, a short
+        or empty entry -- resolves to None and the ordinary physical restart.
+        """
+        blobs = payload.get("context_blobs")
+        recorded = payload.get("context_platform") or {}
+        mine = self._context_signature()
+        if not blobs:
+            self.context_restore = "physical: the checkpoint carries no context checkpoints"
+        elif recorded != mine:
+            self.context_restore = (
+                f"physical: the context checkpoints were written under {recorded} "
+                f"and this process runs {mine}")
+        elif len(blobs) != int(self.protocol.n_states) or not all(blobs):
+            self.context_restore = (
+                f"physical: {sum(1 for b in blobs if b)} of {self.protocol.n_states} rungs "
+                f"carry a context checkpoint")
+        else:
+            self.context_restore = "bitwise: every rung's OpenMM context checkpoint was restored"
+            return list(blobs)
+        return None
+
+    def _context_blobs(self, state):
+        """Every rung's OpenMM context checkpoint, on every rank, state-indexed.
+
+        COLLECTIVE. Each rank can only serialise the contexts it owns, and the checkpoint is
+        written by the root, so the blobs have to be gathered exactly as the configurations are.
+        Call it from a point every rank reaches -- never from inside an `is_root` branch.
+        """
+        local = {index: self.engine.integrator_state(index) for index in self.owned}
+        if self.coordinator.size > 1:
+            assembled = {}
+            for piece in self.coordinator.allgather(local):
+                assembled.update(piece)
+            local = assembled
+        return [local.get(index) for index in range(self.protocol.n_states)]
 
     #: Test seam: raise a rank-local RuntimeError inside the dynamics loop on named ranks, as
     #: "0,3". This is what a real mid-run failure looks like -- a NaN energy, a device error, a
@@ -1308,6 +1395,12 @@ class ReplicaRun:
                     frame_index_for_state=named)
                 self._fail_at("after-cv-row")
 
+            if "checkpoint" in events:
+                # COLLECTIVE, and so deliberately outside the root-only block below: every rank
+                # holds only its own rungs' contexts, and gathering them is a collective the root
+                # cannot perform alone.
+                state["context_blobs"] = self._context_blobs(state)
+
             if self.coordinator.is_root:
                 if "exchange" in events:
                     pass    # already written by _exchange
@@ -1353,6 +1446,8 @@ class ReplicaRun:
             # is together. One rank raising inside its signal handler would leave the others in a
             # collective forever.
             if self.coordinator.any_true(interruption.requested):
+                if "checkpoint" not in events:
+                    state["context_blobs"] = self._context_blobs(state)
                 if self.coordinator.is_root and "checkpoint" not in events:
                     self._write_checkpoint(state, schedule)
                 state["interrupted"] = True
@@ -1497,6 +1592,8 @@ class ReplicaRun:
 
     def _write_checkpoint(self, state, schedule):
         storage.ReplicaCheckpoint(self.files.checkpoint).write(
+            context_blobs=state.get("context_blobs"),
+            context_platform=self._context_signature(),
             step=state["step"], exchange_index=state["exchange_index"],
             frame_index=state["frame_index"],
             solute_frame_index=state["solute_frame_index"],

@@ -1044,16 +1044,31 @@ class ReplicaCheckpoint:
     walker's complete phase-space sample, the mapping, the RNG states, the rule's persisted state,
     the absolute step, the event counters and the budget.
 
-    OpenMM's own context checkpoints are deliberately NOT stored: they are platform-specific and
-    would make a checkpoint unusable on a different device. Positions, velocities and box are the
-    complete logical state of a Langevin walker.
+    Positions, velocities and box are the complete logical state of a Langevin walker, and they
+    remain the AUTHORITATIVE record: a checkpoint written on one device stays readable on any
+    other, which is why they are stored unconditionally and why a continuation never requires
+    anything else.
+
+    They are not, however, sufficient to reproduce a run BIT FOR BIT. The integrator's
+    pseudo-random stream has a position within it, and positions and velocities do not carry it,
+    so a walker resumed from them draws different noise from here on. The continuation is
+    statistically exact and physically correct; it is simply not the same trajectory, which means
+    a resumed CV series cannot be compared value-by-value against an uninterrupted reference.
+
+    So OpenMM's own context checkpoints are stored ALONGSIDE them, per state, together with the
+    platform and precision that produced them. They are platform-specific by construction, and are
+    therefore an optimisation and never a requirement: a continuation that finds them, and finds
+    they were written by the platform it is running on, restores them and reproduces the reference
+    exactly; a continuation on a different device ignores them and falls back to positions and
+    velocities, exactly as before. The checkpoint is never made unusable on another machine.
     """
 
     def __init__(self, path):
         self.path = Path(path)
 
     def write(self, *, step, exchange_index, frame_index, solute_frame_index, configurations,
-              state_to_walker, rng_states, rule_state, schedule, identity, extra=None):
+              state_to_walker, rng_states, rule_state, schedule, identity, extra=None,
+              context_blobs=None, context_platform=None):
         import netCDF4
 
         temporary = self.path.with_name(f"{self.path.name}.partial.{os.getpid()}")
@@ -1087,6 +1102,21 @@ class ReplicaCheckpoint:
             if has_box:
                 dataset.createVariable("box", "f8", ("walker", "cell", "spatial"))[:] = \
                     np.array([c.box for c in configurations], dtype=float)
+            if context_blobs:
+                # State-indexed, not walker-indexed: a context belongs to a rung, and the
+                # walker occupying that rung is recorded separately by `state_to_walker`.
+                blobs = [bytes(b) for b in context_blobs]
+                widest = max(len(b) for b in blobs)
+                dataset.context_platform_json = json.dumps(
+                    context_platform or {}, sort_keys=True, default=str)
+                dataset.createDimension("state", len(blobs))
+                dataset.createDimension("blobbyte", widest)
+                dataset.createVariable("context_blob_lengths", "i8", ("state",))[:] = \
+                    np.array([len(b) for b in blobs], dtype=np.int64)
+                padded = np.zeros((len(blobs), widest), dtype=np.uint8)
+                for index, blob in enumerate(blobs):
+                    padded[index, :len(blob)] = np.frombuffer(blob, dtype=np.uint8)
+                dataset.createVariable("context_blobs", "u1", ("state", "blobbyte"))[:] = padded
             dataset.sync()
         finally:
             dataset.close()
@@ -1125,6 +1155,23 @@ class ReplicaCheckpoint:
                 "schedule": json.loads(dataset.schedule_json),
                 "identity": json.loads(dataset.identity_json),
                 "extra": json.loads(getattr(dataset, "extra_json", "{}")),
+                "context_blobs": _read_context_blobs(dataset),
+                "context_platform": json.loads(
+                    getattr(dataset, "context_platform_json", "null")),
             }
         finally:
             dataset.close()
+
+
+def _read_context_blobs(dataset):
+    """The per-state OpenMM context checkpoints, or None when this file carries none.
+
+    None is the ordinary answer for a checkpoint written before this field existed, and for one
+    written by a build that could not produce them. A continuation must treat it as "resume from
+    positions and velocities", never as an error.
+    """
+    if "context_blobs" not in dataset.variables:
+        return None
+    padded = np.asarray(dataset.variables["context_blobs"][:], dtype=np.uint8)
+    lengths = [int(n) for n in dataset.variables["context_blob_lengths"][:]]
+    return [padded[index, :length].tobytes() for index, length in enumerate(lengths)]

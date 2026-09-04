@@ -273,7 +273,6 @@ def manifest_entries(directory, definition, *, taus, interval_steps, total_steps
     the field".
     """
     directory = Path(directory)
-    self_costs = list(per_state_cost) if per_state_cost else None
     entries = []
     for index, tau in enumerate(taus):
         csv_path = directory / f"remd{index}.cv.csv"
