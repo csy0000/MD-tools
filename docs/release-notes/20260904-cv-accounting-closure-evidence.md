@@ -162,8 +162,7 @@ Each change was checked by putting the defect back and confirming the tests fail
 virtualenv and run from a directory outside the checkout. Import origin:
 `…/wheelenv2/lib/python3.12/site-packages/md_tools/__init__.py`.
 
-Both runs used a two-torsion definition and **no `--cpu`**, on `CUDA_VISIBLE_DEVICES=7`
-(NVIDIA GeForce RTX 3080, mixed precision).
+All runs used a two-torsion definition and **no `--cpu`**.
 
 | run | invocations | result |
 |---|---|---|
@@ -172,8 +171,47 @@ Both runs used a two-torsion definition and **no `--cpu`**, on `CUDA_VISIBLE_DEV
 | AIS fresh | 1 | completed on CUDA; 5 rows, 10 scalar evaluations per path |
 | AIS multiply resumed | crash `after-work-row` → crash `after-frame` → complete | per-path `cv.csv` and the global `AIS_cv.csv` **byte-identical** to the uninterrupted reference; segment 3 obs / 6 evals, cumulative 5 obs / 10 evals; aggregate "sum over completed paths", 10 obs / 20 evals over 2 paths |
 
+| REST2 fresh, **3 MPI ranks** on CUDA | `mpirun -n 3 … -ng 3` | completed; `local_rank` device policy, 27 observations / **54** scalar evaluations over 3 rungs |
+| REST2 **3 ranks, twice interrupted** | crash `after-cv-row` → crash `after-checkpoint` → complete | all three per-state series **byte-identical** to the uninterrupted reference |
+
 The cumulative counter is exactly `rows × 2` in every case, which a reporter-call counter cannot
-produce — that is what the two-torsion definition is for.
+produce — that is what the two-torsion definition is for. The multi-rank rows also demonstrate
+bitwise ladder resume under MPI on real devices from the installed wheel, not only from the
+checkout.
+
+## Complete MPI and multi-GPU sweep
+
+With every device free, all MPI and multi-GPU lanes were run together:
+
+```
+pytest tests/test_cv_mpi_cuda_lanes.py tests/test_cv_mpi_cuda_rrest2.py \
+       tests/test_cv_mpi_cuda_ais.py tests/test_md_run_mpi_gpu.py \
+       tests/test_mpi_fail_closed.py tests/test_driver_fail_closed.py
+```
+
+**78 passed**, 0 failed, 10:29. That covers REST2, rREST2 and AIS CV lanes under `mpirun` on
+real devices, the hundred-path AIS campaign distributed across four ranks, and both fail-closed
+suites, in which the subprocess timeout is the assertion: a rank that raises alone must stop the
+whole communicator rather than leave the others blocked in a collective.
+
+## Limitations, and which of them were closed
+
+* **Bitwise ladder resume is platform-bound.** OpenMM context checkpoints are device-specific by
+  construction and there is no public API to read or restore an integrator's pseudo-random
+  stream position portably, so a cross-device continuation falls back to coordinates. The
+  fallback is correct, statistically exact, announced on the run's output and recorded — it is
+  simply not the same trajectory. Not fixable from here.
+* **Checkpoint size.** Measured at **3.53×** the coordinate payload on a two-rung ladder.
+  Compression was tested and rejected on evidence: zlib reaches 98.9% of raw, because the blobs
+  are binary doubles. The cost is bounded — the checkpoint is rewritten whole rather than
+  accumulated — and the coordinates remain authoritative.
+* **CPU-platform reproducibility.** Not fixable here; OpenMM's CPU platform sums force
+  reductions in thread-completion order. The record now carries `cpu_threads` so a reader can
+  tell whether two runs were comparable at all, which is what was actually missing.
+* **GitHub CI has no CUDA runner.** All GPU and MPI evidence is local, on the hardware named
+  above. Closing this needs a self-hosted runner, which is an infrastructure decision.
+* **Closed since the first draft:** the installed-wheel evidence was single-device; it is now
+  also a three-rank MPI run on real CUDA, twice interrupted, reproducing its reference exactly.
 
 ## Hardware, MPI and versions
 
