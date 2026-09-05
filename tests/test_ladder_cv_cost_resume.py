@@ -246,3 +246,23 @@ def test_re_entering_a_completed_ladder_evaluates_nothing_further(project, tmp_p
         "re-entering a completed ladder evaluated collective variables again")
     assert after["segment"]["cv_evaluations"] == 0, (
         "the re-entering invocation performed no CV work, so its segment must be empty")
+
+
+def test_the_record_says_how_many_cpu_threads_produced_it(project, tmp_path):
+    """Whether two runs are comparable must be readable from the record.
+
+    OpenMM's CPU platform sums force reductions in thread-completion order, so it reproduces
+    itself only at a fixed pool size: the same ladder, same seed, same inputs, same machine,
+    diverges by the first observation when the pool differs. That is a property of the platform
+    and nothing here can change it -- but a record that does not say what the pool was leaves a
+    reader comparing two runs with no way to tell a real divergence from a different thread
+    count, which is exactly how this was first mistaken for a defect in the ladder.
+    """
+    destination = tmp_path / "threads"
+    _run(project, destination)
+    execution = json.loads(
+        (destination / "restart.json").read_text(encoding="utf-8"))["execution"]
+    assert execution["platform"] == "CPU", execution["platform"]
+    assert execution["cpu_threads"] == 1, (
+        f"the run was launched with OPENMM_CPU_THREADS=1 and the record says "
+        f"{execution.get('cpu_threads')!r}")

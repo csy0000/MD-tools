@@ -529,9 +529,34 @@ class ReplicaRun:
             "device_index": prepared.device_index,
             "device_policy": prepared.device_policy_detail,
             "precision": self._properties.get("Precision"),
+            # THE CPU THREAD COUNT, when this ran on the CPU platform. OpenMM's CPU platform
+            # sums its force reductions in thread-completion order, so it is reproducible only
+            # at a fixed pool size: two runs of the same ladder, same seed, same inputs, on the
+            # same machine, diverge by the first observation when the pool differs. Without this
+            # field nothing in the record says whether two runs were even comparable, and a
+            # divergence between them looks like a defect in the ladder rather than a difference
+            # in how many threads OpenMM was given. Absent on CUDA, which has no such property.
+            "cpu_threads": self._cpu_threads(),
             "mpi_rank": self.coordinator.rank, "mpi_size": self.coordinator.size,
             "hostname": socket.gethostname(), "owned_states": list(self.owned),
         }
+
+    def _cpu_threads(self):
+        """The resolved CPU thread pool size, or None when this is not the CPU platform.
+
+        Asked of the PLATFORM rather than read from `OPENMM_CPU_THREADS`: the environment
+        variable is one of several inputs OpenMM resolves, and the resolved value is the one
+        that determines whether two runs can be compared.
+        """
+        if self._platform is None or str(self._platform.getName()) != "CPU":
+            return None
+        try:
+            if "Threads" not in self._platform.getPropertyNames():
+                return None
+            return int(self._properties.get("Threads")
+                       or self._platform.getPropertyDefaultValue("Threads"))
+        except Exception:      # noqa: BLE001 - a missing property is not a run failure
+            return None
 
     def _begin(self, identity, systems, rule_identity, *, resume, extend,
                extend_from=None):
