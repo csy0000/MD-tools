@@ -322,3 +322,61 @@ def test_interruption_and_resume_under_mpi_reproduce_every_output(project, tmp_p
     assert any(split), (
         "no path's cost is divided between two invocations, so the interruption did not land "
         "mid-path and the carrying of earlier work was never exercised")
+
+
+def test_a_resume_under_a_different_rank_count_keeps_path_identity_and_the_aggregate(
+        project, tmp_path):
+    """The rescheduling case: crash under two ranks, finish under four.
+
+    Path ids are GLOBAL and a given id always owns the same file name, so a restart under a
+    different worker count is supposed to land on the same trajectories rather than silently
+    reshuffling which path is which -- the scheduling is an implementation detail of how the
+    work was divided, not part of what the paths ARE. Nothing exercised that: every resume in
+    the suite used the same rank count it crashed with, which is precisely the case where a
+    reshuffle cannot show up.
+
+    Every per-path series, the work table and the aggregate must match a reference produced in
+    one uninterrupted two-rank run.
+    """
+    from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
+
+    reference = tmp_path / "reference"
+    _launch(project, reference)
+    want_cv = {index: _rows(reference / f"path_{index:04d}" / "cv.csv") for index in range(PATHS)}
+    want_aggregate = _rows(reference / "AIS_cv.csv")
+    want_work = _rows(reference / "AIS_work.csv")
+
+    destination = tmp_path / "rescheduled"
+    crashed = _launch(project, destination, ranks=2, expect=1,
+                      environment={FAULT_ENVIRONMENT: "after-work-row",
+                                   FAULT_AFTER_ENVIRONMENT: "2"})
+    assert crashed.returncode != 0
+
+    # FOUR ranks now, for four paths: one path each, a different division of the same work.
+    _launch(project, destination, "--resume", ranks=4)
+
+    ranks = {int(_completion(destination, index)["mpi_rank"]) for index in range(PATHS)}
+    assert len(ranks) > 1, f"the resumed run put every path on rank(s) {sorted(ranks)}"
+
+    for index in range(PATHS):
+        assert _completion(destination, index)["path_index"] == index, (
+            f"path {index}'s directory holds another path's manifest after rescheduling")
+        assert _rows(destination / f"path_{index:04d}" / "cv.csv") == want_cv[index], (
+            f"path {index} differs from the reference after being rescheduled onto another rank")
+
+    assert _rows(destination / "AIS_cv.csv") == want_aggregate, (
+        "the aggregate changed when the work was divided differently")
+
+    # The work table carries an `mpi_rank` column, which is a record of WHICH worker produced a
+    # row and must change when the work is divided differently -- that is the whole point of
+    # rescheduling. Asserting that it is the ONLY column that changes is the stronger claim:
+    # every measured quantity, every identifier and every accumulated total is independent of
+    # how the paths were distributed.
+    got_work = _rows(destination / "AIS_work.csv")
+    assert len(got_work) == len(want_work), "the work table changed length"
+    differing = {column
+                 for mine, theirs in zip(got_work, want_work)
+                 for column in mine
+                 if mine[column] != theirs[column]}
+    assert differing <= {"mpi_rank"}, (
+        f"rescheduling changed {sorted(differing)} in the work table; only mpi_rank may differ")

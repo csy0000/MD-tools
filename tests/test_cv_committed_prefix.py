@@ -347,3 +347,85 @@ def test_cv_cost_is_persisted_and_survives_two_interruptions(tmp_path):
     again = read_record(resumed / "cMD.log")["collective_variable_cost"]
     assert again["cumulative"]["cv_evaluations"] == before_reentry, (
         "re-entering a completed run evaluated collective variables again")
+
+
+def test_the_final_committed_generation_carries_the_cv_prefix_and_cost(tmp_path):
+    """The LAST generation, not just the periodic ones.
+
+    A stage commits generations periodically through its checkpoint reporter and once more at
+    the end. The periodic path supplied the CV prefix; the final one did not -- despite a
+    comment beside it saying the final commit goes through the same transaction as every
+    periodic one. So the generation a later reader actually consults, the committed one,
+    vouched for a CV row count in `streams` while carrying no digest of those rows and no
+    cumulative counters. A continuation from it would refuse for want of a committed prefix,
+    and nothing protected the committed rows of a finished stage from being edited in place.
+    """
+    if not ALA.is_file():
+        pytest.skip("no ALA fixture")
+    from md_tools.openmm.checkpoint import read_committed
+
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
+    assert subprocess.run(
+        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
+               "-log", "built.log", "--config", str(root / "sys.config")],
+        cwd=root, capture_output=True, text=True, timeout=1800).returncode == 0
+    (root / "cv.yaml").write_text(
+        "schema_version: 1\ncollective_variables:\n"
+        "  - {name: phi, type: torsion, atom_indices: [4, 6, 8, 14]}\n"
+        "  - {name: psi, type: torsion, atom_indices: [6, 8, 14, 16]}\n", encoding="utf-8")
+    (root / "cMD.config").write_text(yaml.safe_dump({
+        "protocol": "cMD", "solvent": "implicit",
+        "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 0,
+                   "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
+                   "production_steps": 60},
+        "reporting": {"solute_printout": 20, "system_printout": 20, "checkpoint_printout": 10},
+        "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
+        "dynamics": {"seed": 20260904},
+    }), encoding="utf-8")
+    assert subprocess.run(
+        CLI + ["build-md", "-odir", "./cMD", "--config", str(root / "cMD.config"),
+               "--all-in-one"],
+        cwd=root, capture_output=True, text=True, timeout=600).returncode == 0
+
+    base = dict(os.environ)
+    base["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO / "src"), *([base["PYTHONPATH"]] if base.get("PYTHONPATH") else [])])
+    user = root / "user.config"
+    user.write_text(yaml.safe_dump(
+        {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
+    base["MD_TOOLS_CONFIG"] = str(user)
+
+    destination = tmp_path / "final"
+    done = subprocess.run(
+        [sys.executable, str(root / "cMD" / "md.py"),
+         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+         "-odir", str(destination), "--cpu"],
+        cwd=root / "cMD", capture_output=True, text=True, timeout=1800, env=base)
+    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+
+    # The stage that REPORTED collective variables, not simply the last directory: a chain
+    # commits generations for its minimisation and equilibration stages too, and those carry no
+    # CV stream at all.
+    states = [read_committed(path)["state"] for path in sorted(destination.rglob("*.checkpoints"))]
+    reporting = [state for state in states
+                 if "collective_variables" in (state.get("streams") or {})]
+    assert reporting, "no committed generation vouches for a CV stream"
+    state = reporting[-1]
+    rows = int(state["streams"]["collective_variables"])
+    assert rows == 13
+
+    entry = state.get("cv_prefix")
+    assert entry is not None, (
+        "the committed generation vouches for CV rows and carries no prefix record for them")
+    assert int(entry["rows"]) == rows
+    assert entry["prefix_sha256"], "no digest protects the committed rows"
+    cost = entry["cost"]
+    assert cost["cumulative"]["cv_observations"] == rows
+    assert cost["cumulative"]["cv_evaluations"] == rows * 2, "two torsions per observation"
+
+    # And it is a prefix a continuation would actually accept, by the same validator.
+    series = sorted(destination.rglob("*.cv.csv"))[0]
+    assert cv_prefix.validate(
+        series, entry, sidecar=series.with_suffix(".json")) == rows

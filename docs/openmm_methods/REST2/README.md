@@ -111,6 +111,25 @@ state), `rem.log`, `REST2.nc` (the analysis file), `REST2_checkpoint.nc`, `REST2
 `--resume` continues from the checkpoint; the run state records `interrupted` or `failed` with a
 reason when it does not finish, and only a run that did finish writes a completion manifest.
 
+**A resume reproduces the trajectory, not merely a valid one.** Positions, velocities and box are
+the complete *physical* state of a Langevin walker and are stored unconditionally, which is what
+keeps a checkpoint readable on any device. They are not sufficient to continue a trajectory: the
+integrator's pseudo-random stream has a position within it that coordinates do not carry, so a
+walker resumed from them alone draws different noise from that point on — correct, statistically
+exact, and a *different* trajectory. So each rung's OpenMM context checkpoint is stored alongside
+the coordinates, with the platform and precision that produced it. A continuation that finds them
+and is running on that platform restores them and reproduces an uninterrupted run exactly; one on
+a different device ignores them and falls back to coordinates, as before. Which path was taken is
+printed as `# continuation :` and recorded, never inferred. The cost is checkpoint size: one
+context checkpoint per rung beside the coordinates, on a file that is rewritten whole rather than
+accumulated.
+
+One caveat belongs with this: OpenMM's **CPU platform** sums force reductions in
+thread-completion order and so is reproducible only at a fixed thread count. Two replicate CPU
+ladder runs with the same pinned seed diverge by the first observation when the pool differs.
+That is a property of the platform, not of the ladder, and the run record carries `cpu_threads`
+so two runs can be told apart from two thread counts.
+
 **Extension is out of place.** `--extend-from` writes a new directory holding only the new segment
 and pins the parent by content. The parent is left byte-for-byte unchanged, so a chain is a
 sequence of immutable segments rather than a file that grows and loses its own history.

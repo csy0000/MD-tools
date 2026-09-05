@@ -881,7 +881,16 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                    **_checkpoint_identity(stage, name, seed, acceleration, timestep_fs),
                    "streams": _stream_counts(
                        trajectory=traj_path, state_csv=log_path.with_suffix(".csv"),
-                       collective_variables=cv_csv_path(traj_path, stage))})
+                       collective_variables=cv_csv_path(traj_path, stage)),
+                   # THE CV PREFIX, on the final generation too. The comment above says this
+                   # commit goes through the same transaction as every periodic one, and it did
+                   # -- except for this field, which only the periodic path supplied. So the
+                   # LAST committed generation of every CV-enabled stage, the one a later reader
+                   # actually consults, vouched for a row count in `streams` while carrying no
+                   # digest of those rows and no cumulative counters. A continuation from it
+                   # would refuse for want of a committed prefix, and nothing protected the
+                   # committed rows of a finished stage from being edited in place.
+                   "cv_prefix": _cv_prefix_record(cv_series)})
 
         log.heading("Outputs")
         reread = XmlSerializer.deserialize(restart_path.read_text(encoding="utf-8"))

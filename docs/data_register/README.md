@@ -102,6 +102,23 @@ Interrupted, it is safe to run again:
 Re-registering identical bytes is a no-op. Re-registering *different* bytes under a name that
 already exists is refused, and the source is preserved.
 
+## Collective-variable artefacts
+
+Two independent things record a run's CV output, and they answer different questions.
+
+`SHA256SUMS` lists every file under the dataset root, so `remd<N>.cv.csv` and its sidecar are
+hashed and re-checkable like any other file — that is what `--verify-only` re-reads.
+
+The **provenance record** is separate: registration reads each run's machine `-log`, and
+`check_lineage` indexes that record's `outputs` block by digest to connect one stage's outputs to
+the next stage's inputs. A file absent from `outputs` is invisible to lineage checking even while
+sitting in `SHA256SUMS`, which is exactly what happened to the ladder's CV series. Each per-state
+CSV and sidecar is now named there as its own role, carrying the path relative to the run root,
+the digest and byte size the completion manifest recorded, the state index and its tau, and the
+CV definition digest. The inventory is built from that validated manifest rather than from a
+`remd*.cv.csv` glob, so a file left behind by an earlier run into the same directory is not
+recorded as this run's provenance.
+
 ## Verifying later
 
 ```bash

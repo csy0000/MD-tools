@@ -46,6 +46,13 @@ account for.
   NetCDF trajectory per global path id;
 * restart: a completed path is skipped rather than appended to, and an interrupted one resumes
   from its checkpoint without duplicating a work row, a state row or a frame.
+* validation before completion: a path's CV output is validated in full -- row count against the
+  schedule, switching-step grid, path and source-frame identity on every row, protocol column
+  order, tau schedule and endpoints, the empty-or-index semantics of the frame references, finite
+  values, the sidecar, and the cumulative CV cost against the row count -- *before* `completed.json`
+  is committed, by the same rules that refuse a completed path when a later invocation skips it.
+  Everything before that commit can be undone, so a refusal there costs a rerun rather than a
+  wrong answer recorded as finished.
 
 The Hamiltonian is scaled by the **same** `md_tools.rest2.REST2Scaler` that REST2 uses. There is no
 second AIS scaler.
