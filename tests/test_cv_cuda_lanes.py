@@ -415,3 +415,161 @@ def test_ais_cv_and_decomposition_on_cuda_fresh_and_resumed(ais_project, tmp_pat
     assert again["platform"] == "CUDA"
     assert again["cv_rows"] == record["cv_rows"]
     assert [int(r["protocol_step"]) for r in _rows(resumed / "path_0000" / "cv.csv")] == steps
+
+
+# --- 5: MULTIPLY resumed, all four protocols, on real CUDA -------------------------------------
+#
+# The tests above interrupt each protocol ONCE. One resume passes whether the accumulation is
+# "restored prefix + this segment" (correct), "just the prefix", or "just this segment" -- with a
+# single prior segment the three answers can coincide. It also cannot show a continuation that
+# rebuilds its state correctly the first time and loses it the second. Two consecutive
+# interruptions separate them, and the requirement is for that depth on a DEVICE, not only under
+# `--cpu`, because the restore path being exercised here restores an OpenMM context checkpoint
+# whose contents are platform-specific.
+
+def test_cmd_cv_survives_two_interruptions_on_cuda(cmd_project, tmp_path):
+    from md_tools.build.record import read_record
+    from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
+
+    scripts = _generate(cmd_project, "cudaD", _cmd_config(cmd_project), "--all-in-one")
+
+    reference = tmp_path / "reference"
+    _run_cmd(cmd_project, scripts, reference)
+    want = (sorted(reference.rglob("*.cv.csv"))[0]).read_text(encoding="utf-8")
+
+    # Both counts come from what the runs actually do, not from a guess. The first invocation
+    # runs the whole chain, and its first three generations belong to the minimisation and
+    # equilibration stages; production then commits every 10 steps, which is every second CV
+    # row. 4 crashes at step 10 with 3 of the 9 rows committed, leaving three production commits
+    # still to come -- room for a SECOND interruption. The resumed invocation skips every
+    # finished stage, so its first commit is already inside production and 0 crashes there.
+    #
+    # Crashing first at 6 (step 30, the count the single-resume test above uses) leaves exactly
+    # one commit remaining, so the resumed run necessarily wrote every remaining row before its
+    # fault could fire: the series was already complete and the third invocation then correctly
+    # refused to re-run a finished run. The assertion below is what caught that, and it stays,
+    # so a future edit cannot quietly reduce this back to a single interruption.
+    destination = tmp_path / "twice"
+    committed = []
+    for allowed in ("4", "0"):
+        crashed = _run_cmd(cmd_project, scripts, destination, expect=1,
+                           environment={FAULT_ENVIRONMENT: "after-pointer-replace",
+                                        FAULT_AFTER_ENVIRONMENT: allowed})
+        assert crashed.returncode != 0
+        committed.append(len(_rows(sorted(destination.rglob("*.cv.csv"))[0])))
+    assert committed[0] < committed[1] < len(EXPECTED), (
+        f"the two interruptions left {committed} rows of {len(EXPECTED)}: they must land at "
+        f"different, incomplete points or nothing about repeated carrying is exercised")
+    _run_cmd(cmd_project, scripts, destination)
+
+    record = read_record(destination / "cMD.log")
+    _assert_cuda(record, "cMD twice resumed")
+    got = (sorted(destination.rglob("*.cv.csv"))[0]).read_text(encoding="utf-8")
+    assert got == want, (
+        "after two interruptions on CUDA the series differs from the uninterrupted reference")
+
+    cost = record["collective_variable_cost"]
+    assert cost["cumulative"]["cv_observations"] == len(EXPECTED)
+    assert cost["cumulative"]["cv_evaluations"] == len(EXPECTED) * N_CV
+    assert cost["segment"]["cv_observations"] < cost["cumulative"]["cv_observations"], (
+        "the final segment equals the cumulative, so earlier segments were not carried")
+
+
+def _ladder_twice(project, scripts, name, tmp_path):
+    """Fresh reference, then two interruptions and completion. Returns (reference, resumed)."""
+    reference = tmp_path / f"{name}-reference"
+    _run_ladder(project, scripts, reference, name)
+
+    resumed = tmp_path / f"{name}-twice"
+    _run_ladder(project, scripts, resumed, name, expect=1,
+                environment={"MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": "0",
+                             "MD_TOOLS_FAIL_LADDER_AT": "after-cv-row",
+                             "MD_TOOLS_FAIL_PROPAGATION_AFTER": "2"})
+    _run_ladder(project, scripts, resumed, name, "--resume", expect=1,
+                environment={"MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": "0",
+                             "MD_TOOLS_FAIL_LADDER_AT": "after-checkpoint",
+                             "MD_TOOLS_FAIL_PROPAGATION_AFTER": "1"})
+    _run_ladder(project, scripts, resumed, name, "--resume")
+    return reference, resumed
+
+
+def _assert_ladder_matches(reference: Path, resumed: Path, states=3):
+    for index in range(states):
+        want = _rows(reference / f"remd{index}.cv.csv")
+        got = _rows(resumed / f"remd{index}.cv.csv")
+        assert [int(r["step"]) for r in got] == EXPECTED
+        assert len({r["step"] for r in got}) == len(got), "a step was written twice"
+        for column in ("phi", "psi", "walker_index", "trajectory_frame_index"):
+            assert [r[column] for r in got] == [r[column] for r in want], (
+                f"state {index} {column} diverges from the uninterrupted reference after two "
+                f"interruptions on CUDA")
+
+
+def test_rest2_cv_survives_two_interruptions_on_cuda(ladder_project, tmp_path):
+    scripts = _generate(ladder_project, "REST2twice", _ladder_config(ladder_project))
+    reference, resumed = _ladder_twice(ladder_project, scripts, "REST2", tmp_path)
+    _assert_ladder_matches(reference, resumed)
+
+    cost = json.loads(
+        (resumed / "restart.json").read_text(encoding="utf-8"))["collective_variables"]["cost"]
+    assert cost["cumulative"]["cv_evaluations"] == 3 * len(EXPECTED) * N_CV
+    assert cost["segment"]["cv_observations"] < cost["cumulative"]["cv_observations"]
+
+
+def test_rrest2_cv_survives_two_interruptions_on_cuda(ladder_project, tmp_path):
+    """rREST2 twice resumed on a device: a refresh REPLACES a walker mid-run.
+
+    The one ladder path where a continuation has to reproduce not just its own dynamics but the
+    reservoir draws that displaced them, and it had no resume coverage on CUDA at all.
+    """
+    from tests.test_rrest2_pre_refresh_cv import _reservoir
+
+    _reservoir(ladder_project)
+    scripts = _generate(ladder_project, "rREST2twice",
+                        _ladder_config(ladder_project, reservoir=True))
+    reference, resumed = _ladder_twice(ladder_project, scripts, "rREST2", tmp_path)
+    _assert_ladder_matches(reference, resumed)
+
+    from md_tools.remd import storage
+
+    def _draws(directory):
+        reporter = storage.ReplicaReporter(directory / "rREST2.nc", mode="r")
+        try:
+            return [(int(r[0]), int(r[1])) for r in reporter.reservoir_events()
+                    if int(r[3]) == 1 and int(r[0]) >= 0]
+        finally:
+            reporter.close()
+
+    want, got = _draws(reference), _draws(resumed)
+    assert want, "no reservoir refresh was accepted, so nothing about refresh was exercised"
+    assert got == want, (
+        "the resumed run drew different reservoir frames: the refresh stream was not restored")
+
+
+def test_ais_cv_survives_two_interruptions_on_cuda(ais_project, tmp_path):
+    from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
+
+    reference = tmp_path / "ais-reference"
+    _run_ais(ais_project, reference)
+    want = _rows(reference / "path_0000" / "cv.csv")
+
+    # Both crashes land AFTER a committed generation, so each resume has a prefix to carry. A
+    # crash before the path's first commit is a different case -- the path restarts from its
+    # source frame, and its final segment then legitimately equals its cumulative, which would
+    # make the carrying assertion below vacuous rather than failing loudly.
+    resumed = tmp_path / "ais-twice"
+    _run_ais(ais_project, resumed, expect=1,
+             environment={FAULT_ENVIRONMENT: "after-work-row", FAULT_AFTER_ENVIRONMENT: "2"})
+    _run_ais(ais_project, resumed, "--resume", expect=1,
+             environment={FAULT_ENVIRONMENT: "after-work-row", FAULT_AFTER_ENVIRONMENT: "1"})
+    _run_ais(ais_project, resumed, "--resume")
+
+    record = json.loads(
+        (resumed / "path_0000" / "completed.json").read_text(encoding="utf-8"))
+    assert record["platform"] == "CUDA", record["platform"]
+    assert _rows(resumed / "path_0000" / "cv.csv") == want, (
+        "after two interruptions on CUDA the path differs from the uninterrupted reference")
+
+    cost = record["collective_variable_cost"]
+    assert cost["cumulative"]["cv_evaluations"] == len(want) * N_CV
+    assert cost["segment"]["cv_observations"] < cost["cumulative"]["cv_observations"]
