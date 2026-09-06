@@ -329,3 +329,44 @@ def test_interruption_and_resume_through_mpi_reproduce_the_reference(project, tm
         for column in ("phi", "psi", "walker_index"):
             assert [r[column] for r in got] == [r[column] for r in want[index]], (
                 f"state {index} {column} diverges from the uninterrupted reference")
+
+
+#: Which (rank, boundary) pairs a THREE-rank rREST2 launch actually reaches. The table is not a
+#: product, for the same reason it is not one in `test_cv_mpi_cuda_lanes.py`: the CV rows, the
+#: checkpoint and the reservoir refresh are all written by ROOT while every rank propagates, so
+#: arming those boundaries on a non-root rank injects nothing at all -- the run completes and the
+#: test would sit in the suite proving the opposite of what it claims. What a non-root rank does
+#: during a refresh step is PROPAGATE, so that is where its failure is injected.
+REACHABLE = [
+    (0, "after-cv-row"),
+    (0, "after-checkpoint"),
+    (0, "propagation"),
+    (1, "propagation"),
+    (2, "propagation"),
+]
+
+
+@pytest.mark.parametrize("rank, boundary", REACHABLE,
+                         ids=[f"rank{r}-{b}" for r, b in REACHABLE])
+def test_a_rank_local_failure_stops_the_whole_rrest2_communicator(project, tmp_path, rank,
+                                                                  boundary):
+    """A rank that raises alone must stop the job, not hang it. The timeout IS the assertion.
+
+    rREST2 had continuation coverage under MPI and no injected-failure coverage: a rank dying
+    mid-refresh left the others blocked in the next collective, and a job that hangs burns its
+    allocation and reports nothing. A test that waited forever could not tell that from a job
+    that is merely slow, so every launch here carries a timeout.
+    """
+    destination = tmp_path / f"fail-{boundary}-{rank}"
+    done = _launch(project, destination, expect=1,
+                   environment={"MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": str(rank),
+                                "MD_TOOLS_FAIL_LADDER_AT": boundary,
+                                "MD_TOOLS_FAIL_PROPAGATION_AFTER": "1"})
+    assert done.returncode != 0, done.stdout[-2000:] + done.stderr[-2000:]
+
+    combined = done.stdout + done.stderr + _reports(destination)
+    assert f"rank {rank}" in combined, combined[-3000:]
+    # No completion manifest may survive, and no rank may claim the run finished.
+    assert not (destination / "restart.json").exists(), (
+        "a failed launch left a completion manifest")
+    assert "run_status: completed" not in combined

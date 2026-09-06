@@ -380,3 +380,88 @@ def test_a_resume_under_a_different_rank_count_keeps_path_identity_and_the_aggre
                  if mine[column] != theirs[column]}
     assert differing <= {"mpi_rank"}, (
         f"rescheduling changed {sorted(differing)} in the work table; only mpi_rank may differ")
+
+
+def _rank_scoped_wrapper(tmp_path: Path, rank: int, boundary: str, allowed: str) -> Path:
+    """A launcher shim that arms the fault on ONE rank only.
+
+    AIS has no rank-scoped fault seam of its own, and adding one to the product for a test would
+    be the wrong trade. The checkpoint fault is process-wide, so arming it under `mpirun` fires
+    it on every rank at once -- which tests "the whole job failed", not "one worker died and the
+    others were left holding a collective". Open MPI publishes the rank in the environment
+    before the process starts, so the shim can arm the fault for exactly one of them and nothing
+    in `md_tools` needs to know this test exists.
+    """
+    script = tmp_path / "one_rank_fails.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        f'if [ "$OMPI_COMM_WORLD_RANK" = "{rank}" ]; then\n'
+        f'  MD_TOOLS_CHECKPOINT_FAULT={boundary}\n'
+        f'  MD_TOOLS_CHECKPOINT_FAULT_AFTER={allowed}\n'
+        "  export MD_TOOLS_CHECKPOINT_FAULT MD_TOOLS_CHECKPOINT_FAULT_AFTER\n"
+        "fi\n"
+        'exec "$@"\n', encoding="utf-8")
+    script.chmod(0o755)
+    return script
+
+
+@pytest.mark.parametrize("rank", [0, 1])
+def test_one_rank_dying_fails_the_campaign_and_invents_no_completed_paths(project, tmp_path,
+                                                                         rank):
+    """A worker dies mid-campaign. The job must fail, and the tables must stay honest.
+
+    AIS had continuation coverage under MPI and no injected-failure coverage. The danger here is
+    not the crash: it is what survives it. Rank 0 assembles the aggregate by READING completion
+    manifests off disk rather than gathering over MPI, so a campaign that lost a worker can
+    still write `AIS_work.csv` and `AIS_cv.csv` -- and those files must then describe exactly
+    the paths that genuinely finished, never the campaign that was requested. A table quietly
+    short of paths, presented as the run's result, would bias any reweighting built on it.
+
+    So: the launch must fail, no path may carry a completion marker it cannot support, and every
+    row in the aggregate must belong to a path that really completed.
+
+    The timeout is an assertion too. A rank that dies alone must not leave the others blocked in
+    a collective; a job that hangs burns its allocation and reports nothing.
+    """
+    destination = tmp_path / f"rank{rank}-died"
+    shim = _rank_scoped_wrapper(tmp_path, rank, "after-work-row", "1")
+
+    base = dict(os.environ)
+    base["PYTHONPATH"] = os.pathsep.join(
+        [str(REPO / "src"), *([base["PYTHONPATH"]] if base.get("PYTHONPATH") else [])])
+    user = project / "user.config"
+    user.write_text(yaml.safe_dump(
+        {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
+    base["MD_TOOLS_CONFIG"] = str(user)
+
+    done = subprocess.run(
+        ["mpirun", "-n", str(RANKS), str(shim), sys.executable,
+         str(project / "AIS" / "AIS.py"),
+         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+         "-source-traj", str(project / "source.dcd"),
+         "-ng", str(RANKS), "-odir", str(destination)],
+        cwd=project / "AIS", capture_output=True, text=True, timeout=LAUNCH_TIMEOUT, env=base)
+
+    assert done.returncode != 0, (
+        "a campaign that lost a worker reported success:\n" + done.stdout[-3000:])
+
+    finished = {index for index in range(PATHS)
+                if (destination / f"path_{index:04d}" / "completed.json").is_file()}
+    assert len(finished) < PATHS, (
+        "every path completed although a rank was killed, so nothing was actually injected")
+
+    # Every completion marker that DOES exist must still describe its own path correctly: a
+    # crash must not leave a half-written marker that a later invocation would skip on.
+    for index in sorted(finished):
+        record = json.loads(
+            (destination / f"path_{index:04d}" / "completed.json").read_text(encoding="utf-8"))
+        assert record["path_index"] == index
+        assert record["status"] == "completed"
+
+    # And the aggregate, if one was written at all, must contain exactly the paths that finished
+    # -- never a row for work that was not measured.
+    aggregate = destination / "AIS_cv.csv"
+    if aggregate.is_file():
+        listed = {int(row["path_index"]) for row in _rows(aggregate)}
+        assert listed <= finished, (
+            f"the aggregate lists path(s) {sorted(listed - finished)} that never completed")
