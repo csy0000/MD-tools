@@ -120,14 +120,15 @@ qualified in place, and the two missing methods have lanes of their own.
 
 ## Test lanes
 
-All of the following ran on `db443bf`, the commit that completes the implementation. The final
-implementation SHA adds only this document's results to that tree; `git diff` between the two
-touches no code and no test.
+Re-audited against the instruction three further times after the first completion; each pass is
+recorded under "What later audits found" below, and the counts here are from the current head.
 
 | lane | command | result | wall |
 |---|---|---|---:|
-| fast / non-GPU | `pytest -q -m "not slow"` | **1282 passed**, 0 failed | 183.1 s |
-| slow / GPU, complete | `pytest -q -m "slow"` | **384 passed**, 0 failed, 1 skipped | 1815.5 s (30:15) |
+| fast / non-GPU | `pytest -q -m "not slow"` | **1283 passed**, 0 failed | 169.7 s |
+| slow / GPU, complete | `pytest -q -m "slow"` | **403 passed**, 0 failed, 1 skipped | 2322.6 s (38:42) |
+| dedicated real-CUDA CV suite | `pytest tests/test_cv_cuda_lanes.py` | **10 passed** — fresh and **twice resumed** cMD, REST2, rREST2, AIS | 105.1 s |
+| all three MPI + CUDA lanes | `pytest tests/test_cv_mpi_cuda_{lanes,rrest2,ais}.py` | **42 passed** — continuation *and* injected failure per method | 385.8 s |
 | CUDA coverage matrix | `pytest tests/test_cuda_coverage_matrix.py --cuda-evidence=...` | **27 passed** on real devices | 423.5 s |
 | ladder CV cost and two-interruption resume | `pytest tests/test_ladder_cv_cost_resume.py` | **6 passed** (REST2 and rREST2) | 45.9 s |
 | ladder walker identity and permutation | `pytest tests/test_ladder_walker_validation.py` | **8 passed** | 8.0 s |
@@ -193,6 +194,34 @@ pytest tests/test_cv_mpi_cuda_lanes.py tests/test_cv_mpi_cuda_rrest2.py \
 real devices, the hundred-path AIS campaign distributed across four ranks, and both fail-closed
 suites, in which the subprocess timeout is the assertion: a rank that raises alone must stop the
 whole communicator rather than leave the others blocked in a collective.
+
+## What later audits found
+
+Re-reading the instruction clause by clause, three times after first reporting the work
+complete, found four things. They are listed because the pattern is the point: each pass found
+something, so the confidence attached to any single pass should be moderate.
+
+1. **A real defect, section 1.** cMD's *final* committed checkpoint generation carried no CV
+   prefix. A stage commits generations periodically through its checkpoint reporter and once
+   more at the end; the periodic path supplied the prefix and the final one did not, beneath a
+   comment saying the two went through the same transaction. So the generation a later reader
+   actually consults vouched for a CV row count while carrying no digest of those rows and no
+   cumulative counters. Found by reading a committed generation's JSON on disk, not from the
+   code. The ladder and AIS were unaffected — both write the prefix through a single path.
+2. **Section 3's rescheduling clause was untested.** A resume under a changed worker count is
+   supported deliberately: a global path id always owns the same file name. Every resume in the
+   suite used the rank count it crashed with — the one case where a reshuffle cannot appear. Now
+   tested, and `mpi_rank` is asserted to be the ONLY work-table column that changes.
+3. **Section 8.3 was not satisfied.** The dedicated real-CUDA CV suite interrupted each protocol
+   once, and rREST2 not at all. The clause asks for *multiply* resumed on a device — which
+   matters here specifically, because the restore path being exercised loads an OpenMM context
+   checkpoint whose contents are platform-specific, so a CPU run proves nothing about it.
+4. **Section 8.4's injected-failure half was missing for rREST2 and AIS.** Both had continuation
+   coverage under a real launcher and no test that a rank dying ALONE stops the job rather than
+   leaving the others blocked in a collective.
+
+Section 9's documentation list was also only half done, and section 7's regression list was
+verified by inspection against the existing tests rather than re-derived.
 
 ## Limitations, and which of them were closed
 
