@@ -102,15 +102,39 @@ rows totalled 29. Both numbers were stale in different ways: the combined figure
 rREST2 fail-closed cases and the AIS rescheduling case, and the itemised rows had never been
 re-run after those were added. Current, all on `c22b757`:
 
-| file | method | tests | wall |
-|---|---|---:|---:|
-| `tests/test_cv_mpi_cuda_lanes.py` | REST2 | **9** | 90.5 s |
-| `tests/test_cv_mpi_cuda_rrest2.py` | rREST2 (× 2 velocity policies) | **24** | 190.4 s |
-| `tests/test_cv_mpi_cuda_ais.py` | AIS | **10** | 115.2 s |
-| combined, one invocation | — | **43** | 397.2 s |
+| file | method | tests | contended | dedicated |
+|---|---|---:|---:|---:|
+| `tests/test_cv_mpi_cuda_lanes.py` | REST2, 2 ranks | **9** | 90.5 s | 61.8 s |
+| `tests/test_cv_mpi_cuda_rrest2.py` | rREST2, 3 ranks (× 2 velocity policies) | **24** | 190.4 s | 122.0 s |
+| `tests/test_cv_mpi_cuda_ais.py` | AIS, 2 and 4 ranks | **10** | 115.2 s | 77.1 s |
+| combined, one invocation | — | **43** | 397.2 s | 259.8 s |
 
 9 + 24 + 10 = 43, which is the combined run. No count is carried forward from an earlier
 document.
+
+**Contended** is the original run, sharing devices with unrelated jobs on the same host.
+**Dedicated** is a rerun with `CUDA_VISIBLE_DEVICES=0,5,6,7,8`, one rank per device for every
+lane including the four-rank case. The counts are identical; only the wall times move.
+
+### The counts do not depend on how many devices are visible
+
+The same 43 tests were run at three device counts, deliberately:
+
+| visible devices | placement | result | combined wall |
+|---|---|---|---:|
+| 1 (`CUDA_VISIBLE_DEVICES=0`) | round-robin, up to 4 ranks per device | **43 passed** | 259.5 s |
+| 2 (`7,8`) | round-robin for the 3- and 4-rank lanes | **43 passed** | 263.3 s (sum of three separate invocations) |
+| 5 (`0,5,6,7,8`) | one rank per device throughout | **43 passed** | 259.8 s |
+
+The 1- and 5-device figures are single combined invocations; the 2-device figure is the sum
+of the three files run separately, and is marked as such rather than presented as one run.
+
+That invariance is the design working rather than a coincidence: `select_device_for_rank`
+falls back to a documented round-robin — "N ranks share M device(s)" — instead of failing or
+silently placing every rank on the default device, and AIS path identity does not depend on the
+worker count. The three wall times are within 5% of each other, which says these systems are far
+too small to be GPU-bound; the 35% gap against the contended run is the unrelated jobs, not the
+device count. No throughput claim should be read from any of these numbers.
 
 ## What ran where
 
