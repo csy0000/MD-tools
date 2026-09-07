@@ -195,12 +195,17 @@ def protocol_file_text(ladder: dict[str, Any]) -> str:
     states = int(ladder["n_states"])
     taus = tau_ladder(states, float(ladder["tau_max"]))
     exchange_ps = int(ladder["exchange_interval_steps"]) * timestep / 1000.0
+    # Steps in the configuration, picoseconds in the protocol, converted with the SAME expression
+    # the exchange interval uses. This used to be hard-coded to 0.0, so `_equilibrate` -- which
+    # relaxes each rung under its own scaled Hamiltonian and has done all along -- could not be
+    # reached through `build-md` at all.
+    equilibration_ps = int(ladder.get("equilibration_steps") or 0) * timestep / 1000.0
     return PROTOCOL_TEMPLATE.format(
         protocol=ladder["protocol"], n_states=states, tau_max=ladder["tau_max"],
         temperature=float(dynamics["temperature_K"]), ladder=taus, timestep=timestep,
         exchange_ps=exchange_ps, whole_ps=exchange_ps, solute_ps=exchange_ps,
         exchanges=int(ladder["number_of_exchanges"]),
-        friction=float(dynamics["friction_per_ps"]), equilibration_ps=0.0,
+        friction=float(dynamics["friction_per_ps"]), equilibration_ps=equilibration_ps,
         seed=int(dynamics["seed"]), platform=dynamics.get("platform"),
         cv_interval_steps=(int((ladder.get("collective_variables") or {}).get(
             "interval_steps") or 0) or None))
@@ -740,6 +745,10 @@ def ladder_from_resolved(resolved: dict[str, Any], protocol: str) -> dict[str, A
         "tau_max": resolved["rest2"]["tau_max"],
         "exchange_interval_steps": resolved["rest2"]["exchange_interval_steps"],
         "number_of_exchanges": resolved["rest2"]["number_of_exchanges"],
+        # `.get`, because this reconstruction also reads `resolved.config` files written before
+        # the field existed. A ladder that never asked for per-state equilibration must keep
+        # behaving exactly as it did.
+        "equilibration_steps": resolved["rest2"].get("equilibration_steps", 0),
         "state_trajectory": resolved["rest2"]["state_trajectory"],
         "rem_log": resolved["rest2"]["rem_log"],
         "neighbour_acceptance_report": resolved["rest2"]["neighbour_acceptance_report"],

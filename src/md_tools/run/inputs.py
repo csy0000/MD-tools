@@ -71,6 +71,10 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "tau_max": "rest2.tau_max",
         "exchange_interval_steps": "rest2.exchange_interval_steps",
         "number_of_exchanges": "rest2.number_of_exchanges",
+        # Per-state relaxation before the first exchange, at each rung's own Hamiltonian. Spelled
+        # out rather than abbreviated: Amber has no counterpart, so there is no established short
+        # name to borrow and inventing one would only be a second thing to remember.
+        "equilibration_steps": "rest2.equilibration_steps",
         "state_trajectory": "rest2.state_trajectory",
         "rem_log": "rest2.rem_log",
         "neighbour_acceptance_report": "rest2.neighbour_acceptance_report",

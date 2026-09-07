@@ -148,6 +148,19 @@ MD_SCHEMA = Schema(
             Field("number_of_exchanges", int, default=500, minimum=1,
                   doc="Exchange attempts. Total production per state is this times "
                       "exchange_interval_steps."),
+            Field("equilibration_steps", int, default=0, minimum=0, unit="steps",
+                  doc="Relaxation run at EACH STATE'S OWN Hamiltonian before the first exchange "
+                      "attempt, and not counted as production. 0 (the default) starts exchanging "
+                      "immediately.\n"
+                      "  This exists because the alternative is wrong in a way that is hard to "
+                      "see. A ladder takes ONE starting state -- the group file refuses per-rung "
+                      "coordinates, deliberately, since rungs must be states of the same system "
+                      "-- so without this every rung begins from a configuration equilibrated "
+                      "under tau = 0. The hot rungs then spend their opening exchanges relaxing "
+                      "out of a distribution that is not theirs, and those samples are production "
+                      "by every record that describes them.\n"
+                      "  The driver has always relaxed each rung under its own scaled "
+                      "Hamiltonian; only the number was unreachable from a configuration file."),
             Field("state_trajectory", bool, default=True,
                   doc="Write one trajectory per fixed thermodynamic STATE (remd0.nc .. remdN.nc). "
                       "A state trajectory follows a state, not a walker; the filename carries the "
@@ -995,6 +1008,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
             "tau_max": resolved["rest2"]["tau_max"],
             "exchange_interval_steps": resolved["rest2"]["exchange_interval_steps"],
             "number_of_exchanges": resolved["rest2"]["number_of_exchanges"],
+            "equilibration_steps": resolved["rest2"]["equilibration_steps"],
             "state_trajectory": resolved["rest2"]["state_trajectory"],
             "rem_log": resolved["rest2"]["rem_log"],
             "neighbour_acceptance_report": resolved["rest2"]["neighbour_acceptance_report"],
@@ -1023,6 +1037,16 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
             log.field("exchange every", f"{steps_between} steps")
             log.field("production per state", f"{total_steps} steps")
         log.field("attempts", ladder["number_of_exchanges"])
+        # Stated whether or not it was asked for. "Equilibration: 0 steps" is a fact a reader
+        # needs in order to interpret the opening exchanges; a silently absent line is not.
+        equilibration = ladder["equilibration_steps"]
+        if numeric:
+            log.field("equilibration", f"{equilibration} steps = "
+                                       f"{equilibration * numeric / 1000.0:g} ps per state, "
+                                       f"at that state's own Hamiltonian, not production")
+        else:
+            log.field("equilibration", f"{equilibration} steps per state, at that state's own "
+                                       f"Hamiltonian, not production")
 
     # The Amber-like inputs, beside the Python entry points. Two shapes over ONE resolved run:
     # `python min.py` and `md-openmm md-run -i min.in` reach the same function with the same
