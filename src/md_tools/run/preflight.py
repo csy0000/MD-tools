@@ -989,6 +989,18 @@ def _reject_flags_outside_their_protocol(*, protocol_name, number_of_groups=None
                 f"rather than accepting a path nothing writes to.")
 
 
+
+def _ligand_sdf_beside(system):
+    """`<system stem>.sdf`, when `build-top` retained one for a SMILES-built solute.
+
+    Returns None for a peptide build, which writes no SDF -- so this cannot turn a protein run
+    into a ligand run, and the absence is as meaningful as the presence.
+    """
+    if not system:
+        return None
+    candidate = Path(system).with_suffix(".sdf")
+    return candidate if candidate.is_file() else None
+
 def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=None,
                      trajectory=None, restart=None, checkpoint=None, output=None, log=None,
                      number_of_groups=None, cpu=False, device=None, machine_config=None,
@@ -1031,8 +1043,24 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
         # used to fire from inside `write_solute_document`, after `-odir` and both logs existed.
         from ..remd.generated import solute_document
 
+        # THE SDF BESIDE THE SYSTEM, and the route that follows from it.
+        #
+        # `build-top` writes `<system stem>.sdf` when and only when it built the solute from
+        # SMILES through the small-molecule route. Its presence is therefore not a guess about
+        # what this system is -- it is the build recording what it did, in the one place a later
+        # run already has a path to. A peptide build writes none, so the default is unchanged and
+        # every existing ladder classifies exactly as before.
+        #
+        # Resolved here rather than left to a flag the operator must remember: forgetting
+        # `--route ligand` produced a refusal listing every backbone amide as unclassifiable,
+        # which is safe but reads like a chemistry problem rather than a missing argument.
+        ligand_sdf = _ligand_sdf_beside(system)
+        if ligand_sdf is not None and route == "peptide":
+            route = "ligand"
+
         try:
-            solute_record = solute_document(loaded.pdb.topology, loaded.system, route=route)
+            solute_record = solute_document(loaded.pdb.topology, loaded.system, route=route,
+                                            ligand_sdf=ligand_sdf)
         except SystemExit as refusal:
             raise PreflightError(f"{protocol}: {refusal}") from None
         span = solute_record.get("solute_atom_range")

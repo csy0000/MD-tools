@@ -579,7 +579,27 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
         # --- atomic placement, only now that everything above passed ---------------------
         log.heading("Outputs")
-        for source, target in ((built_xml, out_system), (built_pdb, out_pdb)):
+        # THE SDF, for a molecule built from SMILES. It was written into the staging directory,
+        # used to assign charges and parameters, and then deleted with the staging directory --
+        # so the bond orders it carries existed only for the duration of the build.
+        #
+        # Bond orders are not recoverable from a topology, and the omega classifier's ligand route
+        # needs them: a SMILES-built solute is ONE residue, so there is no residue evidence to
+        # read and RDKit perception on the SDF is the only thing that can say which C-N bonds are
+        # amides. Without this file a REST2 ladder over such a system cannot be run at all -- the
+        # peptide route refuses every candidate as unclassifiable, and the ligand route has
+        # nothing to read.
+        #
+        # Placed beside the System, with the System's stem, because that is what a later run has
+        # in hand: `-s built.xml` is given, and `built.sdf` is then discoverable without a second
+        # path to keep in step. A peptide build writes none, which is itself the signal that the
+        # ligand route does not apply.
+        outputs = [(built_xml, out_system), (built_pdb, out_pdb)]
+        staged_sdf = staging / "structure" / "solute.sdf"
+        out_sdf = out_system.with_suffix(".sdf") if staged_sdf.is_file() else None
+        if out_sdf is not None:
+            outputs.append((staged_sdf, out_sdf))
+        for source, target in outputs:
             target.parent.mkdir(parents=True, exist_ok=True)
             tmp = target.with_name(target.name + ".partial")
             shutil.copy2(source, tmp)
@@ -595,8 +615,11 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                               "completion")
         log.field("re-read check", f"{reread.topology.getNumAtoms()} atoms == "
                                    f"{resystem.getNumParticles()} particles  OK")
-        log.update(outputs={"system_xml": file_facts(out_system),
-                            "topology_pdb": file_facts(out_pdb)})
+        written_outputs = {"system_xml": file_facts(out_system),
+                           "topology_pdb": file_facts(out_pdb)}
+        if out_sdf is not None:
+            written_outputs["solute_sdf"] = file_facts(out_sdf)
+        log.update(outputs=written_outputs)
         log.complete()
         log.heading("Summary")
         log(f"  built {n_pdb} particles, {len(residues)} residues, "

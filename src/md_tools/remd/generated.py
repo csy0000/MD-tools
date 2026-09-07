@@ -41,7 +41,7 @@ def tau_ladder(n_states: int, tau_max: float) -> list[float]:
 
 
 def write_solute_document(topology_path: Path, system_path: Path, out: Path, *,
-                          route: str = "peptide") -> dict[str, Any]:
+                          route: str = "peptide", ligand_sdf=None) -> dict[str, Any]:
     """Derive and write solute.yaml from the built system.
 
 # `templates_directory` and `_ensure_runtime_importable` lived here. They located the loose
@@ -64,12 +64,13 @@ def write_solute_document(topology_path: Path, system_path: Path, out: Path, *,
 
     topology = PDBFile(str(topology_path)).topology
     system = XmlSerializer.deserialize(Path(system_path).read_text(encoding="utf-8"))
-    document = solute_document(topology, system, route=route)
+    document = solute_document(topology, system, route=route, ligand_sdf=ligand_sdf)
     write_yaml(out, document)
     return document
 
 
-def solute_document(topology, system, *, route: str = "peptide") -> dict[str, Any]:
+def solute_document(topology, system, *, route: str = "peptide",
+                    ligand_sdf=None) -> dict[str, Any]:
     """The same derivation, WITHOUT writing anything.
 
     Split out because it carries a refusal -- an amide candidate that is neither ordinary nor
@@ -83,7 +84,11 @@ def solute_document(topology, system, *, route: str = "peptide") -> dict[str, An
     from ..md.stage import solute_atom_indices
 
     indices = solute_atom_indices(topology)
-    omega = classify_omega_bonds(topology, indices, route=route, ligand_sdf=None)
+    # The SDF, for the ligand route. This was a hard-coded `None`, which made the ligand route
+    # unreachable from a ladder: it raises without one, and the peptide route refuses every
+    # candidate of a SMILES-built solute because its single `UNL`/custom residue is not a known
+    # protein residue. Between them a Sage-parameterised macrocycle could not be run at all.
+    omega = classify_omega_bonds(topology, indices, route=route, ligand_sdf=ligand_sdf)
     document = _solute_document(topology, indices, omega, route=route, system=system)
     ambiguous = (document.get("rest2") or {}).get("omega_ambiguous_candidates") or []
     if ambiguous:
