@@ -465,3 +465,118 @@ def test_one_rank_dying_fails_the_campaign_and_invents_no_completed_paths(projec
         listed = {int(row["path_index"]) for row in _rows(aggregate)}
         assert listed <= finished, (
             f"the aggregate lists path(s) {sorted(listed - finished)} that never completed")
+
+
+# --- Test D: an interrupted two-rank campaign resumed under four ranks, on real CUDA -------------
+
+def test_d_two_rank_interruption_resumed_under_four_ranks_on_cuda(project, tmp_path):
+    """The case the invocation accounting exists for, on devices, with the world size changed.
+
+    Four paths under TWO ranks, interrupted so that at least one path is fully complete and at
+    least one has a committed partial prefix, then finished under FOUR. Path identity does not
+    depend on the worker count -- global path n always writes AIS_traj000n.nc from its own source
+    frame under its own seeds -- so every scientific table must equal an uninterrupted
+    two-rank reference, and only execution metadata may differ.
+
+    The accounting assertion is the point: the four-rank invocation must credit itself with the
+    CVs it actually evaluated, not with the work the two-rank invocation did before it. Under the
+    old rule the finished path's stored segment would have been summed in here, reporting work
+    from a process that had already exited.
+    """
+    from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
+
+    reference = tmp_path / "reference"
+    _launch(project, reference, ranks=2)
+    want_cv = {index: _rows(reference / f"path_{index:04d}" / "cv.csv") for index in range(PATHS)}
+    want_work = _rows(reference / "AIS_work.csv")
+    want_aggregate = _rows(reference / "AIS_cv.csv")
+    want_frames = (reference / "selected_source_frames.csv").read_text(encoding="utf-8")
+    want_manifests = {index: _completion(reference, index) for index in range(PATHS)}
+
+    # TWO ranks, interrupted part-way. `after-work-row` with a count that lets the first path
+    # finish and stops the next one mid-switch, so the resume meets both an already-complete
+    # path and a committed partial prefix.
+    destination = tmp_path / "resumed"
+    crashed = _launch(project, destination, ranks=2, expect=1,
+                      environment={FAULT_ENVIRONMENT: "after-work-row",
+                                   FAULT_AFTER_ENVIRONMENT: "9"})
+    assert crashed.returncode != 0
+
+    complete_before = {index for index in range(PATHS)
+                       if (destination / f"path_{index:04d}" / "completed.json").is_file()}
+    partial_before = {index for index in range(PATHS)
+                      if index not in complete_before
+                      and (destination / f"path_{index:04d}" / "cv.csv").is_file()}
+    assert complete_before, "the interruption left no completed path, so nothing is skipped later"
+    assert partial_before, "the interruption left no partial path, so no prefix is carried later"
+
+    # FOUR ranks now: one path each, a different division of the same campaign.
+    _launch(project, destination, "--resume", ranks=4)
+
+    cost = _aggregate_cost_record(destination)
+
+    # All ranks agreed on one invocation id, and it is this invocation's.
+    assert isinstance(cost["invocation_id"], str) and len(cost["invocation_id"]) == 32
+
+    # Cumulative counts every completed path exactly once.
+    assert cost["cumulative"]["cv_observations"] == PATHS * EXPECTED_ROWS
+    assert cost["cumulative"]["cv_evaluations"] == PATHS * EXPECTED_ROWS * N_CV
+
+    # The segment counts ONLY what this four-rank invocation evaluated. Every path that was
+    # already complete contributes exactly zero, and the total is strictly less than the
+    # campaign -- which is what the old rule could not report.
+    by_index = {entry["path_index"]: entry for entry in cost["per_path"]}
+    for index in sorted(complete_before):
+        assert by_index[index]["disposition"] == "already_complete"
+        assert by_index[index]["segment"]["cv_observations"] == 0
+        assert by_index[index]["segment"]["cv_evaluations"] == 0
+        assert by_index[index]["segment"]["wall_seconds"] == 0.0
+    for index in sorted(partial_before):
+        assert by_index[index]["disposition"] == "resumed_and_completed"
+        assert 0 < by_index[index]["segment"]["cv_observations"] <= EXPECTED_ROWS
+
+    expected_segment = sum(by_index[i]["segment"]["cv_observations"] for i in range(PATHS))
+    assert cost["segment"]["cv_observations"] == expected_segment
+    assert cost["segment"]["cv_observations"] < cost["cumulative"]["cv_observations"], (
+        "the resumed invocation claimed the whole campaign's work as its own")
+    assert cost["segment"]["cv_evaluations"] == 2 * cost["segment"]["cv_observations"], (
+        "two torsions per observation")
+
+    # And the science is the two-rank reference's, exactly.
+    for index in range(PATHS):
+        assert _rows(destination / f"path_{index:04d}" / "cv.csv") == want_cv[index], (
+            f"path {index} changed when the campaign was divided differently")
+    assert _rows(destination / "AIS_cv.csv") == want_aggregate
+    assert (destination / "selected_source_frames.csv").read_text(encoding="utf-8") \
+        == want_frames, "the source-frame selection moved with the worker count"
+
+    got_work = _rows(destination / "AIS_work.csv")
+    assert len(got_work) == len(want_work)
+    differing = {column for mine, theirs in zip(got_work, want_work)
+                 for column in mine if mine[column] != theirs[column]}
+    assert differing <= {"mpi_rank"}, (
+        f"resuming under four ranks changed {sorted(differing)} in the work table")
+
+    # Every path kept its source frame, seeds, filenames and work values.
+    ignore = {"mpi_rank", "resumed", "outputs", "collective_variable_cost"}
+    for index in range(PATHS):
+        got = _completion(destination, index)
+        assert (destination / f"AIS_traj{index:04d}.nc").is_file(), (
+            f"path {index} did not write its own trajectory name")
+        for field, value in want_manifests[index].items():
+            if field in ignore:
+                continue
+            assert _scrub(got[field]) == _scrub(value), (
+                f"path {index}: {field!r} changed under a different worker count")
+        assert got["platform"] == "CUDA", got["platform"]
+
+
+def _aggregate_cost_record(destination: Path) -> dict:
+    from md_tools.build.record import read_record
+
+    for candidate in sorted(destination.glob("AIS.log*")):
+        record = read_record(candidate)
+        cost = record.get("collective_variable_cost")
+        if cost is not None:
+            return cost
+    raise AssertionError(f"no global collective-variable cost recorded under {destination}")

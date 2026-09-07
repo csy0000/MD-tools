@@ -1380,10 +1380,16 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                                       fingerprint=fingerprint, index=index, frame=chosen[index],
                                       trajectory_name=trajectory_name, schedule=schedule)
         log(f"  path {index:4d}: already completed and verified; not rerun and never appended to")
-        if contributions is not None:
+        if contributions is not None and record.get("collective_variable_cost") is not None:
             # EXACTLY ZERO. Verification, hashing, CSV reading and skipping are not CV
             # evaluation, and the path's stored segment belongs to whichever invocation finished
             # it -- reusing that here is the defect this accounting exists to remove.
+            #
+            # Recorded only for a path that HAS a cost, so contributions and completion costs
+            # stay in one-to-one correspondence: the aggregate is assembled from paths carrying a
+            # cost record, and a contribution for a path absent from that set is refused as work
+            # credited to a path the run cannot show finished -- which is exactly what a
+            # CV-disabled campaign produced when this was recorded unconditionally.
             from ..cv.cost import CVCost, cost_record
 
             zero = CVCost()
@@ -2038,19 +2044,20 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
     fault("after-checkpoint-cleanup")
     log(f"  path {index:4d}: frame {frame}, {rows_emitted} observations, {frames_emitted} "
         f"frames, W = {cumulative:.4f} kJ/mol (reduced {beta * cumulative:.4f})")
-    if contributions is not None:
+    if contributions is not None and cv_series is not None:
         # This path finished HERE, so the work its manifest records as this segment is the work
         # this invocation performed. `resumed_and_completed` and `fresh_and_completed` differ in
         # whether a committed prefix was carried in, which is exactly what makes the segment a
         # strict subset of the cumulative in the first case and equal to it in the second.
-        from ..cv.cost import CVCost, cost_record
+        #
+        # A run with no CV reporting contributes nothing at all rather than a zero: it has no
+        # cost record in its manifest either, and the aggregate pairs the two.
+        from ..cv.cost import cost_record
 
-        performed = (cv_series.segment_cost() if cv_series is not None else CVCost())
-        carried = (cv_series.cumulative_cost() if cv_series is not None else CVCost())
         contributions[index] = {
             "disposition": ("resumed_and_completed" if state_of_path
                             else "fresh_and_completed"),
-            "cost": cost_record(performed, carried),
+            "cost": cost_record(cv_series.segment_cost(), cv_series.cumulative_cost()),
         }
     return completion
 
