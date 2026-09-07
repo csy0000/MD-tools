@@ -191,6 +191,17 @@ def _run(project: Path, destination: Path, *extra, expect=0):
     user.write_text(yaml.safe_dump(
         {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
     base["MD_TOOLS_CONFIG"] = str(user)
+    # DETERMINISM, not a tolerance. OpenMM's CPU platform sums its force reductions in
+    # thread-completion order, so the same ladder with the same pinned seed follows a slightly
+    # different trajectory when the pool size or the machine load changes. The assertions below
+    # separate a propagated configuration from the reservoir sample it was refreshed from by
+    # comparing torsions, and that separation depends on how far the walker actually drifted --
+    # so an unpinned pool made this file's outcome depend on what else the machine was doing.
+    #
+    # It passed in isolation and failed inside a loaded full-suite run, where the drift came out
+    # at 0.589 degrees against a threshold of 1.0. The threshold is not the problem and is not
+    # touched; the run being irreproducible is.
+    base["OPENMM_CPU_THREADS"] = "1"
     done = subprocess.run(
         [sys.executable, str(project / "rREST2" / "rREST2.py"),
          "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
