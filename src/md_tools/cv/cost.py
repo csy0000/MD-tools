@@ -132,6 +132,13 @@ class CommittedPrefix:
 
     @classmethod
     def from_record(cls, record, *, where: str = "committed prefix") -> "CommittedPrefix":
+        """Restore from a PERSISTED record. A fresh run constructs `CommittedPrefix()` instead.
+
+        The empty record is the one case that yields zero, and it means "there is nothing
+        persisted here" -- not "the persisted thing said zero". Anything else must carry a cost:
+        this used to fall through to `read_scope`, which returned zero for an absent cost, so a
+        damaged record restored a clean-looking history of no work at all.
+        """
         if not record:
             return cls()
         if not isinstance(record, dict):
@@ -140,8 +147,12 @@ class CommittedPrefix:
         if rows is None:
             rows = 0
         require_count(rows, where=where, scope="prefix", field="rows")
-        return cls(rows=rows, cumulative=read_scope(record.get("cost"), "cumulative",
-                                                    where=where))
+        cost = record.get("cost")
+        if not isinstance(cost, dict) or not cost:
+            raise CVCostError(
+                f"{where}: a persisted prefix of {rows} row(s) carries no usable cost record "
+                f"(found {cost!r}); restoring it as zero would invent a history of no work")
+        return cls(rows=rows, cumulative=read_scope(cost, "cumulative", where=where))
 
 
 # -- the one strict parser ------------------------------------------------------------------------

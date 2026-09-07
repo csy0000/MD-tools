@@ -113,12 +113,32 @@ def validate(path, entry, *, sidecar=None, definition=None, expect_columns=None,
     # appended to, so a record that would be refused by one reader and accepted by another is
     # refused by all of them here. The row count is the VERIFIED one -- counted from the file
     # above, not read out of the record being checked.
-    if entry.get("cost") is not None:
-        try:
-            parse_cost_record(entry["cost"], where=where, rows=rows,
-                              n_cv=len(definition.names) if definition is not None else None)
-        except CVCostError as refusal:
-            raise CVPrefixError(str(refusal)) from None
+    #
+    # REQUIRED, not merely validated when present. This used to read `if entry.get("cost") is
+    # not None`, so a record whose cost had been removed or nulled skipped the parser entirely
+    # and was then restored as ZERO -- a two-row, two-torsion prefix that should carry 2
+    # observations and 4 scalar evaluations came back as 0 and 0, and the continuation went on
+    # with counters that had silently lost their history.
+    #
+    # `validate` is only ever called for a CV-ENABLED series: it is reached from a committed
+    # prefix record, which exists only because a reporter wrote one. So an absent cost here is
+    # corruption or unsupported legacy data, never a fresh run. A fresh run has no persisted
+    # prefix at all and never arrives here; a genuinely CV-disabled run records its documented
+    # null CV field and is not given a prefix to validate. Neither case is decided from the
+    # truthiness of a stored value.
+    if not isinstance(entry.get("cost"), dict) or not entry["cost"]:
+        raise CVPrefixError(
+            f"{where}: this committed collective-variable prefix carries no usable cost record "
+            f"(found {entry.get('cost')!r}). A CV-enabled series records what it cost in the "
+            f"same checkpoint transaction as its rows, so an absent, null or empty cost is a "
+            f"damaged or pre-schema-2 record rather than a fresh run -- and reading it as zero "
+            f"would discard exactly the history the prefix exists to preserve. Start a fresh "
+            f"run with --overwrite, or continue with the build that wrote it.")
+    try:
+        parse_cost_record(entry["cost"], where=where, rows=rows,
+                          n_cv=len(definition.names) if definition is not None else None)
+    except CVCostError as refusal:
+        raise CVPrefixError(str(refusal)) from None
 
     actual = prefix_digest(path, rows)          # raises if the file is shorter than committed
     if actual != entry["prefix_sha256"]:

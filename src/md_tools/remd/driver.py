@@ -360,20 +360,23 @@ class ReplicaRun:
                 interval_steps=int(interval), committed_rows=extra.get("cv_rows"))
             from .cv_states import truncate_to, validate_prefixes
 
-            rows = validate_prefixes(
+            validated = validate_prefixes(
                 directory, definition, taus=self.protocol.tau,
                 interval_steps=int(interval), block=extra.get("cv_prefix"))
         except CVContinuationError as refusal:
             raise storage.StorageError(str(refusal)) from None
         # Only now is anything cut: everything past the committed prefix belongs to steps whose
-        # dynamics are about to be repeated.
-        truncate_to(directory, taus=self.protocol.tau, rows=rows)
-        # Rows AND cost, together. Restoring rows alone left a resumed ladder whose series was
-        # correct and whose cumulative counters had silently reset to this segment's work.
+        # dynamics are about to be repeated. The count comes from the VALIDATED object, not from
+        # the raw block -- the two used to be read separately, so the number that cut the files
+        # was not necessarily the number that had been checked.
+        truncate_to(directory, taus=self.protocol.tau, rows=validated.rows)
+        # Rows AND cost, together, and from that same validated object. Restoring rows alone left
+        # a resumed ladder whose series was correct and whose cumulative counters had silently
+        # reset to this segment's work.
         from .cv_states import committed_prefixes
 
         return self._open_cv_states(
-            committed=committed_prefixes(extra.get("cv_prefix"), self.protocol.n_states))
+            committed=committed_prefixes(validated, self.protocol.n_states))
 
     def _cv_manifest(self, state):
         """The completion manifest's record of this ladder's CV series, or None if disabled."""

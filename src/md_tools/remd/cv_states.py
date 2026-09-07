@@ -26,6 +26,7 @@ THE EXCHANGE-BOUNDARY CONVENTION
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import json
@@ -155,6 +156,19 @@ class StateCVSet:
 
 class CVContinuationError(RuntimeError):
     """A CV series that cannot be continued. Refused rather than appended to."""
+
+
+@dataclass(frozen=True)
+class ValidatedLadderPrefix:
+    """What a checkpoint's CV block committed, once every field of it has been checked.
+
+    Returned by `validate_prefixes` and consumed by both the truncation and the restoration, so
+    the numbers that cut the files are the same numbers that were validated. Passing the raw
+    block on instead is how the two came to disagree.
+    """
+
+    rows: int
+    per_state: tuple
 
 
 def validate_for_continuation(directory, definition, *, taus, interval_steps, committed_rows):
@@ -587,23 +601,112 @@ def validate_prefixes(directory, definition, *, taus, interval_steps, block):
             "established and a continuation would either duplicate observations or silently keep "
             "rows that were edited after the last commit. Start a fresh run with --overwrite.")
 
+    from ..cv.cost import (CVCostError, CommittedPrefix, parse_aggregate_record,
+                           parse_cost_record, require_count)
+
     directory = Path(directory)
     columns = list(COLUMNS) + list(definition.names)
-    rows = int(block["rows"])
-    for entry in block["states"]:
-        index = int(entry["state_index"])
+    where = "the checkpoint's collective-variable block"
+
+    # 1. THE BLOCK'S OWN ROW COUNT, strictly. This went through `int()`, so 1.9 became 1 and the
+    #    continuation truncated every state's series to a length nobody had committed -- silently,
+    #    because the number it truncated to was a perfectly ordinary integer by then.
+    try:
+        rows = require_count(block["rows"], where=where, scope="block", field="rows")
+    except CVCostError as refusal:
+        raise CVContinuationError(str(refusal)) from None
+
+    # 2. THE STATE SET, before any dictionary is built from it. Collapsing the entries into a
+    #    mapping keyed by `int(state_index)` made a list holding state 0 twice and omitting
+    #    state 1 look complete: the duplicate overwrote, and the missing state fell through to an
+    #    empty record that restored zero. Expected identities come from the PROTOCOL -- the taus
+    #    this run resolved -- not from the record being checked, which cannot vouch for itself.
+    entries = block["states"]
+    if not isinstance(entries, list):
+        raise CVContinuationError(
+            f"{where}: `states` must be a list, got {type(entries).__name__}")
+    expected = list(range(len(taus)))
+    seen: dict[int, dict] = {}
+    for position, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise CVContinuationError(f"{where}: states[{position}] must be a mapping")
+        try:
+            index = require_count(entry.get("state_index"), where=where,
+                                  scope=f"states[{position}]", field="state_index")
+        except CVCostError as refusal:
+            raise CVContinuationError(str(refusal)) from None
+        if index in seen:
+            raise CVContinuationError(
+                f"{where}: state {index} appears more than once. Every thermodynamic state "
+                f"commits exactly one prefix, so a duplicate means one state's rows would be "
+                f"restored twice and another's not at all.")
+        if index not in expected:
+            raise CVContinuationError(
+                f"{where}: state {index} is not one of this ladder's states {expected}")
+        seen[index] = entry
+    missing = sorted(set(expected) - set(seen))
+    if missing:
+        raise CVContinuationError(
+            f"{where}: no committed prefix for state(s) {missing}. This ladder resolves "
+            f"{len(expected)} state(s) and every one of them commits a prefix; a state without "
+            f"one would silently restore zero rows and zero cost.")
+
+    # 3. EACH STATE, against the tau the protocol resolved for it and against the file and
+    #    sidecar that state owns. `cv_prefix.validate` carries the digest, columns, cadence,
+    #    finiteness, identifiers and -- now -- the required cost.
+    prefixes: list[CommittedPrefix] = []
+    for index in expected:
+        entry = seen[index]
+        tau = float(taus[index])
+        recorded_tau = entry.get("tau")
+        if not isinstance(recorded_tau, (int, float)) or isinstance(recorded_tau, bool) \
+                or abs(float(recorded_tau) - tau) > 1e-12:
+            raise CVContinuationError(
+                f"{where}: state {index} records tau {recorded_tau!r} and this ladder resolves "
+                f"{tau}. The series belongs to a different rung.")
+        try:
+            entry_rows = require_count(entry.get("rows"), where=where,
+                                       scope=f"state {index}", field="rows")
+        except CVCostError as refusal:
+            raise CVContinuationError(str(refusal)) from None
+        # 4. ALL REPRESENTATIONS OF THE COUNT AGREE. The block said one number and each state
+        #    said its own, and nothing compared them -- so a block count that had been edited,
+        #    or an entry written by a different generation, went unnoticed and decided the
+        #    truncation for every state.
+        if entry_rows != rows:
+            raise CVContinuationError(
+                f"{where}: the block commits {rows} row(s) and state {index} commits "
+                f"{entry_rows}. One of them decided the truncation and the other did not agree.")
         try:
             cv_prefix.validate(
                 directory / f"remd{index}.cv.csv", entry,
                 sidecar=directory / f"remd{index}.cv.json",
                 definition=definition, expect_columns=columns,
                 value_columns=list(definition.names),
-                identifiers={"state_index": index, "tau": float(entry["tau"]),
-                             "exchange_phase": PHASE},
+                identifiers={"state_index": index, "tau": tau, "exchange_phase": PHASE},
                 interval=int(interval_steps), step_column="step")
         except cv_prefix.CVPrefixError as refusal:
             raise CVContinuationError(str(refusal)) from None
-    return rows
+        try:
+            parse_cost_record(entry["cost"], where=f"{where} state {index}",
+                              rows=entry_rows, n_cv=len(definition.names))
+            prefixes.append(CommittedPrefix.from_record(entry,
+                                                        where=f"{where} state {index}"))
+        except CVCostError as refusal:
+            raise CVContinuationError(str(refusal)) from None
+
+    # 5. THE AGGREGATE, against those verified per-state entries. Only completion manifests were
+    #    checked before, which is the wrong half: continuation is the operation that TRUNCATES.
+    try:
+        parse_aggregate_record(block.get("cost"), where=f"{where} aggregate",
+                               entries_key="per_state", identity_key="state_index",
+                               expected_identities=expected)
+    except CVCostError as refusal:
+        raise CVContinuationError(str(refusal)) from None
+
+    # 6. TYPED DATA OUT, for both the truncation and the restoration, so nothing downstream
+    #    rereads or re-coerces a field this function has already checked.
+    return ValidatedLadderPrefix(rows=rows, per_state=tuple(prefixes))
 
 
 def truncate_to(directory, *, taus, rows):
@@ -615,12 +718,22 @@ def truncate_to(directory, *, taus, rows):
         cv_prefix.truncate(directory / f"remd{index}.cv.csv", int(rows))
 
 
-def committed_prefixes(block, n_states):
-    """The typed per-state prefix from a checkpoint block: rows AND restored cumulative cost."""
-    from ..cv.cost import CommittedPrefix
+def committed_prefixes(validated, n_states):
+    """The per-state prefixes, taken from what `validate_prefixes` already verified.
 
-    entries = {int(e["state_index"]): e for e in (block or {}).get("states", [])}
-    rows = int((block or {}).get("rows", 0))
-    return [CommittedPrefix.from_record({"rows": rows,
-                                         "cost": (entries.get(index) or {}).get("cost")})
-            for index in range(int(n_states))]
+    This used to re-read the raw block: it keyed the entries by `int(state_index)`, so a
+    duplicate overwrote its twin and a missing state fell through to an empty record restoring
+    zero -- the same permissive read the validator had just been strengthened to refuse, running
+    again a few lines later and undoing it. A helper that bypasses the parser is a second policy,
+    and it is the one that decides what is actually restored.
+    """
+    if not isinstance(validated, ValidatedLadderPrefix):
+        raise CVContinuationError(
+            "committed_prefixes must be given the validated prefix returned by "
+            "validate_prefixes; re-reading the raw checkpoint block would bypass every check it "
+            "just performed")
+    if len(validated.per_state) != int(n_states):
+        raise CVContinuationError(
+            f"the validated prefix covers {len(validated.per_state)} state(s) and this ladder "
+            f"resolves {n_states}")
+    return list(validated.per_state)

@@ -44,8 +44,20 @@ def _series(path: Path, rows=4, *, state=1, tau=0.25, interval=5, tail=0):
     return path
 
 
-def _entry(path, rows):
-    return cv_prefix.record(path, rows=rows)
+def _entry(path, rows, *, cost="valid", sidecar=None):
+    """A committed-prefix entry, carrying a valid cost unless a case is testing its absence.
+
+    A CV-enabled prefix is now REQUIRED to record what it cost, so a fixture that omitted one
+    made every case below refuse for that reason instead of the reason it is named for. The
+    cost here is the honest one for this fixture: `rows` observations of the single `phi`
+    column, so each case isolates the single thing it mutates.
+    """
+    from md_tools.cv.cost import CVCost, cost_record
+
+    if cost == "valid":
+        scope = CVCost(observations=rows, evaluations=rows, wall_seconds=0.001)
+        cost = cost_record(scope, scope, rows=rows)
+    return cv_prefix.record(path, rows=rows, sidecar=sidecar, cost=cost or None)
 
 
 def _validate(path, entry, **kwargs):
@@ -63,7 +75,7 @@ def test_an_untouched_prefix_validates(tmp_path):
 def test_an_uncommitted_tail_is_allowed_and_then_truncated(tmp_path):
     """A crash leaves rows past the commit. That is ordinary, not corruption."""
     path = _series(tmp_path / "a.cv.csv", rows=4, tail=3)
-    entry = cv_prefix.record(path, rows=4)
+    entry = _entry(path, 4)
     assert _validate(path, entry) == 4
     assert cv_prefix.truncate(path, 4) == 4
     assert len(path.read_text(encoding="utf-8").splitlines()) == 5
@@ -151,7 +163,7 @@ def test_a_changed_sidecar_is_refused(tmp_path):
     path = _series(tmp_path / "a.cv.csv", rows=2)
     sidecar = tmp_path / "a.cv.json"
     sidecar.write_text('{"units": "degrees"}', encoding="utf-8")
-    entry = cv_prefix.record(path, rows=2, sidecar=sidecar)
+    entry = _entry(path, 2, sidecar=sidecar)
     sidecar.write_text('{"units": "radians"}', encoding="utf-8")
     with pytest.raises(cv_prefix.CVPrefixError, match="different interpretation"):
         _validate(path, entry, sidecar=sidecar)
@@ -429,3 +441,16 @@ def test_the_final_committed_generation_carries_the_cv_prefix_and_cost(tmp_path)
     series = sorted(destination.rglob("*.cv.csv"))[0]
     assert cv_prefix.validate(
         series, entry, sidecar=series.with_suffix(".json")) == rows
+
+
+def test_a_cv_enabled_prefix_with_no_cost_is_refused(tmp_path):
+    """The rule the fixture above now satisfies, asserted directly rather than by accident.
+
+    An absent cost on a CV-enabled prefix is corruption or unsupported legacy data: restoring it
+    as zero would discard the history the prefix exists to preserve. Every other case in this
+    file supplies a valid cost so that it can test its own mutation; this one supplies none.
+    """
+    path = _series(tmp_path / "a.cv.csv", rows=3)
+    entry = _entry(path, 3, cost=None)
+    with pytest.raises(cv_prefix.CVPrefixError, match="no usable cost record"):
+        _validate(path, entry)
