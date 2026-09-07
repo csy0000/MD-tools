@@ -77,7 +77,9 @@ def validate_ladder_continuation(out_dir, *, definition, taus, interval_steps,
                                   interval_steps=int(interval_steps),
                                   committed_rows=extra.get("cv_rows"))
         validate_prefixes(directory, definition, taus=list(taus),
-                          interval_steps=int(interval_steps), block=extra.get("cv_prefix"))
+                          interval_steps=int(interval_steps), block=extra.get("cv_prefix"),
+                          committed_step=checkpoint.get("step"),
+                          committed_rows=extra.get("cv_rows"))
     except CVContinuationError as refusal:
         raise ContinuationError(str(refusal)) from None
 
@@ -260,15 +262,41 @@ def validate_public_entry(resolved, out_dir, *, protocol, stage=None,
 
         from ..ais.run import COMPLETION_NAME
 
+        from ..openmm.checkpoint import CheckpointError, read_committed
+
+        # COMPLETED AND PARTIAL PATHS BOTH.
+        #
+        # This used to read `completed.json` and nothing else, so an interrupted path -- one with
+        # a committed generation and no marker, which is precisely the state a resume exists for
+        # -- was not in the selection and was never looked at. The authoritative runtime does
+        # refuse such a path before it truncates any of its tables, so no scientific output was at
+        # risk; what was at risk is the other half of the boundary. `md-run` creates `-odir` and
+        # rewrites `resolved.config` and the definition copy BEFORE it dispatches, so a resume
+        # that the runtime was always going to refuse still replaced the prior run's authoritative
+        # configuration record on its way to refusing. A path's source frame is recorded in its
+        # committed checkpoint exactly as it is in its completion manifest, so including partial
+        # paths costs one extra read and needs no new validation rule.
         chosen: dict[int, int] = {}
         for directory in sorted(out_dir.glob("path_*")):
             marker = directory / COMPLETION_NAME
-            if not marker.is_file():
+            if marker.is_file():
+                try:
+                    record = json.loads(marker.read_text(encoding="utf-8"))
+                    chosen[int(record["path_index"])] = int(record["source_frame_index"])
+                except (ValueError, KeyError, TypeError):
+                    continue
                 continue
+            # A partial path. An unreadable or absent committed generation is left to the
+            # runtime, which reports it far better than this boundary can and reaches it before
+            # it truncates anything.
             try:
-                record = json.loads(marker.read_text(encoding="utf-8"))
-                chosen[int(record["path_index"])] = int(record["source_frame_index"])
-            except (ValueError, KeyError, TypeError):
+                committed = read_committed(directory)
+            except CheckpointError:
+                continue
+            state = (committed or {}).get("state") or {}
+            try:
+                chosen[int(state["path_index"])] = int(state["source_frame_index"])
+            except (KeyError, TypeError, ValueError):
                 continue
         if not chosen:
             return

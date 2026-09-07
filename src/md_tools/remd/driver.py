@@ -362,7 +362,12 @@ class ReplicaRun:
 
             validated = validate_prefixes(
                 directory, definition, taus=self.protocol.tau,
-                interval_steps=int(interval), block=extra.get("cv_prefix"))
+                interval_steps=int(interval), block=extra.get("cv_prefix"),
+                # The checkpoint's OWN progress, so the committed count is checked against
+                # something the record being checked cannot influence. Without it a coherent
+                # but too-short prefix truncated committed observations and resumed past them.
+                committed_step=checkpoint.get("step"),
+                committed_rows=extra.get("cv_rows"))
         except CVContinuationError as refusal:
             raise storage.StorageError(str(refusal)) from None
         # Only now is anything cut: everything past the committed prefix belongs to steps whose

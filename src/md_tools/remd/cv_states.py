@@ -585,7 +585,8 @@ def prefix_records(directory, definition, *, taus, interval_steps, rows, cost=No
     return record
 
 
-def validate_prefixes(directory, definition, *, taus, interval_steps, block):
+def validate_prefixes(directory, definition, *, taus, interval_steps, block,
+                      committed_step=None, committed_rows=None):
     """Validate every state's committed prefix. Returns the committed row count, or raises.
 
     Raised as `CVContinuationError` so a caller distinguishes "this cannot be continued" from a
@@ -695,6 +696,80 @@ def validate_prefixes(directory, definition, *, taus, interval_steps, block):
         except CVCostError as refusal:
             raise CVContinuationError(str(refusal)) from None
 
+    # 4b. THE COUNT AGAINST THE RUN'S OWN PROGRESS.
+    #
+    #     Everything above compares the record with itself: the block count against each state's
+    #     count, each cost against its own rows, each digest against the prefix it describes. All
+    #     of that is satisfied by a prefix that is simply TOO SHORT -- shorten it, recompute the
+    #     digests and costs to match, and every check passes. What happened next was the reason
+    #     this exists: `truncate_to` cut each series to that shorter length, dynamics resumed from
+    #     the step the checkpoint recorded, and the committed observations in between were gone.
+    #     The series that remained had a hole in the middle of it, and nothing said so until the
+    #     completion check at the very END of the run -- after the whole segment had been
+    #     recomputed, and only because that run happened to reach its end at all. An interruption
+    #     before then leaves a gapped set that no later reader can distinguish from a good one.
+    #
+    #     So the expectation is taken from somewhere the record cannot influence: the checkpoint's
+    #     committed STEP and the configured observation grid. The three cadences are independent
+    #     -- checkpoints commit on their own interval, frames on theirs -- and only the CV cadence
+    #     is used here. The origin is the first committed row's own step rather than zero, which
+    #     is what makes this correct for an out-of-place extension: its steps are absolute and
+    #     carry on from the parent's terminal value, so its series begins where the parent stopped
+    #     and not at 0.
+    #
+    #     A ladder writes its CV row for a step before the checkpoint that vouches for it (`cv`
+    #     precedes `checkpoint` in EVENT_ORDER), so the row at the committed step is itself
+    #     committed -- hence the inclusive count. The equality is exact in both directions: fewer
+    #     rows than the grid demands is the data loss above, and more is a prefix vouching for
+    #     observations the run never reached, which would restore an uncommitted tail as durable.
+    if committed_step is not None:
+        step = int(committed_step)
+        interval = int(interval_steps)
+        if rows < 1:
+            raise CVContinuationError(
+                f"{where}: the checkpoint reached step {step} and commits {rows} "
+                f"collective-variable row(s). A ladder observes its initial configuration before "
+                f"it commits any checkpoint, so a checkpoint that vouches for no rows at all "
+                f"cannot be reconciled with the run that wrote it.")
+        first = _first_committed_step(directory, where=where)
+        if step < first:
+            raise CVContinuationError(
+                f"{where}: the checkpoint reached step {step} and the committed series begins at "
+                f"step {first}. The checkpoint and the series describe different runs.")
+        expected_rows = (step - first) // interval + 1
+        if rows != expected_rows:
+            lost = expected_rows - rows
+            raise CVContinuationError(
+                f"{where}: the checkpoint reached step {step} and the series begins at step "
+                f"{first}, so on a {interval}-step observation grid exactly {expected_rows} "
+                f"collective-variable row(s) are committed -- but the prefix commits {rows}. "
+                + (f"Continuing would truncate {lost} committed observation(s) and then resume "
+                   f"dynamics at step {step}, leaving a gap in the middle of every state's "
+                   f"series with nothing in the file to show where it is. "
+                   if lost > 0 else
+                   f"The prefix vouches for {-lost} row(s) beyond the last committed step, which "
+                   f"would restore an uncommitted tail as though it were durable. ")
+                + f"This checkpoint's progress and its collective-variable record disagree; "
+                  f"neither can be trusted to decide the truncation. Start a fresh run with "
+                  f"--overwrite, or recover the checkpoint generation that matches the series.")
+
+    # 4c. `extra.cv_rows` AND THE PREFIX BLOCK. Two independent statements of the same number live
+    #     in one checkpoint, and each has its own reader: `validate_for_continuation` uses the
+    #     first, the truncation uses the second. Nothing compared them, so a checkpoint carrying
+    #     both could pass each check separately while disagreeing about how much of the run is
+    #     durable.
+    if committed_rows is not None:
+        try:
+            counted = require_count(committed_rows, where=where, scope="checkpoint",
+                                    field="cv_rows")
+        except CVCostError as refusal:
+            raise CVContinuationError(str(refusal)) from None
+        if counted != rows:
+            raise CVContinuationError(
+                f"{where}: the checkpoint records {counted} committed collective-variable row(s) "
+                f"and the prefix block commits {rows}. The same checkpoint states the durable "
+                f"length twice and the two statements disagree.")
+
     # 5. THE AGGREGATE, against those verified per-state entries. Only completion manifests were
     #    checked before, which is the wrong half: continuation is the operation that TRUNCATES.
     try:
@@ -707,6 +782,33 @@ def validate_prefixes(directory, definition, *, taus, interval_steps, block):
     # 6. TYPED DATA OUT, for both the truncation and the restoration, so nothing downstream
     #    rereads or re-coerces a field this function has already checked.
     return ValidatedLadderPrefix(rows=rows, per_state=tuple(prefixes))
+
+
+
+def _first_committed_step(directory, *, where):
+    """The step of the first row of state 0's series, read from the file itself.
+
+    The reconciliation above needs an origin, and for an extension that origin is not zero: its
+    steps are absolute and continue from the parent's terminal value. Taking it from the series
+    rather than assuming it makes the check correct for both, and the row it reads has already
+    been covered by the verified prefix digest by the time this is called.
+    """
+    from ..cv import prefix as cv_prefix
+
+    series = Path(directory) / "remd0.cv.csv"
+    lines = cv_prefix.read_lines(series)
+    if len(lines) < 2:
+        raise CVContinuationError(
+            f"{where}: {series.name} holds no data rows, so the step its committed series begins "
+            f"at cannot be established.")
+    header = lines[0].split(",")
+    try:
+        column = header.index("step")
+        return int(lines[1].split(",")[column])
+    except (ValueError, IndexError):
+        raise CVContinuationError(
+            f"{where}: {series.name} does not begin with a readable `step` value, so the committed "
+            f"prefix cannot be reconciled with the checkpoint's progress.") from None
 
 
 def truncate_to(directory, *, taus, rows):
