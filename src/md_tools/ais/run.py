@@ -2425,6 +2425,12 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         import uuid
 
         invocation_id = coordination.bcast(uuid.uuid4().hex if rank == 0 else None)
+        # RECORDED BY EVERY RANK, not only the one that assembles the aggregate. A single id in
+        # the aggregate proves that rank 0 wrote one; it cannot show that the other ranks agreed
+        # about which launch they were part of. Each rank keeps its own log, so writing it there
+        # makes rank agreement independently checkable from per-rank evidence. Execution
+        # metadata only: it reaches no seed, fingerprint, frame selection, filename or value.
+        log.update(invocation_id=invocation_id, mpi_rank=rank, mpi_size=size)
         #: path index -> what THIS invocation did for that path. Filled by `run_one_path`, then
         #: gathered across ranks below through the same authority that owns every other
         #: collective, because a rank-local dict is exactly the thing a plural launch must not

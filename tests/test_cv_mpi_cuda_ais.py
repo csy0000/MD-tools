@@ -467,6 +467,98 @@ def test_one_rank_dying_fails_the_campaign_and_invents_no_completed_paths(projec
             f"the aggregate lists path(s) {sorted(listed - finished)} that never completed")
 
 
+# --- the independent oracle ---------------------------------------------------------------------
+#
+# Test D used to compute `expected_segment` by summing the RESUMED output's own per-path segment
+# counts and then asserting the global segment equalled that sum. That is internal consistency:
+# it shows the aggregate adds up, and says nothing whatever about how many observations the
+# resumed invocation should have evaluated. An implementation that credited itself with twice
+# the work, or none, would satisfy it exactly as well.
+#
+# The oracle below is computed BEFORE the resume, from two things the resumed run does not get to
+# choose: the committed checkpoint generations left by the interrupted run, and the CV grid this
+# campaign was configured with. No cost counter is consulted -- those are the numbers under test.
+
+#: R = 1 + S/d. Written out from the configuration, not read back from any output.
+COMPLETE_OBSERVATIONS = 1 + SWITCHING // CV_EVERY
+
+
+def _committed_grid_points(directory: Path) -> int:
+    """How many CV grid points a partial path's committed checkpoint vouches for.
+
+    From the generation's PROGRESS -- the protocol step it committed -- and the configured CV
+    interval, which is what defines the grid. `cv_rows` is read only as a cross-check below; a
+    count that agreed with itself while disagreeing with the checkpoint's progress is exactly
+    the corruption the accounting is supposed to notice.
+    """
+    from md_tools.openmm.checkpoint import CheckpointError, read_committed
+
+    try:
+        committed = read_committed(directory)
+    except (CheckpointError, FileNotFoundError):
+        return 0
+    state = (committed or {}).get("state") or {}
+    step = state.get("protocol_step")
+    if step is None:
+        return 0
+    step = int(step)
+    # CHECKPOINT CADENCE IS NOT CV CADENCE. Checkpoints commit every parameter-update interval
+    # (5 steps here); observations are written every CV interval (10). A committed step therefore
+    # lands BETWEEN grid points routinely -- step 35 commits observations at 0, 10, 20 and 30 and
+    # owes the one at 40. Requiring the committed step to sit on the CV grid asserted a
+    # coincidence of two independent cadences, which is precisely the assumption to avoid.
+    grid_points = 1 + step // CV_EVERY
+
+    # CROSS-CHECK, not the oracle: the committed CSV prefix must hold exactly those rows.
+    rows = state.get("cv_rows")
+    if rows is not None:
+        assert int(rows) == grid_points, (
+            f"the checkpoint commits step {step} -- {grid_points} grid point(s) -- and claims "
+            f"{rows} committed CV row(s); the two disagree")
+    return grid_points
+
+
+def _starting_dispositions(destination: Path, paths: int):
+    """Each path's state before the resume, and how many observations it still owes.
+
+    completed  -> 0 new; it is skipped and contributes nothing to the current segment
+    partial    -> R minus the grid points its checkpoint committed; an uncommitted tail is NOT
+                  retained work and is not counted
+    fresh      -> R
+    """
+    expected = {}
+    disposition = {}
+    for index in range(paths):
+        directory = destination / f"path_{index:04d}"
+        if (directory / "completed.json").is_file():
+            disposition[index] = "already_complete"
+            expected[index] = 0
+        elif directory.is_dir():
+            committed = _committed_grid_points(directory)
+            disposition[index] = "resumed_and_completed" if committed else "fresh_and_completed"
+            expected[index] = COMPLETE_OBSERVATIONS - committed
+        else:
+            disposition[index] = "fresh_and_completed"
+            expected[index] = COMPLETE_OBSERVATIONS
+    return disposition, expected
+
+
+def _per_rank_invocation_ids(destination: Path):
+    """Every rank's own record of which launch it belonged to.
+
+    A single id in the aggregate proves rank 0 wrote one. Rank AGREEMENT needs each rank's own
+    evidence, which is why every rank records it in its own log.
+    """
+    from md_tools.build.record import read_record
+
+    found = {}
+    for path in sorted(destination.glob("AIS.log*")):
+        record = read_record(path)
+        if record.get("invocation_id"):
+            found[path.name] = (record["invocation_id"], record.get("mpi_rank"))
+    return found
+
+
 # --- Test D: an interrupted two-rank campaign resumed under four ranks, on real CUDA -------------
 
 def test_d_two_rank_interruption_resumed_under_four_ranks_on_cuda(project, tmp_path):
@@ -510,13 +602,32 @@ def test_d_two_rank_interruption_resumed_under_four_ranks_on_cuda(project, tmp_p
     assert complete_before, "the interruption left no completed path, so nothing is skipped later"
     assert partial_before, "the interruption left no partial path, so no prefix is carried later"
 
+    # THE ORACLE, taken from the interrupted tree BEFORE the resume touches it.
+    starting, expected_new = _starting_dispositions(destination, PATHS)
+    assert sum(1 for d in starting.values() if d == "already_complete") >= 1
+    assert sum(1 for d in starting.values() if d == "resumed_and_completed") >= 1, (
+        "no path carried a committed partial prefix, so the partial-path arithmetic is untested")
+    assert 0 < sum(expected_new.values()) < PATHS * COMPLETE_OBSERVATIONS
+    # Printed so the derived expectations are readable evidence rather than an invisible
+    # intermediate: R, each path's starting disposition, and what it owes.
+    print(f"@@ORACLE R={COMPLETE_OBSERVATIONS} (1 + {SWITCHING}/{CV_EVERY}) "
+          f"dispositions={starting} expected_new={expected_new} "
+          f"global_expected_segment={sum(expected_new.values())}")
+
     # FOUR ranks now: one path each, a different division of the same campaign.
     _launch(project, destination, "--resume", ranks=4)
 
+    # RANK AGREEMENT, from each rank's own log rather than from the aggregate alone.
+    per_rank = _per_rank_invocation_ids(destination)
+    assert len(per_rank) >= 2, f"only {len(per_rank)} rank(s) recorded an invocation id"
+    assert len({identity for identity, _rank in per_rank.values()}) == 1, (
+        f"ranks disagree about which launch they belonged to: {per_rank}")
+
     cost = _aggregate_cost_record(destination)
 
-    # All ranks agreed on one invocation id, and it is this invocation's.
+    # All ranks agreed on one invocation id, and it is the one the aggregate reports.
     assert isinstance(cost["invocation_id"], str) and len(cost["invocation_id"]) == 32
+    assert {identity for identity, _rank in per_rank.values()} == {cost["invocation_id"]}
 
     # Cumulative counts every completed path exactly once.
     assert cost["cumulative"]["cv_observations"] == PATHS * EXPECTED_ROWS
@@ -526,6 +637,10 @@ def test_d_two_rank_interruption_resumed_under_four_ranks_on_cuda(project, tmp_p
     # already complete contributes exactly zero, and the total is strictly less than the
     # campaign -- which is what the old rule could not report.
     by_index = {entry["path_index"]: entry for entry in cost["per_path"]}
+    for index in range(PATHS):
+        assert by_index[index]["disposition"] == starting[index], (
+            f"path {index} was {starting[index]} before the resume and reports "
+            f"{by_index[index]['disposition']}")
     for index in sorted(complete_before):
         assert by_index[index]["disposition"] == "already_complete"
         assert by_index[index]["segment"]["cv_observations"] == 0
@@ -535,8 +650,27 @@ def test_d_two_rank_interruption_resumed_under_four_ranks_on_cuda(project, tmp_p
         assert by_index[index]["disposition"] == "resumed_and_completed"
         assert 0 < by_index[index]["segment"]["cv_observations"] <= EXPECTED_ROWS
 
-    expected_segment = sum(by_index[i]["segment"]["cv_observations"] for i in range(PATHS))
-    assert cost["segment"]["cv_observations"] == expected_segment
+    # THE ORACLE, computed before the resume from the checkpoints and the configured grid.
+    for index in range(PATHS):
+        assert by_index[index]["segment"]["cv_observations"] == expected_new[index], (
+            f"path {index} ({starting[index]}) evaluated "
+            f"{by_index[index]['segment']['cv_observations']} observation(s); the checkpoint it "
+            f"resumed from and the {CV_EVERY}-step grid say it owed {expected_new[index]}")
+        assert by_index[index]["segment"]["cv_evaluations"] == 2 * expected_new[index]
+        assert by_index[index]["cumulative"]["cv_observations"] == COMPLETE_OBSERVATIONS
+        assert by_index[index]["cumulative"]["cv_evaluations"] == 2 * COMPLETE_OBSERVATIONS
+        if expected_new[index] == 0:
+            assert by_index[index]["segment"]["wall_seconds"] == 0.0, (
+                f"path {index} was skipped and still reported evaluation time")
+        else:
+            seconds = by_index[index]["segment"]["wall_seconds"]
+            assert seconds >= 0.0 and seconds == seconds and seconds != float("inf")
+
+    expected_segment = sum(expected_new.values())
+    assert cost["segment"]["cv_observations"] == expected_segment, (
+        f"the four-rank invocation reports {cost['segment']['cv_observations']} observation(s); "
+        f"the pre-resume checkpoints and the configured grid say {expected_segment}")
+    assert cost["cumulative"]["cv_observations"] == PATHS * COMPLETE_OBSERVATIONS
     assert cost["segment"]["cv_observations"] < cost["cumulative"]["cv_observations"], (
         "the resumed invocation claimed the whole campaign's work as its own")
     assert cost["segment"]["cv_evaluations"] == 2 * cost["segment"]["cv_observations"], (
@@ -580,3 +714,58 @@ def _aggregate_cost_record(destination: Path) -> dict:
         if cost is not None:
             return cost
     raise AssertionError(f"no global collective-variable cost recorded under {destination}")
+
+
+def test_a_malformed_record_on_a_nonzero_rank_refuses_collectively_without_touching_the_tree(
+        project, tmp_path):
+    """A damaged record owned by a rank that is not rank 0, under real MPI on real CUDA.
+
+    Rank 0 assembles the aggregate and writes the shared files, so a malformed record it owns is
+    the easy case -- the rank that would do the writing is the rank that refuses. The dangerous
+    case is a record belonging to some OTHER rank: the refusal has to become collective before
+    rank 0 writes anything, and the job has to stop rather than leave the others blocked in a
+    collective while one of them exits.
+
+    So this damages a path that a four-rank launch assigns to a nonzero rank, then asserts three
+    things: the launch fails, nothing under the protected tree moved, and it did not hang. The
+    subprocess timeout is the hang assertion.
+    """
+    import hashlib
+    import os
+
+    from md_tools.ais import paths_for_rank
+
+    destination = tmp_path / "nonzero"
+    _launch(project, destination, ranks=2)
+
+    # A path owned by a rank other than 0 when the world is four wide.
+    victim = next(index for rank in range(1, 4) for index in paths_for_rank(rank, 4, PATHS))
+    marker = destination / f"path_{victim:04d}" / "completed.json"
+    record = json.loads(marker.read_text(encoding="utf-8"))
+    record["collective_variable_cost"]["cumulative"]["cv_observations"] = "5"   # a string
+    marker.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def tree(root):
+        state = {}
+        for path in sorted(root.rglob("*")):
+            key = str(path.relative_to(root))
+            if path.is_symlink():
+                state[key] = ("symlink", os.readlink(path))
+            elif path.is_dir():
+                state[key] = ("dir", None)
+            else:
+                stat = path.stat()
+                state[key] = ("file", hashlib.sha256(path.read_bytes()).hexdigest(),
+                              stat.st_ino, stat.st_mtime_ns)
+        return state
+
+    before = tree(destination)
+    refused = _launch(project, destination, "--resume", ranks=4, expect=1)
+    assert refused.returncode != 0, refused.stdout[-2000:]
+
+    changed = sorted(k for k in set(before) | set(tree(destination))
+                     if before.get(k) != tree(destination).get(k))
+    assert not changed, f"a collectively refused launch modified the tree: {changed}"
+
+    combined = refused.stdout + refused.stderr
+    assert "cv_observations" in combined or "cost" in combined.lower(), combined[-3000:]
