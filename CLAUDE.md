@@ -35,8 +35,12 @@ mistakes are refused by name. Flag abbreviation is off.
 `.log` is the machine-readable provenance record. Never merge them; only a genuine collision is
 refused.
 
-**`resolved.config` is authoritative** and md-run writes it on every invocation, from the `.in`
-file it re-reads each time. Every `.in` that `build-md` writes resolves back to exactly the
+**`resolved.config` is authoritative** and md-run writes it on every ACCEPTED invocation, from
+the `.in` file it re-reads each time. Not on a refused one: an invocation that is rejected while
+validating the records it intended to continue writes nothing into the output tree at all --
+no `resolved.config`, no definition copy, no `.out`, no `.log`, no run-state record. The
+rejected attempt must not replace the prior run's authoritative account of itself, which is the
+same reason completion is read from a machine record rather than from prose. Every `.in` that `build-md` writes resolves back to exactly the
 `resolved.config` beside it; that round-trip is a test, not a convention.
 
 These do not exist and must never be suggested: `sys-config`, `sys-gen`, `md-gen`, `setup`,
@@ -209,6 +213,15 @@ Do not change these without a failing test that demonstrates a defect.
 * **A rank-local failure is made collective.** The preflight agrees across ranks before any output
   exists, and a runtime failure aborts the communicator. A rank that raises alone leaves the
   others waiting at the next collective for a participant that has already exited.
+* **A refused continuation is read-only, and that includes its own logs.** An invocation that
+  continues or verifies existing data validates every authoritative record it needs FIRST --
+  committed CV prefixes, per-state and aggregate costs, completion manifests, and for AIS every
+  selected path before work begins on any of them. That phase creates, rewrites, truncates and
+  replaces nothing; the refusal goes to stderr. Only once it passes do logs, run-state records,
+  `resolved.config`, reporters, truncation and publication happen, and ordinary runtime failure
+  logging resumes from that point. Under MPI the ranks agree they all passed before any rank
+  writes. `md_tools.run.continuation` is the one implementation, used by the public `md-run` and
+  by the generated entry points alike.
 * **Nothing is written until the whole preflight passes.** `md_tools.run.preflight` checks flag
   roles, resolved-path collisions (outputs against each other AND against the inputs), input
   existence and format, topology/System agreement, the MPI launch, the machine configuration,

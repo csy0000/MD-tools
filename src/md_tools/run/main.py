@@ -374,6 +374,20 @@ def md_run_main(argv: list[str] | None = None) -> int:
         print(f"md-run: {refusal}", file=sys.stderr)
         return 2
 
+    # WHAT THIS INVOCATION INTENDS TO CONTINUE -- checked while the tree is still untouched.
+    # `md-run` writes `resolved.config` and the content-addressed definition copy itself, so
+    # without this a refused continuation through the public command added two files to a tree it
+    # was declining to touch, while the same operation through a generated wrapper added none.
+    from .continuation import ContinuationError, validate_public_entry
+
+    try:
+        validate_public_entry(run_input.resolved, args.out_dir, protocol=protocol,
+                              stage=run_input.stage,
+                              config_directory=Path(run_input.path).parent)
+    except ContinuationError as refusal:
+        print(f"md-run: {refusal}", file=sys.stderr)
+        return 2
+
     # Only now. Everything above touched nothing.
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

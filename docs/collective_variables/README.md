@@ -351,6 +351,20 @@ different interval, units, wrapping, sign or periodic convention, exchange-bound
 state index, tau, definition digest, or column set. Each would make the appended rows a different
 measurement sharing a column heading with the old ones.
 
+**A rejected continuation preserves the prior run entirely.** Every authoritative CV record a
+continuation depends on -- the committed prefix and its cost, each per-state entry, the
+checkpoint's aggregate, and for AIS every selected path's completion manifest -- is validated in
+a read-only phase before the run creates or replaces anything. That includes `.out`, `.log`, the
+run-state record and `resolved.config`: those are the prior run's machine-readable provenance and
+completion status, and a rejected attempt must not become the authoritative account of a run it
+never started. The refusal is written to stderr and names the record, the scope and the field.
+Once the phase passes, ordinary runtime logging resumes unchanged.
+
+An absent cost on a CV-enabled record is not a zero cost. It is corruption or unsupported legacy
+data, and it is refused rather than restored as a clean history of no work -- the distinction is
+made from the run's own configuration and schema, never from whether a stored value happens to be
+truthy. A genuinely CV-disabled run records its documented null field and is unaffected.
+
 **CV output failure is simulation failure.** Reporting is never silently disabled.
 
 ## Cost

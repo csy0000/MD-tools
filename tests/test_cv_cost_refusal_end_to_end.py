@@ -451,3 +451,49 @@ def test_ladder_extension_refuses_a_malformed_parent_cost(ladder_project, tmp_pa
     _assert_unchanged(destination, before, "a refused ladder extension")
     assert not list(extension.glob("remd*.cv.csv")), (
         "the extension wrote CV outputs before refusing its parent")
+
+
+# --- the PUBLIC entry point, at the same boundary as the generated wrappers ---------------------
+
+def test_md_run_refuses_a_malformed_record_without_touching_the_tree(cmd_project, tmp_path):
+    """`md-openmm md-run` must honour the same read-only boundary as a generated script.
+
+    The two are different surfaces onto one runtime, and a boundary that held for only one of
+    them would be a boundary nobody could rely on: `md-run` creates `-odir` and writes
+    `resolved.config` itself, before dispatching to `stage_main`, so it is the surface with the
+    most opportunity to touch the tree ahead of the validation.
+
+    The generated wrapper is covered by the cases above; this covers the public command against
+    the same doctored record.
+    """
+    from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
+
+    destination = tmp_path / "public"
+    crashed = _run_cmd(cmd_project, destination,
+                       {FAULT_ENVIRONMENT: "after-pointer-replace",
+                        FAULT_AFTER_ENVIRONMENT: "4"})
+    assert crashed.returncode != 0
+
+    _doctor_checkpoint_cost(
+        _cv_reporting_checkpoints(destination),
+        lambda cost: cost["cumulative"].__setitem__("cv_observations", "9"))
+
+    generated = cmd_project / "cMD"
+    inputs = sorted(generated.glob("*.in"))
+    assert inputs, f"no .in file in {generated}"
+    stage_input = next((p for p in inputs if p.stem == "cMD"), inputs[-1])
+
+    before = _tree(destination)
+    refused = subprocess.run(
+        [sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
+         "-i", str(stage_input), "-p", str(cmd_project / "built.pdb"),
+         "-s", str(cmd_project / "built.xml"), "-odir", str(destination), "--cpu"],
+        cwd=generated, capture_output=True, text=True, timeout=1800,
+        env=_environment(cmd_project))
+    assert refused.returncode != 0, refused.stdout[-3000:]
+    _assert_unchanged(destination, before, "a refused md-run continuation")
+    # The contract asks the refusal to identify the record, the scope and the FIELD -- so the
+    # assertion is on the field name, not on the word "cost".
+    combined = refused.stdout + refused.stderr
+    assert "cv_observations" in combined, combined[-2000:]
+    assert "cMD.cv.csv" in combined, combined[-2000:]

@@ -174,14 +174,107 @@ def validate_stage_continuation(destination, *, stage, definition) -> None:
         series = sorted(destination.rglob("*.cv.csv"))
         if not series:
             continue
-        from ..md.stage import _validate_cv_prefix
+        # The series file directly. `_validate_cv_prefix` in the stage runtime derives it from
+        # the TRAJECTORY path via `cv_csv_path`, so handing it the series produced a doubled
+        # `.cv.cv.csv` and refused for a file that had never existed -- a real refusal for the
+        # wrong reason, which is its own kind of wrong.
+        from ..cv import prefix as cv_prefix
 
         try:
-            _validate_cv_prefix(entry, stage=stage, trajectory=series[0], fingerprint=None)
-        except (CVPrefixError, SystemExit) as refusal:
+            cv_prefix.validate(series[0], entry, sidecar=series[0].with_suffix(".json"),
+                               definition=definition)
+        except CVPrefixError as refusal:
             problems.append(str(refusal))
 
     if problems:
         raise ContinuationError(
             "the existing collective-variable output cannot be continued:\n  - "
             + "\n  - ".join(problems))
+
+
+def _definition_from(resolved, *, config_directory=None):
+    """The CV definition a resolved document names, or None when reporting is off."""
+    block = (resolved or {}).get("collective_variables") or {}
+    path = block.get("file")
+    if not path:
+        return None
+    candidate = Path(path)
+    if not candidate.is_absolute() and config_directory is not None:
+        candidate = Path(config_directory) / candidate
+    if not candidate.is_file():
+        return None
+    try:
+        from ..cv import load_cv_definition
+
+        return load_cv_definition(candidate)
+    except Exception:      # noqa: BLE001 - the ordinary path reports a bad definition better
+        return None
+
+
+def validate_public_entry(resolved, out_dir, *, protocol, stage=None,
+                          config_directory=None) -> None:
+    """The same read-only boundary, for `md-openmm md-run`.
+
+    `md-run` creates `-odir` and writes `resolved.config` and the content-addressed definition
+    copy ITSELF, before dispatching to the runtime whose preflight does the validating. So a
+    refused continuation through the public command added two files to a tree it was declining
+    to touch, while the identical operation through a generated wrapper added none. Two surfaces
+    onto one runtime must not disagree about that, or the boundary is one nobody can rely on.
+
+    Called before the directory is created and before anything is written.
+    """
+    out_dir = Path(out_dir)
+    if not out_dir.is_dir():
+        return                                  # nothing exists yet; nothing to protect
+    definition = _definition_from(resolved, config_directory=config_directory)
+    if definition is None:
+        return
+
+    interval = _cv_interval(resolved)
+    if protocol in ("REST2", "rREST2") and stage is None:
+        rest2 = (resolved or {}).get("rest2") or {}
+        states = int(rest2.get("number_of_replicas") or 0)
+        if not states:
+            return
+        tau_max = float(rest2.get("tau_max", 0.5))
+        taus = [tau_max * i / (states - 1) for i in range(states)] if states > 1 else [0.0]
+        validate_ladder_continuation(
+            out_dir, definition=definition, taus=taus, interval_steps=interval,
+            checkpoint_path=out_dir / f"{protocol}_checkpoint.nc")
+        return
+
+    if protocol == "AIS":
+        import json
+
+        from ..ais.run import COMPLETION_NAME
+
+        chosen: dict[int, int] = {}
+        for directory in sorted(out_dir.glob("path_*")):
+            marker = directory / COMPLETION_NAME
+            if not marker.is_file():
+                continue
+            try:
+                record = json.loads(marker.read_text(encoding="utf-8"))
+                chosen[int(record["path_index"])] = int(record["source_frame_index"])
+            except (ValueError, KeyError, TypeError):
+                continue
+        if not chosen:
+            return
+        schedule = (resolved or {}).get("schedule") or {}
+        ais = (resolved or {}).get("ais") or {}
+        derived = {
+            "cv_interval_steps": interval,
+            "switching_steps": int(schedule.get("switching_steps")
+                                   or ais.get("switching_steps") or 0),
+        }
+        if not derived["switching_steps"]:
+            return
+        validate_ais_continuation(
+            out_dir, definition=definition, schedule=derived,
+            chosen=[chosen.get(i, 0) for i in range(max(chosen) + 1)],
+            selected=sorted(chosen))
+        return
+
+    # `stage` here is the stage NAME the input selected, not a mapping; the resolved document is
+    # what carries the collective-variable block a stage check needs.
+    validate_stage_continuation(out_dir, stage=resolved, definition=definition)
