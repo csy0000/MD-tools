@@ -1542,6 +1542,25 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         frames_emitted = int(state_of_path["frames"])
         state_rows_emitted = int(state_of_path["state_rows"])
         switcher.set_tau(simulation.context, system, taus[updates_done])
+        # THE COMMITTED CV PREFIX, VALIDATED BEFORE A SINGLE STREAM IS TRUNCATED.
+        #
+        # This used to happen where the CV series is opened, some two hundred lines below and
+        # well after the observation and state tables had been cut back to their committed
+        # counts. The comment there said a continuation which has already truncated cannot decide
+        # afterwards that it should have refused -- which was exactly right, and exactly what the
+        # ordering did: a malformed committed cost was refused only after the resume had already
+        # rewritten `observations.csv` and the staged trajectory. The refusal then destroyed part
+        # of the run it was complaining about.
+        #
+        # Nothing here writes. It reads the record, checks it against the series on disk, and
+        # raises before the first `_truncate_csv` below.
+        if cv_definition is not None and int(schedule.get("cv_interval_steps") or 0):
+            _validate_cv_prefix(
+                directory / CV_CSV, state_of_path.get("cv_prefix") or {},
+                definition=cv_definition,
+                columns=list(CV_COLUMNS) + list(cv_definition.names),
+                index=index, frame=frame,
+                interval=int(schedule["cv_interval_steps"]))
         _truncate_csv(directory / OBSERVATIONS_CSV, rows_emitted, OBSERVATION_COLUMNS)
         _truncate_csv(directory / STATE_CSV, state_rows_emitted, STATE_COLUMNS)
         log(f"  path {index:4d}: resuming at step {updates_done * interval} of "
@@ -1745,10 +1764,8 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         committed_prefix = CommittedPrefix()
         if state_of_path:
             entry = state_of_path.get("cv_prefix") or {}
-            _validate_cv_prefix(
-                directory / CV_CSV, entry, definition=cv_definition,
-                columns=list(CV_COLUMNS) + list(cv_definition.names),
-                index=index, frame=frame, interval=int(cv_every))
+            # Already validated above, before anything was truncated. Not repeated here: two
+            # validations of one record is two places for the rule to drift.
             # Rows AND the cost that produced them, as one object. A rows-only restore left a
             # resumed path whose series was right and whose cumulative counters had reset to this
             # segment's work -- and across two resumes that silently discards the middle one.
