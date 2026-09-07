@@ -452,6 +452,44 @@ def verify_manifest_entries(directory, record):
             occupancy[index] = mine
 
     problems.extend(_permutation_problems(occupancy, n_states))
+    problems.extend(_cost_problems(record, entries))
+    return problems
+
+
+def _cost_problems(record, entries):
+    """The stored cost, through the one strict parser rather than a reader of its own.
+
+    A ladder's aggregate claims to be the sum over its states, and the per-state records beside
+    it are what make that auditable. Neither was checked when a completed run was verified, so a
+    manifest could carry an aggregate that no set of per-state entries adds up to and still pass
+    every other check in this file.
+    """
+    from ..cv.cost import CVCostError, parse_aggregate_record, parse_cost_record
+
+    block = (record or {}).get("cost")
+    if block is None:
+        return []
+    problems: list[str] = []
+    rows_by_state = {}
+    for entry in entries:
+        index = entry.get("state_index")
+        columns = entry.get("columns") or []
+        n_cv = max(0, len(columns) - len(COLUMNS)) or None
+        rows_by_state[index] = (entry.get("rows"), n_cv)
+    for one in (block.get("per_state") or []):
+        index = one.get("state_index")
+        rows, n_cv = rows_by_state.get(index, (None, None))
+        try:
+            parse_cost_record(one, where=f"restart.json cost per_state state {index}",
+                              rows=rows, n_cv=n_cv)
+        except CVCostError as refusal:
+            problems.append(str(refusal))
+    try:
+        parse_aggregate_record(block, where="restart.json collective-variable cost",
+                               entries_key="per_state", identity_key="state_index",
+                               expected_identities=sorted(rows_by_state))
+    except CVCostError as refusal:
+        problems.append(str(refusal))
     return problems
 
 

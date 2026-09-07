@@ -245,23 +245,37 @@ def test_a_frame_reference_that_is_neither_empty_nor_an_index_is_refused(finishe
 
 
 def test_a_cumulative_cost_that_disagrees_with_the_rows_is_refused(finished, tmp_path):
-    """The counters are pinned to the row count; a resume that lost a segment shows up here."""
+    """The counters are pinned to the row count; a resume that lost a segment shows up here.
+
+    BOTH scopes are lowered together. Lowering only the cumulative also violates
+    `segment <= cumulative`, which the shared parser refuses first -- correctly, but then this
+    case would be proving that rule rather than the row-count rule it is named for.
+    """
     directory = _copy(finished, tmp_path)
     marker = directory / "path_0000" / "completed.json"
     record = json.loads(marker.read_text(encoding="utf-8"))
-    record["collective_variable_cost"]["cumulative"]["cv_observations"] = EXPECTED_ROWS - 1
+    cost = record["collective_variable_cost"]
+    for scope in ("segment", "cumulative"):
+        cost[scope]["cv_observations"] = EXPECTED_ROWS - 1
+        cost[scope]["cv_evaluations"] = (EXPECTED_ROWS - 1) * N_CV
     marker.write_text(json.dumps(record), encoding="utf-8")
-    _expect_refusal(directory, "observation(s) and the series holds")
+    _expect_refusal(directory, "verified series holds")
 
 
 def test_a_scalar_count_that_is_not_rows_times_the_definition_is_refused(finished, tmp_path):
-    """The misnomer this whole change exists to remove: calls counted as scalar evaluations."""
+    """The misnomer this whole change exists to remove: calls counted as scalar evaluations.
+
+    Both scopes again, so the only rule broken is `cumulative evaluations == rows * N_cv`.
+    `EXPECTED_ROWS` is what a reporter-CALL counter would have stored.
+    """
     directory = _copy(finished, tmp_path)
     marker = directory / "path_0000" / "completed.json"
     record = json.loads(marker.read_text(encoding="utf-8"))
-    record["collective_variable_cost"]["cumulative"]["cv_evaluations"] = EXPECTED_ROWS
+    cost = record["collective_variable_cost"]
+    for scope in ("segment", "cumulative"):
+        cost[scope]["cv_evaluations"] = EXPECTED_ROWS
     marker.write_text(json.dumps(record), encoding="utf-8")
-    _expect_refusal(directory, "scalar evaluation(s)")
+    _expect_refusal(directory, "collective variable")
 
 
 def test_a_crash_before_finalization_leaves_no_marker_and_resumes_to_the_reference(

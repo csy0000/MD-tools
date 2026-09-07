@@ -69,8 +69,11 @@ def file_digest(path) -> str | None:
 
 def record(path, *, rows: int, sidecar=None, definition=None, cost=None) -> dict:
     """What a checkpoint generation stores about one CV series, for a later continuation."""
+    from .cost import require_count
+
+    require_count(rows, where=f"{Path(path).name} prefix", scope="prefix", field="rows")
     entry = {
-        "rows": int(rows),
+        "rows": rows,
         "prefix_sha256": prefix_digest(path, rows),
         "sidecar_sha256": file_digest(sidecar) if sidecar else None,
     }
@@ -100,7 +103,23 @@ def validate(path, entry, *, sidecar=None, definition=None, expect_columns=None,
             f"established and a continuation would either duplicate or silently keep edited rows. "
             f"Start a fresh run with --overwrite.")
 
-    rows = int(entry["rows"])
+    from .cost import CVCostError, parse_cost_record, require_count
+
+    where = f"{Path(path).name} committed prefix"
+    rows = require_count(entry["rows"], where=where, scope="prefix", field="rows")
+
+    # THE STORED COST, validated here rather than by each protocol's own reader. This is the one
+    # place cMD, the ladder and AIS all pass through to decide whether a committed prefix may be
+    # appended to, so a record that would be refused by one reader and accepted by another is
+    # refused by all of them here. The row count is the VERIFIED one -- counted from the file
+    # above, not read out of the record being checked.
+    if entry.get("cost") is not None:
+        try:
+            parse_cost_record(entry["cost"], where=where, rows=rows,
+                              n_cv=len(definition.names) if definition is not None else None)
+        except CVCostError as refusal:
+            raise CVPrefixError(str(refusal)) from None
+
     actual = prefix_digest(path, rows)          # raises if the file is shorter than committed
     if actual != entry["prefix_sha256"]:
         raise CVPrefixError(

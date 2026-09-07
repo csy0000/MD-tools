@@ -165,6 +165,9 @@ WORK_COLUMNS = ("path_id", "source_frame", "observation_index", "switch_step",
 #: silent.
 HS_TABLE = "AIS_hs.csv"
 
+#: What a per-path contribution may say about how this invocation met that path.
+DISPOSITIONS = ("already_complete", "resumed_and_completed", "fresh_and_completed")
+
 #: One row per path: the summary a reader wants when the question is about the work DISTRIBUTION
 #: rather than about any individual path's trajectory through it.
 WORK_SUMMARY = "AIS_paths.csv"
@@ -327,7 +330,83 @@ def _summed_counters(completed) -> dict[str, Any]:
     return total.record()
 
 
-def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
+def aggregate_cv_cost(cv_costs, *, contributions=None, invocation_id: str | None = None):
+    """The global CV cost for one AIS invocation. Pure: dictionaries in, one record out.
+
+    CUMULATIVE is a sum over verified completed paths, in path order, so it is deterministic
+    across worker counts and across resume -- it describes the campaign, not this process.
+
+    SEGMENT is not, and that is the correction. A path manifest's `segment` describes the
+    invocation that COMPLETED that path, which is not necessarily the invocation assembling this
+    table: a campaign that resumes after some paths finished, or that is merely re-entered,
+    would otherwise report work from a previous process as though it had just happened. Summing
+    the stored segments made the current segment wrong in exactly the cases resume exists for,
+    and wrong in the flattering direction -- it reported more work than was done.
+
+    So the segment comes from EXPLICIT per-path contributions, gathered from every rank through
+    the shared coordination authority. A path already complete when this invocation started
+    contributes exactly zero: verifying it, hashing its outputs, reading its CSV and skipping it
+    are not collective-variable evaluation.
+
+    Kept separate from the table writer so it can be tested as arithmetic, without a directory
+    of trajectories standing between the inputs and the assertion.
+    """
+    from ..cv.cost import CVCost, cost_record, parse_cost_record
+
+    contributed = dict(contributions or {})
+    segment = cumulative_cost = CVCost()
+    per_path = []
+    for path_id in sorted(cv_costs):
+        record = cv_costs[path_id]
+        one = parse_cost_record(record, where=f"path {path_id} completion manifest")
+        cumulative_cost = cumulative_cost.plus(one.cumulative)
+
+        if contributions is None:
+            # No coordination result supplied (a single-path invocation, or a caller not
+            # assembling a campaign). Report no segment rather than inventing one from history.
+            mine, disposition = CVCost(), "unknown"
+        else:
+            if path_id not in contributed:
+                raise SystemExit(
+                    f"path {path_id} has a verified completion manifest and no contribution from "
+                    f"this invocation. The global segment is assembled from explicit per-path "
+                    f"contributions gathered across ranks, so a missing one would be silently "
+                    f"read as zero work; refusing to write a table that under-reports it.")
+            entry = contributed.pop(path_id)
+            disposition = entry["disposition"]
+            if disposition not in DISPOSITIONS:
+                raise SystemExit(
+                    f"path {path_id} reports disposition {disposition!r}; a contribution says "
+                    f"one of {list(DISPOSITIONS)}")
+            mine = parse_cost_record(entry["cost"],
+                                     where=f"path {path_id} invocation contribution").segment
+        segment = segment.plus(mine)
+
+        one_record = cost_record(mine, one.cumulative, rows=record.get("cv_rows"))
+        one_record["path_index"] = path_id
+        one_record["disposition"] = disposition
+        per_path.append(one_record)
+
+    if contributions is not None and contributed:
+        raise SystemExit(
+            f"this invocation reported contributions for path(s) {sorted(contributed)} that have "
+            f"no verified completion manifest. Refusing to write a table crediting work to paths "
+            f"the run cannot show finished.")
+
+    if not per_path:
+        return None
+    cv_cost = cost_record(segment, cumulative_cost,
+                          rows=sum(r["cv_rows"] for r in per_path
+                                   if r.get("cv_rows") is not None))
+    cv_cost["aggregation"] = "sum over completed paths"
+    if invocation_id is not None:
+        cv_cost["invocation_id"] = invocation_id
+    cv_cost["per_path"] = per_path
+    return cv_cost
+
+
+def write_work_table(out: Path, chosen: list[int], *, contributions=None,
+                     invocation_id: str | None = None) -> dict[str, Any]:
     """Assemble the global work table and the per-path summary from what the paths wrote.
 
     Read from files rather than gathered over MPI, so an interrupted campaign still produces a
@@ -408,25 +487,8 @@ def write_work_table(out: Path, chosen: list[int]) -> dict[str, Any]:
     hs_rows.sort(key=lambda row: (row["path_id"], int(row["switch_step"])))
     cv_rows.sort(key=lambda row: (int(row["path_index"]), int(row["protocol_step"])))
 
-    # THE GLOBAL COST, summed over verified paths in path order. Deterministic across MPI worker
-    # counts and across resume for the same reason the tables are: it is assembled from the
-    # committed per-path manifests on disk, in path order, not from whatever this process happened
-    # to run. The per-path records are retained so the total is auditable.
-    from ..cv.cost import CVCost, cost_record
-
-    segment = cumulative_cost = CVCost()
-    per_path = []
-    for path_id in sorted(cv_costs):
-        record = cv_costs[path_id]
-        segment = segment.plus(CVCost.from_record(record.get("segment") or {}))
-        cumulative_cost = cumulative_cost.plus(CVCost.from_record(record.get("cumulative") or {}))
-        per_path.append({"path_index": path_id, **record})
-    cv_cost = None
-    if per_path:
-        cv_cost = cost_record(segment, cumulative_cost,
-                              rows=sum(int(r.get("cv_rows", 0)) for r in per_path))
-        cv_cost["aggregation"] = "sum over completed paths"
-        cv_cost["per_path"] = per_path
+    cv_cost = aggregate_cv_cost(cv_costs, contributions=contributions,
+                                invocation_id=invocation_id)
 
     # ATOMIC. These tables are rewritten from scratch every time rank 0 assembles them, and
     # opening the real path with "w" truncates it first: a reader arriving during the rewrite --
@@ -1231,26 +1293,17 @@ def _verify_cv_series(path, record, *, schedule, index, frame, marker):
     # variables the two are pinned to the row count and to each other. A cumulative counter that
     # disagrees means a resume lost or double-counted a segment, and that is exactly the kind of
     # damage that leaves every row on disk looking perfect.
-    cost = record.get("collective_variable_cost") or {}
-    cumulative = cost.get("cumulative") or {}
-    if cumulative:
-        observations = cumulative.get("cv_observations")
-        evaluations = cumulative.get("cv_evaluations")
-        if int(observations or 0) != expected_rows:
-            raise SystemExit(
-                f"{marker}: the cumulative CV cost records {observations} observation(s) and the "
-                f"series holds {expected_rows} row(s). A segment was lost or counted twice.")
-        if int(evaluations or 0) != expected_rows * n_cv:
-            raise SystemExit(
-                f"{marker}: the cumulative CV cost records {evaluations} scalar evaluation(s) "
-                f"and {expected_rows} observation(s) of {n_cv} collective variable(s) is "
-                f"{expected_rows * n_cv}.")
-        for scope in ("segment", "cumulative"):
-            for field, value in (cost.get(scope) or {}).items():
-                if isinstance(value, (int, float)) and (value != value or value < 0):
-                    raise SystemExit(
-                        f"{marker}: the {scope} CV cost reports {field} = {value!r}, and every "
-                        f"counter is finite and non-negative.")
+    # THE STORED COST, through the one strict parser. This used to coerce with `int(...)` before
+    # comparing, which accepted 2.7 as 2 and "5" as 5, and it treated a missing cumulative block
+    # as optional -- so a path with no cost record at all verified. A CV-enabled path has a cost;
+    # its absence is a malformed record, not a permission.
+    from ..cv.cost import CVCostError, parse_cost_record
+
+    try:
+        parse_cost_record(record.get("collective_variable_cost"), where=str(marker),
+                          rows=expected_rows, n_cv=n_cv)
+    except CVCostError as refusal:
+        raise SystemExit(str(refusal)) from None
 
 
 def _cv_prefix_record(series, *, index, frame):
@@ -1283,8 +1336,16 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                  taus, switcher, simulation_inputs: dict[str, Any], dynamics: dict[str, Any],
                  ais: dict[str, Any], beta: float, temperature: float, rank: int,
                  resume: bool, fingerprint: str, log,
-                 cv_definition=None) -> dict[str, Any] | None:
-    """Run (or finish) one switching path. Returns its completion record, or None if it failed."""
+                 cv_definition=None, contributions=None) -> dict[str, Any] | None:
+    """Run (or finish) one switching path. Returns its completion record, or None if it failed.
+
+    `contributions`, when supplied, is filled in with what THIS invocation did for this path:
+    its disposition and the collective-variable cost performed now. It is deliberately an
+    out-parameter rather than part of the returned record, because the returned record is what
+    gets written to `completed.json` and this is not a property of the path -- it is a property
+    of the invocation looking at it. Two runs of the same finished path must produce the same
+    manifest and different contributions.
+    """
     import os
 
     import mdtraj
@@ -1319,6 +1380,17 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                                       fingerprint=fingerprint, index=index, frame=chosen[index],
                                       trajectory_name=trajectory_name, schedule=schedule)
         log(f"  path {index:4d}: already completed and verified; not rerun and never appended to")
+        if contributions is not None:
+            # EXACTLY ZERO. Verification, hashing, CSV reading and skipping are not CV
+            # evaluation, and the path's stored segment belongs to whichever invocation finished
+            # it -- reusing that here is the defect this accounting exists to remove.
+            from ..cv.cost import CVCost, cost_record
+
+            zero = CVCost()
+            contributions[index] = {
+                "disposition": "already_complete",
+                "cost": cost_record(zero, zero),
+            }
         return record
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -1949,6 +2021,20 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
     fault("after-checkpoint-cleanup")
     log(f"  path {index:4d}: frame {frame}, {rows_emitted} observations, {frames_emitted} "
         f"frames, W = {cumulative:.4f} kJ/mol (reduced {beta * cumulative:.4f})")
+    if contributions is not None:
+        # This path finished HERE, so the work its manifest records as this segment is the work
+        # this invocation performed. `resumed_and_completed` and `fresh_and_completed` differ in
+        # whether a committed prefix was carried in, which is exactly what makes the segment a
+        # strict subset of the cumulative in the first case and equal to it in the second.
+        from ..cv.cost import CVCost, cost_record
+
+        performed = (cv_series.segment_cost() if cv_series is not None else CVCost())
+        carried = (cv_series.cumulative_cost() if cv_series is not None else CVCost())
+        contributions[index] = {
+            "disposition": ("resumed_and_completed" if state_of_path
+                            else "fresh_and_completed"),
+            "cost": cost_record(performed, carried),
+        }
     return completion
 
 
@@ -2307,6 +2393,20 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             log.field("mpi", f"rank {rank} of {size}: {len(wanted)} of {len(chosen)} path(s)")
             log.update(mpi={"rank": rank, "size": size, "paths": list(wanted)})
 
+        # ONE INVOCATION ID for this launch, drawn on rank 0 and broadcast, so every rank labels
+        # the same launch the same way. It is execution metadata and nothing else: it is not in
+        # the scientific fingerprint, not in any seed, not in the source-frame selection, not in
+        # a filename, and not in a CV or work value. A campaign resumed tomorrow is the same
+        # experiment with a different invocation id, and that must remain checkable.
+        import uuid
+
+        invocation_id = coordination.bcast(uuid.uuid4().hex if rank == 0 else None)
+        #: path index -> what THIS invocation did for that path. Filled by `run_one_path`, then
+        #: gathered across ranks below through the same authority that owns every other
+        #: collective, because a rank-local dict is exactly the thing a plural launch must not
+        #: assemble privately.
+        contributions: dict[int, dict] = {}
+
         sim_out.heading("Schedule")
         sim_out.field("tau", f"{ais['tau_start']} -> {ais['tau_end']} (linear)")
         sim_out.field("switching", f"{schedule['switching_steps']} steps "
@@ -2333,6 +2433,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         completed: list[dict[str, Any]] = []
         for index in wanted:
             record = run_one_path(
+                contributions=contributions,
                 index=index, chosen=chosen, out=out, schedule=schedule, taus=taus,
                 switcher=switcher, simulation_inputs=dict(
                     topology=pdb.topology, source_path=source_path, mdtraj_top=top,
@@ -2362,10 +2463,24 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         # distribution is the result of the method, and it has to be readable as a single object
         # rather than as N per-rank fragments the reader is left to concatenate correctly.
         coordination.barrier()
+        # THE CONTRIBUTIONS, gathered through the coordination authority rather than inferred on
+        # rank 0 from filenames or a glob. Every selected path is owned by exactly one rank, so a
+        # duplicate here means two ranks believed they owned one path -- which is the failure a
+        # plural launch must never resolve silently, because both would have written it.
+        gathered: dict[int, dict] = {}
+        for piece in coordination.allgather(contributions):
+            for path_index, entry in (piece or {}).items():
+                if path_index in gathered:
+                    coordination.fail(
+                        f"two ranks reported work for AIS path {path_index}; path ownership is "
+                        f"exclusive and a duplicate means the world was divided twice")
+                gathered[path_index] = entry
+
         outputs = {"selected_source_frames": file_facts(out / "selected_source_frames.csv",
                                                         relative_to=out)}
         if rank == 0 and not args.paths:
-            table = write_work_table(out, chosen)
+            table = write_work_table(out, chosen, contributions=gathered,
+                                     invocation_id=invocation_id)
             log.field("work table", f"{table['rows']} row(s) from {table['paths']} of "
                                     f"{table['requested']} path(s)")
             log.field("HS table", f"{table['hs_rows']} frame-aligned row(s) in {HS_TABLE}")
@@ -2382,6 +2497,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                 outputs["collective_variables"] = file_facts(cv_table, relative_to=out)
             if table.get("collective_variable_cost"):
                 log.update(collective_variable_cost=table["collective_variable_cost"])
+                log.field("invocation", invocation_id)
                 total = table["collective_variable_cost"]["cumulative"]
                 log.field("CV cost", f"{total['cv_evaluations']} scalar evaluation(s) over "
                                      f"{total['cv_observations']} observation(s), summed over "
