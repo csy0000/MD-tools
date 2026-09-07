@@ -75,7 +75,9 @@ part of the run it was complaining about. Validation now precedes the first trun
 
 ## Test lanes, in the required order
 
-All run on `IMPLEMENTATION_SHA`, on the hardware named below. Wall times are from these runs.
+All run on `c22b757`, on the hardware named below. Wall times are from these runs. The
+commit that adds this document is `c22b757` plus these results and nothing else; `git diff`
+between the two touches no code and no test, and CI is green on both.
 
 | # | lane | command | result | wall |
 |---:|---|---|---|---:|
@@ -88,17 +90,17 @@ All run on `IMPLEMENTATION_SHA`, on the hardware named below. Wall times are fro
 | 7 | all dedicated CUDA CV tests | `pytest tests/test_cv_cuda_lanes.py` | **10 passed** | 113.7 s |
 | 8 | all REST2/rREST2/AIS MPI+CUDA tests | see the breakdown below | **43 passed** | 397.2 s |
 | 9 | complete fast/non-slow suite | `pytest -q -m "not slow"` | **1355 passed**, 426 deselected | 170.2 s |
-| 10 | complete slow/GPU suite | `pytest -q -m "slow"` | SLOW_RESULT | SLOW_WALL |
-| 11 | wheel build and clean install outside the checkout | see below | WHEEL_RESULT | — |
-| 12 | installed-wheel CUDA AIS subset/resume and no-op re-entry | see below | WHEEL_AIS_RESULT | — |
-| 13 | GitHub Actions on the exact implementation SHA | non-CUDA hosted CI | CI_RESULT | — |
+| 10 | complete slow/GPU suite | `pytest -q -m "slow"` | **425 passed**, 1 skipped | 2472.0 s (41:12) |
+| 11 | wheel build and clean install outside the checkout | `python -m build --wheel`, then `pip install` into a fresh venv | built and imported | — |
+| 12 | installed-wheel CUDA AIS subset/resume and no-op re-entry | generated tree run from the installed wheel | subset, resume and re-entry all rc=0; **segment exactly 0** on re-entry | — |
+| 13 | GitHub Actions on the exact implementation SHA | hosted, non-CUDA | **success** — [run 34094228043](https://github.com/csy0000/MD-tools/actions/runs/34094228043) | — |
 
 ### Lane 8, itemised — the count correction §6 asked for
 
 The previous document reported a combined MPI+CUDA lane of 42 while its itemised REST2/rREST2/AIS
 rows totalled 29. Both numbers were stale in different ways: the combined figure predated the
 rREST2 fail-closed cases and the AIS rescheduling case, and the itemised rows had never been
-re-run after those were added. Current, all on `IMPLEMENTATION_SHA`:
+re-run after those were added. Current, all on `c22b757`:
 
 | file | method | tests | wall |
 |---|---|---:|---:|
@@ -124,8 +126,8 @@ document.
 ## Environment
 
 * Python 3.12.14, OpenMM 8.6.0.dev-c6173db, Linux 6.8.0-124-generic, x86-64
-* Wheel: `WHEEL_NAME`, sha256 `WHEEL_SHA`
-* Installed import origin: `IMPORT_ORIGIN`
+* Wheel: `md_tools-0.5.0.dev0-py3-none-any.whl`, sha256 `1b4bc1c2a9baed07e42d7c4080cbe15d612f5bc757a93cb1f163a332613e07c9`
+* Installed import origin: `…/env2/lib/python3.12/site-packages/md_tools/__init__.py` (outside the checkout)
 
 ## Earlier evidence, cross-linked
 
@@ -145,4 +147,36 @@ document.
 
 Recorded here rather than left implicit; none is a known test failure.
 
-LIMITATIONS_BLOCK
+* **GitHub-hosted CI has no CUDA runner.** Lane 13 proves packaging and interface only. Every
+  GPU and MPI claim in this document rests on the local hardware named above, and is labelled as
+  such rather than folded into a single "CI is green".
+* **The CPU platform is reproducible only at a fixed thread count.** Tests that compare
+  trajectory-dependent values pin `OPENMM_CPU_THREADS=1`; production pins nothing, deliberately.
+  Lane 10 caught a file that had not pinned it — see below. Neighbouring CPU files that compare
+  only grids and structure remain unpinned, correctly; a future value comparison added to one of
+  them would need the same pin.
+* **Schema-version-1 records are refused, not auto-migrated.** `migrate_schema_1` exists and is
+  tested, but must be called explicitly with the verified row count and CV definition, and stamps
+  its output as reconstructed. Nothing converts a legacy record silently.
+* **A single-path invocation writes no global table.** `--paths N` selects a subset, so no
+  campaign aggregate — and therefore no aggregate segment — is recorded for it. That is by
+  design: a subset is not a campaign. The per-path manifest still records its own cost.
+* **Aggregate wall-time comparison carries a microsecond epsilon per entry.** Stored durations
+  are rounded to six decimal places, so a re-summation can differ in the last place. Integer
+  counters are compared exactly; only seconds carry the tolerance, and the constant is named
+  `SECONDS_EPSILON` rather than being inlined.
+
+## One lane failed and was diagnosed rather than adjusted
+
+The first run of lane 10 failed `test_rrest2_pre_refresh_cv.py::
+test_the_row_holds_the_propagated_configuration_not_the_reservoir_sample[stored]` with a
+separation of 0.589 degrees against a threshold of 1.0 — and the same test passed in isolation.
+
+That difference was the diagnosis. The file's subprocesses did not pin `OPENMM_CPU_THREADS`, so
+its trajectory depended on machine load; inside a loaded full-suite run the walker drifted 0.589
+degrees, and run deterministically the same four events separate by 159.9, 168.3, 122.8 and 97.7
+degrees. The threshold was never the problem and was not touched: the pool is pinned, and the
+margins were measured afterwards to confirm the fix is real rather than lucky.
+
+This was latent flakiness that the new tests exposed by making the suite busier, not a regression
+from this task. Retry history for every other lane: none failed.
