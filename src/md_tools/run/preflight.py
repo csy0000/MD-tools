@@ -1200,6 +1200,22 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
 
         collectively(coordination, _cadence, what="the collective-variable cadence")
 
+    # WHAT THIS INVOCATION INTENDS TO CONTINUE, validated here -- before `-odir`, the `.out`, the
+    # `.log`, the run-state record or `resolved.config` is created or replaced. Every protocol
+    # used to check its committed CV records only once those files were already open, so a
+    # refused continuation had overwritten the prior run's machine-readable provenance and
+    # completion status with a description of an invocation that never started.
+    if out_dir is not None and cv_definition is not None:
+        from .continuation import ContinuationError, validate_ladder_continuation
+
+        try:
+            validate_ladder_continuation(
+                out_dir, definition=cv_definition, taus=rungs_tau,
+                interval_steps=_cv_interval_of(ladder),
+                checkpoint_path=(checkpoint or Path(out_dir) / f"{protocol}_checkpoint.nc"))
+        except ContinuationError as refusal:
+            raise PreflightError(str(refusal)) from None
+
     return LadderPreflight(coordination=coordination, machine=machine,
                            acceleration=acceleration, device_index=index,
                            device_policy=str(machine.get("device_policy") or "local_rank"),
@@ -1213,6 +1229,15 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                            reservoir_declaration=declaration, reservoir_digest=digest,
                            reservoir_source=source_facts, cv_definition=cv_definition,
                            notes={"solute_document": solute_record} if solute_record else {})
+
+
+def _cv_interval_of(document) -> int:
+    """The configured CV cadence for a resolved protocol document, or 0 when reporting is off."""
+    block = (document or {}).get("collective_variables") or {}
+    try:
+        return int(block.get("interval_steps") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, checkpoint,
@@ -1366,6 +1391,22 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
 
     prepared.pop("_topology_facts")
     prepared.pop("_system_facts")
+
+    # EVERY SELECTED PATH, before work begins on any of them -- and before `-odir`, the `.out`,
+    # the `.log` or `resolved.config` is created or replaced. Validating lazily meant an invalid
+    # path 3 was discovered once path 0 had already been rewritten, and a refusal had by then
+    # replaced the prior campaign's provenance with a description of a run that never started.
+    if out_dir is not None and prepared.get("cv_definition") is not None:
+        from .continuation import ContinuationError, validate_ais_continuation
+
+        try:
+            validate_ais_continuation(
+                out_dir, definition=prepared["cv_definition"], schedule=prepared["schedule"],
+                chosen=list(prepared["chosen_frames"]),
+                selected=range(len(prepared["chosen_frames"])))
+        except ContinuationError as refusal:
+            raise PreflightError(str(refusal)) from None
+
     return AISPreflight(coordination=coordination, machine=machine, acceleration=acceleration,
                         device_index=index,
                         device_policy=str(machine.get("device_policy") or "local_rank"),

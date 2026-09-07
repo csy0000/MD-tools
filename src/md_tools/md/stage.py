@@ -345,6 +345,23 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         print(f"{refusal}", file=sys.stderr)
         return 2
 
+    # WHAT THIS INVOCATION INTENDS TO CONTINUE, validated here -- while the only thing that has
+    # happened is reading. The committed CV prefix used to be checked deep inside the resume
+    # branch, some two hundred lines after `LogWriter` had already replaced the prior run's
+    # machine record and its `.out`, so a refusal overwrote the authoritative account of a run it
+    # never started. Completion is read from a machine record; that is exactly why a rejected
+    # attempt may not become one. The refusal goes to stderr, outside the protected tree.
+    try:
+        from ..run.continuation import ContinuationError, validate_stage_continuation
+
+        validate_stage_continuation(
+            Path(args.out_dir) if getattr(args, "out_dir", None) else log_path.parent,
+            stage=stage, definition=getattr(checked, "cv_definition", None) or _stage_definition(
+                stage, checked))
+    except ContinuationError as refusal:
+        print(f"{name}: {refusal}", file=sys.stderr)
+        return 2
+
     if getattr(args, "resume", False):
         # NOT accepted-and-inert any more. A flag that is taken and does nothing is a flag whose
         # absence and presence are indistinguishable, so a person who passes it believes they
@@ -992,6 +1009,25 @@ def _checkpoint_identity(stage, name, seed, acceleration, timestep_fs) -> dict[s
     return {"stage": name, "seed": int(seed), "timestep_fs": float(timestep_fs),
             "ensemble": stage.get("ensemble"), "platform": acceleration.name,
             "precision": (acceleration.properties or {}).get("Precision")}
+
+
+def _stage_definition(stage, checked):
+    """This stage's CV definition, resolved read-only for the continuation check.
+
+    Returns None when the stage reports no collective variables -- which is a legitimate
+    configuration and not something to refuse.
+    """
+    block = (stage or {}).get("collective_variables") or {}
+    path = block.get("file")
+    if not path:
+        return None
+    try:
+        from ..cv import load_cv_definition
+
+        topology = getattr(getattr(checked, "loaded", None), "pdb", None)
+        return load_cv_definition(path, topology=getattr(topology, "topology", None))
+    except Exception:      # noqa: BLE001 - the ordinary path reports a bad definition far better
+        return None
 
 
 def _validate_cv_prefix(entry, *, stage, trajectory, fingerprint):

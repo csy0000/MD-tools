@@ -62,39 +62,48 @@ collective_variables:
 """
 
 
-#: A refusal reports itself, and these are where it reports. `.out` is the human record, `.log`
-#: the machine one, `.runstate.json` the status field a later reader consults to learn the run
-#: failed and why. A tool that refused while leaving no trace of the refusal would satisfy a
-#: byte-identical assertion by being less useful, and CLAUDE.md's "completion is read from a
-#: machine record" depends on these being written.
+#: NO EXEMPTIONS. An earlier version of this file excused `.out`, `.log` and `runstate.json` on
+#: the grounds that a refusal must be able to report itself. That was the wrong boundary: those
+#: files are the prior run's machine-readable provenance and completion status, and a rejected
+#: continuation that overwrites them has replaced the authoritative record of a run it never
+#: started. "Completion is read from a machine record" is exactly why they may not move.
 #:
-#: Everything else is a SCIENTIFIC output -- series, tables, trajectories, checkpoints, manifests
-#: -- and none of it may move. That is the distinction these tests are actually about: a refusal
-#: must not damage the run it declined to continue.
-DIAGNOSTIC_SUFFIXES = (".out", ".log")
-DIAGNOSTIC_NAMES = ("runstate.json",)
-
-
-def _is_diagnostic(relative: str) -> bool:
-    name = Path(relative).name
-    return (Path(relative).suffix in DIAGNOSTIC_SUFFIXES
-            or any(name.endswith(tail) for tail in DIAGNOSTIC_NAMES))
+#: The refusal reports itself on stderr, captured by the test OUTSIDE the protected tree. Once
+#: preflight succeeds and execution begins, normal runtime logging resumes -- that is a different
+#: phase, and the accepted-invocation tests cover it.
+#:
+#: Only filesystem ACCESS times are ignored: reading a file to validate it updates atime, and
+#: turning that into a failure would make validation itself look like mutation.
 
 
 def _tree(root: Path) -> dict:
-    """Every byte under the run root, by digest."""
-    return {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in sorted(root.rglob("*")) if path.is_file()}
+    """Every file, directory entry and symlink target under the protected tree.
+
+    Digest for regular files; the target for symlinks; a marker for directories -- so a refusal
+    that deletes and recreates identical bytes, or replaces a file with a link, is still caught.
+    `st_ino`/`st_mtime_ns` ride along so a rewrite of identical content is visible too.
+    """
+    state = {}
+    for path in sorted(root.rglob("*")):
+        key = str(path.relative_to(root))
+        if path.is_symlink():
+            state[key] = ("symlink", os.readlink(path))
+        elif path.is_dir():
+            state[key] = ("dir", None)
+        else:
+            stat = path.stat()
+            state[key] = ("file", hashlib.sha256(path.read_bytes()).hexdigest(),
+                          stat.st_ino, stat.st_mtime_ns)
+    return state
 
 
 def _assert_unchanged(root: Path, before: dict, what: str):
-    """No scientific output moved. The invocation's own records are allowed to say it refused."""
+    """Nothing under the protected tree moved. Not one byte, entry, link or inode."""
     after = _tree(root)
     changed = sorted(key for key in set(before) | set(after)
                      if before.get(key) != after.get(key))
-    scientific = [key for key in changed if not _is_diagnostic(key)]
-    assert not scientific, (
-        f"{what} modified scientific output before refusing: {scientific}")
+    assert not changed, (
+        f"{what} modified the protected output tree before refusing: {changed}")
 
 
 def _environment(root: Path, **extra):
