@@ -137,14 +137,36 @@ the test and the assertion, not an import error.
   instruction's limited exemption. They are not CUDA evidence and are not counted as such. Lanes
   3–6, 8 and 9 ran on real devices; lanes 4–6 and the lane-9 refusals under real `mpirun`.
 
+## Open item: one unexplained failure, not a limitation
+
+Filed separately and deliberately. An accepted trade-off and an unexplained failure are different
+things, and this document first recorded this one under "Limitations", which was wrong: the
+instruction says not to leave a known failure and call it a limitation. It is restated here as
+what it is -- open, and unexplained.
+
+**What happened.** During a batch in which lanes 4, 5 and 6 ran back to back,
+`tests/test_cv_mpi_cuda_ais.py` reported `1 failed, 10 passed` once. The failing node ID and its
+traceback were lost to an output filter before being written down, which the instruction requires
+preserving. Without them the failure cannot be classified, and no fix can be claimed.
+
+**What was then done.** Thirteen full-file runs of that file, each with complete `-rA` output
+retained: three immediately afterwards with all devices visible, and ten more pinned to the
+otherwise idle devices 5-8. All thirteen report `11 passed`. The combined lane 6 invocation
+(44 passed) and the complete slow/gpu suite (427 passed) also pass.
+
+**What that establishes, and what it does not.** It establishes that the failure is not
+systematic and does not reproduce under either device configuration. It does NOT establish a
+cause, and it is not a fix. The most plausible hypothesis -- unproven, and recorded as a
+hypothesis only -- is transient resource contention: at the time, `CUDA_VISIBLE_DEVICES` was
+unset, so a four-rank launch could round-robin onto devices carrying unrelated jobs at 100%
+utilisation, and a concurrent run was killed by a harness timeout shortly afterwards. Nothing in
+the retained evidence confirms that.
+
+**What would close it.** A recurrence with its diagnostic captured. Every run of this file now
+retains full output, so the next occurrence will be classifiable.
+
 ## Limitations
 
-* **One undiagnosed failure.** During a batch where several GPU lanes ran back to back and a
-  concurrent combined run was killed by a shell timeout, `tests/test_cv_mpi_cuda_ais.py` reported
-  `1 failed, 10 passed` once. The diagnostic was lost to an output filter before it was recorded,
-  which the instruction requires preserving, so it cannot be classified. Three subsequent
-  full-file runs and the combined lane all pass. It is recorded here rather than treated as
-  resolved.
 * **GitHub CI has no CUDA runner.** Lane 10 proves packaging and interface only; every GPU and
   MPI claim rests on the local hardware named above.
 * **The CPU platform is reproducible only at a fixed thread count.** Tests comparing
