@@ -3,7 +3,7 @@
 **Date:** 2026-09-07
 **Project:** `../RGDfV-REST2/`, a sibling of the MD-tools checkout (here
 `/path/to/scheme/RGDfV-REST2`)
-**Engine pin used:** `8e95a589aebddb945fe160764dc34999fddade75`
+**Engine pin used:** `8e95a589aebddb945fe160764dc34999fddade75` (the build and the ladder both ran on this commit; later commits on `dev` touch only documentation and a test)
 **Engine pin requested:** `443fc736f3a8f426414e244a50a1a438d2d8a497` — changed by two blockers,
 both fixed here and both with focused regression tests.
 
