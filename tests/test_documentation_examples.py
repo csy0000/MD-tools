@@ -124,9 +124,22 @@ def test_no_internal_documentation_link_is_dangling():
     """A link to a page that was consolidated away is how a reader ends up in Git history."""
     import re
 
+    def prose(text):
+        """The page with code removed, because a link inside code is not a link.
+
+        Chemistry notation collides with the link syntax exactly: a SMILES such as
+        `[C@@H](Cc2ccccc2)N` and a SMARTS such as `[CX3](=[OX1])[NX3]` both contain `](...)`,
+        and scanning the raw text reported them as links to pages named `Cc2ccccc2` and
+        `=[OX1]`. Fenced blocks first, then inline spans, so a fence containing backticks is
+        not half-stripped.
+        """
+        text = re.sub(r"^```.*?^```", "", text, flags=re.MULTILINE | re.DOTALL)
+        return re.sub(r"`[^`\n]*`", "", text)
+
     broken = []
     for page in sorted(DOCS.rglob("*.md")) + [DOCS.parent / "README.md"]:
-        for target in re.findall(r"\]\(([^)#:]+?)(?:#[^)]*)?\)", page.read_text(encoding="utf-8")):
+        for target in re.findall(r"\]\(([^)#:]+?)(?:#[^)]*)?\)",
+                                 prose(page.read_text(encoding="utf-8"))):
             if target.startswith(("http", "mailto")):
                 continue
             if not (page.parent / target).exists():
@@ -141,3 +154,25 @@ def test_the_retired_replica_exchange_page_is_gone_and_not_referenced():
         if page.parts[-2:] == ("release-notes", "v0.5.0.md"):
             continue                                   # history may name what was consolidated
         assert "replica-exchange.md" not in page.read_text(encoding="utf-8"), page
+
+
+def test_the_link_checker_ignores_code_and_still_catches_a_real_break(tmp_path):
+    """The stripping must not blind the check -- that would be a checker that passes always."""
+    import re
+
+    def prose(text):
+        text = re.sub(r"^```.*?^```", "", text, flags=re.MULTILINE | re.DOTALL)
+        return re.sub(r"`[^`\n]*`", "", text)
+
+    page = (
+        "See [the contract](data-contract.md).\n\n"
+        "```\n"
+        "CC(C)[C@@H]1NC(=O)[C@@H](Cc2ccccc2)NC(=O)[C@H](CC(=O)[O-])N\n"
+        "```\n\n"
+        "Inline SMARTS `[CX3](=[OX1])[NX3]` too.\n\n"
+        "And [a page that went away](retired-page.md).\n"
+    )
+    targets = re.findall(r"\]\(([^)#:]+?)(?:#[^)]*)?\)", prose(page))
+    assert "Cc2ccccc2" not in targets, "a SMILES inside a fence was read as a link"
+    assert "=[OX1]" not in targets, "a SMARTS inside inline code was read as a link"
+    assert targets == ["data-contract.md", "retired-page.md"], targets
