@@ -383,7 +383,8 @@ def md_run_main(argv: list[str] | None = None) -> int:
     try:
         validate_public_entry(run_input.resolved, args.out_dir, protocol=protocol,
                               stage=run_input.stage,
-                              config_directory=Path(run_input.path).parent)
+                              config_directory=Path(run_input.path).parent,
+                              overwrite=bool(args.overwrite))
     except ContinuationError as refusal:
         print(f"md-run: {refusal}", file=sys.stderr)
         return 2

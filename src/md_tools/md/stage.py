@@ -357,7 +357,8 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         validate_stage_continuation(
             Path(args.out_dir) if getattr(args, "out_dir", None) else log_path.parent,
             stage=stage, definition=getattr(checked, "cv_definition", None) or _stage_definition(
-                stage, checked))
+                stage, checked),
+            overwrite=bool(getattr(args, "overwrite", False)))
     except ContinuationError as refusal:
         print(f"{name}: {refusal}", file=sys.stderr)
         return 2

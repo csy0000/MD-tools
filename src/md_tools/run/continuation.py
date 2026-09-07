@@ -144,13 +144,17 @@ def validate_ais_continuation(out_dir, *, definition, schedule, chosen, selected
             + "\n  - ".join(problems))
 
 
-def validate_stage_continuation(destination, *, stage, definition) -> None:
+def validate_stage_continuation(destination, *, stage, definition, overwrite=False) -> None:
     """A cMD stage's committed prefix, before the stage opens its own records.
 
     The stage continues automatically from its committed generation, so this is the ordinary
     resume path and the point at which it would truncate its appendable streams.
+
+    `--overwrite` is not a continuation. It starts CLEAN and deliberately does not load the
+    generations it was asked to replace, so validating them would refuse a run precisely because
+    the data it is about to discard is unusable -- which is the reason the flag exists.
     """
-    if definition is None:
+    if definition is None or overwrite:
         return
     destination = Path(destination)
     if not destination.is_dir():
@@ -171,9 +175,15 @@ def validate_stage_continuation(destination, *, stage, definition) -> None:
         entry = state.get("cv_prefix")
         if entry is None:
             continue
-        series = sorted(destination.rglob("*.cv.csv"))
-        if not series:
+        # THIS checkpoint's own series. A chain has one checkpoint tree per stage --
+        # `<stem>.checkpoints` beside `<stem>.cv.csv` -- and taking the first `*.cv.csv` in the
+        # directory paired stage `min`'s checkpoint with the production stage's series, then
+        # refused the run over a disagreement between two different stages' files.
+        stem = checkpoints.name[: -len(".checkpoints")]
+        candidate = checkpoints.parent / f"{stem}.cv.csv"
+        if not candidate.is_file():
             continue
+        series = [candidate]
         # The series file directly. `_validate_cv_prefix` in the stage runtime derives it from
         # the TRAJECTORY path via `cv_csv_path`, so handing it the series produced a doubled
         # `.cv.cv.csv` and refused for a file that had never existed -- a real refusal for the
@@ -212,7 +222,7 @@ def _definition_from(resolved, *, config_directory=None):
 
 
 def validate_public_entry(resolved, out_dir, *, protocol, stage=None,
-                          config_directory=None) -> None:
+                          config_directory=None, overwrite=False) -> None:
     """The same read-only boundary, for `md-openmm md-run`.
 
     `md-run` creates `-odir` and writes `resolved.config` and the content-addressed definition
@@ -223,6 +233,8 @@ def validate_public_entry(resolved, out_dir, *, protocol, stage=None,
 
     Called before the directory is created and before anything is written.
     """
+    if overwrite:
+        return                                  # --overwrite starts clean; nothing to continue
     out_dir = Path(out_dir)
     if not out_dir.is_dir():
         return                                  # nothing exists yet; nothing to protect
@@ -277,4 +289,5 @@ def validate_public_entry(resolved, out_dir, *, protocol, stage=None,
 
     # `stage` here is the stage NAME the input selected, not a mapping; the resolved document is
     # what carries the collective-variable block a stage check needs.
-    validate_stage_continuation(out_dir, stage=resolved, definition=definition)
+    validate_stage_continuation(out_dir, stage=resolved, definition=definition,
+                                overwrite=overwrite)
