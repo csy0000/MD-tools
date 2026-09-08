@@ -140,6 +140,14 @@ def build_forcefield_record(*, resolved: dict[str, Any], route: str, record: dic
             # Measured on the built CustomGBForce: which atoms carry parameters from the GB-Neck2
             # fit and which carry ParmEd's generic fallback. See implicit.gb_parameter_coverage.
             "parameter_coverage": implicit_report.get("parameter_coverage"),
+            # WHAT WAS REQUESTED VERSUS WHAT WAS DONE. For a solute with no residue names these
+            # differ: `changeRadii("mbondi3")` matches nothing and the radii reduce to mbondi2
+            # unless the peptide-like corrections were applied from the mapped chemistry. A
+            # record that printed only the requested policy would be a name-only coverage claim,
+            # which is exactly what this route may not make.
+            "radius_policy_requested": implicit_report.get("radius_policy_requested"),
+            "radius_assignment_method": implicit_report.get("radius_assignment_method"),
+            "peptide_like_mbondi3": implicit_report.get("peptide_like_mbondi3"),
             **_implicit_support_status(is_ligand=is_ligand,
                                        coverage=implicit_report.get("parameter_coverage") or {}),
         } if implicit else None,

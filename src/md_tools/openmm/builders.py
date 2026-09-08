@@ -80,6 +80,13 @@ def _legacy_cfg(resolved: dict[str, Any]) -> dict[str, Any]:
     cfg["forcefield"]["water"] = _water_xml(forcefield.get("water"))
     cfg["forcefield"]["ligand"] = openff_resource(solute.get("ligand_forcefield"))
     cfg["forcefield"]["ligand_charge_method"] = solute.get("ligand_charge_method")
+    # THE CLASSIFICATION, carried across. This mapping rebuilds `cfg` from `DEFAULTS` and copies
+    # named keys, so anything not copied here simply does not reach the builders -- which is how
+    # a correctly resolved `solute.kind: peptide-like` reached the log and the record while the
+    # implicit builder still saw no kind at all and applied no corrections.
+    cfg.setdefault("solute", {})
+    cfg["solute"]["kind"] = solute.get("kind") or ("peptide" if solute.get("peptide", True)
+                                                   else "ligand")
 
     cfg["system_build"]["constraints"] = constraints.get("type", "HBonds")
     cfg["system_build"]["rigid_water"] = bool(constraints.get("rigid_water", not implicit))

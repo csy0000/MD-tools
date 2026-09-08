@@ -45,11 +45,33 @@ BUILD_SCHEMA = Schema(
     doc="Topology and System construction for `md-openmm build-top`.",
     sections=[
         Section("solute", [
-            Field("peptide", bool, default=True,
-                  doc="true reads -i as a peptide/protein PDB and parameterises it with the "
-                      "protein force field. false reads a .smi and parameterises the molecule "
-                      "with the small-molecule force field. Sage never touches a peptide-only "
-                      "input, and the record must not claim it did."),
+            Field("kind", str, default="peptide",
+                  enum=("peptide", "peptide-like", "ligand"),
+                  doc="What the solute IS, which decides how it is parameterised and what "
+                      "chemistry may be read from it. This is the authoritative "
+                      "classification.\n"
+                      "  peptide       -- read -i as a peptide/protein PDB and parameterise it "
+                      "with the protein force field. Sage never touches it.\n"
+                      "  ligand        -- read -i as a .smi and parameterise the whole molecule "
+                      "with the small-molecule force field. One residue, no peptide chemistry "
+                      "is claimed or read.\n"
+                      "  peptide-like  -- the SAME whole-molecule route as `ligand`, with the "
+                      "same force field and the same charges, PLUS a validated peptide-chemistry "
+                      "map over the result. It exists for a head-to-tail cyclic peptide built "
+                      "from SMILES, whose residues are real amino acids but which a "
+                      "single-residue ligand representation cannot describe -- so "
+                      "residue-keyed corrections such as mbondi3's silently miss it. It never "
+                      "loads a protein force field and never replaces Sage's charges or bonded "
+                      "terms."),
+            Field("peptide", bool, default=None, nullable=True,
+                  doc="RETIRED spelling of `kind`, kept so configurations written before `kind` "
+                      "existed -- including every `resolved.config` already on disk -- still "
+                      "read. true means kind: peptide, false means kind: ligand, and there is no "
+                      "boolean for peptide-like. Resolved into `kind` BEFORE defaults are "
+                      "applied, so a stated boolean is never compared against a `kind` nobody "
+                      "wrote. Stating both is accepted only when they agree exactly; anything "
+                      "else is refused with a migration message rather than silently preferring "
+                      "one."),
             Field("ligand_forcefield", str, default="sage-2.2.1",
                   doc="Small-molecule force field, used only when peptide is false. Two families "
                       "are supported. `sage-2.2.1` (the default) is OpenFF Sage, applied through "
@@ -267,6 +289,12 @@ def resolve_build_config(path: Path | None) -> dict[str, Any]:
             raise ConfigError(f"{path}: the document must be a mapping")
     _refuse_retired_hmr_key(document)
     stated = {name: tuple(block) for name, block in document.items() if isinstance(block, dict)}
+    # ALIASES BEFORE DEFAULTS. `kind` has a default; the legacy boolean does not have one that
+    # could be compared against it. Resolving here, against what the document actually STATES,
+    # is what stops an injected `peptide: true` from being weighed against a `kind` nobody wrote
+    # -- and stops the default `kind: peptide` from looking like a conflict with a stated
+    # `peptide: false`.
+    document = _resolve_solute_kind(document)
     resolved = BUILD_SCHEMA.resolve(document)
     resolved["_explicit_keys"] = stated
     _check_pairings(resolved)
@@ -274,6 +302,56 @@ def resolve_build_config(path: Path | None) -> dict[str, Any]:
     resolved.pop("_explicit_keys")
     resolved["_stated"] = stated
     return resolved
+
+
+
+#: The only boolean/kind pairs that mean the same thing. `peptide-like` is deliberately absent:
+#: it postdates the boolean and has no truthful spelling in it, so stating both is always wrong.
+_KIND_FOR_LEGACY = {True: "peptide", False: "ligand"}
+
+
+def _resolve_solute_kind(document: dict[str, Any]) -> dict[str, Any]:
+    """Fold a legacy `solute.peptide` into `solute.kind`, on the RAW document.
+
+    Runs before schema resolution, so "stated" means stated and "absent" means absent. After
+    defaults have been applied the two are indistinguishable, and every rule below depends on
+    telling them apart.
+
+    Returns a copy; the caller's document is not mutated.
+    """
+    solute = document.get("solute")
+    if not isinstance(solute, dict):
+        return document
+    has_kind = "kind" in solute
+    has_legacy = "peptide" in solute
+    if not has_legacy:
+        return document                       # nothing to fold; `kind` defaults if also absent
+
+    legacy = solute["peptide"]
+    if not isinstance(legacy, bool):
+        raise ConfigError(
+            f"solute.peptide must be true or false, got {legacy!r}. It is the retired spelling "
+            f"of solute.kind; write `kind: peptide`, `kind: peptide-like` or `kind: ligand` "
+            f"instead.")
+    implied = _KIND_FOR_LEGACY[legacy]
+
+    if has_kind:
+        stated_kind = solute["kind"]
+        if stated_kind != implied:
+            raise ConfigError(
+                f"solute.kind is {stated_kind!r} and the retired solute.peptide is {legacy!r}, "
+                f"which means {implied!r}. They describe different solutes, and guessing which "
+                f"one was meant would parameterise the molecule the other way round.\n"
+                f"  Keep solute.kind and delete solute.peptide. The boolean has no spelling for "
+                f"'peptide-like', so a peptide-like solute must not carry it at all.")
+        # They agree. Keep the authoritative key and drop the alias, so exactly one field
+        # decides the route from here on.
+    updated = dict(document)
+    solute = dict(solute)
+    solute.pop("peptide", None)
+    solute["kind"] = implied if not has_kind else solute["kind"]
+    updated["solute"] = solute
+    return updated
 
 
 def _sys_document(resolved: dict[str, Any]) -> dict[str, Any]:
@@ -285,8 +363,15 @@ def _sys_document(resolved: dict[str, Any]) -> dict[str, Any]:
     from ..openmm.system_defaults import sys_defaults
 
     solvent = canonical_solvent(resolved["solvent"]["model"])
-    peptide = bool(resolved["solute"]["peptide"])
-    document = sys_defaults(peptide=peptide, solvent=solvent)
+    kind = str(resolved["solute"]["kind"])
+    # THE ROUTE, from the classification. `peptide-like` takes the ligand route deliberately and
+    # completely: same force field, same charges, same builder. What it adds is a validated map
+    # over the result, not a different parameterisation.
+    peptide = kind == "peptide"
+    document = sys_defaults(peptide=peptide, solvent=solvent, kind=kind)
+    # DERIVED, never independently authoritative. Downstream readers that predate `kind` still
+    # find the boolean they expect, but it is recomputed from `kind` at every crossing rather
+    # than stored as a second opinion that could drift from it.
     document["solute"]["peptide"] = peptide
     document["solute"]["ligand_forcefield"] = resolved["solute"]["ligand_forcefield"]
     document["solute"]["ligand_charge_method"] = resolved["solute"]["ligand_charge_method"]
@@ -402,7 +487,11 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     stated = resolved.pop("_stated", {})
     solvent = canonical_solvent(resolved["solvent"]["model"])
     implicit = is_implicit(solvent)
-    peptide = bool(resolved["solute"]["peptide"])
+    kind = str(resolved["solute"]["kind"])
+    peptide = kind == "peptide"
+    # Two names for two different questions. `route` is how the System is BUILT and has exactly
+    # two values, because there are exactly two parameterisation paths; `kind` is what the solute
+    # IS and has three. `peptide-like` is a ligand build whose chemistry is then mapped.
     route = "peptide" if peptide else "ligand"
 
     log = LogWriter(out_log, record_type="build-top", echo=echo)
@@ -426,18 +515,21 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     smiles = residue_name = None
     if peptide:
         if suffix != ".pdb":
-            raise ConfigError(f"-i {input_path}: solute.peptide is true, so the input must be a "
-                              f".pdb file, not {suffix}")
+            raise ConfigError(f"-i {input_path}: solute.kind is 'peptide', so the input must be "
+                              f"a .pdb file, not {suffix}")
         log.field("interpreted as", "peptide/protein PDB")
         log.field("small-molecule FF", "not used (peptide-only input)")
     else:
         if suffix != ".smi":
-            raise ConfigError(f"-i {input_path}: solute.peptide is false, so the input must be a "
-                              f".smi file, not {suffix}")
+            raise ConfigError(f"-i {input_path}: solute.kind is {kind!r}, which is built from a "
+                              f"molecular graph, so the input must be a .smi file, not "
+                              f"{suffix}")
         smiles, name_field = read_single_smiles(input_path)
         residue_name = _assigned_residue_name(resolved["solute"]["residue_name"], name_field,
                                               input_path)
-        log.field("interpreted as", "single-molecule SMILES")
+        log.field("interpreted as",
+                  "single-molecule SMILES" if kind == "ligand"
+                  else "single-molecule SMILES, mapped as a peptide-like solute")
         log.field("smiles", smiles)
         log.field("residue name", f"{residue_name}   "
                                   f"({'stated' if resolved['solute']['residue_name'] else 'assigned deterministically'})")

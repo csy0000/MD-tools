@@ -107,6 +107,37 @@ Documented in `docs/scientific-defaults.md` section 11.2.
 
 ---
 
+## 6. AM1-BCC charges are not reproducible between builds of the same input
+
+**What.** Two `build-top` runs of the same `.smi`, same configuration, same machine, produce
+different partial charges. Measured on a 43-atom cyclic peptide: **41 of 43 atoms differed**, one
+example atom moving from -0.63047675 to -0.71247675 e.
+
+**Cause, from the installed source.** The ETKDG embedding IS seeded, and `build-top` refuses an
+unseeded one precisely so "this prepared system would not be reproducible" cannot happen. But the
+OpenFF toolkit then discards that conformer: `AmberToolsToolkitWrapper.assign_partial_charges`
+does `if use_conformers is None: mol_copy._conformers = None; mol_copy.generate_conformers(...)`,
+and `md_tools.openmm.system` calls `offmol.assign_partial_charges(scheme)` without
+`use_conformers`. The charges therefore come from an unseeded conformer that is neither the one
+recorded in the build provenance nor the same one twice.
+
+**Impact.** Two: no ligand or peptide-like build is bitwise reproducible, and the recorded ETKDG
+conformer provenance does not describe the geometry the charges were computed on. Nothing is
+wrong within a single build -- the charges are real AM1-BCC for the conformer that was used -- and
+every published dataset remains internally consistent and self-describing. What cannot be done is
+reproduce one from its inputs, or compare two builds expecting only an intended difference.
+
+**Not fixed here, deliberately.** Passing `use_conformers=` would change the charges of every
+future build, which is a scientific decision rather than a bug fix, and this was found while
+implementing something else. It is also why `tests/test_peptide_like_hamiltonian.py` proves "only
+the GB parameters change" on ONE prepared structure rather than by differencing two builds.
+
+**Trigger.** Pick this up before any study that needs to reproduce a build from its inputs, before
+comparing two builds for anything but their radii, or when deciding whether recorded conformer
+provenance should be binding. The fix is small; its consequences are not.
+
+---
+
 ## Cross-references
 
 - `docs/release-notes/20260907-cv-validation-final-evidence.md` — the evidence behind the

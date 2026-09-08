@@ -224,12 +224,85 @@ def gb_parameter_coverage(system, structure) -> dict:
     }
 
 
+#: mbondi3's two side-chain corrections, in angstrom, exactly as ParmEd applies them by name.
+#: Verified against the installed `parmed.tools.changeradii.mbondi3`, which sets 1.4 on OD*/OE*
+#: in GLU/ASP/GL4/AS4 and 1.17 on HH*/HE* in ARG.
+MBONDI3_CARBOXYLATE_OXYGEN_ANGSTROM = 1.40
+MBONDI3_GUANIDINIUM_HYDROGEN_ANGSTROM = 1.17
+
+
+def apply_peptide_like_mbondi3(structure, peptide_map) -> dict:
+    """Apply mbondi3's residue-keyed corrections to a solute that has no residues to key on.
+
+    WHERE THIS SITS, AND WHY IT MATTERS
+
+        Between `changeRadii(...)` and `createSystem(...)`. Before, because `createSystem` reads
+        `solvent_radius` to build the CustomGBForce and derives `sr = screen * (radius - offset)`
+        from it; a radius changed afterwards would leave `sr` describing the old one, and the two
+        would disagree inside a single force. After `changeRadii`, because that call establishes
+        the mbondi2 baseline these corrections modify -- running first would have the baseline
+        overwrite them.
+
+    WHY BY CHEMISTRY
+
+        ParmEd selects by residue and atom NAME. A solute built from SMILES is one residue with
+        one made-up name, so those rules match nothing and the radii are silently mbondi2 while
+        the build still reports mbondi3. The mapped chemistry supplies the same atom sets by what
+        they ARE.
+
+        Stricter than the name rule in one place, deliberately: ParmEd also corrects `AS4`/`GL4`,
+        the PROTONATED variants, because their names begin the same way. A neutral carboxylic
+        acid is not a carboxylate and is not corrected here.
+
+    Returns a record of exactly what changed, for the build log.
+    """
+    if peptide_map is None:
+        return {"applied": False, "reason": "no peptide map"}
+    atoms = structure.atoms
+    targets: list[tuple[int, float, str]] = []
+    for index in peptide_map.carboxylate_oxygens:
+        targets.append((int(index), MBONDI3_CARBOXYLATE_OXYGEN_ANGSTROM,
+                        "deprotonated side-chain carboxylate oxygen"))
+    for index in peptide_map.guanidinium_hydrogens:
+        targets.append((int(index), MBONDI3_GUANIDINIUM_HYDROGEN_ANGSTROM,
+                        "protonated guanidinium hydrogen"))
+
+    corrections = []
+    for index, angstrom, why in targets:
+        if index >= len(atoms):
+            raise ValueError(
+                f"the peptide map names atom {index} but the prepared structure has "
+                f"{len(atoms)} atoms; the map and the topology are not the same molecule")
+        atom = atoms[index]
+        before = float(atom.solvent_radius)
+        atom.solvent_radius = float(angstrom)
+        corrections.append({
+            "atom_index": index,
+            "element": atom.element_name if hasattr(atom, "element_name") else atom.atomic_number,
+            "reason": why,
+            "intrinsic_radius_before_angstrom": before,
+            "intrinsic_radius_after_angstrom": float(angstrom),
+        })
+    return {
+        "applied": True,
+        "policy": "mbondi3 side-chain corrections, selected by mapped chemistry",
+        "units": "angstrom (intrinsic solvent_radius, before the GB offset is subtracted)",
+        "carboxylate_oxygens": list(peptide_map.carboxylate_oxygens),
+        "guanidinium_hydrogens": list(peptide_map.guanidinium_hydrogens),
+        "n_corrected": len(corrections),
+        "corrections": corrections,
+        "molecular_map_digest": peptide_map.digest(),
+        "sequence": list(peptide_map.sequence),
+    }
+
+
 def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = None, *,
                           implicit_model: str = "GBn2", radii: str = "mbondi3",
                           remove_cm_motion: bool = True,
                           hydrogen_mass_amu: Optional[float] = None,
                           hmr_scope: str = "none",
-                          nonpolar_sasa: bool = False):
+                          nonpolar_sasa: bool = False,
+                          peptide_map=None):
     """Build the implicit-solvent System, and report what the radius change actually did.
 
     Returns `(system, info)`. `info` records the radii before and after `changeRadii`, so a bundle
@@ -255,6 +328,10 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
                  if coordinate_path is not None else pmd.load_file(str(prmtop_path)))
     before = radii_of(structure)
     changeRadii(structure, str(radii)).execute()
+    # The residue-keyed corrections `changeRadii` could not reach, applied from the mapped
+    # chemistry -- and still before `createSystem`, so every parameter it derives from a radius
+    # is derived from the corrected one.
+    peptide_like = apply_peptide_like_mbondi3(structure, peptide_map)
     after = radii_of(structure)
 
     scope = str(hmr_scope or "none")
@@ -297,6 +374,14 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
             "app.ForceField(+implicit/gbn2.xml) to 0.0017 kJ/mol on ACE-ALA-NME"),
         "implicit_model": implicit_model,
         "radii": radii,
+        # What was REQUESTED versus what was actually done. The two differ for a solute with no
+        # residue names, and the difference is the whole point of the correction pass.
+        "radius_policy_requested": radii,
+        "radius_assignment_method": (
+            f"parmed.tools.changeRadii({radii!r}) then mbondi3 side-chain corrections from the "
+            f"mapped peptide chemistry" if peptide_like.get("applied")
+            else f"parmed.tools.changeRadii({radii!r})"),
+        "peptide_like_mbondi3": peptide_like,
         "nonpolar_sasa": bool(nonpolar_sasa),
         "nonpolar_model": ("ACE surface-area term" if nonpolar_sasa else None),
         "nonbonded_method": "NoCutoff",
@@ -459,10 +544,26 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
     else:
         raise ValueError(f"implicit preparation has no route {route!r}; expected peptide or ligand")
 
+    # THE MAP, for a peptide-like solute only. Read from the SDF the ligand route already wrote,
+    # which is where bond orders and formal charges survive -- a topology has neither, and both
+    # decide whether a side chain is a carboxylate or a carboxylic acid.
+    peptide_map = None
+    if str((cfg.get("solute") or {}).get("kind") or "") == "peptide-like":
+        from .peptide_map import map_from_sdf
+
+        sdf = amber.get("ligand_sdf")
+        if not sdf:
+            raise ValueError(
+                "solute.kind is 'peptide-like' but the prepared inputs carry no SDF, so the "
+                "peptide chemistry cannot be read. Bond orders are not recoverable from a "
+                "topology.")
+        peptide_map = map_from_sdf(sdf)
+
     system, info = build_implicit_system(
         amber["prmtop"], amber["coordinates"],
         implicit_model=implicit_model, radii=radii,
-        hydrogen_mass_amu=hydrogen_mass_amu, hmr_scope=hmr_scope)
+        hydrogen_mass_amu=hydrogen_mass_amu, hmr_scope=hmr_scope,
+        peptide_map=peptide_map)
 
     (staging / "system.xml").write_text(XmlSerializer.serialize(system), encoding="utf-8")
     pdb_file = app.PDBFile(str(topology_source))

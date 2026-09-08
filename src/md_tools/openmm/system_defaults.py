@@ -182,7 +182,8 @@ def dataset_defaults() -> dict[str, Any]:
     }
 
 
-def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT) -> dict[str, Any]:
+def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT,
+                 kind: str | None = None) -> dict[str, Any]:
     """System preparation settings.
 
     Both the explicit and implicit blocks are written so the file documents what the other option
@@ -199,6 +200,9 @@ def sys_defaults(*, peptide: bool = True, solvent: str = DEFAULT_SOLVENT) -> dic
         "engine": ENGINE,
         "engine_version": ENGINE_VERSION,
         "solute": {
+            # The authoritative classification. `peptide` below is derived from it and kept only
+            # so readers written before `kind` existed still find what they expect.
+            "kind": str(kind) if kind else ("peptide" if peptide else "ligand"),
             "peptide": bool(peptide),
             # Sage 2.2.1 and standard AM1-BCC (AmberTools sqm). `am1bcc_nagl` is a graph network
             # TRAINED to predict AM1-BCC ELF10 charges -- close but not that calculation -- and is
