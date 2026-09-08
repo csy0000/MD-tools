@@ -82,6 +82,31 @@ blocker; this one is not, because it is not reproducible.
 
 ---
 
+## 5. `constraints.type` is ignored under implicit solvent, and the log says otherwise
+
+**What.** The explicit-solvent route honours `constraints.type`; the implicit route passes
+`app.HBonds` unconditionally. `AllBonds` + GBn2 builds a System identical to `HBonds` + GBn2 (12
+constraints, none heavy-heavy, on the same input where TIP3P + `AllBonds` adds 9), while the build
+log records `constraints.type  AllBonds  (set)`.
+
+**Impact.** Not the ignored setting so much as the record naming a setting that did not apply. No
+run in this repository is affected: `HBonds` is the default and what every validated
+implicit-solvent run asks for, so request and outcome coincide. Anyone asking for `AllBonds` or
+`HAngles` under implicit solvent gets `HBonds` and a log that says otherwise.
+
+**Related, smaller.** The build schema's enum offers `constraints.type: "None"`, but
+`_check_constraints` compares against Python `None` rather than the string, so the advertised
+value is refused with "not supported". Conversely `_check_constraints` accepts `HAngles`, which
+the schema enum does not offer; the enum is the tighter and intended policy.
+
+**Trigger.** Pick this up when someone needs a non-`HBonds` constraint setting under implicit
+solvent, or before any implicit-solvent build log is used as evidence of what was constrained.
+Two defensible resolutions and the choice is a policy call: make the implicit route honour the
+setting, or refuse anything but `HBonds` there so the request cannot disagree with the outcome.
+Documented in `docs/scientific-defaults.md` section 11.2.
+
+---
+
 ## Cross-references
 
 - `docs/release-notes/20260907-cv-validation-final-evidence.md` — the evidence behind the

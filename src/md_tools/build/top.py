@@ -100,10 +100,22 @@ BUILD_SCHEMA = Schema(
         ], doc="Solvent treatment. Under GBn2 every key here except `model` is inapplicable."),
         Section("constraints", [
             Field("type", str, default="HBonds", enum=("HBonds", "AllBonds", "None"),
-                  doc="HBonds constrains X-H and permits the 2 fs default timestep."),
+                  doc="HBonds constrains the LENGTH of every bond to a hydrogen, and permits the "
+                      "2 fs default timestep. It constrains NO ANGLE -- not even H-X-H. That is "
+                      "the point: with the X-H stretches frozen the fastest remaining motions "
+                      "are the hydrogen bond-angle vibrations at ~10 fs, which 2 fs resolves. "
+                      "OpenMM's HAngles would constrain those too and is deliberately not "
+                      "offered. AllBonds additionally freezes heavy-atom bond lengths.\n"
+                      "  HOW the constraints are solved is OpenMM's choice, not a setting here "
+                      "and not selectable: CCMA for the general case, which is every X-H "
+                      "constraint in an ordinary solute, and SETTLE for rigid three-site water. "
+                      "There is no SHAKE in OpenMM. See docs/scientific-defaults.md section 11.2."),
             Field("rigid_water", bool, default=True,
-                  doc="Forced to false under implicit solvent, where there is no water to hold "
-                      "rigid."),
+                  doc="Hold water rigid -- the case OpenMM solves with SETTLE, which needs a real "
+                      "rigid triangle (both O-H bonds and the H-H distance). Forced to false "
+                      "under implicit solvent, where there is no water to hold rigid, and "
+                      "recorded as the resolved value rather than the requested one; such a run "
+                      "therefore uses CCMA and nothing else."),
         ], doc="Constraints. These change the serialised System."),
         Section("hydrogen_mass_repartitioning", [
             Field("enabled", bool, default=False,

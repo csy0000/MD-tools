@@ -559,7 +559,100 @@ is altered to buy the timestep. For a repository whose purpose is method develop
 protocols, not maximising throughput — that is the right trade, and it means a trajectory produced
 by the defaults can be used for kinetic analysis without a caveat about its inertia.
 
-### 11.2 The HMR option
+### 11.2 What is constrained, and what solves the constraints
+
+`constraints: HBonds` is the default, and it is worth being exact about its scope, because the
+name is easy to read as more than it is.
+
+| | constrained? |
+|---|---|
+| bond **lengths** to hydrogen (X–H) | **yes**, every one of them |
+| bond lengths between heavy atoms | no |
+| bond **angles**, including H–X–H | **no**, never |
+| water geometry | rigid when there IS water — see below |
+
+**No angle is ever constrained by this option.** OpenMM's `HAngles` would do that; it is not
+offered here, and the schema's enum is `HBonds | AllBonds | None`. That is deliberate and it is
+what §11.1 above depends on: with the X–H stretches frozen, the fastest *remaining* motions are
+the hydrogen bond-angle vibrations at roughly 10 fs, and 2 fs resolves them with margin. Freezing
+those angles too would change which motions the timestep has to resolve, and would change the
+ensemble.
+
+A worked example, from a real build (79-atom macrocycle, 38 hydrogens, implicit solvent):
+
+```
+constraints                       38   (one per hydrogen, all involving H)
+constraint lengths                0.102 - 0.109 nm
+HarmonicAngleForce terms         141   of which 85 involve a hydrogen -- all still flexible
+```
+
+#### The algorithms are OpenMM's, and are not selectable
+
+MD-tools decides **which** bonds are constrained. It does not decide, and cannot decide, **how**
+the constraints are satisfied — OpenMM chooses that per platform from the constraint topology:
+
+- **CCMA** (Constraint Matrix Approximation) solves the general case, and is what handles every
+  X–H constraint in an ordinary solute;
+- **SETTLE** is the closed-form solver, used for rigid three-site clusters — in practice water.
+  It applies only where the cluster really is a rigid triangle, which needs three constraints
+  (both O–H bonds *and* the H–H distance). A CH2 or NH2 group under `HBonds` has only its two
+  X–H bonds constrained, not the H···H distance, so it is not a rigid triangle and CCMA handles
+  it.
+
+**There is no SHAKE.** OpenMM does not implement it; CCMA does the same job by a different
+method. A protocol note claiming "SHAKE" is describing a different engine.
+
+Both algorithms are present in the CUDA platform as well as the reference implementation, and
+neither is exposed as a setting. **No configuration key selects them, and none is offered**: a
+knob that cannot change anything is worse than no knob, because it invites a run record that
+claims a choice nobody made.
+
+#### Under implicit solvent there is no SETTLE
+
+`rigid_water` defaults to `true` but is **forced to `false`** under implicit solvent, and
+recorded as such — there is no water to hold rigid. So an implicit-solvent run uses CCMA and
+nothing else. The build log states the resolved value rather than the requested one.
+
+#### Known issue: under implicit solvent the setting is ignored
+
+`constraints.type` is honoured on the explicit-solvent route and **not** on the implicit one,
+where the builder passes `app.HBonds` unconditionally. Measured, same input structure:
+
+| build | constraints | of which heavy-heavy |
+|---|---|---|
+| `HBonds` + TIP3P | 1782 | 0 |
+| `AllBonds` + TIP3P | 1791 | **9** |
+| `HBonds` + GBn2 | 12 | 0 |
+| `AllBonds` + GBn2 | 12 | **0** — identical to `HBonds` |
+
+The sharp part is not the ignored setting but the record: the build log states
+`constraints.type  AllBonds  (set)` for a System that has `HBonds`. A provenance record that
+names a setting which did not apply is worse than one that omits it.
+
+**This does not affect a build that asks for `HBonds`**, which is the default and what every
+validated implicit-solvent run in this repository uses — the requested and applied values
+coincide. It affects anyone asking for something else under implicit solvent.
+
+Until it is resolved, treat `HBonds` as the only implicit-solvent constraint setting, and read
+`constraints.type` in an implicit build's log as the request rather than the outcome. The System
+itself is authoritative: count its constraints.
+
+#### Constraint tolerance
+
+The tolerance is the relative accuracy the solver works to, and it is **not uniform across
+protocols today**:
+
+| protocol | constraint tolerance |
+|---|---|
+| REST2 / rREST2 ladders | **1e-8**, set explicitly (`REST2Protocol.constraint_tolerance`) |
+| cMD stages, AIS paths | **1e-5**, OpenMM's integrator default |
+
+Stated rather than quietly reconciled. The ladder is tighter because an exchange compares reduced
+potentials computed in different Contexts, and constraint drift enters that comparison directly;
+a stage has no such comparison. If a study needs one number across every protocol, that is a
+change to make deliberately, not an assumption to carry.
+
+### 11.3 The HMR option
 
 Requested explicitly, never implied by a null:
 
@@ -589,7 +682,7 @@ stable for biomolecular systems and reproduces equilibrium structural and thermo
 [@openfe_rfe_defaults], and the industrial RBFE assessment [@baumann2025openfe] was run on that
 protocol — so the setting has genuine large-scale support **for equilibrium free-energy work**.
 
-### 11.3 The four things that must be kept apart
+### 11.4 The four things that must be kept apart
 
 1. **Stability at 4 fs.** Well supported [@feenstra1999hmr; @hopkins2015hmr] and, for suitable
    biomolecular systems, effectively standard practice.
@@ -611,7 +704,7 @@ Before using 4 fs on a system class you have not run before, compare a few hundr
 against the 2 fs baseline — total energy drift, temperature, density, and whichever structural
 quantity your project cares about.
 
-### 11.4 What the implementation enforces
+### 11.5 What the implementation enforces
 
 * 4 fs with `hydrogen_mass_amu: null` is **refused**, naming both files.
 * 4 fs with hydrogens constrained but `constraints.type` set to `None` is **refused**: HMR lowers
@@ -632,7 +725,7 @@ quantity your project cares about.
 
 ---
 
-### 11.5 `timestep_fs: auto`, and why the System decides
+### 11.6 `timestep_fs: auto`, and why the System decides
 
 The default is now the word `auto` rather than the number 2.0.
 
