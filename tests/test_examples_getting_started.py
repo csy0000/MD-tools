@@ -1,0 +1,444 @@
+"""WORKED EXAMPLES: how to start a simulation with this repository.
+
+Read this file top to bottom. Each example is a complete, self-contained run of one protocol,
+written the way you would actually write it, and it EXECUTES -- so an example that stops being
+true fails here instead of quietly misleading the next person.
+
+    example 1   cMD              build a system, generate a workflow, run the whole chain
+    example 2   REST2            the same, plus a replica-exchange ladder under a launcher
+    example 3   interrupt+resume kill a run and finish it
+    example 4   AIS              switching paths drawn from a cMD ensemble
+    example 5   peptide-like     a cyclic peptide from SMILES, with mbondi3 corrections
+    example 6   the shipped configs in `configs/` still resolve
+
+THE SHAPE OF EVERY EXAMPLE
+
+    Two commands to prepare, one script to run:
+
+        md-openmm build-top   structure + chemistry  ->  built.xml, built.pdb, built.log
+        md-openmm build-md    a protocol config      ->  a directory of .in files and run.sh
+        ./run.sh                                     ->  every stage, in order
+
+    `build-top` decides the PHYSICS: force field, charges, radii, constraints. It writes
+    `built.xml`, which is the Hamiltonian. `build-md` decides the EXPERIMENT: stage lengths,
+    intervals, the ladder. It never opens `built.xml` -- the timestep is resolved at run time from
+    the masses actually serialised there, because a configuration that claims HMR is a request and
+    the System is the fact.
+
+    `resolved.config` beside the generated scripts is AUTHORITATIVE. The `.in` files resolve to
+    it; editing an `.in` changes the run, but the resolved document is what is read.
+
+WHAT YOU SUPPLY, AND WHAT IS SUPPLIED FOR YOU
+
+    You supply: the structure, the chemistry, the schedule, and the hardware. In particular
+    nothing binds MPI ranks to GPUs for you -- see example 2.
+
+SIZES HERE ARE TINY ON PURPOSE
+
+    Tens of steps, so the file runs in minutes. A real run changes the step counts and nothing
+    else about the shape.
+
+PLATFORM_POLICY_EXEMPTION: `--cpu` throughout. What these examples demonstrate is the COMMAND
+FLOW -- which command produces which file, and what you type next. They are not GPU evidence and
+are not offered as any; real CUDA and MPI evidence lives in `test_cv_mpi_cuda_lanes.py`,
+`test_cmd_cuda_smoke.py`, `test_rrest2_cuda_smoke.py` and `test_md_run_mpi_gpu.py`. On real
+hardware you drop `--cpu`: CUDA is the default and there is no automatic fallback.
+"""
+from __future__ import annotations
+
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+import yaml
+
+REPO = Path(__file__).resolve().parents[1]
+ALA = REPO / "tests" / "data" / "ALA.pdb"
+CLI = [sys.executable, "-m", "md_tools.cli.md_openmm"]
+
+pytestmark = pytest.mark.slow
+
+
+def _md_openmm(cwd, *args, timeout=1800):
+    """`md-openmm ...`, as you would type it."""
+    done = subprocess.run(CLI + [str(a) for a in args], cwd=cwd,
+                          capture_output=True, text=True, timeout=timeout)
+    assert done.returncode == 0, (
+        f"md-openmm {' '.join(str(a) for a in args)} failed:\n"
+        + done.stdout[-3000:] + done.stderr[-3000:])
+    return done
+
+
+def _run_sh(directory, *extra, timeout=3600, expect_success=True):
+    """`./run.sh ../built.pdb ../built.xml`, the generated driver for a whole protocol."""
+    done = subprocess.run(
+        ["bash", "run.sh", "../built.pdb", "../built.xml", *extra],
+        cwd=directory, capture_output=True, text=True, timeout=timeout)
+    if expect_success:
+        assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
+    return done
+
+
+@pytest.fixture(scope="module")
+def built(tmp_path_factory):
+    """EXAMPLE 0 -- build a system.
+
+    Everything below starts here. `-i` is the input structure; `-os` the serialised System, which
+    holds the physics; `-op` the topology; `-log` the machine-readable record of what was loaded.
+
+        md-openmm build-top -i ALA.pdb -os built.xml -op built.pdb -log built.log \\
+                            --config sys.config
+
+    `sys.config` says what the solute IS and how to solvate it. Implicit GBn2 here, so there is no
+    box, no water, no ions and no barostat anywhere downstream -- choosing it changes what the
+    rest of the configuration is allowed to say.
+    """
+    if not ALA.is_file():
+        pytest.skip("no ALA fixture")
+    work = tmp_path_factory.mktemp("examples")
+    (work / "sys.config").write_text(yaml.safe_dump({
+        "solute": {"kind": "peptide"},          # a PDB of a peptide -> the protein force field
+        "solvent": {"model": "GBn2"},           # implicit; use TIP3P or OPC for explicit water
+        "constraints": {"type": "HBonds"},      # X-H lengths fixed, which is what permits 2 fs
+        "hydrogen_mass_repartitioning": {"enabled": False},
+    }), encoding="utf-8")
+    _md_openmm(work, "build-top", "-i", ALA, "-os", "built.xml", "-op", "built.pdb",
+               "-log", "built.log", "--config", "sys.config")
+    assert (work / "built.xml").is_file() and (work / "built.pdb").is_file()
+    return work
+
+
+# --- example 1: cMD ------------------------------------------------------------------------------
+
+def test_example_1_plain_md_from_a_structure_to_a_trajectory(built):
+    """The simplest complete run: minimise, equilibrate, produce.
+
+        md-openmm build-md -odir ./cMD --config cMD.config
+        cd cMD && ./run.sh ../built.pdb ../built.xml
+
+    `build-md` writes one `.in` per stage, one thin `.py` entry point per stage, `run.sh` which
+    calls them in order, and `resolved.config`. Each stage hands its final state to the next
+    through `-c`, which `run.sh` wires up for you.
+    """
+    (built / "cMD.config").write_text(yaml.safe_dump({
+        "protocol": "cMD",
+        "solvent": "implicit",
+        "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "seed": 20260908},
+        # Step counts, not durations: the step count is the authoritative number and the log
+        # prints the derived picoseconds beside it.
+        "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 20,
+                   "restrained_npt_steps": 20, "unrestrained_npt_steps": 20,
+                   "production_steps": 100},
+        "reporting": {"solute_printout": 20, "system_printout": 50, "checkpoint_printout": 50},
+    }), encoding="utf-8")
+    _md_openmm(built, "build-md", "-odir", "./cMD", "--config", "cMD.config")
+
+    generated = {p.name for p in (built / "cMD").iterdir()}
+    assert {"run.sh", "resolved.config", "min.in", "cMD.in", "min.py", "cMD.py"} <= generated
+
+    _run_sh(built / "cMD", "--cpu")
+
+    # What you get: a trajectory, a final state to continue from, a human-readable output and a
+    # machine-readable provenance record, per stage.
+    assert (built / "cMD" / "cMD.dcd").is_file()
+    assert (built / "cMD" / "cMD.xml").is_file()
+    assert "completed" in (built / "cMD" / "cMD.out").read_text(encoding="utf-8")
+
+
+def test_example_1b_the_same_run_one_stage_at_a_time(built):
+    """`run.sh` is a convenience, not a second interface. Any stage can be run directly.
+
+    These three are the SAME run reaching the same installed code:
+
+        ./run.sh
+        md-openmm md-run -i min.in -p ../built.pdb -s ../built.xml -o min.out ...
+        python min.py    -p ../built.pdb -s ../built.xml -o min.out ...
+    """
+    directory = built / "cMD"
+    if not directory.is_dir():
+        pytest.skip("example 1 has not run")
+    _md_openmm(directory, "md-run", "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
+               "-o", "min_again.out", "-x", "min_again.dcd", "-r", "min_again.xml",
+               "-log", "min_again.log", "--cpu", "-odir", "./again")
+    assert (directory / "again" / "min_again.out").is_file() or \
+        (directory / "min_again.out").is_file()
+
+
+# --- example 2: REST2 ----------------------------------------------------------------------------
+
+def test_example_2_a_rest2_ladder_under_a_launcher(built):
+    """Replica exchange: N states of one system, differing only in Hamiltonian.
+
+        mpirun -n 3 md-openmm md-run -ng 3 -i REST2.in -p ../built.pdb -s ../built.xml ...
+
+    `run.sh` writes that line for you with `-n` equal to the state count. **Any other world size
+    is refused**: a ladder run in fewer processes is a different schedule, not a smaller one.
+
+    ON REAL HARDWARE YOU MUST PLACE THE RANKS YOURSELF:
+
+        CUDA_VISIBLE_DEVICES=0,1,2 ./run.sh ../built.pdb ../built.xml
+
+    Nothing binds ranks to devices automatically. Without it every rank builds its Context on the
+    default device and the whole ladder runs on one GPU, silently and slowly.
+
+    `equilibration_steps` is the one setting people miss. It relaxes each rung under ITS OWN
+    scaled Hamiltonian before the first exchange, outside the production budget. Without it every
+    rung starts from a tau = 0 configuration and the hot rungs spend their opening exchanges
+    relaxing out of a distribution that is not theirs -- while every record calls those samples
+    production.
+    """
+    if shutil.which("mpirun") is None:
+        pytest.skip("no mpirun on PATH")
+
+    (built / "REST2.config").write_text(yaml.safe_dump({
+        "protocol": "REST2",
+        "solvent": "implicit",
+        "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "seed": 20260908},
+        "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 20,
+                   "restrained_npt_steps": 20, "unrestrained_npt_steps": 20,
+                   "production_steps": 0},        # the ladder owns production, not a stage
+        "reporting": {"solute_printout": 50, "system_printout": 50, "checkpoint_printout": 50},
+        "rest2": {
+            "number_of_replicas": 3,              # -> mpirun -n 3
+            "tau_max": 0.5,                       # ladder is linear 0 -> 0.5 over the states
+            "exchange_interval_steps": 50,
+            "number_of_exchanges": 4,             # production per state = 50 * 4 = 200 steps
+            "equilibration_steps": 50,            # per state, at that state's own Hamiltonian
+        },
+    }), encoding="utf-8")
+    _md_openmm(built, "build-md", "-odir", "./REST2", "--config", "REST2.config")
+
+    run_sh = (built / "REST2" / "run.sh").read_text(encoding="utf-8")
+    assert "mpirun -n 3" in run_sh and "-ng 3" in run_sh
+
+    _run_sh(built / "REST2", "--cpu", timeout=7200)
+
+    out = (built / "REST2" / "REST2.out").read_text(encoding="utf-8")
+    assert "run_status: completed" in out
+    # One trajectory per fixed thermodynamic STATE -- never per walker, never tau-named.
+    for state in range(3):
+        assert (built / "REST2" / f"remd{state}.nc").is_file()
+    # An Amber-style exchange history, and the per-pair acceptance report.
+    assert (built / "REST2" / "rem.log").is_file()
+    assert "acceptance" in out.lower()
+
+
+# --- example 3: interrupt and resume ---------------------------------------------------------------
+
+def test_example_3_an_interrupted_cmd_chain_cannot_currently_be_resumed(built):
+    """READ THIS BEFORE RUNNING A LONG cMD CHAIN ON A SCHEDULER.
+
+    An interrupted cMD chain cannot be continued. Every documented route is refused:
+
+        ./run.sh ...                -> "3 output(s) already exist ... Pass --overwrite to
+                                        replace them, --resume to continue that run, or
+                                        choose another -odir."
+        ./run.sh ... --resume       -> "--resume is not a cMD flag. An interrupted chain
+                                        continues from each stage's committed checkpoint
+                                        automatically; re-run the same command."
+        ./run.sh ...                -> ... the first message again.
+
+    The two messages point at each other, and `run.sh`'s own header promises a third thing that
+    does not happen ("a stage that already reports completion is skipped"). In the code,
+    `_refuse_existing_outputs` returns early only for `--overwrite` or `--resume`, and there is
+    no completed-stage skip; the cMD layer then rejects `--resume`.
+
+    So today the only ways forward are `--overwrite`, which discards the finished stages, or a
+    fresh `-odir`. **A ladder is not affected** -- it takes `--resume` properly (example 3b).
+
+    This example asserts the behaviour as measured, so that when it is fixed this test fails and
+    is updated, rather than the defect being documented for ever. Recorded in `docs/backlog.md`.
+    """
+    directory = built / "interrupted"
+    (built / "interrupt.config").write_text(yaml.safe_dump({
+        "protocol": "cMD", "solvent": "implicit",
+        "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "seed": 20260908},
+        "stages": {"minimization_iterations": 10, "restrained_nvt_steps": 10,
+                   "restrained_npt_steps": 10, "unrestrained_npt_steps": 10,
+                   "production_steps": 400_000},
+        "reporting": {"solute_printout": 500, "system_printout": 500,
+                      "checkpoint_printout": 500},
+    }), encoding="utf-8")
+    _md_openmm(built, "build-md", "-odir", "./interrupted", "--config", "interrupt.config")
+
+    killed = subprocess.run(
+        ["timeout", "-s", "INT", "45", "bash", "run.sh", "../built.pdb", "../built.xml", "--cpu"],
+        cwd=directory, capture_output=True, text=True, timeout=300)
+    assert killed.returncode != 0, "the run finished; it was meant to be interrupted"
+    assert list(directory.glob("*.checkpoints")), "nothing was committed"
+
+    # Route 1: re-run, as the cMD refusal advises.
+    again = _run_sh(directory, "--cpu", expect_success=False)
+    assert again.returncode != 0
+    assert "already exist" in again.stdout + again.stderr
+
+    # Route 2: --resume, as the output-collision refusal advises.
+    resumed = _run_sh(directory, "--cpu", "--resume", expect_success=False)
+    assert resumed.returncode != 0
+    assert "--resume is not a cMD flag" in resumed.stdout + resumed.stderr
+
+    # The one route that works is `--overwrite`, which starts the whole chain again and throws
+    # the finished stages away. It is not executed here: on this fixture that means redoing
+    # 400,000 steps to demonstrate something the flag's own name already says.
+
+
+def test_example_3b_resuming_a_ladder_is_a_different_command(built):
+    """A ladder takes `--resume`, but NOT through `run.sh`.
+
+        # this does NOT work -- run.sh forwards its arguments to every stage, and the
+        # cMD-style min/eq stages reject --resume before the ladder is reached:
+        ./run.sh ../built.pdb ../built.xml --resume
+
+        # this is how you resume a ladder: the launcher line, directly.
+        mpirun -n 3 md-openmm md-run -ng 3 -i REST2.in \
+            -p ../built.pdb -s ../built.xml -c eq_nvt_free.xml \
+            -x REST2.nc -r restart.json -o REST2.out -log REST2.log --resume
+
+    It continues to the ORIGINAL budget and does not extend it. Run against a ladder that already
+    finished it reports completion rather than repeating the work.
+    """
+    if shutil.which("mpirun") is None:
+        pytest.skip("no mpirun on PATH")
+    directory = built / "REST2"
+    if not (directory / "REST2.out").is_file():
+        pytest.skip("example 2 has not run")
+
+    # The wrong way, demonstrated so nobody has to discover it.
+    wrong = _run_sh(directory, "--cpu", "--resume", expect_success=False)
+    assert wrong.returncode != 0
+    assert "not a cMD flag" in wrong.stdout + wrong.stderr
+
+    # The right way.
+    before = (directory / "remd0.nc").stat().st_mtime_ns
+    done = subprocess.run(
+        ["mpirun", "-n", "3", *CLI, "md-run", "-ng", "3", "-i", "REST2.in",
+         "-p", "../built.pdb", "-s", "../built.xml", "-c", "eq_nvt_free.xml",
+         "-x", "REST2.nc", "-r", "restart.json", "-o", "REST2.out", "-log", "REST2.log",
+         "--cpu", "--resume"],
+        cwd=directory, capture_output=True, text=True, timeout=3600)
+    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+    assert (directory / "remd0.nc").stat().st_mtime_ns == before, \
+        "a completed ladder was rerun instead of reporting completion"
+
+
+# --- example 4: AIS ------------------------------------------------------------------------------
+
+def test_example_4_switching_paths_from_an_equilibrium_ensemble(built):
+    """AIS: many short non-equilibrium paths, each starting from a frame of a cMD trajectory.
+
+    AIS is `protocol: AIS` in a `build-md` configuration, not a separate command. It needs a
+    SOURCE trajectory -- the equilibrium ensemble the paths anneal away from -- which you pass
+    with `-source-traj`. `number_of_paths` is the GLOBAL total, not a count per rank.
+    """
+    source = built / "cMD" / "cMD.dcd"
+    if not source.is_file():
+        pytest.skip("example 1 has not run")
+
+    (built / "AIS.config").write_text(yaml.safe_dump({
+        "protocol": "AIS",
+        "solvent": "implicit",
+        "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "seed": 20260908},
+        "stages": {"minimization_iterations": 0, "restrained_nvt_steps": 0,
+                   "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
+                   "production_steps": 0},
+        "reporting": {"solute_printout": 10, "system_printout": 10, "checkpoint_printout": 10},
+        "ais": {"number_of_paths": 2, "switching_steps": 20,
+                "observation_interval_steps": 10, "parameter_update_interval_steps": 5},
+        "ais_source": {"trajectory": str(source)},
+    }), encoding="utf-8")
+    _md_openmm(built, "build-md", "-odir", "./AIS", "--config", "AIS.config")
+
+    _md_openmm(built / "AIS", "md-run", "-i", "AIS.in",
+               "-p", "../built.pdb", "-s", "../built.xml",
+               "-source-traj", str(source), "-odir", "./out", "-log", "AIS.log", "--cpu",
+               timeout=3600)
+
+    out = built / "AIS" / "out"
+    # One directory per path, each with the work rows and the record that says it finished.
+    assert (out / "path_0000" / "completed.json").is_file()
+    # The work table rank 0 assembles from the per-path records on disk.
+    assert (out / "AIS_work.csv").is_file()
+    assert (out / "selected_source_frames.csv").is_file()
+
+
+# --- example 5: a cyclic peptide from SMILES -------------------------------------------------------
+
+def test_example_5_a_cyclic_peptide_built_from_smiles(tmp_path):
+    """When the solute is a molecule rather than a PDB peptide: `-i` a `.smi`, and choose a kind.
+
+        solute:
+          kind: peptide-like          # peptide | peptide-like | ligand
+          ligand_forcefield: sage-2.2.1
+          ligand_charge_method: am1bcc
+
+    `ligand` parameterises the whole molecule with the small-molecule force field and claims no
+    peptide chemistry. `peptide-like` is the SAME route -- same force field, same charges -- plus
+    a validated residue map, which is what lets residue-keyed corrections reach a solute that has
+    no residue names. The concrete case is mbondi3: its Arg/Asp/Glu radius adjustments are
+    selected by residue and atom NAME, so against a single made-up residue they match nothing and
+    the radii silently reduce to mbondi2 while the build still says mbondi3.
+
+    THIS IS THE SLOW EXAMPLE: AM1-BCC runs a real semi-empirical calculation on the CPU and is
+    the longest part of a small-molecule build, minutes rather than seconds.
+    """
+    # cyclo(Gly-L-Asp-L-Arg): head-to-tail, and it carries both correctable groups.
+    smiles = "O=C1NCC(=O)N[C@H](CC(=O)[O-])C(=O)N[C@H]1CCCNC(N)=[NH2+]"
+    (tmp_path / "cyc.smi").write_text(f"{smiles} CYC\n", encoding="utf-8")
+    (tmp_path / "sys.config").write_text(yaml.safe_dump({
+        "solute": {"kind": "peptide-like",
+                   "ligand_forcefield": "sage-2.2.1",
+                   "ligand_charge_method": "am1bcc"},
+        "solvent": {"model": "GBn2"},
+        "constraints": {"type": "HBonds"},
+        "hydrogen_mass_repartitioning": {"enabled": False},
+    }), encoding="utf-8")
+    _md_openmm(tmp_path, "build-top", "-i", "cyc.smi", "-os", "built.xml", "-op", "built.pdb",
+               "-log", "built.log", "--config", "sys.config", timeout=3600)
+
+    # The build states what it actually assigned, including which atoms were corrected.
+    log = (tmp_path / "built.log").read_text(encoding="utf-8")
+    assert "peptide_like_mbondi3" in log
+    assert "molecular_map_digest" in log
+    # `built.sdf` is retained beside the System: bond orders are not recoverable from a topology,
+    # and the omega classifier needs them for a ladder over this solute.
+    assert (tmp_path / "built.sdf").is_file()
+
+    # The map is reusable, and it is what you would define collective variables from.
+    from md_tools.openmm.peptide_map import map_from_sdf
+
+    mapped = map_from_sdf(tmp_path / "built.sdf")
+    assert sorted(mapped.sequence) == ["ARG", "ASP", "GLY"]
+    assert len(mapped.torsions()) == 9          # phi, psi, omega for each of three residues
+    assert len(mapped.carboxylate_oxygens) == 2
+    assert len(mapped.guanidinium_hydrogens) == 5
+
+
+# --- example 6: the configurations shipped with the repository -------------------------------------
+
+@pytest.mark.parametrize("name", ["cMD.config", "REST2.config", "rREST2.config", "AIS.config"])
+def test_example_6_the_shipped_protocol_configs_are_usable_starting_points(name, tmp_path):
+    """`configs/md/*.config` are documented starting points, and they still resolve.
+
+    Copy one, change the step counts, and run it. This asserts they parse under the current
+    schema -- a shipped example that no longer loads is worse than none.
+    """
+    from md_tools.build.md import resolve_md_config
+
+    source = REPO / "configs" / "md" / name
+    if not source.is_file():
+        pytest.skip(f"{source} is not shipped")
+    resolved = resolve_md_config(source)
+    assert resolved["protocol"] in ("cMD", "REST2", "rREST2", "AIS")
+
+
+def test_example_6b_the_shipped_build_top_config_is_usable(tmp_path):
+    """`configs/sys/build-top.config` likewise."""
+    from md_tools.build.top import resolve_build_config
+
+    source = REPO / "configs" / "sys" / "build-top.config"
+    if not source.is_file():
+        pytest.skip(f"{source} is not shipped")
+    resolved = resolve_build_config(source)
+    assert resolved["solute"]["kind"] in ("peptide", "peptide-like", "ligand")

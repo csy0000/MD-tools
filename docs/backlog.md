@@ -144,6 +144,43 @@ provenance should be binding. The fix is small; its consequences are not.
 
 ---
 
+## 7. An interrupted cMD chain cannot be resumed, and three messages disagree about it
+
+**What.** Interrupt a cMD chain mid-production and there is no way to continue it. Every
+documented route is refused:
+
+| you do | you get |
+|---|---|
+| `./run.sh ...` again | `3 output(s) already exist ... Pass --overwrite to replace them, --resume to continue that run, or choose another -odir.` |
+| `./run.sh ... --resume` | `--resume is not a cMD flag. An interrupted chain continues from each stage's committed checkpoint automatically; re-run the same command.` |
+| `./run.sh ...` again | the first message again |
+
+`run.sh`'s own header promises a third behaviour that does not happen: *"A stage that already
+reports completion is skipped rather than silently rerun."* In the code,
+`preflight._refuse_existing_outputs` returns early only for `--overwrite` or `--resume`, and
+there is no completed-stage skip; the cMD workflow layer then rejects `--resume`.
+
+**Impact.** The only way forward is `--overwrite`, which discards every finished stage, or a
+fresh `-odir`. For a long cMD chain on a scheduler with a wall-clock limit that is the difference
+between resuming and starting again. Committed checkpoints ARE written, so the data to resume
+from exists; nothing can reach it.
+
+**Not affected:** REST2/rREST2 ladders, which take `--resume` properly -- though not through
+`run.sh`, which forwards its arguments to the cMD-style `min`/`eq` stages first and is rejected
+there. A ladder is resumed by invoking its `mpirun` line directly.
+
+**Trigger.** Pick this up before running any cMD chain long enough to be interrupted. Two
+separate fixes: make the cMD layer accept `--resume` (or make re-running skip completed stages,
+which is what `run.sh` already claims), and stop the output-collision message suggesting a flag
+that the next layer always rejects.
+
+Demonstrated and pinned by `tests/test_examples_getting_started.py::
+test_example_3_an_interrupted_cmd_chain_cannot_currently_be_resumed`, which asserts the
+behaviour as measured so that fixing it fails the test rather than leaving the defect documented
+for ever.
+
+---
+
 ## Cross-references
 
 - `docs/release-notes/20260907-cv-validation-final-evidence.md` — the evidence behind the
