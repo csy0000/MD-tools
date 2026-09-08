@@ -11,18 +11,101 @@ dataset.
 
 **Status: unreleased.** Version `0.5.0.dev0`, developed on `dev`. Not on PyPI, not tagged.
 
-## Environment
+## Getting started
 
-Python 3.12 and OpenMM 8.6, in a conda environment. OpenMM, OpenFF and AmberTools are conda
-packages; installing MD-tools must not pull a second, pip-built OpenMM alongside them:
+Four steps, in order. If you already have a conda environment with OpenMM 8.6, skip to step 3.
+
+### 1. A package manager, if you have none
+
+The scientific stack is conda packages. Any of conda, mamba or micromamba works; micromamba is a
+single static binary and needs no base environment:
 
 ```bash
-micromamba create -f environment-ci.yml && micromamba activate md-tools-ci
+mkdir -p ~/software/md-stack && cd ~/software/md-stack
+curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -xj bin/micromamba
+export MAMBA_ROOT_PREFIX=$PWD
+```
+
+### 2. The environment
+
+```bash
+micromamba create -y -p ~/software/md-stack/envs/md-tools -f environment-ci.yml
+```
+
+That installs Python 3.12, OpenMM 8.6, OpenFF, AmberTools, ParmEd, RDKit, MDTraj, OpenMMTools and
+NetCDF4 — everything the four commands import.
+
+**It is deliberately CPU-only and single-rank.** `environment-ci.yml` is what CI validates
+against, and CI has no GPU and no second device to bind a rank to. For real work add both:
+
+```bash
+micromamba install -y -p ~/software/md-stack/envs/md-tools -c conda-forge mpi4py openmpi
+```
+
+CUDA needs nothing extra on a machine with a working NVIDIA driver — conda-forge's OpenMM carries
+the CUDA platform and finds the driver at run time. Verify rather than assume:
+
+```bash
+python -c "from openmm import Platform; print([Platform.getPlatform(i).getName()
+                                               for i in range(Platform.getNumPlatforms())])"
+# -> ['Reference', 'CPU', 'CUDA', 'OpenCL']
+```
+
+If `CUDA` is absent, the platform is missing or the driver is not visible; runs will refuse rather
+than silently fall back, which is the intended behaviour.
+
+Without `mpi4py`, single-process and single-GPU runs are fully supported. A launch of more than
+one rank without it is a **fatal preflight error before any output exists** — N uncoordinated
+ranks would each run a whole simulation over one set of paths and the result would look complete.
+
+### 3. The package
+
+```bash
 pip install --no-deps .
 ```
 
-`--no-deps` is deliberate. The scientific stack comes from conda; this package adds only pure
-Python.
+`--no-deps` is deliberate and not optional. The scientific stack comes from conda; this package
+adds only pure Python. Without it, pip pulls a second, pip-built OpenMM alongside the conda one
+and the two disagree about which native libraries are loaded.
+
+### 4. Sourcing it, every time
+
+**Activate the environment before running anything.** Not a convenience — AM1-BCC goes through
+AmberTools' `sqm`, which the OpenFF toolkit discovers by looking on `PATH`. In a bare shell it is
+not found even though it is installed, `AmberToolsToolkitWrapper` is silently absent from the
+registry, and AM1-BCC becomes unavailable under its own name.
+
+```bash
+micromamba activate ~/software/md-stack/envs/md-tools
+```
+
+Or put the environment on `PATH` from your shell profile, which is what a shared machine usually
+wants:
+
+```bash
+# ~/.bashrc
+export PATH="$HOME/software/md-stack/envs/md-tools/bin:$PATH"
+export MD_DATA="/path/to/your/managed/storage"     # where data-register writes
+```
+
+Check it:
+
+```bash
+md-openmm --version
+command -v sqm mpiexec        # both must resolve inside the environment
+```
+
+### 5. Once per machine, before registering data
+
+`md-openmm data-register` needs to know who you are and where managed storage is. This writes
+`~/.config/md-tools/user.config` and is asked once:
+
+```bash
+md-openmm data-register --init
+```
+
+It asks for a stable lowercase `person_id`, your name for provenance, and `$MD_DATA`. Nothing else
+in the four commands needs it — building and running work without it.
 
 ## The four commands
 
@@ -92,6 +175,28 @@ mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in   -p built.pdb -s built.xml \
 
 See [Running](docs/md-run.md) for the flags, the input language, the platform policy, the MPI
 rules, and what AIS writes.
+
+## Worked examples you can run
+
+Each method page carries a runnable script beside its prose and its configuration, so the
+documented commands cannot drift from what actually works:
+
+```text
+docs/openmm_methods/cMD/README.md         what the method is, and what the generated directory holds
+docs/openmm_methods/cMD/example.config    the configuration those commands use
+docs/openmm_methods/cMD/README.sh         the same commands, executable
+```
+
+```bash
+cd docs/openmm_methods/cMD
+./README.sh                     # the documented example, on a GPU
+./README.sh --quick --cpu       # a small implicit-solvent version, anywhere
+./README.sh -i my_protein.pdb   # your own structure
+```
+
+Read `README.sh` as instructions or run it; it builds a system, generates the workflow and runs
+the chain, explaining each command as it goes. It never deletes anything: if its output directory
+exists it stops and says so.
 
 ## Configuration
 

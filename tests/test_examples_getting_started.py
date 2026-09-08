@@ -442,3 +442,47 @@ def test_example_6b_the_shipped_build_top_config_is_usable(tmp_path):
         pytest.skip(f"{source} is not shipped")
     resolved = resolve_build_config(source)
     assert resolved["solute"]["kind"] in ("peptide", "peptide-like", "ligand")
+
+
+# --- the runnable script beside each method page ------------------------------------------------
+
+def test_the_cmd_method_page_script_actually_runs(tmp_path):
+    """`docs/openmm_methods/cMD/README.sh` is instructions AND a script; run it.
+
+    A worked example nobody executes drifts from the code it documents, and the drift is invisible
+    until someone follows it and it fails. `--quick` shrinks the documented example to an implicit
+    solvent chain of a few thousand steps so this finishes in about a minute; everything else --
+    the commands, the generated files, the order -- is what the page documents.
+    """
+    script = REPO / "docs" / "openmm_methods" / "cMD" / "README.sh"
+    if not script.is_file():
+        pytest.skip(f"{script} is not present")
+    assert script.stat().st_mode & 0o111, "README.sh is not executable"
+
+    done = subprocess.run(
+        ["bash", str(script), "--quick", "--cpu", "-o", str(tmp_path / "run")],
+        cwd=script.parent, capture_output=True, text=True, timeout=3600)
+    assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
+
+    produced = tmp_path / "run" / "md_script"
+    assert (produced / "cMD.dcd").is_file()
+    assert "completed" in (produced / "cMD.out").read_text(encoding="utf-8")
+
+
+def test_the_method_page_script_refuses_to_delete_an_existing_directory(tmp_path):
+    """It must never clear a path it was handed -- it stops and says so instead."""
+    script = REPO / "docs" / "openmm_methods" / "cMD" / "README.sh"
+    if not script.is_file():
+        pytest.skip(f"{script} is not present")
+
+    occupied = tmp_path / "already-here"
+    occupied.mkdir()
+    keep = occupied / "precious.txt"
+    keep.write_text("do not delete me", encoding="utf-8")
+
+    done = subprocess.run(
+        ["bash", str(script), "--quick", "--cpu", "-o", str(occupied)],
+        cwd=script.parent, capture_output=True, text=True, timeout=300)
+    assert done.returncode != 0
+    assert "already exists" in done.stdout + done.stderr
+    assert keep.read_text(encoding="utf-8") == "do not delete me", "the script deleted user data"
