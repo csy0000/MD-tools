@@ -613,6 +613,22 @@ claims a choice nobody made.
 recorded as such — there is no water to hold rigid. So an implicit-solvent run uses CCMA and
 nothing else. The build log states the resolved value rather than the requested one.
 
+#### mbondi3 on a solute with no residue names
+
+`mbondi3` is `mbondi2` plus two side-chain corrections that ParmEd selects by RESIDUE and ATOM
+NAME: `OD*`/`OE*` in `GLU/ASP/GL4/AS4` to 1.4 A, and `HH*`/`HE*` in `ARG` to 1.17 A. A solute
+built from SMILES is one residue with one invented name, so those rules match nothing and the
+radii are exactly mbondi2 -- while the build still reports `mbondi3`.
+
+`solute.kind: peptide-like` closes that gap for a head-to-tail cyclic peptide of canonical
+residues: the same corrections are applied from a validated chemistry map, after the mbondi2
+baseline and before `createSystem`, and the build records the corrected atoms with their old and
+new intrinsic radii. `kind: ligand` is unchanged and still reduces to mbondi2, which the build
+log continues to state.
+
+See `docs/migration/solute-kind.md` and
+`docs/integration/rgdfv-peptide-like-mbondi3.md`.
+
 #### Known issue: under implicit solvent the setting is ignored
 
 `constraints.type` is honoured on the explicit-solvent route and **not** on the implicit one,

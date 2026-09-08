@@ -109,9 +109,15 @@ Documented in `docs/scientific-defaults.md` section 11.2.
 
 ## 6. AM1-BCC charges are not reproducible between builds of the same input
 
-**What.** Two `build-top` runs of the same `.smi`, same configuration, same machine, produce
-different partial charges. Measured on a 43-atom cyclic peptide: **41 of 43 atoms differed**, one
-example atom moving from -0.63047675 to -0.71247675 e.
+**What.** Two `build-top` runs of the same `.smi`, same configuration, same machine, can produce
+different partial charges. Measured on a 43-atom cyclo(Gly-Asp-Arg): **41 of 43 atoms differed**,
+one example atom moving from -0.63047675 to -0.71247675 e. Reproduced with the two builds run
+SEQUENTIALLY, so it is not a parallel-execution artefact.
+
+**It is molecule-dependent, not universal.** The 79-atom c(RGDfV) reproduced its charges
+**exactly** -- 0 of 79 atoms differed -- across builds separated by a day and by a change to the
+engine. So some molecules land in the same conformer every time and some do not; the absence of a
+difference is luck rather than a guarantee, and cannot be relied on for any particular input.
 
 **Cause, from the installed source.** The ETKDG embedding IS seeded, and `build-top` refuses an
 unseeded one precisely so "this prepared system would not be reproducible" cannot happen. But the
