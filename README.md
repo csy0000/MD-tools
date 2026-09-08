@@ -13,7 +13,38 @@ dataset.
 
 ## Getting started
 
-Four steps, in order. If you already have a conda environment with OpenMM 8.6, skip to step 3.
+Step 0 needs root and is done once per machine; steps 1-5 are a normal user install. If you
+already have a conda environment with OpenMM 8.6, skip to step 3.
+
+### 0. The NVIDIA driver — the one step conda cannot do
+
+**Needs root, and is done once per machine.** Everything else below is a normal user install.
+
+Conda supplies the CUDA *toolkit* — `libcudart`, `libnvrtc`, `libcufft` — and nothing else. The
+**driver** is the kernel module plus `libcuda.so.1`, and it comes from the operating system:
+
+```text
+libcuda.so.1   ->  /lib/x86_64-linux-gnu/libcuda.so.1     the DRIVER, from the OS
+libnvrtc.so    ->  <env>/lib/libnvrtc.so                  the TOOLKIT, from conda
+```
+
+Both are loaded by OpenMM's CUDA plugin, from two different places. No conda package can install
+the first: `environment-ci.yml` cannot rebuild a driver, and a machine without one has no CUDA no
+matter what the environment contains.
+
+Check what you have:
+
+```bash
+nvidia-smi        # driver version, and the highest CUDA version it supports
+```
+
+If that prints a table you are done — install the driver through your distribution or NVIDIA's
+installer otherwise. The constraint runs one way: a driver is forward-compatible with older
+toolkits, so a recent driver serves any CUDA version conda resolves, while a toolkit newer than
+the driver supports fails at run time.
+
+**No GPU?** Everything still installs and runs on the CPU and Reference platforms; skip this step
+and pass `--cpu` at run time. GPU tests are then unavailable rather than silently passing.
 
 ### 1. A package manager, if you have none
 
