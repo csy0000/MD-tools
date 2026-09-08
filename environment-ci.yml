@@ -30,6 +30,26 @@ dependencies:
 
   # --- what the six commands import ------------------------------------------------------------
   - openmm=8.6.0              # the simulations themselves
+    #
+    # THE `.dev` IN THE VERSION STRING IS COSMETIC. A build from this package reports
+    #
+    #     >>> openmm.version.version
+    #     '8.6.0.dev-c6173db'
+    #
+    # which reads like a development snapshot and is not one. OpenMM generates version.py at
+    # build time and appends `.dev-<githash>` unless the build sets the release flag, which the
+    # conda-forge recipe does not. The code is the 8.6.0 RELEASE: its `git_revision`,
+    # c6173db6e8edd705eb59172bd21e9ce69c572405, is exactly the commit the upstream 8.6.0 tag
+    # points at (released 2026-08-19). conda-forge lists 8.6.0beta, 8.6.0rc1 and 8.6.0 as
+    # separate versions; this pin takes the plain one.
+    #
+    # Verify rather than trusting either string:
+    #
+    #     python -c "import openmm.version as v; print(v.version, v.git_revision)"
+    #
+    # and compare git_revision with the tag. Do NOT conclude from `.dev` that the environment
+    # drifted onto a snapshot, and do not "fix" it by building from source -- that yields the
+    # identical code with a tidier string.
   - pyyaml                    # every configuration file read or written
   - numpy                     # box geometry in solvation.py and system.py
   - openff-toolkit            # Molecule, GLOBAL_TOOLKIT_REGISTRY -- ligand parameterisation
