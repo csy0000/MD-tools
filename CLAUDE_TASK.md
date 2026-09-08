@@ -1,236 +1,182 @@
-# RGDfV macrocycle: bounded REST2 integration and data registration
+# Implement peptide-like macrocycles with verified mbondi3 corrections
 
-## Goal and scope
+## Goal
+Implement this change on MD-tools dev, validate it, and push the code, tests and report.
+Read CLAUDE.md and preserve unrelated work. This supersedes the completed RGDfV
+integration task; retain docs/integration/rgdfv-rest2.md as the historical record.
 
-Execute one real integration project in a sibling folder of MD-tools:
-../RGDfV-REST2/
+Support head-to-tail cyclic peptides composed of canonical amino-acid side chains,
+including D stereoisomers, parameterized as a whole molecule with Sage/AM1-BCC.
+RGDfV is the concrete integration case. Do not expand into a general modified-peptide
+framework, solvent-model comparison, new force field or longer convergence study.
 
-Prove three things:
-1. The five backbone omega central bonds are excluded from REST2 torsion scaling.
-2. The whole macrocycle can be parameterized using Sage 2.2.1 and AM1-BCC and run in implicit solvent.
-3. A completed dataset meets the current MD-tools data contract, can be deposited under the user's actual MD_DATA root, and can be read and verified there.
+## 1. One classification in the existing configuration
+Add solute.kind with exactly peptide, peptide-like, ligand. Keep existing configuration
+locations, e.g. this YAML .config:
+    solute:
+      kind: peptide-like
+      ligand_forcefield: sage-2.2.1
+      ligand_charge_method: am1bcc
+    solvent:
+      model: GBn2
+    constraints:
+      type: HBonds
+    hydrogen_mass_repartitioning:
+      enabled: false
 
-This is the next project integration experiment, not another exhaustive engine audit.
-Read CLAUDE.md. Use the tested engine commit
-443fc736f3a8f426414e244a50a1a438d2d8a497 initially.
-Do not reset the user's MD-tools checkout to that commit: install it from an isolated checkout/wheel.
-Record the actual installed commit, package import origin and environment. Preserve unrelated work.
+peptide uses the existing protein route; ligand uses the existing whole-molecule route;
+peptide-like uses that SAME whole-molecule parameterization route plus validated peptide
+chemistry mapping. It must not load ff14SB or replace Sage charges/bonded terms.
+Do not introduce a separate parameterization implementation.
 
-## Workspace and deliverables
+Backward compatibility:
+- Explicit legacy peptide:true maps to kind:peptide; false maps to kind:ligand.
+- Neither field specified retains the current peptide default.
+- Resolve aliases before defaults so an injected peptide:true cannot override kind.
+- Both explicitly supplied: accept only the exact compatible alias pair
+  (peptide/true or ligand/false); otherwise refuse with a migration message.
+  peptide-like has no boolean alias; omit the legacy key.
+- Persist one authoritative classification; any derived compatibility field is never
+  independently authoritative. Existing saved configs must remain readable.
+- Unknown values and incompatible input formats fail before publication.
+Inspect build/top.py, openmm/system_config.py and route consumers, examples and logging.
+Keep actual force-field resource selection separate from chemical classification.
 
-Resolve the sibling path relative to the actual MD-tools checkout, not a hard-coded machine path.
-If it exists, inspect and preserve its contents rather than overwriting it.
+## 2. Validated molecular map
+Reuse RDKit and the retained SDF graph; add one reusable mapping implementation.
+Do not infer chemistry from a single UNL/custom residue name or hard-code RGDfV indices.
+For v1 require an unambiguous head-to-tail alpha-peptide backbone cycle and canonical
+side-chain identities. Include glycine, proline and D stereoisomers without equating
+L/D universally to S/R (cysteine is an exception). Require specified stereochemistry
+where applicable. Preserve protonation, formal charges, all bonds and atom order.
 
-Keep the project independent of the engine:
-- inputs/: chemical identity, stereochemical SMILES, source/reference and atom mapping.
-- config/: build, REST2, CV and relevant preparation configurations.
-- scripts/: small reproducible preparation, run and validation scripts.
-- data/: generated build and simulation datasets; ignored by Git.
-- reports/: measured checks, commands, plots and final verdict.
-- README.md: short reproduce/resume/register instructions and engine pin.
+Map source graph -> prepared SDF -> System solute indices explicitly, accounting for
+hydrogen addition and explicit-solvent particles where applicable. Verify connectivity,
+bond orders and stereochemistry through conversions; equal atom counts alone are insufficient.
+Record residue identities, stereochemistry, protonation, backbone N/CA/C/O indices,
+cyclic links, and the affected side-chain atom sets.
+Equivalent symmetric matches may be accepted only if all affected atom sets agree.
+Reject ambiguous decomposition or unsupported modified side chains with a useful reason;
+the generic ligand route remains available explicitly. Do not guess a partial mapping
+while claiming complete peptide-like support.
 
-Version the small project inputs/configs/scripts/reports locally; do not commit trajectories,
-checkpoints, charge caches or large generated data. Do not create a remote sibling repository
-without a request. At the end, push a concise, self-contained integration report to MD-tools dev
-at docs/integration/rgdfv-rest2.md, including the validated molecular identity, essential settings,
-commands/results, actual engine pin and registered dataset identity. Engine fixes, if needed,
-belong in MD-tools, not in copied runtime code inside the project.
+Use the same map for meaningful cyclic phi/psi/omega definitions and radius assignment.
+Reuse existing omega classification/scaler; cross-check its output against the map.
+Proline-like exclusions/scaling retain the existing scientific policy.
+Retain existing general ligand behavior. No automatic new restraints or forces for CVs.
 
-## 1. Establish the molecule before building
+## 3. Correct radii before System construction
+The current implicit builder calls ParmEd changeRadii(..., "mbondi3"), whose Arg/Asp/Glu
+rules depend on residue/atom names. A single ligand residue misses these rules.
+For mapped peptide-like chemistry, assign the equivalent established corrections after
+baseline radius assignment but BEFORE createSystem/serialization:
+- deprotonated Asp/Glu side-chain carboxylate oxygens: 1.40 angstrom each;
+- positively charged Arg guanidinium hydrogens corresponding to canonical HH*/HE*:
+  1.17 angstrom each.
+RGDfV should have TWO affected Asp oxygens and FIVE affected Arg hydrogens.
+Do not change carbonyl oxygens, backbone NH hydrogens or other atoms.
+Do not apply charged-group corrections to neutral protonation variants.
+The supported head-to-tail cycle has no terminal OXT correction.
 
-Target head-to-tail cyclo(L-Arg-Gly-L-Asp-D-Phe-L-Val), c(RGDfV).
-Lowercase f means D-Phe. This is the non-N-methylated molecule; do not substitute a similarly
-named N-methylated analog.
+Verify these rules against the installed ParmEd implementation and record its version.
+Reference: https://parmed.github.io/ParmEd/html/_modules/parmed/tools/changeradii.html
+Use chemical identities/protonation, not arbitrary residue renaming or guessed radii.
+If a selected radius/model policy is inapplicable, do not quietly apply mbondi3 anyway.
+Explicit-solvent builds must not acquire GB terms or radius corrections.
 
-Use the user's existing trusted input if available. Otherwise construct/obtain a chemically
-explicit stereochemical SMILES and validate it independently before use. Record its origin.
-Specify Arg guanidinium +1 and Asp side-chain carboxylate -1, for net formal charge zero.
-There are no free backbone termini. Confirm:
-- one connected cyclic pentapeptide with a 15-membered backbone ring;
-- exactly five backbone carbonyl-C--amide-N links, including Val->Arg ring closure;
-- L-Arg, L-Asp, D-Phe and L-Val stereochemistry, with Gly achiral;
-- explicit protonation, hydrogens and all bond orders;
-- source graph, prepared SDF and built topology agree through an explicit atom mapping.
+Record requested radius policy, actual assignment method, correction atom indices and
+old/new intrinsic radii with units, molecular-map digest and corrected-atom count.
+Replace name-only coverage claims for this route with measured evidence.
+Report intrinsic radii separately from OpenMM offset radii and effective Born radii.
+The serialized CustomGBForce stores transformed parameters: verify using the installed
+GBn2 offset (normally 0.0195141 nm), not by comparing its field directly to 0.14 nm.
+Check corresponding dependent parameters are rebuilt consistently.
 
-Use residue chemistry and stereocentres rather than copying ALA atom indices.
-Create a residue/backbone atom map from the molecular graph, retained across conversion.
-Generate an annotated structure or atom table sufficient to review the five omega bonds and CVs.
+All solute charges, valence and LJ/exception parameters, masses and constraints must
+match an otherwise identical ligand build. Only the intended GB parameters change.
+Keep the current GBn2 scaling by (1-tau), and label Sage+GBn2 as a hybrid whose
+conformational accuracy is not established by implementing these corrections.
 
-## 2. Parameterize through the Sage whole-molecule route
+## 4. Tests with concrete pass criteria
+First demonstrate the missed corrections on the current RGDfV ligand build.
+Add focused regressions rather than assertions that merely mirror implementation.
 
-Use the public build-top interface and a .smi input. Essential configuration:
+A. Configuration:
+test each new kind, legacy booleans, absent fields, matching aliases, conflicts,
+unknown values and config round trips; peptide-like demonstrably uses Sage.
+B. Chemistry:
+RGDfV gives five residues, D-Phe, the five cyclic links and correct charged groups.
+Use atom-permuted/relabelled inputs to prove index/name independence.
+Add compact fixtures exercising Glu, Pro/Gly and D/L handling (including Cys), neutral
+side-chain controls, and rejection of ambiguous/unsupported chemistry.
+C. Radii:
+prove exactly 2 O and 5 H corrections for charged RGDfV, with all other intrinsic
+radii unchanged from the legacy ligand baseline. Independently compare these atom
+sets to a trusted canonical-residue ParmEd mbondi3 assignment; never derive both
+expected and observed values through the new mapper.
+Neutral-group controls do not receive the charged correction.
+Serialize/reload the actual System; reconstruct intrinsic radii from offset fields
+with explicit units and check abs tolerance 1e-8 nm. Check finite energies and forces.
+D. Hamiltonian:
+with identical charges and coordinates, non-GB parameters remain unchanged; compare
+GB energies on several configurations, without imposing a sign or arbitrary minimum
+magnitude. At tau=0 reproduce the corrected base System. At tau=0.25 and 0.5
+retain existing omega/eligible-torsion/nonbonded/GB scaling invariants using existing
+repository tolerances, specified before inspecting results.
+E. Integration:
+both md-run and generated entry points consume the corrected serialized System and
+map without recomputing a different assignment. Map/SDF/provenance survive data inventory.
+Legacy peptide and ligand representative builds retain their original Hamiltonians.
+An explicit peptide-like smoke build retains Sage and has no GB force.
 
-solute:
-  peptide: false
-  ligand_forcefield: sage-2.2.1
-  ligand_charge_method: am1bcc
-solvent:
-  model: GBn2
-hydrogen_mass_repartitioning:
-  enabled: false
+Run the fast suite, affected real CUDA/MPI lanes and wheel install outside the checkout.
+Include cMD, REST2, rREST2 and AIS smoke coverage for the shared corrected System/scaler;
+reuse existing test lanes instead of four new scientific projects.
+Run full GPU/slow coverage if shared scientific runtime or restart code changes.
+CUDA is mandatory evidence; CPU graph/parameter checks are legitimate but not a
+substitute. Record skips and blockers honestly.
 
-Use HBonds constraints and a 2 fs timestep for dynamics. No periodic box, explicit water,
-ions, cutoff, barostat or NPT stage. No SASA/nonpolar term for this first test.
-Inspect the installed configuration schema for exact supported fields; do not invent flags.
+## 5. Corrected RGDfV sibling integration
+Use ../RGDfV-REST2 relative to the actual checkout. Preserve the existing project and
+registered dataset; create a distinctly named corrected-mbondi3 dataset/run directory.
+Never resume old checkpoints with the changed Hamiltonian or alter old registered files.
+Reuse verified molecular input and AM1-BCC charges/cache ONLY with matching identity,
+stereochemistry, protonation and atom mapping, recording cache origin and charge digest.
+Otherwise recalculate actual AmberTools AM1-BCC; do not silently substitute ELF10/NAGL.
 
-The peptide-PDB route uses a protein force field and would not test Sage. The actual intramolecular
-force field must be openff-2.2.1, with the exact resource/version recorded.
+Install the new committed wheel in the sibling environment, record commit/import path.
+After chemistry, radii and force-level checks pass:
+- six states tau=0,0.1,0.2,0.3,0.4,0.5 at 300 K;
+- HBonds, 2 fs, HMR off, no SASA, nonperiodic GBn2;
+- minimize then 100 ps per-state equilibration;
+- 1 ns production/state, exchange every 10 ps;
+- all 15 backbone CVs every 1 ps, trajectory/checkpoint every 10 ps;
+- interrupt once after >=200 ps and resume to the original production budget.
+Use available CUDA devices and six MPI ranks without disturbing unrelated jobs.
+Verify final grids (1001 CV rows/state), completion, cyclic integrity, mapped CVs
+against matching coordinates, omega force-level exclusion, and unchanged assignment
+across resume. Reuse the established uninterrupted-reference comparison if affordable;
+do not claim bitwise reference equality unless actually measured.
+Report acceptance and Arg/Asp contact diagnostics descriptively, with no convergence claim
+or acceptance threshold. Do not tune the ladder during this test.
 
-### Charges
+Assemble required metadata and validation reports BEFORE registration. Use existing
+identity/storage configuration, supported data-register dry run then transaction and
+verify-only (include required project/data/year arguments). Use a new dataset identity
+containing a corrected-mbondi3 distinction. Verify hashes and reopen CVs/trajectories
+through the project symlink. Do not invent a storage destination or license.
 
-Require actual AM1-BCC, not NAGL, Gasteiger or a silent fallback. The current code may choose
-am1bccelf10 when OpenEye is detected even when am1bcc was requested. Inspect the actual call and
-record the actual toolkit backend/charge scheme. For this experiment use the AmberTools AM1-BCC
-route; an ELF10 run does not satisfy this particular test.
+## 6. Validate -> fix -> revalidate -> report
+For every failing required check: retain the command and diagnostic, identify the cause,
+add a focused regression, implement the fix and rerun that check and its dependent gates.
+Do not weaken tolerances, rename failures as passes or remove failing tests.
+Stop only on a concrete unavailable dependency/hardware or unresolved chemical ambiguity,
+with completed changes and precise remaining blocker recorded.
+Avoid unrelated backlog fixes, broad refactors, new commands and automatic long production.
 
-Record AmberTools/OpenFF/toolkit versions, conformer preparation and any charge cache used.
-Retain per-atom charges with the atom mapping and the charge calculation diagnostics. Verify
-finite charges, net charge agreement within 1e-5 e, complete parameter assignment, correct
-particle/bond counts, preserved stereochemistry and ring closure.
-
-### Implicit solvent is a separate component
-
-Inspect the final System's GBn2 parameters and radii. Sage controls the intramolecular parameters;
-the GB model/radius assignment is an additional modelling choice.
-
-In particular, the single-ligand residue representation may prevent mbondi3's residue-name-based
-Arg/Asp corrections. Report what was actually assigned to the Arg/Asp functional groups and
-whether the requested radius change was a no-op. Do not relabel residues or invent radii merely
-to make a check pass.
-
-A documented generic ligand-radius assignment may be used as an explicitly labelled exploratory
-Sage+GBn2 integration test. Do not claim conventional peptide mbondi3 parity if those adjustments
-were not applied. If the resulting Hamiltonian is internally inconsistent or a required parameter
-is missing, fix or report that before running; a complete but scientifically unvalidated hybrid
-model is a limitation, not proof of invalid software.
-
-Retain SDF, charge table, parameterization provenance and serialized System in the eventual dataset.
-Verify the conversion to the final implicit System preserves the intended charges and bonded/
-nonbonded parameters, apart from the explicitly added GB force and configured constraints.
-
-## 3. Prove omega exclusion at the force level
-
-Identify the five backbone amide central bonds independently from the source chemical graph.
-Use the actual automatic ligand classifier first; do not pre-populate its expected output.
-
-Pass if:
-- the resolved exclusion set contains exactly those five ordinary backbone amide bonds;
-- the ring-closing bond is included;
-- no backbone nitrogen is misclassified as proline-like because it lies in the macrocycle;
-- no candidate remains ambiguous and no unrelated central bond is excluded;
-- the SDF-to-topology index mapping is demonstrated.
-
-Inventory every PeriodicTorsionForce term about each excluded central bond, including all
-periodicities and reversed atom order. Compare the original and scaled Systems at tau=0, 0.25, 0.5.
-For all those terms, periodicity, phase and force constant remain unchanged. The torsion is
-retained, not deleted, restrained, or removed from the force field.
-
-Positive control: nonzero eligible non-omega torsion terms scale by (1-tau)^2. Also check the
-existing intended scaling for solute nonbonded/1-4 and GB, and that bonds/angles remain unchanged.
-At tau=0 the scaled System reproduces the original Hamiltonian. Reuse established repository
-parameter/energy comparison tolerances and record them before inspecting results.
-
-Save a compact bond/term table with expected versus observed factors. Omega trajectories are a
-useful diagnostic but are not the proof: an unscaled omega may still fluctuate or isomerize.
-
-If detection is wrong, fix the reusable detector/mapping in MD-tools with a focused regression
-test. An explicit manual exclusion can help diagnose the issue, but cannot be reported as passing
-automatic detection.
-
-## 4. Run the integration experiment
-
-Use the accepted protocol:
-- six states: tau = 0, 0.1, 0.2, 0.3, 0.4, 0.5;
-- one physical temperature, 300 K;
-- 2 fs timestep, HMR off, fixed-volume/nonperiodic implicit solvent;
-- minimize, then 100 ps equilibration at each state's Hamiltonian;
-- 1 ns REST2 production per state;
-- exchanges every 10 ps;
-- CVs every 1 ps; state trajectories and checkpoints every 10 ps.
-
-At 2 fs this is 50,000 equilibration steps per state, 500,000 production steps,
-5,000 steps per exchange and 500 steps per CV observation.
-Use configured Langevin settings explicitly and record deterministic seeds.
-Run through supported public interfaces/installed APIs; inspect how per-state initialization is
-supported before assembling the equilibration pipeline. Do not forge checkpoint files or
-silently replace per-state equilibration with six copies of one tau=0 state.
-
-Use real CUDA and six MPI ranks for the ladder. Inspect available devices, prefer one rank per
-available GPU, and use only documented device sharing if necessary. Record rank/device mapping.
-Do not occupy or terminate unrelated jobs. AM1-BCC and graph checks legitimately run on CPU.
-
-Define all 15 backbone CVs (five phi, five psi, five omega) with cyclic indexing.
-Validate definitions against the mapped chemical graph and independently recompute selected
-reported rows from matching saved coordinates. Respect the documented pre-exchange CV convention:
-do not compare a pre-exchange row to a post-exchange frame holding another configuration.
-
-Deliberately interrupt once after at least 200 ps of production, retain the committed checkpoint,
-then resume to the original 1 ns budget. Do not extend the budget accidentally.
-Verify checkpoint progress, expected CV grids, trajectory/state assignment and no lost/duplicated
-committed observations. Report exchange attempts/acceptance, state/walker movement, energies,
-temperatures, ring integrity and omega traces. Acceptance and sampling quality are observations,
-not targets to force by changing the agreed ladder mid-run.
-
-This budget establishes integration behavior, not converged populations or a validated force field.
-
-## 5. Finish, register and verify
-
-Keep build, preparation and production provenance together in a self-contained dataset under
-the sibling project's data/. Include the molecular identity/protonation, mapped charges,
-force-field/GB details, actual engine pin, configs/seeds, resolved exclusions, all CV definitions
-and outputs, per-state trajectories, exchange history, checkpoints and completion records.
-Include essential validation reports before registration; registered datasets remain immutable.
-
-Resolve storage through the existing machine/user configuration, MD_DATA or documented override.
-Never invent a storage root or overwrite user configuration. If none is available, finish the
-local experiment and report the missing destination as the deposition blocker.
-
-Use the current data-contract v2 interface:
-md-openmm data-register -idata <finished-dataset> -project_name RGDfV-REST2 -data_name RGDfV-Sage221-GBn2-REST2 -year <completion-year> --dry-run
-then the same command without --dry-run, followed by:
-md-openmm data-register -idata <registered-destination> --verify-only
-
-The expected project-role destination is:
-$MD_DATA/<completion-year>/RGDfV-REST2/RGDfV-Sage221-GBn2-REST2/
-
-The user has authorized this integration/deposition experiment. After validation and a successful
-dry run, execute registration using the supported transaction. Never manually move/delete the
-source to simulate successful registration. If the destination already exists with different
-content, use a clearly versioned new dataset name and record it; never overwrite it.
-
-Pass if completion/lineage checks and dry run succeed, real registration succeeds, verification
-passes, the original data path becomes the intended symlink, and analysis can reopen trajectories/
-CVs through that link. Confirm the dataset contains the inputs and metadata needed to interpret
-the output without referring to temporary build directories.
-
-Registration into local managed storage tests the FAIR-oriented contract, not public FAIR
-certification. Record dataset identity, checksums, creator, method/software provenance, access
-location and reuse terms where known. Do not invent a license or claim a DOI/public deposit.
-
-## 6. Fix only blockers, then hand off
-
-Start with parameterization and force-level checks; do not spend the REST2 budget on a wrong
-molecule or incorrect scaling. If a check fails, preserve the command/diagnostic, fix the concrete
-cause, and rerun the affected check. Do not loosen scientific assertions or substitute another
-force field/charge model.
-
-If the engine needs a fix, implement it on MD-tools dev, add a focused regression test, run the
-affected existing CUDA/MPI lanes, install the new commit into the sibling environment, and record
-the changed pin. Rerun this experiment's dependent checks; run a full suite only if shared
-scientific execution or restart logic changed. Do not reopen deferred metadata hardening.
-
-Keep unrelated optional issues in the backlog. Stop on a genuine chemical/parameterization/
-hardware blocker with the finished work and diagnostic intact; never label an unexecuted step
-as passing.
-
-Final report:
-- molecule, stereochemistry/protonation and actual parameter/charge/GB choices;
-- five-bond omega exclusion table and positive scaling controls;
-- measured six-state run and interrupted-resume results;
-- actual engine commit and any focused fixes;
-- registration/verification result, dataset ID and actual destination;
-- concise limitations and next scientific step.
-
-Push the integration report and any necessary engine fixes to MD-tools dev. Keep the project
-files in the sibling project and large data in the registered dataset. Do not start a longer
-production study automatically.
+Update configuration examples/help, scientific-defaults and a concise migration note.
+Add docs/integration/rgdfv-peptide-like-mbondi3.md with actual corrected atom/radius
+table, engine pin, commands, test counts, CUDA evidence, integration/registration result
+and limitations. Link the historical report rather than rewriting its old-model result.
+Push code/tests/docs to dev. Final handoff must distinguish implemented, measured,
+not run and blocked. The goal is an actual verified fix, not another instruction-only commit.
