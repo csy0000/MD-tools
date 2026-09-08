@@ -311,39 +311,82 @@ exclusion but — as stated above — is a diagnostic, not the proof.
 
 ---
 
-## 6. Registration: blocked, and why
+## 6. Registration — completed and verified
 
-**Not performed.** `md-openmm data-register` resolves identity and storage independently, and
-neither exists on this machine:
+Registration was blocked for part of this experiment: `$MD_DATA` was unset and no user
+configuration existed, and every `data-register` path including `--dry-run` needs both. No storage
+root was invented and no user configuration was written, since `--init` requires the user's own
+name and `person_id`. The user then created it, and registration ran.
+
+| | |
+|---|---|
+| managed storage root | `/path/to/DATA` (from `machine.md_data`) |
+| user configuration | `~/.config/md-tools/user.config` (XDG default) |
+| canonical path | `2026/RGDfV-REST2/RGDfV-Sage221-GBn2-REST2` |
+| **destination** | `/path/to/DATA/2026/RGDfV-REST2/RGDfV-Sage221-GBn2-REST2` |
+| **dataset id** | `rgdfv-rest2-rgdfv-sage221-gbn2-rest2` |
+| creator | `person_id: chen` |
+| manifest | `dataset.yaml`, schema 2.0, contract v2, 5 components |
+| inventory | **57 files, 5.8 MB, all hashed** |
+
+**Dry run** — every check passed with nothing written:
 
 ```
-$ md-openmm data-register -idata <dataset> -project_name RGDfV-REST2 \
-      -data_name RGDfV-Sage221-GBn2-REST2 -year 2026 --dry-run
-data-register: no user configuration at ~/.config/md-tools/user.config (from XDG default).
-Create one with:
-    md-openmm data-register --init
+machine records : 3 accepted, all reporting completion
+lineage         : 4 stage handoff(s) verified by digest
+inventory       : 57 files, 5.8 MB, all hashed
+contract        : dataset.yaml validates against contract v2 (5 components)
 ```
 
-`$MD_DATA` is unset, `~/.config/md-tools/user.config` does not exist, and no documented override
-supplies a root. Every `data-register` path — including `--dry-run` — needs both. **No storage
-root was invented and no user configuration was created**, since `--init` requires the user's own
-name and `person_id` and would write a machine-wide file that is theirs to own.
+**The transaction**, staged and verified before anything was committed or removed:
 
-**This is the deposition blocker to clear**, and it is a one-time action by the user:
-
-```bash
-md-openmm data-register --init          # asks for name, person_id and $MD_DATA
+```
+staged        : .../RGDfV-Sage221-GBn2-REST2.registering
+verified      : every staged file re-read, all digests match
+committed     : .../2026/RGDfV-REST2/RGDfV-Sage221-GBn2-REST2
+re-verified   : the committed destination matches the inventory
+source removed: ...   (only after the destination verified)
+linked        : <project>/data/dataset/RGDfV-Sage221-GBn2-REST2 -> <destination>
+validated     : the registered manifest passes the contract
 ```
 
-The dataset is assembled, self-contained and ready at
-`../RGDfV-REST2/data/dataset/RGDfV-Sage221-GBn2-REST2/` (5.7 MB). Its expected destination is
-`$MD_DATA/2026/RGDfV-REST2/RGDfV-Sage221-GBn2-REST2/`. It contains molecular identity and the
-atom map, the SDF with bond orders, the serialised System and topology, the build log, every
-configuration and seed, all six state trajectories and CV series with sidecars, the exchange
-history, the checkpoint, the run records, and the validation reports — with **no reference to any
-temporary build directory** (checked). The run records report `run_status: completed`.
+The source was never moved or deleted by hand to simulate success; the supported transaction did
+it, and only after the destination verified.
 
-No DOI, no public deposit and no licence are claimed; none exists.
+**Independent verification** of the committed destination:
+
+```
+verified : 57 files, manifest valid, all digests match
+```
+
+**Analysis reopens through the link.** The local path is now a relative symlink into managed
+storage, and the data load through it without referring to the destination path:
+
+```
+data/dataset/RGDfV-Sage221-GBn2-REST2 -> ../../../../DATA/2026/RGDfV-REST2/RGDfV-Sage221-GBn2-REST2
+
+remd0: 100 frames, 79 atoms | 1001 CV rows, omega_ARG0[0] =  176.769 deg
+remd5: 100 frames, 79 atoms | 1001 CV rows, omega_ARG0[0] = -157.670 deg
+```
+
+The dataset carries the inputs and metadata needed to interpret the output — molecular identity
+and atom map, the SDF with bond orders, the serialised System and topology, every configuration
+and seed, the validation reports — with **no reference to any temporary build directory**
+(checked).
+
+This is registration into local managed storage, which tests the FAIR-oriented contract. It is
+not public FAIR certification: **no DOI, no public deposit and no licence are claimed**, and none
+exists.
+
+**One interface note, not a blocker.** The documented `--verify-only` form
+(`data-register -idata <registered-destination> --verify-only`) is rejected by this build, which
+also requires `-project_name`, `-data_name` and `-year`:
+
+```
+data-register: missing required option(s) -project_name, -data_name, -year.
+```
+
+Supplying them verifies correctly. The command works; the documented short form does not.
 
 ---
 
@@ -359,7 +402,7 @@ No DOI, no public deposit and no licence are claimed; none exists.
   chemistry — a limitation, not evidence of broken software.
 - **Exchange acceptance is low and uneven** (§5), with a 2% pair. A production study would need a
   ladder chosen from measured acceptance rather than a uniform six-rung tau spacing.
-- **Registration is unexecuted**, pending the user's one-time `--init` (§6).
+- **Registration is complete and verified** (§6). `--verify-only` needs the path segments the documented short form omits — an interface wart, not a data problem.
 
 **Next scientific step.** Before any longer study, re-tune the ladder: run a short acceptance
 scan to place the rungs by measured overlap rather than uniform tau spacing, paying particular
