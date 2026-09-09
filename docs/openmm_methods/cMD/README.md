@@ -4,6 +4,26 @@ Ordinary MD: one system, one Hamiltonian, one trajectory. It is also the method 
 *source ensembles* the other protocols consume — a fixed-τ cMD run at the ladder's top rung is how
 an rREST2 reservoir and an AIS source are generated.
 
+
+## The two example files beside this README
+
+| file | what it is |
+|---|---|
+| [`example.config`](example.config) | what you hand to `md-openmm build-md` |
+| [`example.in`](example.in) | what `md-run` then reads — the production stage of a conventional MD chain |
+
+`build-md` generates the `.in` from the `.config`; you do not normally write one by
+hand. It is shipped here because it is the file the run actually reads, and because
+every setting in it carries the schema's own description as a comment — so the meaning
+of a key can be looked up where it is used rather than in the source.
+
+`resolved.config`, written beside the `.in` at run time, stays AUTHORITATIVE: the `.in`
+is resolved into it, and that resolved document is what the run reads.
+
+Both are checked by `tests/test_method_example_inputs.py`, which regenerates the `.in`
+from the `.config` and fails if they have drifted — an example that no longer matches
+the engine is worse than none.
+
 ## Ensemble
 
 | solvent | minimisation | equilibration | production |

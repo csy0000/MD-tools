@@ -6,6 +6,26 @@ much of the solute's Hamiltonian is scaled down, not by how hot the thermostat i
 are softened, so the cost of the ladder does not grow with the number of solvent molecules the way
 temperature REMD's does.
 
+
+## The two example files beside this README
+
+| file | what it is |
+|---|---|
+| [`example.config`](example.config) | what you hand to `md-openmm build-md` |
+| [`example.in`](example.in) | what `md-run` then reads — the ladder's production stage |
+
+`build-md` generates the `.in` from the `.config`; you do not normally write one by
+hand. It is shipped here because it is the file the run actually reads, and because
+every setting in it carries the schema's own description as a comment — so the meaning
+of a key can be looked up where it is used rather than in the source.
+
+`resolved.config`, written beside the `.in` at run time, stays AUTHORITATIVE: the `.in`
+is resolved into it, and that resolved document is what the run reads.
+
+Both are checked by `tests/test_method_example_inputs.py`, which regenerates the `.in`
+from the `.config` and fails if they have drifted — an example that no longer matches
+the engine is worse than none.
+
 ## Ensemble
 
 **NVT.** The runtime installs no barostat and a requested pressure is refused. Exchanging complete

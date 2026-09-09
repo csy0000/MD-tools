@@ -7,6 +7,26 @@ and it reuses the REST2 block for everything about the ladder itself.
 Read [the REST2 page](../REST2/README.md) first. Everything there — the scaling, the NVT runtime,
 one trajectory per state, the four schedules, restart and extension — applies unchanged.
 
+
+## The two example files beside this README
+
+| file | what it is |
+|---|---|
+| [`example.config`](example.config) | what you hand to `md-openmm build-md` |
+| [`example.in`](example.in) | what `md-run` then reads — the ladder's production stage, with the reservoir block |
+
+`build-md` generates the `.in` from the `.config`; you do not normally write one by
+hand. It is shipped here because it is the file the run actually reads, and because
+every setting in it carries the schema's own description as a comment — so the meaning
+of a key can be looked up where it is used rather than in the source.
+
+`resolved.config`, written beside the `.in` at run time, stays AUTHORITATIVE: the `.in`
+is resolved into it, and that resolved document is what the run reads.
+
+Both are checked by `tests/test_method_example_inputs.py`, which regenerates the `.in`
+from the `.config` and fails if they have drifted — an example that no longer matches
+the engine is worse than none.
+
 ## What the reservoir changes
 
 The hottest rung's configurations are drawn from a reservoir that was generated *separately, at

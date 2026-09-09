@@ -109,6 +109,14 @@ CUDA_SITES = {
     "md/_stages.py::set_restraint": (
         "pushes the positional-restraint force constant into a live CUDA Context",
         "test_cmd_cuda_smoke.py, test_cuda_precision_lane (restrained NVT)"),
+    "md/torsion_restraints.py::TorsionRestraint.set_strength": (
+        "pushes the TORSIONAL restraint force constant into a live CUDA Context -- the biasing "
+        "half of umbrella sampling. The same one-parameter push as the positional restraint "
+        "above, and listed separately because it is a different force with a different failure "
+        "mode: a positional restraint that fails to arrive lets a solute drift visibly, while a "
+        "torsional one that fails to arrive produces a window that simply samples the unbiased "
+        "ensemble and looks like a legitimate, if oddly broad, distribution",
+        "test_torsion_restraint_cuda.py"),
     "md/_stages.py::write_final_state": (
         "reads CUDA positions, velocities and parameters into the restart",
         "every cMD lane; asserted in test_explicit_solvent_npt_lane"),
