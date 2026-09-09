@@ -93,6 +93,7 @@ def project(tmp_path_factory):
     (root / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit",
         "ais": {"number_of_paths": PATHS, "switching_steps": SWITCHING,
+                "work_measurement": "components",
                 "observation_interval_steps": OBSERVE_EVERY,
                 "parameter_update_interval_steps": UPDATE_EVERY},
         "ais_source": {"trajectory": "../source.dcd"},

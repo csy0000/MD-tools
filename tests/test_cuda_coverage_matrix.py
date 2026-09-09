@@ -597,6 +597,7 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
     (work / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit",
         "ais": {"number_of_paths": 2, "switching_steps": 20,
+                "work_measurement": "components",
                 "observation_interval_steps": 5,
                 "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
@@ -708,6 +709,7 @@ def test_ais_reads_a_netcdf_source_on_cuda(built, hardware, tmp_path):
     (work / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit",
         "ais": {"number_of_paths": 2, "switching_steps": 10,
+                "work_measurement": "components",
                 "observation_interval_steps": 5, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.nc"},
         "reporting": {"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 5}}),
@@ -1173,6 +1175,7 @@ def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):
     (work / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "explicit",
         "ais": {"number_of_paths": 2, "switching_steps": 10,
+                "work_measurement": "components",
                 "observation_interval_steps": 5, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
         "reporting": {"solute_printout": 5, "system_printout": 5,
@@ -1255,6 +1258,7 @@ def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_expli
         (work / "AIS.config").write_text(yaml.safe_dump({
             "protocol": "AIS", "solvent": solvent,
             "ais": {"number_of_paths": 1, "switching_steps": 20,
+                    "work_measurement": "components",
                     "observation_interval_steps": 5,
                     "parameter_update_interval_steps": 1},
             "ais_source": {"trajectory": "../source.dcd"},
@@ -1320,6 +1324,7 @@ def test_hs_rows_match_recomputation_on_cuda(solvent, built, built_explicit, har
     (work / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": solvent,
         "ais": {"number_of_paths": 1, "switching_steps": 60,
+                "work_measurement": "components",
                 "observation_interval_steps": 6, "parameter_update_interval_steps": 2},
         "ais_source": {"trajectory": "../source.dcd"},
         "reporting": {"solute_printout": 10, "system_printout": 20,
@@ -1400,6 +1405,7 @@ def test_a_hundred_paths_under_real_mpi_produce_exactly_their_own_files(built, h
     (work / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit",
         "ais": {"number_of_paths": 100, "switching_steps": 4,
+                "work_measurement": "components",
                 "observation_interval_steps": 2, "parameter_update_interval_steps": 2},
         "ais_source": {"trajectory": "../source.dcd", "allow_repeated_frames": True},
         "reporting": {"solute_printout": 2, "system_printout": 4,

@@ -131,6 +131,7 @@ def implicit_run(tmp_path_factory):
     (root / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit",
         "ais": {"number_of_paths": 2, "switching_steps": SWITCHING_STEPS,
+                "work_measurement": "components",
                 "observation_interval_steps": OBSERVE_EVERY,
                 "parameter_update_interval_steps": UPDATE_EVERY},
         "ais_source": {"trajectory": "../source.dcd"},
@@ -528,6 +529,7 @@ def explicit_run(tmp_path_factory):
     (root / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "explicit",
         "ais": {"number_of_paths": 1, "switching_steps": 20,
+                "work_measurement": "components",
                 "observation_interval_steps": 5, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
         "reporting": {"solute_printout": 10, "system_printout": 20,

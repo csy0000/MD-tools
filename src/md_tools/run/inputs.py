@@ -90,6 +90,11 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "switching_steps": "ais.switching_steps",
         "observation_interval_steps": "ais.observation_interval_steps",
         "parameter_update_interval_steps": "ais.parameter_update_interval_steps",
+        # Spelled out. This one decides what the run COSTS and what it can be reweighted with
+        # afterwards, and an abbreviation would make the most consequential line in an AIS input
+        # the least readable one.
+        "work_measurement": "ais.work_measurement",
+        "verify_every_updates": "ais.verify_every_updates",
         "source_frame_start": "ais_source.first_frame",
         "source_frame_end": "ais_source.last_frame",
         "source_frame_stride": "ais_source.frame_stride",

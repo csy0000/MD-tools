@@ -37,6 +37,19 @@ account for.
   `observation_interval_steps` must divide consistently, and a schedule that would have to be
   rounded is refused with the arithmetic that would fix it;
 * both endpoints included in the schedule;
+* **two ways to measure the work, chosen with `ais.work_measurement`, and they cost different
+  amounts.** `work` (the DEFAULT) evaluates `U(tau_k)` and `U(tau_k+1)` and subtracts: two energy
+  evaluations per update, and the work integral is what you get. `components` instead probes the
+  three-group basis at amplitudes (0, 0.5, 1) and derives the work from the fit -- three
+  evaluations per update -- and additionally records the potential as a *function* of tau, which
+  is what reweighting onto a different schedule, a different endpoint, or a Hummer-Szabo estimate
+  at an unvisited tau requires. A single work value cannot produce that function, and re-running
+  at another tau is not reweighting, so this is a decision to take **before** the run rather than
+  after it. In `components` mode `ais.verify_every_updates` schedules the independent direct
+  measurement the fit is checked against; 0, the default, checks the first update of every path;
+* component columns are **absent** from a `work` run's tables rather than zero, and every
+  `completed.json`, `AIS_paths.csv` row and run-identity document records which mode produced it
+  -- so a reweighting script meets a missing column, and a directory cannot mix the two;
 * independent per-path seeds derived from the run seed, so paths are independent and the whole set
   is reproducible;
 * frame selection from an explicitly identified source ensemble, without repetition by default;
@@ -158,13 +171,26 @@ parameter-update grid and also divides `switching_steps`. See
 
 ### The λ-basis decomposition, and the columns it is read from
 
-`U(τ, x) = U_non_scaled + √λ · U_sqrt_scaled + λ · U_lin_scaled`, with `λ = (1 − τ)²`. The three
-components are recovered from three energy evaluations at amplitudes `a ∈ {0, ½, 1}` and are
-checked against a directly measured potential every time they are taken — a run refuses rather
-than record components that do not reproduce `U(τ)`.
+**`ais.work_measurement: components` only.** A `work` run has none of the columns below; see
+*What MD-tools implements* above for the two modes, and
+[the release note](../../release-notes/20260909-ais-work-measurement.md) for why `work` is the
+default.
 
-They are written as separate columns rather than folded into a total, because that is what makes
-a reweighting at a τ the run never visited possible without rerunning it:
+`U(τ, x) = U_non_scaled + √λ · U_sqrt_scaled + λ · U_lin_scaled`, with `λ = (1 − τ)²`. The three
+components are recovered from three energy evaluations at amplitudes `a ∈ {0, ½, 1}`. Because the
+fit gives `U` at *any* τ, both endpoints of an update come from it and the work needs no direct
+evaluation at all — which is why a component update costs three evaluations rather than five.
+
+The fit is checked against a directly measured potential on the updates
+`ais.verify_every_updates` schedules — the first of every path by default — and a run refuses
+rather than record components that do not reproduce `U(τ)`. Checking every update instead would
+cost two more evaluations each time to re-establish something that cannot vary along a path: the
+identity holds for a *system*, and a force whose τ-dependence falls outside the basis falls
+outside it at every coordinate. Observation potentials, by contrast, are checked every time they
+are taken, because they cost the direct evaluation anyway — it is one of their columns.
+
+The components are written as separate columns rather than folded into a total, because that is
+what makes a reweighting at a τ the run never visited possible without rerunning it:
 
 | column group | columns |
 |---|---|
@@ -176,7 +202,8 @@ a reweighting at a τ the run never visited possible without rerunning it:
 **`lin_scaled` is never spelled `scaled`.** Three components carry a scaling and a bare "scaled"
 does not say which, so the ambiguity would land in exactly the files a reweighting is built from.
 
-`AIS_hs.csv` is the **frame-aligned subset**: only rows whose coordinate was actually saved, so
+`AIS_hs.csv` is written in both modes and is the **frame-aligned subset**: only rows whose
+coordinate was actually saved, so
 every HS row's potentials and its work describe *one* configuration. A row without a stored frame
 has empty potential cells by schema, and including it would put those empty cells in front of a
 reweighting with no way to notice.

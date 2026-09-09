@@ -364,6 +364,7 @@ def ais_project(tmp_path_factory):
     _generate(root, "AIS", {
         "protocol": "AIS", "solvent": "implicit",
         "ais": {"number_of_paths": 2, "switching_steps": 20,
+                "work_measurement": "components",
                 "observation_interval_steps": 10, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
         "reporting": {"solute_printout": 10, "system_printout": 10, "checkpoint_printout": 10},

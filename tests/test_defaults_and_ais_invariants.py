@@ -417,3 +417,22 @@ def clean_checkout():
 
 
 
+
+
+def test_the_runtime_work_measurement_defaults_match_the_configuration_schema():
+    """Two files state the same default; a test is what keeps them one default.
+
+    `ais/run.py` must not import the configuration builder -- the runtime is usable without it --
+    so it repeats the two literals. A default changed in `build/md.py` alone would then take
+    effect for anyone who ran `build-md` and NOT for a caller handing `run_one_path` a mapping,
+    and the two would disagree about what an unspecified setting means.
+    """
+    from md_tools.ais.run import AIS_VERIFY_EVERY_DEFAULT, AIS_WORK_MEASUREMENT_DEFAULT
+    from md_tools.build.md import MD_SCHEMA
+
+    fields = MD_SCHEMA.sections["ais"].fields
+    assert fields["work_measurement"].default == AIS_WORK_MEASUREMENT_DEFAULT
+    assert fields["verify_every_updates"].default == AIS_VERIFY_EVERY_DEFAULT
+    assert fields["work_measurement"].enum == ("work", "components")
+    # And the default is `work`: the cheap, direct measurement, as documented.
+    assert AIS_WORK_MEASUREMENT_DEFAULT == "work"

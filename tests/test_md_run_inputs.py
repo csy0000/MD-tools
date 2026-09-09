@@ -297,7 +297,11 @@ def test_the_specified_ais_example_parses_and_every_key_takes_effect():
     assert parsed.resolved["ais"] == {
         "number_of_paths": 100, "tau_start": 0.5, "tau_end": 0.0,
         "switching_steps": 250, "observation_interval_steps": 10,
-        "parameter_update_interval_steps": 1}
+        "parameter_update_interval_steps": 1,
+        # The example names neither, so both come from the schema. `work` is the DEFAULT: an
+        # input that says nothing about how to measure the work gets the two-evaluation direct
+        # measurement, not the basis probe.
+        "work_measurement": "work", "verify_every_updates": 0}
     assert parsed.resolved["ais_source"]["frame_stride"] == 10
     assert parsed.resolved["ais_source"]["trajectory"] == "../cMD_tau0p5/tau_0p5.dcd"
     assert parsed.resolved["dynamics"]["seed"] == 20260902

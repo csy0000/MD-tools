@@ -102,7 +102,10 @@ __all__ = ["BASIS_PROBE_AMPLITUDES", "POTENTIAL_ENERGY_EVALUATIONS_PER_PROBE",
            "COMPONENT_SUMMARY_COLUMNS", "HS_COLUMNS", "GROUPS",
            "Components", "ComponentWork", "ComponentProbe", "EvaluationCounters",
            "quadratic_through", "reconstruction_tolerance", "require_compatible_schema",
-           "RECONSTRUCTION_TOLERANCES", "DecompositionError"]
+           "RECONSTRUCTION_TOLERANCES", "DecompositionError", "WORK_MEASUREMENT_MODES",
+           "work_component_columns", "observation_potential_columns", "hs_columns",
+           "component_summary_columns", "require_mode", "recorded_mode",
+           "DIRECT_POTENTIAL_COLUMN"]
 
 
 #: The three amplitudes probed, in the order they are applied. As far apart as the domain allows:
@@ -187,6 +190,76 @@ HS_COLUMNS = (
     "potential_lin_scaled_kj_mol", "potential_reconstructed_kj_mol",
     "potential_direct_kj_mol",
 )
+
+
+#: The two ways a run may measure the work at a parameter update. Mutually exclusive: `work` is
+#: the direct difference and nothing else, `components` is the basis probe from which the work
+#: follows. See `build.md`'s `ais.work_measurement` for which to choose.
+WORK_MEASUREMENT_MODES = ("work", "components")
+
+#: The one observation potential a `work`-mode run still has. It costs the evaluation the run
+#: already makes, it belongs to the coordinate the row names, and it is U at the tau that was
+#: VISITED -- which is the part of the reweighting story a direct measurement can honestly tell.
+#: The basis columns beside it are the part it cannot, and they are absent rather than nought.
+DIRECT_POTENTIAL_COLUMN = "potential_direct_kj_mol"
+
+
+def require_mode(mode: Any, *, what: str = "work_measurement") -> str:
+    """The mode, or a refusal naming what was given. Never a silent fallback to a default.
+
+    A misspelled mode that quietly became `work` would drop the component columns from a run
+    whose whole purpose was to produce them, and the run would look successful.
+    """
+    if mode not in WORK_MEASUREMENT_MODES:
+        raise DecompositionError(
+            f"{what} is {mode!r}; it must be one of {', '.join(WORK_MEASUREMENT_MODES)}.")
+    return str(mode)
+
+
+def recorded_mode(record: Any, *, what: str) -> str:
+    """The mode a written record was produced under.
+
+    An ABSENT `work_measurement` means `components`, and that is not a guess. Every build that
+    wrote a record without this key took the basis probe unconditionally -- it was the only mode
+    -- so the key's absence has one meaning and the columns beside it confirm it. This is the
+    opposite of an absent `decomposition_schema`, which means the components were never measured
+    at all; there, absence is refused. The difference is whether the old behaviour was knowable.
+    """
+    if isinstance(record, dict) and record.get("work_measurement") is None:
+        return "components"
+    return require_mode(record.get("work_measurement") if isinstance(record, dict) else record,
+                        what=what)
+
+
+def work_component_columns(mode: str) -> tuple[str, ...]:
+    """The per-update work-component columns, which only `components` mode measures."""
+    return WORK_COMPONENT_COLUMNS if require_mode(mode) == "components" else ()
+
+
+def observation_potential_columns(mode: str) -> tuple[str, ...]:
+    """The observation potentials this mode measured: all five, or the direct one alone."""
+    return (OBSERVATION_POTENTIAL_COLUMNS if require_mode(mode) == "components"
+            else (DIRECT_POTENTIAL_COLUMN,))
+
+
+def component_summary_columns(mode: str) -> tuple[str, ...]:
+    """The per-path component totals on `AIS_paths.csv`, absent outside `components` mode."""
+    return COMPONENT_SUMMARY_COLUMNS if require_mode(mode) == "components" else ()
+
+
+def hs_columns(mode: str) -> tuple[str, ...]:
+    """The frame-aligned table's columns for this mode.
+
+    `work` mode still gets the table: every row is a saved coordinate with the work that reached
+    it and the potential AT it, which is what a Hummer-Szabo estimate at the schedule that ran
+    needs. What it does not get is the basis, so an estimate at an UNVISITED tau cannot be formed
+    from it -- and the reader discovers that from four missing columns rather than from four
+    columns of zeros.
+    """
+    if require_mode(mode) == "components":
+        return HS_COLUMNS
+    return tuple(name for name in HS_COLUMNS
+                 if name not in OBSERVATION_POTENTIAL_COLUMNS or name == DIRECT_POTENTIAL_COLUMN)
 
 
 class DecompositionError(ValueError):

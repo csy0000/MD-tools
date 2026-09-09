@@ -187,3 +187,5 @@ for ever.
   validation work these gaps were carved out of, including its own "Open item" section for
   entry 4.
 - `docs/release-notes/20260907-readiness.md` — the readiness note for the pinned commit.
+- `docs/release-notes/20260909-ais-work-measurement.md` — `ais.work_measurement`, and why the
+  default changed to `work`. A behaviour change for any AIS configuration that did not set it.

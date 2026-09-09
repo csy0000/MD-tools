@@ -201,6 +201,40 @@ MD_SCHEMA = Schema(
                   doc="How often tau moves. 1 changes the Hamiltonian every step -- 50000 "
                       "parameter changes over the path above. observation_interval_steps must "
                       "divide by this, or observations would not sit on the update grid."),
+            Field("work_measurement", str, default="work", enum=("work", "components"),
+                  doc="How the work increment at each parameter update is obtained, and what "
+                      "else is recorded with it. This is a scientific choice AND the dominant "
+                      "cost of an AIS run: everything else here controls what is written, this "
+                      "controls what is computed.\n"
+                      "  work        -- TWO energy evaluations per update, U(tau_k) and "
+                      "U(tau_k+1). The work integral, and nothing more. This is the default "
+                      "because it is what a free energy for the schedule you actually ran "
+                      "needs.\n"
+                      "  components  -- a THREE-point basis probe per update, at amplitudes "
+                      "(0, 0.5, 1), from which the work follows analytically. It also gives the "
+                      "potential as a FUNCTION of tau, which is what reweighting onto a "
+                      "different schedule, a different endpoint, or a Hummer-Szabo estimator "
+                      "evaluated at an unvisited tau requires. A single total work cannot "
+                      "produce that function, and re-running at another tau is not "
+                      "reweighting.\n"
+                      "  Component columns are ABSENT from a `work` path rather than zero, so a "
+                      "reader expecting them fails instead of treating a missing measurement as "
+                      "a measured nought."),
+            Field("verify_every_updates", int, default=0, minimum=0,
+                  doc="In `components` mode, how often the fitted work is checked against a "
+                      "directly measured U(tau_k+1) - U(tau_k). Costs two extra evaluations "
+                      "whenever it fires.\n"
+                      "  0 (the default) verifies the FIRST update of every path and no other. "
+                      "That is not a token check: the three-group identity is a property of the "
+                      "SYSTEM, not of the step -- a force carrying tau-dependence outside the "
+                      "basis is outside it at any coordinate -- so one verified update per path "
+                      "establishes the model the whole path relies on, for two evaluations "
+                      "rather than two thousand.\n"
+                      "  N > 0 re-verifies every N updates as well, for the case the first "
+                      "update cannot cover: a force whose tau-dependence only switches on at "
+                      "some geometry the path reaches later.\n"
+                      "  Ignored in `work` mode, where the work IS the direct measurement and "
+                      "there is nothing to cross-check it against."),
         ], doc="The switching path. Ignored unless protocol is AIS. Every length is an exact "
                "integer step count; nothing here is a duration that has to divide by a timestep."),
         Section("ais_source", [
