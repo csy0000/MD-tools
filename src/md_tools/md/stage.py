@@ -37,6 +37,20 @@ import sys
 from pathlib import Path
 from typing import Any
 
+
+def _beside_resolved_config(stage, name):
+    """Resolve `name` beside `resolved.config`, which is where `build-md` copies definitions.
+
+    Resolving against the working directory only happens to work when the script is launched from
+    beside itself, and silently finds nothing -- or the wrong file -- otherwise. One rule, used by
+    the collective-variable definition and by the umbrella restraints that name variables in it.
+    """
+    path = Path(name)
+    if path.is_absolute():
+        return path
+    beside = stage.get("resolved_config")
+    return (Path(beside).parent if beside else Path(".")) / path
+
 from ..openmm.platform_policy import (PlatformRequest, acceleration_record,
                                       resolve_platform_request)
 from ..openmm.timestep import resolve_timestep_fs
@@ -590,6 +604,53 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         # System in place, so a reference would be fingerprinted after the restraint anyway.
         hamiltonian_identity_record = checked.hamiltonian_identity
         restrained = checked.restrained
+
+        # --- umbrella biases, added while the System is still mutable ---------------------------
+        #
+        # This has to happen HERE, before the Context exists, and the collective-variable
+        # definition it resolves against is therefore loaded here too -- earlier than the
+        # reporting block below, which reuses this object rather than reading the file again.
+        #
+        # One load, deliberately. The restraint names a CV and the reported series measures one;
+        # if those came from two reads they could differ, and the run would bias one torsion
+        # while reporting another with every column still looking correct. Sharing the object
+        # makes that failure inexpressible rather than merely unlikely.
+        cv_definition_shared = None
+        umbrella_restraints = ()
+        umbrella_file = stage.get("umbrella_file")
+        if umbrella_file:
+            from ..cv import load_cv_definition as _load_cv
+            from ..md.torsion_restraints import FLAT_BOTTOM, HARMONIC, TorsionRestraint
+            from ..umbrella import load_umbrella_definition
+
+            cv_definition_shared = _load_cv(
+                _beside_resolved_config(stage, (stage.get("collective_variables") or {})["file"]),
+                topology=pdb.topology, particles=system.getNumParticles())
+            umbrella_restraints = load_umbrella_definition(
+                _beside_resolved_config(stage, umbrella_file), cv_definition_shared)
+
+            # One force per FORM, not per restraint: every torsion in a CustomTorsionForce shares
+            # its energy expression, so harmonic and flat-bottom windows cannot live in one force.
+            by_form = {}
+            for entry in umbrella_restraints:
+                force = by_form.get(entry.form)
+                if force is None:
+                    force = by_form[entry.form] = TorsionRestraint(system, entry.form)
+                force.add_torsion(entry.atom_indices, entry.centre_deg,
+                                  entry.half_width_deg or 0.0)
+            umbrella_forces = tuple(by_form.values())
+            # Every restraint shares one global force constant, so a window whose entries differ
+            # in strength cannot be expressed -- and is refused when the definition is read.
+            constants = {entry.force_constant for entry in umbrella_restraints}
+            if len(constants) != 1:
+                raise SystemExit(
+                    f"stage {name}: the restraints in {umbrella_file} ask for force constants "
+                    f"{sorted(constants)}, but every restraint in a window shares one global "
+                    f"parameter. Write one force_constant, or split the window.")
+            umbrella_force_constant = constants.pop()
+        else:
+            umbrella_forces = ()
+            umbrella_force_constant = 0.0
         barostat_active = (not implicit) and stage.get("ensemble") == "NPT"
 
         # ONE platform decision, from `md_tools.openmm.platform_policy`, shared with REMD and AIS.
@@ -609,6 +670,12 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         log.field("acceleration", f"{acceleration.name} "
                                   f"({checked.record()['requested_policy']})")
         set_restraint(simulation, float(stage.get("restraint_kcal_per_mol_A2") or 0.0))
+        # The umbrella biases, onto the same live Context. BOTH places this is set
+        # get it: a resumed window that restored its positional restraint and not
+        # its umbrella would continue unbiased, writing a CV series that looks like
+        # a legitimately broad window.
+        for _force in umbrella_forces:
+            _force.set_strength(simulation, umbrella_force_constant)
 
         system_sha = file_facts(system_path)["sha256"]
         topology_sha = file_facts(topology_path)["sha256"]
@@ -688,6 +755,12 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             state = XmlSerializer.deserialize(parent.read_text(encoding="utf-8"))
             simulation.context.setState(state)
             set_restraint(simulation, float(stage.get("restraint_kcal_per_mol_A2") or 0.0))
+            # The umbrella biases, onto the same live Context. BOTH places this is set
+            # get it: a resumed window that restored its positional restraint and not
+            # its umbrella would continue unbiased, writing a CV series that looks like
+            # a legitimately broad window.
+            for _force in umbrella_forces:
+                _force.set_strength(simulation, umbrella_force_constant)
             # The parent state is recorded WITH ITS DIGEST, not just its name. Registration
             # re-hashes every recorded input and refuses a directory whose files no longer match
             # the records, so a parent that was rewritten after this stage consumed it is caught
@@ -783,8 +856,11 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                     # itself, and silently finds nothing -- or the wrong file -- otherwise.
                     beside = stage.get("resolved_config")
                     cv_path = (Path(beside).parent if beside else Path(".")) / cv_path
-                definition = load_cv_definition(
-                    cv_path, topology=pdb.topology, particles=system.getNumParticles())
+                # Reuse the object the umbrella restraints resolved against, when there is one.
+                # See where it is loaded, above, for why this must not be a second read.
+                definition = cv_definition_shared if cv_definition_shared is not None else \
+                    load_cv_definition(cv_path, topology=pdb.topology,
+                                       particles=system.getNumParticles())
                 cv_series = CVSeries(
                     cv_csv_path(traj_path, stage), definition,
                     extra_columns=("step", "time_ps", "trajectory_frame_index"),

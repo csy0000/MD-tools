@@ -1,0 +1,11 @@
+# The collective variables. This file defines WHAT IS MEASURED; `umbrella.yaml` beside it says
+# which of these are biased and how. One definition, read once, so the quantity that is restrained
+# and the quantity that is reported cannot differ.
+#
+# Indices are 0-based into the built topology. They are explicit and never inferred: a CV series
+# that names the wrong four atoms cannot be told apart from one that names the right four.
+schema_version: 1
+collective_variables:
+  # Alanine dipeptide, as built from tests/data/ALA.pdb.
+  - {name: phi_ALA, type: torsion, atom_indices: [4, 6, 8, 14]}
+  - {name: psi_ALA, type: torsion, atom_indices: [6, 8, 14, 16]}

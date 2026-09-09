@@ -65,6 +65,11 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         # `file` in an &cntrl block reads as "the input file" to anyone who has written an mdin.
         "cv_file": "collective_variables.file",
         "cv_interval_steps": "collective_variables.interval_steps",
+        # Beside the CV keys deliberately: an umbrella restraint names a variable
+        # from `cv_file`, so the two are read together or the restraint has nothing
+        # to resolve against. A path and not an inline list, for the same reason
+        # `cv_file` is one: a list of restraints does not fit a namelist.
+        "umbrella_file": "umbrella.file",
     },
     "remd": {
         "number_of_replicas": "rest2.number_of_replicas",
@@ -114,6 +119,11 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         # `file` in an &cntrl block reads as "the input file" to anyone who has written an mdin.
         "cv_file": "collective_variables.file",
         "cv_interval_steps": "collective_variables.interval_steps",
+        # Beside the CV keys deliberately: an umbrella restraint names a variable
+        # from `cv_file`, so the two are read together or the restraint has nothing
+        # to resolve against. A path and not an inline list, for the same reason
+        # `cv_file` is one: a list of restraints does not fit a namelist.
+        "umbrella_file": "umbrella.file",
     },
 }
 

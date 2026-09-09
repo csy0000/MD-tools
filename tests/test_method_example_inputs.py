@@ -31,9 +31,10 @@ import pytest
 
 from .conftest import REPO_ROOT
 
-METHODS = ("cMD", "REST2", "rREST2", "AIS")
+METHODS = ("cMD", "REST2", "rREST2", "AIS", "umbrella")
 #: The production stage each method's `example.in` shows -- the one that does the sampling.
-PRODUCTION_STAGE = {"cMD": "cMD.in", "REST2": "REST2.in", "rREST2": "rREST2.in", "AIS": "AIS.in"}
+PRODUCTION_STAGE = {"cMD": "cMD.in", "REST2": "REST2.in", "rREST2": "rREST2.in",
+                    "AIS": "AIS.in", "umbrella": "umbrella.in"}
 
 
 def _significant(text: str) -> list[str]:

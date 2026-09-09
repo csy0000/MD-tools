@@ -1,0 +1,28 @@
+# The restraints. Each names a collective variable from `cv.yaml` -- BY NAME, never by repeating
+# atom indices, so a run cannot bias one torsion and report another.
+#
+# THE TWO FORMS, and they answer different questions:
+#
+#   harmonic      0.5*k*dtheta^2                 an umbrella WINDOW. Biased everywhere including
+#                                                at its own centre, so every sample needs
+#                                                reweighting afterwards. This is what you use to
+#                                                build a profile from a series of windows.
+#
+#   flat_bottom   0.5*k*max(0,|dtheta|-w)^2      a BOUND. Exactly zero inside the window, so
+#                                                samples there are from the unbiased ensemble and
+#                                                need no correction. Use it to keep a molecule in
+#                                                a basin, not to measure across one.
+#
+# `dtheta` is wrapped onto the circle, so a restraint at 170 deg pulls a torsion at -170 deg the
+# short way round, as it must.
+#
+# One force constant is shared by every restraint here: they are one window.
+schema_version: 1
+restraints:
+  # The window: hold phi near -60 deg and reweight afterwards.
+  - {cv: phi_ALA, form: harmonic, centre_deg: -60.0, force_constant: 500.0}
+
+  # The bound: leave psi alone within 30 deg of 140, and stop it leaving. Inside that window the
+  # samples are unbiased, so they need no correction at all.
+  - {cv: psi_ALA, form: flat_bottom, centre_deg: 140.0, half_width_deg: 30.0,
+     force_constant: 500.0}

@@ -36,7 +36,7 @@ from .strict import ConfigError, Field, Schema, Section, load_yaml_strictly
 from ..openmm.timestep import ORDINARY_TIMESTEP_FS
 from ..openmm.system_defaults import DEFAULT_BAROSTAT_FREQUENCY_STEPS
 
-PROTOCOLS = ("cMD", "REST2", "rREST2", "AIS")
+PROTOCOLS = ("cMD", "REST2", "rREST2", "AIS", "umbrella")
 
 MD_SCHEMA = Schema(
     "cMD.config / REST2.config / rREST2.config",
@@ -267,6 +267,28 @@ MD_SCHEMA = Schema(
                       "paths from one configuration are not two independent realisations, and "
                       "treating them as such understates the spread of the work distribution."),
         ], doc="Where the starting configurations come from. Ignored unless protocol is AIS."),
+        Section("umbrella", [
+            Field("file", str, default=None, nullable=True,
+                  doc="Path to the restraint definition, resolved beside `resolved.config` -- the "
+                      "same rule `collective_variables.file` follows.\n"
+                      "A LIST of restraints does not fit a namelist `.in`, and inventing a "
+                      "packed-string encoding for one would make the most consequential line of "
+                      "an umbrella input the least readable. So the restraints live in their own "
+                      "YAML, referenced by path, exactly as the collective variables they name "
+                      "already do.\n"
+                      "Each entry names a CV from `collective_variables.file` and says how it is "
+                      "restrained -- see `md_tools.umbrella.load_umbrella_definition` for the "
+                      "schema and every way it is refused."),
+        ], doc="Umbrella sampling: restrain named collective variables and report them.\n"
+               "Producing the biased series is what this protocol does. Turning a set of windows "
+               "into a free-energy profile is ANALYSIS and is deliberately not here: WHAM and "
+               "MBAR belong to the project asking the question, not to the engine generating the "
+               "samples.\n"
+               "A window needs `collective_variables.file` and `interval_steps` set too. The "
+               "restraint resolves its `cv` name against that same file, so the quantity that is "
+               "biased and the quantity that is reported are the same object by construction -- "
+               "a run cannot restrain one torsion and report another."),
+
         Section("reservoir", [
             Field("enabled", bool, default=False,
                   doc="rREST2 only. Refresh the hottest rung from a pre-generated Boltzmann "
@@ -425,6 +447,48 @@ def _check_ais(resolved: dict[str, Any]) -> None:
         raise ConfigError(str(error)) from None
 
 
+#: The restraint forms `umbrella.restraints[].form` accepts. Mirrors
+#: `md.torsion_restraints.RESTRAINT_FORMS`; a test pins the two together, because the build must
+#: refuse a form the runtime cannot build rather than generating a script that fails on the node.
+UMBRELLA_FORMS = ("harmonic", "flat_bottom")
+
+
+def _check_umbrella(resolved: dict[str, Any]) -> None:
+    """`umbrella.file` and `protocol: umbrella` are given together or not at all.
+
+    Only coherence is checked here; the file's CONTENTS are validated when it is loaded, the same
+    division `collective_variables.file` follows. Reading it at build time would mean parsing it
+    twice under two sets of rules, and the second parse is the one the run actually uses.
+    """
+    protocol = resolved["protocol"]
+    path = (resolved.get("umbrella") or {}).get("file")
+
+    if protocol != "umbrella":
+        if path:
+            raise ConfigError(
+                f"umbrella.file = {path!r} defines restraints, but protocol is {protocol}. A "
+                f"restraint biases the dynamics, so it is never applied as a side effect of "
+                f"another protocol -- either run `protocol: umbrella`, or remove the file.")
+        return
+
+    if not path:
+        raise ConfigError(
+            "protocol is umbrella but umbrella.file is not set. Umbrella sampling IS the "
+            "restraint; without one this is a cMD run and should say so.")
+
+    variables = resolved.get("collective_variables") or {}
+    if not variables.get("file"):
+        raise ConfigError(
+            "protocol is umbrella but collective_variables.file is not set. A restraint names a "
+            "collective variable from that file, and the same file drives the reported series -- "
+            "so without it there is nothing to restrain and nothing to record.")
+    if not int(variables.get("interval_steps") or 0):
+        raise ConfigError(
+            "protocol is umbrella but collective_variables.interval_steps is 0, which disables "
+            "reporting. A window that biases a collective variable and never records it produces "
+            "a trajectory nobody can reweight; the restraint and the series are the point.")
+
+
 def _check_collective_variables(resolved: dict[str, Any]) -> None:
     """`file` and `interval_steps` are given together or not at all.
 
@@ -451,7 +515,8 @@ def _check_collective_variables(resolved: dict[str, Any]) -> None:
         f"or set file to null to disable reporting deliberately.")
 
 
-MD_SCHEMA.checks = (_check_protocol, _check_timestep, _check_collective_variables)
+MD_SCHEMA.checks = (_check_protocol, _check_timestep, _check_collective_variables,
+                    _check_umbrella)
 
 
 def _refuse_retired_platform(document: dict[str, Any]) -> None:
@@ -628,6 +693,22 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
                      "checkpoint_interval_steps": rep["checkpoint_printout"],
                      "description": "Unrestrained NPT, the last stage before production."})
 
+    if resolved["protocol"] == "umbrella":
+        # A cMD production stage that carries biases. Everything else about it -- the
+        # equilibration chain before it, checkpointing, CV reporting -- is cMD's, deliberately:
+        # an umbrella window IS conventional dynamics with a restraint on top, and giving it its
+        # own stage machinery would mean maintaining two of everything to no benefit.
+        plan.append({**common, "name": "umbrella",
+                     "ensemble": "NVT" if fixed_volume else "NPT",
+                     "steps": stages["production_steps"],
+                     "restraint_kcal_per_mol_A2": 0.0,
+                     "phase_space_interval_steps": dyn["phase_space_printout"],
+                     "trajectory_interval_steps": rep["solute_printout"],
+                     "state_interval_steps": rep["system_printout"],
+                     "checkpoint_interval_steps": rep["checkpoint_printout"],
+                     "umbrella_file": resolved["umbrella"]["file"],
+                     "description": "Umbrella sampling: biased production with the restrained "
+                                    "collective variables reported."})
     if resolved["protocol"] == "cMD":
         plan.append({**common, "name": "cMD",
                      "ensemble": "NVT" if fixed_volume else "NPT",
@@ -706,6 +787,9 @@ _IN_SECTIONS = {
                ("remd", ("rest2", "reservoir"))),
     "AIS": (("cntrl", ("", "dynamics", "reporting", "collective_variables")),
             ("AIS", ("ais", "ais_source"))),
+    # Umbrella is cMD with biases, so it writes cMD's block and adds the restraint file.
+    "umbrella": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables",
+                            "umbrella")),),
 }
 
 
@@ -975,6 +1059,32 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
             "collective_variables": list(definition.names),
         }
 
+    # The umbrella definition travels with the generated directory too, and for the same reasons:
+    # a run must not depend on a path outside the directory it was generated into, and a
+    # definition that changed must not quietly replace one a previous run used. Parsed HERE, so a
+    # restraint naming a variable that does not exist is refused at build time -- once, with the
+    # path the person wrote -- rather than by every generated script when it reaches a node.
+    umbrella_provenance = None
+    umbrella_block = resolved.get("umbrella") or {}
+    if umbrella_block.get("file"):
+        from ..umbrella import load_umbrella_definition
+        from ..umbrella.definition import definition_digest
+
+        source = Path(umbrella_block["file"])
+        if not source.is_absolute() and config_path is not None:
+            source = (Path(config_path).parent / source).resolve()
+        restraints = load_umbrella_definition(source, definition)
+        digest = definition_digest(source)
+        copied = out_dir / f"umbrella.{digest[:12]}.yaml"
+        copied.write_bytes(source.read_bytes())
+        resolved["umbrella"] = dict(umbrella_block, file=copied.name)
+        umbrella_provenance = {
+            "source_path": str(source),
+            "source_sha256": digest,
+            "copied_as": copied.name,
+            "restraints": [entry.record() for entry in restraints],
+        }
+
     plan = stage_plan(resolved)
     protocol = resolved["protocol"]
     log = LogWriter(out_dir / "build-md.log", record_type="build-md", echo=echo)
@@ -1132,7 +1242,8 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
                all_in_one=bool(all_in_one), resolved_config=resolved,
                stages=[{k: v for k, v in s.items()} for s in plan],
                files=written,
-               **({"collective_variable_definition": cv_provenance} if cv_provenance else {}))
+               **({"collective_variable_definition": cv_provenance} if cv_provenance else {}),
+               **({"umbrella_definition": umbrella_provenance} if umbrella_provenance else {}))
     log.complete()
     log.heading("Summary")
     log(f"  generated {len(written)} files in {out_dir}")

@@ -218,7 +218,7 @@ def test_the_input_language_can_express_every_field_of_the_resolved_model():
 
     reachable = {target for keys in SECTION_KEYS.values() for target in keys.values()
                  if not target.startswith("_")}
-    for protocol in ("cMD", "REST2", "rREST2", "AIS"):
+    for protocol in ("cMD", "REST2", "rREST2", "AIS", "umbrella"):
         resolved = resolve_md_config(REPO / "configs" / "md" / f"{protocol}.config")
         for name, block in resolved.items():
             if isinstance(block, dict):
