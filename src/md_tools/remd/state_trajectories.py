@@ -56,8 +56,10 @@ class StateTrajectorySet:
             raise StateTrajectoryError(
                 f"{len(existing)} state trajectory/ies already exist in {directory} "
                 f"({', '.join(existing[:4])}). A new run does not write into them; "
-                f"pass --force to "
-                f"replace a run deliberately, or continue the existing one.")
+                f"pass --overwrite to "
+                f"replace a run deliberately, or continue the existing one with --resume.\n"
+                f"  (--overwrite, NOT --force: this message is reached from `md-run`, which "
+                f"defines no --force. The generated ladder script accepts either.)")
         writers = [
             AmberTrajectoryWriter(
                 directory / state_trajectory_name(index), n_atoms=n_atoms, state_index=index,

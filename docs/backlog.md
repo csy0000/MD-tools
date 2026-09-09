@@ -192,3 +192,7 @@ for ever.
 - `docs/release-notes/20260909-ladder-throughput-and-intervals.md` — the O(N) `rem.log` gather,
   and the three reporting intervals the ladder was discarding. Includes the one invariant that is
   now enforced without having been tested (a checkpoint must land on an exchange boundary).
+- `docs/release-notes/20260909-resume-identity-and-force.md` — resume identity narrowed to what
+  determines the calculation, after a defaulted AIS field made every in-flight run of every
+  protocol unresumable. Records the deferred O(N) `rem.log` render and the length at which it
+  starts to matter.

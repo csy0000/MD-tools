@@ -152,6 +152,9 @@ def md_run_parser() -> argparse.ArgumentParser:
     return parser
 
 
+from . import resume_identity
+
+
 def _write_resolved(out_dir: Path, run_input, *, overwrite: bool) -> Path:
     """Write `resolved.config` into the output directory and link it to the `.in` by digest.
 
@@ -162,7 +165,11 @@ def _write_resolved(out_dir: Path, run_input, *, overwrite: bool) -> Path:
     import yaml
 
     digest = hashlib.sha256(run_input.path.read_bytes()).hexdigest()
-    document = yaml.safe_dump(run_input.resolved, sort_keys=False, default_flow_style=False)
+    # `schema_version` FIRST and never compared: it is what lets a later resume tell a field that
+    # did not exist yet from one that was deliberately removed. Absence alone cannot say which,
+    # and the difference decides whether continuing is safe.
+    written = {"schema_version": resume_identity.SCHEMA_VERSION, **run_input.resolved}
+    document = yaml.safe_dump(written, sort_keys=False, default_flow_style=False)
     header = (
         f"# The configuration this run resolved to, in full. THIS FILE IS AUTHORITATIVE:\n"
         f"# it is what the run reads, what the checkpoint fingerprint binds, and what the log\n"
@@ -178,12 +185,14 @@ def _write_resolved(out_dir: Path, run_input, *, overwrite: bool) -> Path:
         # same run, whatever their comments and formatting, and rerunning a command must not be
         # refused for a reason invisible in what actually executes.
         existing = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if existing != run_input.resolved:
-            raise SystemExit(
-                f"{path} already exists and describes a different run. A directory holding "
-                f"outputs from one resolved configuration and a second, different one cannot be "
-                f"read correctly afterwards. Use a different -odir, or --overwrite if the "
-                f"outputs there are meant to be replaced.")
+        # Compared by what determines the CALCULATION, not by document equality. A whole-document
+        # comparison meant that adding one defaulted field to any protocol's schema made every
+        # in-flight run of EVERY protocol unresumable -- and the runs that most need a fix are the
+        # long ones already going. See `resume_identity` for what is and is not compared.
+        differing = resume_identity.differences(existing, run_input.resolved)
+        if differing:
+            raise SystemExit(resume_identity.explain(path, differing, existing,
+                                                     run_input.resolved))
         return path
     path.write_text(header + document, encoding="utf-8")
     _carry_cv_definition(run_input, out_dir)

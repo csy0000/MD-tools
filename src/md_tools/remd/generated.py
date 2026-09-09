@@ -425,7 +425,10 @@ def _write_helper_if_compatible(destination: Path, text: str, *, force: bool = F
                 f"  A stale helper is executed or read as though it belonged to this ladder: a "
                 f"`_protocol.py` from a run with a different state count runs perfectly and "
                 f"simulates something else.\n"
-                f"  Delete it to regenerate, or pass --force.")
+                f"  Pass --overwrite to regenerate it, or delete it by hand.\n"
+                f"  (--overwrite, NOT --force: `md-run` defines no --force, and this message is "
+                f"printed on that path too. Deleting a file by hand is the more dangerous of the "
+                f"two remedies, so it is not the one named first.)")
     staging = destination.with_name(destination.name + ".partial")
     staging.write_text(stamped, encoding="utf-8")
     os.replace(staging, destination)
