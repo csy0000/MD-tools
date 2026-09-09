@@ -4,10 +4,15 @@
 #   micromamba activate md-tools-ci
 #   pip install --no-deps dist/md_tools-*.whl
 #
-# This is the package list MD-tools is developed and tested against -- see
-# src/md_tools/install/openmm.py -- with the CUDA pin removed, because CI runners have no GPU.
-# `tests/test_install.py` asserts the two agree, so an environment that CI validates and one a user
-# installs cannot drift apart silently.
+# This is the package list MD-tools is developed and tested against, with the CUDA pin removed,
+# because CI runners have no GPU. For a machine that HAS a driver, use `environment-cuda.yml`
+# beside this file: it is this list plus `cuda-version=13.0` and MPI, and its header explains why
+# that pin is not optional.
+#
+# (This paragraph used to cite `src/md_tools/install/openmm.py` and claim `tests/test_install.py`
+# asserted the two agree. Neither file exists -- they were lost and never restored -- so the
+# cross-check it promised was not happening. `tests/test_environment_files.py` now does the part
+# that can be checked: that the two environment files do not drift apart.)
 #
 # Everything here has a caller in src/. Nothing is included because it might be useful later:
 # an unused dependency is one more thing that can fail to solve.
@@ -75,8 +80,15 @@ dependencies:
   # whole simulation over one set of output paths, and the result would look complete. Serial runs
   # are unaffected -- world size 1 coordinates with nobody and imports nothing.
 
-  # cuda-version is deliberately ABSENT: the runners are CPU-only. OpenMM still provides the
-  # Reference and CPU platforms, which is what the smoke tests use.
+  # cuda-version is deliberately ABSENT HERE: the runners are CPU-only, and OpenMM still provides
+  # the Reference and CPU platforms, which is what the smoke tests use.
+  #
+  # It is NOT optional on a GPU machine. nvrtc emits PTX and the driver assembles it; PTX is
+  # backward compatible only, and CUDA's minor-version-compatibility rule exempts the PTX JIT. So
+  # cuda-nvrtc 13.3 against a CUDA 13.0 driver installs cleanly and then fails every kernel it has
+  # to compile with CUDA_ERROR_UNSUPPORTED_PTX_VERSION (222) -- while anything already in OpenMM's
+  # kernel cache keeps working, so it presents as flaky hardware rather than as a bad solve.
+  # `environment-cuda.yml` pins it. See that file for how to reproduce the failure deliberately.
 
   # --- packaging and test toolchain ------------------------------------------------------------
   - pip

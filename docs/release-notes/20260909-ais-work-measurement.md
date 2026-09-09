@@ -1,5 +1,18 @@
 # AIS: the work measurement becomes a choice, and its default changes
 
+> **CORRECTION, same day.** This note calls `ais.work_measurement` the dominant cost of an AIS
+> update. It was not. A tau change re-uploaded every solute parameter and cost 38x an energy
+> evaluation — 95% of a `work` update — so the evaluations counted below were the smaller term
+> throughout, and the counters that measured them did not report the expense at all.
+>
+> The change here is still right: three evaluations beat five, and `work` is still the right
+> default for a run that will not reweight. But the arithmetic of "2 versus 3 evaluations" was
+> never where the time went. With tau now set by global parameters, a `components` update costs
+> 0.24 ms against the old `work` mode's 3.08 ms, so the decision this note frames as a cost
+> trade-off has largely stopped being one.
+>
+> See `20260909-rest2-switching-cost.md`.
+
 **Behaviour change.** An AIS run that does not set `ais.work_measurement` now measures its work
 DIRECTLY and records no three-group decomposition. Before this commit every AIS path took the
 basis probe unconditionally. Configurations that relied on the components must now ask for them:

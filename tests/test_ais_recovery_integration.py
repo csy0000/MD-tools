@@ -1183,3 +1183,4 @@ def test_verify_every_updates_buys_more_checks_and_costs_exactly_two_each(harnes
     # Verification costs evaluations and nothing else -- the probe count is untouched.
     assert often["work_basis_probe_energy_evaluations"] == \
         once["work_basis_probe_energy_evaluations"]
+

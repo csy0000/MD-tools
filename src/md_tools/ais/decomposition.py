@@ -487,6 +487,19 @@ class EvaluationCounters:
     parameter_updates: int = 0
     #: Wall-clock seconds inside the probes.
     probe_seconds: float = 0.0
+    #: Wall-clock seconds spent CHANGING TAU, which the evaluation counts do not describe.
+    #:
+    #: The counters above say how many energies were computed, and that was taken to be the cost.
+    #: It is not. A tau change re-uploaded every solute parameter, and measured here on 22-atom
+    #: alanine it cost 2.9 ms against 0.076 ms for an evaluation -- 38x -- so an update that
+    #: reports "2 evaluations" spent 95% of its time on the one number nobody was counting. That
+    #: is how the expense stayed invisible while the evaluation counts were carefully audited.
+    #:
+    #: Recorded in SECONDS rather than as a count for the same reason `probe_seconds` is: a count
+    #: of parameter changes is only a cost if you already know what one costs, and after
+    #: `reparameterise_for_global_switching` the answer differs by three orders of magnitude
+    #: between two Systems that report the same count.
+    parameter_change_seconds: float = 0.0
 
     @property
     def useful_total(self) -> int:
@@ -512,6 +525,7 @@ class EvaluationCounters:
             "discarded_is_complete": bool(self.discarded_is_complete),
             "parameter_updates": self.parameter_updates,
             "probe_seconds": round(self.probe_seconds, 6),
+            "parameter_change_seconds": round(self.parameter_change_seconds, 6),
             "relationships": [
                 "useful_total = direct_work + work_basis_probe + observation_potential "
                 "+ other_useful",
@@ -546,7 +560,8 @@ class EvaluationCounters:
                 entry.get("known_discarded_energy_evaluations", 0)),
             discarded_is_complete=bool(entry.get("discarded_is_complete", True)),
             parameter_updates=int(entry.get("parameter_updates", 0)),
-            probe_seconds=float(entry.get("probe_seconds", 0.0)))
+            probe_seconds=float(entry.get("probe_seconds", 0.0)),
+            parameter_change_seconds=float(entry.get("parameter_change_seconds", 0.0)))
 
     def __add__(self, other: "EvaluationCounters") -> "EvaluationCounters":
         return EvaluationCounters(
@@ -564,7 +579,9 @@ class EvaluationCounters:
             discarded_is_complete=bool(self.discarded_is_complete
                                        and other.discarded_is_complete),
             parameter_updates=self.parameter_updates + other.parameter_updates,
-            probe_seconds=self.probe_seconds + other.probe_seconds)
+            probe_seconds=self.probe_seconds + other.probe_seconds,
+            parameter_change_seconds=(self.parameter_change_seconds
+                                      + other.parameter_change_seconds))
 
 
 class ComponentProbe:

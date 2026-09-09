@@ -196,3 +196,7 @@ for ever.
   determines the calculation, after a defaulted AIS field made every in-flight run of every
   protocol unresumable. Records the deferred O(N) `rem.log` render and the length at which it
   starts to matter.
+- `docs/release-notes/20260909-rest2-switching-cost.md` — tau by global context parameters (1172x
+  on the switch), Context reuse across AIS paths, and the two places it does not work: CMAP, and
+  explicit solvent's long-range dispersion correction. Corrects the cost claim in the
+  work-measurement note above.

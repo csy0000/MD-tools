@@ -53,6 +53,7 @@ import csv
 import json
 import os
 import re
+import time
 import sys
 from pathlib import Path
 from typing import Any
@@ -1486,6 +1487,31 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
 
     staged = directory / STAGED_TRAJECTORY
 
+    # ONE CONTEXT PER PATH, and it stays that way. Reusing one across a rank's paths was tried
+    # and REVERTED; the measurement that motivated it and the contract that killed it are both
+    # worth having written down.
+    #
+    # Building a Context costs 205 ms here with the kernel cache warm, against 0.17 ms to point an
+    # existing one at a new path -- 1200x, and after global-parameter switching it is the largest
+    # fixed cost an AIS campaign pays: 20 s of construction for 100 paths against 0.1 s of
+    # switching.
+    #
+    # WHY IT CANNOT BE TAKEN. A path's trajectory would then depend on how many paths had already
+    # run in the same process, because an integrator's RNG stream carries over and
+    # `setRandomNumberSeed` does not reset it -- `reinitialize(preserveState=False)` does not
+    # either, and costs 227 ms, more than building afresh. On CUDA this is invisible: two FRESH
+    # Contexts with identical seeds already diverge by 2.9e-04 nm in one step, because force
+    # reductions are atomic and order-dependent. On the CPU and Reference platforms it is exact,
+    # and there the difference is real and visible.
+    #
+    # That breaks a contract this repository tests directly: a path must be identical whether its
+    # campaign ran in one invocation or several, and under any rank count --
+    # `test_ais_invocation_segment_runs.py` and `test_cv_mpi_cuda_ais.py` both compare path for
+    # path against an uninterrupted reference. Reuse makes the science depend on scheduling, which
+    # is not a trade available for wall clock.
+    #
+    # To revisit it, the missing piece is a way to restore an integrator's RNG stream to its
+    # freshly-seeded state. Without that, this is 20 s well spent.
     system = switcher.prepared_system(taus[0])
     integrator = LangevinMiddleIntegrator(
         temperature * unit.kelvin,
@@ -1951,7 +1977,9 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             # nothing to cross-check it against: in this mode the measurement IS the answer.
             before = direct_potential()
             counters.direct_work_energy_evaluations += 1
+            _started = time.perf_counter()
             switcher.set_tau(simulation.context, system, tau_after)
+            counters.parameter_change_seconds += time.perf_counter() - _started
             counters.parameter_updates += 1
             after = direct_potential()
             counters.direct_work_energy_evaluations += 1
@@ -1961,7 +1989,9 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             verify = verifies(update)
             components, before = measure_components(
                 tau_before, what="the frozen pre-switch coordinate", verify=verify)
+            _started = time.perf_counter()
             switcher.set_tau(simulation.context, system, tau_after)
+            counters.parameter_change_seconds += time.perf_counter() - _started
             counters.parameter_updates += 1
 
             # Derived from the fit. The probe gives U at ANY tau, so both endpoints come from it

@@ -1,0 +1,71 @@
+# The GPU environment. environment-ci.yml plus a CUDA pin, for machines that have a driver.
+#
+#   micromamba create -f environment-cuda.yml
+#   micromamba activate md-tools-cuda
+#   pip install --no-deps dist/md_tools-*.whl
+#
+# WHY THE PIN EXISTS, and why it is 13.0 rather than "the newest".
+#
+# OpenMM compiles its kernels at run time: nvrtc emits PTX, and the DRIVER assembles that PTX for
+# the device. PTX is BACKWARD compatible and NOT forward compatible -- a driver assembles PTX from
+# its own CUDA version or older, and refuses anything newer with
+#
+#     Error loading CUDA module: CUDA_ERROR_UNSUPPORTED_PTX_VERSION (222)
+#
+# CUDA's minor-version-compatibility rule, which is what makes a 13.3 runtime legal against a 13.0
+# driver, explicitly EXEMPTS the PTX JIT. So a solve that pairs cuda-nvrtc 13.3 with a driver at
+# CUDA 13.0 is legal, installs cleanly, and cannot compile a kernel. Measured on this project's
+# own machine: driver 580.173.02 (CUDA 13.0) with cuda-nvrtc 13.3.33 fails exactly as above.
+#
+# THE FAILURE IS INTERMITTENT-LOOKING, WHICH IS THE DANGEROUS PART. OpenMM caches compiled
+# kernels, so anything already compiled keeps working. A full campaign can run to completion while
+# a Context built minutes later fails -- because the second one used a force combination whose
+# kernel was not in the cache. It reads as flaky hardware. To see it deliberately:
+#
+#     OPENMM_CACHE_DIR=$(mktemp -d) python -c "import openmm as mm; \
+#         s=mm.System(); s.addParticle(1.0); \
+#         mm.Context(s, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName('CUDA'))"
+#
+# 13.0 IS THE CONSERVATIVE PIN, NOT A LOCAL WORKAROUND. Because PTX is backward compatible, a
+# 13.0 runtime works on every driver at CUDA 13.0 or newer; a 13.3 runtime works only on 13.3+.
+# Pinning the OLDEST supported minor is therefore correct on the most machines, and costs nothing
+# a simulation can measure -- nvrtc emits the kernels, it does not run them.
+#
+# Raise this pin only together with a stated minimum driver, and check `nvidia-smi` (the "CUDA
+# Version" it reports is the newest the driver can assemble) on the machines that must keep working.
+
+name: md-tools-cuda
+
+channels:
+  - conda-forge
+  - nodefaults
+
+dependencies:
+  - python=3.12
+
+  # --- the CUDA pin, which is the whole reason this file is separate from environment-ci.yml ----
+  - cuda-version=13.0
+
+  # --- everything environment-ci.yml has, unchanged ---------------------------------------------
+  - openmm=8.6.0              # see environment-ci.yml on why the `.dev` in its version is cosmetic
+  - pyyaml
+  - numpy
+  - openff-toolkit
+  - openff-nagl-models
+  - openmmforcefields
+  - ambertools
+  - parmed
+  - rdkit
+  - mdtraj
+
+  - openmmtools=0.26.0        # EXACT: templates/rest2_openmmtools.py subclasses its private methods
+  - netcdf4
+
+  # --- multi-rank, which environment-ci.yml omits because CI has one device ----------------------
+  - mpi4py
+  - openmpi
+
+  - pip
+  - setuptools>=64
+  - python-build
+  - pytest
