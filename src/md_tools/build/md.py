@@ -1048,6 +1048,9 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
             "neighbour_acceptance_report": resolved["rest2"]["neighbour_acceptance_report"],
             "reservoir": dict(resolved["reservoir"]),
             "dynamics": dict(resolved["dynamics"]),
+            # Kept in step with `ladder_from_resolved`, which is what the RUN rebuilds from. A
+            # field added to one and not the other reaches the log and never the simulation.
+            "reporting": dict(resolved["reporting"]),
         }
         path = out_dir / f"{protocol}.py"
         path.write_text(_REPLICA_SCRIPT.format(protocol=protocol,

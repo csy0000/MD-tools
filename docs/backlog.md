@@ -189,3 +189,6 @@ for ever.
 - `docs/release-notes/20260907-readiness.md` — the readiness note for the pinned commit.
 - `docs/release-notes/20260909-ais-work-measurement.md` — `ais.work_measurement`, and why the
   default changed to `work`. A behaviour change for any AIS configuration that did not set it.
+- `docs/release-notes/20260909-ladder-throughput-and-intervals.md` — the O(N) `rem.log` gather,
+  and the three reporting intervals the ladder was discarding. Includes the one invariant that is
+  now enforced without having been tested (a checkpoint must land on an exchange boundary).

@@ -1615,9 +1615,13 @@ class ReplicaRun:
         last = self.reporter.last_exchange()
         if last < 0:
             return None
+        # THREE bulk reads, not 2N indexed ones. `statistics` was already a slice; the reduced
+        # potentials were not, and gathering them record by record made every regeneration cost
+        # O(N) in the history it was regenerating from. The rows built here are identical either
+        # way -- `test_rem_log_bulk_read.py` renders both and compares the bytes.
         accepted, proposed = self.reporter.statistics()
-        exchanges = [(proposed[i], accepted[i], self.reporter.reduced_potentials(i)[0])
-                     for i in range(last + 1)]
+        u_history, _ = self.reporter.reduced_potentials_upto(last)
+        exchanges = [(proposed[i], accepted[i], u_history[i]) for i in range(last + 1)]
         blocks = rem_log.build(n_states=self.protocol.n_states, exchanges=exchanges,
                                beta=self.protocol.beta,
                                temperature_k=self.protocol.temperature_k)

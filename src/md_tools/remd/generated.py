@@ -118,6 +118,7 @@ protocol = REST2Protocol(
     exchange_interval_ps={exchange_ps},
     whole_output_interval_ps={whole_ps},
     solute_output_interval_ps={solute_ps},
+    checkpoint_interval_ps={checkpoint_ps},
     number_of_exchanges={exchanges},
     friction_per_ps={friction},
     equilibration_ps={equilibration_ps},
@@ -205,10 +206,67 @@ def protocol_file_text(ladder: dict[str, Any]) -> str:
     # relaxes each rung under its own scaled Hamiltonian and has done all along -- could not be
     # reached through `build-md` at all.
     equilibration_ps = int(ladder.get("equilibration_steps") or 0) * timestep / 1000.0
+
+    # THE CONFIGURED OUTPUT AND CHECKPOINT INTERVALS. These three used to be hard-wired to
+    # `exchange_ps`, which silently overrode whatever the configuration asked for -- a run that
+    # requested 5 ps solute frames got 10 ps ones and nothing said so. A substitution that
+    # changes the recorded data has to be impossible, not merely documented.
+    # ABSENT means an OLD ladder description, written before the reporting block reached here.
+    # Such a run used both streams at the exchange interval, so that is what it keeps: reading
+    # absence as "no streams configured" would turn two working streams into one final frame each
+    # and the run would still look successful. An EMPTY block is a different statement -- a
+    # configuration that named no intervals -- and is honoured as written.
+    reporting = ladder.get("reporting")
+    if reporting is None:
+        return PROTOCOL_TEMPLATE.format(
+            protocol=ladder["protocol"], n_states=states, tau_max=ladder["tau_max"],
+            temperature=float(dynamics["temperature_K"]), ladder=taus, timestep=timestep,
+            exchange_ps=exchange_ps, whole_ps=exchange_ps, solute_ps=exchange_ps,
+            checkpoint_ps=None,
+            exchanges=int(ladder["number_of_exchanges"]),
+            friction=float(dynamics["friction_per_ps"]), equilibration_ps=equilibration_ps,
+            seed=int(dynamics["seed"]), platform=dynamics.get("platform"),
+            cv_interval_steps=(int((ladder.get("collective_variables") or {}).get(
+                "interval_steps") or 0) or None))
+
+    def interval_ps(key, what):
+        """A reporting interval in ps, or None when it is disabled (0 steps)."""
+        steps = int(reporting.get(key) or 0)
+        if steps <= 0:
+            return None
+        return steps * timestep / 1000.0
+
+    solute_ps = interval_ps("solute_printout", "the solute output interval")
+    whole_ps = interval_ps("system_printout", "the whole-system output interval")
+    checkpoint_ps = interval_ps("checkpoint_printout", "the checkpoint interval")
+
+    # A CHECKPOINT MUST LAND ON AN EXCHANGE BOUNDARY. `ReplicaSchedule` defaults the checkpoint
+    # interval to the exchange interval for that reason: a restart then resumes exactly where a
+    # transition did, which is where the state-to-walker mapping and the exchange RNG are jointly
+    # defined. Honouring a configured value must not quietly give that up, so a value that is not
+    # a whole number of exchange intervals is REFUSED, naming both, rather than rounded to one.
+    if checkpoint_ps is not None:
+        exchange_steps = int(ladder["exchange_interval_steps"])
+        checkpoint_steps = int(reporting.get("checkpoint_printout") or 0)
+        if checkpoint_steps % exchange_steps:
+            raise ValueError(
+                f"reporting.checkpoint_printout = {checkpoint_steps} steps is not a whole number "
+                f"of exchange intervals (rest2.exchange_interval_steps = {exchange_steps} "
+                f"steps); it is {checkpoint_steps / exchange_steps:g} of them.\n"
+                f"  A ladder checkpoints only at exchange boundaries, because that is where the "
+                f"state-to-walker mapping and the exchange RNG are jointly defined and where a "
+                f"restart can resume without inventing either. Refusing rather than rounding: "
+                f"rounding would write checkpoints at an interval nobody asked for and nothing "
+                f"would report the substitution.\n"
+                f"  Choose a checkpoint_printout that is a multiple of {exchange_steps}: "
+                f"{(checkpoint_steps // exchange_steps) * exchange_steps} or "
+                f"{(checkpoint_steps // exchange_steps + 1) * exchange_steps}.")
+
     return PROTOCOL_TEMPLATE.format(
         protocol=ladder["protocol"], n_states=states, tau_max=ladder["tau_max"],
         temperature=float(dynamics["temperature_K"]), ladder=taus, timestep=timestep,
-        exchange_ps=exchange_ps, whole_ps=exchange_ps, solute_ps=exchange_ps,
+        exchange_ps=exchange_ps, whole_ps=whole_ps, solute_ps=solute_ps,
+        checkpoint_ps=checkpoint_ps,
         exchanges=int(ladder["number_of_exchanges"]),
         friction=float(dynamics["friction_per_ps"]), equilibration_ps=equilibration_ps,
         seed=int(dynamics["seed"]), platform=dynamics.get("platform"),
@@ -760,6 +818,17 @@ def ladder_from_resolved(resolved: dict[str, Any], protocol: str) -> dict[str, A
         "reservoir": dict(resolved["reservoir"]),
         "dynamics": dict(resolved["dynamics"]),
         "collective_variables": dict(resolved.get("collective_variables") or {}),
+        # THE REPORTING INTERVALS. Absent here until now, so `protocol_file_text` had nothing to
+        # honour and hard-wired both output streams to the exchange interval while passing no
+        # checkpoint interval at all. The values were resolved, logged and written into
+        # resolved.config, and then silently discarded -- a run that asked for 5 ps solute frames
+        # got 10 ps ones and nothing said so.
+        #
+        # `.get` returning None rather than {}: a resolved.config written before this change is an
+        # OLD description, and the honest reading of it is what it used to do. See
+        # `protocol_file_text`, which keeps that behaviour when this key is absent.
+        "reporting": (dict(resolved["reporting"]) if resolved.get("reporting") is not None
+                      else None),
     }
 
 
