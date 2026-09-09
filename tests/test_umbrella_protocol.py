@@ -177,3 +177,79 @@ def test_umbrella_is_a_known_protocol():
     from md_tools.build.md import PROTOCOLS
 
     assert "umbrella" in PROTOCOLS
+
+
+def test_a_window_may_mix_force_constants(workspace):
+    """Each restraint carries its own strength, so a window need not use one for all of them.
+
+    The first implementation shared a single global constant, which made this configuration build
+    successfully and fail at RUN time -- after minimisation and three equilibration stages. It is
+    a configuration error or it is nothing; it must not be a late one.
+    """
+    path = _umbrella(workspace, """
+        schema_version: 1
+        restraints:
+          - {cv: phi_ALA, form: harmonic, centre_deg: -60.0, force_constant: 800.0}
+          - {cv: psi_ALA, form: harmonic, centre_deg: 140.0, force_constant: 50.0}
+    """)
+    restraints = load_umbrella_definition(path, _definition(workspace))
+    assert [r.force_constant for r in restraints] == [800.0, 50.0]
+
+
+def test_a_window_may_mix_forms(workspace):
+    """Harmonic and flat-bottom in one window: they become two forces, one per expression."""
+    path = _umbrella(workspace, """
+        schema_version: 1
+        restraints:
+          - {cv: phi_ALA, form: harmonic, centre_deg: -60.0, force_constant: 500.0}
+          - {cv: psi_ALA, form: flat_bottom, centre_deg: 140.0, half_width_deg: 30.0,
+             force_constant: 500.0}
+    """)
+    restraints = load_umbrella_definition(path, _definition(workspace))
+    assert {r.form for r in restraints} == {"harmonic", "flat_bottom"}
+
+
+def test_umbrella_works_in_explicit_solvent(tmp_path):
+    """The protocol is not implicit-only.
+
+    Explicit solvent brings PME and a barostat, and the restraint is added to the System before
+    either is configured. Checked at the configuration level -- the biasing force itself is
+    solvent-independent, and running a solvated window here would cost minutes to prove something
+    `test_torsion_restraint_cuda.py` already establishes.
+    """
+    (tmp_path / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
+    (tmp_path / "umbrella.yaml").write_text(textwrap.dedent("""
+        schema_version: 1
+        restraints:
+          - {cv: phi_ALA, form: harmonic, centre_deg: -60.0, force_constant: 500.0}
+    """), encoding="utf-8")
+    config = tmp_path / "u.config"
+    config.write_text(textwrap.dedent("""
+        protocol: umbrella
+        solvent: explicit
+        collective_variables: {file: cv.yaml, interval_steps: 100}
+        umbrella: {file: umbrella.yaml}
+    """), encoding="utf-8")
+
+    resolved = resolve_md_config(config)
+    assert resolved["solvent"] == "explicit"
+
+    from md_tools.build.md import stage_plan
+
+    production = [s for s in stage_plan(resolved) if s["name"] == "umbrella"]
+    assert len(production) == 1, "explicit solvent produced no umbrella production stage"
+    # NPT in explicit solvent, and the restraint file reaches the stage that runs it.
+    assert production[0]["ensemble"] == "NPT"
+    assert production[0]["umbrella_file"] == "umbrella.yaml"
+
+
+def test_an_implicit_window_runs_at_fixed_volume():
+    """The control for the test above: implicit has no box, so it cannot be NPT."""
+    from md_tools.build.md import MD_SCHEMA, stage_plan
+
+    resolved = MD_SCHEMA.resolve({"protocol": "umbrella", "solvent": "implicit",
+                                  "collective_variables": {"file": "cv.yaml",
+                                                           "interval_steps": 100},
+                                  "umbrella": {"file": "umbrella.yaml"}})
+    production = [s for s in stage_plan(resolved) if s["name"] == "umbrella"]
+    assert production[0]["ensemble"] == "NVT"

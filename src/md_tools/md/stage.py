@@ -636,21 +636,20 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                 force = by_form.get(entry.form)
                 if force is None:
                     force = by_form[entry.form] = TorsionRestraint(system, entry.form)
+                # The force constant rides on the PER-TORSION `scale`, not on the global. The
+                # energy is 0.5 * k_global * scale * dtheta^2, so with the global at 1.0 each
+                # restraint carries its own strength and a window may mix them freely. The global
+                # then means only "are the biases on", which is what releasing them needs.
+                #
+                # The alternative -- one global constant for the whole window -- would have made
+                # a config with two different force_constants unbuildable, and it built anyway:
+                # the mismatch was caught here, at run time, after minimisation and three
+                # equilibration stages had already run.
                 force.add_torsion(entry.atom_indices, entry.centre_deg,
-                                  entry.half_width_deg or 0.0)
+                                  entry.half_width_deg or 0.0, scale=entry.force_constant)
             umbrella_forces = tuple(by_form.values())
-            # Every restraint shares one global force constant, so a window whose entries differ
-            # in strength cannot be expressed -- and is refused when the definition is read.
-            constants = {entry.force_constant for entry in umbrella_restraints}
-            if len(constants) != 1:
-                raise SystemExit(
-                    f"stage {name}: the restraints in {umbrella_file} ask for force constants "
-                    f"{sorted(constants)}, but every restraint in a window shares one global "
-                    f"parameter. Write one force_constant, or split the window.")
-            umbrella_force_constant = constants.pop()
         else:
             umbrella_forces = ()
-            umbrella_force_constant = 0.0
         barostat_active = (not implicit) and stage.get("ensemble") == "NPT"
 
         # ONE platform decision, from `md_tools.openmm.platform_policy`, shared with REMD and AIS.
@@ -670,12 +669,18 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         log.field("acceleration", f"{acceleration.name} "
                                   f"({checked.record()['requested_policy']})")
         set_restraint(simulation, float(stage.get("restraint_kcal_per_mol_A2") or 0.0))
-        # The umbrella biases, onto the same live Context. BOTH places this is set
-        # get it: a resumed window that restored its positional restraint and not
-        # its umbrella would continue unbiased, writing a CV series that looks like
-        # a legitimately broad window.
+        # The umbrella biases, onto the same live Context.
+        #
+        # On the RESUME path this is redundant, and deliberately kept:
+        # `Context.setState` restores global parameters along with positions and
+        # velocities, so a resumed window comes back already biased -- measured,
+        # not assumed. Removing this call changes nothing today. It stays because
+        # that guarantee belongs to OpenMM's State rather than to this code, and a
+        # resume path that ever rebuilt a Context without setState would otherwise
+        # continue unbiased, writing a series that merely looks like a broader
+        # window.
         for _force in umbrella_forces:
-            _force.set_strength(simulation, umbrella_force_constant)
+            _force.set_strength(simulation, 1.0)
 
         system_sha = file_facts(system_path)["sha256"]
         topology_sha = file_facts(topology_path)["sha256"]
@@ -755,12 +760,18 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             state = XmlSerializer.deserialize(parent.read_text(encoding="utf-8"))
             simulation.context.setState(state)
             set_restraint(simulation, float(stage.get("restraint_kcal_per_mol_A2") or 0.0))
-            # The umbrella biases, onto the same live Context. BOTH places this is set
-            # get it: a resumed window that restored its positional restraint and not
-            # its umbrella would continue unbiased, writing a CV series that looks like
-            # a legitimately broad window.
+            # The umbrella biases, onto the same live Context.
+            #
+            # On the RESUME path this is redundant, and deliberately kept:
+            # `Context.setState` restores global parameters along with positions and
+            # velocities, so a resumed window comes back already biased -- measured,
+            # not assumed. Removing this call changes nothing today. It stays because
+            # that guarantee belongs to OpenMM's State rather than to this code, and a
+            # resume path that ever rebuilt a Context without setState would otherwise
+            # continue unbiased, writing a series that merely looks like a broader
+            # window.
             for _force in umbrella_forces:
-                _force.set_strength(simulation, umbrella_force_constant)
+                _force.set_strength(simulation, 1.0)
             # The parent state is recorded WITH ITS DIGEST, not just its name. Registration
             # re-hashes every recorded input and refuses a directory whose files no longer match
             # the records, so a parent that was rewritten after this stage consumed it is caught

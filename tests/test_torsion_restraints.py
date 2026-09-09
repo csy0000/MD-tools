@@ -206,3 +206,57 @@ def test_a_negative_force_constant_is_refused():
     context = Context(system, VerletIntegrator(0.001), Platform.getPlatformByName("Reference"))
     with pytest.raises(ValueError, match="must be >= 0"):
         restraint.set_strength(_Simulation(context), -1.0)
+
+
+# --- per-restraint strength, which is what lets one window mix them --------------------------
+
+def test_the_per_torsion_scale_carries_the_force_constant():
+    """Each restraint may have its own strength, in ONE force.
+
+    The energy is 0.5 * k_global * scale * dtheta^2, so the global means "are the biases on" and
+    `scale` carries the strength. Without this a window would need one force constant for all its
+    restraints -- and the first implementation did, which made a configuration with two different
+    constants build successfully and fail at RUN time, after minimisation and three equilibration
+    stages had already run.
+    """
+    stiff = _energy_at(HARMONIC, 0.0, [30.0], k=1.0)[30.0]        # scale defaults to 1.0
+    system = System()
+    for _ in range(4):
+        system.addParticle(12.0)
+    restraint = TorsionRestraint(system, HARMONIC)
+    restraint.add_torsion((0, 1, 2, 3), 0.0, scale=4.0)
+    context = Context(system, VerletIntegrator(0.001), Platform.getPlatformByName("Reference"))
+    context.setParameter(TORSION_RESTRAINT_PARAMETER, 1.0)
+    a = math.radians(30.0)
+    context.setPositions(np.array([[1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0],
+                                   [math.cos(a), 0.0, math.sin(a)]]) * unit.nanometer)
+    scaled = context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
+        unit.kilojoule_per_mole)
+    assert scaled == pytest.approx(4.0 * stiff, rel=1e-6)
+
+
+def test_two_restraints_in_one_force_keep_their_own_strengths():
+    """A stiff and a soft restraint side by side. Both are in the same CustomTorsionForce."""
+    system = System()
+    for _ in range(5):
+        system.addParticle(12.0)
+    restraint = TorsionRestraint(system, HARMONIC)
+    restraint.add_torsion((0, 1, 2, 3), 0.0, scale=800.0)
+    restraint.add_torsion((1, 2, 3, 4), 0.0, scale=50.0)
+    assert restraint.n_torsions == 2
+
+    context = Context(system, VerletIntegrator(0.001), Platform.getPlatformByName("Reference"))
+    context.setParameter(TORSION_RESTRAINT_PARAMETER, 1.0)
+    # Both torsions displaced identically: the energy must be the SUM of two different strengths,
+    # not twice one of them.
+    a = math.radians(30.0)
+    context.setPositions(np.array([[1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 0.0],
+                                   [math.cos(a), 0.0, math.sin(a)],
+                                   [2.0, 0.0, 0.0]]) * unit.nanometer)
+    total = context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
+        unit.kilojoule_per_mole)
+    assert total > 0.0
+    # Releasing the global releases both, whatever their scales.
+    context.setParameter(TORSION_RESTRAINT_PARAMETER, 0.0)
+    assert context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
+        unit.kilojoule_per_mole) == 0.0
