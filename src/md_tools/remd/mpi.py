@@ -291,7 +291,20 @@ class Coordination:
         """
         import sys as _sys
 
-        print(f"[rank {self.rank}/{self.size}] fatal: {message}", file=_sys.stderr, flush=True)
+        text = f"[rank {self.rank}/{self.size}] fatal: {message}"
+        print(text, file=_sys.stderr, flush=True)
+        # AND THE TERMINAL. The executor runs the whole ladder inside
+        # `contextlib.redirect_stderr(<protocol>.out)`, so `_sys.stderr` above is that file --
+        # and `Abort` below ends the job without returning through the code that would have said
+        # "see <protocol>.out". `mpirun` therefore printed "MPI_ABORT was invoked" and nothing
+        # else, and the only way to read why a ladder refused was to re-run it single-rank.
+        # `_sys.__stderr__` is the interpreter's own stderr and survives the redirect.
+        original = getattr(_sys, "__stderr__", None)
+        if original is not None and original is not _sys.stderr:
+            try:
+                print(text, file=original, flush=True)
+            except (ValueError, OSError):                  # a closed or unusable original stream
+                pass
         if self.comm is not None:
             self.comm.Abort(int(code))
         raise SystemExit(int(code))

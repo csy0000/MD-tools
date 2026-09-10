@@ -795,6 +795,10 @@ def test_generated_overwrite_reaches_the_executor():
     `--overwrite` rewrote `solute.yaml`, `_protocol.py` and the group file and was then turned
     away -- leaving the user to pass a second flag for the same intent, with the first already
     partially applied.
+
+    This is a source check and it is NOT sufficient on its own: it proves the flag travels, not
+    that anything happens when it arrives. It did travel, and for a long time nothing happened --
+    see the two tests below, which are the ones that would have caught it.
     """
     import inspect
 
@@ -804,6 +808,191 @@ def test_generated_overwrite_reaches_the_executor():
     assert "args.force or args.overwrite" in source, (
         "--overwrite does not reach the executor, so it can update the helpers and then be "
         "refused by the run they were prepared for")
+
+
+def test_overwrite_replaces_the_ladder_outputs_the_executor_never_named(tmp_path):
+    """The defect: `--overwrite` on a ladder REFUSED, advising the flag that had just been passed.
+
+    `--overwrite` reached `replica_main` and became the executor's `--force`, which only BYPASSES
+    the existing-output check. That check covers `_outputs(files)` -- `-o`, `-x`, `-r`, `--chk` --
+    and the per-state trajectories are not among them. Nothing ever moved `whole_stateN_prod1.nc`
+    or `solute_stateN_prod1.nc` aside, so `StateTrajectorySet.create`, which refuses to write into
+    files it did not just create, turned the run away with
+
+        "pass --overwrite to replace a run deliberately"
+
+    to a user who had passed exactly that. Restarting a ladder in place was impossible; the ALA
+    campaign used a fresh `-odir` instead.
+
+    `_ladder_inventory` has named every one of those files since the output-inventory pass, so the
+    fix is the transaction the cMD stage path already runs. This asserts over the inventory
+    directly: every per-state trajectory it names is gone afterwards, and a file it does not name
+    survives.
+    """
+    from md_tools.run.overwrite import replace_owned_inventory
+    from md_tools.run.preflight import _ladder_inventory
+
+    out = tmp_path / "REST2"
+    out.mkdir()
+    inventory = _ladder_inventory(
+        protocol="REST2", replicas=4, output=out / "REST2.out", log=out / "REST2.log",
+        trajectory=out / "REST2.nc", restart=out / "restart.json",
+        checkpoint=out / "REST2.chk", groupfile=None, reservoir=False)
+    for path in inventory.roles.values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("previous run", encoding="utf-8")
+    # Not this ladder's: `--overwrite` is not a delete button, and `md-run` writes this one itself
+    # before the ladder is ever dispatched.
+    (out / "resolved.config").write_text("protocol: REST2\n", encoding="utf-8")
+
+    replaced = replace_owned_inventory(inventory, where="REST2 --overwrite", directory=out)
+
+    for state in range(4):
+        for content in ("whole", "solute"):
+            name = f"{content}_state{state}_prod1.nc"
+            assert not (out / name).exists(), (
+                f"{name} survived --overwrite, which is exactly what StateTrajectorySet.create "
+                f"then refuses the new run for")
+    assert not (out / "REST2.nc").exists() and not (out / "solute.yaml").exists()
+    assert (out / "resolved.config").is_file(), "--overwrite deleted a file the ladder never wrote"
+    assert set(replaced) >= {f"state_trajectory_{i}" for i in range(4)}
+
+
+def test_the_ladder_runs_the_replacement_before_it_publishes_its_helpers(tmp_path):
+    """Order is the contract: `solute.yaml`, `_protocol.py` and the group file are OWNED outputs.
+
+    Replacing after publishing them would delete what the launch had just prepared, and the run
+    would then fail verifying helpers that no longer exist. This pins the ordering in the source,
+    because the alternative is a full MPI ladder run to observe it.
+    """
+    import inspect
+
+    from md_tools.remd import generated
+
+    source = inspect.getsource(generated.replica_main)
+    assert "replace_owned_inventory" in source, (
+        "--overwrite reaches the ladder and replaces nothing, so a rerun in place is refused")
+    replacement = source.index("replace_owned_inventory")
+    publication = source.index("_write_helper_if_compatible(destination, text")
+    assert replacement < publication, (
+        "the ladder replaces its owned inventory AFTER publishing the helpers, which deletes the "
+        "helpers this launch just wrote")
+
+
+def test_a_ladder_refusal_reaches_the_terminal_and_not_only_the_report(capfd):
+    """The third fault, and the reason the first cost an hour rather than a minute.
+
+    The executor runs the whole ladder inside `contextlib.redirect_stderr(<protocol>.out)`, and
+    `Coordination.fail` printed to `sys.stderr` -- which is that file -- and then called
+    `MPI_ABORT`, which ends the job without returning through the code that would have said "see
+    <protocol>.out". `mpirun` therefore printed "MPI_ABORT was invoked" and nothing else. The
+    reproduction was recovered only by re-running the ladder single-rank.
+
+    Fixing the drop without this leaves the next failure on this path just as opaque.
+    """
+    import contextlib
+    import io
+
+    from md_tools.remd.mpi import Coordination
+
+    coordination = Coordination(MPI=None, rank=0, size=1)
+
+    report = io.StringIO()
+    with contextlib.redirect_stderr(report):
+        with pytest.raises(SystemExit):
+            coordination.fail("4 state trajectory/ies already exist")
+
+    # `capfd`, not `capsys`: the fix writes to `sys.__stderr__`, the interpreter's own stream,
+    # which is exactly the point -- it survives a `redirect_stderr` and is file-descriptor level.
+    terminal = capfd.readouterr().err
+    assert "4 state trajectory/ies already exist" in report.getvalue(), (
+        "the reason left the report, which is where a reader looks afterwards")
+    assert "4 state trajectory/ies already exist" in terminal, (
+        "the reason reached only the redirected report, so MPI_ABORT discarded it and the "
+        "terminal showed nothing but 'MPI_ABORT was invoked'")
+
+
+@pytest.fixture(scope="module")
+def ladder_start(workspace):
+    """A serialised State for `-c`, so a ladder can actually be started.
+
+    A REST2 ladder continues from an equilibration's restart file. Running the three equilibration
+    stages to make one would cost minutes and prove nothing this test is about, so the State is
+    built directly from the same System and topology the ladder will use -- which is exactly what
+    `-c` names: positions and velocities for a Context over that System.
+    """
+    from openmm import LangevinMiddleIntegrator, XmlSerializer, unit
+    from openmm.app import PDBFile, Simulation
+
+    destination = workspace / "REST2" / "start.xml"
+    if destination.is_file():
+        return destination
+    pdb = PDBFile(str(workspace / "built.pdb"))
+    system = XmlSerializer.deserialize((workspace / "built.xml").read_text(encoding="utf-8"))
+    simulation = Simulation(pdb.topology, system,
+                            LangevinMiddleIntegrator(300.0 * unit.kelvin, 1.0 / unit.picosecond,
+                                                     0.002 * unit.picoseconds))
+    simulation.context.setPositions(pdb.positions)
+    simulation.context.setVelocitiesToTemperature(300.0 * unit.kelvin, 20260910)
+    state = simulation.context.getState(getPositions=True, getVelocities=True)
+    destination.write_text(XmlSerializer.serialize(state), encoding="utf-8")
+    return destination
+
+
+@pytest.mark.slow
+def test_a_ladder_reruns_in_place_under_overwrite(workspace, ladder_start, tmp_path, good_config):
+    """END TO END, which is the only test that would have caught this.
+
+    Everything else on this path passed while restarting a ladder in place was impossible: the
+    flag was parsed, forwarded, and reached the executor, and a source check confirmed each hop.
+    What no test did was run a ladder, run it again over itself, and look at the exit code.
+
+    The first run must leave per-state trajectories behind -- if it does not, the second run has
+    nothing to collide with and this proves nothing -- so that is asserted, not assumed.
+    """
+    destination = tmp_path / "ladder-rerun"
+
+    start = ["-c", str(ladder_start)]
+    first = _launch(workspace, "REST2", destination, *start, *PROTOCOL_ONLY,
+                    environment=good_config)
+    assert first.returncode == 0, first.stdout + first.stderr
+    written = sorted(p.name for p in destination.glob("whole_state*_prod1.nc"))
+    assert written, (
+        f"the first ladder wrote no per-state trajectory, so the rerun below collides with "
+        f"nothing: {sorted(p.name for p in destination.iterdir())}")
+
+    second = _launch(workspace, "REST2", destination, "--overwrite", *start, *PROTOCOL_ONLY,
+                     environment=good_config)
+    message = second.stdout + second.stderr
+    assert second.returncode == 0, (
+        f"--overwrite was refused by the ladder it was passed to:\n{message[-3000:]}")
+    assert "already exist" not in message, (
+        f"the run was told to pass the flag it had just passed:\n{message[-3000:]}")
+    assert sorted(p.name for p in destination.glob("whole_state*_prod1.nc")) == written
+    # The transaction finished, so no marker is left to refuse the run after this one.
+    from md_tools.run.overwrite import MARKER_NAME
+
+    assert not (destination / MARKER_NAME).exists()
+
+
+def test_a_crashed_ladder_replacement_leaves_a_marker_and_refuses_the_next_run(
+        workspace, tmp_path, good_config):
+    """A half-replaced directory is part one ladder and part another, and nothing else can tell.
+
+    The surviving per-state trajectories are exactly what a `--resume` would try to continue. The
+    cMD stage path has refused on this marker since the transaction was introduced; the ladder
+    path did not look for it at all.
+    """
+    from md_tools.run.overwrite import MARKER_NAME
+
+    destination = tmp_path / "ladder-marker"
+    destination.mkdir()
+    (destination / MARKER_NAME).write_text(
+        json.dumps({"what": "REST2 --overwrite", "staging": ".x", "paths": []}),
+        encoding="utf-8")
+
+    done = _launch(workspace, "REST2", destination, *PROTOCOL_ONLY, environment=good_config)
+    _refused(done, fragment="did not finish")
 
 
 def test_verify_only_is_read_only_on_an_absent_target(workspace, tmp_path, good_config):

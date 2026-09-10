@@ -192,23 +192,51 @@ that the next layer always rejects.
 That test did its job: it failed on the day the defect was fixed, which is how the fix was
 noticed rather than the entry being left standing.
 
-## 8. `md-run --overwrite` is dropped on the REST2/rREST2 ladder path
+## 8. `md-run --overwrite` could not restart a REST2/rREST2 ladder in place
 
-`run/main.py::_run_ladder` forwards `--resume` to `replica_main` and does not forward
-`--overwrite`:
+> **RESOLVED 2026-09-10.** The symptom was real and the diagnosis below was wrong, in a way worth
+> keeping: the flag was never dropped. `_forward` in `run/main.py` has appended BOTH `--resume`
+> and `--overwrite`, for every protocol, since `2074b0d` -- 141 commits before this entry was
+> written. What this entry read as the forwarding list was a REDUNDANT second `argparse.append`
+> of `--resume` sitting beside it, and `--overwrite`'s absence from that redundant line was
+> mistaken for its absence from the forwarding. The duplicate is gone, and the comment in its
+> place says where forwarding actually happens.
+>
+> The defect was one layer down. `--overwrite` reached `replica_main` and became the executor's
+> `--force`, which only BYPASSES the existing-output check -- and that check covers
+> `_outputs(files)`: `-o`, `-x`, `-r`, `--chk`. The per-state trajectories are not among them.
+> So nothing ever moved `whole_stateN_prod1.nc` or `solute_stateN_prod1.nc` aside, and
+> `StateTrajectorySet.create`, which refuses to write into files it did not just create, turned
+> the run away advising the flag that had just been passed. Bypassing a check was never going to
+> be enough: something had to REPLACE.
+>
+> `_ladder_inventory` has named every one of those files -- both per-state streams, both per-state
+> CV streams, the per-rank reports, the helpers, the checkpoint tree -- since the output-inventory
+> pass. The ladder now runs `replace_owned_inventory` over it, once, on rank 0, BEFORE the helpers
+> are published (they are owned outputs too, and replacing after writing them would delete what
+> the launch had just prepared). That is the same one-transaction replacement the cMD stage path
+> has always run over its own inventory. The ladder also refuses on a marker left by a
+> replacement that did not finish, which the stage path already did and this path did not.
+>
+> Fault 3 -- the message being unreachable under MPI -- was `Coordination.fail` printing to
+> `sys.stderr`, which the executor has redirected into `<protocol>.out`, and then calling
+> `MPI_ABORT`, which ends the job without returning through the code that would have said "see
+> `<protocol>.out`". It writes to `sys.__stderr__` as well now: the interpreter's own stream,
+> which survives the redirect. Without this the NEXT failure on this path would have been just as
+> opaque.
+>
+> **Why every existing test passed.** Each hop was checked and the destination was not.
+> `test_generated_overwrite_reaches_the_executor` asserted, by source inspection, that the flag
+> travels -- and it did travel, into a runtime that did nothing with it. Pinned now by
+> `tests/test_runtime_contract_matrix.py::test_a_ladder_reruns_in_place_under_overwrite`, which
+> runs a two-state ladder, runs it again over itself, and looks at the exit code; plus the
+> inventory, ordering, marker and terminal-diagnostic tests beside it.
 
-```python
-    if args.resume:
-        argv.append("--resume")
-    return replica_main(ladder, argv)
-```
+**What (as it was).** `md-run --overwrite` was accepted, applied to every `stage_main` stage --
+minimisation and the three equilibrations all reported "--overwrite replaced N existing
+output(s)" -- and then the ladder refused, advising `--overwrite`.
 
-So `--overwrite` is accepted by `md-run`, applied to every `stage_main` stage -- minimisation and
-the three equilibrations all report "--overwrite replaced N existing output(s)" -- and then
-silently dropped before the ladder. `StateTrajectorySet.create` finds `remd0..N.nc` from the
-previous attempt and refuses, advising the user to pass the flag they just passed.
-
-**Reproduction.** `docs/../` is not needed; any REST2 directory that has already run once:
+**Reproduction.** Any REST2 directory that has already run once:
 
 ```bash
 mpirun -n 4 md-openmm md-run -ng 4 -i REST2.in -p built.pdb -s built.xml \
@@ -218,30 +246,18 @@ mpirun -n 4 md-openmm md-run -ng 4 -i REST2.in -p built.pdb -s built.xml \
 A preserved failing directory is at
 `MD-project/data/ala-campaign/run_1_rest2.implicit.aborted-20260910`.
 
-**Three faults, and the second and third are why it costs an hour rather than a minute.**
+**Three faults, and the second and third are why it cost an hour rather than a minute.**
 
-1. The flag is dropped. One line in `_run_ladder`.
-2. The advice cannot be followed. The message names the right flag for the right command and doing
-   what it says changes nothing.
-3. The message is unreachable under MPI. It is written to `REST2.out`, and rank 0's `MPI_ABORT`
-   discards it -- `mpirun` prints only "MPI_ABORT was invoked". It was recovered only by re-running
-   single-rank with `-ng 1`.
+1. `--overwrite` replaced nothing on this path.
+2. The advice could not be followed. The message named the right flag for the right command and
+   doing what it said changed nothing.
+3. The message was unreachable under MPI. It went to `REST2.out`, and rank 0's `MPI_ABORT`
+   discarded it -- `mpirun` printed only "MPI_ABORT was invoked". It was recovered only by
+   re-running single-rank with `-ng 1`.
 
-Fixing (1) without (3) leaves the next failure on this path just as opaque.
-
-**Note the comment four lines above the drop site**, which describes this exact defect as already
-fixed:
-
-> a flag that is not listed here does not reach the stage at all -- which is how `--resume` and
-> `--overwrite` were accepted by `md-run` and silently dropped
-
-It was fixed for the STAGE path and left on the LADDER path, in the same file. The error message
-was separately corrected on 2026-09-09 (`--force` -> `--overwrite`, entry in
+The error message was separately corrected on 2026-09-09 (`--force` -> `--overwrite`, entry in
 `20260909-resume-identity-and-force.md`) without testing that following the corrected advice
 works -- so the wording of unfollowable advice was improved.
-
-**Trigger.** Before the next campaign that has to restart a ladder in place. Until then, the
-workaround is a fresh `-odir`, which is what the ALA campaign used.
 
 ---
 

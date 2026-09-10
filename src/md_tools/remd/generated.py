@@ -608,6 +608,26 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     # a group file that lost lines to an interleaved write.
     rank, size = coordination.rank, coordination.size
 
+    # WHAT `--overwrite` MEANS HERE: replace this ladder's outputs, once, before any new one is
+    # opened. A continuation is not a replacement -- `--resume`, `--extend` and `--extend-from`
+    # all read what is already there -- and `--verify-only` must not write at all.
+    replacing = bool(args.force or args.overwrite) and not (
+        args.resume or args.extend or args.extend_from or args.verify_only)
+
+    # A previous replacement that did not reach the end left a marker, so the directory holds
+    # part of one ladder's outputs and none of another's, with every file looking equally
+    # current. Nothing downstream can tell that from an ordinary interrupted run: the per-state
+    # trajectories that survived are exactly what a `--resume` would try to continue. Every rank
+    # reads the same file and reaches the same answer, so this needs no collective.
+    from ..run.overwrite import find_incomplete_replacement
+
+    if not replacing and find_incomplete_replacement(out) is not None:
+        print(f"{protocol_name}: {out} holds a marker from an --overwrite that did not finish, "
+              f"so some of the previous ladder's outputs may still be present and some may not. "
+              f"Nothing here can be trusted as either run's. Re-run with --overwrite to replace "
+              f"it completely, or choose a different -odir.", file=sys.stderr)
+        return 2
+
     solute_yaml = out / "solute.yaml"
     protocol_file = out / "_protocol.py"
     # A group file the caller SUPPLIED is an input. Writing a default one beside it created a file
@@ -675,6 +695,32 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     failure = None
     if rank == 0:
         try:
+            if replacing:
+                # `--overwrite` REPLACES. Until this existed it only stopped the executor's own
+                # existing-output check: nothing moved the previous ladder's files aside, so
+                # `StateTrajectorySet.create` -- which refuses to write into per-state
+                # trajectories it did not just create -- turned the run away advising the very
+                # flag that had just been passed. The flag did reach here; what it did not do
+                # was the thing it names.
+                #
+                # The per-state trajectories are the ones that matter and they are NOT among the
+                # executor's `--trajectory/--restart/--checkpoint`, which is why bypassing that
+                # check was never enough. `_ladder_inventory` has named every one of them, plus
+                # both per-state CV streams, the per-rank reports, the helpers and the
+                # checkpoint tree, so the ladder can run the same one-transaction replacement
+                # the cMD stage path already runs over its own inventory.
+                #
+                # BEFORE the helpers are published: `solute.yaml`, `_protocol.py`, the group file
+                # and `reservoir.yaml` are owned outputs too, and replacing after writing them
+                # would delete what this launch had just prepared.
+                from ..run.overwrite import replace_owned_inventory
+
+                replaced = replace_owned_inventory(
+                    checked.inventory, where=f"{protocol_name} --overwrite", directory=out)
+                if replaced:
+                    print(f"{protocol_name}: --overwrite replaced {len(replaced)} existing "
+                          f"output(s): {', '.join(sorted(replaced))}")
+                    sys.stdout.flush()
             for destination, text in helpers.items():
                 _write_helper_if_compatible(destination, text,
                                             force=bool(args.force or args.overwrite))

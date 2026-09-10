@@ -502,8 +502,12 @@ def _run_ladder(args, resolved: dict[str, Any], protocol: str, config_path: Path
         argv += ["-x", str(args.trajectory)]
     if args.groupfile:
         argv += ["--groupfile", str(args.groupfile)]
-    if args.resume:
-        argv.append("--resume")
+    # `--resume` and `--overwrite` are already in `argv`: `_forward` appends both, for every
+    # protocol, so there is one place that decides what the runtime contract forwards. Repeating
+    # `--resume` here was harmless -- argparse stores the same True twice -- but it read as the
+    # list of runtime flags this path forwards, and `--overwrite`'s absence from it was recorded
+    # as a defect in `docs/backlog.md` on the strength of that reading. It was reaching
+    # `replica_main` the whole time; what it did not do there was replace anything.
     return replica_main(ladder, argv)
 
 
@@ -544,12 +548,12 @@ def _run_ais(args, resolved: dict[str, Any], config_path: Path) -> int:
                   f"how many run at once does.", file=sys.stderr)
             return 2
 
+    # `--resume` and `--overwrite` come from `_forward`, which appends both for every protocol.
+    # Without that, `--resume` reached md-run and stopped there: every interrupted path silently
+    # restarted from its source frame while the command reported success, which is the failure
+    # mode a checkpoint exists to prevent. Re-appending it here said otherwise about where the
+    # decision lives.
     argv = _forward(args, names=("log", "output", "out_dir", "device"))
-    if args.resume:
-        # Without this, `--resume` reached md-run and stopped there: every interrupted path
-        # silently restarted from its source frame while the command reported success, which is
-        # the failure mode a checkpoint exists to prevent.
-        argv.append("--resume")
     source = args.source_traj or resolved["ais_source"]["trajectory"]
     if source:
         argv += ["-source-traj", str(source)]
