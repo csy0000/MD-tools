@@ -194,7 +194,7 @@ def test_the_ladder_ran_on_cuda_across_ranks_with_cv_for_every_state(completed):
     assert manifest["collective_variables"] is not None
 
     for index in range(STATES):
-        rows = _rows(completed / f"remd{index}.cv.csv")
+        rows = _rows(completed / f"cv_state{index}.csv")
         assert [int(r["step"]) for r in rows] == EXPECTED_STEPS
         assert {"phi", "psi"} <= set(rows[0]), "both torsions must be reported"
 
@@ -231,7 +231,7 @@ def test_the_refreshed_row_holds_the_propagated_configuration(completed, project
     checked = 0
     for exchange_index, state_index, frame in events:
         step = (exchange_index + 1) * EXCHANGE_EVERY
-        rows = {int(r["step"]): r for r in _rows(completed / f"remd{state_index}.cv.csv")}
+        rows = {int(r["step"]): r for r in _rows(completed / f"cv_state{state_index}.csv")}
         if step not in rows:
             continue
         reported = float(rows[step]["phi"])
@@ -251,7 +251,7 @@ def test_the_refreshed_state_names_no_trajectory_frame(completed):
     checked = 0
     for exchange_index, state_index, _frame in events:
         step = (exchange_index + 1) * EXCHANGE_EVERY
-        rows = {int(r["step"]): r for r in _rows(completed / f"remd{state_index}.cv.csv")}
+        rows = {int(r["step"]): r for r in _rows(completed / f"cv_state{state_index}.csv")}
         if step not in rows:
             continue
         named = rows[step]["trajectory_frame_index"]
@@ -271,7 +271,7 @@ def test_unaffected_states_still_name_the_correct_post_exchange_frame(completed,
     for state_index in range(STATES):
         frames = mdtraj.load(str(completed / f"whole_state{state_index}_prod1.nc"),
                              top=str(project / "built.pdb"))
-        for row in _rows(completed / f"remd{state_index}.cv.csv"):
+        for row in _rows(completed / f"cv_state{state_index}.csv"):
             named = row["trajectory_frame_index"]
             if named == "":
                 continue
@@ -305,7 +305,7 @@ def test_interruption_and_resume_through_mpi_reproduce_the_reference(project, tm
     """
     reference = tmp_path / "reference"
     _launch(project, reference)
-    want = {index: _rows(reference / f"remd{index}.cv.csv") for index in range(STATES)}
+    want = {index: _rows(reference / f"cv_state{index}.csv") for index in range(STATES)}
     reference_cost = _cost(reference)
 
     destination = tmp_path / "resumed"
@@ -324,7 +324,7 @@ def test_interruption_and_resume_through_mpi_reproduce_the_reference(project, tm
         "interruption")
 
     for index in range(STATES):
-        got = _rows(destination / f"remd{index}.cv.csv")
+        got = _rows(destination / f"cv_state{index}.csv")
         assert [r["step"] for r in got] == [r["step"] for r in want[index]]
         assert len({r["step"] for r in got}) == len(got), "a step was written twice"
         for column in ("phi", "psi", "walker_index"):

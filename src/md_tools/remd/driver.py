@@ -1703,15 +1703,27 @@ class ReplicaRun:
 
         buffer = io.StringIO()
         writer = _csv.writer(buffer)
+        # `potential_energy_kj_per_mol` beside the reduced potential, because THIS FILE IS THE
+        # LADDER'S STATE TABLE and a state table reports energy in energy units. u = beta * U and
+        # beta is one number for the whole ladder (every rung is at the same temperature), so the
+        # conversion is exact rather than a reconstruction -- but a reader should not have to know
+        # that, nor go looking for beta, to answer "what was the energy of state 2".
+        #
+        # This is why a ladder writes no `mdout.csv`: it would be this table with one column
+        # renamed. What `info_printout` governs on a ladder is its equilibration stages, which do
+        # write `mdout_<stage>.csv`; the production span is recorded per exchange, here.
+        beta = float(self.protocol.beta)
         writer.writerow(["exchange", "step", "time_ps", "state", "tau", "walker",
-                         "reduced_potential", "proposed_with_next", "accepted_with_next"])
+                         "reduced_potential", "potential_energy_kj_per_mol",
+                         "proposed_with_next", "accepted_with_next"])
         for n in range(last + 1):
             for state in range(len(taus)):
                 walker = int(mapping[n][state])
                 nxt = state + 1
+                reduced = float(u_history[n][state][walker])
                 writer.writerow([
                     n, int(steps[n]), f"{float(times[n]):.6f}", state, f"{taus[state]:.6f}",
-                    walker, f"{float(u_history[n][state][walker]):.6f}",
+                    walker, f"{reduced:.6f}", f"{reduced / beta:.6f}",
                     int(proposed[n][state][nxt]) if nxt < len(taus) else "",
                     int(accepted[n][state][nxt]) if nxt < len(taus) else ""])
         # Atomic, for the same reason the log is: a reader arriving mid-rewrite must not find a

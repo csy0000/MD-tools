@@ -182,7 +182,7 @@ def test_cost_and_series_survive_two_interruptions(project, tmp_path):
     reference = tmp_path / "reference"
     _run(project, reference)
     ref_cost, _ = _cost(reference)
-    ref_series = {index: _rows(reference / f"remd{index}.cv.csv") for index in range(STATES)}
+    ref_series = {index: _rows(reference / f"cv_state{index}.csv") for index in range(STATES)}
 
     destination = tmp_path / "resumed"
     first = _run(project, destination, expect=1,
@@ -209,7 +209,7 @@ def test_cost_and_series_survive_two_interruptions(project, tmp_path):
     assert cost["cumulative"]["wall_seconds"] >= cost["segment"]["wall_seconds"] >= 0.0
 
     for index in range(STATES):
-        got = _rows(destination / f"remd{index}.cv.csv")
+        got = _rows(destination / f"cv_state{index}.csv")
         want = ref_series[index]
         assert [r["step"] for r in got] == [r["step"] for r in want], f"state {index} step grid"
         assert [r["walker_index"] for r in got] == [r["walker_index"] for r in want]
@@ -238,12 +238,12 @@ def test_re_entering_a_completed_ladder_evaluates_nothing_further(project, tmp_p
     destination = tmp_path / "reentry"
     _run(project, destination)
     before, _ = _cost(destination)
-    rows_before = {index: _rows(destination / f"remd{index}.cv.csv") for index in range(STATES)}
+    rows_before = {index: _rows(destination / f"cv_state{index}.csv") for index in range(STATES)}
 
     _run(project, destination, "--resume")
     after, _ = _cost(destination)
     for index in range(STATES):
-        assert _rows(destination / f"remd{index}.cv.csv") == rows_before[index], (
+        assert _rows(destination / f"cv_state{index}.csv") == rows_before[index], (
             f"state {index}: re-entry rewrote a committed series")
     assert after["cumulative"]["cv_evaluations"] == before["cumulative"]["cv_evaluations"], (
         "re-entering a completed ladder evaluated collective variables again")

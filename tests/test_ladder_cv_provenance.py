@@ -2,7 +2,7 @@
 
 WHY THIS FILE
 
-    `remd<N>.cv.csv` and its sidecar were recorded in `restart.json` and, being ordinary files
+    `cv_state<N>.csv` and its sidecar were recorded in `restart.json` and, being ordinary files
     under the run root, hashed into the registry's `SHA256SUMS`. They were absent from the one
     place that connects a run to the runs around it: the `-log` machine record's `outputs`
     block, which `md_tools.registry.discovery.check_lineage` indexes by digest to match one
@@ -13,7 +13,7 @@ WHY THIS FILE
 WHY NOT A GLOB
 
     The inventory is built from the completion manifest, which is written only after the driver
-    has validated every series. A `remd*.cv.csv` glob over the directory would record a file
+    has validated every series. A `cv_state*.csv` glob over the directory would record a file
     left behind by an earlier run into the same place, or one belonging to a state this ladder
     does not have, as provenance for this one. The test for that is below: a foreign file
     dropped into the run root must not appear.
@@ -157,8 +157,8 @@ def test_the_outer_record_names_every_cv_csv_and_sidecar(project, tmp_path):
 
         # The path is relative to the run root, so the record is readable after the directory
         # is moved or registered under another name.
-        assert csv_facts["path"] == f"remd{state}.cv.csv"
-        assert side_facts["path"] == f"remd{state}.cv.json"
+        assert csv_facts["path"] == f"cv_state{state}.csv"
+        assert side_facts["path"] == f"cv_state{state}.json"
         assert not Path(csv_facts["path"]).is_absolute()
 
         # Digest and size, and they are the manifest's -- the same numbers the run validated,
@@ -242,10 +242,10 @@ def test_registration_refuses_a_cv_artefact_that_no_longer_matches(project, tmp_
     entries = inventory.build(destination)
     listed = {entry["path"] for entry in entries}
     for state in range(STATES):
-        assert f"remd{state}.cv.csv" in listed
-        assert f"remd{state}.cv.json" in listed
+        assert f"cv_state{state}.csv" in listed
+        assert f"cv_state{state}.json" in listed
 
-    target = destination / "remd0.cv.csv"
+    target = destination / "cv_state0.csv"
     lines = target.read_text(encoding="utf-8").splitlines()
     header = lines[0].split(",")
     cells = lines[2].split(",")
@@ -256,7 +256,7 @@ def test_registration_refuses_a_cv_artefact_that_no_longer_matches(project, tmp_
     # The inventory taken before the edit no longer verifies.
     with pytest.raises(Exception) as refusal:
         inventory.verify(destination, entries)
-    assert "remd0.cv.csv" in str(refusal.value), refusal.value
+    assert "cv_state0.csv" in str(refusal.value), refusal.value
 
     # And the run's own completion record refuses it by the same digest.
     from md_tools.remd.cv_states import verify_manifest_entries
@@ -264,7 +264,7 @@ def test_registration_refuses_a_cv_artefact_that_no_longer_matches(project, tmp_
     block = json.loads(
         (destination / "restart.json").read_text(encoding="utf-8"))["collective_variables"]
     problems = verify_manifest_entries(destination, block)
-    assert any("remd0.cv.csv" in problem for problem in problems), problems
+    assert any("cv_state0.csv" in problem for problem in problems), problems
 
 
 def test_registration_refuses_a_missing_cv_artefact(project, tmp_path):
@@ -273,8 +273,8 @@ def test_registration_refuses_a_missing_cv_artefact(project, tmp_path):
     destination = tmp_path / "missing"
     _run(project, destination)
     entries = inventory.build(destination)
-    (destination / "remd1.cv.json").unlink()
+    (destination / "cv_state1.json").unlink()
 
     with pytest.raises(Exception) as refusal:
         inventory.verify(destination, entries)
-    assert "remd1.cv.json" in str(refusal.value), refusal.value
+    assert "cv_state1.json" in str(refusal.value), refusal.value

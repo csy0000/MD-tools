@@ -256,3 +256,45 @@ def test_stage_reporter_keeps_a_triclinic_cell(tmp_path):
     with netCDF4.Dataset(path) as ds:
         angles = np.asarray(ds.variables["cell_angles"][0, :])
         assert not np.allclose(angles, 90.0), "a triclinic cell was written as orthorhombic"
+
+
+# -- a stage's file states its OWN Hamiltonian --------------------------------------------------
+#
+# `_AmberStreamReporter` passed `state_index=0, tau=0.0, temperature_k=0.0` and the writer
+# hard-coded `application="REST2"`, so every conventional stage wrote a header claiming to be
+# REST2 state 0 at tau = 0 whatever it had run at. A fixed-tau cMD ensemble is where that costs
+# something: it is what AIS anneals away from, and `ais.tau_start` was an assertion nothing could
+# contradict precisely because the one file that knew agreed with the wrong answer.
+
+def test_a_stage_records_the_tau_and_temperature_it_ran_at(tmp_path):
+    import numpy as np
+    import netCDF4
+
+    from md_tools.md.stage import _AmberStreamReporter
+
+    path = tmp_path / "whole_prod1.nc"
+    reporter = _AmberStreamReporter(path, 10, n_atoms=2, periodic=False,
+                                    tau=0.5, temperature_k=300.0, application="cMD")
+    reporter.report(None, _FakeState(np.zeros((2, 3)), np.eye(3), 0.0))
+    reporter._writer.close()
+
+    with netCDF4.Dataset(path) as ds:
+        assert ds.tau == 0.5, "the file does not record the tau the stage ran at"
+        assert ds.temperature_k == 300.0
+        assert ds.application == "cMD", "a cMD stage claimed to be REST2"
+        assert "state_index" not in ds.ncattrs(), (
+            "a conventional stage has no thermodynamic state and must not claim one")
+
+
+def test_a_ladder_file_still_carries_its_state_index(tmp_path):
+    """The ladder's own naming is unchanged by making `state_index` optional."""
+    import netCDF4
+
+    from md_tools.remd.amber_trajectory import AmberTrajectoryWriter
+
+    path = tmp_path / "whole_state2_prod1.nc"
+    AmberTrajectoryWriter(path, n_atoms=2, state_index=2, tau=0.25, temperature_k=300.0,
+                          periodic=False).close()
+    with netCDF4.Dataset(path) as ds:
+        assert ds.state_index == 2
+        assert ds.title == "REST2 state 2"

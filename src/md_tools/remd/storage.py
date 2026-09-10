@@ -405,26 +405,37 @@ class ReplicaReporter:
         return reporter
 
     def _create_solute(self, *, n_states, n_solute_atoms, identity):
-        """The solute stream is its own file: it is written far more often and read separately."""
+        """The solute stream's INDEX and commit marker. It holds no coordinates.
+
+        IT USED TO HOLD THEM, in `solute_positions(solute_frame, walker, solute_atom, xyz)`, and
+        that array was written by exactly one line and read by none. The coordinates it duplicated
+        live in `solute_state<i>_prod<N>.nc` -- one AMBER trajectory per state, which mdtraj and
+        cpptraj open without being told anything. This copy was indexed by WALKER while every
+        other per-state file in the run is indexed by STATE, and stored in a layout no standard
+        reader opens: `solute_positions` is not `coordinates`, so the data was present and
+        unreachable without a bespoke reader. On this campaign's 4-state ladder it was 1.2 MB
+        against 1.06 MB for the four readable files -- a full second copy, in the unusable shape.
+        Dropping the array leaves a few KB.
+
+        WHAT STAYS, and why the file is not simply deleted: `last_solute_frame` is the ladder's
+        COMMIT MARKER for the solute stream. `_continue` resumes the per-state solute files at
+        `checkpoint["solute_frame_index"] + 1`, and the marker is what makes "this many frames are
+        committed" a fact about the record rather than about whichever file was longest when the
+        process died. Removing it would put the count back in the trajectories it is supposed to
+        vouch for.
+        """
         import netCDF4
 
         path = solute_path(self.path)
         dataset = netCDF4.Dataset(str(path), "w")
         dataset.schema = SCHEMA_VERSION
-        dataset.kind = "solute"
+        dataset.kind = "solute_index"
         dataset.identity_json = json.dumps(identity, sort_keys=True, default=str)
-        dataset.coordinate_indexing = "walker"
-        dataset.position_unit = "nanometer"
+        dataset.coordinates_live_in = "solute_state<i>_prod<N>.nc, one per STATE"
         dataset.createDimension("solute_frame", None)
-        dataset.createDimension("walker", n_states)
-        dataset.createDimension("solute_atom", int(n_solute_atoms))
-        dataset.createDimension("spatial", 3)
         dataset.createVariable("solute_step", "i8", ("solute_frame",))
         dataset.createVariable("solute_time_ps", "f8", ("solute_frame",))
         dataset.createVariable("solute_exchange", "i8", ("solute_frame",))
-        positions = dataset.createVariable(
-            "solute_positions", "f4", ("solute_frame", "walker", "solute_atom", "spatial"))
-        positions.units = "nanometer"
         last = dataset.createVariable("last_solute_frame", "i8")
         last[0] = -1
         dataset.sync()
@@ -498,9 +509,19 @@ class ReplicaReporter:
         self.dataset.sync()
         return index
 
-    def write_solute_frame(self, *, step, time_ps, exchange_index, configurations,
-                           solute_indices):
-        """One solute frame. Its own file, its own schedule, its own commit marker."""
+    def write_solute_frame(self, *, step, time_ps, exchange_index, configurations=None,
+                           solute_indices=None):
+        """Commit one solute frame: its step, its time, and the marker that counts it.
+
+        The coordinates are NOT written here -- `StateTrajectorySet` has already written them,
+        one file per state, before this is called. The marker moves last and is synced on its
+        own, so a crash between the two leaves frames that nothing counts (which a continuation
+        ignores) rather than a count with no frames behind it.
+
+        `configurations` and `solute_indices` are accepted and unused, so the call site reads the
+        same as the whole-system one beside it and no caller has to know which of the two writes
+        coordinates.
+        """
         dataset = self._open_solute("a")
         if dataset is None:
             raise StorageError("the solute stream was never created")
@@ -509,9 +530,6 @@ class ReplicaReporter:
         variables["solute_step"][index] = int(step)
         variables["solute_time_ps"][index] = float(time_ps)
         variables["solute_exchange"][index] = int(exchange_index)
-        subset = np.array([c.positions[solute_indices] for c in configurations],
-                          dtype=np.float32)
-        variables["solute_positions"][index, :, :, :] = subset
         dataset.sync()
         variables["last_solute_frame"][0] = index
         dataset.sync()

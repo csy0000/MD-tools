@@ -113,7 +113,7 @@ def _validate(path, entry, definition, sidecar=None):
 
 def test_a_valid_prefix_validates_and_restores_its_real_counters(tmp_path, definition):
     """The control. Two rows of two torsions restore 2 observations and 4 evaluations."""
-    path, sidecar = _series(tmp_path / "remd0.cv.csv", definition)
+    path, sidecar = _series(tmp_path / "cv_state0.csv", definition)
     entry = _entry(path, definition, sidecar=sidecar)
     assert _validate(path, entry, definition, sidecar) == ROWS
 
@@ -137,7 +137,7 @@ def test_a_an_uncommitted_tail_does_not_invalidate_the_committed_prefix(tmp_path
     Requiring the whole file to match the committed digest would make every ordinary
     interruption look like corruption, which is the opposite of what the prefix is for.
     """
-    path, sidecar = _series(tmp_path / "remd0.cv.csv", definition, rows=ROWS, tail=3)
+    path, sidecar = _series(tmp_path / "cv_state0.csv", definition, rows=ROWS, tail=3)
     entry = _entry(path, definition, rows=ROWS, sidecar=sidecar)
     assert _validate(path, entry, definition, sidecar) == ROWS
 
@@ -160,7 +160,7 @@ def test_a_a_cv_enabled_prefix_without_a_usable_cost_is_refused(tmp_path, defini
     damaged record, and reading it as a fresh run silently discards the history it was written
     to preserve.
     """
-    path, sidecar = _series(tmp_path / "remd0.cv.csv", definition)
+    path, sidecar = _series(tmp_path / "cv_state0.csv", definition)
     entry = _entry(path, definition, sidecar=sidecar, cost=cost)
     with pytest.raises(cv_prefix.CVPrefixError) as refusal:
         _validate(path, entry, definition, sidecar)
@@ -169,7 +169,7 @@ def test_a_a_cv_enabled_prefix_without_a_usable_cost_is_refused(tmp_path, defini
 
 def test_a_restoring_an_absent_cost_as_zero_is_refused(tmp_path, definition):
     """The restoration half. `CommittedPrefix.from_record` must not invent a zero history."""
-    path, sidecar = _series(tmp_path / "remd0.cv.csv", definition)
+    path, sidecar = _series(tmp_path / "cv_state0.csv", definition)
     entry = _entry(path, definition, sidecar=sidecar, cost=None)
     with pytest.raises(CVCostError):
         CommittedPrefix.from_record(entry)
@@ -177,7 +177,7 @@ def test_a_restoring_an_absent_cost_as_zero_is_refused(tmp_path, definition):
 
 def test_a_a_cost_that_disagrees_with_the_committed_rows_is_refused(tmp_path, definition):
     """The counters are checked against the VERIFIED row count, not against themselves."""
-    path, sidecar = _series(tmp_path / "remd0.cv.csv", definition)
+    path, sidecar = _series(tmp_path / "cv_state0.csv", definition)
     wrong = CVCost(observations=ROWS + 1, evaluations=(ROWS + 1) * N_CV, wall_seconds=0.002)
     entry = _entry(path, definition, sidecar=sidecar,
                    cost=cost_record(wrong, wrong, rows=ROWS + 1))
@@ -191,7 +191,7 @@ def _block(tmp_path, definition, *, n_states=2, rows=ROWS, states=None, aggregat
     """A ladder checkpoint CV block: per-state entries plus the aggregate cost beside them."""
     entries = []
     for index in range(n_states):
-        path, sidecar = _series(tmp_path / f"remd{index}.cv.csv", definition,
+        path, sidecar = _series(tmp_path / f"cv_state{index}.csv", definition,
                                 state=index, tau=index * 0.5, rows=rows)
         entry = _entry(path, definition, rows=rows, sidecar=sidecar)
         entry["state_index"] = index

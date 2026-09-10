@@ -117,7 +117,7 @@ readable without the topology or the definition that produced it.
 | protocol | file | leading columns |
 |---|---|---|
 | cMD | `<stage>.cv.csv` + `<stage>.cv.json` | `step,time_ps,trajectory_frame_index` |
-| REST2 / rREST2 | `remd<N>.cv.csv` + `remd<N>.cv.json` | `step,time_ps,exchange_attempt,state_index,tau,walker_index,exchange_phase,trajectory_frame_index` |
+| REST2 / rREST2 | `cv_state<N>.csv` + `cv_state<N>.json` | `step,time_ps,exchange_attempt,state_index,tau,walker_index,exchange_phase,trajectory_frame_index` |
 | AIS | `path_NNNN/cv.csv` | `path_index,source_frame_index,protocol_step,time_ps,tau,observation_index,coordinate_frame_index` |
 | AIS | `AIS_cv.csv` | the aggregate, same columns |
 
@@ -125,7 +125,7 @@ The CV names follow, in definition order.
 
 ### States, not walkers
 
-`remd2.cv.csv` holds whatever configuration **occupied state 2**, whichever walker supplied each
+`cv_state2.csv` holds whatever configuration **occupied state 2**, whichever walker supplied each
 one — the same rule the state trajectories follow. A ladder's result is a property of a rung
 ("the distribution at tau = 0.3") and a walker visits many rungs, so a per-walker series is a
 series over a changing Hamiltonian and is not an ensemble average of anything. `walker_index`
@@ -246,7 +246,7 @@ from it is invisible to every lineage check even while present on disk. Each rec
 path relative to the run root, the digest and byte size the manifest recorded, the state index and
 its tau, and the CV definition digest; CSV and sidecar are separate roles, because the sidecar is
 how the CSV is read. The inventory is built from the validated manifest and never from a glob: a
-`remd*.cv.csv` glob would record a file left behind by an earlier run into the same directory as
+`cv_state*.csv` glob would record a file left behind by an earlier run into the same directory as
 this run's provenance.
 
 An AIS path validates its series structurally against the **schedule** rather than the file:

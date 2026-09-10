@@ -444,7 +444,7 @@ def _cv_outputs(restart: Path, out: Path) -> dict[str, Any]:
 
     FROM THE COMPLETION MANIFEST, never from a glob. `restart.json` is written only after the
     driver has validated every series -- its digests, its step grid, its walker permutation --
-    so the manifest is the one list of CV files this run vouches for. A `remd*.cv.csv` glob over
+    so the manifest is the one list of CV files this run vouches for. A `cv_state*.csv` glob over
     the directory would happily pick up a file left by an earlier run into the same place, or one
     belonging to a state this ladder does not have, and record it as provenance for this one.
 
@@ -774,14 +774,19 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     restart = out / "restart.json"
     if code == 0 and restart.is_file():
         outputs = {"restart_json": file_facts(restart, relative_to=out)}
-        for name in sorted(out.glob("remd*.nc")):
+        # BOTH per-state streams, under the names the driver writes. This globbed `remd*.nc` --
+        # a name no ladder has produced since the rename -- so the completion record named none
+        # of the trajectories the run had just made and reported `state_trajectories: 0` while
+        # 2N of them sat in the directory.
+        for name in sorted(out.glob("whole_state*.nc")) + sorted(out.glob("solute_state*.nc")):
             outputs[name.name] = file_facts(name, relative_to=out)
         for extra in (out / f"{protocol_name}.nc", out / f"{protocol_name}_checkpoint.nc",
                       out / "rem.log"):
             if extra.is_file():
                 outputs[extra.name] = file_facts(extra, relative_to=out)
         outputs.update(_cv_outputs(restart, out))
-        log.update(outputs=outputs, state_trajectories=len(list(out.glob("remd*.nc"))))
+        log.update(outputs=outputs,
+                   state_trajectories=len(list(out.glob("whole_state*.nc"))))
         log.complete()
         log.heading("Summary")
         log(f"  {protocol_name}: {states} states, {ladder['number_of_exchanges']} exchanges")

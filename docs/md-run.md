@@ -72,6 +72,36 @@ whether a simulation was moving. Amber has kept `mdout` and its logfile apart fo
 Each names the other, so whichever you open first tells you where the rest is. Only an actual
 collision — the two resolving to the same path — is refused.
 
+### If you are coming from Amber, `mdout.csv` is not `mdout`
+
+The names invite a wrong mapping. Amber writes two energy files and MD-tools writes three, and
+they do not line up one-to-one:
+
+| Amber | controlled by | MD-tools | controlled by |
+|---|---|---|---|
+| `mdout` — human-readable, with the per-term breakdown | `ntpr` | **`<name>.out`** | `info_printout` |
+| `mden` — columnar energies, for parsing | `ntwe` | **`mdout.csv`** | `info_printout` |
+| the `BOND`/`ANGLE`/`EEL`/`EGB` decomposition inside `mdout` | `ntpr` | **`energy_components.csv`** | `info_printout` |
+
+So the file called `mdout.csv` is the analogue of Amber's `mden`, and the analogue of Amber's
+`mdout` is the `.out`. One `info_printout` drives all three, which is why there is no separate
+`ntwe`.
+
+Two differences worth knowing before you go looking for something that is not there:
+
+- **The decomposition is by FORCE GROUP, not by Amber energy term.** A column is labelled with
+  the forces in its group, so `CustomGBForce+NonbondedForce` means those two share a group and
+  their energies are reported as one number. That is stated rather than hidden behind a prettier
+  name; splitting them would need a different force-group assignment, which changes the
+  serialised System and so its digest, and would make every run in flight unresumable.
+- **Averages and RMS fluctuations** are printed at the foot of the `.out`, as Amber prints them
+  at the foot of an `mdout`. They are computed from the rows `mdout.csv` actually holds, so a
+  resumed run summarises what it kept rather than steps whose rows were truncated.
+
+On implicit solvent no box columns are written to either file: a system with no periodic box has
+no volume and no density, and reporting the nominal unit cell for one would be a number
+describing something that does not exist.
+
 ## Which file drives the run
 
 **`resolved.config`. Always — and md-run writes it on every invocation.**

@@ -449,7 +449,7 @@ def test_ladder_extension_refuses_a_malformed_parent_cost(ladder_project, tmp_pa
                           "--extend-from", str(destination))
     assert refused.returncode != 0, refused.stdout[-2000:]
     _assert_unchanged(destination, before, "a refused ladder extension")
-    assert not list(extension.glob("remd*.cv.csv")), (
+    assert not list(extension.glob("cv_state*.csv")), (
         "the extension wrote CV outputs before refusing its parent")
 
 

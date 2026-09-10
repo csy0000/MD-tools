@@ -6,7 +6,7 @@ WHY PER STATE AND NOT PER WALKER
     "the distribution sampled at tau = 0.3" -- and a walker visits many rungs. A per-walker series
     is a series over a changing Hamiltonian, which is not an ensemble average of anything.
 
-    So `remd2.cv.csv` holds the configurations that OCCUPIED state 2, whichever walker supplied
+    So `cv_state2.csv` holds the configurations that OCCUPIED state 2, whichever walker supplied
     each of them, and `walker_index` records which one did. That column is what makes the
     exchange history reconstructible from the CV files alone, and what lets someone check the
     series against a walker-centric analysis if they want one.
@@ -54,7 +54,7 @@ class StateCVSet:
         self.series = []
         for index, tau in enumerate(self.taus):
             self.series.append(CVSeries(
-                self.directory / f"remd{index}.cv.csv", definition,
+                self.directory / f"cv_state{index}.csv", definition,
                 extra_columns=COLUMNS,
                 sidecar_extra={
                     "state_index": index, "tau": tau,
@@ -212,8 +212,8 @@ def validate_for_continuation(directory, definition, *, taus, interval_steps, co
 
     expected_columns = list(COLUMNS) + list(definition.names)
     for index, tau in enumerate(taus):
-        csv_path = directory / f"remd{index}.cv.csv"
-        sidecar = directory / f"remd{index}.cv.json"
+        csv_path = directory / f"cv_state{index}.csv"
+        sidecar = directory / f"cv_state{index}.json"
         if not csv_path.is_file():
             problems.append(f"{csv_path.name} is missing")
             continue
@@ -289,8 +289,8 @@ def manifest_entries(directory, definition, *, taus, interval_steps, total_steps
     directory = Path(directory)
     entries = []
     for index, tau in enumerate(taus):
-        csv_path = directory / f"remd{index}.cv.csv"
-        sidecar = directory / f"remd{index}.cv.json"
+        csv_path = directory / f"cv_state{index}.csv"
+        sidecar = directory / f"cv_state{index}.json"
         lines = csv_path.read_text(encoding="utf-8").splitlines() if csv_path.is_file() else []
         rows = [line.split(",") for line in lines[1:]]
         steps = [int(row[0]) for row in rows] if rows else []
@@ -569,9 +569,9 @@ def prefix_records(directory, definition, *, taus, interval_steps, rows, cost=No
     self_costs = list(per_state_cost) if per_state_cost else None
     entries = []
     for index, tau in enumerate(taus):
-        csv_path = directory / f"remd{index}.cv.csv"
+        csv_path = directory / f"cv_state{index}.csv"
         entry = cv_prefix.record(
-            csv_path, rows=int(rows), sidecar=directory / f"remd{index}.cv.json",
+            csv_path, rows=int(rows), sidecar=directory / f"cv_state{index}.json",
             definition=definition)
         entry["state_index"] = index
         entry["tau"] = float(tau)
@@ -680,8 +680,8 @@ def validate_prefixes(directory, definition, *, taus, interval_steps, block,
                 f"{entry_rows}. One of them decided the truncation and the other did not agree.")
         try:
             cv_prefix.validate(
-                directory / f"remd{index}.cv.csv", entry,
-                sidecar=directory / f"remd{index}.cv.json",
+                directory / f"cv_state{index}.csv", entry,
+                sidecar=directory / f"cv_state{index}.json",
                 definition=definition, expect_columns=columns,
                 value_columns=list(definition.names),
                 identifiers={"state_index": index, "tau": tau, "exchange_phase": PHASE},
@@ -795,7 +795,7 @@ def _first_committed_step(directory, *, where):
     """
     from ..cv import prefix as cv_prefix
 
-    series = Path(directory) / "remd0.cv.csv"
+    series = Path(directory) / "cv_state0.csv"
     lines = cv_prefix.read_lines(series)
     if len(lines) < 2:
         raise CVContinuationError(
@@ -817,7 +817,7 @@ def truncate_to(directory, *, taus, rows):
 
     directory = Path(directory)
     for index in range(len(taus)):
-        cv_prefix.truncate(directory / f"remd{index}.cv.csv", int(rows))
+        cv_prefix.truncate(directory / f"cv_state{index}.csv", int(rows))
 
 
 def committed_prefixes(validated, n_states):

@@ -192,7 +192,7 @@ def _rewrite_prefix(destination: Path, rows: int, definition_names=("phi", "psi"
         total = CVCost()
         for entry in block["states"]:
             index = int(entry["state_index"])
-            series = destination / f"remd{index}.cv.csv"
+            series = destination / f"cv_state{index}.csv"
             entry["rows"] = rows
             entry["prefix_sha256"] = cv_prefix.prefix_digest(series, rows)
             entry["cost"] = cost_record(scope, scope, rows=rows)
@@ -219,7 +219,7 @@ def test_a_valid_interrupted_resume_retains_every_committed_row(project, tmp_pat
     """
     reference = tmp_path / "reference"
     _run(project, reference)
-    want = {i: _rows(reference / f"remd{i}.cv.csv") for i in range(STATES)}
+    want = {i: _rows(reference / f"cv_state{i}.csv") for i in range(STATES)}
     assert len(want[0]) == COMPLETE_ROWS
 
     destination = tmp_path / "resumed"
@@ -229,12 +229,12 @@ def test_a_valid_interrupted_resume_retains_every_committed_row(project, tmp_pat
         f"the interruption committed {committed} of {COMPLETE_ROWS} rows; it must land mid-run")
 
     # The uncommitted tail a crash leaves behind is legitimately present and longer.
-    on_disk = len(_rows(destination / "remd0.cv.csv"))
+    on_disk = len(_rows(destination / "cv_state0.csv"))
     assert on_disk >= committed
 
     _run(project, destination, "--resume")
     for index in range(STATES):
-        got = _rows(destination / f"remd{index}.cv.csv")
+        got = _rows(destination / f"cv_state{index}.csv")
         assert len(got) == COMPLETE_ROWS
         assert [r["step"] for r in got] == [r["step"] for r in want[index]]
         assert got == want[index], f"state {index} differs from the uninterrupted reference"
@@ -254,7 +254,7 @@ def test_a_prefix_shorter_than_committed_progress_is_refused(project, tmp_path):
     honest = _expected_rows(checkpoint)
     assert honest >= 3, "need room to shorten the prefix by more than one row"
 
-    before = {i: _rows(destination / f"remd{i}.cv.csv") for i in range(STATES)}
+    before = {i: _rows(destination / f"cv_state{i}.csv") for i in range(STATES)}
     _rewrite_prefix(destination, honest - 2)
 
     refused = _run(project, destination, "--resume", expect=1)
@@ -270,7 +270,7 @@ def test_a_prefix_shorter_than_committed_progress_is_refused(project, tmp_path):
 
     # And the committed samples are still on disk: the refusal happened before any truncation.
     for index in range(STATES):
-        assert _rows(destination / f"remd{index}.cv.csv") == before[index], (
+        assert _rows(destination / f"cv_state{index}.csv") == before[index], (
             f"state {index} was truncated by a run that then refused")
 
 
@@ -279,15 +279,15 @@ def test_a_prefix_longer_than_committed_progress_is_refused(project, tmp_path):
     destination = tmp_path / "lengthened"
     checkpoint = _interrupted(project, destination)
     honest = _expected_rows(checkpoint)
-    on_disk = len(_rows(destination / "remd0.cv.csv"))
+    on_disk = len(_rows(destination / "cv_state0.csv"))
     if on_disk <= honest:
         pytest.skip("this interruption left no uncommitted tail to over-claim")
 
-    before = {i: _rows(destination / f"remd{i}.cv.csv") for i in range(STATES)}
+    before = {i: _rows(destination / f"cv_state{i}.csv") for i in range(STATES)}
     _rewrite_prefix(destination, honest + 1)
     refused = _run(project, destination, "--resume", expect=1)
     combined = refused.stdout + refused.stderr + \
         (destination / "REST2.out").read_text(encoding="utf-8", errors="replace")
     assert "observation grid" in combined, combined[-3000:]
     for index in range(STATES):
-        assert _rows(destination / f"remd{index}.cv.csv") == before[index]
+        assert _rows(destination / f"cv_state{index}.csv") == before[index]

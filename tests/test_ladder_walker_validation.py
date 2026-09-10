@@ -3,7 +3,7 @@
 WHY THIS FILE
 
     `walker_index` is what makes a state-centric CV series joinable to a walker-centric
-    analysis: `remd2.cv.csv` holds whatever occupied rung 2, and this column says who. Every
+    analysis: `cv_state2.csv` holds whatever occupied rung 2, and this column says who. Every
     other field in those files was validated -- the step grid, the state index, tau, the
     exchange phase, the frame reference, the finiteness of every value, the digest of the whole
     file -- and this one was not read at all. A walker of -1, of `n_states`, of "2.5", or the
@@ -148,7 +148,7 @@ def _reseal(destination: Path, block):
 
 def _edit(destination: Path, state: int, *, row: int, column: str, value: str):
     """Replace one field of one committed row, leaving the file otherwise byte-identical."""
-    path = destination / f"remd{state}.cv.csv"
+    path = destination / f"cv_state{state}.csv"
     lines = path.read_text(encoding="utf-8").splitlines()
     header = lines[0].split(",")
     cells = lines[row + 1].split(",")
@@ -197,7 +197,7 @@ def test_a_walker_duplicated_across_states_at_one_step_is_refused(finished, tmp_
     destination = _copy(finished, tmp_path)
     block = _block(destination)
     # Whatever occupies state 1 at row 1, make state 0 claim it too at the same step.
-    lines = (destination / "remd1.cv.csv").read_text(encoding="utf-8").splitlines()
+    lines = (destination / "cv_state1.csv").read_text(encoding="utf-8").splitlines()
     header = lines[0].split(",")
     theirs = lines[2].split(",")[header.index("walker_index")]
     _edit(destination, 0, row=1, column="walker_index", value=theirs)
@@ -209,7 +209,7 @@ def test_a_walker_duplicated_across_states_at_one_step_is_refused(finished, tmp_
 def test_a_walker_missing_at_one_step_is_refused(finished, tmp_path):
     """One step short in one file: that step has a rung nobody occupied."""
     destination = _copy(finished, tmp_path)
-    path = destination / "remd0.cv.csv"
+    path = destination / "cv_state0.csv"
     lines = path.read_text(encoding="utf-8").splitlines()
     path.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
     block = _reseal(destination, _block(destination))
@@ -226,10 +226,10 @@ def test_two_state_files_swapped_whole_are_refused(finished, tmp_path):
     """Syntactically perfect, scientifically wrong: every row valid, in the wrong file."""
     destination = _copy(finished, tmp_path)
     block = _block(destination)
-    first = (destination / "remd0.cv.csv").read_text(encoding="utf-8")
-    second = (destination / "remd1.cv.csv").read_text(encoding="utf-8")
-    (destination / "remd0.cv.csv").write_text(second, encoding="utf-8")
-    (destination / "remd1.cv.csv").write_text(first, encoding="utf-8")
+    first = (destination / "cv_state0.csv").read_text(encoding="utf-8")
+    second = (destination / "cv_state1.csv").read_text(encoding="utf-8")
+    (destination / "cv_state0.csv").write_text(second, encoding="utf-8")
+    (destination / "cv_state1.csv").write_text(first, encoding="utf-8")
     problems = _verify(destination, _reseal(destination, block))
     # Caught by the rows' own state index: a swapped file reports the other rung's identity.
     assert any("reports state_index" in problem for problem in problems), problems
@@ -261,5 +261,5 @@ def test_an_invalid_ladder_is_refused_an_extension_before_outputs_appear(finishe
     reported = (extension / "REST2.out").read_text(encoding="utf-8")
     assert f"walker {STATES}" in reported, reported[-3000:]
     assert "cannot be extended" in reported, reported[-3000:]
-    assert not list(extension.glob("remd*.cv.csv")), (
+    assert not list(extension.glob("cv_state*.csv")), (
         "the extension wrote CV outputs before refusing its parent")

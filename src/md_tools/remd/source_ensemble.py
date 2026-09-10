@@ -219,6 +219,45 @@ def resolve_source_paths(request):
             "topology": topology, "topology_choice": chosen}
 
 
+def trajectory_identity(trajectory):
+    """`tau`, `temperature_k` and the per-frame times an AMBER NetCDF source records ITSELF.
+
+    THE FILE IS ITS OWN RUNTIME RECORD. Every trajectory this repository writes is AMBER NetCDF
+    carrying a real `time` variable and, as our own attributes, the `tau` and `temperature_k` the
+    frames were sampled at -- written by the reporter that produced them, at the moment it
+    produced them.
+
+    That is strictly better evidence than the sidecar this module looked for first. A
+    `resolved_run.yaml` can be copied away from its trajectory, can describe a directory holding
+    several runs, and -- as it turned out -- was written by nothing in this repository at all, so
+    the refusals below advised pointing at "a trajectory written by this repository's runtime
+    (which records the map)" when no such trajectory existed. The attributes cannot be separated
+    from the frames they describe, because they are in the same file.
+
+    Returns `(identity, None)` or `(None, reason)`; absence is never an error here.
+    """
+    path = Path(trajectory)
+    if path.suffix.lower() != ".nc":
+        return None, f"{path.name} is not AMBER NetCDF, so it carries no recorded identity"
+    try:
+        import netCDF4
+
+        with netCDF4.Dataset(str(path)) as dataset:
+            if getattr(dataset, "Conventions", None) != "AMBER":
+                return None, f"{path.name} is NetCDF but does not declare the AMBER convention"
+            identity = {
+                "tau": (float(dataset.tau) if hasattr(dataset, "tau") else None),
+                "temperature_k": (float(dataset.temperature_k)
+                                  if hasattr(dataset, "temperature_k") else None),
+                "times_ps": ([float(value) for value in dataset.variables["time"][:]]
+                             if "time" in dataset.variables else None),
+                "title": getattr(dataset, "title", None),
+            }
+        return identity, None
+    except Exception as failure:                              # noqa: BLE001 - evidence, not flow
+        return None, f"{path.name} could not be read for its identity: {failure}"
+
+
 def companion_record(trajectory):
     """The `resolved_run.yaml` describing the run that wrote `trajectory`, if there is one.
 
@@ -263,6 +302,23 @@ def source_frame_timing(request, trajectory, n_frames):
                        "source": f"{request.field('first_frame_time_ps')} / "
                                  f"{request.field('frame_interval_ps')}"}
 
+    # THE FILE'S OWN CLOCK, ahead of any sidecar. An AMBER NetCDF written by this repository
+    # carries a real `time` per frame, so the times are not derived from a first-frame-plus-
+    # interval model at all -- they are read. That also means a source with a non-uniform
+    # cadence (a run whose interval changed between segments) is described correctly, which the
+    # two-number model cannot do.
+    identity, _ = trajectory_identity(trajectory)
+    if identity is not None and identity["times_ps"]:
+        times = list(identity["times_ps"])
+        if len(times) >= n_frames:
+            times = times[:n_frames]
+            spacing = ({round(b - a, 6) for a, b in zip(times, times[1:])} if len(times) > 1
+                       else set())
+            return times, {"route": "trajectory_time_variable",
+                           "first_frame_time_ps": times[0],
+                           "frame_interval_ps": (spacing.pop() if len(spacing) == 1 else None),
+                           "source": f"{Path(trajectory).name} time variable"}
+
     record, record_path = companion_record(trajectory)
     if record is not None:
         block = record.get("trajectories") or {}
@@ -284,7 +340,9 @@ def source_frame_timing(request, trajectory, n_frames):
 
     raise SourceError(
         f"cannot establish a physical time for the frames of {Path(trajectory).name}.\n"
-        f"  No companion resolved_run.yaml with a frame_time_map was found beside or above it, "
+        f"  It records no per-frame time of its own (it is not an AMBER NetCDF written by this "
+        f"repository), no companion resolved_run.yaml with a frame_time_map was found beside or "
+        f"above it, "
         f"and {request.field('first_frame_time_ps')} / {request.field('frame_interval_ps')} are "
         f"not set.\n"
         f"  A frame index is not a time, and this refuses to invent one. Either point "
@@ -304,8 +362,17 @@ def source_tau(request, trajectory):
     """
     declared = request.declared_tau
     recorded, evidence = None, None
+
+    # The trajectory's OWN attribute first. It was written by the reporter that produced the
+    # frames, so it cannot be separated from them -- unlike a sidecar, and unlike the directory
+    # name this docstring rejects.
+    identity, _ = trajectory_identity(trajectory)
+    if identity is not None and identity["tau"] is not None:
+        recorded = float(identity["tau"])
+        evidence = f"{Path(trajectory).name} tau attribute"
+
     record, record_path = companion_record(trajectory)
-    if record is not None:
+    if recorded is None and record is not None:
         entry = _replica_entry(record, trajectory)
         if entry is not None and entry.get("tau") is not None:
             recorded = float(entry["tau"])
@@ -333,7 +400,9 @@ def source_tau(request, trajectory):
     raise SourceError(
         f"cannot establish the Hamiltonian tau of the source trajectory "
         f"{Path(trajectory).name}.\n"
-        f"  No companion resolved_run.yaml recording `tau` was found beside or above it, and "
+        f"  It records no `tau` of its own (it is not an AMBER NetCDF written by this "
+        f"repository), no companion resolved_run.yaml recording `tau` was found beside or above "
+        f"it, and "
         f"{request.field('source_tau')} is not set.\n"
         f"  This is refused rather than assumed to be {request.required_tau}. A directory name "
         f"such as `cMD_tau0p5` is NOT evidence: it can be renamed or copied, and a "

@@ -6,7 +6,7 @@ WHY PER STATE
     distribution at tau = 0.3" -- and a walker visits many rungs, so a per-walker series is a
     series over a changing Hamiltonian and is not an ensemble average of anything.
 
-    `remd2.cv.csv` therefore holds whatever configuration OCCUPIED state 2 at each step, and
+    `cv_state2.csv` therefore holds whatever configuration OCCUPIED state 2 at each step, and
     `walker_index` says which walker supplied it. Getting that backwards produces files that look
     perfect and describe the wrong ensembles, which is what the tests here exist to exclude.
 
@@ -110,12 +110,12 @@ def _rows(path: Path):
 
 
 def test_there_is_one_series_per_state_named_for_the_state(completed):
-    found = sorted(p.name for p in completed.glob("remd*.cv.csv"))
-    assert found == ["remd0.cv.csv", "remd1.cv.csv", "remd2.cv.csv"], found
+    found = sorted(p.name for p in completed.glob("cv_state*.csv"))
+    assert found == ["cv_state0.csv", "cv_state1.csv", "cv_state2.csv"], found
 
 
 def test_the_columns_are_the_documented_ones(completed):
-    header, _rows_ = _rows(completed / "remd0.cv.csv")
+    header, _rows_ = _rows(completed / "cv_state0.csv")
     assert header == ["step", "time_ps", "exchange_attempt", "state_index", "tau",
                       "walker_index", "exchange_phase", "trajectory_frame_index", "phi"]
 
@@ -124,7 +124,7 @@ def test_each_file_reports_its_own_fixed_state_and_tau(completed):
     """A state file must never report another state's index or another rung's tau."""
     taus = {}
     for index in range(3):
-        _header, rows = _rows(completed / f"remd{index}.cv.csv")
+        _header, rows = _rows(completed / f"cv_state{index}.csv")
         assert {row["state_index"] for row in rows} == {str(index)}
         tau_values = {row["tau"] for row in rows}
         assert len(tau_values) == 1, f"state {index} reported several taus: {tau_values}"
@@ -143,7 +143,7 @@ def test_the_cadence_is_finer_than_the_exchange_interval_and_lands_on_the_grid(c
     absent from every state file. The universal contract is that step 0 and the final step each
     appear exactly once.
     """
-    _header, rows = _rows(completed / "remd0.cv.csv")
+    _header, rows = _rows(completed / "cv_state0.csv")
     steps = [int(row["step"]) for row in rows]
     assert steps == [0, 5, 10, 15, 20, 25, 30, 35, 40], steps
     assert steps.count(0) == 1 and steps.count(40) == 1
@@ -153,7 +153,7 @@ def test_the_cadence_is_finer_than_the_exchange_interval_and_lands_on_the_grid(c
 def test_the_step_zero_row_is_the_initial_configuration_before_any_attempt(completed):
     """Step 0 precedes every exchange attempt, and says so rather than claiming attempt 0."""
     for index in range(3):
-        _header, rows = _rows(completed / f"remd{index}.cv.csv")
+        _header, rows = _rows(completed / f"cv_state{index}.csv")
         first = rows[0]
         assert int(first["step"]) == 0
         assert int(first["exchange_attempt"]) == -1, (
@@ -168,9 +168,9 @@ def test_the_step_zero_row_is_the_initial_configuration_before_any_attempt(compl
 
 def test_every_state_file_has_the_same_steps(completed):
     """They are written together; a file that drifted would misalign every later row."""
-    reference = [row["step"] for row in _rows(completed / "remd0.cv.csv")[1]]
+    reference = [row["step"] for row in _rows(completed / "cv_state0.csv")[1]]
     for index in (1, 2):
-        assert [row["step"] for row in _rows(completed / f"remd{index}.cv.csv")[1]] == reference
+        assert [row["step"] for row in _rows(completed / f"cv_state{index}.csv")[1]] == reference
 
 
 def test_the_walker_index_is_a_permutation_of_the_walkers_at_every_step(completed):
@@ -180,7 +180,7 @@ def test_the_walker_index_is_a_permutation_of_the_walkers_at_every_step(complete
     the three files at a fixed step must give a permutation of {0, 1, 2}. A bug that wrote the
     state index into the walker column, or that failed to follow an accepted swap, breaks this.
     """
-    per_state = {index: _rows(completed / f"remd{index}.cv.csv")[1] for index in range(3)}
+    per_state = {index: _rows(completed / f"cv_state{index}.csv")[1] for index in range(3)}
     for position in range(len(per_state[0])):
         walkers = sorted(int(per_state[index][position]["walker_index"]) for index in range(3))
         assert walkers == [0, 1, 2], (
@@ -194,7 +194,7 @@ def test_the_walkers_actually_move_between_states(completed):
     every state/walker assertion here vacuous -- so this states plainly whether the run under test
     exercised the case, and skips rather than passing silently if it did not.
     """
-    _header, rows = _rows(completed / "remd0.cv.csv")
+    _header, rows = _rows(completed / "cv_state0.csv")
     seen = {int(row["walker_index"]) for row in rows}
     if len(seen) == 1:
         pytest.skip(f"no accepted exchange in this short run; state 0 held walker {seen} "
@@ -205,12 +205,12 @@ def test_the_walkers_actually_move_between_states(completed):
 def test_every_row_is_marked_pre_exchange(completed):
     """One convention, everywhere, written into the file rather than left to be inferred."""
     for index in range(3):
-        _header, rows = _rows(completed / f"remd{index}.cv.csv")
+        _header, rows = _rows(completed / f"cv_state{index}.csv")
         assert {row["exchange_phase"] for row in rows} == {"pre-exchange"}
 
 
 def test_the_sidecar_states_the_convention_and_what_the_columns_mean(completed):
-    body = json.loads((completed / "remd1.cv.json").read_text(encoding="utf-8"))
+    body = json.loads((completed / "cv_state1.json").read_text(encoding="utf-8"))
     assert body["state_index"] == 1
     assert body["series_follows"] == "thermodynamic state"
     assert body["exchange_phase"] == "pre-exchange"

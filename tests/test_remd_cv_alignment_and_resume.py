@@ -152,7 +152,7 @@ def test_every_named_frame_holds_the_configuration_the_row_was_measured_on(compl
 
     checked = 0
     for index in range(STATES):
-        rows = _rows(completed / f"remd{index}.cv.csv")
+        rows = _rows(completed / f"cv_state{index}.csv")
         frames = mdtraj.load(str(completed / f"whole_state{index}_prod1.nc"),
                              top=str(project / "built.pdb"))
         for row in rows:
@@ -177,7 +177,7 @@ def test_every_named_frame_holds_the_configuration_the_row_was_measured_on(compl
 
 def test_rows_off_the_frame_cadence_carry_no_index(completed):
     """Frames every 10, CVs every 5: the odd multiples can never name one."""
-    rows = _rows(completed / "remd0.cv.csv")
+    rows = _rows(completed / "cv_state0.csv")
     by_step = {int(r["step"]): r["trajectory_frame_index"] for r in rows}
     for step in (0, 5, 15, 25, 35):
         assert by_step[step] == "", (
@@ -200,7 +200,7 @@ def test_a_state_the_exchange_moved_names_no_frame_at_that_step(completed):
     frame_steps = {10, 20, 30, 40}
     moved_and_empty = coincident = 0
     for index in range(STATES):
-        rows = _rows(completed / f"remd{index}.cv.csv")
+        rows = _rows(completed / f"cv_state{index}.csv")
         for row, following in zip(rows, rows[1:]):
             step = int(row["step"])
             if step not in frame_steps:
@@ -227,7 +227,7 @@ def test_a_state_the_exchange_moved_names_no_frame_at_that_step(completed):
 def test_a_named_frame_index_is_never_negative(completed):
     """-1 is not a frame index. Writing it invites a reader to index from the end of the file."""
     for index in range(STATES):
-        for row in _rows(completed / f"remd{index}.cv.csv"):
+        for row in _rows(completed / f"cv_state{index}.csv"):
             named = row["trajectory_frame_index"]
             if named != "":
                 assert int(named) >= 0, f"state {index}: {named}"
@@ -245,7 +245,7 @@ def test_a_resumed_ladder_writes_the_same_cv_series_as_an_uninterrupted_one(
     """
     reference = tmp_path / f"reference-{boundary}"
     _run(project, reference)
-    expected = {index: _rows(reference / f"remd{index}.cv.csv") for index in range(STATES)}
+    expected = {index: _rows(reference / f"cv_state{index}.csv") for index in range(STATES)}
 
     destination = tmp_path / f"resumed-{boundary}"
     crashed = _run(project, destination, expect=1,
@@ -253,14 +253,14 @@ def test_a_resumed_ladder_writes_the_same_cv_series_as_an_uninterrupted_one(
                                 "MD_TOOLS_FAIL_LADDER_AT": boundary,
                                 "MD_TOOLS_FAIL_PROPAGATION_AFTER": "2"})
     assert crashed.returncode != 0, crashed.stdout[-2000:] + crashed.stderr[-2000:]
-    partial = _rows(destination / "remd0.cv.csv")
+    partial = _rows(destination / "cv_state0.csv")
     assert partial, "the interruption left no CV rows, so the resume has nothing to continue"
     assert len(partial) < len(expected[0]), "the interruption did not stop the run early"
 
     _run(project, destination, "--resume")
 
     for index in range(STATES):
-        rows = _rows(destination / f"remd{index}.cv.csv")
+        rows = _rows(destination / f"cv_state{index}.csv")
         steps = [int(r["step"]) for r in rows]
         assert steps == [int(r["step"]) for r in expected[index]], (
             f"state {index} at {boundary}: a resumed ladder produced {steps}")

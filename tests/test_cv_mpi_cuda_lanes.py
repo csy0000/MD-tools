@@ -158,7 +158,7 @@ def test_a_two_rank_cuda_ladder_writes_cv_for_every_state(project, tmp_path):
     assert manifest["collective_variables"] is not None
 
     for index in range(STATES):
-        assert [int(r["step"]) for r in _rows(destination / f"remd{index}.cv.csv")] == EXPECTED
+        assert [int(r["step"]) for r in _rows(destination / f"cv_state{index}.csv")] == EXPECTED
 
     # Each rank recorded its own device: a two-rank launch that quietly shared one device would
     # still finish, and would not be the placement the run claims.
@@ -175,7 +175,7 @@ def test_cv_continuation_under_mpi_on_cuda(project, tmp_path):
     """
     reference = tmp_path / "reference"
     _launch(project, reference)
-    expected = {index: [int(r["step"]) for r in _rows(reference / f"remd{index}.cv.csv")]
+    expected = {index: [int(r["step"]) for r in _rows(reference / f"cv_state{index}.csv")]
                 for index in range(STATES)}
 
     destination = tmp_path / "resumed"
@@ -187,7 +187,7 @@ def test_cv_continuation_under_mpi_on_cuda(project, tmp_path):
     _launch(project, destination, "--resume")
 
     for index in range(STATES):
-        steps = [int(r["step"]) for r in _rows(destination / f"remd{index}.cv.csv")]
+        steps = [int(r["step"]) for r in _rows(destination / f"cv_state{index}.csv")]
         assert steps == expected[index], f"state {index}: {steps}"
         assert len(steps) == len(set(steps))
 

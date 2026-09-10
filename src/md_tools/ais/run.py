@@ -2332,6 +2332,33 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     rank, size = coordination.rank, coordination.size
     source_format = checked.source_format
 
+    # THE SOURCE'S OWN tau, AGAINST THE ONE THIS RUN ASSERTS.
+    #
+    # `ais.tau_start` says which ensemble the source frames were drawn from, and until now that
+    # was an assertion nothing could contradict -- the log said as much, "not verifiable from the
+    # trajectory itself", which was true of a DCD and is no longer true of what this repository
+    # writes. An AMBER NetCDF from a stage or a ladder carries the `tau` its reporter recorded
+    # while producing the frames, so a source ensemble at the wrong tau can be caught here rather
+    # than running to completion and being wrong -- which is the failure `source_tau`'s own
+    # docstring warns about, and the one a directory name cannot protect against.
+    #
+    # Silence when the file records nothing: a foreign trajectory is still a legitimate source,
+    # and the assertion stands exactly as before for it.
+    from ..remd.source_ensemble import trajectory_identity
+
+    recorded_identity, _ = trajectory_identity(source_path)
+    recorded_tau = (recorded_identity or {}).get("tau")
+    if recorded_tau is not None and abs(float(recorded_tau) - float(ais["tau_start"])) > 1e-9:
+        print(f"AIS: ais.tau_start is {ais['tau_start']}, but {source_path.name} records that it "
+              f"was sampled at tau = {recorded_tau}.\n"
+              f"  The source ensemble and the path's starting Hamiltonian must be the same one, "
+              f"or every work value measures a switch that did not happen.\n"
+              f"  This is read from the trajectory's own `tau` attribute, written by the run that "
+              f"produced the frames -- not from its filename or its directory.\n"
+              f"  Correct ais.tau_start, or point ais_source.trajectory at the run you meant.",
+              file=sys.stderr)
+        return 2
+
     from ..run.preflight import reject_contradictory_continuation
 
     try:
@@ -2489,12 +2516,19 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                             f"(frames {first}..{last} inclusive"
                             + (f", every {stride}" if stride > 1 else "") + ")")
         log.field("selection", source_cfg["selection"])
-        # Stated, not verified. Nothing in a coordinate trajectory records the Hamiltonian it was
-        # sampled under, so this is an assertion the configuration makes and the log repeats --
-        # written down precisely so that a reader can check it against the run that produced the
-        # file rather than assume it was checked here.
-        log.field("asserted ensemble", f"tau = {ais['tau_start']} (ASSERTED by ais.tau_start, "
-                                       f"not verifiable from the trajectory itself)")
+        # VERIFIED when the file says so, asserted when it cannot. An AMBER NetCDF written by
+        # this repository records the `tau` its reporter sampled at, and the preflight above
+        # refuses a run whose `ais.tau_start` disagrees -- so reaching here means they agree, and
+        # the log should say which of the two statements it is making. For a foreign trajectory
+        # that records nothing the old wording is still exactly right, and is kept verbatim.
+        if recorded_tau is not None:
+            log.field("source ensemble", f"tau = {ais['tau_start']}, CONFIRMED against the "
+                                         f"`tau` attribute {source_path.name} recorded when it "
+                                         f"was written")
+        else:
+            log.field("asserted ensemble",
+                      f"tau = {ais['tau_start']} (ASSERTED by ais.tau_start, not verifiable "
+                      f"from this trajectory, which records no tau of its own)")
         log.field("velocities", "not read from the source; each path draws fresh "
                                 f"Maxwell-Boltzmann momenta at {dynamics['temperature_K']} K "
                                 f"with its own recorded seed")

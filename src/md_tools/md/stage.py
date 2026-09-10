@@ -91,19 +91,25 @@ class _AmberStreamReporter:
     writer: the writer's business is one trajectory of N atoms, and which N is the caller's.
     """
 
-    def __init__(self, path, interval, *, n_atoms, atom_subset=None, periodic, from_frame=0):
+    def __init__(self, path, interval, *, n_atoms, atom_subset=None, periodic, from_frame=0,
+                 tau=0.0, temperature_k=0.0, application="cMD"):
         from ..remd.amber_trajectory import AmberTrajectoryWriter
 
         self._interval = int(interval)
         self._subset = None if atom_subset is None else list(atom_subset)
         width = len(self._subset) if self._subset is not None else int(n_atoms)
+        # THE STAGE'S OWN tau AND TEMPERATURE. These were hard-coded to 0.0 with a state index of
+        # 0, so every conventional stage wrote a file whose header said it was REST2 state 0 at
+        # tau = 0 whatever it actually ran at. A fixed-tau cMD ensemble is the one case where
+        # that matters most: it is what AIS anneals away from, and `source_tau` exists precisely
+        # to refuse taking the value from a directory name.
         if from_frame:
             self._writer = AmberTrajectoryWriter.open_existing(
-                path, n_atoms=width, state_index=0, tau=0.0, from_frame=int(from_frame))
+                path, n_atoms=width, tau=float(tau), from_frame=int(from_frame))
         else:
             self._writer = AmberTrajectoryWriter(
-                path, n_atoms=width, state_index=0, tau=0.0, temperature_k=0.0,
-                periodic=bool(periodic))
+                path, n_atoms=width, tau=float(tau), temperature_k=float(temperature_k),
+                application=str(application), periodic=bool(periodic))
 
     def describeNextReport(self, simulation):                 # noqa: N802 - OpenMM's protocol
         steps = self._interval - simulation.currentStep % self._interval
@@ -136,6 +142,110 @@ class _AmberStreamReporter:
             pass
 
 
+class _EnergyComponentsReporter:
+    """Per-force-group potential energy at the state table's cadence.
+
+    THE ATTRIBUTION AMBER'S `mdout` GIVES AND A SINGLE TOTAL CANNOT. One `getState` per group per
+    report, and the groups are read off the System as it already is -- MD-tools assigns them
+    meaningfully when it builds (bonds 0, angles 1, torsions 2, nonbonded and GB 11), so nothing
+    here reassigns anything. That matters more than the convenience: a force group is part of the
+    serialised System, so changing one would change `system_sha256` and make every run in flight
+    unresumable for the sake of a diagnostic.
+
+    Groups are labelled by the forces IN them, so `NonbondedForce+CustomGBForce` says plainly
+    that those two share a group and are not separable here. Naming them apart would be a nicer
+    header over a number that is their sum.
+    """
+
+    def __init__(self, path, interval, system, *, append=False):
+        from collections import defaultdict
+
+        self._interval = int(interval)
+        by_group = defaultdict(list)
+        for force in system.getForces():
+            by_group[int(force.getForceGroup())].append(type(force).__name__)
+        # CMMotionRemover contributes no energy and would add a column of zeros.
+        self._groups = [(group, "+".join(sorted(set(names) - {"CMMotionRemover"})))
+                        for group, names in sorted(by_group.items())
+                        if set(names) - {"CMMotionRemover"}]
+        self._handle = open(path, "a" if append else "w", encoding="utf-8")
+        if not append:
+            # Joined WITH the fixed columns rather than appended to them: a System whose only
+            # forces carry no energy leaves no groups, and `"Time (ps)",` + "" ends the header in
+            # a comma, which declares a column with no name.
+            columns = ['#"Step"', '"Time (ps)"']
+            columns += [f'"{label} (kJ/mole)"' for _, label in self._groups]
+            self._handle.write(",".join(columns) + "\n")
+            self._handle.flush()
+
+    def describeNextReport(self, simulation):                 # noqa: N802 - OpenMM's protocol
+        steps = self._interval - simulation.currentStep % self._interval
+        # Nothing is requested here: each group's energy is fetched individually in `report`,
+        # because one State cannot carry a per-group breakdown.
+        return (steps, False, False, False, False, None)
+
+    def report(self, simulation, state):
+        from openmm import unit
+
+        context = simulation.context
+        values = []
+        for group, _ in self._groups:
+            energy = context.getState(getEnergy=True, groups={group}).getPotentialEnergy()
+            values.append(f"{energy.value_in_unit(unit.kilojoule_per_mole):.10g}")
+        time_ps = context.getState().getTime().value_in_unit(unit.picosecond)
+        self._handle.write(f"{simulation.currentStep},{time_ps!r},{','.join(values)}\n")
+        self._handle.flush()
+
+    def __del__(self):                                        # pragma: no cover - interpreter exit
+        try:
+            self._handle.close()
+        except Exception:                                     # noqa: BLE001 - best effort
+            pass
+
+
+def _state_table_statistics(path):
+    """Mean and RMS fluctuation of each numeric column of a state table.
+
+    AMBER PRINTS THESE AT THE FOOT OF `mdout` and this did not, so the first thing anybody wants
+    after a run -- "what was the average temperature, and how much did the energy wander" -- was a
+    separate computation every time, over a file they had to go and find.
+
+    Read back from the CSV rather than accumulated during the run on purpose: what is summarised
+    is then exactly what was written, including after a resume truncated rows the checkpoint did
+    not vouch for. An accumulator would describe steps whose rows are no longer in the file.
+
+    RMS fluctuation, not standard deviation of the mean: sqrt(<x^2> - <x>^2), which is the
+    quantity Amber reports under that name.
+    """
+    import csv as _csv
+    import math
+
+    path = Path(path)
+    if not path.is_file():
+        return []
+    with path.open(encoding="utf-8") as handle:
+        rows = list(_csv.reader(handle))
+    if len(rows) < 2:
+        return []
+    headers = [column.lstrip("#").strip('"') for column in rows[0]]
+    summary = []
+    for index, header in enumerate(headers):
+        if header.startswith("Step") or header.startswith("Time"):
+            continue
+        values = []
+        for row in rows[1:]:
+            try:
+                values.append(float(row[index]))
+            except (ValueError, IndexError):
+                continue
+        if not values:
+            continue
+        mean = sum(values) / len(values)
+        variance = max(sum(value * value for value in values) / len(values) - mean * mean, 0.0)
+        summary.append((header, mean, math.sqrt(variance), len(values)))
+    return summary
+
+
 def _committed_frames(path, done):
     """How many frames of `path` the resume may keep: what is on disk, capped by nothing here.
 
@@ -159,7 +269,8 @@ def _committed_frames(path, done):
 
 
 def _coordinate_reporter(path, interval, *, atom_subset=None, append=False, n_atoms=0,
-                         periodic=False, from_frame=0):
+                         periodic=False, from_frame=0, tau=0.0, temperature_k=0.0,
+                         application="cMD"):
     """A trajectory reporter whose FORMAT matches the name it was given.
 
     `-x whatever.dcd` must produce DCD and `-x whatever.nc` must produce AMBER NetCDF. Choosing
@@ -181,7 +292,8 @@ def _coordinate_reporter(path, interval, *, atom_subset=None, append=False, n_at
 
         return DCDReporter(str(path), int(interval), append=bool(append))
     return _AmberStreamReporter(path, interval, n_atoms=n_atoms, atom_subset=atom_subset,
-                                periodic=periodic, from_frame=int(from_frame))
+                                periodic=periodic, from_frame=int(from_frame),
+                                tau=tau, temperature_k=temperature_k, application=application)
 
 
 def check_trajectory_suffix(path: Path) -> None:
@@ -470,7 +582,10 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     # single `mdout.csv` shared by every stage in a chain is not one table with five sections: the
     # second stage finds an output it did not write, and the run refuses before it starts.
     from ._stages import info_csv_name
-    info_path = outputs / info_csv_name(str(stage.get("name") or "stage"))
+    info_path = outputs / info_csv_name(str(stage.get("name") or "stage"), segment)
+    from ._stages import energy_components_name
+    components_path = outputs / energy_components_name(
+        str(stage.get("name") or "stage"), segment)
     restart_path = Path(args.restart) if args.restart else base / f"{name}.xml"
     chk_path = Path(args.checkpoint) if args.checkpoint else base / f"{name}.chk"
 
@@ -498,6 +613,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         checked = prepared if prepared is not None else preflight_stage(
             topology=topology_path, system=system_path, coordinates=args.continue_from,
             trajectory=traj_path, whole=whole_path, restart=restart_path, checkpoint=chk_path,
+            segment=segment,
             output=out_path, log=log_path, cpu=bool(args.cpu),
             device=int(args.device) if args.device is not None else None,
             protocol=f"stage {name}",
@@ -601,6 +717,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                 inventory=getattr(checked, "inventory", None),
                 streams=stage_streams(trajectory=traj_path,
                                       state_csv=info_path, whole=whole_path,
+                                      energy_components=components_path,
                                       collective_variables=cv_csv_path(traj_path, stage)))
             if problems:
                 detail = "".join(f"\n  - {problem}" for problem in problems)
@@ -902,6 +1019,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             trimmed = _truncate_streams_to_committed(
                 meta.get("streams") or {}, trajectory=traj_path,
                 state_csv=info_path, log=log, whole=whole_path,
+                energy_components=components_path,
                 collective_variables=cv_csv_path(traj_path, stage))
             log.heading("Resume")
             log.field("from checkpoint", f"generation {committed['generation']} at step {done}")
@@ -997,6 +1115,9 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                     _coordinate_reporter(
                         traj_path, int(stage["trajectory_interval_steps"]),
                         atom_subset=list(checked.solute) or None,
+                        tau=float(stage.get("tau") or 0.0),
+                        temperature_k=float(stage.get("temperature_K") or 0.0),
+                        application=str(stage.get("name") or "cMD"),
                         n_atoms=system.getNumParticles(), periodic=not implicit,
                         append=bool(done) and _trajectory_holds_frames(traj_path),
                         from_frame=(_committed_frames(traj_path, done) if done else 0)))
@@ -1006,6 +1127,9 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                 simulation.reporters.append(
                     _coordinate_reporter(
                         whole_path, int(stage["whole_interval_steps"]),
+                        tau=float(stage.get("tau") or 0.0),
+                        temperature_k=float(stage.get("temperature_K") or 0.0),
+                        application=str(stage.get("name") or "cMD"),
                         n_atoms=system.getNumParticles(), periodic=not implicit,
                         append=bool(done) and _trajectory_holds_frames(whole_path),
                         from_frame=(_committed_frames(whole_path, done) if done else 0)))
@@ -1013,8 +1137,22 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                 simulation.reporters.append(
                     StateDataReporter(str(info_path),
                                       int(stage["state_interval_steps"]), step=True, time=True,
-                                      potentialEnergy=True, temperature=True, volume=True,
-                                      density=True, speed=True, append=done > 0))
+                                      potentialEnergy=True, kineticEnergy=True,
+                                      totalEnergy=True, temperature=True,
+                                      # NOT under implicit solvent, where there is no box. The
+                                      # CSV asked for both unconditionally and OpenMM answered
+                                      # with the nominal unit cell -- a 22-atom GBn2 run got
+                                      # `Box Volume 8.0` and `Density 0.0299`, numbers describing
+                                      # a box the system does not have. The readable `.out` beside
+                                      # it has always suppressed them (`volume=not implicit`), so
+                                      # the two files disagreed about the same run.
+                                      volume=not implicit, density=not implicit,
+                                      speed=True, append=done > 0))
+                # The decomposition, at the SAME cadence, in its own file.
+                simulation.reporters.append(
+                    _EnergyComponentsReporter(components_path,
+                                              int(stage["state_interval_steps"]),
+                                              system, append=done > 0))
                 # The same numbers, readable, in the .out. A separate reporter rather than a
                 # post-hoc copy of the CSV: the point of the .out is that it can be tailed while
                 # the run is going, and a file written at the end cannot be.
@@ -1126,10 +1264,12 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                             name: (lambda key=name: _stream_counts(
                                 trajectory=traj_path,
                                 state_csv=info_path, whole=whole_path,
+                                energy_components=components_path,
                                 collective_variables=cv_csv_path(traj_path, stage)).get(key, 0))
                             for name in stage_streams(
                                 trajectory=traj_path,
                                 state_csv=info_path, whole=whole_path,
+                                energy_components=components_path,
                                 collective_variables=cv_csv_path(traj_path, stage))},
                         # A callable, read AT COMMIT TIME like the stream counts: the digest has
                         # to cover the rows that exist when the generation commits, not the ones
@@ -1240,6 +1380,15 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                       f"{cost['cumulative']['wall_seconds']:.3f} s cumulative "
                       f"({cost['segment']['cv_evaluations']} this segment)")
         log.complete()
+        # AVERAGES AND RMS FLUCTUATIONS, as Amber prints at the foot of an `mdout`. Over the
+        # rows the file actually holds, so a resumed run summarises what it kept.
+        statistics = _state_table_statistics(info_path)
+        if statistics:
+            out.heading("Averages")
+            out.field("over", f"{statistics[0][3]} report(s) in {info_path.name}")
+            for header, mean, fluctuation, _ in statistics:
+                out.field(header, f"mean {mean:.6g}   rms fluctuation {fluctuation:.6g}")
+
         log.heading("Summary")
         log(f"  {name}: {steps} steps completed, {steps * timestep_fs / 1000.0:g} ps")
         log("  status: completed")
@@ -1382,6 +1531,7 @@ def cv_csv_path(trajectory: Path, stage: dict[str, Any] | None = None) -> Path:
 
 
 def stage_streams(*, trajectory: Path, state_csv: Path, whole: Path | None = None,
+                  energy_components: Path | None = None,
                   collective_variables: Path | None = None) -> dict[str, Path]:
     """The appendable outputs a stage produces, by the name the checkpoint commits them as.
 
@@ -1404,6 +1554,8 @@ def stage_streams(*, trajectory: Path, state_csv: Path, whole: Path | None = Non
         "state_csv": Path(state_csv),
         "phase_space": whole_path.with_suffix(".phase_space.nc"),
     }
+    if energy_components is not None:
+        streams["energy_components"] = Path(energy_components)
     if collective_variables is not None:
         streams["collective_variables"] = Path(collective_variables)
     return streams
@@ -1414,7 +1566,7 @@ def _count_stream(name: str, path: Path) -> int | None:
     path = Path(path)
     if not path.is_file():
         return None
-    if name in ("state_csv", "collective_variables"):
+    if name in ("state_csv", "collective_variables", "energy_components"):
         # A CSV: one header line, then one row per report. The CV stream is counted the same way
         # for the same reason -- it is appended to, and a resume has to cut it back.
         with path.open(encoding="utf-8") as handle:
@@ -1428,6 +1580,7 @@ def _count_stream(name: str, path: Path) -> int | None:
 
 
 def _stream_counts(*, trajectory: Path, state_csv: Path, whole: Path | None = None,
+                   energy_components: Path | None = None,
                    collective_variables: Path | None = None) -> dict[str, int]:
     """How many records each appendable output holds RIGHT NOW, for the commit to vouch for.
 
@@ -1437,7 +1590,7 @@ def _stream_counts(*, trajectory: Path, state_csv: Path, whole: Path | None = No
     """
     counts: dict[str, int] = {}
     for name, path in stage_streams(trajectory=trajectory, state_csv=state_csv,
-                                    whole=whole,
+                                    whole=whole, energy_components=energy_components,
                                     collective_variables=collective_variables).items():
         count = _count_stream(name, path)
         if count is not None:
@@ -1464,6 +1617,7 @@ def _truncate_csv_rows(path: Path, keep: int) -> None:
 
 def _truncate_streams_to_committed(committed: dict[str, Any], *, trajectory: Path,
                                    state_csv: Path, log, whole: Path | None = None,
+                                   energy_components: Path | None = None,
                                    collective_variables: Path | None = None
                                    ) -> dict[str, tuple[int, int]]:
     """Cut EVERY appendable stream back to the count the checkpoint committed.
@@ -1482,7 +1636,7 @@ def _truncate_streams_to_committed(committed: dict[str, Any], *, trajectory: Pat
 
     moved: dict[str, tuple[int, int]] = {}
     for name, path in stage_streams(trajectory=trajectory, state_csv=state_csv,
-                                    whole=whole,
+                                    whole=whole, energy_components=energy_components,
                                     collective_variables=collective_variables).items():
         wanted = committed.get(name)
         if wanted is None:
@@ -1490,7 +1644,7 @@ def _truncate_streams_to_committed(committed: dict[str, Any], *, trajectory: Pat
         have = _count_stream(name, path)
         if have is None or have <= int(wanted):
             continue
-        if name in ("state_csv", "collective_variables"):
+        if name in ("state_csv", "collective_variables", "energy_components"):
             _truncate_csv_rows(path, int(wanted))
         else:
             truncate_frames(path, int(wanted))

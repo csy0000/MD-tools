@@ -341,16 +341,43 @@ def test_example_3b_resuming_a_ladder_is_a_different_command(built):
 
 # --- example 4: AIS ------------------------------------------------------------------------------
 
-def test_example_4_switching_paths_from_an_equilibrium_ensemble(built):
-    """AIS: many short non-equilibrium paths, each starting from a frame of a cMD trajectory.
+def test_example_4_switching_paths_from_a_fixed_tau_ensemble(built):
+    """AIS: many short non-equilibrium paths, each starting from a frame of a FIXED-TAU cMD run.
 
     AIS is `protocol: AIS` in a `build-md` configuration, not a separate command. It needs a
-    SOURCE trajectory -- the equilibrium ensemble the paths anneal away from -- which you pass
-    with `-source-traj`. `number_of_paths` is the GLOBAL total, not a count per rank.
+    SOURCE trajectory -- the ensemble the paths anneal away from -- which you pass with
+    `-source-traj`. `number_of_paths` is the GLOBAL total, not a count per rank.
+
+    THE SOURCE MUST BE SAMPLED AT `ais.tau_start`, and this example used to break that rule. It
+    took example 1's ordinary cMD, which runs at tau = 0, and left `ais.tau_start` at its default
+    of 0.5 -- so every path claimed to begin in an ensemble that had never been sampled, and
+    every work value measured a switch that did not start where it said. `tau_start`'s own
+    documentation states the requirement ("It must equal the tau of the source ensemble"), and
+    nothing could check it: the trajectory recorded no tau, and the log said so in as many words.
+
+    It is checked now, from the `tau` attribute the source records for itself, so this example
+    has to do what it always should have: run its own short cMD AT tau = 0.5 and anneal from
+    that. The extra build is the point of the example, not overhead around it.
     """
-    source = built / "cMD" / "solute_prod1.nc"
-    if not source.is_file():
-        pytest.skip("example 1 has not run")
+    hot_config = built / "hot.config"
+    hot_config.write_text(yaml.safe_dump({
+        "protocol": "cMD",
+        "solvent": "implicit",
+        # `tau: 0.5` -- the whole reason this run exists. It samples the scaled ensemble that
+        # `ais.tau_start` below names.
+        "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "seed": 20260908, "tau": 0.5},
+        "stages": {"minimization_iterations": 10, "restrained_nvt_steps": 10,
+                   "restrained_npt_steps": 10, "unrestrained_npt_steps": 10,
+                   "production_steps": 100},
+        # `crd_printout_whole`, because AIS builds a Context from the FULL System: the
+        # solute-only stream is not a usable source, and this key defaults to 0.
+        "reporting": {"crd_printout_solute": 10, "crd_printout_whole": 10,
+                      "info_printout": 50, "checkpoint_printout": 100},
+    }), encoding="utf-8")
+    _md_openmm(built, "build-md", "-odir", "./hot", "--config", "hot.config")
+    _run_sh(built / "hot", "--cpu")
+    source = built / "hot" / "whole_prod1.nc"
+    assert source.is_file(), sorted(p.name for p in (built / "hot").iterdir())
 
     (built / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS",
@@ -360,8 +387,10 @@ def test_example_4_switching_paths_from_an_equilibrium_ensemble(built):
                    "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
                    "production_steps": 0},
         "reporting": {"crd_printout_solute": 10, "info_printout": 10, "checkpoint_printout": 10},
+        # tau_start MATCHES the source above, and is checked against the tau that file records.
         "ais": {"number_of_paths": 2, "switching_steps": 20,
-                "observation_interval_steps": 10, "parameter_update_interval_steps": 5},
+                "observation_interval_steps": 10, "parameter_update_interval_steps": 5,
+                "tau_start": 0.5, "tau_end": 0.0},
         "ais_source": {"trajectory": str(source)},
     }), encoding="utf-8")
     _md_openmm(built, "build-md", "-odir", "./AIS", "--config", "AIS.config")

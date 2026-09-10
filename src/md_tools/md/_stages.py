@@ -338,7 +338,39 @@ def dcd_frame_count(path):
 PRODUCTION_STAGE_NAMES = frozenset({"cMD", "umbrella"})
 
 
-def info_csv_name(stage_name: str) -> str:
-    """`mdout.csv` for a production stage, `mdout_<stage>.csv` for every other."""
+def info_csv_name(stage_name: str, segment: int = 1) -> str:
+    """`mdout.csv` for production, `mdout_<stage>.csv` otherwise, `mdout_prod<N>.csv` past one.
+
+    The segment matters because the production table alone had a FIXED name while the
+    trajectories beside it carry theirs (`solute_prod2.nc`). An in-place second segment therefore
+    wrote its state table into the first segment's file -- appending rows from one span of
+    dynamics onto another with nothing in the file saying where one ended. Only the convention of
+    extending out-of-place, into a directory of its own, kept that from happening.
+
+    Segment 1 keeps the plain `mdout.csv`: it is the file anybody opens, and the overwhelmingly
+    common case should not be made ugly to accommodate the rare one.
+    """
     name = str(stage_name or "stage")
-    return "mdout.csv" if name in PRODUCTION_STAGE_NAMES else f"mdout_{name}.csv"
+    if name not in PRODUCTION_STAGE_NAMES:
+        return f"mdout_{name}.csv"
+    return "mdout.csv" if int(segment) <= 1 else f"mdout_prod{int(segment)}.csv"
+
+
+def energy_components_name(stage_name: str, segment: int = 1) -> str:
+    """`energy_components.csv`, the per-force-group energy table beside `mdout.csv`.
+
+    THE COLUMN AMBER'S `mdout` HAS AND `mdout.csv` DOES NOT. `mdout.csv` reports one total
+    potential energy, so a drift in it cannot be attributed: an Amber user reading `EEL` or `EGB`
+    or `VDWAALS` out of an `mdout` to work out what a build did wrong has nothing to read here.
+
+    Its own file rather than more columns in `mdout.csv`, deliberately. The state table is
+    written by OpenMM's own `StateDataReporter`, which owns the parts that are easy to get subtly
+    wrong -- the degrees of freedom behind the reported temperature, and the ns/day. Rewriting it
+    to widen the row would put that arithmetic in this repository for the sake of some extra
+    columns. A second file at the same cadence costs a join and risks none of it.
+    """
+    name = str(stage_name or "stage")
+    if name not in PRODUCTION_STAGE_NAMES:
+        return f"energy_components_{name}.csv"
+    return ("energy_components.csv" if int(segment) <= 1
+            else f"energy_components_prod{int(segment)}.csv")

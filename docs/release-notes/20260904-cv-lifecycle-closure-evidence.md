@@ -121,7 +121,7 @@ that name, shared by writer, inventory, completion record and AIS manifest.
 
 ### 7. Ladder and aggregate CV outputs were in no inventory
 
-`remdN.cv.csv`, `remdN.cv.json` and `AIS_cv.csv` were unowned, so a CV-disabled rerun left
+`cv_stateN.csv`, `cv_stateN.json` and `AIS_cv.csv` were unowned, so a CV-disabled rerun left
 them in place permanently, describing a calculation that no longer exists.
 
 Evidence: a CV-enabled run followed by a CV-disabled `--overwrite` is asserted to leave **no**

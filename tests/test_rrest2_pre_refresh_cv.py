@@ -272,7 +272,7 @@ def test_the_row_holds_the_propagated_configuration_not_the_reservoir_sample(com
     checked = 0
     for exchange_index, state_index, frame in events:
         step = (exchange_index + 1) * EXCHANGE_EVERY
-        rows = {int(r["step"]): r for r in _rows(completed / f"remd{state_index}.cv.csv")}
+        rows = {int(r["step"]): r for r in _rows(completed / f"cv_state{state_index}.csv")}
         if step not in rows:
             continue
         reported = float(rows[step]["phi"])
@@ -297,7 +297,7 @@ def test_the_refreshed_state_names_no_trajectory_frame(completed):
     checked = 0
     for exchange_index, state_index, _frame in events:
         step = (exchange_index + 1) * EXCHANGE_EVERY
-        rows = {int(r["step"]): r for r in _rows(completed / f"remd{state_index}.cv.csv")}
+        rows = {int(r["step"]): r for r in _rows(completed / f"cv_state{state_index}.csv")}
         if step not in rows:
             continue
         named = rows[step]["trajectory_frame_index"]
@@ -320,7 +320,7 @@ def test_unaffected_states_still_name_their_frames_correctly(completed, project)
     for state_index in range(STATES):
         frames = mdtraj.load(str(completed / f"whole_state{state_index}_prod1.nc"),
                              top=str(project / "built.pdb"))
-        for row in _rows(completed / f"remd{state_index}.cv.csv"):
+        for row in _rows(completed / f"cv_state{state_index}.csv"):
             named = row["trajectory_frame_index"]
             if named == "":
                 continue

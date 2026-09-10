@@ -68,8 +68,8 @@ def _write_series(directory: Path, definition, rows=4, **sidecar_overrides):
             body.append(",".join([str(row * INTERVAL), f"{row * 0.01:.6f}", "-1",
                                   str(index), f"{TAUS[index]}", str(index), PHASE, ""]
                                  + ["0.000000"] * len(definition.variables)))
-        (directory / f"remd{index}.cv.csv").write_text("\n".join(body) + "\n", encoding="utf-8")
-        (directory / f"remd{index}.cv.json").write_text(
+        (directory / f"cv_state{index}.csv").write_text("\n".join(body) + "\n", encoding="utf-8")
+        (directory / f"cv_state{index}.json").write_text(
             json.dumps(_sidecar(index, definition, **sidecar_overrides)), encoding="utf-8")
 
 
@@ -101,7 +101,7 @@ def test_a_series_shorter_than_the_committed_count_refuses(tmp_path):
         _validate(tmp_path, definition, committed=4)
 
 
-@pytest.mark.parametrize("missing", ["remd1.cv.csv", "remd2.cv.json"])
+@pytest.mark.parametrize("missing", ["cv_state1.csv", "cv_state2.json"])
 def test_a_missing_file_or_sidecar_refuses(tmp_path, missing):
     definition = _definition()
     _write_series(tmp_path, definition)
@@ -171,7 +171,7 @@ def test_a_changed_definition_digest_refuses(tmp_path):
 def test_a_malformed_sidecar_refuses(tmp_path):
     definition = _definition()
     _write_series(tmp_path, definition)
-    (tmp_path / "remd0.cv.json").write_text("{not json", encoding="utf-8")
+    (tmp_path / "cv_state0.json").write_text("{not json", encoding="utf-8")
     with pytest.raises(CVContinuationError, match="not readable JSON"):
         _validate(tmp_path, definition)
 
@@ -180,7 +180,7 @@ def test_a_changed_column_set_refuses(tmp_path):
     """A CSV whose header no longer matches is a different schema, not a continuable series."""
     definition = _definition()
     _write_series(tmp_path, definition)
-    path = tmp_path / "remd0.cv.csv"
+    path = tmp_path / "cv_state0.csv"
     lines = path.read_text(encoding="utf-8").splitlines()
     path.write_text("\n".join([lines[0] + ",extra"] + lines[1:]) + "\n", encoding="utf-8")
     with pytest.raises(CVContinuationError, match="columns"):

@@ -704,7 +704,7 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
                     checkpoint=None, output=None, log=None, cpu=False, device=None,
                     machine_config=None, protocol="this stage", pending_parent=None,
                     timestep_fs=None, ensemble=None, tau=0.0, stage=None,
-                    number_of_groups=None, groupfile=None, whole=None,
+                    number_of_groups=None, groupfile=None, whole=None, segment=1,
                     source_trajectory=None) -> StagePreflight:
     """A conventional stage, including every stage of an all-in-one workflow."""
     from ..md.stage import check_trajectory_suffix
@@ -718,7 +718,7 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
 
     inputs = _continuation_inputs(coordinates, pending_parent, where=protocol)
     inventory = _stage_inventory(output=output, log=log, trajectory=trajectory, whole=whole,
-                                 restart=restart,
+                                 restart=restart, segment=segment,
                                  checkpoint=checkpoint)
     coordination, machine, acceleration, index, detail, particles, loaded = _common(
         topology=topology, system=system,
@@ -842,7 +842,7 @@ def cv_sidecar_path(csv_path) -> Path:
 
 
 def _stage_inventory(*, output, log, trajectory, restart, checkpoint,
-                     whole=None) -> OutputInventory:
+                     whole=None, segment=1) -> OutputInventory:
     """A stage's complete inventory, including the outputs it derives rather than is given.
 
     The phase-space stream and the checkpoint GENERATION TREE are the two that were invisible:
@@ -867,7 +867,7 @@ def _stage_inventory(*, output, log, trajectory, restart, checkpoint,
         # streams a checkpoint commits counts for -- so it belongs in the inventory that decides
         # collisions and what `--overwrite` governs.
         from ..md._stages import info_csv_name
-        roles["state_csv"] = Path(log).parent / info_csv_name(Path(log).stem)
+        roles["state_csv"] = Path(log).parent / info_csv_name(Path(log).stem, segment)
     if trajectory:
         # The collective-variable series and the resolved definition beside it. Both are written
         # by the stage, neither arrives as a flag, and an inventory that omits them is an
@@ -1335,11 +1335,11 @@ def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, c
         roles[f"state_solute_trajectory_{state}"] = directory / state_trajectory_name(
             state, content="solute")
         # The per-state CV series and its interpretation sidecar. In no inventory before, so a
-        # `--overwrite` left a previous CV-enabled run's `remdN.cv.csv` sitting beside the new
+        # `--overwrite` left a previous CV-enabled run's `cv_stateN.csv` sitting beside the new
         # ladder's output -- and a CV-DISABLED rerun left them there permanently, describing a
         # calculation that no longer exists, with nothing in the directory saying so.
-        roles[f"state_cv_{state}"] = directory / f"remd{state}.cv.csv"
-        roles[f"state_cv_definition_{state}"] = directory / f"remd{state}.cv.json"
+        roles[f"state_cv_{state}"] = directory / f"cv_state{state}.csv"
+        roles[f"state_cv_definition_{state}"] = directory / f"cv_state{state}.json"
     if checkpoint:
         # What a `--resume` READS. Its presence is never itself the reason to refuse a
         # continuation, which is what `resumable` says.

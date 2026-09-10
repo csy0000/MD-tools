@@ -60,6 +60,13 @@ CUDA_SITES = {
         # on the CPU platform and is not CUDA evidence for it. It was cited here anyway, which is
         # worse than an empty cell -- a gap invites work, a false entry closes the question.
         "test_cv_cuda_lanes.py::test_ais_cv_and_decomposition_on_cuda_fresh_and_resumed"),
+    "md/stage.py::_EnergyComponentsReporter.report": (
+        "one `context.getState(getEnergy=True, groups={g})` per force group per report, which on "
+        "CUDA is a device synchronise and an energy evaluation restricted to that group. It is a "
+        "REAL cost and belongs here rather than among the reporters that only read a State handed "
+        "to them: the decomposition asks the device for numbers the run would not otherwise "
+        "compute, once per group, at the state table's cadence",
+        "test_cmd_cuda_smoke.py, and every cMD lane that reports a state table"),
     "openmm/platform_policy.py::_prove_cuda_initialises": (
         "opens a one-particle CUDA Context to prove the platform works before any output exists",
         "test_platform_policy.py, and every preflight in every lane below"),
@@ -195,6 +202,12 @@ NON_CUDA_CONTEXT_SITES = {
         "writes them to an AMBER NetCDF on the host. It constructs nothing and asks the Context "
         "for nothing; the device work that produced the State belongs to whoever created it "
         "(`md/stage.py::stage_main`). Same standing as `md/cv_report.py::CVReporter.observe`.",
+    "md/stage.py::_EnergyComponentsReporter.__init__":
+        "reads the force GROUPS off the System object while building its header. A System is not "
+        "a Context: no device is involved, nothing is evaluated, and the groups it reads are the "
+        "ones the build already assigned -- reassigning any of them would change the serialised "
+        "System's digest and make every run in flight unresumable, which is precisely why this "
+        "only reads.",
     "md/stage.py::_coordinate_reporter":
         "CHOOSES a reporter class by filename suffix and returns it -- DCD for the whole system, "
         "AMBER NetCDF when an atom subset is wanted. No Context, no State, no device: the match "

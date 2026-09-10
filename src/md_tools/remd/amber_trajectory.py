@@ -67,6 +67,21 @@ def state_trajectory_name(state_index, *, content="whole", segment=1):
     return f"{content}_state{index}_prod{int(segment)}.nc"
 
 
+def state_cv_name(state_index, *, suffix="csv"):
+    """`cv_state<i>.csv` / `.json` -- the CV series and its sidecar, for one STATE.
+
+    `<content>_state<i>`, the same shape as `solute_state<i>_prod<N>.nc` and
+    `whole_state<i>_prod<N>.nc`, because it describes the same thing: whatever occupied state i.
+    These were `remd<i>.cv.csv` -- the last place the pre-rename name survived, which left one
+    run directory using two spellings of "state i" and no way to tell from a filename whether a
+    given file followed the state or the walker.
+    """
+    index = int(state_index)
+    if index < 0:
+        raise ValueError(f"a state index cannot be negative; got {state_index}")
+    return f"cv_state{index}.{suffix}"
+
+
 def state_index_from_name(name):
     """Only for validating a groupfile that names its outputs. Never used to discover order."""
     import re
@@ -113,8 +128,8 @@ def validate_state_outputs(names):
 class AmberTrajectoryWriter:
     """One Amber NetCDF trajectory, for one fixed thermodynamic state."""
 
-    def __init__(self, path, *, n_atoms, state_index, tau, temperature_k, periodic,
-                 program="md-tools", program_version="0"):
+    def __init__(self, path, *, n_atoms, tau, temperature_k, periodic, state_index=None,
+                 application="REST2", program="md-tools", program_version="0"):
         import netCDF4
 
         self.path = Path(path)
@@ -128,11 +143,21 @@ class AmberTrajectoryWriter:
         dataset.ConventionVersion = AMBER_CONVENTION_VERSION
         dataset.program = program
         dataset.programVersion = str(program_version)
-        dataset.application = "REST2"
-        # Ours, not Amber's: the state this file belongs to, so the tau it held can be checked
-        # rather than inferred from the filename.
-        dataset.title = f"REST2 state {int(state_index)}"
-        dataset.state_index = int(state_index)
+        dataset.application = str(application)
+        # Ours, not Amber's: the Hamiltonian this file was sampled at, so it can be CHECKED
+        # rather than inferred from a filename or a directory name.
+        #
+        # `state_index` belongs to a ladder and is omitted for anything else. A conventional
+        # stage wrote `application: REST2`, `title: REST2 state 0`, `tau: 0.0` and
+        # `temperature_k: 0.0` into every file, because these four were hard-coded here and the
+        # stage reporter had nothing to pass. A hot cMD run at tau = 0.5 -- which is exactly what
+        # an AIS source ensemble is -- therefore recorded tau = 0.0, and the one place that could
+        # have contradicted the directory name agreed with the wrong answer instead.
+        if state_index is not None:
+            dataset.title = f"{application} state {int(state_index)}"
+            dataset.state_index = int(state_index)
+        else:
+            dataset.title = f"{application} tau={float(tau):g}"
         dataset.tau = float(tau)
         dataset.temperature_k = float(temperature_k)
 
@@ -165,7 +190,7 @@ class AmberTrajectoryWriter:
         self._frames = 0
 
     @classmethod
-    def open_existing(cls, path, *, n_atoms, state_index, tau, from_frame):
+    def open_existing(cls, path, *, n_atoms, tau, from_frame, state_index=None):
         """Reopen a state trajectory for append, positioned at the committed marker.
 
         `from_frame` is the committed-frame count from the authoritative record, and it is where
@@ -185,7 +210,7 @@ class AmberTrajectoryWriter:
         if seen["conventions"] != AMBER_CONVENTIONS:
             raise ValueError(
                 f"{path.name} is not an Amber trajectory (Conventions={seen['conventions']!r})")
-        if seen["state_index"] != int(state_index):
+        if state_index is not None and seen["state_index"] != int(state_index):
             raise ValueError(
                 f"{path.name} records state {seen['state_index']}, not {int(state_index)}")
         if abs(seen["tau"] - float(tau)) > 1e-12:

@@ -294,7 +294,7 @@ def test_an_unreadable_ladder_checkpoint_refuses_before_truncating(tmp_path):
     directory.mkdir()
     checkpoint = directory / "REST2_checkpoint.nc"
     checkpoint.write_bytes(b"not a netcdf file at all")
-    series = directory / "remd0.cv.csv"
+    series = directory / "cv_state0.csv"
     series.write_text("step,phi\n0,1.0\n", encoding="utf-8")
     before = series.read_bytes()
 

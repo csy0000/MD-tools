@@ -106,7 +106,7 @@ already exists is refused, and the source is preserved.
 
 Two independent things record a run's CV output, and they answer different questions.
 
-`SHA256SUMS` lists every file under the dataset root, so `remd<N>.cv.csv` and its sidecar are
+`SHA256SUMS` lists every file under the dataset root, so `cv_state<N>.csv` and its sidecar are
 hashed and re-checkable like any other file — that is what `--verify-only` re-reads.
 
 The **provenance record** is separate: registration reads each run's machine `-log`, and
@@ -116,7 +116,7 @@ sitting in `SHA256SUMS`, which is exactly what happened to the ladder's CV serie
 CSV and sidecar is now named there as its own role, carrying the path relative to the run root,
 the digest and byte size the completion manifest recorded, the state index and its tau, and the
 CV definition digest. The inventory is built from that validated manifest rather than from a
-`remd*.cv.csv` glob, so a file left behind by an earlier run into the same directory is not
+`cv_state*.csv` glob, so a file left behind by an earlier run into the same directory is not
 recorded as this run's provenance.
 
 ## Verifying later

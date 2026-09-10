@@ -2,7 +2,7 @@
 
 WHAT WAS WRONG
 
-    The typed inventory named `remdN.cv.csv` and `remdN.cv.json`, so collisions and `--overwrite`
+    The typed inventory named `cv_stateN.csv` and `cv_stateN.json`, so collisions and `--overwrite`
     governed them. The authoritative completion manifest did not. A run could therefore finish,
     record itself complete, and have any of its CV files deleted, truncated, edited or swapped
     afterwards -- and every validator would still call the run complete, because nothing had ever
@@ -136,8 +136,8 @@ def test_the_manifest_records_every_series_with_its_identity(completed):
     assert len(block["series"]) == STATES
     for index, entry in enumerate(block["series"]):
         assert entry["state_index"] == index
-        assert entry["csv"] == f"remd{index}.cv.csv"
-        assert entry["sidecar"] == f"remd{index}.cv.json"
+        assert entry["csv"] == f"cv_state{index}.csv"
+        assert entry["sidecar"] == f"cv_state{index}.json"
         assert len(entry["csv_sha256"]) == 64 and len(entry["sidecar_sha256"]) == 64
         assert entry["csv_bytes"] > 0 and entry["sidecar_bytes"] > 0
         assert entry["rows"] == TOTAL // CV_EVERY + 1
@@ -198,8 +198,8 @@ def test_a_damaged_series_stops_the_run_validating(completed, tmp_path, damage):
 
     staged = tmp_path / damage
     shutil.copytree(completed, staged)
-    csv0, csv1 = staged / "remd0.cv.csv", staged / "remd1.cv.csv"
-    sidecar0 = staged / "remd0.cv.json"
+    csv0, csv1 = staged / "cv_state0.csv", staged / "cv_state1.csv"
+    sidecar0 = staged / "cv_state0.json"
 
     if damage == "delete_csv":
         csv0.unlink()
@@ -239,8 +239,8 @@ def test_an_extension_refuses_a_damaged_cv_parent(project, completed, tmp_path):
     """An extension must not build on a parent whose CV series no longer matches its manifest."""
     staged = tmp_path / "parent"
     shutil.copytree(completed, staged)
-    lines = (staged / "remd0.cv.csv").read_text(encoding="utf-8").splitlines()
-    (staged / "remd0.cv.csv").write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+    lines = (staged / "cv_state0.csv").read_text(encoding="utf-8").splitlines()
+    (staged / "cv_state0.csv").write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
 
     extended = tmp_path / "extended"
     done = _run(project, extended, "--extend", "2", "--extend-from", str(staged), expect=1)

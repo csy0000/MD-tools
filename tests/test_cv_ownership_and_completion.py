@@ -7,7 +7,7 @@ WHAT WAS WRONG
     not removed by `--overwrite`, and free to survive a definition change and describe the new
     CSV with the old atom mapping.
 
-    `remdN.cv.csv`, `remdN.cv.json` and `AIS_cv.csv` were in no inventory at all. A CV-DISABLED
+    `cv_stateN.csv`, `cv_stateN.json` and `AIS_cv.csv` were in no inventory at all. A CV-DISABLED
     rerun over a CV-enabled directory therefore left them in place permanently, describing a
     calculation that no longer exists, with nothing in the directory saying so.
 

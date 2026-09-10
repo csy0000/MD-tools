@@ -289,7 +289,7 @@ def test_rest2_cv_runs_on_cuda_fresh_and_resumed(ladder_project, tmp_path):
     assert (manifest.get("execution") or {}).get("platform") == "CUDA", manifest.get("execution")
     assert manifest["collective_variables"] is not None
     for index in range(3):
-        assert [int(r["step"]) for r in _rows(fresh / f"remd{index}.cv.csv")] == EXPECTED
+        assert [int(r["step"]) for r in _rows(fresh / f"cv_state{index}.csv")] == EXPECTED
 
     resumed = tmp_path / "resumed"
     _run_ladder(ladder_project, scripts, resumed, "REST2", expect=1,
@@ -298,7 +298,7 @@ def test_rest2_cv_runs_on_cuda_fresh_and_resumed(ladder_project, tmp_path):
                              "MD_TOOLS_FAIL_PROPAGATION_AFTER": "2"})
     _run_ladder(ladder_project, scripts, resumed, "REST2", "--resume")
     for index in range(3):
-        assert [int(r["step"]) for r in _rows(resumed / f"remd{index}.cv.csv")] == EXPECTED
+        assert [int(r["step"]) for r in _rows(resumed / f"cv_state{index}.csv")] == EXPECTED
 
 
 def test_rrest2_cv_on_cuda_holds_the_pre_refresh_configuration(ladder_project, tmp_path):
@@ -336,7 +336,7 @@ def test_rrest2_cv_on_cuda_holds_the_pre_refresh_configuration(ladder_project, t
     checked = 0
     for exchange_index, state_index, frame in accepted:
         step = (exchange_index + 1) * 10
-        rows = {int(r["step"]): r for r in _rows(destination / f"remd{state_index}.cv.csv")}
+        rows = {int(r["step"]): r for r in _rows(destination / f"cv_state{state_index}.csv")}
         if step not in rows:
             continue
         reported = float(rows[step]["phi"])
@@ -499,8 +499,8 @@ def _ladder_twice(project, scripts, name, tmp_path):
 
 def _assert_ladder_matches(reference: Path, resumed: Path, states=3):
     for index in range(states):
-        want = _rows(reference / f"remd{index}.cv.csv")
-        got = _rows(resumed / f"remd{index}.cv.csv")
+        want = _rows(reference / f"cv_state{index}.csv")
+        got = _rows(resumed / f"cv_state{index}.csv")
         assert [int(r["step"]) for r in got] == EXPECTED
         assert len({r["step"] for r in got}) == len(got), "a step was written twice"
         for column in ("phi", "psi", "walker_index", "trajectory_frame_index"):
