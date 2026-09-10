@@ -843,6 +843,18 @@ choices — rather than predicting a number:
 5. **Archive `inputs/` with the trajectories.** `system.xml` records what was built; the
    configuration records only what was requested. An archive holding trajectories alone cannot say
    which Hamiltonian produced them.
+6. **Take the reference topology; do not rebuild an equivalent one.** Every arm should load the
+   SAME `system.xml` and topology — the ones the reference simulations were run from, kept with
+   the reference data rather than regenerated per arm. Rebuilding "the same" system is where §11
+   and backlog entry 6 bite: on the ligand and peptide-like routes, AM1-BCC charges differ between
+   two builds of the same input, so two arms that each built their own would differ in the
+   Hamiltonian before the methods differed at all. Protein routes assign library charges and are
+   deterministic, but taking the built System is the cheaper habit either way — it removes the
+   question instead of answering it per project.
+
+   Reference data for shared systems belongs under `$MD_DATA/common/`, so that every project
+   comparing against it loads one topology rather than a copy per repository. A copy is a chance
+   to diverge; a shared path is not.
 
 ---
 

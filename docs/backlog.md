@@ -183,12 +183,20 @@ wrong within a single build -- the charges are real AM1-BCC for the conformer th
 every published dataset remains internally consistent and self-describing. What cannot be done is
 reproduce one from its inputs, or compare two builds expecting only an intended difference.
 
-**Not fixed here, deliberately.** Passing `use_conformers=` would change the charges of every
-future build, which is a scientific decision rather than a bug fix, and this was found while
-implementing something else. It is also why `tests/test_peptide_like_hamiltonian.py` proves "only
-the GB parameters change" on ONE prepared structure rather than by differencing two builds.
+**How method development avoids it entirely — and the reason this is not being fixed in code.**
+A project comparing sampling or analysis efficiency against reference data takes the SAME topology
+and `system.xml` the reference simulations used, from `$MD_DATA/common/`, rather than building its
+own. Then no two arms of a comparison can differ in their charges, because there is only one build.
+The non-reproducibility is real and stays open, but it never enters a study run this way, and
+`docs/scientific-defaults.md` §13 now states the rule where a reader planning a comparison will
+meet it.
 
-**Trigger.** Pick this up before any study that needs to reproduce a build from its inputs, before
+That also settles the question this entry left hanging. The fix is one keyword — passing
+`use_conformers=` to `assign_partial_charges` — and it would change the charges of every future
+ligand and peptide-like build, including any comparison against a dataset built before it. Paying
+that to remove a problem the practice already avoids is the wrong trade while the practice holds.
+
+**Not fixed here, deliberately.** **Trigger.** Pick this up before any study that needs to reproduce a build from its inputs, before
 comparing two builds for anything but their radii, or when deciding whether recorded conformer
 provenance should be binding. The fix is small; its consequences are not.
 
