@@ -68,13 +68,13 @@ frequency, for instance — that is said plainly.
 ff14SB's side-chain dihedrals were fit to gas-phase QM (`HF/6-31G*` geometries, `MP2/6-31+G**`
 single points), but its backbone adjustment was not: it is, in the authors' words, "an empirical
 correction based on data obtained from simulations carried out in TIP3P explicit water"
-[@maier2015ff14sb]. Every validation simulation in that paper used TIP3P, and the paper closes the
+[1]. Every validation simulation in that paper used TIP3P, and the paper closes the
 point with an explicit caution — "transferability of this correction term to other implicit or
 explicit solvent models may need evaluation prior to production use."
 
 ff19SB replaced that empirical backbone correction with amino-acid-specific CMAP maps trained
 against QM in aqueous (implicit) solvent, and its authors recommend a different water model:
-"Of the explicit water models tested here, we recommend use of OPC with ff19SB" [@tian2020ff19sb].
+"Of the explicit water models tested here, we recommend use of OPC with ff19SB" [2].
 The same paper is blunt about why the older pair works: ff14SB has an inherent underestimation of
 helicity that TIP3P's compact-structure bias partly cancels.
 
@@ -85,8 +85,7 @@ TIP3P, or ff14SB with OPC — discards the reason either works. This repository 
 protein force field and the water model as **one selection**, not as two independent keys with
 independent defaults.
 
-*Evidence: **JP** for each pair. [@maier2015ff14sb; @tian2020ff19sb; @jorgensen1983tip3p;
-@izadi2014opc].*
+*Evidence: **JP** for each pair. [1, 2, 3, 4].*
 
 ### 3.2 Why TIP3P is the default for method development
 
@@ -95,15 +94,15 @@ Three reasons, in order of weight.
 1. **It is the water Sage's aqueous training data used.** Sage's Lennard-Jones parameters were
    refit against condensed-phase densities and enthalpies of mixing, and "physical properties of
    aqueous systems using TIP3P water were directly included in the training set ensuring maximal
-   self-consistency between the small molecule and water interactions" [@boothroyd2023sage]. A
+   self-consistency between the small molecule and water interactions" [5]. A
    protein–ligand system in TIP3P is therefore the arrangement in which the ligand's non-bonded
    parameters and the water they were fit alongside agree.
 2. **It is the water the protein–ligand tooling defaults to.** The Open Free Energy OpenMM relative
    free energy protocol ships `['amber/ff14SB.xml', 'amber/tip3p_standard.xml', ...]` with an
-   OpenFF small-molecule force field [@openfe_rfe_defaults]. That combination is what the recent
+   OpenFF small-molecule force field [6]. That combination is what the recent
    large-scale industrial RBFE assessment exercised across >1700 ligands from 15 companies
-   [@baumann2025openfe], and what the OpenFF 2.2.1 RBFE benchmark dataset used
-   [@alibay2025openff221].
+   [7], and what the OpenFF 2.2.1 RBFE benchmark dataset used
+   [8].
 3. **It is cheaper.** TIP3P is three-site; OPC is four-site. On the ALA test system in this
    repository the same box under identical settings is 1790 particles with TIP3P and 2418 with OPC
    — a 35% increase in particle count for the same chemistry. For method development, where the
@@ -111,7 +110,7 @@ Three reasons, in order of weight.
 
 **What this does not say.** It does not say TIP3P is a good model of water. It is not: it
 underestimates the dielectric constant and overestimates self-diffusion, and OPC reproduces bulk
-water properties substantially better [@izadi2014opc]. The claim is narrower and it is the one the
+water properties substantially better [4]. The claim is narrower and it is the one the
 default rests on — ff14SB and Sage's aqueous training were both done in TIP3P, so TIP3P is the
 water in which the pieces of this default were assembled.
 
@@ -122,7 +121,7 @@ ff19SB**. It used `ff99SB*-ILDN`:
 
 > "For the ligand molecules, the Sage 2.0.0 force field was used. The protein was parametrized with
 > the AMBER `ff99sb*-ILDN` force field, and a TIP3P explicit water model was employed."
-> [@boothroyd2023sage]
+> [5]
 
 The authors' stated reason was compatibility, not optimality: "We chose AMBER `ff99sb*-ILDN` as the
 protein force field because Parsley and Sage are essentially AMBER-family force fields and should
@@ -132,24 +131,24 @@ Two further corrections that this document exists partly to make:
 
 * **Sage was not fitted to protein-binding affinities.** Binding free energies appear in that paper
   as a *benchmark*, run "to ensure the refit did not adversely affect performance on this critical
-  measure" [@boothroyd2023sage]. The valence parameters were fit to quantum-chemical data from
+  measure" [5]. The valence parameters were fit to quantum-chemical data from
   QCArchive; the Lennard-Jones parameters were fit to condensed-phase densities and enthalpies of
   mixing. No experimental binding affinity entered either fit.
 * **Sage's complete parameter set was not fitted against TIP3P.** TIP3P entered the fit only
   through the aqueous subset of the physical-property training data, and the water model itself was
   not refit — the paper notes that the residual systematic overprediction of aqueous mixing
-  enthalpies could not be removed for exactly that reason [@boothroyd2023sage]. The valence
+  enthalpies could not be removed for exactly that reason [5]. The valence
   parameters were fit to QM and involve no water model at all.
 
 The combination this repository defaults to — **ff14SB + Sage 2.2.1 + TIP3P** — therefore has:
 **CB** evidence for *Sage 2.0 + an AMBER protein force field + TIP3P* as a class (from the Sage
-paper and from [@hahn2024openff], which uses `Amber99sb*ILDN` + TIP3P with OpenFF ligand
+paper and from [9], which uses `Amber99sb*ILDN` + TIP3P with OpenFF ligand
 parameters); **ID + CE** evidence for *ff14SB + TIP3P + an OpenFF small-molecule force field* as a
-workflow (the OpenFE protocol default [@openfe_rfe_defaults] and the assessments run on it
-[@baumann2025openfe; @alibay2025openff221]); and **EX** for the specific triple with Sage **2.2.1**,
+workflow (the OpenFE protocol default [6] and the assessments run on it
+[7, 8]); and **EX** for the specific triple with Sage **2.2.1**,
 which has no protein–ligand benchmark published under its own version number. Sage 2.2.1 differs
 from 2.2.0 only in fixing "some linear angles to stay at 180 degrees", and 2.2.0 from 2.1.0 in
-"small ring internal angles" and "sulfamide geometries" [@openff_forcefields_releases]; the
+"small ring internal angles" and "sulfamide geometries" [10]; the
 extrapolation from the 2.x benchmarks is small, but it is an extrapolation and is labelled one.
 
 ### 3.4 Keeping ff19SB + OPC available
@@ -157,7 +156,7 @@ extrapolation from the 2.x benchmarks is small, but it is an extrapolation and i
 Setting `forcefield.protein: ff19SB` and `solvent.model: OPC` selects ff19SB + OPC, unchanged. It is the right choice when
 the science depends on the water model — conformational ensembles of intrinsically disordered or
 marginally stable peptides, where ff14SB's helicity bias and TIP3P's compactness both matter, and
-where ff19SB was specifically shown to improve on ff14SB [@tian2020ff19sb]. It is selected by one
+where ff19SB was specifically shown to improve on ff14SB [2]. It is selected by one
 flag and written into the same editable YAML; there is no profile registry and no inheritance.
 
 **Not claimed:** that ff19SB, Sage 2.2.1 and OPC were jointly optimized. They were not. OPC was not
@@ -176,7 +175,7 @@ Sage is pinned by the resource the toolkit actually loads, `openff-2.2.1`, resol
 `inputs/forcefield.json` rather than the label.
 
 Charges are **standard AM1-BCC** through AmberTools' `sqm`, via the OpenFF toolkit registry, which
-is the charge model Sage's non-bonded parameters were developed alongside [@boothroyd2023sage]. The
+is the charge model Sage's non-bonded parameters were developed alongside [5]. The
 builder refuses to proceed if the AmberTools wrapper is absent rather than silently falling back.
 `am1bcc_nagl` is available but is never a default: NAGL is a graph network *trained to predict*
 AM1-BCC ELF10 charges. It is close to them and it is not that calculation, so selecting it produces
@@ -192,12 +191,12 @@ naming Sage for a calculation it contributed nothing to.
 ### 4.1 GAFF as the documented alternative, resolved to an exact version
 
 Sage remains the default. GAFF is available through `openmmforcefields`'
-`GAFFTemplateGenerator`, which types the molecule with antechamber [@wang2006antechamber] and
-takes the AM1-BCC charges already assigned to it [@jakalian2002am1bcc]. GAFF version 1 is
-published [@wang2004gaff].
+`GAFFTemplateGenerator`, which types the molecule with antechamber [11] and
+takes the AM1-BCC charges already assigned to it [12]. GAFF version 1 is
+published [13].
 
 **GAFF2 is not.** It has been distributed with AmberTools since 2015 and its provenance is the
-parameter file, not a paper [@amber_gaff2_distribution]. Citing Wang 2004 for a GAFF2 run would
+parameter file, not a paper [14]. Citing Wang 2004 for a GAFF2 run would
 attribute version 2 parameters to the version 1 publication, which is why the two entries in the
 bibliography are kept apart.
 
@@ -225,8 +224,8 @@ continuing a series.
 
 GB-Neck2 (GBn2) was developed **with ff99SB**, and its parameters were fit to Poisson–Boltzmann
 polar solvation energies and effective Born radii, not to explicit-solvent or experimental data
-[@nguyen2013gbn2]. Its training and test sets were peptides, mini-proteins and proteins — Ala10,
-trpzip2, HP36, tc5b, HIV-1 protease, lysozyme. It extends GB-Neck [@mongan2007gbneck] by making the
+[15]. Its training and test sets were peptides, mini-proteins and proteins — Ala10,
+trpzip2, HP36, tc5b, HIV-1 protease, lysozyme. It extends GB-Neck [16] by making the
 {α, β, γ} neck parameters element-dependent.
 
 Three consequences follow directly and are implemented:
@@ -263,7 +262,7 @@ match and mbondi3 is *exactly* mbondi2 for it. `build-top` measures this and rec
 
 GB-Neck2's {α, β, γ} were optimized for **hydrogen, carbon, nitrogen and oxygen**; sulfur was
 assigned the oxygen values after the authors "found that S parameters have insignificant effect"
-[@nguyen2013gbn2]. ParmEd implements exactly that: fitted (screen, α, β, γ) for elements
+[15]. ParmEd implements exactly that: fitted (screen, α, β, γ) for elements
 {H, C, N, O, S}, and for everything else the values its own source comments call "non-optimized
 values as defaults" — **α = 1.0, β = 0.8, γ = 4.85, screen = 0.5**
 (`parmed.structure.Structure._get_gb_parameters`, ParmEd 4.3.1).
@@ -272,7 +271,7 @@ Fluorine, chlorine, bromine, iodine, phosphorus in a non-nucleic residue, seleni
 silicon are all outside the fit. **Nothing fails.** Every atom receives a radius and a parameter
 set, the System builds, the energy is finite, and no warning comes from the library. The GBn2 paper
 itself flags the boundary — "extension to non-protein systems will be explored in the future"
-[@nguyen2013gbn2] — but the software does not enforce it.
+[15] — but the software does not enforce it.
 
 ### 6.3 What this repository does about it
 
@@ -340,9 +339,9 @@ keep them apart under names that say which is which:
 
 1.5 nm is what production protein–ligand free-energy work uses. Hahn et al. placed their systems
 "in a dodecahedral box with a minimal distance of 1.5 nm to the box wall", solvated in TIP3P at
-150 mM NaCl, across the OpenFF/GAFF/CHARMM comparison [@hahn2024openff]; the OpenFF 2.2.1 RBFE
+150 mM NaCl, across the OpenFF/GAFF/CHARMM comparison [9]; the OpenFF 2.2.1 RBFE
 benchmark used a dodecahedron at 1.0 nm padding in the complex and 1.5 nm in solvent
-[@alibay2025openff221]; the OpenFE protocol default is 1.2 nm [@openfe_rfe_defaults]. Against that,
+[8]; the OpenFE protocol default is 1.2 nm [6]. Against that,
 2.0 nm — the previous default here — is generous rather than standard, and for a folded solute it
 buys volume rather than physics.
 
@@ -354,9 +353,9 @@ clearance it holds roughly 71% of the water a cube would.
 conformation. The box is fixed at build time; the solute is not. A peptide that unfolds, a
 macrocycle that opens, or a REST2 ladder whose hot rungs expand the solute will all reduce the
 clearance below what was requested — and PME's periodicity means the artifact is a bias in the
-electrostatics, not a visible failure [@hunenberger1999ewald]. El Hage et al. showed that even a
+electrostatics, not a visible failure [17]. El Hage et al. showed that even a
 folded protein can need a much larger box than convention suggests before its dynamics stop
-depending on the box [@elhage2018boxsize].
+depending on the box [18].
 
 So the guarantee this repository actually offers is narrower and enforced: **the built box is
 checked against the cutoff.** `solvation._resolve_box` computes the reduced-box height of the box
@@ -368,10 +367,10 @@ height 2.121 nm against a required 2.1 nm.
 **When to use 2.0 nm** (`solvent.padding_nm: 2.0`): an unfolded or intrinsically disordered solute;
 a solute expected to extend during sampling; REST2 or any enhanced sampling whose hot rungs expand
 the solute; a highly charged solute where Ewald finite-size artifacts scale with the charge
-[@hunenberger1999ewald]; or any case where the built box's recorded `solute_image_clearance_nm` is
+[17]; or any case where the built box's recorded `solute_image_clearance_nm` is
 uncomfortably close to the cutoff.
 
-*Evidence: **CB** for 1.5 nm in protein–ligand production work [@hahn2024openff]; **CE + EX** for
+*Evidence: **CB** for 1.5 nm in protein–ligand production work [9]; **CE + EX** for
 the general case; the cutoff gate is enforced code, not evidence.*
 
 ---
@@ -401,14 +400,14 @@ A reader therefore never has to infer whether the padding they asked for is the 
 
 ## 8. PME and the 1.0 nm cutoff
 
-Particle mesh Ewald [@darden1993pme] in its smooth form [@essmann1995spme] is the standard
+Particle mesh Ewald [19] in its smooth form [20] is the standard
 treatment for periodic electrostatics and is what every reference protocol in §7 uses. A plain
 cutoff on Coulomb interactions is not an option for a charged solvated system at any cutoff that is
 affordable.
 
-The 1.0 nm real-space cutoff matches the OpenFE protocol default [@openfe_rfe_defaults] and sits
+The 1.0 nm real-space cutoff matches the OpenFE protocol default [6] and sits
 inside the 1.0–1.2 nm band used across the AMBER-family literature; Hahn et al. used 1.1 nm with a
-1.0–1.1 nm van der Waals switch [@hahn2024openff]. The real-space cutoff in PME is a
+1.0–1.1 nm van der Waals switch [9]. The real-space cutoff in PME is a
 work-partitioning parameter for the *electrostatics* — the split between real and reciprocal space —
 and its accuracy is governed by the Ewald error tolerance, here 5×10⁻⁴, which OpenMM uses to choose
 the splitting parameter and grid. It is *not* only that for the **Lennard-Jones** term, which is
@@ -430,18 +429,18 @@ correction assumes a homogeneous fluid beyond the cutoff, which a solvated prote
 
 ## 9. Langevin-middle integration at 300 K with 1.0 ps⁻¹ friction
 
-OpenMM's `LangevinMiddleIntegrator` implements the LFMiddle discretization [@zhang2019lfmiddle],
-which its own documentation describes as closely related to BAOAB [@leimkuhler2016geodesic] —
+OpenMM's `LangevinMiddleIntegrator` implements the LFMiddle discretization [21],
+which its own documentation describes as closely related to BAOAB [22] —
 identical trajectories, half-step versus on-step velocities. The middle-scheme family was
 constructed specifically to reduce the configurational sampling error of Langevin integrators at a
-given timestep [@leimkuhler2012rational; @leimkuhler2013baoab], and that is the property this
+given timestep [23, 24], and that is the property this
 repository wants: at 2 fs and 4 fs the configurational distribution should be as close to correct as
 the discretization allows.
 
 `friction_per_ps: 1.0` is OpenMM's collision rate in ps⁻¹, corresponding to a nominal 1 ps
 damping time. It is written as `friction_per_ps` and not as a prose "collision time" precisely
 because the two are reciprocal and the ambiguity is a real source of factor-of-N errors between
-codes. 1.0 ps⁻¹ is the value the OpenFE protocol uses [@openfe_rfe_defaults] and sits in the weak
+codes. 1.0 ps⁻¹ is the value the OpenFE protocol uses [6] and sits in the weak
 regime: strong enough to thermostat and to damp the energy a barostat move injects, weak enough
 that the dynamics between collisions are close to Newtonian.
 
@@ -463,14 +462,14 @@ observable's dependence on it rather than assume 1.0 ps⁻¹ is neutral.
 
 The Monte Carlo barostat samples the isothermal–isobaric ensemble by proposing volume changes and
 accepting them with a Metropolis criterion that includes the `pV` and `N ln V` terms
-[@chow1995mcbarostat; @aqvist2004mcbarostat]. It has no fictitious barostat degree of freedom and no
+[25, 26]. It has no fictitious barostat degree of freedom and no
 time constant to tune, so unlike an extended-Lagrangian barostat it cannot introduce spurious
 oscillations in the volume — which is why it is the appropriate choice for a template whose users
 will not tune it.
 
 **`barostat_frequency_steps: 25`** is now a public setting. 25 steps is OpenMM's own default —
 verified directly on the installed build, `MonteCarloBarostat(1 bar, 300 K).getFrequency() == 25` —
-and is what the OpenFE protocol uses [@openfe_rfe_defaults]. It is an interval in **integration
+and is what the OpenFE protocol uses [6]. It is an interval in **integration
 steps**, not in time, so its physical meaning depends on the timestep:
 
 | timestep | 25 steps is |
@@ -505,7 +504,7 @@ has to infer one from the other.
 
 For REST2 specifically: every replica shares one thermostat temperature and one β and differs only
 by Hamiltonian, so the `pV` contributions cancel in the NPT exchange criterion, and positions and
-box vectors travel together as one configuration [@wang2011rest2].
+box vectors travel together as one configuration [27].
 
 *Evidence: **CE** (the algorithm), **ID** (the value 25).*
 
@@ -515,7 +514,7 @@ box vectors travel together as one configuration [@wang2011rest2].
 
 Berendsen weak coupling rescales the box toward the target pressure with a first-order relaxation
 of time constant τ_p, so the volume approaches its target smoothly and quickly
-[@berendsen1984coupling]. That is genuinely useful, and it is why the method survives in
+[28]. That is genuinely useful, and it is why the method survives in
 equilibration protocols: relaxing a box that was built by a solvation heuristic is exactly the job
 it does well.
 
@@ -526,7 +525,7 @@ them, the isothermal compressibility first among them — are wrong. This is the
 the literature, stated plainly in the paper that introduced stochastic cell rescaling to fix it:
 the usual recipe of a Berendsen barostat for equilibration followed by a second-order or Monte
 Carlo barostat for production exists precisely because the first "results in incorrect volume
-fluctuations" [@bernetti2020csr].
+fluctuations" [29].
 
 **MD-tools does not provide it.** OpenMM ships no `BerendsenBarostat` class, and this repository
 will not offer a hand-written one under that name. A pressure-control method that silently
@@ -552,7 +551,7 @@ statement that the method has no use.*
 With `constraints=HBonds` the bond stretches involving hydrogen are removed, and the fastest
 remaining motions are the bond-angle vibrations involving hydrogen, with periods around 10 fs. A 2 fs
 step resolves those with a comfortable margin and is the long-standing default across the
-AMBER-family literature, including every validation run in the ff14SB paper [@maier2015ff14sb].
+AMBER-family literature, including every validation run in the ff14SB paper [1].
 
 Crucially, at 2 fs **the masses are the ones the force field assigned**. Nothing about the dynamics
 is altered to buy the timestep. For a repository whose purpose is method development — comparing
@@ -692,15 +691,15 @@ fastest motion in the system. All three are verified against the built System an
 `docs/examples/hmr-4fs.yaml` gives the complete change: hydrogen mass 3.024 amu, timestep 4 fs,
 `constraints: HBonds`, `rigid_water: true`. Repartitioning moves mass from each heavy atom onto the
 hydrogens bonded to it, lowering the hydrogen angle-bend frequencies and permitting a longer step
-[@feenstra1999hmr]. Hopkins et al. showed that with a hydrogen mass around 3 amu, 4 fs integration is
+[30]. Hopkins et al. showed that with a hydrogen mass around 3 amu, 4 fs integration is
 stable for biomolecular systems and reproduces equilibrium structural and thermodynamic properties
-[@hopkins2015hmr]. The OpenFE protocol runs 4 fs with 3.0 amu hydrogens as its production default
-[@openfe_rfe_defaults], and the industrial RBFE assessment [@baumann2025openfe] was run on that
+[31]. The OpenFE protocol runs 4 fs with 3.0 amu hydrogens as its production default
+[6], and the industrial RBFE assessment [7] was run on that
 protocol — so the setting has genuine large-scale support **for equilibrium free-energy work**.
 
 ### 11.4 The four things that must be kept apart
 
-1. **Stability at 4 fs.** Well supported [@feenstra1999hmr; @hopkins2015hmr] and, for suitable
+1. **Stability at 4 fs.** Well supported [30, 31] and, for suitable
    biomolecular systems, effectively standard practice.
 2. **Equilibrium configurational sampling.** The Boltzmann distribution in configuration space does
    not depend on masses at all, so equilibrium structural and thermodynamic averages — free
@@ -777,25 +776,25 @@ which of them is applied and on what evidence.*
 Read this section before quoting anything above as support for a result.
 
 1. **No citation validates the specific triple ff14SB + Sage 2.2.1 + TIP3P.** The Sage
-   protein–ligand benchmark used `ff99SB*-ILDN` [@boothroyd2023sage]. The ff14SB + TIP3P + OpenFF
-   workflow evidence comes from software defaults [@openfe_rfe_defaults] and assessments run on
-   them [@baumann2025openfe; @alibay2025openff221], one of which is a preprint and one of which is a
+   protein–ligand benchmark used `ff99SB*-ILDN` [5]. The ff14SB + TIP3P + OpenFF
+   workflow evidence comes from software defaults [6] and assessments run on
+   them [7, 8], one of which is a preprint and one of which is a
    dataset. The step from "Sage 2.x with an AMBER protein force field in TIP3P" to "Sage 2.2.1 with
    ff14SB in TIP3P" is an extrapolation.
 2. **No citation validates ff19SB + Sage 2.2.1 + OPC.** ff19SB + OPC is jointly recommended
-   [@tian2020ff19sb]; Sage with OPC is not benchmarked anywhere, and OPC was not in Sage's training
+   [2]; Sage with OPC is not benchmarked anywhere, and OPC was not in Sage's training
    data. The alternative is offered as two consistent halves, not as a validated whole.
 3. **TIP3P is not endorsed as a water model.** §3.2 argues only that it is the water in which
    ff14SB was corrected and Sage's aqueous properties were fit. Its bulk properties are worse than
-   OPC's [@izadi2014opc], and ff14SB's agreement with experiment depends partly on cancellation with
-   that fact [@tian2020ff19sb].
+   OPC's [4], and ff14SB's agreement with experiment depends partly on cancellation with
+   that fact [2].
 4. **GBn2 is not validated for non-peptidic chemistry.** The GBn2 paper says so
-   [@nguyen2013gbn2], and §6 measures the consequence on the built System. The implicit ligand route
+   [15], and §6 measures the consequence on the built System. The implicit ligand route
    is labelled experimental in the record and in this document, and no `igb=8` parity is claimed for
    it.
 5. **1.5 nm padding is not a guarantee.** It is common practice in protein–ligand production work
-   [@hahn2024openff] for solutes that stay folded. Nothing about it bounds the self-interaction of a
-   conformation that has not happened yet [@elhage2018boxsize].
+   [9] for solutes that stay folded. Nothing about it bounds the self-interaction of a
+   conformation that has not happened yet [18].
 6. **1.0 nm is not a converged cutoff for any named observable.** It matches reference protocols.
    No convergence study was run here.
 7. **1.0 ps⁻¹ friction is not neutral for kinetics.** §9.
@@ -876,20 +875,142 @@ default. Two tests assert this directly.
 
 ## 15. Sources
 
-Full entries, with the DOI of each verified against the Crossref REST API on 2026-08-27, are in
-`docs/scientific-defaults.bib`. Software documentation and dataset entries are labelled as such
-there and in §2.
+Numbered in order of first citation, and cited by number in the text above. `docs/scientific-defaults.bib` holds the same entries keyed by name, with the DOI of each verified against the
+Crossref REST API on 2026-08-27.
 
-Primary literature: [@maier2015ff14sb] ff14SB · [@tian2020ff19sb] ff19SB · [@jorgensen1983tip3p]
-TIP3P · [@izadi2014opc] OPC · [@boothroyd2023sage] Sage 2.0.0 · [@nguyen2013gbn2] GB-Neck2 ·
-[@mongan2007gbneck] GB-Neck · [@darden1993pme; @essmann1995spme] PME · [@hunenberger1999ewald]
-Ewald artifacts · [@elhage2018boxsize] box size · [@leimkuhler2012rational; @leimkuhler2013baoab;
-@leimkuhler2016geodesic] BAOAB/geodesic Langevin · [@zhang2019lfmiddle] LFMiddle ·
-[@chow1995mcbarostat; @aqvist2004mcbarostat] Monte Carlo pressure coupling · [@feenstra1999hmr;
-@hopkins2015hmr] HMR · [@wang2011rest2] REST2 · [@hahn2024openff] open-source force fields in
-protein–ligand affinity prediction · [@eastman2017openmm7; @eastman2024openmm8] OpenMM ·
-[@parmed] ParmEd.
+Entries that are software documentation, a dataset or a preprint are labelled as such here and
+in §2. None of them is ever used to support a scientific claim a primary source could support
+instead.
 
-Software documentation and datasets, used only for implementation facts:
-[@openfe_rfe_defaults; @openmm_userguide; @openff_forcefields_releases; @alibay2025openff221].
-Preprint, not peer reviewed: [@baumann2025openfe].
+[1] J. A. Maier; C. Martinez; K. Kasavajhala; L. Wickstrom; K. E. Hauser; C. Simmerling. ff14SB:
+Improving the Accuracy of Protein Side Chain and Backbone Parameters from ff99SB. J. Chem. Theory
+Comput., 2015, 11, 3696–3713.
+
+[2] C. Tian; K. Kasavajhala; K. A. A. Belfon; L. Raguette; H. Huang; A. N. Migues; J. Bickel;
+Y. Wang; J. Pincay; Q. Wu; C. Simmerling. ff19SB: Amino-Acid-Specific Protein Backbone Parameters
+Trained against Quantum Mechanics Energy Surfaces in Solution. J. Chem. Theory Comput., 2020, 16,
+528–552.
+
+[3] W. L. Jorgensen; J. Chandrasekhar; J. D. Madura; R. W. Impey; M. L. Klein. Comparison of simple
+potential functions for simulating liquid water. J. Chem. Phys., 1983, 79, 926–935.
+
+[4] S. Izadi; R. Anandakrishnan; A. V. Onufriev. Building Water Models: A Different Approach.
+J. Phys. Chem. Lett., 2014, 5, 3863–3871.
+
+[5] S. Boothroyd; P. K. Behara; O. C. Madin; D. F. Hahn; H. Jang; V. Gapsys; J. R. Wagner;
+J. T. Horton; D. L. Dotson; M. W. Thompson; J. Maat; T. Gokey; L.-P. Wang; D. J. Cole; M. K. Gilson;
+J. D. Chodera; C. I. Bayly; M. R. Shirts; D. L. Mobley. Development and Benchmarking of Open Force
+Field 2.0.0: The Sage Small Molecule Force Field. J. Chem. Theory Comput., 2023, 19, 3251–3275.
+
+[6] The Open Free Energy Consortium. OpenMM Relative Free Energy Protocol — default settings.
+https://docs.openfree.energy/en/v0.15.0/reference/api/openmm_rfe.html, 2024. *Software
+documentation.*
+
+[7] H. M. Baumann; J. T. Horton; M. M. Henry; A. Travitz; B. Ries; R. J. Gowers; D. W. H. Swenson;
+I. Pulido; D. Rufa; D. L. Dotson; et al. Large-scale collaborative assessment of binding free energy
+calculations for drug discovery using OpenFE. ChemRxiv preprint, posted 2025-12-18. *Preprint, not
+peer reviewed.*
+
+[8] I. Alibay. OpenFF 2.2.1 Relative Binding Free Energy Benchmarks. Zenodo dataset, version v2,
+2025-10-21. *Dataset, not a peer-reviewed publication.*
+
+[9] D. F. Hahn; V. Gapsys; B. L. de Groot; D. L. Mobley; G. Tresadern. Current State of Open Source
+Force Fields in Protein-Ligand Binding Affinity Predictions. J. Chem. Inf. Model., 2024, 64,
+5063–5076.
+
+[10] The Open Force Field Initiative. openff-forcefields releases: Sage 2.2.0 (tag 2024.04.0) and
+Sage 2.2.1 (tag 2024.09.0). https://github.com/openforcefield/openff-forcefields/releases, 2024.
+*Software documentation.*
+
+[11] J. Wang; W. Wang; P. A. Kollman; D. A. Case. Automatic atom type and bond type perception in
+molecular mechanical calculations. J. Mol. Graphics Modell., 2006, 25, 247–260.
+
+[12] A. Jakalian; D. B. Jack; C. I. Bayly. Fast, efficient generation of high-quality atomic
+charges. AM1-BCC model: II. Parameterization and validation. J. Comput. Chem., 2002, 23, 1623–1641.
+
+[13] J. Wang; R. M. Wolf; J. W. Caldwell; P. A. Kollman; D. A. Case. Development and testing of a
+general amber force field. J. Comput. Chem., 2004, 25, 1157–1174.
+
+[14] The Amber developers. GAFF2 parameters, distributed with AmberTools as gaff2.dat.
+https://ambermd.org/AmberModels_organic.php, 2026. *Software documentation.*
+
+[15] H. Nguyen; D. R. Roe; C. Simmerling. Improved Generalized Born Solvent Model Parameters for
+Protein Simulations. J. Chem. Theory Comput., 2013, 9, 2020–2034.
+
+[16] J. Mongan; C. Simmerling; J. A. McCammon; D. A. Case; A. Onufriev. Generalized Born Model with
+a Simple, Robust Molecular Volume Correction. J. Chem. Theory Comput., 2007, 3, 156–169.
+
+[17] P. H. Hünenberger; J. A. McCammon. Ewald artifacts in computer simulations of ionic solvation
+and ion–ion interaction: A continuum electrostatics study. J. Chem. Phys., 1999, 110, 1856–1872.
+
+[18] K. El Hage; F. Hédin; P. K. Gupta; M. Meuwly; M. Karplus. Valid molecular dynamics simulations
+of human hemoglobin require a surprisingly large box size. eLife, 2018, 7, e35560.
+
+[19] T. Darden; D. York; L. Pedersen. Particle mesh Ewald: An N·log(N) method for Ewald sums in
+large systems. J. Chem. Phys., 1993, 98, 10089–10092.
+
+[20] U. Essmann; L. Perera; M. L. Berkowitz; T. Darden; H. Lee; L. G. Pedersen. A smooth particle
+mesh Ewald method. J. Chem. Phys., 1995, 103, 8577–8593.
+
+[21] Z. Zhang; X. Liu; K. Yan; M. E. Tuckerman; J. Liu. Unified Efficient Thermostat Scheme for the
+Canonical Ensemble with Holonomic or Isokinetic Constraints via Molecular Dynamics. J. Phys. Chem.
+A, 2019, 123, 6056–6079.
+
+[22] B. Leimkuhler; C. Matthews. Efficient molecular dynamics using geodesic integration and
+solvent–solute splitting. Proc. R. Soc. A, 2016, 472, 20160138.
+
+[23] B. Leimkuhler; C. Matthews. Rational Construction of Stochastic Numerical Methods for Molecular
+Sampling. Appl. Math. Res. eXpress, 2013, 2013, 34–56.
+
+[24] B. Leimkuhler; C. Matthews. Robust and efficient configurational molecular sampling via
+Langevin dynamics. J. Chem. Phys., 2013, 138, 174102.
+
+[25] K.-H. Chow; D. M. Ferguson. Isothermal-isobaric molecular dynamics simulations with Monte Carlo
+volume sampling. Comput. Phys. Commun., 1995, 91, 283–289.
+
+[26] J. Åqvist; P. Wennerström; M. Nervall; S. Bjelic; B. O. Brandsdal. Molecular dynamics
+simulations of water and biomolecules with a Monte Carlo constant pressure algorithm. Chem. Phys.
+Lett., 2004, 384, 288–294.
+
+[27] L. Wang; R. A. Friesner; B. J. Berne. Replica Exchange with Solute Scaling: A More Efficient
+Version of Replica Exchange with Solute Tempering (REST2). J. Phys. Chem. B, 2011, 115, 9431–9438.
+
+[28] H. J. C. Berendsen; J. P. M. Postma; W. F. van Gunsteren; A. DiNola; J. R. Haak. Molecular
+dynamics with coupling to an external bath. J. Chem. Phys., 1984, 81, 3684–3690.
+
+[29] M. Bernetti; G. Bussi. Pressure control using stochastic cell rescaling. J. Chem. Phys., 2020,
+153, 114107.
+
+[30] K. A. Feenstra; B. Hess; H. J. C. Berendsen. Improving efficiency of large time-scale molecular
+dynamics simulations of hydrogen-rich systems. J. Comput. Chem., 1999, 20, 786–798.
+
+[31] C. W. Hopkins; S. Le Grand; R. C. Walker; A. E. Roitberg. Long-Time-Step Molecular Dynamics
+through Hydrogen Mass Repartitioning. J. Chem. Theory Comput., 2015, 11, 1864–1874.
+
+**Not cited by number above.** Present in `docs/scientific-defaults.bib` and part of this
+document's source set, but no passage above carries an inline marker for them. ParmEd is
+discussed by name in §5 without one; the nonequilibrium-work entries belong to AIS, which
+this document mentions only in passing.
+
+[32] P. Eastman; J. Swails; J. D. Chodera; R. T. McGibbon; Y. Zhao; K. A. Beauchamp; L.-P. Wang;
+A. C. Simmonett; M. P. Harrigan; C. D. Stern; R. P. Wiewiora; B. R. Brooks; V. S. Pande. OpenMM 7:
+Rapid development of high performance algorithms for molecular dynamics. PLoS Comput. Biol., 2017,
+13, e1005659.
+
+[33] P. Eastman; R. Galvelis; R. P. Peláez; C. R. A. Abreu; S. E. Farr; E. Gallicchio; A. Gorenko;
+M. M. Henry; F. Hu; J. Huang; A. Krämer; J. Michel; J. A. Mitchell; V. S. Pande;
+J. P. G. L. M. Rodrigues; J. Rodriguez-Guerra; A. C. Simmonett; S. Singh; J. Swails; P. Turner;
+Y. Wang; I. Zhang; J. D. Chodera; G. De Fabritiis; T. E. Markland. OpenMM 8: Molecular Dynamics
+Simulation with Machine Learning Potentials. J. Phys. Chem. B, 2024, 128, 109–116.
+
+[34] The OpenMM Development Team. OpenMM Python API: MonteCarloBarostat, LangevinMiddleIntegrator.
+http://docs.openmm.org/latest/api-python/, 2026. *Software documentation.*
+
+[35] M. R. Shirts; C. Klein; J. M. Swails; J. Yin; M. K. Gilson; D. L. Mobley; D. A. Case;
+E. D. Zhong. Lessons learned from comparing molecular dynamics engines on the SAMPL5 dataset.
+J. Comput.-Aided Mol. Des., 2017, 31, 147–161.
+
+[36] C. Jarzynski. Nonequilibrium Equality for Free Energy Differences. Phys. Rev. Lett., 1997, 78,
+2690–2693.
+
+[37] R. M. Neal. Annealed importance sampling. Stat. Comput., 2001, 11, 125–139.
