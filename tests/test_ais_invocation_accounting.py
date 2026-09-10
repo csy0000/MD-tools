@@ -165,6 +165,50 @@ def test_a_malformed_contribution_cost_is_refused_before_anything_is_summed():
     assert "cv_observations" in str(refusal.value)
 
 
+def test_the_writer_refuses_an_aggregate_whose_total_is_not_the_sum(monkeypatch):
+    """The writer AUDITS ITS OWN ARITHMETIC. The test below proves something weaker.
+
+    `test_the_aggregate_validates_against_its_own_per_path_entries` calls the parser on the
+    returned record, so it shows the record WOULD satisfy the parser -- not that
+    `aggregate_cv_cost` runs it. Those differ exactly when the writer is wrong, which is the only
+    case anyone cares about, and the record is published either way: `ais_main` reads `cumulative`
+    back out and writes it into the run log as a measured fact.
+
+    So: corrupt the aggregate the writer builds, and require it to notice. `cost_record` is called
+    once per path and then once for the aggregate, so the last call is the one to spoil.
+    """
+    from md_tools.cv import cost as cost_module
+
+    real = cost_module.cost_record
+    calls = []
+
+    def spoiled(*args, **kwargs):
+        record = real(*args, **kwargs)
+        calls.append(record)
+        return record
+
+    monkeypatch.setattr(cost_module, "cost_record", spoiled)
+    good = aggregate_cv_cost(_manifests(), contributions=_contributions())
+    n_calls = len(calls)
+
+    calls.clear()
+
+    def corrupt_the_aggregate(*args, **kwargs):
+        record = real(*args, **kwargs)
+        calls.append(record)
+        if len(calls) == n_calls:                       # the aggregate, built last
+            record["cumulative"]["cv_evaluations"] += 1
+        return record
+
+    monkeypatch.setattr(cost_module, "cost_record", corrupt_the_aggregate)
+    with pytest.raises(Exception) as refusal:
+        aggregate_cv_cost(_manifests(), contributions=_contributions())
+    message = str(refusal.value)
+    assert "cv_evaluations" in message and "sum to" in message, message
+    # And the uncorrupted record really did pass, so the refusal is the corruption and not the fixture.
+    assert good["cumulative"]["cv_evaluations"] >= 0
+
+
 def test_the_aggregate_validates_against_its_own_per_path_entries():
     """The record it writes must satisfy the strict aggregate parser it will later be read by."""
     record = aggregate_cv_cost(_manifests(), contributions=_contributions(),

@@ -482,6 +482,24 @@ def _cost_problems(record, entries):
 
     block = (record or {}).get("cost")
     if block is None:
+        # AN ABSENT COST IS ONLY ACCEPTABLE WHEN THERE IS NOTHING IT COULD DESCRIBE.
+        #
+        # This returned unconditionally, which made the two halves of the same rule disagree: a
+        # committed PREFIX with no cost record is refused by name (`cv/prefix.py`, "carries no
+        # usable cost record"), and a completion MANIFEST with none passed every check in this
+        # file. The strict parsers already refuse `None` -- both answer "no collective-variable
+        # cost record" -- so the omission was here, in the early return that never reached them.
+        #
+        # A run with CV reporting off has no series and no cost, and that is correct rather than
+        # missing. A run that recorded series for N states and no cost is a record with a hole in
+        # it: the evaluations happened, something wrote the rows, and what they cost is gone.
+        if entries:
+            return [f"this manifest records collective-variable series for {len(entries)} "
+                    f"state(s) and carries no cost record at all. A committed prefix without one "
+                    f"is refused; a completed run without one was not, which left the same "
+                    f"omission reported in one place and silent in the other. If this run "
+                    f"genuinely evaluated no collective variables it should carry no series "
+                    f"either."]
         return []
     problems: list[str] = []
     rows_by_state = {}

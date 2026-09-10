@@ -344,3 +344,39 @@ def test_b_committed_prefixes_does_not_silently_fill_a_missing_state(tmp_path, d
     block["states"] = [block["states"][0], dict(block["states"][0])]
     with pytest.raises((CVContinuationError, CVCostError, ValueError)):
         committed_prefixes(block, 2)
+
+
+# --- C. the completion manifest, held to the same rule as the committed prefix -----------------
+
+def test_c_a_completion_manifest_with_series_and_no_cost_at_all_is_refused():
+    """The rule was enforced on one of the two records that state a cost, and not the other.
+
+    A committed PREFIX whose cost is missing is refused by name -- section A above, and
+    `cv/prefix.py`'s "carries no usable cost record". A completion MANIFEST with no `cost` block
+    passed every check in `cv_states.py`, because `_cost_problems` returned early before the
+    strict parsers it delegates to could see the absence. Both parsers refuse `None` when they are
+    reached; nothing reached them.
+
+    The asymmetry is what makes it worth pinning rather than the absence itself: the same
+    omission was reported loudly on a resume and silently on a completed run, so which answer you
+    got depended on which operation happened to read the campaign.
+    """
+    from md_tools.remd.cv_states import _cost_problems
+
+    series = [{"state_index": 0, "rows": 3, "columns": ["step", "time_ps", "walker", "state",
+                                                        "phi"]}]
+    problems = _cost_problems({}, series)
+    assert problems, "a manifest with CV series and no cost record was accepted"
+    assert "no cost record" in problems[0], problems
+
+
+def test_c_a_manifest_with_no_series_needs_no_cost():
+    """The other direction, which is why this is not simply 'refuse an absent cost'.
+
+    A run with collective-variable reporting switched off records no series and no cost, and that
+    is a complete record rather than a damaged one. Refusing every absent cost would have made
+    every non-CV ladder unverifiable.
+    """
+    from md_tools.remd.cv_states import _cost_problems
+
+    assert _cost_problems({}, []) == []

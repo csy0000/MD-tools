@@ -398,7 +398,7 @@ def aggregate_cv_cost(cv_costs, *, contributions=None, invocation_id: str | None
     Kept separate from the table writer so it can be tested as arithmetic, without a directory
     of trajectories standing between the inputs and the assertion.
     """
-    from ..cv.cost import CVCost, cost_record, parse_cost_record
+    from ..cv.cost import CVCost, cost_record, parse_aggregate_record, parse_cost_record
 
     contributed = dict(contributions or {})
     segment = cumulative_cost = CVCost()
@@ -449,6 +449,21 @@ def aggregate_cv_cost(cv_costs, *, contributions=None, invocation_id: str | None
     if invocation_id is not None:
         cv_cost["invocation_id"] = invocation_id
     cv_cost["per_path"] = per_path
+
+    # PROVE THE TOTALS BEFORE PUBLISHING THEM. `parse_aggregate_record` checks that the
+    # aggregate's own observations, evaluations and seconds are the sum of the `per_path` entries
+    # beside it, that every path appears once, and that the set is the one this table claims to
+    # cover. The ladder has audited its aggregate this way since 916feca; AIS assembled one by
+    # accumulating in a loop and published it unaudited, so a record whose parts were each valid
+    # and whose total was wrong was accepted.
+    #
+    # It is not only a file. `ais_main` reads `cumulative` straight back out and writes
+    # "N scalar evaluation(s) over M observation(s), summed over K completed path(s)" into the run
+    # log, so a slip in this arithmetic is read by a person as a measured fact about the campaign.
+    # Checked here, against the entries, rather than trusted because this function computed it.
+    parse_aggregate_record(cv_cost, where="AIS collective-variable cost table",
+                           entries_key="per_path", identity_key="path_index",
+                           expected_identities=sorted(cv_costs))
     return cv_cost
 
 

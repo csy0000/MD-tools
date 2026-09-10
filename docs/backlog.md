@@ -10,57 +10,82 @@ being backlog and becomes a defect.
 
 ---
 
-## 1. The aggregate CV-cost record is not cross-checked against the prefix costs it sums
+## 1. The AIS aggregate CV-cost record was not cross-checked against the entries it sums
 
-**What.** A campaign's aggregate cost record (`aggregation`, `per_state` / `per_path`) is parsed
-strictly — every scope, every count, every `wall_seconds` — and each per-state or per-path entry
-is checked against the prefix it belongs to. What is *not* checked is that the aggregate's own
-totals equal the sum of those entries. A record whose parts are individually valid and whose
-total is wrong is accepted.
-
-**Impact.** Reporting only. The aggregate is never read back to decide a truncation, a resume
-point or any scientific value; it is metadata describing how much CV evaluation a campaign cost.
-A wrong total would mislead someone comparing the cost of two campaigns.
-
-**Do not** use aggregate CV-cost metadata for efficiency comparisons between runs until this is
-closed. The per-state and per-path entries are individually verified and are the trustworthy
-numbers.
-
-**Trigger.** Pick this up when CV cost is used to make a decision — scheduling, budgeting, or a
-published efficiency claim — or when a campaign's reported total is questioned.
-
----
-
-## 2. Missing completion-cost metadata, and exhaustive malformed-metadata cases
-
-**What.** Two related gaps. A completion manifest that carries no cost record at all is not
-refused the way a *committed prefix* without one is (that case is closed, and refuses). And the
-malformed-metadata coverage is representative rather than exhaustive: it covers the field shapes
-that decide a truncation or a restoration, not every field of every record under every mutation.
-
-**Impact.** A completed campaign whose manifest lacks cost metadata reports no cost rather than a
-wrong one. The unexercised mutations are in fields that no continuation reads.
-
-**Trigger.** Pick this up when a manifest is found in the wild without its cost record, or when
-manifest metadata starts being consumed by something other than a human reader — a dashboard, an
-analysis package, an automated pin.
+> **RESOLVED 2026-09-10, and the entry was half stale.** `cv/cost.py::parse_aggregate_record` has
+> audited an aggregate against its own entries since `916feca` — observations and evaluations
+> exactly, `wall_seconds` within an epsilon that scales with the entry count, every identity
+> present and unique. The LADDER calls it, in two places. **AIS never did.** It assembled the
+> aggregate by accumulating in a loop, wrote it, and published it unaudited, so a record whose
+> parts were each valid and whose total was wrong was accepted on that path only.
+>
+> `aggregate_cv_cost` now runs the same parser over the record it just built, against
+> `expected_identities`, before returning it.
+>
+> **It was never only a file.** `ais_main` reads `cumulative` straight back out and writes
+> "N scalar evaluation(s) over M observation(s), summed over K completed path(s)" into the run
+> log, so a slip in that arithmetic is read by a person as a measured fact about the campaign.
+>
+> **Why the existing test did not catch it**, which is the part worth keeping: it called the
+> parser on the returned record, proving the record WOULD satisfy the parser rather than that the
+> writer runs it. Those differ exactly when the writer is wrong, which is the only case that
+> matters. The same shape as entry 8, where a source check proved a flag travelled to a runtime
+> that ignored it. Pinned now by
+> `test_the_writer_refuses_an_aggregate_whose_total_is_not_the_sum`, which corrupts the aggregate
+> the writer builds and requires it to notice; it reports "DID NOT RAISE" against the parent
+> commit.
 
 ---
 
-## 3. Broader provenance/schema hardening and diagnostic-file transactional behaviour
+## 2. A completion manifest with no cost record at all was accepted
 
-**What.** The read-only continuation boundary protects trajectories, CV/work/HS tables, committed
-checkpoint generations and pointers, completion manifests and authoritative configuration. It
-does not make *diagnostic* files transactional: a refused attempt may append to a `.out` or a
-`.log`, and a crash mid-write can leave a partial diagnostic line. Schema-version handling is
-strict where a record decides scientific behaviour and permissive elsewhere.
+> **RESOLVED 2026-09-10.** The first half of this entry. A committed PREFIX whose cost record is
+> missing is refused by name; a completion MANIFEST with no `cost` block passed every check,
+> because `remd/cv_states.py::_cost_problems` returned early — `if block is None: return []` —
+> before the strict parsers it delegates to could see the absence. Both parsers refuse `None`
+> when reached, answering "no collective-variable cost record". Nothing reached them.
+>
+> The asymmetry was the defect, more than the absence: the same omission was reported loudly on a
+> resume and silently on a completed run, so which answer you got depended on which operation
+> happened to read the campaign.
+>
+> Refused now WHEN THERE IS SOMETHING IT COULD DESCRIBE — a manifest recording CV series for N
+> states and carrying no cost. A run with reporting switched off has no series and no cost, and
+> that is a complete record rather than a damaged one; refusing every absent cost would have made
+> every non-CV ladder unverifiable. Both directions pinned in
+> `tests/test_cv_validation_gaps.py`, section C.
+>
+> **The second half stands, and is not a defect.** Malformed-metadata coverage is representative
+> rather than exhaustive: it covers the field shapes that decide a truncation or a restoration,
+> not every field of every record under every mutation. The unexercised mutations are in fields
+> no continuation reads. Exhaustive mutation coverage of records nothing consumes is a cost
+> without a benefit; it becomes worth doing if manifest metadata starts being consumed by
+> something other than a human reader — a dashboard, an analysis package, an automated pin.
 
-**Impact.** Diagnostics may be untidy after a refusal or a crash. This is deliberate under the
-current preservation rules — a rejected attempt is allowed to say why it refused — and no
-authoritative record is involved.
+---
 
-**Trigger.** Pick this up if a diagnostic file is ever made authoritative for anything, or if
-partial diagnostic lines start breaking a downstream parser.
+## 3. Diagnostics are not transactional, and that is the design
+
+> **RECLASSIFIED 2026-09-10 — not a gap.** This entry described its own subject as deliberate:
+> "This is deliberate under the current preservation rules — a rejected attempt is allowed to say
+> why it refused". A backlog is a list of things that are wrong and unfixed. An entry that says
+> the behaviour is intended does not belong in one, and leaving it here made the list longer than
+> the actual debt — which matters, because the list is read to decide whether the software is fit
+> to use.
+>
+> The behaviour, stated as behaviour: the read-only continuation boundary protects trajectories,
+> CV/work/HS tables, committed checkpoint generations and pointers, completion manifests and
+> authoritative configuration. It does NOT protect `.out` and `.log` files. A refused attempt may
+> append to one, and a crash mid-write may leave a partial line. That is the point — a refusal
+> that could not write down why it refused would be a worse failure than an untidy log. No
+> authoritative record is involved, and nothing reads a diagnostic back to decide anything.
+>
+> Schema-version handling is likewise strict where a record decides scientific behaviour and
+> permissive where it does not, which is a deliberate boundary rather than an inconsistent one.
+>
+> **It becomes a defect** the moment either assumption stops holding: if a diagnostic file is made
+> authoritative for anything, or if partial diagnostic lines start breaking a downstream parser.
+> Reopen it then, and it will be a real entry.
 
 ---
 
@@ -74,6 +99,18 @@ diagnosed and fixed defect and not as an accepted limitation.
 
 **Impact.** Unknown, which is the problem. It has never recurred and has never been reproduced,
 so there is nothing to characterise.
+
+**Evidence since, 2026-09-10.** Seven further full-suite runs on the nine-GPU machine, including
+the two release gates for `openmm-v0.5.0`, with zero failures in `tests/test_cv_mpi_cuda_ais.py`
+in any of them. That is added as evidence, NOT as a resolution: a fault that has not recurred is
+not a fault that has been found, and the count of clean runs can never reach a proof. It is
+recorded so that a future reader can see how much clean evidence has accumulated against how
+little of the original.
+
+**This entry cannot be closed by work.** There is nothing to reproduce and nothing to diagnose;
+the diagnostic was lost when it happened. It closes if it recurs — and is then a real defect with
+evidence — or it is eventually retired as stale. Neither is something a change to this repository
+can bring about, which is why it sits here differently from every other entry in this file.
 
 **Trigger.** Pick this up the moment it recurs. Every launcher call in that lane now carries a
 subprocess timeout and retains complete stdout and stderr, so a recurrence will arrive with the
