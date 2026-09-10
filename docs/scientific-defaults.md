@@ -628,29 +628,35 @@ log continues to state.
 See `docs/migration/solute-kind.md` and
 `docs/integration/rgdfv-peptide-like-mbondi3.md`.
 
-#### Known issue: under implicit solvent the setting is ignored
+#### Both routes honour the setting
 
-`constraints.type` is honoured on the explicit-solvent route and **not** on the implicit one,
-where the builder passes `app.HBonds` unconditionally. Measured, same input structure:
+`constraints.type` reaches the System on the explicit and the implicit route alike. It did not
+always: the implicit builder passed `app.HBonds` unconditionally, so the setting was accepted,
+echoed back and never applied. Measured on the same input structure, before and after:
 
 | build | constraints | of which heavy-heavy |
 |---|---|---|
 | `HBonds` + TIP3P | 1782 | 0 |
 | `AllBonds` + TIP3P | 1791 | **9** |
 | `HBonds` + GBn2 | 12 | 0 |
-| `AllBonds` + GBn2 | 12 | **0** — identical to `HBonds` |
+| `AllBonds` + GBn2, as it was | 12 | **0** — identical to `HBonds` |
+| `AllBonds` + GBn2, now | **21** | **9** |
 
-The sharp part is not the ignored setting but the record: the build log states
-`constraints.type  AllBonds  (set)` for a System that has `HBonds`. A provenance record that
-names a setting which did not apply is worse than one that omits it.
+The sharp part was never the ignored setting but the record: the build log stated
+`constraints.type  AllBonds  (set)` for a System that had `HBonds`. A provenance record that names
+a setting which did not apply is worse than one that omits it.
 
-**This does not affect a build that asks for `HBonds`**, which is the default and what every
-validated implicit-solvent run in this repository uses — the requested and applied values
-coincide. It affects anyone asking for something else under implicit solvent.
+Both routes now resolve the string through one function, `md_tools.openmm.system.constraint_option`,
+so they cannot drift apart again without
+`tests/test_constraint_scope.py::test_allbonds_adds_heavy_atom_constraints_under_implicit_solvent`
+failing. That test asserts the System; the one beside it asserts that the record and the System
+agree, which is the property that was actually broken.
 
-Until it is resolved, treat `HBonds` as the only implicit-solvent constraint setting, and read
-`constraints.type` in an implicit build's log as the request rather than the outcome. The System
-itself is authoritative: count its constraints.
+**Two smaller disagreements closed with it.** The schema's enum offers `None` as a string and the
+validator compared against Python `None`, so the advertised value was refused as "not supported".
+The validator accepted `HAngles`, which the enum does not offer and which this section says is
+deliberately unavailable. The enum was the intended policy in both cases and the validator now
+matches it.
 
 #### Constraint tolerance
 

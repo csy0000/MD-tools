@@ -974,6 +974,32 @@ def verify_hmr_group_masses(system, reference_system, topology, *, target_h_mass
     }
 
 
+def constraint_option(name):
+    """`constraints.type` as OpenMM spells it. THE mapping, for every route.
+
+    It lived inline in the explicit builder while the implicit route passed `app.HBonds`
+    unconditionally, so `AllBonds` under GBn2 built a System identical to `HBonds` while the log
+    recorded `AllBonds (set)` -- a setting that was accepted, reported, and never applied.
+
+    `HAngles` is refused rather than mapped. `build-top`'s schema does not offer it and
+    `docs/scientific-defaults.md` says why: no angle is ever constrained by this option. Accepting
+    it here while the enum refused it meant the two disagreed about the policy.
+    """
+    from openmm import app
+
+    if name is None:
+        return None
+    text = str(name)
+    try:
+        return {"HBonds": app.HBonds, "AllBonds": app.AllBonds, "None": None}[text]
+    except KeyError:
+        raise ValueError(
+            f"constraints.type {text!r} is not supported. This package offers HBonds, AllBonds "
+            f"and None. OpenMM's HAngles would constrain angles as well and is deliberately not "
+            f"offered -- see docs/scientific-defaults.md, 'No angle is ever constrained by this "
+            f"option'.") from None
+
+
 def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: int,
                  ligand_sdf: Optional[Path] = None, route: str = "peptide") -> dict:
     """Create the OpenMM ``System`` (PME, 1.0 nm, HBonds, HMR) and serialise it to XML."""
@@ -989,9 +1015,7 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
     method = {"PME": app.PME, "LJPME": app.LJPME, "CutoffPeriodic": app.CutoffPeriodic}[
         bcfg["nonbonded_method"]
     ]
-    constraints = {
-        "HBonds": app.HBonds, "AllBonds": app.AllBonds, "HAngles": app.HAngles, "None": None,
-    }[str(bcfg["constraints"])]
+    constraints = constraint_option(bcfg["constraints"])
 
     # OpenMM repartitions hydrogen mass itself, skipping any residue it made rigid -- so with
     # rigidWater=True its behaviour is exactly the "solute" scope this package wants, which was

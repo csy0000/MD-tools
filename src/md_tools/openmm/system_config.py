@@ -196,5 +196,10 @@ def _check_constraints(resolved: dict[str, Any]) -> None:
         raise ConfigError(
             f"constraints.hydrogen_mass_amu is {mass}, lighter than a hydrogen. Repartitioning "
             "moves mass INTO hydrogens from the heavy atoms they are bonded to.")
-    if constraints.get("type") not in ("HBonds", "AllBonds", "HAngles", None):
+    # The strings `build-top`'s schema actually offers, plus an absent key. `"None"` is one of
+    # them and used to be refused, because this compared against Python `None` and never the
+    # string a YAML file can hold. `HAngles` used to be accepted here and is not in the enum:
+    # scientific-defaults.md states that no angle is ever constrained by this option, so the enum
+    # was the intended policy and this was the disagreement.
+    if constraints.get("type") not in ("HBonds", "AllBonds", "None", None):
         raise ConfigError(f"constraints.type {constraints.get('type')!r} is not supported")

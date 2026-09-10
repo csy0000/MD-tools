@@ -143,10 +143,8 @@ def test_implicit_solvent_has_no_rigid_water_cluster_for_settle(tmp_path):
 def test_allbonds_adds_heavy_atom_constraints_under_explicit_solvent(tmp_path):
     """`AllBonds` must actually differ from `HBonds`, and differ in the documented direction.
 
-    Explicit solvent, deliberately: this is the route where `constraints.type` is honoured. Under
-    implicit solvent the builder hard-codes `app.HBonds` and the setting has no effect -- see the
-    known-issue note in `docs/scientific-defaults.md` section 11.2. Asserting the difference here
-    keeps this test about the CONTRACT of the two settings rather than about that defect.
+    Explicit solvent. The implicit route is asserted separately below: it used to hard-code
+    `app.HBonds`, so this test could only be written for one of the two routes.
     """
     hbonds, elements, _ = _built(tmp_path / "hbonds", constraints="HBonds", solvent="TIP3P")
     allbonds, _elements, _ = _built(tmp_path / "allbonds", constraints="AllBonds",
@@ -163,3 +161,72 @@ def test_allbonds_adds_heavy_atom_constraints_under_explicit_solvent(tmp_path):
     assert heavy_heavy(hbonds) == 0, "HBonds constrained a heavy-heavy bond"
     assert heavy_heavy(allbonds) > 0, "AllBonds constrained no heavy-heavy bond"
     assert allbonds.getNumConstraints() > hbonds.getNumConstraints()
+
+
+def test_allbonds_adds_heavy_atom_constraints_under_implicit_solvent(tmp_path):
+    """The same contract on the OTHER route, which used to ignore the setting entirely.
+
+    `build_implicit_system` passed `constraints=app.HBonds` unconditionally, so `AllBonds` + GBn2
+    built a System identical to `HBonds` + GBn2 -- while the build log recorded
+    `constraints.type  AllBonds  (set)` and the bundle record wrote the literal string `"HBonds"`.
+    A setting accepted, echoed back, and never applied.
+
+    Both routes go through `constraint_option` now, so they cannot disagree again without this
+    failing.
+    """
+    hbonds, elements, _ = _built(tmp_path / "hbonds", constraints="HBonds", solvent="GBn2")
+    allbonds, _elements, _ = _built(tmp_path / "allbonds", constraints="AllBonds", solvent="GBn2")
+
+    def heavy_heavy(system):
+        return sum(1 for index in range(system.getNumConstraints())
+                   if elements[system.getConstraintParameters(index)[0]] != "H"
+                   and elements[system.getConstraintParameters(index)[1]] != "H")
+
+    assert heavy_heavy(hbonds) == 0, "HBonds constrained a heavy-heavy bond under implicit solvent"
+    assert heavy_heavy(allbonds) > 0, (
+        "AllBonds constrained no heavy-heavy bond under implicit solvent -- the setting is being "
+        "dropped again")
+    assert allbonds.getNumConstraints() > hbonds.getNumConstraints()
+
+
+def test_the_record_and_the_system_agree_about_the_constraints(tmp_path):
+    """The defect was the DISAGREEMENT, not the setting: the log said one thing, the System another.
+
+    `constraints.type  AllBonds  (set)` was written into the build log and the resolved
+    configuration while the System that came out was the `HBonds` one. Either half alone looks
+    right; only comparing them shows it. So this asserts both, from the same build.
+    """
+    system, elements, _ = _built(tmp_path / "recorded", constraints="AllBonds", solvent="GBn2")
+    log = (tmp_path / "recorded" / "built.log").read_text(encoding="utf-8")
+
+    assert "type: AllBonds" in log, "the resolved configuration did not record what was asked for"
+    heavy_heavy = sum(1 for index in range(system.getNumConstraints())
+                      if elements[system.getConstraintParameters(index)[0]] != "H"
+                      and elements[system.getConstraintParameters(index)[1]] != "H")
+    assert heavy_heavy > 0, (
+        "the record says AllBonds and the System has no heavy-heavy constraint: the two disagree, "
+        "which is exactly the defect this pins")
+
+
+def test_the_advertised_constraint_values_are_exactly_the_accepted_ones():
+    """`build-top`'s schema and the validator disagreed in both directions.
+
+    The enum offers `"None"` and the validator compared against Python `None`, so the advertised
+    value was refused as "not supported". The validator accepted `HAngles`, which the enum does
+    not offer and which `docs/scientific-defaults.md` says is deliberately unavailable because no
+    angle is ever constrained by this option. One of the two had to be wrong about the policy;
+    the enum was right.
+    """
+    from md_tools.build.top import Field  # noqa: F401  - imported for the schema below
+    from md_tools.openmm.system import constraint_option
+    from md_tools.openmm.system_config import ConfigError, _check_constraints
+
+    for value in ("HBonds", "AllBonds", "None"):
+        _check_constraints({"constraints": {"type": value}})       # must not raise
+        constraint_option(value)                                    # must map
+
+    with pytest.raises(ConfigError):
+        _check_constraints({"constraints": {"type": "HAngles"}})
+    with pytest.raises(ValueError):
+        constraint_option("HAngles")
+

@@ -6,7 +6,7 @@ The Hamiltonian-defining path is::
     parmed.tools.changeRadii(st, "mbondi3").execute()
     system = st.createSystem(
         nonbondedMethod=app.NoCutoff,
-        constraints=app.HBonds,
+        constraints=<constraints.type, honoured>,
         implicitSolvent=app.GBn2,
         removeCMMotion=True,
     )
@@ -302,7 +302,8 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
                           hydrogen_mass_amu: Optional[float] = None,
                           hmr_scope: str = "none",
                           nonpolar_sasa: bool = False,
-                          peptide_map=None):
+                          peptide_map=None,
+                          constraints: str = "HBonds"):
     """Build the implicit-solvent System, and report what the radius change actually did.
 
     Returns `(system, info)`. `info` records the radii before and after `changeRadii`, so a bundle
@@ -347,9 +348,13 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
             "would be silently ignored while the manifest recorded a repartitioned System.")
 
     mass_before = sum(a.mass for a in structure.atoms)
+    from .system import constraint_option
+
     system = structure.createSystem(
         nonbondedMethod=app.NoCutoff,
-        constraints=app.HBonds,
+        # HONOURED, not assumed. This was `app.HBonds` unconditionally, so an `AllBonds` request
+        # built the same System as `HBonds` while the build log recorded `AllBonds (set)`.
+        constraints=constraint_option(constraints),
         implicitSolvent=gb_object,
         # The ACE surface-area nonpolar term. False matches Amber's igb=8/gbsa=0 and the context
         # GBn2 was parameterised in; True matches OpenMM's implicit/gbn2.xml default. Stated here
@@ -385,7 +390,7 @@ def build_implicit_system(prmtop_path: Path, coordinate_path: Optional[Path] = N
         "nonpolar_sasa": bool(nonpolar_sasa),
         "nonpolar_model": ("ACE surface-area term" if nonpolar_sasa else None),
         "nonbonded_method": "NoCutoff",
-        "constraints": "HBonds",
+        "constraints": str(constraints),
         "remove_cm_motion": bool(remove_cm_motion),
         "radii_max_change_angstrom": max_change,
         "radii_change_was_a_no_op": max_change == 0.0,
@@ -563,7 +568,8 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
         amber["prmtop"], amber["coordinates"],
         implicit_model=implicit_model, radii=radii,
         hydrogen_mass_amu=hydrogen_mass_amu, hmr_scope=hmr_scope,
-        peptide_map=peptide_map)
+        peptide_map=peptide_map,
+        constraints=(cfg.get("system_build") or {}).get("constraints", "HBonds"))
 
     (staging / "system.xml").write_text(XmlSerializer.serialize(system), encoding="utf-8")
     pdb_file = app.PDBFile(str(topology_source))
@@ -599,7 +605,7 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
         "nonbonded": {"method": "NoCutoff", "cutoff_nm": None},
         # measured on the built System, not restated from the request
         "hmr": info["hmr"],
-        "constraints": "HBonds",
+        "constraints": str((cfg.get("system_build") or {}).get("constraints", "HBonds")),
         "rigid_water": False,
         "omega_central_bonds": omega_central_bonds(topology, solute),
         **{k: omega_info[k] for k in

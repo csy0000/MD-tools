@@ -82,28 +82,33 @@ blocker; this one is not, because it is not reproducible.
 
 ---
 
-## 5. `constraints.type` is ignored under implicit solvent, and the log says otherwise
+## 5. `constraints.type` was ignored under implicit solvent, and the log said otherwise
 
-**What.** The explicit-solvent route honours `constraints.type`; the implicit route passes
-`app.HBonds` unconditionally. `AllBonds` + GBn2 builds a System identical to `HBonds` + GBn2 (12
-constraints, none heavy-heavy, on the same input where TIP3P + `AllBonds` adds 9), while the build
-log records `constraints.type  AllBonds  (set)`.
-
-**Impact.** Not the ignored setting so much as the record naming a setting that did not apply. No
-run in this repository is affected: `HBonds` is the default and what every validated
-implicit-solvent run asks for, so request and outcome coincide. Anyone asking for `AllBonds` or
-`HAngles` under implicit solvent gets `HBonds` and a log that says otherwise.
-
-**Related, smaller.** The build schema's enum offers `constraints.type: "None"`, but
-`_check_constraints` compares against Python `None` rather than the string, so the advertised
-value is refused with "not supported". Conversely `_check_constraints` accepts `HAngles`, which
-the schema enum does not offer; the enum is the tighter and intended policy.
-
-**Trigger.** Pick this up when someone needs a non-`HBonds` constraint setting under implicit
-solvent, or before any implicit-solvent build log is used as evidence of what was constrained.
-Two defensible resolutions and the choice is a policy call: make the implicit route honour the
-setting, or refuse anything but `HBonds` there so the request cannot disagree with the outcome.
-Documented in `docs/scientific-defaults.md` section 11.2.
+> **RESOLVED 2026-09-10.** The implicit route passed `app.HBonds` to `createSystem`
+> unconditionally, so `AllBonds` + GBn2 built a System identical to `HBonds` + GBn2 while the
+> build log recorded `constraints.type  AllBonds  (set)` and the bundle record wrote the literal
+> string `"HBonds"`. The setting was accepted, echoed back, and never applied.
+>
+> Resolved by HONOURING it rather than refusing it, which was the policy call this entry left
+> open. Refusing anything but `HBonds` under implicit solvent would have been defensible, but the
+> explicit route already honours the setting and OpenMM applies it identically with or without a
+> solvent — so refusing would have made the two routes differ in what they accept as well as in
+> what they do. Both now resolve the string through one function,
+> `md_tools.openmm.system.constraint_option`.
+>
+> Measured on ALA + GBn2: `HBonds` gives 12 constraints, `AllBonds` gives **21** — the same +9
+> heavy-heavy bonds `AllBonds` adds under TIP3P.
+>
+> **The two smaller disagreements are closed too.** `_check_constraints` compared against Python
+> `None` while the schema enum offers the string `"None"`, so the advertised value was refused;
+> and it accepted `HAngles`, which the enum does not offer and which
+> `docs/scientific-defaults.md` §11.2 says is deliberately unavailable because no angle is ever
+> constrained by this option. The enum was the intended policy both times, and the validator now
+> matches it — `HAngles` is refused by name, with the reason.
+>
+> Pinned by `tests/test_constraint_scope.py`: the implicit `AllBonds` counterpart to the explicit
+> test that already existed, a test that the record and the System agree, and one asserting the
+> schema and the validator accept exactly the same three values.
 
 ---
 
