@@ -5,6 +5,7 @@ same bug seen from two places, and only this test sees it from the second.
 """
 from __future__ import annotations
 
+import pathlib
 import subprocess
 import sys
 
@@ -46,8 +47,34 @@ def test_the_package_and_project_versions_agree():
 def installed(tmp_path_factory):
     """Build the wheel and install it into a bare prefix, with no source checkout on the path."""
     work = tmp_path_factory.mktemp("wheel")
+
+    # BUILT FROM A COPY, not from the checkout. `pip wheel <repo>` has setuptools write into
+    # `<repo>/build/`, which every pytest-xdist worker shares: several of them building at once
+    # corrupt each other's intermediate tree and the whole module errors at setup with nothing
+    # but "Processing ./." to show for it. Every one of these tests passes serially, so the
+    # failure looks like a packaging bug and is a concurrency bug.
+    #
+    # The copy is of the WORKING TREE, not of HEAD -- a wheel test that silently ignored
+    # uncommitted changes would pass on a checkout whose packaging is broken.
+    import shutil
+
+    #: Dropped ONLY at the repository root. `shutil.ignore_patterns` matches on basename at every
+    #: depth, so a bare "build" also drops `src/md_tools/build/` -- a real package -- and the
+    #: wheel then installs cleanly and raises `ModuleNotFoundError: md_tools.build` at import.
+    root_only = {".git", "build", "dist", ".conda-env", "tests"}
+    anywhere = {"__pycache__", ".pytest_cache", ".ruff_cache"}
+
+    def ignore(directory, names):
+        dropped = {name for name in names
+                   if name in anywhere or name.endswith(".egg-info")}
+        if pathlib.Path(directory) == pathlib.Path(REPO_ROOT):
+            dropped |= {name for name in names if name in root_only}
+        return dropped
+
+    source = work / "checkout"
+    shutil.copytree(REPO_ROOT, source, ignore=ignore)
     built = subprocess.run([sys.executable, "-m", "pip", "wheel", "--no-deps",
-                            "--wheel-dir", str(work / "dist"), str(REPO_ROOT)],
+                            "--wheel-dir", str(work / "dist"), str(source)],
                            capture_output=True, text=True, timeout=900)
     assert built.returncode == 0, built.stdout[-3000:] + built.stderr[-3000:]
     wheels = list((work / "dist").glob("md_tools-*.whl"))

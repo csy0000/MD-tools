@@ -266,6 +266,19 @@ def test_example_3_an_interrupted_cmd_chain_resumes_by_rerunning_the_same_comman
     assert killed.returncode != 0, "the run finished; it was meant to be interrupted"
     assert list(directory.glob("*.checkpoints")), "nothing was committed"
 
+    # THE PREMISE, checked rather than assumed: the interrupt must have landed in production,
+    # which is the only stage here long enough to hold a committed checkpoint short of its step
+    # count. On a loaded machine 45 seconds may not get past the per-stage System setup, and the
+    # chain then stops in an equilibration stage that has outputs and no checkpoint -- which is
+    # refused, correctly and by design, since a stage continues on the strength of a committed
+    # checkpoint rather than on the fact that it was interrupted. Asserting the resume without
+    # this made the example pass alone and fail under `-n 24`, which reads as a defect in the
+    # resume and is a statement about the fixture.
+    if not (directory / "cMD.checkpoints").is_dir():
+        reached = sorted(p.stem for p in directory.glob("*.checkpoints"))
+        pytest.skip(f"the interrupt did not reach production; it stopped after {reached}. "
+                    f"This machine is too loaded to demonstrate the resume in 45 s.")
+
     # Re-running the same command is the route, and it works. The production stage is long on
     # purpose (400,000 steps), so this is interrupted again rather than run to the end: what is
     # being shown is that the chain PROCEEDS, not that it finishes.
