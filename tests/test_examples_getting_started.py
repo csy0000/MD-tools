@@ -227,29 +227,26 @@ def test_example_2_a_rest2_ladder_under_a_launcher(built):
 
 # --- example 3: interrupt and resume ---------------------------------------------------------------
 
-def test_example_3_an_interrupted_cmd_chain_cannot_currently_be_resumed(built):
+def test_example_3_an_interrupted_cmd_chain_resumes_by_rerunning_the_same_command(built):
     """READ THIS BEFORE RUNNING A LONG cMD CHAIN ON A SCHEDULER.
 
-    An interrupted cMD chain cannot be continued. Every documented route is refused:
+    An interrupted cMD chain continues by RE-RUNNING THE SAME COMMAND. Each stage that already
+    reports completion is skipped, and the stage that was interrupted picks up from its committed
+    checkpoint -- which is what `run.sh`'s own header has always promised.
 
-        ./run.sh ...                -> "3 output(s) already exist ... Pass --overwrite to
-                                        replace them, --resume to continue that run, or
-                                        choose another -odir."
-        ./run.sh ... --resume       -> "--resume is not a cMD flag. An interrupted chain
-                                        continues from each stage's committed checkpoint
-                                        automatically; re-run the same command."
-        ./run.sh ...                -> ... the first message again.
+        ./run.sh ...                -> "min: already completed and verified (min.log); not
+                                        rerunning." ... then the interrupted stage resumes.
 
-    The two messages point at each other, and `run.sh`'s own header promises a third thing that
-    does not happen ("a stage that already reports completion is skipped"). In the code,
-    `_refuse_existing_outputs` returns early only for `--overwrite` or `--resume`, and there is
-    no completed-stage skip; the cMD layer then rejects `--resume`.
+    THIS TEST USED TO ASSERT THE OPPOSITE, and was written to fail the day the defect was fixed
+    rather than document it for ever. What was wrong: `md-run` ran the output-collision check
+    before `stage_main` could consult the completion record, so a completed stage was never
+    skipped and the chain refused on its own first stage's outputs. The refusal then advised
+    `--resume`, which the cMD layer rejects by name -- two messages from one command pointing at
+    each other, with no way forward but `--overwrite`, which discards the finished stages.
 
-    So today the only ways forward are `--overwrite`, which discards the finished stages, or a
-    fresh `-odir`. **A ladder is not affected** -- it takes `--resume` properly (example 3b).
-
-    This example asserts the behaviour as measured, so that when it is fixed this test fails and
-    is updated, rather than the defect being documented for ever. Recorded in `docs/backlog.md`.
+    `--resume` is still not a cMD flag, and that is deliberate: a stage continues on the strength
+    of a committed checkpoint, which is a fact about the directory, not a claim on the command
+    line. **A ladder is different** -- it takes `--resume` properly (example 3b).
     """
     directory = built / "interrupted"
     (built / "interrupt.config").write_text(yaml.safe_dump({
@@ -269,19 +266,25 @@ def test_example_3_an_interrupted_cmd_chain_cannot_currently_be_resumed(built):
     assert killed.returncode != 0, "the run finished; it was meant to be interrupted"
     assert list(directory.glob("*.checkpoints")), "nothing was committed"
 
-    # Route 1: re-run, as the cMD refusal advises.
-    again = _run_sh(directory, "--cpu", expect_success=False)
-    assert again.returncode != 0
-    assert "already exist" in again.stdout + again.stderr
+    # Re-running the same command is the route, and it works. The production stage is long on
+    # purpose (400,000 steps), so this is interrupted again rather than run to the end: what is
+    # being shown is that the chain PROCEEDS, not that it finishes.
+    again = subprocess.run(
+        ["timeout", "-s", "INT", "45", "bash", "run.sh",
+         "../built.pdb", "../built.xml", "--cpu"],
+        cwd=directory, capture_output=True, text=True, timeout=300)
+    output = again.stdout + again.stderr
+    assert "already exist" not in output, (
+        "the chain refused on outputs a completed stage of its own wrote:\n" + output[-3000:])
+    assert "already completed and verified" in output, (
+        "no stage was skipped, so nothing was carried over from the interrupted run:\n"
+        + output[-3000:])
 
-    # Route 2: --resume, as the output-collision refusal advises.
+    # `--resume` remains refused BY NAME on a cMD chain, and the message must say so plainly
+    # rather than being advertised by another part of the same command.
     resumed = _run_sh(directory, "--cpu", "--resume", expect_success=False)
     assert resumed.returncode != 0
     assert "--resume is not a cMD flag" in resumed.stdout + resumed.stderr
-
-    # The one route that works is `--overwrite`, which starts the whole chain again and throws
-    # the finished stages away. It is not executed here: on this fixture that means redoing
-    # 400,000 steps to demonstrate something the flag's own name already says.
 
 
 def test_example_3b_resuming_a_ladder_is_a_different_command(built):

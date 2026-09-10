@@ -320,12 +320,16 @@ def test_overwrite_starts_the_ais_directory_over(built, source):
 
 # --- the corrections: formats, cadences, resume, machine platform, output separation ----------
 
-def test_a_conventional_stage_writes_a_genuine_dcd_and_refuses_a_netcdf_name(built):
-    """The suffix is checked against the bytes, not against the name in the command."""
-    import mdtraj
+@pytest.fixture(scope="module")
+def stage_project(built):
+    """A built single-stage cMD directory, shared by every test that runs one.
 
-    from md_tools.openmm.trajectory import detect_trajectory_format
-
+    A FIXTURE, not a directory another test happens to leave behind. Three tests here used
+    `built / "dcd"` on the strength of `test_a_conventional_stage_writes_a_genuine_dcd...`
+    having run first and created it -- an ordering dependency that holds in a serial run and
+    breaks the moment pytest-xdist puts them on different workers, with a `FileNotFoundError`
+    on a path no test in the failing worker ever made.
+    """
     config = built / "dcd.config"
     config.write_text(yaml.safe_dump({
         "protocol": "cMD", "solvent": "implicit", "dynamics": {"seed": 2},
@@ -335,7 +339,17 @@ def test_a_conventional_stage_writes_a_genuine_dcd_and_refuses_a_netcdf_name(bui
         "reporting": {"crd_printout_solute": 20, "info_printout": 50,
                       "checkpoint_printout": 100}}, sort_keys=False), encoding="utf-8")
     assert _cli(built, "build-md", "-odir", "./dcd", "--config", str(config)).returncode == 0
-    out = built / "dcd"
+    return built / "dcd"
+
+
+def test_a_conventional_stage_writes_a_genuine_dcd_and_refuses_a_netcdf_name(built, stage_project):
+    """The suffix is checked against the bytes, not against the name in the command."""
+    import mdtraj
+
+    from md_tools.openmm.trajectory import detect_trajectory_format
+
+    out = stage_project
+    config = built / "dcd.config"
 
     done = _md_run(out, "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
                    "-x", "custom.dcd", "-r", "cMD.xml", "-o", "cMD.out", "-log", "cMD.log")
@@ -368,9 +382,9 @@ def test_a_conventional_stage_writes_a_genuine_dcd_and_refuses_a_netcdf_name(bui
     assert not (out / "cMD.xtc").exists(), "the refused name was created anyway"
 
 
-def test_output_and_log_are_two_files_with_two_kinds_of_content(built):
+def test_output_and_log_are_two_files_with_two_kinds_of_content(built, stage_project):
     """The separation, on a real run rather than at the parser."""
-    out = built / "dcd"
+    out = stage_project
     readable = (out / "cMD.out").read_text(encoding="utf-8")
     record = (out / "cMD.log").read_text(encoding="utf-8")
 
@@ -578,7 +592,7 @@ def test_a_completed_path_is_not_touched_by_a_resume(built, source):
 
 # --- the machine platform ---------------------------------------------------------------------
 
-def test_the_machine_configuration_decides_the_platform_and_cpu_overrides_it(built, tmp_path):
+def test_the_machine_configuration_decides_the_platform_and_cpu_overrides_it(built, tmp_path, stage_project):
     """CUDA by default, CPU when the machine says so, and `--cpu` for one run.
 
     All three are recorded distinguishably. A CPU result that could be an unnoticed CUDA fallback
@@ -586,7 +600,7 @@ def test_the_machine_configuration_decides_the_platform_and_cpu_overrides_it(bui
     """
     import os
 
-    out = built / "dcd"
+    out = stage_project
     # Each run gets its OWN checkpoint. An OpenMM checkpoint is binary and platform-specific, so
     # sharing one between a CUDA run and a CPU run is not a thing that can work -- and the
     # refusal for trying is asserted separately below.
@@ -637,7 +651,7 @@ def test_the_machine_configuration_decides_the_platform_and_cpu_overrides_it(bui
 
 # --- MPI fails closed, for real ----------------------------------------------------------------
 
-def test_a_multi_rank_launch_without_mpi4py_fails_before_any_output(built, tmp_path):
+def test_a_multi_rank_launch_without_mpi4py_fails_before_any_output(built, tmp_path, ladder):
     """A real `mpirun -n 2` with mpi4py made unavailable. Nothing may be written.
 
     Not a mock: the command is launched by the real launcher and refuses on its own. Eight ranks
@@ -647,6 +661,8 @@ def test_a_multi_rank_launch_without_mpi4py_fails_before_any_output(built, tmp_p
     import os
 
     _require_mpi()
+    # `ladder`, requested above, is what builds this directory. Reaching for it on the strength
+    # of another test having run first is what made this fail under pytest-xdist.
     out = built / "rest2"
     destination = tmp_path / "nothing"
     environment = dict(os.environ, MD_TOOLS_FORCE_NO_MPI4PY="1")
@@ -661,11 +677,11 @@ def test_a_multi_rank_launch_without_mpi4py_fails_before_any_output(built, tmp_p
         sorted(p.name for p in destination.iterdir())
 
 
-def test_a_serial_run_needs_no_mpi4py(built, tmp_path):
+def test_a_serial_run_needs_no_mpi4py(built, tmp_path, stage_project):
     """The other half of the rule: one rank coordinates with nobody, so it needs nothing."""
     import os
 
-    out = built / "dcd"
+    out = stage_project
     environment = dict(os.environ, MD_TOOLS_FORCE_NO_MPI4PY="1")
     done = subprocess.run(
         ["md-openmm", "md-run", "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",

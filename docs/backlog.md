@@ -146,7 +146,22 @@ provenance should be binding. The fix is small; its consequences are not.
 
 ## 7. An interrupted cMD chain cannot be resumed, and three messages disagree about it
 
-**What.** Interrupt a cMD chain mid-production and there is no way to continue it. Every
+> **RESOLVED 2026-09-10** (`7d76b05`). `md-run` ran the output-collision check before
+> `stage_main` could consult the completion record, so a completed stage was never skipped.
+> `stage_main` runs the identical check itself and does it LATER -- after the
+> completed-and-verified short-circuit and after reading the committed checkpoint that decides
+> whether a stage is merely interrupted -- so the early call is gone on that path. Re-running
+> the same command now continues the chain, which is what `run.sh`'s header always claimed.
+>
+> `--resume` is still refused by name on a cMD chain, deliberately: a stage continues on the
+> strength of a committed checkpoint, a fact about the directory, not a claim on the command
+> line. The collision message no longer advertises it on that path.
+>
+> Pinned by `tests/test_examples_getting_started.py::
+> test_example_3_an_interrupted_cmd_chain_resumes_by_rerunning_the_same_command`, which is the
+> same example rewritten to assert the working behaviour.
+
+**What (as it was).** Interrupt a cMD chain mid-production and there is no way to continue it. Every
 documented route is refused:
 
 | you do | you get |
@@ -174,10 +189,8 @@ separate fixes: make the cMD layer accept `--resume` (or make re-running skip co
 which is what `run.sh` already claims), and stop the output-collision message suggesting a flag
 that the next layer always rejects.
 
-Demonstrated and pinned by `tests/test_examples_getting_started.py::
-test_example_3_an_interrupted_cmd_chain_cannot_currently_be_resumed`, which asserts the
-behaviour as measured so that fixing it fails the test rather than leaving the defect documented
-for ever.
+That test did its job: it failed on the day the defect was fixed, which is how the fix was
+noticed rather than the entry being left standing.
 
 ## 8. `md-run --overwrite` is dropped on the REST2/rREST2 ladder path
 
