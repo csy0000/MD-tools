@@ -9,7 +9,14 @@ ordinary MD, REST2, rREST2 or annealed importance sampling; runs them on CUDA, u
 the protocol is parallel; and moves a finished run into managed storage as a verified, immutable
 dataset.
 
-**Status:** `0.5.1`, tagged `openmm-v0.5.1` on `dev`. Not on PyPI. Known limitations are stated
+**Status:** `0.5.1`, tagged `openmm-v0.5.1`, on `dev` and `main`. Not on PyPI.
+
+`0.5.1` fixes one thing, and it is the one a scheduler-killed campaign needs: an interrupted
+CV-enabled REST2 ladder can be resumed. Four-, eight- and twelve-rung ladders could not be, because
+three implementations of one tau ladder disagreed in the seventh decimal and the resume check used
+one that never ran. See [`docs/release-notes/v0.5.1.md`](docs/release-notes/v0.5.1.md).
+
+Known limitations are stated
 in [`docs/release-notes/v0.5.0.md`](docs/release-notes/v0.5.0.md); open and closed gaps, each with
 its reasoning, in [`docs/backlog.md`](docs/backlog.md).
 
