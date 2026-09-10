@@ -329,6 +329,15 @@ def stage_project(built):
     having run first and created it -- an ordering dependency that holds in a serial run and
     breaks the moment pytest-xdist puts them on different workers, with a `FileNotFoundError`
     on a path no test in the failing worker ever made.
+
+    IT ALSO RUNS THE STAGE, which is the other half of that fix and was missing. Building the
+    directory here while the OUTPUTS in it were still produced by whichever test happened to go
+    first left the same dependency one level down: `test_output_and_log_...` reads `cMD.out` and
+    `cMD.log`, requests only this fixture, and got `FileNotFoundError: .../dcd/cMD.out` on a
+    worker that drew it without the test that runs the stage. A directory is not the artefact
+    those tests are about; the run is.
+
+    One run serves every reader, so this is also one stage cheaper than it was.
     """
     config = built / "dcd.config"
     config.write_text(yaml.safe_dump({
@@ -339,7 +348,11 @@ def stage_project(built):
         "reporting": {"crd_printout_solute": 20, "info_printout": 50,
                       "checkpoint_printout": 100}}, sort_keys=False), encoding="utf-8")
     assert _cli(built, "build-md", "-odir", "./dcd", "--config", str(config)).returncode == 0
-    return built / "dcd"
+    out = built / "dcd"
+    done = _md_run(out, "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
+                   "-x", "custom.dcd", "-r", "cMD.xml", "-o", "cMD.out", "-log", "cMD.log")
+    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+    return out
 
 
 def test_a_conventional_stage_writes_a_genuine_dcd_and_refuses_a_netcdf_name(built, stage_project):
@@ -348,12 +361,8 @@ def test_a_conventional_stage_writes_a_genuine_dcd_and_refuses_a_netcdf_name(bui
 
     from md_tools.openmm.trajectory import detect_trajectory_format
 
-    out = stage_project
+    out = stage_project                    # the fixture ran the stage; these are its outputs
     config = built / "dcd.config"
-
-    done = _md_run(out, "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
-                   "-x", "custom.dcd", "-r", "cMD.xml", "-o", "cMD.out", "-log", "cMD.log")
-    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
 
     # Genuine, by two independent checks: our own byte sniffer and a reader that knows nothing
     # about this project.

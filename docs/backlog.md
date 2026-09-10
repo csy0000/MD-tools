@@ -1,12 +1,24 @@
 # Backlog
 
-Known gaps that are **not fixed**. None of them is a release gate: none has been shown to
-corrupt, discard or misreport scientific output, or to prevent recovery of an interrupted run.
-Each entry says what it is, what it costs today, and the concrete thing that should cause it to
-be picked up.
+Known gaps, and what became of them. Each entry says what it is, what it costs, and the concrete
+thing that should cause it to be picked up. **Read the first line of an entry before anything
+else** — an entry that opens `RESOLVED` or `RECLASSIFIED` is a record of what was wrong and how it
+was closed, kept because the reasoning is worth more than the deletion would be.
 
-Nothing here should be read as "handled". If one of these turns out to affect a result, it stops
-being backlog and becomes a defect.
+Nothing here is a release gate: none of it has been shown to corrupt, discard or misreport
+scientific output, or to prevent recovery of an interrupted run. An open entry is not "handled" —
+if one turns out to affect a result it stops being backlog and becomes a defect.
+
+**Where it stands.** Entries 1, 2, 5, 7, 8, 9 and 10 are fixed, each with the test that would fail
+if it came back. Entry 3 is reclassified: it described deliberate behaviour, which does not belong
+in a list of debt. Entry 4 is neither fixed nor accepted but UNDIAGNOSED, and cannot be closed by
+work. Entry 6 is open in code and avoided in practice.
+
+**Three of these entries described code that had already moved on** — 8 said a flag was dropped
+that was being forwarded, 9 described a reader whose sidecar nothing wrote, 1 said an aggregate
+went unaudited that the ladder had been auditing since `916feca`. The lesson is in the file rather
+than in any one entry: a backlog is written once and read many times, and an entry is a claim
+about the code that needs re-checking against it before being acted on.
 
 ---
 
