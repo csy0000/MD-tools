@@ -67,6 +67,17 @@ def project(tmp_path_factory):
         CLI + ["build-md", "-odir", "./REST2", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
+
+    # WRITTEN HERE, by the fixture that owns this directory. It used to be written by `completed`,
+    # while other tests read `project / "user.config"` having requested only `project` -- an
+    # unstated dependency on a sibling fixture's side effect. It survived a serial run, where
+    # something always created it first. Under `-n 24` xdist splits a module across workers and
+    # each builds only the fixtures ITS tests need, so a worker running one of those readers and
+    # no `completed`-dependent test found no file: the run refused with "MD_TOOLS_CONFIG points at
+    # ... which does not exist" instead of the refusal the test was written for, and which of the
+    # two happened depended on how the module was distributed.
+    (root / "user.config").write_text(yaml.safe_dump(
+        {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
     return root
 
 
@@ -90,10 +101,7 @@ def completed(project, tmp_path_factory):
     base = dict(os.environ)
     base["PYTHONPATH"] = os.pathsep.join(
         [str(REPO / "src"), *([base["PYTHONPATH"]] if base.get("PYTHONPATH") else [])])
-    user = project / "user.config"
-    user.write_text(yaml.safe_dump(
-        {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
-    base["MD_TOOLS_CONFIG"] = str(user)
+    base["MD_TOOLS_CONFIG"] = str(project / "user.config")
     done = subprocess.run(
         [sys.executable, str(project / "REST2" / "REST2.py"),
          "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
