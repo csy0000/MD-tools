@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.1 — 2026-09-10
+
+**An interrupted CV-enabled REST2 ladder can be resumed.** It could not be, on any ladder whose tau
+was not exactly representable at six decimal places — four, eight or twelve rungs. Three
+implementations of one linear tau ladder disagreed in the seventh decimal: the ladder that RUNS
+rounds to six places and its values are what a generated `_protocol.py` executes and what every
+`cv_stateN.json` records, while the resume check recomputed an unrounded one and compared with a
+1e-12 tolerance. The resume was refused for a serialisation artefact, with the data intact.
+
+There is one implementation now. `run/continuation.py`'s inline copy is gone and
+`rest2.linear_tau_ladder` delegates rather than rounding to match — two implementations that agree
+are what produced this.
+
+Found by interrupting a real four-rung ladder at step 2,610,250 of 5,000,000 and resuming it: the
+deferred integration experiment from `docs/release-notes/20260907-readiness.md`. After the fix the
+same run completed with 20001 of 20001 rows on every state, no gap and no duplicate.
+
+Ladders of two, three, five or six rungs were unaffected, as was any ladder with CV reporting off.
+
+
 ## 0.5.0 — 2026-09-10
 
 **Breaking.** MD-templates became MD-tools: a standalone, pip-installable package with one

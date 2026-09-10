@@ -9,7 +9,7 @@ ordinary MD, REST2, rREST2 or annealed importance sampling; runs them on CUDA, u
 the protocol is parallel; and moves a finished run into managed storage as a verified, immutable
 dataset.
 
-**Status:** `0.5.0`, tagged `openmm-v0.5.0` on `dev`. Not on PyPI. Known limitations are stated
+**Status:** `0.5.1`, tagged `openmm-v0.5.1` on `dev`. Not on PyPI. Known limitations are stated
 in [`docs/release-notes/v0.5.0.md`](docs/release-notes/v0.5.0.md); open and closed gaps, each with
 its reasoning, in [`docs/backlog.md`](docs/backlog.md).
 
