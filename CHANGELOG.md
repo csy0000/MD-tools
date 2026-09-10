@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0.dev0 — unreleased
+## 0.5.0 — 2026-09-10
 
 **Breaking.** MD-templates became MD-tools: a standalone, pip-installable package with one
 executable and three commands. Every detail, with the tests that verify it, is in
