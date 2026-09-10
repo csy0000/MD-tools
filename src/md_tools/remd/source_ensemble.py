@@ -20,11 +20,12 @@ THE RULES, AND WHY EACH ONE EXISTS
     * Never hash a production trajectory at run time. MD-data hashes it once, at archival. Record
       bounded observations instead: path, size, frame count, chunk size, chunks read.
     * A frame index is NOT a time, and a DCD header is NOT the production clock. Physical frame
-      times come from the companion runtime record, or from explicitly supplied fields, or the run
-      refuses.
-    * Source tau is NOT the directory name. `cMD_tau0p5` is a hint to a reader, never evidence. It
-      comes from the companion record or from an explicit declaration, and if both exist and
-      disagree the run refuses rather than preferring one.
+      times come from the trajectory's own `time` variable, or from explicitly supplied fields, or
+      the run refuses.
+    * Source tau and source temperature are NOT the directory name. `cMD_tau0p5` is a hint to a
+      reader, never evidence. They come from the trajectory's own file attributes or from an
+      explicit declaration, and if both exist and disagree the run refuses rather than preferring
+      one.
     * Atom NAME is not identity. A protein is full of repeated names, and the System's parameters
       are assigned per index, so a renumbered topology compares equal on names while scaling the
       wrong atoms.
@@ -258,41 +259,33 @@ def trajectory_identity(trajectory):
         return None, f"{path.name} could not be read for its identity: {failure}"
 
 
-def companion_record(trajectory):
-    """The `resolved_run.yaml` describing the run that wrote `trajectory`, if there is one.
-
-    Searched in the trajectory's own directory and then upward: a cMD trajectory sits beside its
-    record, a replica trajectory sits below the record covering every replica. Returns
-    `(record, path)` or `(None, None)` -- absence is not an error here, it only means the caller
-    must supply the frame timing and the source tau explicitly.
-    """
-    directory = Path(trajectory).parent
-    for candidate in [directory, *list(directory.parents)[:4]]:
-        record = candidate / "resolved_run.yaml"
-        if record.is_file():
-            try:
-                return yaml.safe_load(record.read_text(encoding="utf-8")), record
-            except Exception:
-                return None, None
-    return None, None
-
-
-def _replica_entry(record, trajectory):
-    """The replica block of a record whose directory the trajectory lives under."""
-    parts = set(Path(trajectory).resolve().parts)
-    for entry in record.get("replicas") or []:
-        if str(entry.get("replica")) in parts:
-            return entry
-    return None
+# THE `resolved_run.yaml` SIDECAR IS GONE, and was never there.
+#
+# This module used to consult a companion `resolved_run.yaml` -- searched beside the trajectory
+# and then up to four directories above it -- for the frame-time map, the source tau and the
+# source temperature. NOTHING IN THIS REPOSITORY HAS EVER WRITTEN THAT FILE. Only two test
+# fixtures fabricated one, which is why the branch stayed green while being unreachable.
+#
+# An unreachable fallback is worse than no fallback, because a reader trusts it. It made three
+# refusals below advise pointing at "a trajectory written by this repository's runtime (which
+# records the map)" when what the runtime records is the NetCDF attributes read by
+# `trajectory_identity`, not a sidecar. And it was the ONLY route `source_temperature` had, so an
+# rREST2 reservoir drawn from a trajectory whose own `temperature_k` attribute stated the answer
+# was refused for want of a file that could not exist.
+#
+# `trajectory_identity` is the replacement and is strictly better evidence: the attributes are
+# written by the reporter that produced the frames, into the same file, so they cannot be copied
+# away from them, cannot describe a directory holding several runs, and cannot go stale.
 
 
 def source_frame_timing(request, trajectory, n_frames):
     """`(times_ps, evidence)` for every frame, or a refusal.
 
     A frame index is never a time and a DCD header is never the production clock. Two routes:
-      1. the companion `resolved_run.yaml`, which records the reporter interval and timestep the
-         frames were written with -- the value recorded where it was decided;
-      2. explicit `first_frame_time_ps` and `frame_interval_ps` from the caller.
+      1. explicit `first_frame_time_ps` and `frame_interval_ps` from the caller;
+      2. the trajectory's OWN per-frame `time` variable, written by the reporter that produced
+         the frames. Not a two-number model but the actual clock, so a source whose cadence
+         changed between segments is described correctly rather than plausibly.
     """
     if request.first_frame_time_ps is not None and request.frame_interval_ps is not None:
         first, interval = request.first_frame_time_ps, request.frame_interval_ps
@@ -302,7 +295,7 @@ def source_frame_timing(request, trajectory, n_frames):
                        "source": f"{request.field('first_frame_time_ps')} / "
                                  f"{request.field('frame_interval_ps')}"}
 
-    # THE FILE'S OWN CLOCK, ahead of any sidecar. An AMBER NetCDF written by this repository
+    # THE FILE'S OWN CLOCK. An AMBER NetCDF written by this repository
     # carries a real `time` per frame, so the times are not derived from a first-frame-plus-
     # interval model at all -- they are read. That also means a source with a non-uniform
     # cadence (a run whose interval changed between segments) is described correctly, which the
@@ -319,31 +312,11 @@ def source_frame_timing(request, trajectory, n_frames):
                            "frame_interval_ps": (spacing.pop() if len(spacing) == 1 else None),
                            "source": f"{Path(trajectory).name} time variable"}
 
-    record, record_path = companion_record(trajectory)
-    if record is not None:
-        block = record.get("trajectories") or {}
-        entry = _replica_entry(record, trajectory)
-        if entry is not None:
-            block = entry.get("trajectories") or {}
-        whole = block.get("whole_system")
-        mapping = whole.get("frame_time_map") if isinstance(whole, dict) else None
-        if mapping:
-            first = float(mapping["first_frame_time_ps"])
-            interval = float(mapping["frame_interval_ps"])
-            times = [first + index * interval for index in range(n_frames)]
-            return times, {"route": "companion_record",
-                           "record": relative_to(request.project, record_path),
-                           "first_frame_time_ps": first, "frame_interval_ps": interval,
-                           "convention": mapping.get("convention"),
-                           "source": f"{Path(record_path).name} "
-                                     f"trajectories.whole_system.frame_time_map"}
-
     raise SourceError(
         f"cannot establish a physical time for the frames of {Path(trajectory).name}.\n"
-        f"  It records no per-frame time of its own (it is not an AMBER NetCDF written by this "
-        f"repository), no companion resolved_run.yaml with a frame_time_map was found beside or "
-        f"above it, "
-        f"and {request.field('first_frame_time_ps')} / {request.field('frame_interval_ps')} are "
+        f"  It records no per-frame time of its own -- it is not an AMBER NetCDF written by this "
+        f"repository, and those are the files that carry a real `time` variable per frame -- and "
+        f"{request.field('first_frame_time_ps')} / {request.field('frame_interval_ps')} are "
         f"not set.\n"
         f"  A frame index is not a time, and this refuses to invent one. Either point "
         f"{request.field('trajectory')} at a trajectory written by this repository's runtime "
@@ -371,17 +344,6 @@ def source_tau(request, trajectory):
         recorded = float(identity["tau"])
         evidence = f"{Path(trajectory).name} tau attribute"
 
-    record, record_path = companion_record(trajectory)
-    if recorded is None and record is not None:
-        entry = _replica_entry(record, trajectory)
-        if entry is not None and entry.get("tau") is not None:
-            recorded = float(entry["tau"])
-            evidence = (f"{relative_to(request.project, record_path)} "
-                        f"replicas[{entry.get('replica')}].tau")
-        elif record.get("tau") is not None:
-            recorded = float(record["tau"])
-            evidence = f"{relative_to(request.project, record_path)} tau"
-
     if declared is not None and recorded is not None:
         if abs(declared - recorded) > 1e-9:
             raise SourceError(
@@ -390,20 +352,19 @@ def source_tau(request, trajectory):
                 f"  These must agree. Correct the configuration, or point "
                 f"{request.field('trajectory')} at the run you meant.")
         return recorded, f"{evidence}; confirmed by {request.field('source_tau')}", \
-            "companion record"
+            "trajectory attribute"
     if recorded is not None:
-        return recorded, evidence, "companion record"
+        return recorded, evidence, "trajectory attribute"
     if declared is not None:
-        return declared, f"{request.field('source_tau')} (no companion runtime record)", \
-            "explicit configuration"
+        return declared, (f"{request.field('source_tau')} ({Path(trajectory).name} records no "
+                          f"tau of its own)"), "explicit configuration"
 
     raise SourceError(
         f"cannot establish the Hamiltonian tau of the source trajectory "
         f"{Path(trajectory).name}.\n"
-        f"  It records no `tau` of its own (it is not an AMBER NetCDF written by this "
-        f"repository), no companion resolved_run.yaml recording `tau` was found beside or above "
-        f"it, and "
-        f"{request.field('source_tau')} is not set.\n"
+        f"  It records no `tau` of its own -- it is not an AMBER NetCDF written by this "
+        f"repository, and those carry the tau their frames were sampled at as a file "
+        f"attribute -- and {request.field('source_tau')} is not set.\n"
         f"  This is refused rather than assumed to be {request.required_tau}. A directory name "
         f"such as `cMD_tau0p5` is NOT evidence: it can be renamed or copied, and a "
         f"{request.purpose} seeded from the wrong ensemble runs to completion while being wrong.\n"
@@ -420,17 +381,15 @@ def source_temperature(request, trajectory):
     """
     declared = request.declared_temperature_k
     recorded, evidence = None, None
-    record, record_path = companion_record(trajectory)
-    if record is not None:
-        entry = _replica_entry(record, trajectory)
-        block = entry if (entry is not None and entry.get("temperature_kelvin") is not None) \
-            else record
-        value = block.get("temperature_kelvin")
-        if value is None:
-            value = (block.get("common") or {}).get("temperature_kelvin")
-        if value is not None:
-            recorded = float(value)
-            evidence = f"{relative_to(request.project, record_path)} temperature_kelvin"
+
+    # THE TRAJECTORY'S OWN ATTRIBUTE, exactly as `source_tau` reads tau. This used to have no
+    # route but the `resolved_run.yaml` sidecar that nothing writes, so a reservoir drawn from a
+    # trajectory carrying `temperature_k` -- every AMBER NetCDF this repository produces -- was
+    # refused with "no companion runtime record" while the answer sat in the file being read.
+    identity, _ = trajectory_identity(trajectory)
+    if identity is not None and identity["temperature_k"] is not None:
+        recorded = float(identity["temperature_k"])
+        evidence = f"{Path(trajectory).name} temperature_k attribute"
 
     if declared is not None and recorded is not None:
         if abs(declared - recorded) > 1e-9:
@@ -441,8 +400,11 @@ def source_temperature(request, trajectory):
     if recorded is not None:
         return recorded, evidence
     if declared is not None:
-        return declared, f"{request.field('source_temperature_k')} (no companion runtime record)"
-    return None, "no companion runtime record and no explicit declaration"
+        return declared, (f"{request.field('source_temperature_k')} "
+                          f"({Path(trajectory).name} records no temperature_k of its own)")
+    return None, (f"{Path(trajectory).name} records no temperature_k of its own -- it is not an "
+                  f"AMBER NetCDF written by this repository -- and "
+                  f"{request.field('source_temperature_k')} is not set")
 
 
 def eligible_frames(times, start_time_ps, end_time_ps, *, frame_interval_ps=None):

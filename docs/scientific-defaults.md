@@ -858,7 +858,7 @@ explicitly; `unknown` means "not recorded" and is never upgraded to a guess.
 | salt versus neutralising counterions | `→ explicit_solvent.salt` |
 | constraints, hydrogen masses, HMR group conservation | `→ constraints.*`, `constraints.hmr_group_conservation` |
 | thermostat, friction, timestep | `MD/provenance.yaml → protocol.thermostat`, `protocol.timestep_fs`; each `stage.yaml`; each `resolved_stage.yaml` |
-| barostat pressure, frequency in steps and in ps, which stages it is active in | `MD/provenance.yaml → protocol.pressure_coupling`; `resolved_stage.yaml → barostat_frequency_steps`, `barostat_interval_ps`, `barostats_in_system`, `barostats_active`; `resolved_run.yaml → pressure_coupling` |
+| barostat pressure, frequency in steps and in ps, which stages it is active in | `MD/provenance.yaml → protocol.pressure_coupling`; `resolved_stage.yaml → barostat_frequency_steps`, `barostat_interval_ps`, `barostats_in_system`, `barostats_active` |
 | every package version that could change a parameter | `forcefield.json → package_versions`; `provenance.yaml → environment` |
 | what was built, as one summary beside the lineage hashes | `inputs/provenance.yaml → forcefield_summary` |
 

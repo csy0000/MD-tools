@@ -462,18 +462,104 @@ def test_source_tau_never_comes_from_the_directory_name(tmp_path):
     assert "is NOT evidence" in message and "cMD_tau0p5" in message
 
 
+def _recorded_source(path, *, tau, temperature_k, n_frames=3, interval_ps=1.0):
+    """An AMBER NetCDF carrying the tau, temperature and per-frame times a real source carries.
+
+    The fixture this replaces wrote a `resolved_run.yaml` beside a zero-byte `.dcd`. Nothing in
+    this repository has ever written that file, so the test passed against a branch no user could
+    reach, and the conflict it names -- a declared tau disagreeing with a recorded one -- was
+    unreachable in practice. The recorded value lives in the trajectory now, which is where the
+    reporter puts it.
+    """
+    from md_tools.remd.amber_trajectory import AmberTrajectoryWriter
+
+    writer = AmberTrajectoryWriter(path, n_atoms=2, tau=tau, temperature_k=temperature_k,
+                                   periodic=False, application="cMD")
+    for index in range(n_frames):
+        writer.append(np.zeros((2, 3), dtype=np.float32),
+                      time_ps=index * interval_ps, box_nm=None)
+    writer.close()
+    return path
+
+
 def test_a_conflicting_declared_and_recorded_tau_is_refused(tmp_path):
     directory = tmp_path / "run"
     directory.mkdir()
-    (directory / "resolved_run.yaml").write_text(json.dumps({"tau": 0.5}))
-    trajectory = directory / "cmd.dcd"
-    trajectory.write_bytes(b"")
+    trajectory = _recorded_source(directory / "cmd.nc", tau=0.5, temperature_k=300.0)
     request = source_ensemble.SourceRequest(
         project=tmp_path, prepared_topology=tmp_path / "t.pdb", trajectory=str(trajectory),
         start_time_ps=0.0, end_time_ps=1.0, count=1, seed=1, implicit=True, required_tau=0.4,
         declared_tau=0.4)
     with pytest.raises(source_ensemble.SourceError, match="These must agree"):
         source_ensemble.source_tau(request, trajectory)
+
+
+def test_the_source_temperature_comes_from_the_trajectory_that_recorded_it(tmp_path):
+    """The gap: `source_temperature` had ONE route, and it was a file nothing writes.
+
+    It looked only for a companion `resolved_run.yaml`, so an rREST2 reservoir drawn from a
+    trajectory whose own `temperature_k` attribute stated the answer was refused with "no
+    companion runtime record" -- while the answer sat in the file being read. `source_tau` had
+    already been given the attribute route; temperature had not.
+    """
+    trajectory = _recorded_source(tmp_path / "cmd.nc", tau=0.5, temperature_k=310.0)
+    request = source_ensemble.SourceRequest(
+        project=tmp_path, prepared_topology=tmp_path / "t.pdb", trajectory=str(trajectory),
+        start_time_ps=0.0, end_time_ps=1.0, count=1, seed=1, implicit=True, required_tau=0.5)
+
+    temperature, evidence = source_ensemble.source_temperature(request, trajectory)
+    assert temperature == 310.0
+    assert "cmd.nc" in evidence and "temperature_k" in evidence
+
+
+def test_a_conflicting_declared_and_recorded_temperature_is_refused(tmp_path):
+    """And the disagreement is refused rather than resolved by preferring one of them."""
+    trajectory = _recorded_source(tmp_path / "cmd.nc", tau=0.5, temperature_k=310.0)
+    request = source_ensemble.SourceRequest(
+        project=tmp_path, prepared_topology=tmp_path / "t.pdb", trajectory=str(trajectory),
+        start_time_ps=0.0, end_time_ps=1.0, count=1, seed=1, implicit=True, required_tau=0.5,
+        declared_temperature_k=300.0)
+    with pytest.raises(source_ensemble.SourceError, match="These must agree"):
+        source_ensemble.source_temperature(request, trajectory)
+
+
+def test_nothing_reads_a_resolved_run_yaml_sidecar_any_more(tmp_path):
+    """A fallback nothing can reach is worse than none, because a reader trusts it.
+
+    `companion_record` searched for `resolved_run.yaml` beside the trajectory and up to four
+    directories above it. NO CODE IN THIS REPOSITORY WRITES THAT FILE -- only test fixtures did --
+    so every refusal advising "a trajectory written by this repository's runtime (which records
+    the map)" named a route that did not exist. This pins its removal from both directions: the
+    helper is gone, and planting the file it looked for changes nothing.
+    """
+    assert not hasattr(source_ensemble, "companion_record"), (
+        "the unreachable sidecar route is back")
+    assert not hasattr(source_ensemble, "_replica_entry"), (
+        "the sidecar's replica lookup is back")
+    # The name survives only as prose explaining why the route is gone. It must not be a value
+    # any code goes looking for.
+    import ast
+
+    tree = ast.parse((TEMPLATES / "source_ensemble.py").read_text())
+    named = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Constant) and node.value == "resolved_run.yaml"]
+    assert not named, "resolved_run.yaml is still a string literal the code can act on"
+
+    directory = tmp_path / "run"
+    directory.mkdir()
+    (directory / "resolved_run.yaml").write_text(
+        yaml.safe_dump({"tau": 0.5, "temperature_kelvin": 310.0}), encoding="utf-8")
+    trajectory = directory / "cmd.dcd"
+    trajectory.write_bytes(b"")
+    request = source_ensemble.SourceRequest(
+        project=tmp_path, prepared_topology=tmp_path / "t.pdb", trajectory=str(trajectory),
+        start_time_ps=0.0, end_time_ps=1.0, count=1, seed=1, implicit=True, required_tau=0.5)
+
+    # A planted sidecar used to answer both of these. Neither may consult it now.
+    with pytest.raises(source_ensemble.SourceError, match="is NOT evidence"):
+        source_ensemble.source_tau(request, trajectory)
+    temperature, reason = source_ensemble.source_temperature(request, trajectory)
+    assert temperature is None, f"the sidecar was read: {reason}"
 
 
 def test_frame_timing_is_refused_without_evidence(tmp_path):

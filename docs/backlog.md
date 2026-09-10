@@ -261,6 +261,70 @@ works -- so the wording of unfollowable advice was improved.
 
 ---
 
+## 9. `resolved_run.yaml` was read by three code paths and written by none
+
+> **RESOLVED 2026-09-10.** `remd/source_ensemble.py::companion_record` searched for a
+> `resolved_run.yaml` beside the source trajectory and up to four directories above it, and fed
+> three consumers: the frame-time map, the source tau, and the source temperature. Nothing in this
+> repository has ever written that file. Only two test fixtures fabricated one, which is why the
+> branch stayed green while being unreachable from any real directory.
+>
+> It was not merely dead. It made three refusals advise pointing at "a trajectory written by this
+> repository's runtime (which records the map)" when what the runtime records is the AMBER NetCDF
+> attributes `trajectory_identity` reads, not a sidecar. And it was the ONLY route
+> `source_temperature` had: `trajectory_identity` already returned `temperature_k`, `source_tau`
+> already preferred the file's own attribute over the sidecar, and `source_temperature` consulted
+> neither -- so an rREST2 reservoir drawn from a trajectory whose own `temperature_k` stated the
+> answer was refused with "no companion runtime record" while the answer sat in the file being
+> read.
+>
+> `companion_record` and `_replica_entry` are deleted, all three call sites with them;
+> `source_temperature` reads the trajectory's own attribute exactly as `source_tau` does; the
+> refusals name the real evidence. `docs/scientific-defaults.md` no longer cites
+> `resolved_run.yaml` as a provenance location either.
+>
+> Pinned by `tests/test_own_replica_exchange.py::
+> test_nothing_reads_a_resolved_run_yaml_sidecar_any_more`, which plants the file and asserts it
+> changes nothing, and by the two temperature tests beside it.
+
+---
+
+## 10. Five more documented provenance locations that nothing writes
+
+**What.** Found while closing entry 9, which was one citation in the same table row.
+`docs/scientific-defaults.md`, the row for "barostat pressure, frequency in steps and in ps, which
+stages it is active in", cites six locations. `grep` over `src/` finds ONE of them:
+
+| cited | in `src/`? |
+|---|---|
+| `resolved_stage.yaml → barostat_frequency_steps` | the field, yes; the FILE appears only in the `STAGE_RUNTIME_OUTPUTS` tuple in `md/_stages.py` and is written by nothing |
+| `barostat_interval_ps` | no |
+| `barostats_in_system` | no |
+| `barostats_active` | no |
+| `MD/provenance.yaml → protocol.pressure_coupling` | no -- `pressure_coupling` appears nowhere in `src/` |
+| `resolved_run.yaml → pressure_coupling` | no -- entry 9; removed from the row |
+
+Related and smaller: `tests/test_fair_provenance.py::_complete_fixture` builds a `resolved_run.yaml`
+and has no callers at all.
+
+**Impact.** Documentation only, and that is the whole problem: this table is what a reader consults
+to find out where a barostat setting was recorded, and following it leads to files and fields that
+do not exist. Nothing scientific is decided by it, and no run reads it. It is the same class as
+entries 8 and 9 -- the software stating one thing and doing another -- which is why it is recorded
+rather than left to be rediscovered.
+
+**Not fixed here, deliberately.** Correcting the row means establishing where each of those six
+facts IS recorded, which is an audit of the stage record rather than a documentation edit, and
+guessing at replacements would put a second set of unverified citations in place of the first.
+Only the `resolved_run.yaml` citation was removed, because entry 9 established that that file
+cannot exist.
+
+**Trigger.** Pick this up before any barostat setting is cited from this table as evidence, or
+when the stage runtime record is next audited. The rest of the table has not been checked the same
+way and may hold more of these.
+
+---
+
 ## Cross-references
 
 - `docs/release-notes/20260907-cv-validation-final-evidence.md` — the evidence behind the
