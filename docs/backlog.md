@@ -179,6 +179,57 @@ test_example_3_an_interrupted_cmd_chain_cannot_currently_be_resumed`, which asse
 behaviour as measured so that fixing it fails the test rather than leaving the defect documented
 for ever.
 
+## 8. `md-run --overwrite` is dropped on the REST2/rREST2 ladder path
+
+`run/main.py::_run_ladder` forwards `--resume` to `replica_main` and does not forward
+`--overwrite`:
+
+```python
+    if args.resume:
+        argv.append("--resume")
+    return replica_main(ladder, argv)
+```
+
+So `--overwrite` is accepted by `md-run`, applied to every `stage_main` stage -- minimisation and
+the three equilibrations all report "--overwrite replaced N existing output(s)" -- and then
+silently dropped before the ladder. `StateTrajectorySet.create` finds `remd0..N.nc` from the
+previous attempt and refuses, advising the user to pass the flag they just passed.
+
+**Reproduction.** `docs/../` is not needed; any REST2 directory that has already run once:
+
+```bash
+mpirun -n 4 md-openmm md-run -ng 4 -i REST2.in -p built.pdb -s built.xml \
+       -c eq_nvt_free.xml --overwrite
+```
+
+A preserved failing directory is at
+`MD-project/data/ala-campaign/run_1_rest2.implicit.aborted-20260910`.
+
+**Three faults, and the second and third are why it costs an hour rather than a minute.**
+
+1. The flag is dropped. One line in `_run_ladder`.
+2. The advice cannot be followed. The message names the right flag for the right command and doing
+   what it says changes nothing.
+3. The message is unreachable under MPI. It is written to `REST2.out`, and rank 0's `MPI_ABORT`
+   discards it -- `mpirun` prints only "MPI_ABORT was invoked". It was recovered only by re-running
+   single-rank with `-ng 1`.
+
+Fixing (1) without (3) leaves the next failure on this path just as opaque.
+
+**Note the comment four lines above the drop site**, which describes this exact defect as already
+fixed:
+
+> a flag that is not listed here does not reach the stage at all -- which is how `--resume` and
+> `--overwrite` were accepted by `md-run` and silently dropped
+
+It was fixed for the STAGE path and left on the LADDER path, in the same file. The error message
+was separately corrected on 2026-09-09 (`--force` -> `--overwrite`, entry in
+`20260909-resume-identity-and-force.md`) without testing that following the corrected advice
+works -- so the wording of unfollowable advice was improved.
+
+**Trigger.** Before the next campaign that has to restart a ladder in place. Until then, the
+workaround is a fresh `-odir`, which is what the ALA campaign used.
+
 ---
 
 ## Cross-references
