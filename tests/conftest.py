@@ -213,6 +213,120 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 
+# --- spreading the suite over every GPU ---------------------------------------------------------
+#
+# `select_device_for_rank` gives a SINGLE process "the first visible device" -- device 0. That is
+# right for one run and wrong for a parallel suite: under `-n 24` every serial CUDA test built its
+# Context on device 0 while devices 1-8 sat idle. Only MPI ladders spread, because `local_rank`
+# hands rank i device i. The symptom was device 0 pinned near its memory ceiling while the rest of
+# the machine was free, and at least one example test skipping itself with "this machine is too
+# loaded to demonstrate the resume in 45 s".
+#
+# CUDA_VISIBLE_DEVICES is the lever, and it RENUMBERS: a worker that can see only physical device 5
+# calls it device 0, so "the first visible device" becomes the device this worker was given. The
+# runtime needs no change -- it already asks the driver what is visible.
+#
+# Two classes, because they want opposite things:
+#
+#   one device   an ordinary CUDA test. One worker, one GPU, round-robin over all nine.
+#   many devices a REMD ladder or an AIS launch, which runs one rank per state and needs at least
+#                as many visible devices as ranks. These are kept OFF DEVICE 0: it is the RTX
+#                A5000 and the others are RTX 3080s, so a ladder spanning it would give one rung
+#                different throughput from the rest.
+#
+#: Modules whose tests launch more than one rank. Listed here, in one auditable place, rather than
+#: marked across a dozen files -- and rather than guessed from the node id, which would silently
+#: stop matching the first time a file is renamed.
+MULTI_RANK_MODULES = frozenset({
+    "test_cv_mpi_cuda_ais.py", "test_cv_mpi_cuda_lanes.py", "test_cv_mpi_cuda_rrest2.py",
+    "test_md_run_mpi_gpu.py", "test_rrest2_cuda_smoke.py",
+    "test_examples_getting_started.py", "test_mpi_fail_closed.py",
+    "test_driver_fail_closed.py", "test_regression_preflight_task.py",
+    "test_runtime_contract_matrix.py", "test_own_replica_exchange.py",
+})
+
+#: Modules that must see the machine EXACTLY as it is, and get no assignment at all.
+#:
+#: `test_cuda_coverage_matrix.py` is the record of what ran on what. It asks the DRIVER what
+#: hardware exists -- `nvidia-smi` reports every physical GPU and ignores CUDA_VISIBLE_DEVICES --
+#: and then both places a run on the last device BY PHYSICAL INDEX and asserts that an N-rank
+#: ladder occupies N DISTINCT devices. Either kind of assignment breaks it, in opposite ways:
+#: hiding device 0 left nine devices in its table and eight visible, so `--device 8` came back
+#: "Illegal value for DeviceIndex: 8"; giving it one device instead put every rank of every
+#: ladder on that one, and it reported "ranks shared devices: ['0', '0', '0', '0']". Both times
+#: the test was right and the assignment was wrong.
+UNASSIGNED_MODULES = frozenset({"test_cuda_coverage_matrix.py"})
+
+#: Physical device the ladders must not touch. See above.
+RESERVED_FOR_SERIAL_ONLY = 0
+
+
+def _worker_number() -> int:
+    """This xdist worker's index, or 0 when the suite runs in one process."""
+    name = os.environ.get("PYTEST_XDIST_WORKER", "")
+    digits = "".join(c for c in name if c.isdigit())
+    return int(digits) if digits else 0
+
+
+def _machine_devices():
+    """Every physical CUDA device, as the driver reports it. Asked ONCE and remembered.
+
+    Snapshotted before any assignment below, and never re-read from the environment: this hook
+    WRITES CUDA_VISIBLE_DEVICES, so a later read would see one worker's own slice and shrink the
+    pool on every subsequent test until every worker believed the machine had a single GPU.
+    """
+    global _MACHINE_DEVICES
+    if _MACHINE_DEVICES is None:
+        try:
+            out = subprocess.run(["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+                                 capture_output=True, text=True, timeout=30)
+            _MACHINE_DEVICES = ([line.strip() for line in out.stdout.splitlines() if line.strip()]
+                                if out.returncode == 0 else [])
+        except (OSError, subprocess.SubprocessError):
+            _MACHINE_DEVICES = []
+    return _MACHINE_DEVICES
+
+
+#: Filled by the first call to `_machine_devices`.
+_MACHINE_DEVICES = None
+
+#: What CUDA_VISIBLE_DEVICES held before the suite touched it. A value set from outside is an
+#: instruction -- someone confining this run to particular cards meant it -- so the assignment
+#: below stands down entirely rather than widening it.
+_INHERITED_VISIBLE_DEVICES = os.environ.get("CUDA_VISIBLE_DEVICES")
+
+
+def pytest_runtest_setup(item):
+    """Give this test its own slice of the machine, before it or any subprocess it spawns starts.
+
+    Set per TEST rather than per worker: a worker runs both classes over its lifetime, so a single
+    assignment at startup would either starve the ladders of devices or keep the ordinary tests
+    off device 0 for no reason.
+    """
+    if "gpu" not in item.keywords or _INHERITED_VISIBLE_DEVICES:
+        return
+
+    module = Path(str(item.fspath)).name
+    if module in UNASSIGNED_MODULES:
+        return
+
+    devices = _machine_devices()
+    if len(devices) <= 1:
+        return
+
+    worker = _worker_number()
+    if module in MULTI_RANK_MODULES:
+        pool = [d for d in devices if d != str(RESERVED_FOR_SERIAL_ONLY)]
+        if not pool:
+            return
+        # Rotated per worker so two workers running ladders at once do not both start at device 1.
+        start = worker % len(pool)
+        order = pool[start:] + pool[:start]
+    else:
+        order = [devices[worker % len(devices)]]
+    os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(order)
+
+
 # --- a tiny complete REST2 ladder, shared by the end-to-end and extension suites ----------------
 #
 # Two states, alanine dipeptide in vacuum, CPU, a few seconds. Small enough to be a unit test and
