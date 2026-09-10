@@ -60,7 +60,7 @@ def project(tmp_path_factory):
         "ais": {"number_of_paths": 2, "switching_steps": 20,
                 "observation_interval_steps": 10, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
-        "reporting": {"solute_printout": 10, "system_printout": 10, "checkpoint_printout": 10},
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10, "checkpoint_printout": 10},
         # On the update grid (multiple of 5) and dividing switching_steps (20).
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
     }), encoding="utf-8")

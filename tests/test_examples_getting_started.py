@@ -131,7 +131,7 @@ def test_example_1_plain_md_from_a_structure_to_a_trajectory(built):
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 20,
                    "restrained_npt_steps": 20, "unrestrained_npt_steps": 20,
                    "production_steps": 100},
-        "reporting": {"solute_printout": 20, "system_printout": 50, "checkpoint_printout": 50},
+        "reporting": {"crd_printout_solute": 20, "info_printout": 50, "checkpoint_printout": 50},
     }), encoding="utf-8")
     _md_openmm(built, "build-md", "-odir", "./cMD", "--config", "cMD.config")
 
@@ -142,7 +142,7 @@ def test_example_1_plain_md_from_a_structure_to_a_trajectory(built):
 
     # What you get: a trajectory, a final state to continue from, a human-readable output and a
     # machine-readable provenance record, per stage.
-    assert (built / "cMD" / "cMD.dcd").is_file()
+    assert (built / "cMD" / "solute_prod1.nc").is_file()
     assert (built / "cMD" / "cMD.xml").is_file()
     assert "completed" in (built / "cMD" / "cMD.out").read_text(encoding="utf-8")
 
@@ -199,7 +199,7 @@ def test_example_2_a_rest2_ladder_under_a_launcher(built):
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 20,
                    "restrained_npt_steps": 20, "unrestrained_npt_steps": 20,
                    "production_steps": 0},        # the ladder owns production, not a stage
-        "reporting": {"solute_printout": 50, "system_printout": 50, "checkpoint_printout": 50},
+        "reporting": {"crd_printout_solute": 50, "info_printout": 50, "checkpoint_printout": 50},
         "rest2": {
             "number_of_replicas": 3,              # -> mpirun -n 3
             "tau_max": 0.5,                       # ladder is linear 0 -> 0.5 over the states
@@ -219,7 +219,7 @@ def test_example_2_a_rest2_ladder_under_a_launcher(built):
     assert "run_status: completed" in out
     # One trajectory per fixed thermodynamic STATE -- never per walker, never tau-named.
     for state in range(3):
-        assert (built / "REST2" / f"remd{state}.nc").is_file()
+        assert (built / "REST2" / f"whole_state{state}_prod1.nc").is_file()
     # An Amber-style exchange history, and the per-pair acceptance report.
     assert (built / "REST2" / "rem.log").is_file()
     assert "acceptance" in out.lower()
@@ -258,7 +258,7 @@ def test_example_3_an_interrupted_cmd_chain_cannot_currently_be_resumed(built):
         "stages": {"minimization_iterations": 10, "restrained_nvt_steps": 10,
                    "restrained_npt_steps": 10, "unrestrained_npt_steps": 10,
                    "production_steps": 400_000},
-        "reporting": {"solute_printout": 500, "system_printout": 500,
+        "reporting": {"crd_printout_solute": 500, "info_printout": 500,
                       "checkpoint_printout": 500},
     }), encoding="utf-8")
     _md_openmm(built, "build-md", "-odir", "./interrupted", "--config", "interrupt.config")
@@ -311,7 +311,7 @@ def test_example_3b_resuming_a_ladder_is_a_different_command(built):
     assert "not a cMD flag" in wrong.stdout + wrong.stderr
 
     # The right way.
-    before = (directory / "remd0.nc").stat().st_mtime_ns
+    before = (directory / "whole_state0_prod1.nc").stat().st_mtime_ns
     done = subprocess.run(
         ["mpirun", "-n", "3", *CLI, "md-run", "-ng", "3", "-i", "REST2.in",
          "-p", "../built.pdb", "-s", "../built.xml", "-c", "eq_nvt_free.xml",
@@ -319,7 +319,7 @@ def test_example_3b_resuming_a_ladder_is_a_different_command(built):
          "--cpu", "--resume"],
         cwd=directory, capture_output=True, text=True, timeout=3600)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
-    assert (directory / "remd0.nc").stat().st_mtime_ns == before, \
+    assert (directory / "whole_state0_prod1.nc").stat().st_mtime_ns == before, \
         "a completed ladder was rerun instead of reporting completion"
 
 
@@ -332,7 +332,7 @@ def test_example_4_switching_paths_from_an_equilibrium_ensemble(built):
     SOURCE trajectory -- the equilibrium ensemble the paths anneal away from -- which you pass
     with `-source-traj`. `number_of_paths` is the GLOBAL total, not a count per rank.
     """
-    source = built / "cMD" / "cMD.dcd"
+    source = built / "cMD" / "solute_prod1.nc"
     if not source.is_file():
         pytest.skip("example 1 has not run")
 
@@ -343,7 +343,7 @@ def test_example_4_switching_paths_from_an_equilibrium_ensemble(built):
         "stages": {"minimization_iterations": 0, "restrained_nvt_steps": 0,
                    "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
                    "production_steps": 0},
-        "reporting": {"solute_printout": 10, "system_printout": 10, "checkpoint_printout": 10},
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10, "checkpoint_printout": 10},
         "ais": {"number_of_paths": 2, "switching_steps": 20,
                 "observation_interval_steps": 10, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": str(source)},
@@ -465,7 +465,7 @@ def test_the_cmd_method_page_script_actually_runs(tmp_path):
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
 
     produced = tmp_path / "run" / "md_script"
-    assert (produced / "cMD.dcd").is_file()
+    assert (produced / "solute_prod1.nc").is_file()
     assert "completed" in (produced / "cMD.out").read_text(encoding="utf-8")
 
 

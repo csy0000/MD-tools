@@ -168,7 +168,7 @@ def test_the_canonical_stage_command_runs_against_the_installed_wheel(installed)
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 20,
                    "restrained_npt_steps": 20, "unrestrained_npt_steps": 20,
                    "production_steps": 40},
-        "reporting": {"solute_printout": 20, "system_printout": 20,
+        "reporting": {"crd_printout_solute": 20, "info_printout": 20,
                       "checkpoint_printout": 40}}, sort_keys=False), encoding="utf-8")
     generated = _run(installed, "build-md", "-odir", "md_script", "--config", "c.config")
     assert generated.returncode == 0, generated.stdout[-2000:] + generated.stderr[-2000:]
@@ -183,6 +183,10 @@ def test_the_canonical_stage_command_runs_against_the_installed_wheel(installed)
     from md_tools.build.record import read_record
     from md_tools.openmm.trajectory import detect_trajectory_format
 
+    # `-x cMD.dcd` was given explicitly, so the stage writes THAT name -- and in DCD, because
+    # the writer follows the suffix. A stage left to name its own streams writes
+    # `solute_prod<N>.nc` in NetCDF; both are covered, and neither puts one format in the other's
+    # name.
     assert detect_trajectory_format(script / "cMD.dcd") == "dcd"
     assert (script / "cMD.xml").is_file()
     assert "status               completed" in (script / "cMD.out").read_text(encoding="utf-8")
@@ -221,5 +225,10 @@ def test_the_generated_run_sh_examples_match_the_flag_contract(installed):
     _, work = installed
     text = (work / "md_script" / "run.sh").read_text(encoding="utf-8")
     assert '-s "${SYSTEM}"' in text and '-x "${SYSTEM}"' not in text, text
-    assert re.search(r"-x \w+\.dcd", text), text
+    # NO `-x`: a stage writes two coordinate streams and names them itself. See
+    # `test_md_run_inputs.py` for the same contract stated there.
+    # No `-x` naming a STAGE trajectory: a stage writes two coordinate streams and
+    # names them itself. The ladder line legitimately keeps `-x REST2.nc`, which is
+    # the exchange record rather than a trajectory, so the check is specific.
+    assert not re.search(r"-x \S+\.dcd", text), text
     assert re.search(r"-o \w+\.out", text) and re.search(r"-log \w+\.log", text), text

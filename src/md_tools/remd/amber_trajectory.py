@@ -37,19 +37,47 @@ AMBER_CONVENTION_VERSION = "1.0"
 ANGSTROM_PER_NM = 10.0
 
 
-def state_trajectory_name(state_index):
-    """`remd0.nc`, `remd1.nc`, ... The index is the state's, and tau never appears."""
+def state_trajectory_name(state_index, *, content="whole", segment=1):
+    """`whole_state0_prod1.nc`, `solute_state0_prod1.nc`, ...
+
+    THE INDEX IS THE STATE'S, not the walker's, and the name says so deliberately.
+
+    Amber and GROMACS both write WALKER-following trajectories and sort them afterwards --
+    cpptraj's own help says its default is to sort "by replica", and `remdtrajtemp` exists to
+    extract frames at a given temperature, which is only necessary because the files are not
+    temperature-sorted. GROMACS ships `demux.pl` for the same reason.
+
+    MD-tools writes the sorted thing directly: after an accepted exchange the configuration now
+    occupying state 2 is a different walker's, and it is that one which goes to state 2's file.
+    So calling these `rep<i>` would match Amber's FILENAME while holding the opposite CONTENT,
+    which is worse than not matching at all. `state<i>` describes what is in the file.
+
+    A genuine walker-following trajectory is recoverable from `state_to_walker` in the exchange
+    record, and would deserve its own name -- `walker<i>` -- rather than reusing this one.
+
+    `tau` never appears in the name: two ladders with different tau at the same index would then
+    write different files for the same state, and every script that globs them would silently
+    read one run's ladder as another's.
+    """
     index = int(state_index)
     if index < 0:
         raise ValueError(f"a state index cannot be negative; got {state_index}")
-    return f"remd{index}.nc"
+    if content not in ("whole", "solute"):
+        raise ValueError(f"content must be 'whole' or 'solute'; got {content!r}")
+    return f"{content}_state{index}_prod{int(segment)}.nc"
 
 
 def state_index_from_name(name):
     """Only for validating a groupfile that names its outputs. Never used to discover order."""
+    import re
+
     stem = Path(name).name
-    if not stem.startswith("remd") or not stem.endswith(".nc"):
-        raise ValueError(f"{stem!r} is not a state trajectory name; expected remd<index>.nc")
+    matched = re.fullmatch(r"(whole|solute)_state(\d+)_prod(\d+)\.nc", stem)
+    if matched:
+        return int(matched.group(2))
+    raise ValueError(
+        f"{stem!r} is not a state trajectory name; expected "
+        f"<whole|solute>_state<index>_prod<segment>.nc")
     digits = stem[len("remd"):-len(".nc")]
     if not digits.isdigit():
         raise ValueError(f"{stem!r} does not carry a numeric state index")

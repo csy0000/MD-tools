@@ -81,7 +81,7 @@ def project(tmp_path_factory):
         "protocol": "cMD", "solvent": "implicit",
         "stages": {"minimization_iterations": 2, "restrained_nvt_steps": 10,
                    "production_steps": PRODUCTION_STEPS},
-        "reporting": {"solute_printout": FRAME_EVERY, "system_printout": FRAME_EVERY,
+        "reporting": {"crd_printout_solute": FRAME_EVERY, "info_printout": FRAME_EVERY,
                       "checkpoint_printout": CHECKPOINT_EVERY}}), encoding="utf-8")
     done = subprocess.run(CLI + ["build-md", "-odir", str(root / "project"),
                                  "--config", str(root / "cMD.config")],
@@ -131,7 +131,7 @@ def reference(project, tmp_path_factory):
     work = tmp_path_factory.mktemp("reference")
     done = _run_stage(project, work)
     assert done.returncode == 0, done.stdout + done.stderr
-    return work, _digest(work / "cMD.xml"), _frames(work / "cMD.dcd")
+    return work, _digest(work / "cMD.xml"), _frames(work / "solute_prod1.nc")
 
 
 # --- the transaction ------------------------------------------------------------------------------
@@ -186,8 +186,8 @@ def test_a_crash_at_a_commit_boundary_resumes_to_the_same_result(boundary, proje
     assert _digest(work / "cMD.xml") == reference_restart, (
         f"{boundary}: the recovered stage produced a different final state from an "
         f"uninterrupted run of the same stage with the same seed")
-    assert _frames(work / "cMD.dcd") == reference_frames, (
-        f"{boundary}: {_frames(work / 'cMD.dcd')} frames against the reference's "
+    assert _frames(work / "solute_prod1.nc") == reference_frames, (
+        f"{boundary}: {_frames(work / 'solute_prod1.nc')} frames against the reference's "
         f"{reference_frames}")
 
 
@@ -210,12 +210,12 @@ def test_a_trajectory_longer_than_its_checkpoint_is_cut_back_not_kept(project, r
 
     committed = read_committed(_checkpoints(work))
     vouched = int(committed["state"]["streams"]["trajectory"])
-    on_disk = _frames(work / "cMD.dcd")
+    on_disk = _frames(work / "solute_prod1.nc")
     assert on_disk >= vouched, "frames went backwards before recovery"
 
     resumed = _run_stage(project, work)
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
-    assert _frames(work / "cMD.dcd") == reference_frames
+    assert _frames(work / "solute_prod1.nc") == reference_frames
     assert _digest(work / "cMD.xml") == reference_restart
 
 
@@ -391,7 +391,7 @@ def test_overwrite_starts_clean_and_does_not_load_an_old_checkpoint(project, ref
     assert "Resume" not in log, "--overwrite continued from the checkpoint it was replacing"
     # A clean run of the same stage lands where the uninterrupted reference does.
     assert _digest(work / "cMD.xml") == reference_restart
-    assert _frames(work / "cMD.dcd") == reference_frames
+    assert _frames(work / "solute_prod1.nc") == reference_frames
 
 
 def test_the_checkpoint_commits_all_three_appendable_streams(project, reference):

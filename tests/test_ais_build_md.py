@@ -245,7 +245,7 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 50,
                    "restrained_npt_steps": 50, "unrestrained_npt_steps": 50,
                    "production_steps": 200},
-        "reporting": {"solute_printout": 20, "system_printout": 100,
+        "reporting": {"crd_printout_solute": 20, "info_printout": 100,
                       "checkpoint_printout": 200},
     }, sort_keys=False), encoding="utf-8")
     assert subprocess.run(

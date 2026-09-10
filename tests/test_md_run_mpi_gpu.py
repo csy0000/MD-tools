@@ -76,7 +76,7 @@ def ladder(built):
                    "restrained_npt_steps": 50, "unrestrained_npt_steps": 50},
         "rest2": {"number_of_replicas": 2, "tau_max": 0.3,
                   "exchange_interval_steps": 50, "number_of_exchanges": 4},
-        "reporting": {"solute_printout": 25, "system_printout": 50,
+        "reporting": {"crd_printout_solute": 25, "info_printout": 50,
                       "checkpoint_printout": 50}}, sort_keys=False), encoding="utf-8")
     assert _cli(built, "build-md", "-odir", "./rest2", "--config", str(config)).returncode == 0
 
@@ -99,8 +99,8 @@ def ladder(built):
 
 def test_a_two_rank_ladder_writes_one_trajectory_per_state(ladder):
     """Fixed thermodynamic states, not walkers: `remd0.nc` and `remd1.nc`, and no third."""
-    states = sorted(p.name for p in ladder.glob("remd*.nc"))
-    assert states == ["remd0.nc", "remd1.nc"], states
+    states = sorted(p.name for p in ladder.glob("whole_state*_prod1.nc"))
+    assert states == ["whole_state0_prod1.nc", "whole_state1_prod1.nc"], states
     assert (ladder / "rem.log").is_file()
     assert (ladder / "restart.json").is_file()
 
@@ -164,7 +164,7 @@ def source(built):
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 50,
                    "restrained_npt_steps": 50, "unrestrained_npt_steps": 50,
                    "production_steps": 2000},
-        "reporting": {"solute_printout": 10, "system_printout": 100,
+        "reporting": {"crd_printout_solute": 10, "info_printout": 100,
                       "checkpoint_printout": 1000}}, sort_keys=False), encoding="utf-8")
     assert _cli(built, "build-md", "-odir", "./source", "--config", str(config)).returncode == 0
     done = subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml"],
@@ -328,7 +328,7 @@ def test_a_conventional_stage_writes_a_genuine_dcd_and_refuses_a_netcdf_name(bui
         "stages": {"minimization_iterations": 10, "restrained_nvt_steps": 20,
                    "restrained_npt_steps": 20, "unrestrained_npt_steps": 20,
                    "production_steps": 100},
-        "reporting": {"solute_printout": 20, "system_printout": 50,
+        "reporting": {"crd_printout_solute": 20, "info_printout": 50,
                       "checkpoint_printout": 100}}, sort_keys=False), encoding="utf-8")
     assert _cli(built, "build-md", "-odir", "./dcd", "--config", str(config)).returncode == 0
     out = built / "dcd"
@@ -406,7 +406,7 @@ def _cadence_project(built: Path, name: str) -> Path:
                 "switching_steps": 1000, "parameter_update_interval_steps": 1,
                 "observation_interval_steps": 100},
         "ais_source": {"trajectory": "../source/cMD.dcd"},
-        "reporting": {"solute_printout": 200, "system_printout": 500,
+        "reporting": {"crd_printout_solute": 200, "info_printout": 500,
                       "checkpoint_printout": 200}}, sort_keys=False), encoding="utf-8")
     assert _cli(built, "build-md", "-odir", f"./{name}", "--config", str(config)).returncode == 0
     return built / name
@@ -415,7 +415,7 @@ def _cadence_project(built: Path, name: str) -> Path:
 def test_each_ais_cadence_controls_its_own_stream(built, source):
     """Eleven work rows, six frames, three state rows: three cadences, three different counts.
 
-    `system_printout` and `checkpoint_printout` were once validated and then never read. A setting
+    `info_printout` and `checkpoint_printout` were once validated and then never read. A setting
     that is accepted and inert is worse than one that is refused, because the person who wrote it
     believes it took effect.
     """

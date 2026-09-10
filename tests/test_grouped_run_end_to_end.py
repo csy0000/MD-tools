@@ -246,8 +246,8 @@ def test_a_fresh_run_refuses_to_write_into_an_existing_set(prepared, tmp_path_fa
     for name in ("exchange.nc", "restart.json", "checkpoint.nc", "exchange.runstate.json",
                  "exchange.solute.nc"):
         (work / name).unlink(missing_ok=True)
-    before = (work / "remd0.nc").read_bytes()
+    before = (work / "whole_state0_prod1.nc").read_bytes()
 
     result = _run(work)
     assert result.returncode != 0
-    assert (work / "remd0.nc").read_bytes() == before, "the refused run still wrote into the file"
+    assert (work / "whole_state0_prod1.nc").read_bytes() == before, "the refused run still wrote into the file"

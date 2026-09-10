@@ -266,7 +266,7 @@
     "exercised_by_a_lane": 25,
     "lanes_for_site": {
       "ais/decomposition.py::ComponentProbe.measure": "test_ais_decomposition_lane, test_ais_on_explicit_solvent",
-      "ais/run.py::_state_row": "test_ais_decomposition_lane (system_printout is set in every AIS lane)",
+      "ais/run.py::_state_row": "test_ais_decomposition_lane (info_printout is set in every AIS lane)",
       "ais/run.py::run_one_path": "test_md_run_mpi_gpu.py, test_ais_decomposition_lane",
       "ais/run.py::run_one_path.direct_potential": "test_ais_decomposition_lane, test_hs_rows_match_recomputation_on_cuda",
       "ais/run.py::run_one_path.save_checkpoint": "test_md_run_mpi_gpu.py resume tests, test_hs_rows_match_recomputation_on_cuda",

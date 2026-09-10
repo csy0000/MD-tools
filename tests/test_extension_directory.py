@@ -35,7 +35,7 @@ from md_tools.remd import amber_trajectory as amber
 from .conftest import EXCHANGES, TAUS                               # noqa: E402
 
 PARENT_FILES = ("exchange.nc", "checkpoint.nc", "restart.json", "rem.log",
-                "exchange.solute.nc", "exchange.runstate.json", "remd0.nc", "remd1.nc")
+                "exchange.solute.nc", "exchange.runstate.json", "whole_state0_prod1.nc", "whole_state1_prod1.nc")
 
 
 def _digest(path):
@@ -92,7 +92,7 @@ def test_the_parent_is_byte_for_byte_unchanged(chain):
 def test_the_extension_writes_its_own_complete_set(chain):
     _, extension, _, _ = chain
     for name in ("exchange.nc", "checkpoint.nc", "restart.json", "rem.log",
-                 "remd0.nc", "remd1.nc"):
+                 "whole_state0_prod1.nc", "whole_state1_prod1.nc"):
         assert (extension / name).is_file(), name
 
 
@@ -100,7 +100,7 @@ def test_the_extension_writes_its_own_complete_set(chain):
 def test_nothing_of_the_parent_was_copied_into_the_extension(chain):
     """A copied parent relabelled as an extension is exactly what section 14 forbids."""
     parent, extension, _, _ = chain
-    for name in ("exchange.nc", "remd0.nc", "remd1.nc", "checkpoint.nc"):
+    for name in ("exchange.nc", "whole_state0_prod1.nc", "whole_state1_prod1.nc", "checkpoint.nc"):
         assert _digest(parent / name) != _digest(extension / name), name
 
 
@@ -109,8 +109,8 @@ def test_nothing_of_the_parent_was_copied_into_the_extension(chain):
 @pytest.mark.slow
 def test_the_extension_holds_only_the_new_segment(chain):
     parent, extension, _, _ = chain
-    parent_frames = amber.read_frames(parent / "remd0.nc")["n_frames"]
-    extension_frames = amber.read_frames(extension / "remd0.nc")["n_frames"]
+    parent_frames = amber.read_frames(parent / "whole_state0_prod1.nc")["n_frames"]
+    extension_frames = amber.read_frames(extension / "whole_state0_prod1.nc")["n_frames"]
     assert extension_frames == parent_frames
 
 
@@ -120,8 +120,8 @@ def test_step_and_time_coordinates_are_absolute_across_the_boundary(chain):
     continue the parent's rather than restarting at zero."""
     parent, extension, _, _ = chain
     for index in range(len(TAUS)):
-        parent_times = amber.read_frames(parent / f"remd{index}.nc")["times_ps"]
-        child_times = amber.read_frames(extension / f"remd{index}.nc")["times_ps"]
+        parent_times = amber.read_frames(parent / f"whole_state{index}_prod1.nc")["times_ps"]
+        child_times = amber.read_frames(extension / f"whole_state{index}_prod1.nc")["times_ps"]
         assert min(child_times) > max(parent_times), (parent_times[-1], child_times[0])
         step = parent_times[1] - parent_times[0]
         assert child_times[0] == pytest.approx(parent_times[-1] + step)
@@ -173,10 +173,10 @@ def test_the_new_segment_is_the_dynamics_an_in_place_extension_would_have_produc
                    "--extend", str(EXCHANGES)).returncode == 0
 
     for index in range(len(TAUS)):
-        with netCDF4.Dataset(str(inplace / f"remd{index}.nc")) as handle:
+        with netCDF4.Dataset(str(inplace / f"whole_state{index}_prod1.nc")) as handle:
             appended = np.array(handle.variables["coordinates"][:], dtype=float)
             appended_times = np.array(handle.variables["time"][:], dtype=float)
-        with netCDF4.Dataset(str(extension / f"remd{index}.nc")) as handle:
+        with netCDF4.Dataset(str(extension / f"whole_state{index}_prod1.nc")) as handle:
             segment = np.array(handle.variables["coordinates"][:], dtype=float)
             segment_times = np.array(handle.variables["time"][:], dtype=float)
         tail = appended[-len(segment):]
@@ -258,8 +258,8 @@ def test_cpptraj_concatenates_the_segments_without_a_gap_or_a_duplicate(chain):
                             cwd=str(work), timeout=600)
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
 
-    total = (amber.read_frames(parent / "remd0.nc")["n_frames"]
-             + amber.read_frames(extension / "remd0.nc")["n_frames"])
+    total = (amber.read_frames(parent / "whole_state0_prod1.nc")["n_frames"]
+             + amber.read_frames(extension / "whole_state0_prod1.nc")["n_frames"])
     import netCDF4
     with netCDF4.Dataset(str(joined)) as handle:
         assert len(handle.dimensions["frame"]) == total
@@ -285,7 +285,7 @@ def test_an_unfinished_parent_is_refused_before_anything_is_created(prepared, tm
     result = _invoke(extension, "--extend-from", str(parent), "--extend", str(EXCHANGES))
     assert result.returncode != 0
     assert not (extension / "exchange.nc").exists()
-    assert not (extension / "remd0.nc").exists()
+    assert not (extension / "whole_state0_prod1.nc").exists()
 
 
 @pytest.mark.slow
@@ -360,7 +360,7 @@ def test_the_parent_file_names_are_read_from_its_manifest_not_assumed(prepared,
         cwd=str(parent), capture_output=True, text=True, timeout=1800, env=environment)
     assert first.returncode == 0, first.stdout[-3000:] + first.stderr[-3000:]
     before = {name: _digest(parent / name) for name in
-              ("rest2.nc", "rest2_checkpoint.nc", "restart.json", "remd0.nc", "remd1.nc")}
+              ("rest2.nc", "rest2_checkpoint.nc", "restart.json", "whole_state0_prod1.nc", "whole_state1_prod1.nc")}
 
     second = subprocess.run(
         [sys.executable, "-m", "md_tools.remd.executor",

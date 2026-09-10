@@ -268,7 +268,7 @@ stages:
   restrained_npt_steps: 0
   unrestrained_npt_steps: 0
   production_steps: 400000
-reporting: {solute_printout: 500, system_printout: 500, checkpoint_printout: 500}
+reporting: {crd_printout_solute: 500, info_printout: 500, checkpoint_printout: 500}
 collective_variables: {file: cv.yaml, interval_steps: 250}
 dynamics: {seed: 20260907}
 YAML

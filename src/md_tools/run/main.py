@@ -375,7 +375,19 @@ def md_run_main(argv: list[str] | None = None) -> int:
         # The COMPLETE inventory, not `resolved.config` alone. An `-odir` that already holds a
         # run is a run that happened; writing into it leaves a tree that is half one run and half
         # another, with every file looking equally current.
-        if checked is not None and checked.inventory is not None:
+        #
+        # NOT ON THE STAGE PATH, where `stage_main` runs the identical check itself and does it
+        # LATER -- after the completed-and-verified short-circuit, and after reading the
+        # committed checkpoint that decides whether the stage is merely interrupted. Doing it
+        # here, with neither of those facts in hand, refused first and made both unreachable
+        # through the public command: a chain whose third stage crashed could not be restarted
+        # at all, because rerunning it collided on the first stage's own completed outputs. The
+        # refusal then advised `--resume`, which `stage_main` rejects for cMD by name -- one
+        # command giving two contradictory instructions, and no way forward but `--overwrite`,
+        # which throws away the finished stages. The same partition as the dispatch below.
+        goes_to_stage_main = (run_input.stage is not None
+                              or protocol not in ("REST2", "rREST2", "AIS"))
+        if checked is not None and checked.inventory is not None and not goes_to_stage_main:
             check_existing_outputs(checked.inventory, overwrite=bool(args.overwrite),
                                    resume=bool(args.resume) or bool(args.check),
                                    where=f"md-run {protocol}")
@@ -447,8 +459,11 @@ def _run_stages(args, resolved: dict[str, Any], stage: str | None, config_path: 
         single = len(chosen) == 1
         forwarded = argparse.Namespace(
             topology=args.topology, system=args.system, coordinates=previous,
-            trajectory=args.trajectory if single and args.trajectory
-                       else str(out_dir / f"{name}.dcd"),
+            # None unless the caller named one: the stage names its own coordinate streams,
+            # and there are two of them now -- `solute_prod<N>.nc` and `whole_prod<N>.nc`.
+            # Defaulting this to `<stage>.dcd` here silently overrode both and reinstated the
+            # single whole-system trajectory the new names exist to separate.
+            trajectory=args.trajectory if single and args.trajectory else None,
             restart=args.restart if single and args.restart else str(out_dir / f"{name}.xml"),
             log=args.log if single and args.log else str(out_dir / f"{name}.log"),
             checkpoint=args.checkpoint if single and args.checkpoint

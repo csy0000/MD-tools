@@ -30,7 +30,7 @@ pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 STAGES = {"minimization_iterations": 25, "restrained_nvt_steps": 50,
           "restrained_npt_steps": 50, "unrestrained_npt_steps": 50,
           "production_steps": 200}
-REPORTING = {"solute_printout": 20, "system_printout": 100, "checkpoint_printout": 200}
+REPORTING = {"crd_printout_solute": 20, "info_printout": 100, "checkpoint_printout": 200}
 
 
 @pytest.fixture(scope="module")

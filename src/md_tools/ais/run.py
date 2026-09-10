@@ -116,7 +116,7 @@ AIS_VERIFY_EVERY_DEFAULT = 0
 COMPLETION_NAME = "completed.json"
 OBSERVATIONS_CSV = "observations.csv"
 
-#: The per-path thermodynamic state table, at `reporting.system_printout`. A different question
+#: The per-path thermodynamic state table, at `reporting.info_printout`. A different question
 #: from the work: how the path is BEHAVING while the Hamiltonian moves, which is what tells you a
 #: switch is too fast long before the work distribution does.
 STATE_CSV = "system.csv"
@@ -2454,7 +2454,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                             f"(every {schedule['trajectory_interval_steps']} steps)")
         log.field("state rows", f"{schedule['number_of_state_rows']} "
                                 f"(every {schedule['state_interval_steps']} steps)"
-                  if schedule["state_interval_steps"] else "disabled (system_printout = 0)")
+                  if schedule["state_interval_steps"] else "disabled (info_printout = 0)")
         log.field("checkpoints", f"{schedule['number_of_checkpoints']} "
                                  f"(every {schedule['checkpoint_interval_steps']} steps)"
                   if schedule["checkpoint_interval_steps"] else
@@ -2787,7 +2787,7 @@ def run_generated_ais(script: str | Path, argv: list[str] | None = None) -> int:
         "ais_source": dict(resolved["ais_source"]),
         "dynamics": dict(resolved["dynamics"]),
         # The reporting block reaches the runtime. It used to be validated by `build-md` and then
-        # left behind, so `system_printout` and `checkpoint_printout` were settings a person wrote
+        # left behind, so `info_printout` and `checkpoint_printout` were settings a person wrote
         # that nothing ever read.
         "reporting": dict(resolved["reporting"]),
         "collective_variables": dict(resolved.get("collective_variables") or {}),

@@ -76,7 +76,7 @@ def project(tmp_path_factory):
                   "number_of_exchanges": EXCHANGES},
         # The state trajectory is written every exchange interval, so CV (every 5) and frames
         # (every 10) coincide at 10, 20, 30, 40 and not at 5, 15, 25, 35.
-        "reporting": {"solute_printout": EXCHANGE_EVERY, "system_printout": EXCHANGE_EVERY,
+        "reporting": {"crd_printout_solute": EXCHANGE_EVERY, "info_printout": EXCHANGE_EVERY,
                       "checkpoint_printout": EXCHANGE_EVERY},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": CV_EVERY},
         "dynamics": {"seed": 20260904},
@@ -145,7 +145,7 @@ def test_every_named_frame_holds_the_configuration_the_row_was_measured_on(compl
     checked = 0
     for index in range(STATES):
         rows = _rows(completed / f"remd{index}.cv.csv")
-        frames = mdtraj.load(str(completed / f"remd{index}.nc"),
+        frames = mdtraj.load(str(completed / f"whole_state{index}_prod1.nc"),
                              top=str(project / "built.pdb"))
         for row in rows:
             named = row["trajectory_frame_index"]

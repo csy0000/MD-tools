@@ -454,7 +454,7 @@ def _identity_document(**overrides):
         "fingerprint": "f" * 64, "topology": {"name": "t.pdb", "sha256": "t" * 64},
         "system": {"sha256": "s" * 64}, "source": {"sha256": "x" * 64, "format": "dcd"},
         "tau": {"start": 0.5, "end": 0.0, "interpolation": "linear"},
-        "schedule": {"switching_steps": 10}, "reporting": {"solute_printout": 5},
+        "schedule": {"switching_steps": 10}, "reporting": {"crd_printout_solute": 5},
         "seed_policy": {"seed": 1, "derivation": "derive_seed(seed, 'ais', path_index, role)"},
         "number_of_paths": 2, "selected_frames": [0, 1],
         "observation_columns": [], "decomposition_schema": {"name": "ais", "version": 1},
@@ -737,7 +737,7 @@ def test_an_invalid_last_stage_stops_the_chain_before_stage_one_writes_anything(
         "stages": {"minimization_iterations": 2, "restrained_nvt_steps": 5,
                    "restrained_npt_steps": 5, "unrestrained_npt_steps": 5,
                    "production_steps": 5},
-        "reporting": {"solute_printout": 5, "system_printout": 5,
+        "reporting": {"crd_printout_solute": 5, "info_printout": 5,
                       "checkpoint_printout": 5}}), encoding="utf-8")
     built = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "build-md",
                   "-odir", str(project), "--config", str(tmp_path / "explicit.config"),
@@ -861,7 +861,7 @@ def test_the_ladder_inventory_names_every_artefact_a_ladder_writes(tmp_path):
                      "REST2.checkpoints", "REST2.out", "REST2.log", "REST2.nc"):
         assert required in named, f"{required} is written and is in no inventory: {sorted(named)}"
     for state in range(4):
-        assert f"remd{state}.nc" in named, f"state {state}'s trajectory is unnamed"
+        assert f"whole_state{state}_prod1.nc" in named, f"state {state}'s trajectory is unnamed"
     for rank in range(1, 4):
         assert f"REST2.out.rank{rank:02d}" in named, (
             f"rank {rank}'s report is unnamed -- it is the file a rank that failed to bind its "

@@ -57,18 +57,18 @@ def _write(path, times, *, state_index=0, n_atoms=5, periodic=True, tau=0.0):
 # --- names carry the state index, never tau ----------------------------------------------------
 
 def test_the_name_is_the_state_index():
-    assert amber.state_trajectory_name(0) == "remd0.nc"
-    assert amber.state_trajectory_name(12) == "remd12.nc"
-    assert amber.state_index_from_name("remd12.nc") == 12
-    assert amber.state_index_from_name("/somewhere/remd3.nc") == 3
+    assert amber.state_trajectory_name(0) == "whole_state0_prod1.nc"
+    assert amber.state_trajectory_name(12) == "whole_state12_prod1.nc"
+    assert amber.state_index_from_name("whole_state12_prod1.nc") == 12
+    assert amber.state_index_from_name("/somewhere/whole_state3_prod1.nc") == 3
 
 
 @pytest.mark.parametrize("tau", [0.0, 0.1, 0.5])
 def test_the_name_does_not_depend_on_tau(tau, tmp_path):
     """Two ladders with different tau at the same index produce the same filename."""
-    assert amber.state_trajectory_name(2) == "remd2.nc"
+    assert amber.state_trajectory_name(2) == "whole_state2_prod1.nc"
     path = _write(tmp_path / amber.state_trajectory_name(2), [1.0], state_index=2, tau=tau)
-    assert path.name == "remd2.nc"
+    assert path.name == "whole_state2_prod1.nc"
     assert amber.read_frames(path)["tau"] == pytest.approx(tau), (
         "tau is recorded in metadata, where it can be checked")
 
@@ -83,29 +83,29 @@ def test_a_name_without_a_numeric_index_is_refused():
 
 def test_one_contiguous_output_per_state_is_accepted():
     assert amber.validate_state_outputs(
-        ["remd0.nc", "remd1.nc", "remd2.nc"]) == [0, 1, 2]
+        ["whole_state0_prod1.nc", "whole_state1_prod1.nc", "whole_state2_prod1.nc"]) == [0, 1, 2]
 
 
 def test_a_duplicate_state_output_is_refused():
     with pytest.raises(ValueError, match="more than once"):
-        amber.validate_state_outputs(["remd0.nc", "remd1.nc", "remd1.nc"])
+        amber.validate_state_outputs(["whole_state0_prod1.nc", "whole_state1_prod1.nc", "whole_state1_prod1.nc"])
 
 
 def test_a_gap_in_the_state_outputs_is_refused():
     with pytest.raises(ValueError, match="contiguous"):
-        amber.validate_state_outputs(["remd0.nc", "remd2.nc"])
+        amber.validate_state_outputs(["whole_state0_prod1.nc", "whole_state2_prod1.nc"])
 
 
 def test_out_of_order_state_outputs_are_refused():
     """Position in the group file IS the state index, so order is meaning, not presentation."""
     with pytest.raises(ValueError, match="out of order"):
-        amber.validate_state_outputs(["remd1.nc", "remd0.nc"])
+        amber.validate_state_outputs(["whole_state1_prod1.nc", "whole_state0_prod1.nc"])
 
 
 # --- the Amber convention -----------------------------------------------------------------------
 
 def test_the_file_carries_the_amber_convention(tmp_path):
-    path = _write(tmp_path / "remd0.nc", [2.0, 4.0])
+    path = _write(tmp_path / "whole_state0_prod1.nc", [2.0, 4.0])
     with netCDF4.Dataset(str(path)) as d:
         assert d.Conventions == "AMBER"
         assert d.ConventionVersion == "1.0"
@@ -119,7 +119,7 @@ def test_the_file_carries_the_amber_convention(tmp_path):
 
 def test_positions_are_written_in_angstrom(tmp_path):
     """OpenMM works in nanometre; the conversion happens once, at this boundary."""
-    path = tmp_path / "remd0.nc"
+    path = tmp_path / "whole_state0_prod1.nc"
     with amber.AmberTrajectoryWriter(path, n_atoms=2, state_index=0, tau=0.0,
                                      temperature_k=300.0, periodic=False) as writer:
         writer.append(np.array([[0.0, 0.1, 0.2], [1.0, 0.0, 0.0]]), time_ps=1.0)
@@ -129,14 +129,14 @@ def test_positions_are_written_in_angstrom(tmp_path):
 
 
 def test_a_periodic_trajectory_refuses_a_frame_with_no_box(tmp_path):
-    with amber.AmberTrajectoryWriter(tmp_path / "remd0.nc", n_atoms=2, state_index=0, tau=0.0,
+    with amber.AmberTrajectoryWriter(tmp_path / "whole_state0_prod1.nc", n_atoms=2, state_index=0, tau=0.0,
                                      temperature_k=300.0, periodic=True) as writer:
         with pytest.raises(ValueError, match="undefined density"):
             writer.append(np.zeros((2, 3)), time_ps=1.0)
 
 
 def test_a_wrong_atom_count_is_refused(tmp_path):
-    with amber.AmberTrajectoryWriter(tmp_path / "remd0.nc", n_atoms=5, state_index=0, tau=0.0,
+    with amber.AmberTrajectoryWriter(tmp_path / "whole_state0_prod1.nc", n_atoms=5, state_index=0, tau=0.0,
                                      temperature_k=300.0, periodic=False) as writer:
         with pytest.raises(ValueError, match="shape"):
             writer.append(np.zeros((4, 3)), time_ps=1.0)
@@ -147,8 +147,8 @@ def test_a_wrong_atom_count_is_refused(tmp_path):
 @pytest.mark.skipif(not CPPTRAJ.is_file(), reason="AmberTools26 cpptraj is not installed")
 def test_cpptraj_reads_it_as_an_amber_trajectory(tmp_path):
     _topology(tmp_path / "top.pdb")
-    _write(tmp_path / "remd0.nc", [2.0, 4.0, 6.0, 8.0])
-    (tmp_path / "in").write_text("parm top.pdb\ntrajin remd0.nc\nrun\n")
+    _write(tmp_path / "whole_state0_prod1.nc", [2.0, 4.0, 6.0, 8.0])
+    (tmp_path / "in").write_text("parm top.pdb\ntrajin whole_state0_prod1.nc\nrun\n")
     done = subprocess.run([str(CPPTRAJ), "-i", "in"], capture_output=True, text=True,
                           cwd=tmp_path)
     out = done.stdout + done.stderr
@@ -189,3 +189,70 @@ def test_each_state_gets_its_own_readable_trajectory(tmp_path):
                               cwd=tmp_path)
         assert "AMBER trajectory" in done.stdout + done.stderr
         assert amber.read_frames(tmp_path / name)["state_index"] == state
+
+
+# -- the stage reporter's periodic path ---------------------------------------------------------
+#
+# `_AmberStreamReporter` passed the box as its three DIAGONAL SCALARS while
+# `AmberTrajectoryWriter.append` takes the three box VECTORS, so `np.linalg.norm(box, axis=1)`
+# got a 1-D array and raised `AxisError: axis 1 is out of bounds for array of dimension 1`. It
+# killed every explicit-solvent stage at its first reported frame and no test caught it: the
+# suite's stage tests are implicit, where `periodic` is False and this branch never runs.
+
+class _FakeState:
+    """Only the four accessors `_AmberStreamReporter.report` actually calls."""
+
+    def __init__(self, positions_nm, box_nm, time_ps):
+        from openmm import unit
+
+        self._positions = positions_nm * unit.nanometer
+        self._box = box_nm * unit.nanometer
+        self._time = time_ps * unit.picosecond
+
+    def getPositions(self, asNumpy=False):                    # noqa: N802 - OpenMM's protocol
+        return self._positions
+
+    def getPeriodicBoxVectors(self, asNumpy=False):           # noqa: N802 - OpenMM's protocol
+        return self._box
+
+    def getTime(self):                                        # noqa: N802 - OpenMM's protocol
+        return self._time
+
+
+def test_stage_reporter_writes_a_periodic_frame(tmp_path):
+    import numpy as np
+    import netCDF4
+
+    from md_tools.md.stage import _AmberStreamReporter
+
+    path = tmp_path / "whole_prod1.nc"
+    reporter = _AmberStreamReporter(path, 10, n_atoms=4, periodic=True)
+    positions = np.arange(12, dtype=float).reshape(4, 3) / 10.0
+    box = np.diag([2.0, 3.0, 4.0])
+    reporter.report(None, _FakeState(positions, box, 1.0))
+    reporter._writer.close()
+
+    with netCDF4.Dataset(path) as ds:
+        assert ds.dimensions["frame"].size == 1
+        # cell lengths are the row norms in angstrom, so a 2/3/4 nm cell is 20/30/40 A --
+        # which is exactly what the diagonal-scalar form could not produce.
+        assert np.allclose(ds.variables["cell_lengths"][0, :], [20.0, 30.0, 40.0])
+        assert np.allclose(ds.variables["cell_angles"][0, :], [90.0, 90.0, 90.0])
+
+
+def test_stage_reporter_keeps_a_triclinic_cell(tmp_path):
+    """The diagonal form was not merely a crash: it discarded the off-diagonal shape."""
+    import numpy as np
+    import netCDF4
+
+    from md_tools.md.stage import _AmberStreamReporter
+
+    path = tmp_path / "whole_triclinic.nc"
+    reporter = _AmberStreamReporter(path, 10, n_atoms=2, periodic=True)
+    box = np.array([[2.0, 0.0, 0.0], [1.0, 2.0, 0.0], [1.0, 1.0, 2.0]])
+    reporter.report(None, _FakeState(np.zeros((2, 3)), box, 0.0))
+    reporter._writer.close()
+
+    with netCDF4.Dataset(path) as ds:
+        angles = np.asarray(ds.variables["cell_angles"][0, :])
+        assert not np.allclose(angles, 90.0), "a triclinic cell was written as orthorhombic"

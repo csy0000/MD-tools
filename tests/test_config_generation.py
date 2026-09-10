@@ -488,7 +488,8 @@ def test_the_default_protocol_is_five_ns_of_steps_at_two_femtoseconds():
     # System resolves to. Written as the derivation rather than as a stored duration, because
     # the same step count is 10 ns on a System built with HMR.
     assert resolved["stages"]["production_steps"] * 2.0 / 1e6 == 5.0, "5 ns at 2 fs"
-    assert resolved["reporting"] == {"solute_printout": 1000, "system_printout": 10000,
+    assert resolved["reporting"] == {"crd_printout_solute": 1000, "crd_printout_whole": 0,
+                                    "info_printout": 10000,
                                      "checkpoint_printout": 10000}
 
 

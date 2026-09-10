@@ -57,7 +57,7 @@ def project(tmp_path_factory):
         "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 5,
                   "number_of_exchanges": 2},
         "reservoir": {"enabled": True, "path": "../reservoir.nc"},
-        "reporting": {"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 5},
+        "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5},
     }), encoding="utf-8")
     done = subprocess.run(
         CLI + ["build-md", "-odir", "./rREST2", "--config", str(root / "rREST2.config")],

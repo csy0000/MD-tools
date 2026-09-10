@@ -56,7 +56,7 @@ been fine costs a rerun; permitting one that changes the calculation costs the r
 ### What was deliberately NOT relaxed
 
 The reporting intervals are still part of a REST2 run's identity. After `471daac` the ladder
-honours `solute_printout` and `system_printout`, so a run started before it legitimately differs
+honours `crd_printout_solute` and `info_printout`, so a run started before it legitimately differs
 in frame spacing, and refusing that is correct — the cadence would change mid-run. The
 instruction warned against fixing item 1 by loosening this, and it is pinned by six parametrised
 cases.
@@ -71,7 +71,7 @@ The refusal now names every differing field and both values, modelled on `Identi
 
 ```
 resolved.config describes a different run:
-    reporting.solute_printout: was 1250, now 2500
+    reporting.crd_printout_solute: was 1250, now 2500
 ```
 
 "Describes a different run" is true and useless — the reader had to diff two documents by hand to

@@ -26,8 +26,8 @@ So identity is defined by what determines the CALCULATION, on two axes:
 
 WHAT THIS DOES NOT RELAX. A genuinely load-bearing difference still refuses, and now names the
 fields rather than saying only that something differs. Reporting intervals in particular remain
-part of a REST2 run's identity: after the ladder began honouring `solute_printout` and
-`system_printout`, a run started before that legitimately differs in frame spacing and MUST be
+part of a REST2 run's identity: after the ladder began honouring `crd_printout_solute` and
+`info_printout`, a run started before that legitimately differs in frame spacing and MUST be
 refused, because the cadence would change mid-run.
 
 That protection does not rest on this gate alone. `ReplicaRun.compare_identity` checks the

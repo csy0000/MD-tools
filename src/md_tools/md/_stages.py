@@ -325,3 +325,20 @@ def dcd_frame_count(path):
 
 
 
+
+
+# -- where the StateDataReporter's table lands ------------------------------------------------
+#
+# Two callers need this name and must agree on it: `stage_main`, which opens the file, and the
+# preflight inventory, which decides collisions, what `--overwrite` governs, and -- through
+# `completion.verify` -- whether a finished stage's outputs are still on disk. When they
+# disagreed, a stage that had completed correctly failed its own verification because the
+# verifier looked for `<stage>.csv` while the run had written `mdout_<stage>.csv`. The rule
+# lives here so there is one of it.
+PRODUCTION_STAGE_NAMES = frozenset({"cMD", "umbrella"})
+
+
+def info_csv_name(stage_name: str) -> str:
+    """`mdout.csv` for a production stage, `mdout_<stage>.csv` for every other."""
+    name = str(stage_name or "stage")
+    return "mdout.csv" if name in PRODUCTION_STAGE_NAMES else f"mdout_{name}.csv"

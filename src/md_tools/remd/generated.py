@@ -236,8 +236,13 @@ def protocol_file_text(ladder: dict[str, Any]) -> str:
             return None
         return steps * timestep / 1000.0
 
-    solute_ps = interval_ps("solute_printout", "the solute output interval")
-    whole_ps = interval_ps("system_printout", "the whole-system output interval")
+    solute_ps = interval_ps("crd_printout_solute", "the solute output interval")
+    # `crd_printout_whole`, NOT `info_printout`. The two were transposed in the rename, so a
+    # ladder wrote its whole-system trajectory at the STATE TABLE's cadence: with
+    # `info_printout: 2500` and `crd_printout_whole: 25000` every state got 1000 whole frames
+    # where 100 were asked for -- ten times the disk, silently, and the configured interval
+    # honoured nowhere.
+    whole_ps = interval_ps("crd_printout_whole", "the whole-system output interval")
     checkpoint_ps = interval_ps("checkpoint_printout", "the checkpoint interval")
 
     # A CHECKPOINT MUST LAND ON AN EXCHANGE BOUNDARY. `ReplicaSchedule` defaults the checkpoint

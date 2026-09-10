@@ -60,7 +60,7 @@ def project(tmp_path_factory):
         "dynamics": {"tau": 0.5, "phase_space_printout": FRAME_EVERY},
         "stages": {"minimization_iterations": 2, "restrained_nvt_steps": 6,
                    "production_steps": PRODUCTION_STEPS},
-        "reporting": {"solute_printout": FRAME_EVERY, "system_printout": FRAME_EVERY,
+        "reporting": {"crd_printout_solute": FRAME_EVERY, "info_printout": FRAME_EVERY,
                       "checkpoint_printout": CHECKPOINT_EVERY}}), encoding="utf-8")
     done = subprocess.run(CLI + ["build-md", "-odir", str(root / "project"),
                                  "--config", str(root / "cMD.config")],
@@ -137,7 +137,7 @@ def test_overwrite_removes_a_stream_the_new_run_does_not_write(project, complete
         "dynamics": {"tau": 0.5},
         "stages": {"minimization_iterations": 2, "restrained_nvt_steps": 6,
                    "production_steps": PRODUCTION_STEPS},
-        "reporting": {"solute_printout": FRAME_EVERY, "system_printout": FRAME_EVERY,
+        "reporting": {"crd_printout_solute": FRAME_EVERY, "info_printout": FRAME_EVERY,
                       "checkpoint_printout": CHECKPOINT_EVERY}}), encoding="utf-8")
     regenerated = completed.parent / "project-no-phase-space"
     done = subprocess.run(CLI + ["build-md", "-odir", str(regenerated),

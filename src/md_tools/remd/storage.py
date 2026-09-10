@@ -1015,6 +1015,13 @@ class ReplicaReporter:
             return np.zeros((0,), dtype=np.int64)
         return np.array(self.dataset.variables["exchange_step"][:last + 1], dtype=np.int64)
 
+    def exchange_times(self, upto=None):
+        """The simulation time of each exchange, in ps. Mirrors `exchange_steps`."""
+        last = self.last_exchange() if upto is None else int(upto)
+        if last < 0:
+            return np.zeros((0,), dtype=float)
+        return np.array(self.dataset.variables["exchange_time_ps"][:last + 1], dtype=float)
+
     def frame_steps(self):
         last = self.last_frame()
         if last < 0:

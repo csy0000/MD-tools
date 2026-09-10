@@ -94,7 +94,7 @@ def project(request, tmp_path_factory):
                    "production_steps": 0},
         "rest2": {"number_of_replicas": STATES, "exchange_interval_steps": EXCHANGE_EVERY,
                   "number_of_exchanges": EXCHANGES},
-        "reporting": {"solute_printout": EXCHANGE_EVERY, "system_printout": EXCHANGE_EVERY,
+        "reporting": {"crd_printout_solute": EXCHANGE_EVERY, "info_printout": EXCHANGE_EVERY,
                       "checkpoint_printout": EXCHANGE_EVERY},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": CV_EVERY},
         "dynamics": {"seed": 20260904},

@@ -85,7 +85,7 @@ def project(tmp_path_factory):
                 "observation_interval_steps": OBSERVE_EVERY,
                 "parameter_update_interval_steps": UPDATE_EVERY},
         "ais_source": {"trajectory": "../source.dcd"},
-        "reporting": {"solute_printout": OBSERVE_EVERY, "system_printout": OBSERVE_EVERY,
+        "reporting": {"crd_printout_solute": OBSERVE_EVERY, "info_printout": OBSERVE_EVERY,
                       "checkpoint_printout": UPDATE_EVERY},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": CV_EVERY},
         "dynamics": {"seed": 20260905},

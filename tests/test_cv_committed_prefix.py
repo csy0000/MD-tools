@@ -194,7 +194,7 @@ def test_a_real_stage_refuses_a_mutated_committed_prefix(tmp_path):
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 0,
                    "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
                    "production_steps": 40},
-        "reporting": {"solute_printout": 20, "system_printout": 20, "checkpoint_printout": 10},
+        "reporting": {"crd_printout_solute": 20, "info_printout": 20, "checkpoint_printout": 10},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
@@ -279,7 +279,7 @@ def test_cv_cost_is_persisted_and_survives_two_interruptions(tmp_path):
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 0,
                    "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
                    "production_steps": 60},
-        "reporting": {"solute_printout": 20, "system_printout": 20, "checkpoint_printout": 10},
+        "reporting": {"crd_printout_solute": 20, "info_printout": 20, "checkpoint_printout": 10},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
@@ -392,7 +392,7 @@ def test_the_final_committed_generation_carries_the_cv_prefix_and_cost(tmp_path)
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 0,
                    "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
                    "production_steps": 60},
-        "reporting": {"solute_printout": 20, "system_printout": 20, "checkpoint_printout": 10},
+        "reporting": {"crd_printout_solute": 20, "info_printout": 20, "checkpoint_printout": 10},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")

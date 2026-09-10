@@ -61,7 +61,7 @@ def ladder(tmp_path_factory):
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 50,
                    "restrained_npt_steps": 50, "unrestrained_npt_steps": 50,
                    "production_steps": 200},
-        "reporting": {"solute_printout": 20, "system_printout": 100,
+        "reporting": {"crd_printout_solute": 20, "info_printout": 100,
                       "checkpoint_printout": 200},
     }, sort_keys=False), encoding="utf-8")
     assert _cli(work, "build-md", "-odir", "./hot", "--config", str(work / "hot.config"),
@@ -80,7 +80,7 @@ def ladder(tmp_path_factory):
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 50,
                    "restrained_npt_steps": 50, "unrestrained_npt_steps": 50,
                    "production_steps": 200},
-        "reporting": {"solute_printout": 20, "system_printout": 100,
+        "reporting": {"crd_printout_solute": 20, "info_printout": 100,
                       "checkpoint_printout": 200},
         "rest2": {"number_of_replicas": 2, "tau_max": TAU_MAX,
                   "exchange_interval_steps": 50, "number_of_exchanges": 4},
@@ -147,6 +147,6 @@ def test_the_ladder_ran_on_cuda_and_wrote_one_trajectory_per_state(ladder):
     # `mpiexec -n 2` it would be two processes each naming its own. Both are correct, so what is
     # asserted is that every process that reported used CUDA -- not how many there were.
     assert all("device=" in line for line in lines), lines
-    trajectories = sorted(directory.glob("remd*.nc"))
+    trajectories = sorted(directory.glob("whole_state*_prod1.nc"))
     assert len(trajectories) == 2, [p.name for p in trajectories]
     assert all(p.stat().st_size > 0 for p in trajectories)

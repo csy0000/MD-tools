@@ -149,7 +149,7 @@ def test_the_default_policy_is_cuda_and_cpu_needs_an_explicit_request():
 # --- 4. AIS ---------------------------------------------------------------------------------------
 
 def test_an_ais_interval_that_does_not_divide_the_switching_path_is_refused():
-    """`switching_steps=250` with `system_printout=100` cannot produce a frame at the end."""
+    """`switching_steps=250` with `info_printout=100` cannot produce a frame at the end."""
     from md_tools.build.md import resolve_md_config
     from md_tools.build.strict import ConfigError
 
@@ -159,7 +159,7 @@ def test_an_ais_interval_that_does_not_divide_the_switching_path_is_refused():
         "ais": {"number_of_paths": 4, "switching_steps": 250,
                 "observation_interval_steps": 10},
         "ais_source": {"trajectory": "../source.nc"},
-        "reporting": {"solute_printout": 10, "system_printout": 100,
+        "reporting": {"crd_printout_solute": 10, "info_printout": 100,
                       "checkpoint_printout": 100}}), encoding="utf-8")
     with pytest.raises(ConfigError) as refusal:
         resolve_md_config(path)
@@ -176,7 +176,7 @@ def test_ais_intervals_that_divide_the_switching_path_are_accepted():
         "ais": {"number_of_paths": 4, "switching_steps": 250,
                 "observation_interval_steps": 10},
         "ais_source": {"trajectory": "../source.nc"},
-        "reporting": {"solute_printout": 10, "system_printout": 50,
+        "reporting": {"crd_printout_solute": 10, "info_printout": 50,
                       "checkpoint_printout": 50}}), encoding="utf-8")
     resolved = resolve_md_config(path)
     assert resolved["ais"]["switching_steps"] == 250

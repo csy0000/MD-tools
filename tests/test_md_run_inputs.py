@@ -17,6 +17,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import re
+
 import pytest
 import yaml
 
@@ -145,7 +147,7 @@ def test_a_missing_input_file_is_refused_before_anything_else():
 
 def test_a_semantic_error_is_reported_against_the_file_that_was_written():
     """The projection resolves through a temporary file. The refusal must name the user's."""
-    broken = _written("&cntrl\n  protocol = AIS,\n  system_printout = 100,\n/\n"
+    broken = _written("&cntrl\n  protocol = AIS,\n  info_printout = 100,\n/\n"
                       "&AIS\n  switching_steps = 250,\n  observation_interval_steps = 10,\n"
                       "  source_traj = ../s.nc,\n/\n")
     with pytest.raises(ConfigError) as refusal:
@@ -197,7 +199,14 @@ def test_run_sh_drives_the_installed_command_rather_than_a_second_interface(tmp_
     # built.xml, so the assertion is inverted rather than dropped.
     assert '-s "${SYSTEM}"' in text, text
     assert '-x "${SYSTEM}"' not in text, text
-    assert "-x min.dcd" in text, text
+    # AND NO `-x` AT ALL NOW. A stage writes TWO coordinate streams -- `solute_prod<N>.nc` and
+    # `whole_prod<N>.nc` -- and one `-x` cannot name both. Naming only the solute one would
+    # silently reinstate the single whole-system trajectory the split exists to remove, so
+    # run.sh names neither and each stage names its own.
+    # No `-x` naming a STAGE trajectory: a stage writes two coordinate streams and
+    # names them itself. The ladder line legitimately keeps `-x REST2.nc`, which is
+    # the exchange record rather than a trajectory, so the check is specific.
+    assert not re.search(r"-x \S+\.dcd", text), text
     # Two files, two readers.
     assert "-o min.out" in text and "-log min.log" in text, text
     # One rank per state, and -ng stating the same number, spelled out rather than computed at
@@ -276,8 +285,8 @@ SPEC_EXAMPLE = """\
   timestep_fs                = auto,
   temperature_K              = 300.0,
   friction_per_ps            = 1.0,
-  solute_printout            = 10,
-  system_printout            = 50,
+  crd_printout_solute            = 10,
+  info_printout            = 50,
   checkpoint_printout        = 50,
   random_seed                = 20260902,
   source_traj                = ../cMD_tau0p5/tau_0p5.dcd,
@@ -305,8 +314,8 @@ def test_the_specified_ais_example_parses_and_every_key_takes_effect():
     assert parsed.resolved["ais_source"]["frame_stride"] == 10
     assert parsed.resolved["ais_source"]["trajectory"] == "../cMD_tau0p5/tau_0p5.dcd"
     assert parsed.resolved["dynamics"]["seed"] == 20260902
-    assert parsed.resolved["reporting"] == {"solute_printout": 10, "system_printout": 50,
-                                            "checkpoint_printout": 50}
+    assert parsed.resolved["reporting"] == {"crd_printout_solute": 10, "crd_printout_whole": 0,
+                                            "info_printout": 50, "checkpoint_printout": 50}
 
 
 def test_the_selection_spelling_is_named_when_a_near_miss_is_written():
@@ -316,7 +325,7 @@ def test_the_selection_spelling_is_named_when_a_near_miss_is_written():
 
 
 def test_the_four_ais_cadences_are_independent(tmp_path):
-    """SUPERSEDED: this asserted that `solute_printout` had to equal the observation interval.
+    """SUPERSEDED: this asserted that `crd_printout_solute` had to equal the observation interval.
 
     That rule answered "how often is a configuration written" with the answer to "how often is
     work measured". They are different questions, and somebody who wants work every 10 steps and
@@ -324,9 +333,9 @@ def test_the_four_ais_cadences_are_independent(tmp_path):
     are independent now and each divides `switching_steps` on its own.
     """
     parsed = parse_run_input(_written(
-        SPEC_EXAMPLE.replace("solute_printout            = 10,",
-                             "solute_printout            = 50,")))
-    assert parsed.resolved["reporting"]["solute_printout"] == 50
+        SPEC_EXAMPLE.replace("crd_printout_solute            = 10,",
+                             "crd_printout_solute            = 50,")))
+    assert parsed.resolved["reporting"]["crd_printout_solute"] == 50
     assert parsed.resolved["ais"]["observation_interval_steps"] == 10
 
     # What is still refused is a cadence that cannot place a record on the final step.
@@ -334,5 +343,5 @@ def test_the_four_ais_cadences_are_independent(tmp_path):
 
     with pytest.raises(ConfigError, match="250"):
         parse_run_input(_written(
-            SPEC_EXAMPLE.replace("solute_printout            = 10,",
-                                 "solute_printout            = 100,")))
+            SPEC_EXAMPLE.replace("crd_printout_solute            = 10,",
+                                 "crd_printout_solute            = 100,")))

@@ -146,7 +146,34 @@ def truncate_frames(path: str | Path, keep: int) -> int:
             else:
                 coordinates, lengths, angles = payload
                 destination.write(coordinates, cell_lengths=lengths, cell_angles=angles)
+        # CARRY THE IDENTITY ACROSS. mdtraj writes the coordinates and nothing else, so a
+        # rewritten AMBER file loses the global attributes MD-tools stamped on it -- `state_index`
+        # above all. `AmberTrajectoryWriter.open_existing` checks that attribute before appending,
+        # by design: continuing into a file belonging to another state would corrupt it silently.
+        # Truncation dropping it made every resumed stage fail that check with "records state -1".
+        if kind == "netcdf":
+            _copy_netcdf_identity(path, staging)
         os.replace(staging, path)
     finally:
         staging.unlink(missing_ok=True)
     return count_frames(path)
+
+
+def _copy_netcdf_identity(source: Path, destination: Path) -> None:
+    """Copy MD-tools' own global attributes from one AMBER NetCDF onto another.
+
+    Only the attributes this project sets: the AMBER convention fields are already written by the
+    writer that produced `destination`, and copying those would overwrite correct values with a
+    second opinion.
+    """
+    import netCDF4
+
+    carried = ("title", "state_index", "tau", "temperature_k", "program", "programVersion")
+    with netCDF4.Dataset(str(source)) as original:
+        values = {name: getattr(original, name) for name in carried
+                  if name in original.ncattrs()}
+    if not values:
+        return
+    with netCDF4.Dataset(str(destination), "a") as rewritten:
+        for name, value in values.items():
+            setattr(rewritten, name, value)

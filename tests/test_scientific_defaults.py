@@ -120,7 +120,7 @@ def default_project(tmp_path_factory):
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 25,
                    "restrained_npt_steps": 25, "unrestrained_npt_steps": 25,
                    "production_steps": 25},
-        "reporting": {"solute_printout": 25, "system_printout": 25,
+        "reporting": {"crd_printout_solute": 25, "info_printout": 25,
                       "checkpoint_printout": 25},
     }, sort_keys=False), encoding="utf-8")
     assert _build_md(work, "cMD.config", "./cMD").returncode == 0
@@ -129,7 +129,7 @@ def default_project(tmp_path_factory):
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 25,
                    "restrained_npt_steps": 25, "unrestrained_npt_steps": 25,
                    "production_steps": 0},
-        "reporting": {"solute_printout": 25, "system_printout": 25,
+        "reporting": {"crd_printout_solute": 25, "info_printout": 25,
                       "checkpoint_printout": 25},
         "rest2": {"number_of_replicas": 2, "tau_max": 0.05,
                   "exchange_interval_steps": 25, "number_of_exchanges": 2},
@@ -153,7 +153,7 @@ def hmr_project(tmp_path_factory):
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 10,
                    "restrained_npt_steps": 10, "unrestrained_npt_steps": 10,
                    "production_steps": 10},
-        "reporting": {"solute_printout": 10, "system_printout": 10,
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10,
                       "checkpoint_printout": 10},
     }, sort_keys=False), encoding="utf-8")
     assert _build_md(work, "fast.config", "./md_script").returncode == 0

@@ -115,7 +115,7 @@ def workspace(tmp_path_factory):
 
     tiny = {"minimization_iterations": 5, "restrained_nvt_steps": 5,
             "restrained_npt_steps": 5, "unrestrained_npt_steps": 5, "production_steps": 5}
-    reporting = {"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 5}
+    reporting = {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5}
     projects = {
         "split": {"protocol": "cMD", "solvent": "implicit", "stages": tiny,
                   "reporting": reporting},
@@ -134,7 +134,7 @@ def workspace(tmp_path_factory):
                 "ais": {"number_of_paths": 2, "switching_steps": 10,
                         "observation_interval_steps": 5},
                 "ais_source": {"trajectory": "../source.dcd"},
-                "reporting": {"solute_printout": 5, "system_printout": 5,
+                "reporting": {"crd_printout_solute": 5, "info_printout": 5,
                               "checkpoint_printout": 5}},
     }
     for name, document in projects.items():

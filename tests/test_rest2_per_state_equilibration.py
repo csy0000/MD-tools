@@ -122,7 +122,7 @@ def test_build_md_accepts_the_field_and_reports_it(tmp_path):
         "rest2": {"number_of_replicas": 6, "tau_max": 0.5,
                   "exchange_interval_steps": EXCHANGE_STEPS, "number_of_exchanges": 100,
                   "equilibration_steps": EQUILIBRATION_STEPS},
-        "reporting": {"solute_printout": EXCHANGE_STEPS, "system_printout": EXCHANGE_STEPS,
+        "reporting": {"crd_printout_solute": EXCHANGE_STEPS, "info_printout": EXCHANGE_STEPS,
                       "checkpoint_printout": EXCHANGE_STEPS},
     }), encoding="utf-8")
     done = subprocess.run(CLI + ["build-md", "-odir", "./REST2", "--config", str(config)],

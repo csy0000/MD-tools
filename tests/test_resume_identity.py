@@ -37,7 +37,7 @@ def _rest2_document(**overrides):
         "solvent": "explicit",
         "dynamics": {"timestep_fs": 4.0, "temperature_K": 300.0, "seed": 7},
         "stages": {"production_steps": 1000},
-        "reporting": {"solute_printout": 1250, "system_printout": 12500,
+        "reporting": {"crd_printout_solute": 1250, "info_printout": 12500,
                       "checkpoint_printout": 250000},
         "rest2": {"number_of_replicas": 4, "tau_max": 0.5,
                   "exchange_interval_steps": 2500, "number_of_exchanges": 100},
@@ -95,8 +95,8 @@ def test_a_new_field_in_a_RELEVANT_section_resumes_only_while_it_sits_at_its_def
 # --- and what must still refuse ---------------------------------------------------------------
 
 @pytest.mark.parametrize("section,key,value", [
-    ("reporting", "solute_printout", 2500),
-    ("reporting", "system_printout", 25000),
+    ("reporting", "crd_printout_solute", 2500),
+    ("reporting", "info_printout", 25000),
     ("reporting", "checkpoint_printout", 500000),
     ("rest2", "exchange_interval_steps", 5000),
     ("rest2", "number_of_replicas", 6),
@@ -106,7 +106,7 @@ def test_a_load_bearing_change_still_refuses_and_names_the_field(section, key, v
     """Each of these changes the data. The refusal must say WHICH, not merely that one exists.
 
     The reporting intervals matter especially: after the ladder began honouring
-    `solute_printout` and `system_printout`, a run started before that legitimately differs in
+    `crd_printout_solute` and `info_printout`, a run started before that legitimately differs in
     frame spacing, and refusing it is correct. Fixing the unrelated-field defect must not have
     loosened this.
     """

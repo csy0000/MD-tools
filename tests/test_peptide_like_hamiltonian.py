@@ -305,7 +305,7 @@ def test_a_generated_stage_consumes_the_corrected_system_without_rebuilding_it(t
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 0,
                    "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
                    "production_steps": 20},
-        "reporting": {"solute_printout": 10, "system_printout": 10, "checkpoint_printout": 10},
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10, "checkpoint_printout": 10},
     }), encoding="utf-8")
     generated = subprocess.run(
         CLI + ["build-md", "-odir", "./cMD", "--config", str(config)],

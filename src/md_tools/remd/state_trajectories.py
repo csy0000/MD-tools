@@ -36,9 +36,13 @@ class StateTrajectoryError(RuntimeError):
 class StateTrajectorySet:
     """One Amber trajectory per fixed thermodynamic state, committed together."""
 
-    def __init__(self, writers, *, directory):
+    def __init__(self, writers, *, directory, atom_indices=None, content="whole"):
         self.writers = list(writers)
         self.directory = Path(directory)
+        #: When set, each frame is the SUBSET at these indices. The solute set uses it; the whole
+        #: set leaves it None and writes every atom.
+        self.atom_indices = None if atom_indices is None else list(int(i) for i in atom_indices)
+        self.content = content
 
     @property
     def n_states(self):
@@ -46,12 +50,22 @@ class StateTrajectorySet:
 
     @classmethod
     def create(cls, directory, *, taus, n_atoms, temperature_k, periodic,
-               program="md-tools", program_version="0"):
-        """A fresh set. Refuses to overwrite files it did not just create."""
+               program="md-tools", program_version="0", atom_indices=None, content="whole",
+               segment=1):
+        """A fresh set. Refuses to overwrite files it did not just create.
+
+        `atom_indices` makes this the SOLUTE set: one AMBER trajectory per state holding the
+        solute alone. It used to be a single file with a `walker` dimension --
+        `solute_positions(frame, walker, atom, xyz)` -- which no standard reader opens, because
+        the AMBER convention has no walker axis and mdtraj looks for `coordinates`. One file per
+        state is the same data in a format cpptraj and mdtraj read without being told anything.
+        """
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
-        existing = [state_trajectory_name(i) for i in range(len(taus))
-                    if (directory / state_trajectory_name(i)).exists()]
+        if atom_indices is not None:
+            n_atoms = len(atom_indices)
+        name = lambda i: state_trajectory_name(i, content=content, segment=segment)  # noqa: E731
+        existing = [name(i) for i in range(len(taus)) if (directory / name(i)).exists()]
         if existing:
             raise StateTrajectoryError(
                 f"{len(existing)} state trajectory/ies already exist in {directory} "
@@ -62,14 +76,15 @@ class StateTrajectorySet:
                 f"defines no --force. The generated ladder script accepts either.)")
         writers = [
             AmberTrajectoryWriter(
-                directory / state_trajectory_name(index), n_atoms=n_atoms, state_index=index,
+                directory / name(index), n_atoms=n_atoms, state_index=index,
                 tau=float(tau), temperature_k=temperature_k, periodic=periodic,
                 program=program, program_version=program_version)
             for index, tau in enumerate(taus)]
-        return cls(writers, directory=directory)
+        return cls(writers, directory=directory, atom_indices=atom_indices, content=content)
 
     @classmethod
-    def continue_from(cls, directory, *, taus, n_atoms, committed_frames):
+    def continue_from(cls, directory, *, taus, n_atoms, committed_frames,
+                      atom_indices=None, content="whole", segment=1):
         """Reopen an existing set to continue it, at the committed-frame marker.
 
         Inspection comes FIRST and the files are opened read-only for it. Nothing is opened for
@@ -79,17 +94,20 @@ class StateTrajectorySet:
         """
         directory = Path(directory)
         report = cls.inspect(directory, n_states=len(taus), expect_frames=int(committed_frames),
-                             expect_taus=list(taus))
+                             expect_taus=list(taus), content=content, segment=segment)
         if report["problems"]:
             raise StateTrajectoryError(
                 "the state trajectories in {} cannot be continued:\n  - {}".format(
                     directory, "\n  - ".join(report["problems"])))
+        if atom_indices is not None:
+            n_atoms = len(atom_indices)
         writers = [
             AmberTrajectoryWriter.open_existing(
-                directory / state_trajectory_name(index), n_atoms=n_atoms, state_index=index,
+                directory / state_trajectory_name(index, content=content, segment=segment),
+                n_atoms=n_atoms, state_index=index,
                 tau=float(tau), from_frame=int(committed_frames))
             for index, tau in enumerate(taus)]
-        return cls(writers, directory=directory)
+        return cls(writers, directory=directory, atom_indices=atom_indices, content=content)
 
     # -- the commit ------------------------------------------------------------------------------
 
@@ -107,7 +125,9 @@ class StateTrajectorySet:
         for state_index, writer in enumerate(self.writers):
             walker = int(state_to_walker[state_index])
             configuration = configurations[walker]
-            writer.append(configuration.positions, time_ps=time_ps,
+            positions = (configuration.positions if self.atom_indices is None
+                         else configuration.positions[self.atom_indices])
+            writer.append(positions, time_ps=time_ps,
                           box_nm=configuration.box)
         return self.n_states
 
@@ -123,7 +143,8 @@ class StateTrajectorySet:
     # -- continuation ----------------------------------------------------------------------------
 
     @staticmethod
-    def inspect(directory, *, n_states, expect_frames=None, expect_taus=None):
+    def inspect(directory, *, n_states, expect_frames=None, expect_taus=None,
+                content="whole", segment=1):
         """READ-ONLY. Are the N files present, coherent with each other, and long enough?
 
         `expect_frames` is the committed-frame marker from the authoritative record. A file with
@@ -134,7 +155,7 @@ class StateTrajectorySet:
         problems, facts = [], {}
         frames = {}
         for index in range(n_states):
-            path = directory / state_trajectory_name(index)
+            path = directory / state_trajectory_name(index, content=content, segment=segment)
             if not path.is_file():
                 problems.append(
                     f"{path.name} is missing. Every state owns one trajectory, and a "

@@ -13,8 +13,8 @@ of those is replaced rather than deleted -- the docstring in its file says what 
 3. **The platform is a machine property**, not a scientific one. It lived in `dynamics.platform`
    in every protocol config, where a workflow shared between machines carried one machine's
    hardware.
-4. **AIS accepted reporting settings that did nothing.** `system_printout` and
-   `checkpoint_printout` were validated and then never read, and `solute_printout` was forced
+4. **AIS accepted reporting settings that did nothing.** `info_printout` and
+   `checkpoint_printout` were validated and then never read, and `crd_printout_solute` was forced
    equal to the observation interval. A strict input language must not accept a consequential
    setting it ignores.
 5. **Trajectory formats were taken on faith.** Nothing verified that a `.dcd` was a DCD or that a
@@ -210,12 +210,12 @@ def _ais_document(**reporting):
             "ais": {"number_of_paths": 4, "switching_steps": 250,
                     "observation_interval_steps": 10},
             "ais_source": {"trajectory": "../source.dcd"},
-            "reporting": {"solute_printout": 10, "system_printout": 50,
+            "reporting": {"crd_printout_solute": 10, "info_printout": 50,
                           "checkpoint_printout": 50, **reporting}}
 
 
 def test_the_four_ais_cadences_may_all_differ():
-    """Supersedes the rule that forced `solute_printout == observation_interval_steps`.
+    """Supersedes the rule that forced `crd_printout_solute == observation_interval_steps`.
 
     They are four different questions -- how often work is measured, how often a configuration is
     written, how often the state table is sampled, how often the run becomes resumable -- and
@@ -223,14 +223,14 @@ def test_the_four_ais_cadences_may_all_differ():
     """
     from md_tools.build.md import resolve_md_config
 
-    path = _written(yaml.safe_dump(_ais_document(solute_printout=25, system_printout=50,
+    path = _written(yaml.safe_dump(_ais_document(crd_printout_solute=25, info_printout=50,
                                                  checkpoint_printout=125)), "AIS.config")
     resolved = resolve_md_config(path)
-    assert resolved["reporting"]["solute_printout"] == 25
+    assert resolved["reporting"]["crd_printout_solute"] == 25
     assert resolved["ais"]["observation_interval_steps"] == 10
 
 
-@pytest.mark.parametrize("stream", ["solute_printout", "system_printout", "checkpoint_printout"])
+@pytest.mark.parametrize("stream", ["crd_printout_solute", "info_printout", "checkpoint_printout"])
 def test_an_ais_cadence_that_does_not_divide_the_path_is_refused(stream):
     from md_tools.build.md import resolve_md_config
     from md_tools.build.strict import ConfigError
@@ -267,14 +267,31 @@ def test_the_ais_schedule_carries_the_four_independent_cadences():
 
 # --- 5. genuine formats -----------------------------------------------------------------------
 
-def test_a_conventional_stage_refuses_a_netcdf_trajectory_name():
-    """The ordinary writer is OpenMM's DCDReporter. Renaming a DCD does not make it NetCDF."""
+def test_a_stage_accepts_dcd_and_netcdf_and_refuses_anything_else():
+    """A stage now writes AMBER NetCDF, so `.nc` is honest -- and the guard still has a job.
+
+    THIS TEST ASSERTED THE OPPOSITE, and the reason it did has been overtaken rather than
+    disproved. It read:
+
+        The ordinary writer is OpenMM's DCDReporter. Renaming a DCD does not make it NetCDF.
+
+    True while the stage used OpenMM's reporter, which has no NetCDF writer. The stage now writes
+    through mdtraj's `NetCDFReporter`, which produces genuine AMBER NetCDF -- and must, because
+    that is the only format here that carries an atom SUBSET, which is what a solute-only stream
+    is.
+
+    What the guard still refuses is unchanged and is what this now checks: a name claiming a
+    format nothing writes. Every reader downstream opens a trajectory by extension, so a file
+    whose name and contents disagree fails in the reader and gets blamed on the reader.
+    """
     from md_tools.md.stage import check_trajectory_suffix
 
-    check_trajectory_suffix(Path("cMD.dcd"))                # accepted
-    with pytest.raises(SystemExit) as refusal:
-        check_trajectory_suffix(Path("cMD.nc"))
-    assert "DCD" in str(refusal.value), refusal.value
+    check_trajectory_suffix(Path("solute_prod1.nc"))         # accepted: what a stage writes
+    check_trajectory_suffix(Path("cMD.dcd"))                 # accepted: still supported
+    for claimed in ("cMD.xtc", "cMD.trr", "cMD.pdb", "cMD"):
+        with pytest.raises(SystemExit) as refusal:
+            check_trajectory_suffix(Path(claimed))
+        assert "DCD or AMBER NetCDF" in str(refusal.value), refusal.value
 
 
 def test_the_trajectory_format_of_a_file_is_read_from_its_contents():

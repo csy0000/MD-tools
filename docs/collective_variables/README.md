@@ -79,8 +79,8 @@ translate of the input.
 
 ## Cadence
 
-`collective_variables.interval_steps` is **independent** of `solute_printout` and
-`system_printout`, and may be finer than either. That is the whole reason for a separate series: a
+`collective_variables.interval_steps` is **independent** of `crd_printout_solute` and
+`info_printout`, and may be finer than either. That is the whole reason for a separate series: a
 torsion is cheap to evaluate and a frame is expensive to store.
 
 The schedule must be exact, and is refused rather than rounded:

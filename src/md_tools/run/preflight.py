@@ -857,7 +857,8 @@ def _stage_inventory(*, output, log, trajectory, restart, checkpoint) -> OutputI
         # The StateDataReporter CSV sits beside the log, is appended to, and is one of the three
         # streams a checkpoint commits counts for -- so it belongs in the inventory that decides
         # collisions and what `--overwrite` governs.
-        roles["state_csv"] = Path(log).with_suffix(".csv")
+        from ..md._stages import info_csv_name
+        roles["state_csv"] = Path(log).parent / info_csv_name(Path(log).stem)
     if trajectory:
         # The collective-variable series and the resolved definition beside it. Both are written
         # by the stage, neither arrives as a flag, and an inventory that omits them is an
@@ -1541,8 +1542,8 @@ def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting
             parameter_update_interval_steps=int(ais["parameter_update_interval_steps"]),
             observation_interval_steps=int(ais["observation_interval_steps"]),
             timestep_fs=float(timestep["timestep_fs"]),
-            trajectory_interval_steps=int(reporting["solute_printout"]),
-            state_interval_steps=int(reporting["system_printout"]),
+            trajectory_interval_steps=int(reporting["crd_printout_solute"]),
+            state_interval_steps=int(reporting["info_printout"]),
             checkpoint_interval_steps=int(reporting["checkpoint_printout"]),
             cv_interval_steps=int((collective_variables or {}).get("interval_steps") or 0))
     except (ValueError, SystemExit) as refusal:

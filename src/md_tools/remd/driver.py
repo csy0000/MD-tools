@@ -28,6 +28,7 @@ WRITABLE STORAGE IS ROOT-OWNED
 import datetime
 import hashlib
 import json
+import os
 import platform as platform_module
 import signal
 import socket
@@ -175,6 +176,7 @@ class ReplicaRun:
         # The N per-state Amber trajectories. Root-only: only the root writes frames, so only the
         # root holds writers, and every other rank leaves this None for the whole run.
         self.trajectories = None
+        self.solute_trajectories = None
         #: Per-thermodynamic-state collective-variable series. Root-only, like the trajectories:
         #: only the root holds the gathered configurations every state's row is written from.
         self.cv_states = None
@@ -608,6 +610,22 @@ class ReplicaRun:
                 taus=self.protocol.tau, n_atoms=configurations[0].n_atoms,
                 temperature_k=self.protocol.temperature_k, periodic=self._periodic,
                 program_version=environment_versions().get("md_tools", "0"))
+            # THE SOLUTE SET, one AMBER trajectory per state, on its own schedule.
+            #
+            # It replaces a single `<run>.solute.nc` whose `solute_positions` had a WALKER axis --
+            # (frame, walker, atom, xyz). That shape has no place in the AMBER convention, so no
+            # standard reader opened it: mdtraj looks for `coordinates` and found none. The data
+            # was there and unreachable without writing a bespoke reader for it.
+            #
+            # Same set, same commit, same mapping: after an accepted exchange the configuration
+            # now in state 2 is written to state 2's solute file exactly as it is to state 2's
+            # whole file, so the two streams cannot disagree about which state they describe.
+            self.solute_trajectories = state_trajectories.StateTrajectorySet.create(
+                Path(self.files.trajectory).parent,
+                taus=self.protocol.tau, n_atoms=configurations[0].n_atoms,
+                temperature_k=self.protocol.temperature_k, periodic=self._periodic,
+                program_version=environment_versions().get("md_tools", "0"),
+                atom_indices=list(self.solute_indices), content="solute")
             self.cv_states = self._open_cv_states()
         self.coordinator.barrier()
 
@@ -858,6 +876,16 @@ class ReplicaRun:
                 n_atoms=checkpoint["configurations"][0].n_atoms,
                 temperature_k=self.protocol.temperature_k, periodic=self._periodic,
                 program_version=environment_versions().get("md_tools", "0"))
+            # The solute set travels with the whole set at EVERY site that makes one -- fresh,
+            # extension, and continuation. Creating it in only one of the three is how a resumed
+            # or extended ladder reaches `write_frame` on an attribute that is still None.
+            self.solute_trajectories = state_trajectories.StateTrajectorySet.create(
+                Path(self.files.trajectory).parent,
+                taus=self.protocol.tau,
+                n_atoms=checkpoint["configurations"][0].n_atoms,
+                temperature_k=self.protocol.temperature_k, periodic=self._periodic,
+                program_version=environment_versions().get("md_tools", "0"),
+                atom_indices=list(self.solute_indices), content="solute")
 
             print(f"# extending          : {parent}")
             print(f"#   parent           : {inherited['steps_completed']} step(s), "
@@ -1068,6 +1096,15 @@ class ReplicaRun:
                 taus=self.protocol.tau,
                 n_atoms=int(checkpoint["configurations"][0].n_atoms),
                 committed_frames=committed_frames)
+            # The solute set travels with the whole set at EVERY site that makes one -- fresh,
+            # extension, and continuation. Creating it in only one of the three is how a resumed
+            # or extended ladder reaches `write_frame` on an attribute that is still None.
+            self.solute_trajectories = state_trajectories.StateTrajectorySet.continue_from(
+                Path(self.files.trajectory).parent,
+                taus=self.protocol.tau,
+                n_atoms=int(checkpoint["configurations"][0].n_atoms),
+                committed_frames=int(checkpoint["solute_frame_index"]) + 1,
+                atom_indices=list(self.solute_indices), content="solute")
 
             # THE CV SERIES, reopened at the count the checkpoint vouches for.
             #
@@ -1462,6 +1499,11 @@ class ReplicaRun:
                             f"{state['frame_index']}. Refusing rather than leaving a CV value "
                             f"attributed to a configuration it was not measured on.")
                 if "solute" in events:
+                    self.solute_trajectories.write_frame(
+                        step=target, time_ps=schedule.step_to_ps(target),
+                        state_to_walker=state["state_to_walker"],
+                        configurations=state["configurations"])
+                    self.solute_trajectories.sync()
                     state["solute_frame_index"] = self.reporter.write_solute_frame(
                         step=target, time_ps=schedule.step_to_ps(target),
                         exchange_index=state["exchange_index"],
@@ -1625,7 +1667,58 @@ class ReplicaRun:
         blocks = rem_log.build(n_states=self.protocol.n_states, exchanges=exchanges,
                                beta=self.protocol.beta,
                                temperature_k=self.protocol.temperature_k)
-        return rem_log.write(path, blocks, remlog_name=Path(path).name)
+        written = rem_log.write(path, blocks, remlog_name=Path(path).name)
+        self._write_exchange_csv(last, accepted, proposed, u_history)
+        return written
+
+    def _write_exchange_csv(self, last, accepted, proposed, u_history):
+        """`exchange.csv`: the exchange history as a table, beside `rem.log`.
+
+        A SECOND PROJECTION OF THE SAME AUTHORITY, not a second record. `exchange.nc` remains the
+        thing every row is derived from; this file and `rem.log` are two renderings of it, both
+        rebuilt in full whenever the log is, so neither can drift from the record or from each
+        other.
+
+        Why both. `rem.log` is Amber H-REMD format, which cpptraj reads and a person does not.
+        This is the same history in the shape anything else reads without a parser -- pandas,
+        awk, a spreadsheet.
+
+        ONE ROW PER STATE PER EXCHANGE, which is the grain the record is kept at. What is NOT
+        here is the full N-by-N reduced-potential matrix: that is quadratic in the ladder size and
+        is what `exchange.nc` exists to hold. A reweighting reads the NetCDF; this file answers
+        "which walker was in which state, and did the swap take".
+        """
+        import csv as _csv
+
+        path = getattr(self.files, "rem", None)
+        if not path or not self.coordinator.is_root:
+            return
+        target = Path(path).with_name("exchange.csv")
+        mapping = self.reporter.mapping(upto=last)
+        steps = self.reporter.exchange_steps(upto=last)
+        times = self.reporter.exchange_times(upto=last)
+        taus = list(self.protocol.tau)
+
+        import io
+
+        buffer = io.StringIO()
+        writer = _csv.writer(buffer)
+        writer.writerow(["exchange", "step", "time_ps", "state", "tau", "walker",
+                         "reduced_potential", "proposed_with_next", "accepted_with_next"])
+        for n in range(last + 1):
+            for state in range(len(taus)):
+                walker = int(mapping[n][state])
+                nxt = state + 1
+                writer.writerow([
+                    n, int(steps[n]), f"{float(times[n]):.6f}", state, f"{taus[state]:.6f}",
+                    walker, f"{float(u_history[n][state][walker]):.6f}",
+                    int(proposed[n][state][nxt]) if nxt < len(taus) else "",
+                    int(accepted[n][state][nxt]) if nxt < len(taus) else ""])
+        # Atomic, for the same reason the log is: a reader arriving mid-rewrite must not find a
+        # short file that is still valid CSV.
+        staging = target.with_name(target.name + ".partial")
+        staging.write_text(buffer.getvalue(), encoding="utf-8")
+        os.replace(staging, target)
 
     def _write_checkpoint(self, state, schedule):
         storage.ReplicaCheckpoint(self.files.checkpoint).write(

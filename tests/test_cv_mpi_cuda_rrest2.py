@@ -107,7 +107,7 @@ def project(request, tmp_path_factory):
                   "number_of_exchanges": EXCHANGES},
         "reservoir": {"enabled": True, "path": "../reservoir.nc",
                       "refresh_interval_exchanges": 1, "velocities": policy},
-        "reporting": {"solute_printout": EXCHANGE_EVERY, "system_printout": EXCHANGE_EVERY,
+        "reporting": {"crd_printout_solute": EXCHANGE_EVERY, "info_printout": EXCHANGE_EVERY,
                       "checkpoint_printout": EXCHANGE_EVERY},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": CV_EVERY},
         "dynamics": {"seed": 20260904},
@@ -268,7 +268,7 @@ def test_unaffected_states_still_name_the_correct_post_exchange_frame(completed,
     refreshed_at = {((e + 1) * EXCHANGE_EVERY, s) for e, s, _f in _refresh_events(completed)}
     checked = 0
     for state_index in range(STATES):
-        frames = mdtraj.load(str(completed / f"remd{state_index}.nc"),
+        frames = mdtraj.load(str(completed / f"whole_state{state_index}_prod1.nc"),
                              top=str(project / "built.pdb"))
         for row in _rows(completed / f"remd{state_index}.cv.csv"):
             named = row["trajectory_frame_index"]

@@ -698,7 +698,31 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         # in hand: `-s built.xml` is given, and `built.sdf` is then discoverable without a second
         # path to keep in step. A peptide build writes none, which is itself the signal that the
         # ligand route does not apply.
-        outputs = [(built_xml, out_system), (built_pdb, out_pdb)]
+        # THE SOLUTE TOPOLOGY, beside the full one.
+        #
+        # A solute-only trajectory -- `solute_prod<N>.nc`, and the per-state streams a ladder
+        # writes -- has one row per solute atom, so it cannot be opened against `built.pdb`.
+        # mdtraj refuses the pair outright ("the topology and the trajectory files might not
+        # contain the same atoms"), which is correct of it and useless without this file.
+        #
+        # Written from the SAME `solute_atom_indices` every other part of the run means by
+        # "solute", so the topology and the trajectory cannot disagree about which atoms those
+        # are. For an implicit system it is the whole thing, and writing it anyway costs a few
+        # kilobytes and removes a special case from every analysis script.
+        from ..md.stage import solute_atom_indices
+
+        solute_indices = solute_atom_indices(pdb.topology)
+        staged_solute = staging / "solute_topology.pdb"
+        solute_pdb = app.Modeller(pdb.topology, pdb.positions)
+        keep = {int(i) for i in solute_indices}
+        solute_pdb.delete([a for a in pdb.topology.atoms() if a.index not in keep])
+        with staged_solute.open("w") as handle:
+            app.PDBFile.writeFile(solute_pdb.topology, solute_pdb.positions, handle,
+                                  keepIds=True)
+        out_solute = out_pdb.with_name(out_pdb.stem + ".solute.pdb")
+
+        outputs = [(built_xml, out_system), (built_pdb, out_pdb),
+                   (staged_solute, out_solute)]
         staged_sdf = staging / "structure" / "solute.sdf"
         out_sdf = out_system.with_suffix(".sdf") if staged_sdf.is_file() else None
         if out_sdf is not None:
@@ -720,7 +744,8 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         log.field("re-read check", f"{reread.topology.getNumAtoms()} atoms == "
                                    f"{resystem.getNumParticles()} particles  OK")
         written_outputs = {"system_xml": file_facts(out_system),
-                           "topology_pdb": file_facts(out_pdb)}
+                           "topology_pdb": file_facts(out_pdb),
+                           "solute_topology_pdb": file_facts(out_solute)}
         if out_sdf is not None:
             written_outputs["solute_sdf"] = file_facts(out_sdf)
         log.update(outputs=written_outputs)

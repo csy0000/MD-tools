@@ -64,7 +64,7 @@ def _project(root: Path, *, tau: float = 0.0, phase_space: int = 0) -> Path:
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 0,
                    "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
                    "production_steps": PRODUCTION},
-        "reporting": {"solute_printout": TRAJECTORY_EVERY, "system_printout": TRAJECTORY_EVERY,
+        "reporting": {"crd_printout_solute": TRAJECTORY_EVERY, "info_printout": TRAJECTORY_EVERY,
                       "checkpoint_printout": CHECKPOINT_EVERY},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": CV_EVERY},
         # A pinned seed, so an interrupted run and an uninterrupted one are the same trajectory

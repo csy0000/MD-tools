@@ -105,7 +105,7 @@ CUDA_SITES = {
         "test_md_run_mpi_gpu.py resume tests, test_hs_rows_match_recomputation_on_cuda"),
     "ais/run.py::_state_row": (
         "reads CUDA potential, kinetic and box state into system.csv",
-        "test_ais_decomposition_lane (system_printout is set in every AIS lane)"),
+        "test_ais_decomposition_lane (info_printout is set in every AIS lane)"),
     "md/_stages.py::set_restraint": (
         "pushes the positional-restraint force constant into a live CUDA Context",
         "test_cmd_cuda_smoke.py, test_cuda_precision_lane (restrained NVT)"),
@@ -453,7 +453,7 @@ def test_cuda_precision_lane(precision, built, hardware, tmp_path):
         "protocol": "cMD", "solvent": "implicit",
         "stages": {"minimization_iterations": 2, "restrained_nvt_steps": 5,
                    "production_steps": 20},
-        "reporting": {"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 10}}),
+        "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 10}}),
         encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "cMD.config")],
@@ -475,7 +475,7 @@ def test_cuda_precision_lane(precision, built, hardware, tmp_path):
     assert acceleration.get("cuda_precision") == precision, (
         f"the run recorded precision {acceleration.get('precision')!r}, not {precision!r}: the "
         f"setting did not reach the Context, so this lane proves nothing")
-    assert (work / "cMD.dcd").is_file() and (work / "cMD.xml").is_file()
+    assert (work / "solute_prod1.nc").is_file() and (work / "cMD.xml").is_file()
     _record("test_cuda_precision_lane", feature=f"cMD implicit, {precision} precision",
             precision=precision, device=acceleration.get("cuda_device_index") or "OpenMM-selected",
             detail="minimisation, restrained NVT, production, DCD, restart, checkpoint")
@@ -497,7 +497,7 @@ def test_hmr_timestep_lane(built, hardware, tmp_path):
         "protocol": "cMD", "solvent": "implicit",
         "stages": {"minimization_iterations": 2, "production_steps": 10},
         "dynamics": {"timestep_fs": 4.0},
-        "reporting": {"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 10}}),
+        "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 10}}),
         encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "fast"),
                                       "--config", str(work / "fast.config")],
@@ -559,7 +559,7 @@ def test_explicit_device_placement_lane(built, hardware, tmp_path):
     (work / "cMD.config").write_text(yaml.safe_dump({
         "protocol": "cMD", "solvent": "implicit",
         "stages": {"minimization_iterations": 2, "production_steps": 10},
-        "reporting": {"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 10}}),
+        "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 10}}),
         encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "cMD.config")],
@@ -609,7 +609,7 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
                 "observation_interval_steps": 5,
                 "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
-        "reporting": {"solute_printout": 10, "system_printout": 10, "checkpoint_printout": 10}}),
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10, "checkpoint_printout": 10}}),
         encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "AIS.config")],
@@ -720,7 +720,7 @@ def test_ais_reads_a_netcdf_source_on_cuda(built, hardware, tmp_path):
                 "work_measurement": "components",
                 "observation_interval_steps": 5, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.nc"},
-        "reporting": {"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 5}}),
+        "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5}}),
         encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "AIS.config")],
@@ -761,7 +761,7 @@ def test_there_is_no_automatic_cpu_fallback_on_this_machine(built, hardware, tmp
     (work / "cMD.config").write_text(yaml.safe_dump({
         "protocol": "cMD", "solvent": "implicit",
         "stages": {"minimization_iterations": 2, "production_steps": 5},
-        "reporting": {"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 5}}),
+        "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5}}),
         encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "cMD.config")],
@@ -819,7 +819,7 @@ def test_explicit_solvent_npt_lane(built_explicit, hardware, tmp_path):
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 10,
                    "restrained_npt_steps": 10, "unrestrained_npt_steps": 10,
                    "production_steps": 20},
-        "reporting": {"solute_printout": 10, "system_printout": 10,
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10,
                       "checkpoint_printout": 10}}), encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "cMD.config")],
@@ -909,7 +909,7 @@ def test_explicit_solvent_rest2_lane(built_explicit, hardware, tmp_path):
                    "production_steps": 20},
         "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 10,
                   "number_of_exchanges": 2},
-        "reporting": {"solute_printout": 10, "system_printout": 10,
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10,
                       "checkpoint_printout": 10}}), encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "REST2.config")],
@@ -926,7 +926,7 @@ def test_explicit_solvent_rest2_lane(built_explicit, hardware, tmp_path):
         env=_environment(work, **_machine()))
     assert done.returncode == 0, done.stdout + done.stderr
 
-    trajectories = sorted((work / "run").glob("remd*.nc"))
+    trajectories = sorted((work / "run").glob("whole_state*_prod1.nc"))
     assert len(trajectories) == 2, [p.name for p in trajectories]
     report = (work / "run" / "REST2.out").read_text(encoding="utf-8")
     assert "platform           : CUDA" in report, report[:2000]
@@ -960,7 +960,7 @@ def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_
                    "production_steps": 20},
         "rest2": {"number_of_replicas": states, "exchange_interval_steps": 10,
                   "number_of_exchanges": 2},
-        "reporting": {"solute_printout": 10, "system_printout": 10,
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10,
                       "checkpoint_printout": 10}}), encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "REST2.config")],
@@ -977,7 +977,7 @@ def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_
         env=_environment(work, **_machine()))
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
 
-    trajectories = sorted((work / "run").glob("remd*.nc"))
+    trajectories = sorted((work / "run").glob("whole_state*_prod1.nc"))
     assert len(trajectories) == states, [p.name for p in trajectories]
 
     # One device per rank, and they must be DIFFERENT devices: `device_policy: local_rank` is the
@@ -1010,7 +1010,7 @@ def test_a_genuinely_absent_cuda_device_is_refused_without_any_seam(built, hardw
     (work / "cMD.config").write_text(yaml.safe_dump({
         "protocol": "cMD", "solvent": "implicit",
         "stages": {"minimization_iterations": 2, "production_steps": 5},
-        "reporting": {"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 5}}),
+        "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5}}),
         encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "cMD.config")],
@@ -1060,7 +1060,7 @@ def test_a_genuinely_unimportable_mpi4py_stops_a_plural_launch(built, hardware, 
         "stages": {"minimization_iterations": 2, "production_steps": 10},
         "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 5,
                   "number_of_exchanges": 2},
-        "reporting": {"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 5}}),
+        "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5}}),
         encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "REST2.config")],
@@ -1114,7 +1114,7 @@ def test_multi_rank_rrest2_with_a_real_reservoir(built, hardware, tmp_path):
         "dynamics": {"tau": tau_max, "seed": 11, "phase_space_printout": 10},
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 10,
                    "production_steps": 40},
-        "reporting": {"solute_printout": 10, "system_printout": 20,
+        "reporting": {"crd_printout_solute": 10, "info_printout": 20,
                       "checkpoint_printout": 40}}, sort_keys=False), encoding="utf-8")
     assert subprocess.run(CLI + ["build-md", "-odir", str(work / "hot"),
                                  "--config", str(work / "hot.config")],
@@ -1132,7 +1132,7 @@ def test_multi_rank_rrest2_with_a_real_reservoir(built, hardware, tmp_path):
         "dynamics": {"seed": 13},
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 10,
                    "production_steps": 40},
-        "reporting": {"solute_printout": 10, "system_printout": 20,
+        "reporting": {"crd_printout_solute": 10, "info_printout": 20,
                       "checkpoint_printout": 40},
         "rest2": {"number_of_replicas": 2, "tau_max": tau_max,
                   "exchange_interval_steps": 20, "number_of_exchanges": 2},
@@ -1154,7 +1154,7 @@ def test_multi_rank_rrest2_with_a_real_reservoir(built, hardware, tmp_path):
         env=_environment(work, **_machine()))
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
 
-    trajectories = sorted(run.glob("remd*.nc"))
+    trajectories = sorted(run.glob("whole_state*_prod1.nc"))
     assert len(trajectories) == 2, [p.name for p in trajectories]
     report = (run / "rREST2.out").read_text(encoding="utf-8")
     assert "platform           : CUDA" in report, report[:1500]
@@ -1186,7 +1186,7 @@ def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):
                 "work_measurement": "components",
                 "observation_interval_steps": 5, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
-        "reporting": {"solute_printout": 5, "system_printout": 5,
+        "reporting": {"crd_printout_solute": 5, "info_printout": 5,
                       "checkpoint_printout": 5}}), encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "AIS.config")],
@@ -1270,7 +1270,7 @@ def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_expli
                     "observation_interval_steps": 5,
                     "parameter_update_interval_steps": 1},
             "ais_source": {"trajectory": "../source.dcd"},
-            "reporting": {"solute_printout": 10, "system_printout": 10,
+            "reporting": {"crd_printout_solute": 10, "info_printout": 10,
                           "checkpoint_printout": 20}}), encoding="utf-8")
         assert subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                      "--config", str(work / "AIS.config")],
@@ -1335,7 +1335,7 @@ def test_hs_rows_match_recomputation_on_cuda(solvent, built, built_explicit, har
                 "work_measurement": "components",
                 "observation_interval_steps": 6, "parameter_update_interval_steps": 2},
         "ais_source": {"trajectory": "../source.dcd"},
-        "reporting": {"solute_printout": 10, "system_printout": 20,
+        "reporting": {"crd_printout_solute": 10, "info_printout": 20,
                       "checkpoint_printout": 15}}), encoding="utf-8")
     assert subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                  "--config", str(work / "AIS.config")],
@@ -1416,7 +1416,7 @@ def test_a_hundred_paths_under_real_mpi_produce_exactly_their_own_files(built, h
                 "work_measurement": "components",
                 "observation_interval_steps": 2, "parameter_update_interval_steps": 2},
         "ais_source": {"trajectory": "../source.dcd", "allow_repeated_frames": True},
-        "reporting": {"solute_printout": 2, "system_printout": 4,
+        "reporting": {"crd_printout_solute": 2, "info_printout": 4,
                       "checkpoint_printout": 4}}), encoding="utf-8")
     assert subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                  "--config", str(work / "AIS.config")],
@@ -1467,7 +1467,7 @@ def test_the_generated_wrapper_and_md_run_agree_for_a_stage(built, hardware, tmp
         "protocol": "cMD", "solvent": "implicit",
         "stages": {"minimization_iterations": 2, "restrained_nvt_steps": 5,
                    "production_steps": 20},
-        "reporting": {"solute_printout": 10, "system_printout": 10,
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10,
                       "checkpoint_printout": 20}}), encoding="utf-8")
     assert subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                  "--config", str(work / "cMD.config")],
@@ -1502,15 +1502,18 @@ def test_the_generated_wrapper_and_md_run_agree_for_a_stage(built, hardware, tmp
         "the final state differs between the generated wrapper and md-run: the two entry points "
         "do not forward the same settings")
 
-    # The DCD is compared FRAME BY FRAME, not byte by byte. Its header carries a creation
+    # Compared FRAME BY FRAME, not byte by byte. A trajectory header carries a creation
     # timestamp -- the two runs differ in exactly one byte of it, the wall-clock second they
     # started -- so a digest comparison would be asserting that two processes started in the same
     # second. What has to be identical is the science, and that is the coordinates.
     import mdtraj
 
-    top = str(built / "built.pdb")
-    left = mdtraj.load(str(work / "wrapper" / "cMD.dcd"), top=top)
-    right = mdtraj.load(str(work / "mdrun" / "cMD.dcd"), top=top)
+    # The SOLUTE topology, because the stream being compared is the solute one. A 22-atom
+    # trajectory cannot be opened against the 1796-atom built.pdb, and mdtraj says so rather
+    # than silently mismatching.
+    solute_top = str(built / "built.pdb")   # `-x cMD.dcd` writes the WHOLE system, as it always did
+    left = mdtraj.load(str(work / "wrapper" / "solute_prod1.nc"), top=solute_top)
+    right = mdtraj.load(str(work / "mdrun" / "solute_prod1.nc"), top=solute_top)
     assert left.n_frames == right.n_frames > 0, (left.n_frames, right.n_frames)
     assert numpy.array_equal(left.xyz, right.xyz), (
         "the trajectories differ between the generated wrapper and md-run: "

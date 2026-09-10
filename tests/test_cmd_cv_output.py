@@ -58,7 +58,7 @@ def project(tmp_path_factory):
                    "production_steps": 40},
         # The CV cadence is FINER than the trajectory's, which is the whole point of an
         # independent interval and the case a shared one could never express.
-        "reporting": {"solute_printout": 20, "system_printout": 20, "checkpoint_printout": 20},
+        "reporting": {"crd_printout_solute": 20, "info_printout": 20, "checkpoint_printout": 20},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
     }), encoding="utf-8")
     done = subprocess.run(

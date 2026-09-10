@@ -47,7 +47,7 @@ def _identity_document(**overrides):
         "fingerprint": "f" * 64, "topology": {"name": "t.pdb", "sha256": "t" * 64},
         "system": {"sha256": "s" * 64}, "source": {"sha256": "x" * 64, "format": "dcd"},
         "tau": {"start": 0.5, "end": 0.0, "interpolation": "linear"},
-        "schedule": {"switching_steps": 10}, "reporting": {"solute_printout": 5},
+        "schedule": {"switching_steps": 10}, "reporting": {"crd_printout_solute": 5},
         "seed_policy": {"seed": 1, "derivation": "derive_seed(seed, 'ais', path_index, role)"},
         "number_of_paths": 2, "selected_frames": [0, 1],
         "observation_columns": [], "decomposition_schema": {"name": "ais", "version": 1},
@@ -247,7 +247,7 @@ def project(tmp_path_factory):
         "ais": {"number_of_paths": 1, "switching_steps": 20, "observation_interval_steps": 5,
                 "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
-        "reporting": {"solute_printout": 20, "system_printout": 20, "checkpoint_printout": 5},
+        "reporting": {"crd_printout_solute": 20, "info_printout": 20, "checkpoint_printout": 5},
     }), encoding="utf-8")
     done = subprocess.run(CLI + ["build-md", "-odir", str(root / "AIS"),
                                  "--config", str(root / "AIS.config")],

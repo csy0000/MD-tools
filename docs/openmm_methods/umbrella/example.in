@@ -97,12 +97,24 @@
   !
   ! Trajectory output interval. 1000 steps = 2 ps at 2 fs.
   ! unit: steps; minimum: 0
-  solute_printout           = 500,
+  crd_printout_solute       = 500,
+  !
+  ! COORDINATE output interval for the WHOLE system, in steps, written to `whole_prod<N>.nc`
+  ! (or `whole_rep<i>_prod<N>.nc` per replica on a ladder).
+  ! 0, the default, writes no whole-system trajectory. Say what you want kept: on a solvated
+  ! system the whole stream is two orders of magnitude larger than the solute one -- 1796
+  ! atoms against 22 for alanine dipeptide in water -- so an unasked-for whole-system
+  ! trajectory at a solute cadence is how a 26 MB run becomes 2.1 GB.
+  ! Distinct from `crd_printout_solute`, which is the solute alone, and from `info_printout`,
+  ! which is scalars and no coordinates at all. Those three were previously two, and the two
+  ! were named for what a reader assumed rather than for what they wrote.
+  ! unit: steps; minimum: 0
+  crd_printout_whole        = 0,
   !
   ! Scalar state (energy, temperature, volume, density) interval, written to a CSV beside the
   ! log.
   ! unit: steps; minimum: 0
-  system_printout           = 500,
+  info_printout             = 500,
   !
   ! Checkpoint interval. A checkpoint is what an interrupted stage resumes from, and it is
   ! written with a fingerprint of the configuration that produced it so it cannot be resumed

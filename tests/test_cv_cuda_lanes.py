@@ -146,7 +146,7 @@ def _cmd_config(root: Path, *, tau=0.0, phase_space=0):
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 0,
                    "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
                    "production_steps": 40},
-        "reporting": {"solute_printout": 20, "system_printout": 20, "checkpoint_printout": 10},
+        "reporting": {"crd_printout_solute": 20, "info_printout": 20, "checkpoint_printout": 10},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
         "dynamics": {"seed": 20260904, "tau": tau, "phase_space_printout": phase_space},
     }
@@ -244,7 +244,7 @@ def _ladder_config(root: Path, *, reservoir=False, states=3):
                    "production_steps": 0},
         "rest2": {"number_of_replicas": states, "exchange_interval_steps": 10,
                   "number_of_exchanges": 4},
-        "reporting": {"solute_printout": 10, "system_printout": 10, "checkpoint_printout": 10},
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10, "checkpoint_printout": 10},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
         "dynamics": {"seed": 20260904},
     }
@@ -367,7 +367,7 @@ def ais_project(tmp_path_factory):
                 "work_measurement": "components",
                 "observation_interval_steps": 10, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
-        "reporting": {"solute_printout": 10, "system_printout": 10, "checkpoint_printout": 10},
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10, "checkpoint_printout": 10},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
         "dynamics": {"seed": 20260904},
     })

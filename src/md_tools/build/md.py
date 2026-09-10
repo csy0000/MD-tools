@@ -116,9 +116,22 @@ MD_SCHEMA = Schema(
                       "authoritative number; the log prints the derived ps and ns beside it."),
         ], doc="Stage lengths, as exact integer step counts."),
         Section("reporting", [
-            Field("solute_printout", int, default=1000, minimum=0, unit="steps",
+            Field("crd_printout_solute", int, default=1000, minimum=0, unit="steps",
                   doc="Trajectory output interval. 1000 steps = 2 ps at 2 fs."),
-            Field("system_printout", int, default=10000, minimum=0, unit="steps",
+            Field("crd_printout_whole", int, default=0, minimum=0, unit="steps",
+                  doc="COORDINATE output interval for the WHOLE system, in steps, written to "
+                      "`whole_prod<N>.nc` (or `whole_rep<i>_prod<N>.nc` per replica on a "
+                      "ladder).\n"
+                      "0, the default, writes no whole-system trajectory. Say what you want "
+                      "kept: on a solvated system the whole stream is two orders of magnitude "
+                      "larger than the solute one -- 1796 atoms against 22 for alanine dipeptide "
+                      "in water -- so an unasked-for whole-system trajectory at a solute cadence "
+                      "is how a 26 MB run becomes 2.1 GB.\n"
+                      "Distinct from `crd_printout_solute`, which is the solute alone, and from "
+                      "`info_printout`, which is scalars and no coordinates at all. Those three "
+                      "were previously two, and the two were named for what a reader assumed "
+                      "rather than for what they wrote."),
+            Field("info_printout", int, default=10000, minimum=0, unit="steps",
                   doc="Scalar state (energy, temperature, volume, density) interval, written to a "
                       "CSV beside the log."),
             Field("checkpoint_printout", int, default=10000, minimum=0, unit="steps",
@@ -395,8 +408,8 @@ def _check_ais(resolved: dict[str, Any]) -> None:
     reporting = resolved["reporting"]
     intervals = {
         "ais.observation_interval_steps": int(resolved["ais"]["observation_interval_steps"]),
-        "reporting.solute_printout": int(reporting["solute_printout"]),
-        "reporting.system_printout": int(reporting["system_printout"]),
+        "reporting.crd_printout_solute": int(reporting["crd_printout_solute"]),
+        "reporting.info_printout": int(reporting["info_printout"]),
         "reporting.checkpoint_printout": int(reporting["checkpoint_printout"]),
     }
     for key, interval in sorted(intervals.items()):
@@ -414,7 +427,7 @@ def _check_ais(resolved: dict[str, Any]) -> None:
                 f"  Divisors of {switching} near {interval}: "
                 f"{', '.join(str(d) for d in sorted(near)[:12])}.")
     # The four cadences are independent, and each is checked on its own above. They used to be
-    # two: `solute_printout` was forced equal to `observation_interval_steps`, which answered the
+    # two: `crd_printout_solute` was forced equal to `observation_interval_steps`, which answered the
     # question "how often is a configuration written" with the answer to "how often is work
     # measured". Those are different questions -- work every 10 steps with frames every 50 is a
     # perfectly ordinary thing to want, and it was refused.
@@ -586,7 +599,7 @@ def _apply_ais_reporting_defaults(resolved: dict[str, Any],
         return
     cadence = int(resolved["ais"]["observation_interval_steps"])
     given = stated.get("reporting", set())
-    for key in ("solute_printout", "system_printout", "checkpoint_printout"):
+    for key in ("crd_printout_solute", "info_printout", "checkpoint_printout"):
         if key not in given:
             resolved["reporting"][key] = cadence
 
@@ -656,24 +669,27 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
     plan.append({**common, "name": "eq_nvt_posres", "ensemble": "NVT",
                  "steps": stages["restrained_nvt_steps"],
                  "restraint_kcal_per_mol_A2": dyn["restraint_kcal_per_mol_A2"],
-                 "trajectory_interval_steps": rep["solute_printout"],
-                 "state_interval_steps": rep["system_printout"],
+                 "trajectory_interval_steps": rep["crd_printout_solute"],
+                 "whole_interval_steps": rep["crd_printout_whole"],
+                 "state_interval_steps": rep["info_printout"],
                  "checkpoint_interval_steps": rep["checkpoint_printout"],
                  "description": "Restrained NVT: settle the solvent around a held solute."})
     if fixed_volume:
         plan.append({**common, "name": "eq_nvt_posres_2", "ensemble": "NVT",
                      "steps": stages["restrained_npt_steps"],
                      "restraint_kcal_per_mol_A2": dyn["restraint_kcal_per_mol_A2"],
-                     "trajectory_interval_steps": rep["solute_printout"],
-                     "state_interval_steps": rep["system_printout"],
+                     "trajectory_interval_steps": rep["crd_printout_solute"],
+                 "whole_interval_steps": rep["crd_printout_whole"],
+                     "state_interval_steps": rep["info_printout"],
                      "checkpoint_interval_steps": rep["checkpoint_printout"],
                      "description": "Second restrained NVT stage. This REPLACES the restrained "
                                     f"NPT stage of an unscaled explicit-solvent run: {why}."})
         plan.append({**common, "name": "eq_nvt_free", "ensemble": "NVT",
                      "steps": stages["unrestrained_npt_steps"],
                      "restraint_kcal_per_mol_A2": 0.0,
-                     "trajectory_interval_steps": rep["solute_printout"],
-                     "state_interval_steps": rep["system_printout"],
+                     "trajectory_interval_steps": rep["crd_printout_solute"],
+                 "whole_interval_steps": rep["crd_printout_whole"],
+                     "state_interval_steps": rep["info_printout"],
                      "checkpoint_interval_steps": rep["checkpoint_printout"],
                      "description": "Unrestrained NVT. This REPLACES the unrestrained NPT stage "
                                     f"of an unscaled explicit-solvent run: {why}."})
@@ -681,15 +697,17 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
         plan.append({**common, "name": "eq_npt_posres", "ensemble": "NPT",
                      "steps": stages["restrained_npt_steps"],
                      "restraint_kcal_per_mol_A2": dyn["restraint_kcal_per_mol_A2"],
-                     "trajectory_interval_steps": rep["solute_printout"],
-                     "state_interval_steps": rep["system_printout"],
+                     "trajectory_interval_steps": rep["crd_printout_solute"],
+                 "whole_interval_steps": rep["crd_printout_whole"],
+                     "state_interval_steps": rep["info_printout"],
                      "checkpoint_interval_steps": rep["checkpoint_printout"],
                      "description": "Restrained NPT: equilibrate the density with the solute held."})
         plan.append({**common, "name": "eq_npt_free", "ensemble": "NPT",
                      "steps": stages["unrestrained_npt_steps"],
                      "restraint_kcal_per_mol_A2": 0.0,
-                     "trajectory_interval_steps": rep["solute_printout"],
-                     "state_interval_steps": rep["system_printout"],
+                     "trajectory_interval_steps": rep["crd_printout_solute"],
+                 "whole_interval_steps": rep["crd_printout_whole"],
+                     "state_interval_steps": rep["info_printout"],
                      "checkpoint_interval_steps": rep["checkpoint_printout"],
                      "description": "Unrestrained NPT, the last stage before production."})
 
@@ -703,8 +721,9 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
                      "steps": stages["production_steps"],
                      "restraint_kcal_per_mol_A2": 0.0,
                      "phase_space_interval_steps": dyn["phase_space_printout"],
-                     "trajectory_interval_steps": rep["solute_printout"],
-                     "state_interval_steps": rep["system_printout"],
+                     "trajectory_interval_steps": rep["crd_printout_solute"],
+                 "whole_interval_steps": rep["crd_printout_whole"],
+                     "state_interval_steps": rep["info_printout"],
                      "checkpoint_interval_steps": rep["checkpoint_printout"],
                      "umbrella_file": resolved["umbrella"]["file"],
                      "description": "Umbrella sampling: biased production with the restrained "
@@ -715,8 +734,9 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
                      "steps": stages["production_steps"],
                      "restraint_kcal_per_mol_A2": 0.0,
                      "phase_space_interval_steps": dyn["phase_space_printout"],
-                     "trajectory_interval_steps": rep["solute_printout"],
-                     "state_interval_steps": rep["system_printout"],
+                     "trajectory_interval_steps": rep["crd_printout_solute"],
+                 "whole_interval_steps": rep["crd_printout_whole"],
+                     "state_interval_steps": rep["info_printout"],
                      "checkpoint_interval_steps": rep["checkpoint_printout"],
                      "description": "Production molecular dynamics."})
     return plan
@@ -943,7 +963,11 @@ def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str,
             # output and -log the provenance record. Two files, two readers.
             call = [f'md-openmm md-run -i {name}.in \\',
                     '  -p "${TOPOLOGY}" -s "${SYSTEM}" \\',
-                    f'  -x {name}.dcd -r {name}.xml -chk {name}.chk \\',
+                    # NO -x: the stage names its own coordinate streams now, and there
+                    # are two of them. One -x cannot say both `solute_prod1.nc` and
+                    # `whole_prod1.nc`, and naming only the solute one here would have
+                    # silently reinstated the single-trajectory behaviour this replaces.
+                    f'  -r {name}.xml -chk {name}.chk \\',
                     f'  -o {name}.out -log {name}.log "$@"']
             if previous:
                 call.insert(2, f'  -c {previous}.xml \\')

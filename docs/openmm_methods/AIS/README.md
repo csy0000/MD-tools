@@ -166,8 +166,8 @@ AIS.out / AIS.log             the readable output and the provenance record
 | `ais.tau_start` / `tau_end` | 0.5 / 0.0 | the path. They must differ, or every work value is zero |
 | `ais.switching_steps` | 50000 | **work is path-length dependent**: a faster switch does more dissipative work |
 | `ais.observation_interval_steps` | 2500 | how often the WORK is measured. This one is the method |
-| `reporting.solute_printout` | follows the observations | frames in `AIS_trajNNNN.nc`. Set it larger for a smaller file |
-| `reporting.system_printout` | follows the observations | rows in `path_NNNN/system.csv`. 0 disables the table |
+| `reporting.crd_printout_solute` | follows the observations | frames in `AIS_trajNNNN.nc`. Set it larger for a smaller file |
+| `reporting.info_printout` | follows the observations | rows in `path_NNNN/system.csv`. 0 disables the table |
 | `reporting.checkpoint_printout` | follows the observations | how often a path becomes resumable. 0 means an interrupted path restarts from its source frame |
 | `ais_source.trajectory` | null | required. The equilibrium ensemble the paths start from |
 | `ais_source.allow_repeated_frames` | false | two paths from one configuration are not two independent realisations |

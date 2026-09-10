@@ -153,8 +153,8 @@ def switching_schedule(*, tau_start: float, tau_end: float, switching_steps: int
                       else trajectory_interval_steps)
     state_every = int(state_interval_steps or 0)
     checkpoint_every = int(checkpoint_interval_steps or 0)
-    for label, value in (("reporting.solute_printout", frame_every),
-                         ("reporting.system_printout", state_every),
+    for label, value in (("reporting.crd_printout_solute", frame_every),
+                         ("reporting.info_printout", state_every),
                          ("reporting.checkpoint_printout", checkpoint_every)):
         if value < 0:
             raise ValueError(f"{label} cannot be negative; got {value}")
@@ -166,7 +166,7 @@ def switching_schedule(*, tau_start: float, tau_end: float, switching_steps: int
                 f"another.")
     if frame_every < 1:
         raise ValueError(
-            "reporting.solute_printout cannot be 0 for AIS: a switching path with no "
+            "reporting.crd_printout_solute cannot be 0 for AIS: a switching path with no "
             "configurations written is a work value with nothing to attribute it to.")
 
     updates = steps // interval

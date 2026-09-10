@@ -58,8 +58,9 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "restrained_npt_steps": "stages.restrained_npt_steps",
         "unrestrained_npt_steps": "stages.unrestrained_npt_steps",
         "production_steps": "stages.production_steps",
-        "solute_printout": "reporting.solute_printout",
-        "system_printout": "reporting.system_printout",
+        "crd_printout_solute": "reporting.crd_printout_solute",
+        "crd_printout_whole": "reporting.crd_printout_whole",
+        "info_printout": "reporting.info_printout",
         "checkpoint_printout": "reporting.checkpoint_printout",
         # Torsion collective-variable reporting. `cv_file` rather than `file`, because a bare
         # `file` in an &cntrl block reads as "the input file" to anyone who has written an mdin.
@@ -112,8 +113,8 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "temperature_K": "dynamics.temperature_K",
         "friction_per_ps": "dynamics.friction_per_ps",
         "random_seed": "dynamics.seed",
-        "solute_printout": "reporting.solute_printout",
-        "system_printout": "reporting.system_printout",
+        "crd_printout_solute": "reporting.crd_printout_solute",
+        "info_printout": "reporting.info_printout",
         "checkpoint_printout": "reporting.checkpoint_printout",
         # Torsion collective-variable reporting. `cv_file` rather than `file`, because a bare
         # `file` in an &cntrl block reads as "the input file" to anyone who has written an mdin.
@@ -136,8 +137,8 @@ _CONFUSIONS = {
     "temp": "temperature_K",
     "temp0": "temperature_K",
     "pressure": "pressure_bar",
-    "ntpr": "system_printout",
-    "ntwx": "solute_printout",
+    "ntpr": "info_printout",
+    "ntwx": "crd_printout_solute",
     "ntwr": "checkpoint_printout",
     "nstlim": "production_steps",
     "irest": None,

@@ -35,7 +35,7 @@ def _protocol(taus=TAUS, temperature_k=300.0):
 def test_every_state_records_index_trajectory_tau_and_effective_temperature():
     records = _protocol().state_records()
     assert [r["index"] for r in records] == [0, 1, 2, 3]
-    assert [r["trajectory"] for r in records] == ["remd0.nc", "remd1.nc", "remd2.nc", "remd3.nc"]
+    assert [r["trajectory"] for r in records] == ["whole_state0_prod1.nc", "whole_state1_prod1.nc", "whole_state2_prod1.nc", "whole_state3_prod1.nc"]
     assert [r["tau"] for r in records] == TAUS
     assert set(records[0]) == {"index", "trajectory", "tau", "effective_temperature_k"}
 

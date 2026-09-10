@@ -135,7 +135,7 @@ def implicit_run(tmp_path_factory):
                 "observation_interval_steps": OBSERVE_EVERY,
                 "parameter_update_interval_steps": UPDATE_EVERY},
         "ais_source": {"trajectory": "../source.dcd"},
-        "reporting": {"solute_printout": FRAME_EVERY, "system_printout": STATE_EVERY,
+        "reporting": {"crd_printout_solute": FRAME_EVERY, "info_printout": STATE_EVERY,
                       "checkpoint_printout": CHECKPOINT_EVERY}}), encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(root / "project"),
                                       "--config", str(root / "AIS.config")],
@@ -532,7 +532,7 @@ def explicit_run(tmp_path_factory):
                 "work_measurement": "components",
                 "observation_interval_steps": 5, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
-        "reporting": {"solute_printout": 10, "system_printout": 20,
+        "reporting": {"crd_printout_solute": 10, "info_printout": 20,
                       "checkpoint_printout": 10}}), encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(root / "project"),
                                       "--config", str(root / "AIS.config")],

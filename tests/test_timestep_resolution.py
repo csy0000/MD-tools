@@ -132,7 +132,7 @@ def test_one_generated_script_resolves_two_and_four_fs_from_two_real_systems(tmp
          "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 5,
                     "restrained_npt_steps": 5, "unrestrained_npt_steps": 5,
                     "production_steps": 5},
-         "reporting": {"solute_printout": 5, "system_printout": 5,
+         "reporting": {"crd_printout_solute": 5, "info_printout": 5,
                        "checkpoint_printout": 5}}), encoding="utf-8")
     for enabled, expected, basis in ((False, 2.0, "ordinary_masses"), (True, 4.0, "hmr_masses")):
         # A directory PER SYSTEM. Running the same stage twice against two different Systems in

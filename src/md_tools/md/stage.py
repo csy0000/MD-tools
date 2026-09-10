@@ -75,23 +75,142 @@ def solute_atom_indices(topology) -> list[int]:
 
 
 
-def check_trajectory_suffix(path: Path) -> None:
-    """A conventional stage writes DCD. Refuse a name that claims otherwise.
+class _AmberStreamReporter:
+    """An OpenMM reporter writing AMBER NetCDF through MD-tools' own appending writer.
 
-    OpenMM has a native `DCDReporter` and no native NetCDF reporter, so DCD is what an ordinary
-    stage can honestly produce. Writing DCD bytes into a file called `.nc` would be worse than
-    refusing: every tool downstream would open it as NetCDF, fail, and blame the tool.
+    WHY NOT mdtraj's REPORTER. It cannot append. Both of its backends refuse the mode outright --
+    `NetCDFTrajectoryFile` and `DCDTrajectoryFile` each raise "mode must be one of ['r', 'w']" --
+    so a resumed stage using one restarts its trajectory at frame zero and finishes SHORTER than
+    an uninterrupted run, with no error, because writing a fresh file is an ordinary thing to do.
+
+    `AmberTrajectoryWriter` already appends, is already what a REST2 ladder's per-state files are
+    written with, and produces the same format cpptraj and mdtraj read. Using it here means one
+    AMBER writer in the project rather than two that each do half the job.
+
+    `atom_subset` is the solute stream's whole purpose, and is applied here rather than by the
+    writer: the writer's business is one trajectory of N atoms, and which N is the caller's.
+    """
+
+    def __init__(self, path, interval, *, n_atoms, atom_subset=None, periodic, from_frame=0):
+        from ..remd.amber_trajectory import AmberTrajectoryWriter
+
+        self._interval = int(interval)
+        self._subset = None if atom_subset is None else list(atom_subset)
+        width = len(self._subset) if self._subset is not None else int(n_atoms)
+        if from_frame:
+            self._writer = AmberTrajectoryWriter.open_existing(
+                path, n_atoms=width, state_index=0, tau=0.0, from_frame=int(from_frame))
+        else:
+            self._writer = AmberTrajectoryWriter(
+                path, n_atoms=width, state_index=0, tau=0.0, temperature_k=0.0,
+                periodic=bool(periodic))
+
+    def describeNextReport(self, simulation):                 # noqa: N802 - OpenMM's protocol
+        steps = self._interval - simulation.currentStep % self._interval
+        # positions yes, velocities/forces/energies no, and the box only when there is one.
+        return (steps, True, False, False, False, self._writer.periodic)
+
+    def report(self, simulation, state):
+        from openmm import unit
+
+        positions = state.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
+        if self._subset is not None:
+            positions = positions[self._subset]
+        box = None
+        if self._writer.periodic:
+            # THE THREE BOX VECTORS, not their diagonal. `AmberTrajectoryWriter.append` takes
+            # the (3, 3) matrix -- it derives the cell lengths as row norms and the cell angles
+            # from the vectors themselves -- which is also what `Configuration.box` carries
+            # everywhere else in the project. Passing the diagonal gave `norm(box, axis=1)` a
+            # 1-D array and killed every explicit-solvent stage at its first reported frame;
+            # for a triclinic cell it would additionally have thrown the shape away.
+            box = state.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer)
+        self._writer.append(positions, time_ps=state.getTime().value_in_unit(unit.picosecond),
+                            box_nm=box)
+        self._writer.sync()
+
+    def __del__(self):                                        # pragma: no cover - interpreter exit
+        try:
+            self._writer.close()
+        except Exception:                                     # noqa: BLE001 - best effort
+            pass
+
+
+def _committed_frames(path, done):
+    """How many frames of `path` the resume may keep: what is on disk, capped by nothing here.
+
+    The stage's own truncation has ALREADY cut every appendable stream back to the count the
+    committed checkpoint vouches for, before this is reached. So the file length is the committed
+    length by the time a reporter is opened on it, and reading it is not a second opinion.
+    """
+    from ..openmm.trajectory import count_frames
+
+    path = Path(path)
+    if not path.is_file():
+        return 0
+    try:
+        return count_frames(path)
+    except ValueError:
+        # A file that exists and cannot be counted has no frames to keep. A reporter creates its
+        # file when it is CONSTRUCTED, not when it first writes, so a stage interrupted before
+        # its first frame leaves an empty one with no readable header -- and refusing to resume
+        # over that would make an early interruption the one kind that cannot be continued.
+        return 0
+
+
+def _coordinate_reporter(path, interval, *, atom_subset=None, append=False, n_atoms=0,
+                         periodic=False, from_frame=0):
+    """A trajectory reporter whose FORMAT matches the name it was given.
+
+    `-x whatever.dcd` must produce DCD and `-x whatever.nc` must produce AMBER NetCDF. Choosing
+    one writer for both would put one format's bytes in the other's name, which is exactly what
+    `check_trajectory_suffix` refuses a NAME for -- and worse coming from here, because the name
+    was accepted first.
     """
     suffix = Path(path).suffix.lower()
     if suffix == ".dcd":
+        # `-x something.dcd` KEEPS ITS OLD MEANING: one whole-system DCD, appendable across a
+        # resume. That is what `-x` named before a stage had two streams, and a caller who writes
+        # it is asking for the old thing by name.
+        #
+        # The subset is dropped here rather than honoured because no DCD writer available does
+        # both: OpenMM's appends and cannot subset, mdtraj's subsets and cannot append (its
+        # backends refuse "a" outright). A resumable subset stream needs both, so it must be
+        # NetCDF -- which is why the names a stage chooses for itself are `.nc`.
+        from openmm.app import DCDReporter
+
+        return DCDReporter(str(path), int(interval), append=bool(append))
+    return _AmberStreamReporter(path, interval, n_atoms=n_atoms, atom_subset=atom_subset,
+                                periodic=periodic, from_frame=int(from_frame))
+
+
+def check_trajectory_suffix(path: Path) -> None:
+    """A stage writes DCD or AMBER NetCDF. Refuse a name that claims anything else.
+
+    THE REASON THIS USED TO REFUSE `.nc` NO LONGER HOLDS, and the old text is worth keeping in
+    view because it was correct when written:
+
+        OpenMM has a native `DCDReporter` and no native NetCDF reporter, so DCD is what an
+        ordinary stage can honestly produce.
+
+    That was true while the stage used OpenMM's own reporter. It now writes through mdtraj's
+    `NetCDFReporter`, which produces genuine AMBER NetCDF -- the same format cpptraj and mdtraj
+    read without being told anything, and the only one that carries an atom SUBSET, which is what
+    a solute-only stream is. So `.nc` is now honest, and is the default.
+
+    What the guard still exists for is unchanged: writing one format's bytes into a name claiming
+    another would be worse than refusing, because every tool downstream opens it by extension,
+    fails, and blames the tool.
+    """
+    suffix = Path(path).suffix.lower()
+    if suffix in (".dcd", ".nc"):
         return
     raise SystemExit(
-        f"-x {path}: an ordinary MD stage writes DCD, and this name claims {suffix or 'no'} "
-        f"format.\n"
-        f"  OpenMM has a native DCD writer and no native NetCDF writer, so DCD is what this can "
-        f"honestly produce -- and renaming a DCD file does not make it NetCDF.\n"
-        f"  Use a .dcd name. AIS paths and REST2 state trajectories ARE genuine NetCDF; those "
-        f"are written by their own protocols.")
+        f"-x {path}: a stage writes DCD or AMBER NetCDF, and this name claims "
+        f"{suffix or 'no'} format.\n"
+        f"  Renaming a file does not change what is in it, and every reader downstream opens it "
+        f"by extension.\n"
+        f"  Use a .dcd or .nc name.")
 
 
 def stage_parser(description: str) -> argparse.ArgumentParser:
@@ -309,7 +428,49 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     # other output pair and with the inputs. A second comparison here was a second policy: it
     # compared only those two, missed `-x`, `-r` and `-chk`, and fired first -- so the message a
     # person saw depended on which of the two implementations happened to reach the case.
-    traj_path = Path(args.trajectory) if args.trajectory else base / f"{name}.dcd"
+    # TWO coordinate streams, named for their CONTENT and their segment.
+    #
+    #   solute_prod<N>.nc   the solute alone, at `crd_printout_solute`
+    #   whole_prod<N>.nc    every atom, at `crd_printout_whole` (0 = not written)
+    #
+    # They used to be one file at one interval, called `<stage>.dcd`, holding the WHOLE system --
+    # while the interval that produced it was called `solute_printout`. On a solvated peptide
+    # that is 1796 atoms where 22 were asked for: 2.1 GB where 26 MB was wanted. The names now
+    # say which is which, and a whole-system trajectory has to be asked for.
+    #
+    # AMBER NetCDF rather than DCD because it is what carries an atom SUBSET honestly -- mdtraj's
+    # reporter takes `atomSubset`, OpenMM's DCDReporter does not -- and because cpptraj and
+    # mdtraj both open it without being told anything.
+    # PRODUCTION owns `prod<N>`; every other stage is named for itself.
+    #
+    # Without that split every stage in the chain writes the same two filenames -- minimisation
+    # and three equilibrations all landing on `solute_prod1.nc` -- and the last one to run is the
+    # only one you keep, while the file still claims to be production.
+    #
+    # `<N>` is the segment, which advances when a run is extended in place.
+    production = str(stage.get("name") or "") in ("cMD", "umbrella")
+    segment = int(stage.get("segment") or 1)
+    stem = f"prod{segment}" if production else str(stage.get("name") or "stage")
+    # BESIDE THE LOG, not beside `base`.
+    #
+    # `md-run` forwards each stage its explicit `-log`/`-o`/`-r` paths but NOT `-odir`, so `base`
+    # is the working directory whenever the stage is reached that way. That was invisible while
+    # every output was passed as a full path; the moment a stage names its own files, `base`
+    # scattered them into wherever the command happened to be run from -- silently, because the
+    # run still completed and still reported the steps it took.
+    #
+    # `log_path` is always supplied and always in the run's directory, so its parent is the one
+    # place every entry point agrees on.
+    outputs = log_path.parent
+    traj_path = (Path(args.trajectory) if args.trajectory
+                 else outputs / f"solute_{stem}.nc")
+    whole_path = outputs / f"whole_{stem}.nc"
+    # THE STATE TABLE, and it needs the same per-stage treatment as the trajectories. `mdout.csv`
+    # for production -- which is the one anybody opens -- and `mdout_<stage>.csv` for the rest. A
+    # single `mdout.csv` shared by every stage in a chain is not one table with five sections: the
+    # second stage finds an output it did not write, and the run refuses before it starts.
+    from ._stages import info_csv_name
+    info_path = outputs / info_csv_name(str(stage.get("name") or "stage"))
     restart_path = Path(args.restart) if args.restart else base / f"{name}.xml"
     chk_path = Path(args.checkpoint) if args.checkpoint else base / f"{name}.chk"
 
@@ -439,7 +600,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                 checkpoints=chk_path.parent / f"{chk_path.stem}.checkpoints",
                 inventory=getattr(checked, "inventory", None),
                 streams=stage_streams(trajectory=traj_path,
-                                      state_csv=log_path.with_suffix(".csv"),
+                                      state_csv=info_path,
                                       collective_variables=cv_csv_path(traj_path, stage)))
             if problems:
                 detail = "".join(f"\n  - {problem}" for problem in problems)
@@ -740,7 +901,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
 
             trimmed = _truncate_streams_to_committed(
                 meta.get("streams") or {}, trajectory=traj_path,
-                state_csv=log_path.with_suffix(".csv"), log=log,
+                state_csv=info_path, log=log,
                 collective_variables=cv_csv_path(traj_path, stage))
             log.heading("Resume")
             log.field("from checkpoint", f"generation {committed['generation']} at step {done}")
@@ -826,12 +987,31 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         remaining = steps - done
         if remaining > 0:
             if stage.get("trajectory_interval_steps"):
+                # SOLUTE ONLY. `checked.solute` is the same set every other part of the run means
+                # by "solute" -- the restraint, the REST2 scaling, the CV definitions -- so the
+                # trajectory cannot disagree with them about which atoms those are.
+                # `from_frame` is the committed count, not the file length: rows past the
+                # checkpoint are uncommitted and are overwritten in place, exactly as a ladder's
+                # state trajectories are.
                 simulation.reporters.append(
-                    DCDReporter(str(traj_path), int(stage["trajectory_interval_steps"]),
-                                append=_trajectory_holds_frames(traj_path) if done else False))
+                    _coordinate_reporter(
+                        traj_path, int(stage["trajectory_interval_steps"]),
+                        atom_subset=list(checked.solute) or None,
+                        n_atoms=system.getNumParticles(), periodic=not implicit,
+                        append=bool(done) and _trajectory_holds_frames(traj_path),
+                        from_frame=(_committed_frames(traj_path, done) if done else 0)))
+            if stage.get("whole_interval_steps"):
+                # EVERY atom, and only when asked for: on a solvated system this stream is two
+                # orders of magnitude larger than the solute one.
+                simulation.reporters.append(
+                    _coordinate_reporter(
+                        whole_path, int(stage["whole_interval_steps"]),
+                        n_atoms=system.getNumParticles(), periodic=not implicit,
+                        append=bool(done) and _trajectory_holds_frames(whole_path),
+                        from_frame=(_committed_frames(whole_path, done) if done else 0)))
             if stage.get("state_interval_steps"):
                 simulation.reporters.append(
-                    StateDataReporter(str(log_path.with_suffix(".csv")),
+                    StateDataReporter(str(info_path),
                                       int(stage["state_interval_steps"]), step=True, time=True,
                                       potentialEnergy=True, temperature=True, volume=True,
                                       density=True, speed=True, append=done > 0))
@@ -945,11 +1125,11 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                         streams={
                             name: (lambda key=name: _stream_counts(
                                 trajectory=traj_path,
-                                state_csv=log_path.with_suffix(".csv"),
+                                state_csv=info_path,
                                 collective_variables=cv_csv_path(traj_path, stage)).get(key, 0))
                             for name in stage_streams(
                                 trajectory=traj_path,
-                                state_csv=log_path.with_suffix(".csv"),
+                                state_csv=info_path,
                                 collective_variables=cv_csv_path(traj_path, stage))},
                         # A callable, read AT COMMIT TIME like the stream counts: the digest has
                         # to cover the rows that exist when the generation commits, not the ones
@@ -985,7 +1165,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             state={"fingerprint": fingerprint, "steps_done": steps,
                    **_checkpoint_identity(stage, name, seed, acceleration, timestep_fs),
                    "streams": _stream_counts(
-                       trajectory=traj_path, state_csv=log_path.with_suffix(".csv"),
+                       trajectory=traj_path, state_csv=info_path,
                        collective_variables=cv_csv_path(traj_path, stage)),
                    # THE CV PREFIX, on the final generation too. The comment above says this
                    # commit goes through the same transaction as every periodic one, and it did
@@ -1026,7 +1206,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         # THE STATE CSV, which the record used to omit entirely. A file that is in no manifest is
         # a file no completion check can look at: it could be truncated, half-written or from
         # another run and the stage would still verify.
-        state_csv = log_path.with_suffix(".csv")
+        state_csv = info_path
         if state_csv.is_file():
             outputs["state_csv"] = file_facts(state_csv)
             log.field(state_csv.name, f"{state_csv}  (state table)")
@@ -1189,6 +1369,15 @@ def cv_csv_path(trajectory: Path, stage: dict[str, Any] | None = None) -> Path:
     be is a property of the stage and the inventory needs it either way.
     """
     trajectory = Path(trajectory)
+    # NAMED FOR THE STAGE, not for the trajectory file.
+    #
+    # It used to be `<trajectory stem>.cv.csv`, which was the same thing while a stage had one
+    # trajectory called `<stage>.dcd`. A stage now has TWO -- `solute_prod1.nc` and
+    # `whole_prod1.nc` -- so deriving from the trajectory would put the series at
+    # `solute_prod1.cv.csv` and make its name depend on which of the two happened to be passed in.
+    # The collective variables belong to the stage, not to one of its streams.
+    if stage and stage.get("name"):
+        return trajectory.parent / f"{stage['name']}.cv.csv"
     return trajectory.with_suffix(".cv.csv")
 
 

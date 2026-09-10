@@ -785,7 +785,7 @@ def test_the_run_identity_document_names_every_field_that_may_not_change():
         schedule={"switching_steps": 200, "taus": [1, 2], "observations": [], "note": "n"},
         ais={"work_measurement": "components", "tau_start": 0.5, "tau_end": 0.0, "number_of_paths": 2},
         dynamics={"seed": 3}, chosen=[7, 9],
-        reporting={"solute_printout": 5, "system_printout": 5, "checkpoint_printout": 5},
+        reporting={"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5},
         resolved_config="/somewhere/resolved.config")
     assert document["schema_version"] == RUN_IDENTITY_VERSION
     for field in ("source", "tau", "schedule", "reporting", "seed_policy", "number_of_paths",
@@ -806,7 +806,7 @@ def test_a_directory_holding_another_run_is_refused_by_naming_what_differs(tmp_p
             schedule={"switching_steps": 200},
             ais={"work_measurement": "components", "tau_start": 0.5, "tau_end": 0.0, "number_of_paths": paths},
             dynamics={"seed": seed}, chosen=list(range(paths)),
-            reporting={"solute_printout": 5}, resolved_config=None)
+            reporting={"crd_printout_solute": 5}, resolved_config=None)
 
     (tmp_path / RUN_IDENTITY).write_text(json.dumps(document(3, 2)), encoding="utf-8")
     require_same_run(tmp_path, document(3, 2))                    # unchanged: accepted

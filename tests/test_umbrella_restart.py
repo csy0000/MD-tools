@@ -76,8 +76,8 @@ def project(tmp_path_factory):
         "protocol": "umbrella", "solvent": "implicit",
         "stages": {"minimization_iterations": 2, "restrained_nvt_steps": CV_EVERY,
                    "production_steps": PRODUCTION_STEPS},
-        "reporting": {"solute_printout": CHECKPOINT_EVERY,
-                      "system_printout": CHECKPOINT_EVERY,
+        "reporting": {"crd_printout_solute": CHECKPOINT_EVERY,
+                      "info_printout": CHECKPOINT_EVERY,
                       "checkpoint_printout": CHECKPOINT_EVERY},
         "collective_variables": {"file": "cv.yaml", "interval_steps": CV_EVERY},
         "umbrella": {"file": "umbrella.yaml"}}), encoding="utf-8")

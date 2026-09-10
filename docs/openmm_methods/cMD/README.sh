@@ -61,7 +61,7 @@ stages:
   restrained_npt_steps: 250
   unrestrained_npt_steps: 250
   production_steps: 2000
-reporting: {solute_printout: 250, system_printout: 250, checkpoint_printout: 250}
+reporting: {crd_printout_solute: 250, info_printout: 250, checkpoint_printout: 250}
 YAML
 fi
 cd "${OUT}"
@@ -107,9 +107,9 @@ md-openmm build-md -odir ./md_script --config md.config
 # One stage at a time instead, if you prefer -- the same run, same installed code:
 #
 #   md-openmm md-run -i min.in -p ../built.pdb -s ../built.xml \
-#       -o min.out -x min.dcd -r min.xml -log min.log
+#       -o min.out -r min.xml -log min.log
 #   python min.py    -p ../built.pdb -s ../built.xml \
-#       -o min.out -x min.dcd -r min.xml -log min.log
+#       -o min.out -r min.xml -log min.log
 # -----------------------------------------------------------------------------
 echo "== 3. run.sh =="
 cd md_script

@@ -357,7 +357,7 @@ Every enabled step interval must divide the switching path exactly:
 switching_steps % interval == 0
 ```
 
-for `ais.observation_interval_steps`, `reporting.solute_printout`, `reporting.system_printout` and
+for `ais.observation_interval_steps`, `reporting.crd_printout_solute`, `reporting.info_printout` and
 `reporting.checkpoint_printout`. A path is a complete object: it starts at `tau_start` and ends at
 `tau_end`, and an interval that does not divide `switching_steps` cannot place a frame on the final
 step. The last frame would fall at some interior τ, and "the end of path A" would not be comparable
@@ -367,7 +367,7 @@ Zero means disabled and is exempt. The refusal names both values and the divisor
 wrote:
 
 ```text
-reporting.system_printout is 100, which does not divide ais.switching_steps = 250
+reporting.info_printout is 100, which does not divide ais.switching_steps = 250
 (250 % 100 = 50).
   Divisors of 250 near 100: 50, 125, 250.
 ```
@@ -378,17 +378,17 @@ them together answers one of them with the other's answer:
 | setting | controls | disabled by 0 |
 |---|---|---|
 | `ais.observation_interval_steps` | how often the WORK is measured — this one is the method | no |
-| `reporting.solute_printout` | frames written to `AIS_trajNNNN.nc` | no |
-| `reporting.system_printout` | rows in `path_NNNN/system.csv` | yes |
+| `reporting.crd_printout_solute` | frames written to `AIS_trajNNNN.nc` | no |
+| `reporting.info_printout` | rows in `path_NNNN/system.csv` | yes |
 | `reporting.checkpoint_printout` | how often the path becomes resumable | yes |
 
 Work every 10 steps with frames every 50 is a perfectly ordinary thing to want — it is a smaller
-file — and it used to be refused. Leave `solute_printout` unstated and it follows the observation
+file — and it used to be refused. Leave `crd_printout_solute` unstated and it follows the observation
 cadence, which is what every existing project was generated with.
 
 ### `system.csv`: what the path is doing
 
-At `reporting.system_printout`, each path writes a row of `path_NNNN/system.csv`:
+At `reporting.info_printout`, each path writes a row of `path_NNNN/system.csv`:
 
 ```text
 path_index, protocol_step, switching_time_ps, tau,

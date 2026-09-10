@@ -1,6 +1,6 @@
 """The REST2 ladder must honour the reporting intervals its configuration resolved.
 
-Every other protocol's stages have always carried `solute_printout`, `system_printout` and
+Every other protocol's stages have always carried `crd_printout_solute`, `crd_printout_whole` and
 `checkpoint_printout` through to the run. The ladder did not: `protocol_file_text` hard-wired both
 output intervals to the exchange interval and passed no checkpoint interval at all, so
 `ReplicaSchedule` fell back to its own default -- also the exchange interval.
@@ -42,8 +42,8 @@ def _ladder(**overrides):
         "equilibration_steps": 0,
         "dynamics": {"timestep_fs": TIMESTEP_FS, "temperature_K": 300.0,
                      "friction_per_ps": 1.0, "seed": 7, "platform": None},
-        "reporting": {"solute_printout": SOLUTE_STEPS,
-                      "system_printout": SYSTEM_STEPS,
+        "reporting": {"crd_printout_solute": SOLUTE_STEPS,
+                      "crd_printout_whole": SYSTEM_STEPS,
                       "checkpoint_printout": CHECKPOINT_STEPS},
     }
     ladder.update(overrides)
@@ -71,10 +71,10 @@ def test_the_generated_protocol_carries_the_configured_intervals():
 
     assert float(values["exchange_interval_ps"]) == 10.0
     assert float(values["solute_output_interval_ps"]) == 5.0, (
-        "the solute stream must be written at the configured solute_printout, not at the "
+        "the solute stream must be written at the configured crd_printout_solute, not at the "
         "exchange interval")
     assert float(values["whole_output_interval_ps"]) == 50.0, (
-        "the whole-system stream must be written at the configured system_printout")
+        "the whole-system stream must be written at the configured crd_printout_whole")
     assert float(values["checkpoint_interval_ps"]) == 1000.0, (
         "the ladder must checkpoint at the configured checkpoint_printout, not once per exchange")
 
@@ -82,7 +82,7 @@ def test_the_generated_protocol_carries_the_configured_intervals():
 def test_a_disabled_interval_stays_disabled_rather_than_becoming_the_exchange_interval():
     """`0` means "no such stream". It must not be resurrected as a default."""
     ladder = _ladder()
-    ladder["reporting"] = {"solute_printout": 0, "system_printout": SYSTEM_STEPS,
+    ladder["reporting"] = {"crd_printout_solute": 0, "crd_printout_whole": SYSTEM_STEPS,
                            "checkpoint_printout": CHECKPOINT_STEPS}
     values = _protocol_values(protocol_file_text(ladder))
     assert values["solute_output_interval_ps"] == "None"
@@ -98,7 +98,7 @@ def test_a_checkpoint_interval_off_the_exchange_grid_is_refused_by_name():
     silently -- so a value that is not a whole number of exchange intervals stops the build.
     """
     ladder = _ladder()
-    ladder["reporting"] = {"solute_printout": SOLUTE_STEPS, "system_printout": SYSTEM_STEPS,
+    ladder["reporting"] = {"crd_printout_solute": SOLUTE_STEPS, "crd_printout_whole": SYSTEM_STEPS,
                            "checkpoint_printout": 7000}      # 2.8 exchange intervals
     with pytest.raises(ValueError) as refusal:
         protocol_file_text(ladder)
@@ -128,12 +128,12 @@ def test_the_runtime_ladder_reconstruction_carries_the_reporting_block():
         "dynamics": {"timestep_fs": TIMESTEP_FS, "temperature_K": 300.0,
                      "friction_per_ps": 1.0, "seed": 7, "platform": None},
         "collective_variables": {},
-        "reporting": {"solute_printout": SOLUTE_STEPS, "system_printout": SYSTEM_STEPS,
+        "reporting": {"crd_printout_solute": SOLUTE_STEPS, "crd_printout_whole": SYSTEM_STEPS,
                       "checkpoint_printout": CHECKPOINT_STEPS},
     }
     ladder = ladder_from_resolved(resolved, "REST2")
-    assert ladder["reporting"]["solute_printout"] == SOLUTE_STEPS
-    assert ladder["reporting"]["system_printout"] == SYSTEM_STEPS
+    assert ladder["reporting"]["crd_printout_solute"] == SOLUTE_STEPS
+    assert ladder["reporting"]["crd_printout_whole"] == SYSTEM_STEPS
     assert ladder["reporting"]["checkpoint_printout"] == CHECKPOINT_STEPS
 
     # And through to the protocol the run executes.

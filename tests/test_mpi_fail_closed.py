@@ -377,7 +377,7 @@ def test_a_rank_local_failure_after_preflight_stops_the_whole_ladder(failing_ran
     assert done.returncode != 0, message[-2000:]
     assert f"rank {failing_rank}" in message, message[-2500:]
     # No authoritative completion output survives a failed launch.
-    assert not sorted(destination.glob("remd*.nc")), sorted(destination.glob("remd*.nc"))
+    assert not sorted(destination.glob("whole_state*_prod1.nc")), sorted(destination.glob("whole_state*_prod1.nc"))
     assert not (destination / "restart.json").exists()
 
 

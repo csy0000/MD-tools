@@ -72,7 +72,7 @@ have required demonstrating that mid-interval restarts are safe, which is a larg
 than this instruction's scope. If that demonstration is ever done, the refusal is the thing to
 relax.
 
-## 3. The ladder discarded `solute_printout` and `system_printout`
+## 3. The ladder discarded `crd_printout_solute` and `info_printout`
 
 `protocol_file_text` wrote `whole_ps=exchange_ps, solute_ps=exchange_ps`, hard-wired. The
 configured values were resolved, logged, written into `resolved.config` — and dropped without a
@@ -80,8 +80,8 @@ word. Reproduced exactly, at 4 fs:
 
 | requested | ladder used, before |
 |---|---|
-| `solute_printout: 1250` = 5 ps | 10 ps — half the resolution |
-| `system_printout: 12500` = 50 ps | 10 ps — five times too often |
+| `crd_printout_solute: 1250` = 5 ps | 10 ps — half the resolution |
+| `info_printout: 12500` = 50 ps | 10 ps — five times too often |
 | `checkpoint_printout: 250000` = 1000 ps | 10 ps — a hundred times too often |
 
 This is the worst of the three because it changed recorded DATA rather than runtime, and silently.
@@ -106,7 +106,7 @@ written.
 
 ## AIS does not share the defect
 
-Checked, because the instruction asked. AIS carries `solute_printout`, `system_printout` and
+Checked, because the instruction asked. AIS carries `crd_printout_solute`, `info_printout` and
 `checkpoint_printout` into its generated `.in` and honours them at run time; its four reporting
 cadences are independent and each is validated against `switching_steps`. The hard-wiring was
 specific to the ladder's generator.

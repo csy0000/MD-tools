@@ -60,7 +60,7 @@ def _cmd_config(root: Path, *, cv: bool):
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 0,
                    "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
                    "production_steps": 20},
-        "reporting": {"solute_printout": 10, "system_printout": 10, "checkpoint_printout": 10},
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10, "checkpoint_printout": 10},
         "collective_variables": ({"file": str(root / "cv.yaml"), "interval_steps": 5}
                                  if cv else {"file": None, "interval_steps": 0}),
         "dynamics": {"seed": 20260904},

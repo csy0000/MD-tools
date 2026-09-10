@@ -59,7 +59,7 @@ def project(tmp_path_factory):
                    "production_steps": 0},
         "rest2": {"number_of_replicas": 3, "exchange_interval_steps": 10,
                   "number_of_exchanges": 4},
-        "reporting": {"solute_printout": 10, "system_printout": 10, "checkpoint_printout": 10},
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10, "checkpoint_printout": 10},
         # Finer than the exchange interval, and dividing it exactly.
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
     }), encoding="utf-8")

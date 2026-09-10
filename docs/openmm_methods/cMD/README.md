@@ -65,11 +65,11 @@ cd md_script && ./run.sh
 `run.sh` runs the chain in order. To drive one stage yourself:
 
 ```bash
-python min.py -p ../built.pdb -s ../built.xml -o min.out -x min.dcd -r min.xml -log min.log
+python min.py -p ../built.pdb -s ../built.xml -o min.out -r min.xml -log min.log
 
 # or, the Amber-like way -- the same run, reaching the same installed code:
 md-openmm md-run -i min.in -p ../built.pdb -s ../built.xml \
-    -o min.out -x min.dcd -r min.xml -log min.log
+    -o min.out -r min.xml -log min.log
 ```
 
 ## Generated files
@@ -90,7 +90,10 @@ md_script/
 
 Running produces, per stage: `<stage>.log` (readable log **and** the machine record),
 `<stage>.xml` (final state), `<stage>.chk` + `.chk.json` (checkpoint and its fingerprint),
-`<stage>.csv` (state table) and `<stage>.dcd` where a trajectory was asked for.
+`mdout.csv` (the state table: energy, temperature, volume, density) and the coordinate
+streams `solute_prod<N>.nc` and `whole_prod<N>.nc` -- the solute alone and every atom,
+each at its own interval. Equilibration stages write `solute_<stage>.nc` and
+`whole_<stage>.nc`, so no two stages share a filename.
 
 ## Restart and continuation
 
@@ -110,7 +113,7 @@ after a child consumed it is caught rather than becoming false ancestry.
 | `dynamics.timestep_fs` | `auto` | `auto` reads the built System's masses: 2 fs ordinary, 4 fs if HMR is present |
 | `dynamics.tau` | 0.0 | > 0 runs at one fixed rung of the REST2 ladder, which is how a reservoir or AIS source is made. A scaled run is NVT by construction |
 | `dynamics.phase_space_printout` | 0 | > 0 writes positions **and velocities**; required to generate an rREST2 reservoir |
-| `reporting.solute_printout` | 1000 | solute trajectory interval, in steps |
+| `reporting.crd_printout_solute` | 1000 | solute trajectory interval, in steps |
 
 ## Reporting and registration
 
