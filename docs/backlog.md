@@ -112,9 +112,17 @@ the diagnostic was lost when it happened. It closes if it recurs — and is then
 evidence — or it is eventually retired as stale. Neither is something a change to this repository
 can bring about, which is why it sits here differently from every other entry in this file.
 
+**Not fixed, and not accepted either.** Those are the two states a backlog entry usually has, and
+this is a third: undiagnosed. "Fixed" would mean the cause was found and removed, and nobody knows
+the cause. "Accepted limitation" would mean the behaviour is intended, as entry 3 is — and if the
+cause is real, this is a bug. What exists is MITIGATION: the lane is instrumented so a RECURRENCE
+is diagnosable. That does not explain the original.
+
 **Trigger.** Pick this up the moment it recurs. Every launcher call in that lane now carries a
 subprocess timeout and retains complete stdout and stderr, so a recurrence will arrive with the
-diagnostic this one lacked. A reproducible scientific, restart or MPI failure is a release
+diagnostic this one lacked — verified 2026-09-10 rather than assumed: all of them route through
+`_launch`, which passes `timeout=LAUNCH_TIMEOUT` and `capture_output=True` and asserts with the
+last 4000 characters of both streams. A reproducible scientific, restart or MPI failure is a release
 blocker; this one is not, because it is not reproducible.
 
 ---
