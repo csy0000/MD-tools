@@ -9,7 +9,52 @@ ordinary MD, REST2, rREST2 or annealed importance sampling; runs them on CUDA, u
 the protocol is parallel; and moves a finished run into managed storage as a verified, immutable
 dataset.
 
-**Status: unreleased.** Version `0.5.0.dev0`, developed on `dev`. Not on PyPI, not tagged.
+**Status:** `0.5.0`, tagged `openmm-v0.5.0` on `dev`. Not on PyPI. Known limitations are stated
+in [`docs/release-notes/v0.5.0.md`](docs/release-notes/v0.5.0.md); open and closed gaps, each with
+its reasoning, in [`docs/backlog.md`](docs/backlog.md).
+
+## `md-tools` and `md-openmm` are not the same thing
+
+They are named separately because they are separate, and a project that confuses them will put
+code in the wrong place.
+
+| | what it is |
+|---|---|
+| **`md-tools`** | the **package**. `import md_tools` — modular, inspectable implementations of the basic sampling techniques over OpenMM: Hamiltonian scaling, exchange, switching, restraints, reporting, the dataset contract. Open code, meant to be read and, where a study needs it, modified. |
+| **`md-openmm`** | the **executable**. An Amber-like front end that mimics `pmemd.cuda`: it parses input and output flags — `-i`, `-p`, `-c`, `-x`, `-r`, `-o`, `-odir` — and calls those modules. |
+
+`md-openmm` adds **no behaviour of its own**. Every protocol it dispatches is handed to the same
+function a generated script calls, which is why the same run can be started three ways — the
+executable, a generated `run.sh`, or ordinary Python — and reach identical code. Anyone who has run
+`pmemd -i mdin -p prmtop -c inpcrd -o mdout -x mdcrd -r restrt` can read the command line without a
+manual; that convenience is the executable's entire job.
+
+So: **the simulation logic lives in `md-tools`, and `md-openmm` is how you type it.** A project
+building a new sampling method imports the package. It uses the executable to produce reference
+simulations, not to express the method.
+
+## Using `md-tools` from your own project
+
+**Use the functions as built.** A method assembled from the shipped modules — the REST2 scaler, the
+torsion restraints, the source-ensemble reader, the platform policy — inherits their tests, their
+refusals and their provenance records. Reimplementing one is how two codebases start disagreeing
+about the same quantity.
+
+**When a module genuinely needs changing, record it.** If realising your method requires a small
+modification to an existing `md-tools` function, write it down in your own repository, in
+`<repo>/docs/md_tools_modifications.md`: which module, what changed, and why the shipped behaviour
+was not enough. That file is what makes the change reviewable later — and it is what turns "our
+results differ from the reference" from a mystery into a lookup.
+
+**What belongs in that file, and what does not.**
+
+* **Yes** — the module is still the right one and still usable, and an existing method needs a
+  small change: an extra term, a parameter that was fixed and needs to vary, a hook where there
+  was none.
+* **No** — a different simulation route. A new way of moving between states, a new work
+  convention, a new schedule: that is your method, it belongs in your repository's own code, and
+  recording it as a "modification" would misfile the thing you actually built. See
+  `CONTRIBUTING.md` in a consuming project for the technique / method / study split.
 
 ## Getting started
 
