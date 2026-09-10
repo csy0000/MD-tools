@@ -190,6 +190,15 @@ NON_CUDA_CONTEXT_SITES = {
     "openmm/solvation.py::solvate":
         "reads box vectors off a Topology while building the solvated system. A Topology is "
         "geometry on the host; no Context exists yet, and nothing has been computed on a device.",
+    "md/stage.py::_AmberStreamReporter.report":
+        "reads positions and box off a State it is HANDED by OpenMM's reporter protocol and "
+        "writes them to an AMBER NetCDF on the host. It constructs nothing and asks the Context "
+        "for nothing; the device work that produced the State belongs to whoever created it "
+        "(`md/stage.py::stage_main`). Same standing as `md/cv_report.py::CVReporter.observe`.",
+    "md/stage.py::_coordinate_reporter":
+        "CHOOSES a reporter class by filename suffix and returns it -- DCD for the whole system, "
+        "AMBER NetCDF when an atom subset is wanted. No Context, no State, no device: the match "
+        "here is on the word `report` in a constructor, not on an operation.",
     "remd/driver.py::ReplicaRun._read_initial_configuration":
         "reads positions and velocities out of a State DESERIALISED FROM XML on disk. The same "
         "getPositions spelling as a live Context, but the object is a file's contents.",

@@ -704,7 +704,7 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
                     checkpoint=None, output=None, log=None, cpu=False, device=None,
                     machine_config=None, protocol="this stage", pending_parent=None,
                     timestep_fs=None, ensemble=None, tau=0.0, stage=None,
-                    number_of_groups=None, groupfile=None,
+                    number_of_groups=None, groupfile=None, whole=None,
                     source_trajectory=None) -> StagePreflight:
     """A conventional stage, including every stage of an all-in-one workflow."""
     from ..md.stage import check_trajectory_suffix
@@ -717,7 +717,8 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
         check_trajectory_suffix(Path(trajectory))
 
     inputs = _continuation_inputs(coordinates, pending_parent, where=protocol)
-    inventory = _stage_inventory(output=output, log=log, trajectory=trajectory, restart=restart,
+    inventory = _stage_inventory(output=output, log=log, trajectory=trajectory, whole=whole,
+                                 restart=restart,
                                  checkpoint=checkpoint)
     coordination, machine, acceleration, index, detail, particles, loaded = _common(
         topology=topology, system=system,
@@ -840,7 +841,8 @@ def cv_sidecar_path(csv_path) -> Path:
         else Path(str(csv_path) + ".json")
 
 
-def _stage_inventory(*, output, log, trajectory, restart, checkpoint) -> OutputInventory:
+def _stage_inventory(*, output, log, trajectory, restart, checkpoint,
+                     whole=None) -> OutputInventory:
     """A stage's complete inventory, including the outputs it derives rather than is given.
 
     The phase-space stream and the checkpoint GENERATION TREE are the two that were invisible:
@@ -851,8 +853,15 @@ def _stage_inventory(*, output, log, trajectory, restart, checkpoint) -> OutputI
                         ("restart", restart)):
         if value:
             roles[role] = Path(value)
-    if trajectory:
-        roles["phase_space"] = Path(trajectory).with_suffix(".phase_space.nc")
+    if whole:
+        roles["whole_trajectory"] = Path(whole)
+    # THE WHOLE STREAM'S sidecar, because that is whose atoms it holds. Derived from
+    # `trajectory` -- the solute stream since the rename -- it named a file the run never wrote,
+    # so `--overwrite` left the real one behind: reporting turned off, the stale
+    # `whole_prod1.phase_space.nc` still sitting there looking like an output of the new run.
+    phase_space_source = whole or trajectory
+    if phase_space_source:
+        roles["phase_space"] = Path(phase_space_source).with_suffix(".phase_space.nc")
     if log:
         # The StateDataReporter CSV sits beside the log, is appended to, and is one of the three
         # streams a checkpoint commits counts for -- so it belongs in the inventory that decides
@@ -1312,8 +1321,19 @@ def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, c
         roles["reservoir_declaration"] = directory / "reservoir.yaml"
     roles["rem_log"] = directory / "rem.log"
     roles["provenance"] = directory / "machine.yaml"
+    from ..remd.amber_trajectory import state_trajectory_name
+
     for state in range(int(replicas)):
-        roles[f"state_trajectory_{state}"] = directory / f"remd{state}.nc"
+        # BOTH per-state streams, under the names the driver actually writes. The inventory
+        # still said `remd{state}.nc`, a file no ladder produces any more, so `--overwrite`
+        # governed nothing: a six-state ladder rerun over a four-state one left two stale
+        # `whole_state{4,5}_prod1.nc` and every solute file of the previous run in place,
+        # looking exactly as current as the new ones. The solute stream was never in any
+        # inventory even under its old name.
+        roles[f"state_trajectory_{state}"] = directory / state_trajectory_name(
+            state, content="whole")
+        roles[f"state_solute_trajectory_{state}"] = directory / state_trajectory_name(
+            state, content="solute")
         # The per-state CV series and its interpretation sidecar. In no inventory before, so a
         # `--overwrite` left a previous CV-enabled run's `remdN.cv.csv` sitting beside the new
         # ladder's output -- and a CV-DISABLED rerun left them there permanently, describing a

@@ -1001,9 +1001,9 @@ AIS CONSUMES AN EQUILIBRIUM ENSEMBLE THAT ALREADY EXISTS. It has no minimisation
 chain, because running one would produce a starting state that is not the ensemble the path is
 defined to begin in. Point -src at a finished fixed-tau run at tau = {tau_start}.
 
-    python AIS.py -p built.pdb -s built.xml -src ../hot/cMD.dcd
-    python AIS.py -p built.pdb -s built.xml -src ../hot/cMD.dcd --check     # validate only
-    python AIS.py -p built.pdb -s built.xml -src ../hot/cMD.dcd --paths 0-9
+    python AIS.py -p built.pdb -s built.xml -src ../hot/whole_prod1.nc
+    python AIS.py -p built.pdb -s built.xml -src ../hot/whole_prod1.nc --check     # validate only
+    python AIS.py -p built.pdb -s built.xml -src ../hot/whole_prod1.nc --paths 0-9
 
 Each path is independent and has its own seeds. A completed path is skipped and never appended to;
 an interrupted one RESUMES from its last committed checkpoint generation, continuing the same

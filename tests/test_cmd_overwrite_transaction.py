@@ -128,7 +128,8 @@ def test_overwrite_removes_a_stream_the_new_run_does_not_write(project, complete
     Overwriting with phase-space reporting turned off must not leave `.phase_space.nc` behind
     looking like an output of the new run.
     """
-    phase_space = completed / "cMD.phase_space.nc"
+    # Named after the WHOLE stream: the file carries whole-system positions and velocities.
+    phase_space = completed / "whole_prod1.phase_space.nc"
     assert phase_space.is_file(), "fixture did not produce a phase-space stream to test against"
 
     off_config = completed.parent / "cMD-no-phase-space.config"

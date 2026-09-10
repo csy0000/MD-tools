@@ -497,7 +497,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     try:
         checked = prepared if prepared is not None else preflight_stage(
             topology=topology_path, system=system_path, coordinates=args.continue_from,
-            trajectory=traj_path, restart=restart_path, checkpoint=chk_path,
+            trajectory=traj_path, whole=whole_path, restart=restart_path, checkpoint=chk_path,
             output=out_path, log=log_path, cpu=bool(args.cpu),
             device=int(args.device) if args.device is not None else None,
             protocol=f"stage {name}",
@@ -600,7 +600,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                 checkpoints=chk_path.parent / f"{chk_path.stem}.checkpoints",
                 inventory=getattr(checked, "inventory", None),
                 streams=stage_streams(trajectory=traj_path,
-                                      state_csv=info_path,
+                                      state_csv=info_path, whole=whole_path,
                                       collective_variables=cv_csv_path(traj_path, stage)))
             if problems:
                 detail = "".join(f"\n  - {problem}" for problem in problems)
@@ -901,7 +901,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
 
             trimmed = _truncate_streams_to_committed(
                 meta.get("streams") or {}, trajectory=traj_path,
-                state_csv=info_path, log=log,
+                state_csv=info_path, log=log, whole=whole_path,
                 collective_variables=cv_csv_path(traj_path, stage))
             log.heading("Resume")
             log.field("from checkpoint", f"generation {committed['generation']} at step {done}")
@@ -1108,7 +1108,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                 # agree. It is the real identity record -- over the canonical serialised System,
                 # the solute selection and the omega exclusions -- taken before stage machinery.
                 simulation.reporters.append(PhaseSpaceReporter(
-                    str(traj_path.with_suffix(".phase_space.nc")),
+                    str(whole_path.with_suffix(".phase_space.nc")),
                     int(stage["phase_space_interval_steps"]),
                     identity={"hamiltonian": hamiltonian_identity_record},
                     periodic=not implicit, timestep_fs=timestep_fs))
@@ -1125,11 +1125,11 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                         streams={
                             name: (lambda key=name: _stream_counts(
                                 trajectory=traj_path,
-                                state_csv=info_path,
+                                state_csv=info_path, whole=whole_path,
                                 collective_variables=cv_csv_path(traj_path, stage)).get(key, 0))
                             for name in stage_streams(
                                 trajectory=traj_path,
-                                state_csv=info_path,
+                                state_csv=info_path, whole=whole_path,
                                 collective_variables=cv_csv_path(traj_path, stage))},
                         # A callable, read AT COMMIT TIME like the stream counts: the digest has
                         # to cover the rows that exist when the generation commits, not the ones
@@ -1199,7 +1199,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         if traj_path.is_file():
             outputs["trajectory"] = file_facts(traj_path)
             log.field(traj_path.name, traj_path)
-        phase_space = traj_path.with_suffix(".phase_space.nc")
+        phase_space = whole_path.with_suffix(".phase_space.nc")
         if phase_space.is_file():
             outputs["phase_space"] = file_facts(phase_space)
             log.field(phase_space.name, f"{phase_space}  (positions, velocities and box)")
@@ -1381,7 +1381,7 @@ def cv_csv_path(trajectory: Path, stage: dict[str, Any] | None = None) -> Path:
     return trajectory.with_suffix(".cv.csv")
 
 
-def stage_streams(*, trajectory: Path, state_csv: Path,
+def stage_streams(*, trajectory: Path, state_csv: Path, whole: Path | None = None,
                   collective_variables: Path | None = None) -> dict[str, Path]:
     """The appendable outputs a stage produces, by the name the checkpoint commits them as.
 
@@ -1393,10 +1393,16 @@ def stage_streams(*, trajectory: Path, state_csv: Path,
     second truncation path of its own.
     """
     trajectory = Path(trajectory)
+    # NAMED AFTER THE WHOLE STREAM, because that is what it holds: whole-system positions,
+    # velocities and box, for a reservoir transfer. Deriving it from `trajectory` -- which since
+    # the rename is the SOLUTE stream -- produced `solute_prod1.phase_space.nc`, a name promising
+    # 22 atoms over a file carrying every one of them. `whole` defaults to the trajectory so a
+    # caller that has only one path still gets the historical name rather than a crash.
+    whole_path = Path(whole) if whole is not None else trajectory
     streams = {
         "trajectory": trajectory,
         "state_csv": Path(state_csv),
-        "phase_space": trajectory.with_suffix(".phase_space.nc"),
+        "phase_space": whole_path.with_suffix(".phase_space.nc"),
     }
     if collective_variables is not None:
         streams["collective_variables"] = Path(collective_variables)
@@ -1421,7 +1427,7 @@ def _count_stream(name: str, path: Path) -> int | None:
         return None
 
 
-def _stream_counts(*, trajectory: Path, state_csv: Path,
+def _stream_counts(*, trajectory: Path, state_csv: Path, whole: Path | None = None,
                    collective_variables: Path | None = None) -> dict[str, int]:
     """How many records each appendable output holds RIGHT NOW, for the commit to vouch for.
 
@@ -1431,6 +1437,7 @@ def _stream_counts(*, trajectory: Path, state_csv: Path,
     """
     counts: dict[str, int] = {}
     for name, path in stage_streams(trajectory=trajectory, state_csv=state_csv,
+                                    whole=whole,
                                     collective_variables=collective_variables).items():
         count = _count_stream(name, path)
         if count is not None:
@@ -1456,7 +1463,7 @@ def _truncate_csv_rows(path: Path, keep: int) -> None:
 
 
 def _truncate_streams_to_committed(committed: dict[str, Any], *, trajectory: Path,
-                                   state_csv: Path, log,
+                                   state_csv: Path, log, whole: Path | None = None,
                                    collective_variables: Path | None = None
                                    ) -> dict[str, tuple[int, int]]:
     """Cut EVERY appendable stream back to the count the checkpoint committed.
@@ -1475,6 +1482,7 @@ def _truncate_streams_to_committed(committed: dict[str, Any], *, trajectory: Pat
 
     moved: dict[str, tuple[int, int]] = {}
     for name, path in stage_streams(trajectory=trajectory, state_csv=state_csv,
+                                    whole=whole,
                                     collective_variables=collective_variables).items():
         wanted = committed.get(name)
         if wanted is None:

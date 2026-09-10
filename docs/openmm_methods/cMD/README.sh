@@ -127,4 +127,4 @@ cd md_script
 # -----------------------------------------------------------------------------
 echo
 echo "done. outputs are in $(pwd)"
-ls -1 cMD.dcd cMD.out cMD.log 2>/dev/null || true
+ls -1 whole_prod1.nc solute_prod1.nc mdout.csv cMD.out cMD.log 2>/dev/null || true

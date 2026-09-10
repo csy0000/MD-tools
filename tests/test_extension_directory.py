@@ -34,8 +34,15 @@ from md_tools.remd import amber_trajectory as amber
 
 from .conftest import EXCHANGES, TAUS                               # noqa: E402
 
+# Every output the parent owns. This list does two jobs -- it is what an in-place extension is
+# seeded with, and it is what `_fingerprint` checks stayed byte-identical -- so a file missing
+# from it is both uncopied and unchecked. The per-state names are DERIVED: spelling them out is
+# how the solute streams came to be absent from both jobs after the rename, which made an
+# in-place extension die on files the test had simply never copied.
 PARENT_FILES = ("exchange.nc", "checkpoint.nc", "restart.json", "rem.log",
-                "exchange.solute.nc", "exchange.runstate.json", "whole_state0_prod1.nc", "whole_state1_prod1.nc")
+                "exchange.solute.nc", "exchange.runstate.json") + tuple(
+    amber.state_trajectory_name(state, content=content)
+    for content in ("whole", "solute") for state in range(len(TAUS)))
 
 
 def _digest(path):
@@ -251,8 +258,8 @@ def test_cpptraj_concatenates_the_segments_without_a_gap_or_a_duplicate(chain):
     script = work / "join.in"
     script.write_text(
         f"parm {parent / 'topology.pdb'}\n"
-        f"trajin {parent / 'remd0.nc'}\n"
-        f"trajin {extension / 'remd0.nc'}\n"
+        f"trajin {parent / 'whole_state0_prod1.nc'}\n"
+        f"trajin {extension / 'whole_state0_prod1.nc'}\n"
         f"trajout {joined}\ngo\nquit\n", encoding="utf-8")
     result = subprocess.run([cpptraj, "-i", str(script)], capture_output=True, text=True,
                             cwd=str(work), timeout=600)

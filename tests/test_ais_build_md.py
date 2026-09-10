@@ -245,8 +245,11 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 50,
                    "restrained_npt_steps": 50, "unrestrained_npt_steps": 50,
                    "production_steps": 200},
-        "reporting": {"crd_printout_solute": 20, "info_printout": 100,
-                      "checkpoint_printout": 200},
+        # `crd_printout_whole` is REQUIRED here, not incidental: AIS builds a Context from the
+        # full System, so its source must be the whole-system stream. It defaults to 0 -- no
+        # whole file at all -- and a source ensemble that writes only its solute is unusable.
+        "reporting": {"crd_printout_solute": 20, "crd_printout_whole": 20,
+                      "info_printout": 100, "checkpoint_printout": 200},
     }, sort_keys=False), encoding="utf-8")
     assert subprocess.run(
         [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", "./hot",
@@ -255,11 +258,11 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
                          cwd=work / "hot", capture_output=True, text=True, timeout=3600)
     assert ran.returncode == 0, ran.stdout[-3000:] + ran.stderr[-3000:]
 
-    result = _build_md(work, _base(ais_source={"trajectory": "../hot/cMD.dcd"},
+    result = _build_md(work, _base(ais_source={"trajectory": "../hot/whole_prod1.nc"},
                                    dynamics={}))
     assert result.returncode == 0, result.stdout + result.stderr
 
-    ais = subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml", "../hot/cMD.dcd"],
+    ais = subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml", "../hot/whole_prod1.nc"],
                          cwd=work / "md_script", capture_output=True, text=True, timeout=3600)
     assert ais.returncode == 0, ais.stdout[-3000:] + ais.stderr[-3000:]
 

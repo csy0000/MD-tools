@@ -74,7 +74,10 @@ def project(tmp_path_factory):
                    "production_steps": 0},
         "rest2": {"number_of_replicas": STATES, "exchange_interval_steps": EXCHANGE_EVERY,
                   "number_of_exchanges": EXCHANGES},
-        "reporting": {"crd_printout_solute": EXCHANGE_EVERY, "info_printout": EXCHANGE_EVERY,
+        # `crd_printout_whole` must be set: a ladder's CV rows and its progress reconciliation
+        # both count frames of the WHOLE state trajectory, and the key defaults to 0.
+        "reporting": {"crd_printout_solute": EXCHANGE_EVERY,
+                      "crd_printout_whole": EXCHANGE_EVERY, "info_printout": EXCHANGE_EVERY,
                       "checkpoint_printout": EXCHANGE_EVERY},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": CV_EVERY},
         "dynamics": {"seed": 20260904},

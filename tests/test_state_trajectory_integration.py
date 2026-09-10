@@ -129,7 +129,9 @@ def test_a_missing_state_file_is_refused_and_never_fabricated(tmp_path):
     trajectories.close()
     (tmp_path / amber.state_trajectory_name(1)).unlink()
     seen = st.StateTrajectorySet.inspect(tmp_path, n_states=3)
-    assert any("remd1.nc is missing" in p for p in seen["problems"])
+    # DERIVED, not spelled out: a test that hard-codes the filename passes or fails on the
+    # naming convention rather than on the behaviour it is named for.
+    assert any(f"{amber.state_trajectory_name(1)} is missing" in p for p in seen["problems"])
     assert any("fabricating" in p for p in seen["problems"])
 
 

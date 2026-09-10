@@ -115,7 +115,7 @@ those words and records `tau_verified_from_file: false`. Check it against the ru
 file. What IS checked is the file itself: its atom count against `-p` and `-s`, and that its
 contents are a genuine DCD or NetCDF rather than something with the right suffix.
 
-A fixed-τ cMD run writes DCD, so `../hot/cMD.dcd` is the ordinary source. An earlier AIS or REST2
+A fixed-τ cMD run writes its whole-system stream as AMBER NetCDF, so `../hot/whole_prod1.nc` is the ordinary source. An earlier AIS or REST2
 NetCDF works too; the format is read from the file's leading bytes, and a file whose suffix and
 contents disagree is refused with both named.
 
@@ -123,7 +123,7 @@ contents disagree is refused with both named.
 
 ```bash
 md-openmm build-md -odir ./md_script/ --config example.config
-cd md_script && ./run.sh ../built.pdb ../built.xml ../hot/cMD.dcd
+cd md_script && ./run.sh ../built.pdb ../built.xml ../hot/whole_prod1.nc
 ```
 
 `run.sh` **requires** the source explicitly. There is no default for it: a wrong source is not a

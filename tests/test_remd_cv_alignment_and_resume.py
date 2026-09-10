@@ -76,7 +76,15 @@ def project(tmp_path_factory):
                   "number_of_exchanges": EXCHANGES},
         # The state trajectory is written every exchange interval, so CV (every 5) and frames
         # (every 10) coincide at 10, 20, 30, 40 and not at 5, 15, 25, 35.
-        "reporting": {"crd_printout_solute": EXCHANGE_EVERY, "info_printout": EXCHANGE_EVERY,
+        #
+        # `crd_printout_whole` is the one that matters here and it must be SET: a CV row names a
+        # frame of the WHOLE state trajectory, and the key defaults to 0. Written as
+        # `info_printout` -- the state table -- the ladder wrote one whole frame in the entire
+        # run and every CV row named nothing, which reads as an alignment failure rather than as
+        # a stream that was never asked for.
+        "reporting": {"crd_printout_solute": EXCHANGE_EVERY,
+                      "crd_printout_whole": EXCHANGE_EVERY,
+                      "info_printout": EXCHANGE_EVERY,
                       "checkpoint_printout": EXCHANGE_EVERY},
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": CV_EVERY},
         "dynamics": {"seed": 20260904},

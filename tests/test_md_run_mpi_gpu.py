@@ -149,7 +149,7 @@ def _ais_project(built: Path, name: str, paths: int) -> Path:
         "dynamics": {"seed": 5},
         "ais": {"number_of_paths": paths, "tau_start": 0.5, "tau_end": 0.0,
                 "switching_steps": 10, "observation_interval_steps": 5},
-        "ais_source": {"trajectory": "../source/cMD.dcd"}}, sort_keys=False), encoding="utf-8")
+        "ais_source": {"trajectory": "../source/whole_prod1.nc"}}, sort_keys=False), encoding="utf-8")
     assert _cli(built, "build-md", "-odir", f"./{name}", "--config", str(config)).returncode == 0
     return built / name
 
@@ -164,13 +164,17 @@ def source(built):
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 50,
                    "restrained_npt_steps": 50, "unrestrained_npt_steps": 50,
                    "production_steps": 2000},
-        "reporting": {"crd_printout_solute": 10, "info_printout": 100,
+        # `crd_printout_whole` is what AIS needs: it builds a Context from the FULL System, so
+        # the solute-only stream is not a usable source. It defaults to 0, so a source ensemble
+        # that does not ask for it writes no whole trajectory at all.
+        "reporting": {"crd_printout_solute": 10, "crd_printout_whole": 10,
+                      "info_printout": 100,
                       "checkpoint_printout": 1000}}, sort_keys=False), encoding="utf-8")
     assert _cli(built, "build-md", "-odir", "./source", "--config", str(config)).returncode == 0
     done = subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml"],
                           cwd=built / "source", capture_output=True, text=True, timeout=3600)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
-    return built / "source" / "cMD.dcd"
+    return built / "source" / "whole_prod1.nc"
 
 
 @pytest.fixture(scope="module")
@@ -178,7 +182,7 @@ def hundred(built, source):
     _require_mpi()
     out = _ais_project(built, "ais100", 100)
     done = _md_run(out, "-ng", "4", "-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
-                   "-source-traj", "../source/cMD.dcd", "-odir", ".", "-log", "AIS.log", ranks=4)
+                   "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-log", "AIS.log", ranks=4)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return out
 
@@ -243,7 +247,7 @@ def test_path_identity_does_not_depend_on_the_worker_count(built, source):
     for ranks in (1, 3):
         out = _ais_project(built, f"ais_n{ranks}", 12)
         done = _md_run(out, "-ng", str(ranks), "-i", "AIS.in", "-p", "../built.pdb",
-                       "-s", "../built.xml", "-source-traj", "../source/cMD.dcd",
+                       "-s", "../built.xml", "-source-traj", "../source/whole_prod1.nc",
                        "-odir", ".", "-log", "AIS.log", ranks=ranks)
         assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
         tables[ranks] = {r["path_index"]: r
@@ -268,7 +272,7 @@ def test_a_rerun_does_not_touch_a_path_that_already_completed(built, source):
     """
     out = _ais_project(built, "ais_restart", 4)
     argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
-            "-source-traj", "../source/cMD.dcd", "-odir", ".", "-log", "AIS.log")
+            "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
 
     def fingerprint():
@@ -294,7 +298,7 @@ def test_overwrite_starts_the_ais_directory_over(built, source):
     """
     out = _ais_project(built, "ais_overwrite", 4)
     argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
-            "-source-traj", "../source/cMD.dcd", "-odir", ".", "-log", "AIS.log")
+            "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
     assert len(sorted(out.glob("AIS_traj*.nc"))) == 4
 
@@ -343,11 +347,25 @@ def test_a_conventional_stage_writes_a_genuine_dcd_and_refuses_a_netcdf_name(bui
     trajectory = mdtraj.load(str(out / "custom.dcd"), top=str(built / "built.pdb"))
     assert trajectory.n_frames == 5, trajectory.n_frames
 
+    # `.nc` IS NOW ACCEPTED, and this is the change that made it honest: the stage writes AMBER
+    # NetCDF through MD-tools' own appending writer, so a name claiming that format now gets it.
+    #
+    # In a directory of its OWN, not `out`: the stage there has a committed checkpoint at its
+    # full step count, so a second invocation correctly resumes to completion with no dynamics
+    # and writes no trajectory at all. Reusing it tests the resume path, not the format.
+    assert _cli(built, "build-md", "-odir", "./nc", "--config", str(config)).returncode == 0
+    nc_out = built / "nc"
+    accepted = _md_run(nc_out, "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
+                       "-x", "cMD.nc", "-r", "cMD.xml", "-o", "cMD.out", "-log", "cMD.log")
+    assert accepted.returncode == 0, accepted.stdout[-3000:] + accepted.stderr[-3000:]
+    assert detect_trajectory_format(nc_out / "cMD.nc") == "netcdf"
+    assert mdtraj.load(str(nc_out / "cMD.nc"), top=str(built / "built.pdb")).n_frames == 5
+
     refused = _md_run(out, "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
-                      "-x", "cMD.nc", "-r", "other.xml", "-o", "other.out", "-log", "other.log")
+                      "-x", "cMD.xtc", "-r", "third.xml", "-o", "third.out", "-log", "third.log")
     assert refused.returncode != 0
     assert "DCD" in refused.stderr, refused.stderr
-    assert not (out / "cMD.nc").exists(), "the refused name was created anyway"
+    assert not (out / "cMD.xtc").exists(), "the refused name was created anyway"
 
 
 def test_output_and_log_are_two_files_with_two_kinds_of_content(built):
@@ -366,14 +384,21 @@ def test_output_and_log_are_two_files_with_two_kinds_of_content(built):
     assert "cMD.out" in record, "the record does not point at the readable output"
 
 
-def test_ais_reads_a_genuine_dcd_source_and_writes_genuine_netcdf(hundred, built):
-    """DCD in, NetCDF out, both verified from the bytes and by an independent reader."""
+def test_ais_reads_a_genuine_netcdf_source_and_writes_genuine_netcdf(hundred, built):
+    """NetCDF in, NetCDF out, both verified from the bytes and by an independent reader.
+
+    This used to read a DCD, because that was the only format a cMD stage produced. A stage now
+    writes AMBER NetCDF, so the ordinary source is `whole_prod1.nc` and this checks the pipeline
+    that actually exists. DCD sources remain supported -- `mdtraj.iterload` reads either, and
+    `test_a_source_whose_suffix_and_contents_disagree_is_refused` covers the detection -- but no
+    tool in this project emits one any more, so no test here manufactures one to feed itself.
+    """
     import mdtraj
 
     from md_tools.openmm.trajectory import detect_trajectory_format
 
-    assert detect_trajectory_format(built / "source" / "cMD.dcd") == "dcd"
-    assert read_record(hundred / "AIS.log")["source"]["format"] == "dcd"
+    assert detect_trajectory_format(built / "source" / "whole_prod1.nc") == "netcdf"
+    assert read_record(hundred / "AIS.log")["source"]["format"] == "netcdf"
 
     for path_id in (0, 99):
         published = hundred / f"AIS_traj{path_id:04d}.nc"
@@ -383,15 +408,21 @@ def test_ais_reads_a_genuine_dcd_source_and_writes_genuine_netcdf(hundred, built
 
 
 def test_a_source_whose_suffix_and_contents_disagree_is_refused(built, source, tmp_path):
-    """A DCD named `.nc` reads fine to somebody and is not what it claims."""
-    mislabelled = built / "mislabelled.nc"
+    """AMBER NetCDF named `.dcd` reads fine to somebody and is not what it claims.
+
+    The direction is reversed from what it was. `source` used to be a DCD, so the mislabelling
+    to test was a DCD named `.nc`; a cMD stage now writes AMBER NetCDF, so copying it to a `.nc`
+    name mislabels nothing and the test asserted a refusal that had become correct behaviour.
+    The property under test is unchanged: the SUFFIX is checked against the BYTES.
+    """
+    mislabelled = built / "mislabelled.dcd"
     mislabelled.write_bytes(source.read_bytes())
     out = _ais_project(built, "ais_mislabelled", 2)
     done = _md_run(out, "-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
-                   "-source-traj", "../mislabelled.nc", "-odir", ".",
+                   "-source-traj", "../mislabelled.dcd", "-odir", ".",
                    "-o", "AIS.out", "-log", "AIS.log")
     assert done.returncode != 0
-    assert ".nc" in done.stderr and "DCD" in done.stderr, done.stderr
+    assert ".dcd" in done.stderr, done.stderr
     assert not list(out.glob("AIS_traj*.nc")), "a refused source still produced paths"
 
 
@@ -405,7 +436,7 @@ def _cadence_project(built: Path, name: str) -> Path:
         "ais": {"number_of_paths": 2, "tau_start": 0.5, "tau_end": 0.0,
                 "switching_steps": 1000, "parameter_update_interval_steps": 1,
                 "observation_interval_steps": 100},
-        "ais_source": {"trajectory": "../source/cMD.dcd"},
+        "ais_source": {"trajectory": "../source/whole_prod1.nc"},
         "reporting": {"crd_printout_solute": 200, "info_printout": 500,
                       "checkpoint_printout": 200}}, sort_keys=False), encoding="utf-8")
     assert _cli(built, "build-md", "-odir", f"./{name}", "--config", str(config)).returncode == 0
@@ -423,7 +454,7 @@ def test_each_ais_cadence_controls_its_own_stream(built, source):
 
     out = _cadence_project(built, "cadences")
     done = _md_run(out, "-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
-                   "-source-traj", "../source/cMD.dcd", "-odir", ".",
+                   "-source-traj", "../source/whole_prod1.nc", "-odir", ".",
                    "-o", "AIS.out", "-log", "AIS.log")
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
 
@@ -463,7 +494,7 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
 
     out = _cadence_project(built, "resume")
     argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
-            "-source-traj", "../source/cMD.dcd", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
+            "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
 
     crashed = subprocess.run(["md-openmm", "md-run", *argv], cwd=out, capture_output=True,
                              text=True, timeout=1800,
@@ -527,7 +558,7 @@ def test_a_completed_path_is_not_touched_by_a_resume(built, source):
     """
     out = _cadence_project(built, "untouched")
     argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
-            "-source-traj", "../source/cMD.dcd", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
+            "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
 
     before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()

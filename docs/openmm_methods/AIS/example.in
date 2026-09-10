@@ -196,5 +196,5 @@
   !
   ! REQUIRED for AIS. The equilibrium trajectory the paths start from, typically a fixed-tau
   ! cMD run at tau = ais.tau_start. Resolved relative to the directory run.sh is invoked from.
-  source_traj                     = ../hot/cMD.dcd,
+  source_traj                     = ../hot/whole_prod1.nc,
 /

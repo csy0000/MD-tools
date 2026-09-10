@@ -134,7 +134,13 @@ def test_the_all_in_one_layout_runs_the_same_stages_in_one_file(all_in_one):
 
 
 def test_both_layouts_produce_a_trajectory(split, all_in_one):
+    """AMBER NetCDF, not DCD -- and the SOLUTE stream, which every stage writes.
+
+    The glob was `*.dcd`, the only format a stage could honestly produce while it used OpenMM's
+    own reporter. It now writes AMBER NetCDF through MD-tools' appending writer, which is the
+    only format that carries an atom subset -- and a solute-only stream is exactly that.
+    """
     for directory in (split, all_in_one):
-        produced = list(directory.glob("*.dcd"))
+        produced = list(directory.glob("solute_*.nc"))
         assert produced, f"{directory.name} wrote no trajectory"
         assert all(p.stat().st_size > 0 for p in produced), produced
