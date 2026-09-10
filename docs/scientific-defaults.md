@@ -862,10 +862,10 @@ explicitly; `unknown` means "not recorded" and is never upgraded to a guess.
 | the four box distances (§7.1) | `→ explicit_solvent.box_geometry.*`, plus `box_vectors_nm` and `box_volume_nm3` |
 | salt versus neutralising counterions | `→ explicit_solvent.salt` |
 | constraints, hydrogen masses, HMR group conservation | `→ constraints.*`, `constraints.hmr_group_conservation` |
-| thermostat, friction, timestep | `MD/provenance.yaml → protocol.thermostat`, `protocol.timestep_fs`; each `stage.yaml`; each `resolved_stage.yaml` |
-| barostat pressure, frequency in steps and in ps, which stages it is active in | `MD/provenance.yaml → protocol.pressure_coupling`; `resolved_stage.yaml → barostat_frequency_steps`, `barostat_interval_ps`, `barostats_in_system`, `barostats_active` |
-| every package version that could change a parameter | `forcefield.json → package_versions`; `provenance.yaml → environment` |
-| what was built, as one summary beside the lineage hashes | `inputs/provenance.yaml → forcefield_summary` |
+| thermostat, friction, timestep | requested: `resolved.config → dynamics.{timestep_fs, temperature_K, friction_per_ps}`. Applied: each stage log's *Resolved settings*, where the numerical timestep is the one decided against the masses in the built System rather than the one requested |
+| barostat pressure, frequency in steps and in ps, which stages it is active in | requested: `resolved.config → dynamics.pressure_bar`, `dynamics.barostat_interval_steps`. Applied, measured on the built System: the stage log `<stage>.log → barostats.{in_system, active, frequency_steps, interval_ps}` |
+| every package version that could change a parameter | `inputs/forcefield.json → package_versions`; and each run's log record → `environment.packages`, which is what registration reads to bind a dataset to the engine that produced it |
+| what was built, as one summary beside the lineage hashes | `inputs/forcefield.json` — that file IS the summary of how the System was parameterised; there is no separate one |
 
 `build-top` additionally keeps the user's original input byte-for-byte under `original_inputs/`, keeps
 the construction artifacts that carry science under `preparation/`, and writes `SHA256SUMS` over the

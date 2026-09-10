@@ -294,39 +294,39 @@ works -- so the wording of unfollowable advice was improved.
 
 ---
 
-## 10. Five more documented provenance locations that nothing writes
+## 10. Five more documented provenance locations that nothing wrote
 
-**What.** Found while closing entry 9, which was one citation in the same table row.
-`docs/scientific-defaults.md`, the row for "barostat pressure, frequency in steps and in ps, which
-stages it is active in", cites six locations. `grep` over `src/` finds ONE of them:
-
-| cited | in `src/`? |
-|---|---|
-| `resolved_stage.yaml → barostat_frequency_steps` | the field, yes; the FILE appears only in the `STAGE_RUNTIME_OUTPUTS` tuple in `md/_stages.py` and is written by nothing |
-| `barostat_interval_ps` | no |
-| `barostats_in_system` | no |
-| `barostats_active` | no |
-| `MD/provenance.yaml → protocol.pressure_coupling` | no -- `pressure_coupling` appears nowhere in `src/` |
-| `resolved_run.yaml → pressure_coupling` | no -- entry 9; removed from the row |
-
-Related and smaller: `tests/test_fair_provenance.py::_complete_fixture` builds a `resolved_run.yaml`
-and has no callers at all.
-
-**Impact.** Documentation only, and that is the whole problem: this table is what a reader consults
-to find out where a barostat setting was recorded, and following it leads to files and fields that
-do not exist. Nothing scientific is decided by it, and no run reads it. It is the same class as
-entries 8 and 9 -- the software stating one thing and doing another -- which is why it is recorded
-rather than left to be rediscovered.
-
-**Not fixed here, deliberately.** Correcting the row means establishing where each of those six
-facts IS recorded, which is an audit of the stage record rather than a documentation edit, and
-guessing at replacements would put a second set of unverified citations in place of the first.
-Only the `resolved_run.yaml` citation was removed, because entry 9 established that that file
-cannot exist.
-
-**Trigger.** Pick this up before any barostat setting is cited from this table as evidence, or
-when the stage runtime record is next audited. The rest of the table has not been checked the same
-way and may hold more of these.
+> **RESOLVED 2026-09-10.** The barostat row of `docs/scientific-defaults.md`'s provenance table
+> cited six locations and `grep` found one of them in `src/`. Corrected by auditing where each
+> fact is ACTUALLY recorded rather than by deleting the row, which would have removed the answer
+> along with the wrong address.
+>
+> What was wrong, and what is true:
+>
+> | cited | reality |
+> |---|---|
+> | `MD/provenance.yaml → protocol.pressure_coupling` | `pressure_coupling` appears nowhere in `src/`. The requested pressure is `resolved.config → dynamics.pressure_bar` |
+> | `resolved_stage.yaml → barostat_frequency_steps` | that FILE is written by nothing -- it appears only in a `STAGE_RUNTIME_OUTPUTS` tuple -- and `barostat_frequency_steps` only in comments, naming a configuration key. The requested value is `dynamics.barostat_interval_steps` |
+> | `barostat_interval_ps`, `barostats_in_system`, `barostats_active` | the right facts under the wrong names. They are nested, and they are in the STAGE LOG: `<stage>.log → barostats.{in_system, active, frequency_steps, interval_ps}`, written by `md/stage.py` |
+>
+> The distinction the corrected row now draws is the one that matters and that the old row lost:
+> `resolved.config` records what was REQUESTED, and the stage log records what was APPLIED --
+> `in_system` and `active` are counted off the built System and the live Simulation, not restated
+> from the request. Under implicit solvent those differ by design, and entry 5 was a case of a
+> request and an outcome disagreeing with nothing to compare them against.
+>
+> **The whole table was then audited**, mechanically: every backtick-quoted filename and field in
+> §14 checked against `src/`. Three more rows cited a `provenance.yaml` that NOTHING WRITES — it
+> survives only in a comment, and `openmm/builders.py` records why: the provenance writer "belonged
+> to the retired route, and registration owns that ground now". The rows had outlived the artefact
+> by a refactor. One also named a `forcefield_summary` field that has never existed.
+>
+> Corrected to what is written today: `inputs/forcefield.json` (which IS the parameterisation
+> summary, and carries `package_versions`), each run's log record `environment.packages` (what
+> registration reads to bind a dataset to its engine), and each stage log's *Resolved settings*.
+>
+> 36 distinct tokens across 12 rows now resolve. The audit is a dozen lines of grep and is worth
+> re-running whenever a writer is retired — that is how all four of these got stale.
 
 ---
 
