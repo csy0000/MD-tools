@@ -124,10 +124,32 @@ def scaling_for_amplitude(amplitude):
 
 
 def linear_tau_ladder(minimum, maximum, count):
+    """A linear ladder. ONE implementation, in `remd.generated.tau_ladder`; this is its name here.
+
+    It used to compute the ladder itself, unrounded, while `tau_ladder` rounded to six places --
+    two spellings of one quantity, agreeing to six decimals and no further. That is exactly enough
+    to pass every eye and fail an exact comparison: a `cv_stateN.json` recorded 0.166667 from the
+    ladder that RAN, a resume recomputed 0.16666666666666666 from the ladder that did not, the
+    check allows 1e-12, and every CV-enabled four-rung ladder was unresumable. Found by
+    interrupting a real ladder, because nothing that agrees to six places is visible in a test
+    fixture.
+
+    Making the two round identically would have left two implementations that happen to agree.
+    This delegates, so there is one and they cannot drift apart again.
+
+    `minimum` is kept in the signature -- it is public API -- and every caller passes 0.0, which
+    is what `tau_ladder` assumes: state 0 is the unmodified physical Hamiltonian.
+    """
     if count < 2:
         raise ValueError(f"a ladder needs at least 2 replicas; got {count}")
-    step = (maximum - minimum) / (count - 1)
-    return [minimum + step * i for i in range(count)]
+    if float(minimum) != 0.0:
+        raise ValueError(
+            f"a tau ladder starts at 0.0 -- state 0 is the unscaled Hamiltonian -- and this asks "
+            f"for {minimum}. No caller in this package wants otherwise; if one does, the ladder "
+            f"itself has to learn about it rather than this wrapper reimplementing it.")
+    from ..remd.generated import tau_ladder
+
+    return tau_ladder(int(count), float(maximum))
 
 
 def clone_system(system):

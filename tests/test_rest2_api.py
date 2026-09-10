@@ -192,11 +192,21 @@ def test_the_scaler_is_the_same_object_for_every_protocol(tmp_path):
     topology = PDBFile(str(tmp_path / "b.pdb")).topology
     base = XmlSerializer.deserialize((tmp_path / "b.xml").read_text(encoding="utf-8"))
     selection = ScalingSelection.derive(topology, range(topology.getNumAtoms()))
+    from md_tools.remd.generated import tau_ladder
+
     scaler = REST2Scaler(base, selection)
 
     ladder = scaler.ladder(4, 0.5)
     assert ladder[0] == 0.0 and ladder[-1] == 0.5, ladder
-    assert ladder == pytest.approx([0.0, 1/6, 1/3, 0.5]), ladder
+    # ROUNDED TO SIX PLACES, deliberately, and asserted at that tolerance rather than at
+    # `pytest.approx`'s default 1e-6 RELATIVE one, which 0.166667 against 1/6 just exceeds. The
+    # rounded values are the ladder that runs: they are what a generated `_protocol.py` executes,
+    # what a state trajectory records as `tau`, and what a `cv_stateN.json` sidecar stores. This
+    # line used to assert the unrounded ideal, which is a different ladder from the one any run
+    # has ever used -- and while it did, nothing objected to a second, unrounded implementation
+    # existing, which is what made every CV-enabled four-rung ladder unresumable.
+    assert ladder == pytest.approx([0.0, 1/6, 1/3, 0.5], abs=1e-6), ladder
+    assert ladder == tau_ladder(4, 0.5), "the scaler's ladder is not the one the runtime uses"
     assert scaler.scaling_factors(0.5) == (0.25, 0.5)
     # A fixed rung (REST2, fixed-tau cMD) and a live switcher (AIS) from one selection.
     assert scaler.scaled_system(0.5).getNumParticles() == base.getNumParticles()
@@ -206,3 +216,58 @@ def test_the_scaler_is_the_same_object_for_every_protocol(tmp_path):
     identity = scaler.identity(0.5, temperature_k=300.0, ensemble="NVT")
     assert identity["tau"] == 0.5
     assert "s" not in identity and "sqrt_s" not in identity
+
+
+def test_one_tau_ladder_and_no_second_spelling_of_it():
+    """Two spellings of one ladder made every CV-enabled four-rung ladder unresumable.
+
+    `remd.generated.tau_ladder` rounds to six places, and its values are what a generated
+    `_protocol.py` executes, what a state trajectory stores as its `tau` attribute, and what a
+    `cv_stateN.json` sidecar records. `rest2.linear_tau_ladder` computed the same ladder without
+    rounding, and `run/continuation.py` recomputed it inline a third way, also unrounded.
+
+    They agree to six decimals, which is enough to pass a reading and fail an exact comparison.
+    A resume compared the recorded 0.166667 against a recomputed 0.16666666666666666, allowed
+    1e-12, and refused:
+
+        cv_state1.json records tau 0.166667 for state 1 and this ladder resolves
+        0.16666666666666666
+
+    Nothing was wrong with the data. The spelling that never ran was the one asked to judge it.
+    Found by interrupting a real 4-rung ladder mid-production and resuming it, because a
+    difference in the seventh decimal is invisible in a fixture.
+
+    This asserts IDENTITY, not approximate agreement: rounding both would have left two
+    implementations that happen to agree, and this bug is what that arrangement produces.
+    """
+    from md_tools.remd.generated import tau_ladder
+    from md_tools.rest2 import linear_tau_ladder
+
+    for states in (2, 3, 4, 6, 7, 8, 12):
+        for tau_max in (0.5, 0.3, 1.0):
+            canonical = tau_ladder(states, tau_max)
+            assert linear_tau_ladder(0.0, tau_max, states) == canonical, (
+                f"{states} states, tau_max {tau_max}: the two ladders disagree")
+            # Exactly representable after a round-trip through a JSON/YAML sidecar, which is
+            # where the recorded value comes from.
+            import json
+
+            assert json.loads(json.dumps(canonical)) == canonical
+
+
+def test_the_ladder_the_resume_check_uses_is_the_ladder_that_ran():
+    """`run/continuation.py` had a third inline copy: `tau_max * i / (states - 1)`, unrounded."""
+    import inspect
+
+    from md_tools.remd.generated import tau_ladder
+    from md_tools.run import continuation
+
+    # CODE ONLY. The comment that explains this bug quotes the old expression, and a test that
+    # matched raw source would fire on the explanation of the thing it is checking for.
+    source = inspect.getsource(continuation)
+    code = "\n".join(line.split("#", 1)[0] for line in source.splitlines())
+    assert "tau_max * i / (states - 1)" not in code, (
+        "the continuation check recomputes the tau ladder itself again")
+    assert "tau_ladder" in code, "the continuation check does not use the shared ladder"
+    # And the values it would compare against are the recorded ones.
+    assert tau_ladder(4, 0.5) == [0.0, 0.166667, 0.333333, 0.5]

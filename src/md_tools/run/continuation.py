@@ -251,7 +251,20 @@ def validate_public_entry(resolved, out_dir, *, protocol, stage=None,
         if not states:
             return
         tau_max = float(rest2.get("tau_max", 0.5))
-        taus = [tau_max * i / (states - 1) for i in range(states)] if states > 1 else [0.0]
+        # THE SAME LADDER THE RUN USED, from the one function that defines it. This recomputed it
+        # inline as `tau_max * i / (states - 1)`, unrounded, and compared the result against the
+        # tau each `cv_stateN.json` recorded -- which came from `tau_ladder`, rounded to 6 places.
+        # For four states they differ at the seventh decimal, the comparison allows 1e-12, and
+        # every CV-enabled four-rung ladder was therefore unresumable:
+        #
+        #   cv_state1.json records tau 0.166667 for state 1 and this ladder resolves
+        #   0.16666666666666666
+        #
+        # Nothing was wrong with the data. Two spellings of one ladder disagreed about it, and the
+        # spelling that never ran was the one asked to judge.
+        from ..remd.generated import tau_ladder
+
+        taus = tau_ladder(states, tau_max) if states > 1 else [0.0]
         validate_ladder_continuation(
             out_dir, definition=definition, taus=taus, interval_steps=interval,
             checkpoint_path=out_dir / f"{protocol}_checkpoint.nc")
