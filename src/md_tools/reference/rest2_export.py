@@ -327,10 +327,19 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
     package.mkdir(exist_ok=True)
     environment = record.get("environment") or {}
     packages = environment.get("packages") or {}
-    commit = environment.get("md_tools_commit") or source_commit()
+    # Two commits, answering two different questions. `md_tools_commit` is the engine that RAN
+    # the ladder, exactly as the run recorded it -- null when it recorded none, as the cMD export
+    # leaves it. The modules in ladder/ are copied from THIS installation: the exporter's commit,
+    # which is not necessarily the engine's. This used to fill the first from the second whenever
+    # the run had recorded nothing, so a ladder run on one commit shipped a bundle naming the
+    # exporter's commit beside the run's own version string and timestamps. Confidently wrong is
+    # worse than honestly empty.
+    from .. import __version__ as exporter_version
+    copied_from = {"md_tools_version": exporter_version, "md_tools_commit": source_commit()}
     (package / "__init__.py").write_text(
-        PACKAGE_INIT.format(version=packages.get("md-tools") or "unknown",
-                            commit=commit or "unknown (this build baked none)"),
+        PACKAGE_INIT.format(version=exporter_version,
+                            commit=copied_from["md_tools_commit"]
+                            or "unknown (this build baked none)"),
         encoding="utf-8")
     remd = Path(__import__("md_tools.remd", fromlist=["__file__"]).__file__).parent
     for name in VENDORED:
@@ -358,7 +367,8 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
     provenance = {
         "produced_by": "md-tools",
         "md_tools_version": packages.get("md-tools"),
-        "md_tools_commit": commit,
+        "md_tools_commit": environment.get("md_tools_commit"),
+        "ladder_modules_from": copied_from,
         "openmm": packages.get("openmm"),
         "python": packages.get("python"),
         # Everything the run recorded. None of it is needed to RUN this bundle -- the Systems are
@@ -374,10 +384,11 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
             "continued_from": parent,
         },
         "force_audit": audit,
-        "note": "The modules in ladder/ are byte-for-byte copies of md_tools/remd/*, so the "
-                "acceptance criterion and the sweep schedule here are the code that ran, not a "
-                "reimplementation. system_rung<i>.xml are the Systems the ladder propagated. "
-                "Needs OpenMM and numpy only.",
+        "note": "The modules in ladder/ are byte-for-byte copies of md_tools/remd/* at "
+                "`ladder_modules_from` -- the exporter's commit, which is not necessarily the "
+                "engine that ran (`md_tools_commit`). They are md_tools' own acceptance criterion "
+                "and sweep schedule, not a reimplementation. system_rung<i>.xml are the Systems "
+                "the ladder propagated. Needs OpenMM and numpy only.",
     }
     (out_dir / "provenance.json").write_text(json.dumps(provenance, indent=2, default=str) + "\n",
                                              encoding="utf-8")

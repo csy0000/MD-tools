@@ -12,7 +12,8 @@ A REST2 bundle does not reimplement the ladder. The modules that decide what hap
 acceptance criterion, the sweep schedule, the reduced potential, the seed derivation — are copied
 byte for byte, which took moving `BAR_NM3_TO_KJ_PER_MOL` and `driver._stream_seed` into
 `remd/core.py`. Checked against the engine's own run: 10 of 10 exchanges with an identical
-state-to-walker mapping, not merely a similar acceptance rate.
+state-to-walker mapping, not merely a similar acceptance rate. Its `md_tools_commit` is the engine
+that ran, as recorded; the commit the modules were copied from is `ladder_modules_from`.
 
 The first version of the cMD exporter carried the **build** System rather than the integrated one
 — a different Hamiltonian at non-zero tau — plus the config seed instead of the derived one, the

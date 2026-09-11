@@ -106,6 +106,43 @@ def test_the_vendored_modules_are_byte_identical_to_the_packages_own(ladder):
         assert mine == theirs, f"ladder/{name} is not md_tools/remd/{name}"
 
 
+def test_the_bundle_names_the_engine_that_ran_not_the_one_that_exported_it(ladder, tmp_path,
+                                                                            monkeypatch):
+    """Two commits, two questions: which engine ran the ladder, and where ladder/ was copied from.
+
+    A run that recorded no commit used to be given the EXPORTER's, so a bundle named a commit the
+    ladder never ran on, beside the run's own version string and timestamps. The record is
+    doctored here because in a checkout the two commits coincide and the conflation is invisible.
+    """
+    import copy
+
+    from md_tools import __version__
+    from md_tools.build.record import read_record, source_commit
+    from md_tools.reference import rest2_export
+
+    run, _bundle, _manifest = ladder
+    recorded = read_record(run / "REST2.log")
+
+    def export_with(commit, name):
+        def doctored(run_dir, stage):
+            record = copy.deepcopy(recorded)
+            record.setdefault("environment", {})["md_tools_commit"] = commit
+            return record
+        monkeypatch.setattr(rest2_export, "_ladder_record", doctored)
+        out = tmp_path / name
+        return out, rest2_export.export_rest2_reference(run, out, stage="REST2")["provenance"]
+
+    ran = "0" * 40                       # a commit this checkout is certainly not at
+    out, provenance = export_with(ran, "recorded")
+    assert provenance["md_tools_commit"] == ran
+    assert provenance["ladder_modules_from"] == {"md_tools_version": __version__,
+                                                 "md_tools_commit": source_commit()}
+    assert ran not in (out / "ladder" / "__init__.py").read_text(encoding="utf-8")
+
+    _out, provenance = export_with(None, "unrecorded")
+    assert provenance["md_tools_commit"] is None, "a commit the run never recorded was invented"
+
+
 def test_the_bundle_never_imports_md_tools(ladder):
     """Enforced by blocking the import, not by reading the source."""
     _run, bundle, _manifest = ladder
