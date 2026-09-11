@@ -85,3 +85,6 @@ src/md_tools/_build_info.py
 # would make every build dirty the tree, and a stale committed copy would be a provenance
 # record that lies. A checkout reads live git instead; see `build/record.source_commit`.
 src/md_tools/_commit.py
+
+# --- agent worktrees and settings, never committed ---
+/.claude/

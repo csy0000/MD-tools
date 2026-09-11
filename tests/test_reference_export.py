@@ -98,16 +98,56 @@ def test_input_holds_what_the_user_supplied_each_one_proven(finished):
 
     root, run, bundle, _manifest = finished
     inputs = bundle / "input"
-    assert sorted(p.name for p in inputs.iterdir()) == ["ALA.pdb", "README.md",
-                                                        "build-md.config", "build-top.config"]
+    assert sorted(p.name for p in inputs.iterdir()) == [
+        "ALA.pdb", "README.md", "build-md.config", "build-top.config", "build_settings.json",
+        "build_system.py", "built.pdb", "built.xml", "cMD.in", "eq_nvt_posres.in",
+        "structure.leap"]
     assert (inputs / "ALA.pdb").read_bytes() == ALA.read_bytes()
     assert (inputs / "build-top.config").read_bytes() == (root / "sys.config").read_bytes()
     assert (inputs / "build-md.config").read_bytes() == (run / "resolved.config").read_bytes()
+    for name in ("built.xml", "built.pdb"):
+        assert (inputs / name).read_bytes() == (root / name).read_bytes()
+    for name in ("cMD.in", "eq_nvt_posres.in"):
+        assert (inputs / name).read_bytes() == (run / name).read_bytes()
     recorded = json.loads((bundle / "provenance.json").read_text(encoding="utf-8"))["inputs"]
     assert recorded["structure"]["sha256"] == hashlib.sha256(ALA.read_bytes()).hexdigest()
     assert "resolves to the build-top record" in recorded["build_top_config"]["verified"]
+    assert [entry["file"] for entry in recorded["stage_inputs"]] == [
+        "input/eq_nvt_posres.in", "input/cMD.in"], "the stage inputs, in the order they ran"
+    assert recorded["structure_origin"]["sequence"] == ["ACE", "ALA", "NME"]
     readme = (inputs / "README.md").read_text(encoding="utf-8")
     assert "md-openmm build-top -i input/ALA.pdb --config input/build-top.config" in readme
+    assert ("md-openmm md-run -i input/eq_nvt_posres.in -p input/built.pdb -s input/built.xml"
+            in readme)
+    assert "md-openmm md-run -i input/cMD.in -p input/built.pdb -s input/built.xml" in readme
+    assert "python input/build_system.py --out rebuilt" in readme
+    assert "sequence `{ ACE ALA NME }`" in readme
+    assert str(root) not in readme and sys.executable not in readme, \
+        "a path from the machine the run was on reached the bundle"
+
+
+def test_the_system_rebuilds_from_the_structure_without_md_tools(finished, tmp_path):
+    """Route 2 of input/README.md: openmm-env and the bundle, nothing of md-tools, same bytes."""
+    import shutil
+
+    _root, _run, bundle, _manifest = finished
+    copy = tmp_path / "bundle"
+    shutil.copytree(bundle, copy)
+    blocker = (
+        "import sys, runpy\n"
+        "class B:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name.split('.')[0] == 'md_tools':\n"
+        "            raise ImportError('bundle imported md_tools: ' + name)\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, B())\n"
+        "sys.argv = ['input/build_system.py', '--out', 'rebuilt']\n"
+        "runpy.run_path('input/build_system.py', run_name='__main__')\n")
+    (copy / "_blocked.py").write_text(blocker, encoding="utf-8")
+    done = subprocess.run([sys.executable, "_blocked.py"], cwd=copy, capture_output=True,
+                          text=True, timeout=600, env={**ONE_THREAD, "PYTHONPATH": ""})
+    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+    assert (copy / "rebuilt" / "built.xml").read_bytes() == (copy / "input" / "built.xml").read_bytes()
 
 
 def _copy_of_the_run(finished, tmp_path):

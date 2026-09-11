@@ -20,10 +20,14 @@ every rung from rung 0 and requires an identical System. The runner also perform
 per-state `equilibration_steps`, which it used to skip; a ladder with that setting above zero is
 now reproduced exchange for exchange, and tested so.
 
-**Every bundle carries `input/`**: the structure, the build-top configuration and the run's
-`resolved.config` -- what a person supplied -- each proven against the run's own records before it
-is copied (the structure by digest, the configuration by resolving it again), with the commands
-that rebuild the run.
+**Every bundle carries `input/`**: the structure, the build-top configuration, the run's
+`resolved.config`, the built System and topology every stage ran on, and each stage's `.in` -- each
+proven against the run's own records before it is copied. `input/build_system.py` rebuilds the
+System from the structure with OpenMM and its chemistry libraries alone, no md-tools, and checks it
+is the same bytes; a test holds that for peptide and SMILES inputs in implicit and explicit
+solvent. The README gives four ways to reproduce a run, starting with OpenMM alone, and says where
+the structure came from -- for a capped peptide, the tleap `sequence` that writes it, checked by
+running tleap at export.
 
 The first version of the cMD exporter carried the **build** System rather than the integrated one
 — a different Hamiltonian at non-zero tau — plus the config seed instead of the derived one, the

@@ -367,8 +367,10 @@ def test_nothing_instructs_a_user_to_install_over_unpinned_ssh():
     `git+ssh://.../dev` was replaced is documentation, not an instruction, and forbidding the
     string outright would forbid saying why.
     """
+    # `.claude/` holds agent worktrees -- whole second checkouts, this file included -- which are
+    # not part of this tree and would otherwise report this very line as an offender.
     skipped = (REPO_ROOT / "docs" / "release-notes",
-               REPO_ROOT / "build", REPO_ROOT / ".git", Path(__file__))
+               REPO_ROOT / "build", REPO_ROOT / ".git", REPO_ROOT / ".claude", Path(__file__))
     offenders = {}
     for path in sorted(REPO_ROOT.rglob("*")):
         if path.suffix not in (".py", ".md", ".sh", ".toml") or not path.is_file():

@@ -245,7 +245,46 @@ def _same(left: Any, right: Any) -> bool:
             == json.dumps(right, sort_keys=True, default=str))
 
 
-def user_inputs_plan(run_dir: Path, system_path: Path) -> dict[str, Any]:
+def _stage_inputs(run_dir: Path) -> list[tuple[Path, list[str]]]:
+    """Every `.in` a stage or ladder in `run_dir` ran from, with the command that ran it, in order.
+
+    Taken from the records IN the run directory and copied from that same directory: the records
+    name the file (`-i`), and the file sits in the directory the run wrote, which a registered
+    dataset seals in its inventory. The records do not hold the `.in` digest -- `md-run` writes it
+    into `resolved.config` only when it creates that file, and build-md usually already has -- so
+    the run directory is the proof, and a record naming a file that is not there refuses.
+    """
+    from ..build.record import RecordError, read_record
+
+    found = []
+    for log in sorted(Path(run_dir).glob("*.log")):
+        try:
+            record = read_record(log)
+        except (RecordError, OSError):
+            continue
+        if not str(record.get("record_type") or "").startswith(("md-stage:", "md-replica:")):
+            continue
+        command = list(record.get("command") or [])
+        if "-i" not in command or command.index("-i") + 1 >= len(command):
+            continue
+        path = Path(run_dir) / Path(command[command.index("-i") + 1]).name
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"{log.name} ran from {path.name}, which is not in {run_dir}. input/ holds the "
+                f"stage inputs the run actually read, and this one cannot be shown. Nothing has "
+                f"been written.")
+        found.append((str(record.get("started_utc") or ""), path, command))
+    # A ladder's ranks can each record the same command; one input is one entry.
+    ordered, seen = [], set()
+    for _, path, command in sorted(found, key=lambda item: item[0]):
+        if path.name not in seen:
+            seen.add(path.name)
+            ordered.append((path, command))
+    return ordered
+
+
+def user_inputs_plan(run_dir: Path, system_path: Path,
+                     topology_path: Path | None = None) -> dict[str, Any]:
     """What a person supplied to produce this run, each file found and PROVEN, before any write.
 
     A bundle's `input/` holds exactly these:
@@ -327,25 +366,202 @@ def user_inputs_plan(run_dir: Path, system_path: Path) -> dict[str, Any]:
                                 f"input build-md generated this run from. Nothing has been written.")
     return {"structure": structure, "build_top_config": top_config,
             "build_top_config_named": named_config,
-            "build_top_resolved": record.get("resolved_config"), "build_md_config": protocol}
+            "build_top_resolved": record.get("resolved_config"), "build_md_config": protocol,
+            "build_system": system_path, "build_topology": topology_path,
+            "build_top_record": record, "stage_inputs": _stage_inputs(run_dir)}
 
 
 INPUT_README = """# Inputs
 
-What a person supplied to produce this run. Everything else in the bundle was derived from these,
-and each one here was checked against the run's own records before it was copied.
+What this run was made from. Each file here was checked against the run's own records before it
+was copied.
 
 {rows}
 
-To rebuild the run from scratch with md-tools:
+## Where the structure came from
+
+{origin}
+
+## Four ways to reproduce it
+
+**1. With OpenMM alone, from the bundled state.** No md-tools, no AmberTools, no OpenFF. The
+bundle one level up holds the Hamiltonian the run integrated and the state it continued from:
+
+    cd .. && ./run.sh
+
+**2. From the structure, in `openmm-env`, without md-tools.** {standalone}
+
+**3. With md-tools, from the built System.** No `build-top`: these are the commands the run's
+own records say it ran, pointed at the files here. Each continues from the state the one before
+it wrote.
+
+{stage_commands}
+
+**4. With md-tools, from the structure.**
 
     md-openmm build-top -i input/{structure} {config_flag}-os built.xml -op built.pdb -log built.log
     md-openmm build-md --config input/build-md.config -odir md_script
-
-The bundled Systems stay the authority. A peptide built from a PDB rebuilds to the same System; a
-molecule built from SMILES does not, because AM1-BCC charges differ between builds of the same
-input -- which is why the bundle carries the Systems themselves.
 """
+
+STANDALONE_BUILD = Path(__file__).with_name("standalone_build.py")
+
+_STEPS = {
+    ("peptide", "explicit"): "hydrogens deleted and re-added at pH {ph} (seeded), the {shape} box "
+                             "sized from the solute, {water} water and ions added (seeded), the "
+                             "System created",
+    ("ligand", "explicit"): "the 3D structure made from the SMILES, charges assigned "
+                            "({charges}), the {shape} box sized, {water} water and ions added "
+                            "(seeded), the System created",
+    ("peptide", "implicit"): "tleap writes the Amber topology with {radii} radii, ParmEd creates "
+                             "the {gb} System",
+    ("ligand", "implicit"): "the 3D structure made from the SMILES, charges assigned ({charges}), "
+                            "the {ligand} parameters written to Amber files through ParmEd, ParmEd "
+                            "creates the {gb} System",
+}
+
+
+def standalone_settings(record: dict[str, Any], structure: Path, system: Path,
+                        topology: Path) -> dict[str, Any]:
+    """What `input/build_system.py` needs: the values the recorded build-top used, and the result.
+
+    Taken from the record's resolved configuration through the same mapping build-top applies
+    (`_legacy_cfg`), so the script sees the values the builders saw, not a second reading of the
+    user's file.
+    """
+    from ..openmm.builders import _legacy_cfg
+
+    resolved = record.get("resolved_config") or {}
+    cfg = _legacy_cfg(resolved)
+    kind = str(cfg["solute"]["kind"])
+    route = (record.get("interpretation") or {}).get("route") or (
+        "peptide" if kind == "peptide" else "ligand")
+    implicit = resolved.get("solvation") == "implicit"
+    settings = {
+        "schema_version": 1,
+        "written_by": "md-openmm export-reference, from the build-top record's resolved_config",
+        "route": route,
+        "kind": kind,
+        "solvent": "implicit" if implicit else "explicit",
+        "structure_file": structure.name,
+        "builder": {key: cfg[key] for key in ("run", "structure", "protonation", "forcefield",
+                                              "solvation", "system_build")},
+        "implicit": ({"model": "GBn2", "radii": "mbondi3", "remove_cm_motion": True,
+                      "nonpolar_sasa": bool((cfg.get("implicit_solvent") or {})
+                                            .get("nonpolar_sasa", False))}
+                     if implicit else None),
+        "expected": {"system": {"file": system.name, "sha256": _digest(system)},
+                     "topology": {"file": topology.name, "sha256": _digest(topology)}},
+    }
+    if implicit and kind == "peptide-like":
+        # The mbondi3 corrections for a peptide-like solute come from md-tools' molecular map,
+        # which this script does not carry. Said, rather than built without them.
+        settings["unsupported"] = (
+            "a peptide-like solute in implicit solvent takes mbondi3 corrections from md-tools' "
+            "peptide map, which this script does not reproduce. Rebuild with md-openmm build-top.")
+    return settings
+
+
+def leap_sequence_origin(structure: Path) -> dict[str, Any] | None:
+    """If `structure` is exactly what tleap's `sequence {...}` writes for its residues, say so.
+
+    Checked, not assumed: tleap is run on the residue names read from the file, and every atom
+    record's first 66 columns -- names, residues, coordinates -- must agree. (The element columns
+    are left out because tleap versions differ in whether they write them.) None when tleap is not
+    installed, the file is not a PDB, or the two differ anywhere.
+    """
+    import subprocess
+    import tempfile
+
+    structure = Path(structure)
+    if structure.suffix.lower() != ".pdb" or shutil.which("tleap") is None:
+        return None
+    rows = [line[:66] for line in structure.read_text(encoding="utf-8").splitlines()
+            if line.startswith(("ATOM", "HETATM"))]
+    residues: list[tuple[str, str]] = []
+    for line in rows:
+        key = line[21:27]
+        if not residues or residues[-1][0] != key:
+            residues.append((key, line[17:20].strip()))
+    names = [name for _, name in residues]
+    for leaprc in ("leaprc.protein.ff14SB", "leaprc.protein.ff19SB"):
+        commands = [f"source {leaprc}", f"mol = sequence {{ {' '.join(names)} }}",
+                    f"savePdb mol {structure.name}", "quit"]
+        with tempfile.TemporaryDirectory(prefix="leap-sequence-") as work:
+            (Path(work) / "make.leap").write_text("\n".join(commands) + "\n", encoding="utf-8")
+            subprocess.run(["tleap", "-f", "make.leap"], cwd=work, capture_output=True,
+                           text=True, check=False)
+            made = Path(work) / structure.name
+            if not made.is_file():
+                continue
+            made_rows = [line[:66] for line in made.read_text(encoding="utf-8").splitlines()
+                         if line.startswith(("ATOM", "HETATM"))]
+        if made_rows == rows:
+            return {"leaprc": leaprc, "sequence": names, "script": "\n".join(commands) + "\n"}
+    return None
+
+
+def _origin_text(structure: Path, settings: dict[str, Any], leap: dict[str, Any] | None) -> str:
+    if settings["route"] == "ligand":
+        etkdg = settings["builder"]["structure"]["etkdg"]
+        mmff = settings["builder"]["structure"]["mmff"]
+        seed = etkdg["seed"] if etkdg["seed"] is not None else settings["builder"]["run"]["seed"]
+        return (f"No 3D structure was supplied: `{structure.name}` holds a SMILES string, and "
+                f"`build_system.py` makes the coordinates from it -- RDKit ETKDGv3 with seed "
+                f"{seed} embeds {etkdg['n_conformers']} conformers, each is minimised with "
+                f"{mmff['variant']}, and the lowest in energy is kept. Hydrogens and protonation "
+                f"are exactly as the SMILES writes them.")
+    if leap is not None:
+        return (f"`{structure.name}` is exactly what AmberTools' tleap writes for the sequence "
+                f"`{{ {' '.join(leap['sequence'])} }}` -- every atom name, residue and coordinate, "
+                f"compared when this bundle was exported. `structure.leap` makes it:\n\n"
+                f"    cd input && tleap -f structure.leap")
+    return (f"`{structure.name}` was supplied to build-top as a file. How it was made is not "
+            f"recorded; it is not tleap's `sequence` output for its residues.")
+
+
+def _standalone_text(settings: dict[str, Any]) -> str:
+    if settings.get("unsupported"):
+        return f"Not available for this build: {settings['unsupported']}"
+    b = settings["builder"]
+    steps = _STEPS[(settings["route"], settings["solvent"])].format(
+        ph=b["protonation"]["ph"], shape=b["solvation"]["box_shape"],
+        water=str(b["solvation"]["water_model"]).upper(),
+        charges=b["forcefield"]["ligand_charge_method"], ligand=b["forcefield"]["ligand"],
+        radii=(settings["implicit"] or {}).get("radii"), gb=(settings["implicit"] or {}).get("model"))
+    return (f"`build_system.py` performs every step `build-top` performed -- {steps} -- as plain "
+            f"library calls, with this build's values from `build_settings.json`, and compares "
+            f"what it builds with the System and topology here:\n\n"
+            f"    python input/build_system.py --out rebuilt\n\n"
+            f"It exits 0 only when the rebuilt System is byte-identical and the topology identical "
+            f"apart from the date OpenMM writes into its first line. The rebuilt pair then runs "
+            f"through route 1 or 3. It needs the libraries build-top uses and nothing of "
+            f"md-tools: OpenMM"
+            + (", AmberTools (tleap) and ParmEd" if settings["route"] == "peptide"
+               and settings["solvent"] == "implicit" else "")
+            + (", RDKit, the OpenFF toolkit, openmmforcefields and AmberTools"
+               + (" and ParmEd" if settings["solvent"] == "implicit" else "")
+               if settings["route"] == "ligand" else "")
+            + ".")
+
+
+def _stage_command(command: list[str], system: str, topology: str) -> str:
+    """A recorded `md-run` command, pointed at `input/`, with no path from the machine it ran on.
+
+    The record holds argv as launched -- an interpreter, a script path, absolute file names --
+    and none of that belongs in a bundle. The command is rebuilt from `md-run` onwards and every
+    absolute path is reduced to its file name, which is what it is called in the run directory.
+    """
+    words = list(command)
+    if "md-run" in words:
+        words = ["md-openmm", *words[words.index("md-run"):]]
+    words = [Path(word).name if word.startswith("/") else word for word in words]
+    for flag, value in (("-i", None), ("-p", f"input/{topology}"), ("-s", f"input/{system}")):
+        if flag in words and words.index(flag) + 1 < len(words):
+            at = words.index(flag) + 1
+            words[at] = f"input/{Path(words[at]).name}" if value is None else value
+    if "-ng" in words and words.index("-ng") + 1 < len(words):
+        words = ["mpirun", "-n", words[words.index("-ng") + 1], *words]
+    return "    " + " ".join(words)
 
 
 def write_user_inputs(plan: dict[str, Any], out_dir: Path) -> dict[str, Any]:
@@ -388,9 +604,71 @@ def write_user_inputs(plan: dict[str, Any], out_dir: Path) -> dict[str, Any]:
         "file": "input/build-md.config", "sha256": _digest(target / "build-md.config"),
         "verified": "the run's own resolved.config, authoritative by contract"}
     rows.append("| `build-md.config` | the run's `resolved.config`, which `build-md` reads back |")
+
+    # The OpenMM inputs every stage ran on: found by the digest the run records hold.
+    names = {}
+    for role, key in (("system", "build_system"), ("topology", "build_topology")):
+        source = plan.get(key)
+        if source is None:
+            continue
+        source = Path(source)
+        shutil.copy2(source, target / source.name)
+        names[role] = source.name
+        manifest[f"build_{role}"] = {
+            "file": f"input/{source.name}", "sha256": _digest(target / source.name),
+            "verified": f"sha256 matches the run record's inputs.{role} and the build-top output"}
+        rows.append(f"| `{source.name}` | the built {'System' if role == 'system' else 'topology'}"
+                    f" every stage ran on (`-{'s' if role == 'system' else 'p'}`) |")
+
+    # The Amber-like stage inputs, exactly as md-run read them.
+    commands = []
+    manifest["stage_inputs"] = []
+    for path, command in plan.get("stage_inputs") or []:
+        shutil.copy2(path, target / path.name)
+        manifest["stage_inputs"].append({
+            "file": f"input/{path.name}", "sha256": _digest(target / path.name),
+            "verified": "copied from the run directory, where the stage record that read it lives"})
+        rows.append(f"| `{path.name}` | the stage input `md-run -i` read |")
+        commands.append(_stage_command(command, names.get("system", "built.xml"),
+                                       names.get("topology", "built.pdb")))
+
+    # The build itself, as a script that needs openmm-env and not md-tools.
+    settings = standalone_settings(plan["build_top_record"], structure,
+                                   target / names["system"], target / names["topology"])
+    (target / "build_settings.json").write_text(json.dumps(settings, indent=2) + "\n",
+                                                encoding="utf-8")
+    manifest["build_settings"] = {"file": "input/build_settings.json",
+                                  "sha256": _digest(target / "build_settings.json")}
+    rows.append("| `build_settings.json` | the values build-top used, from its record |")
+    if not settings.get("unsupported"):
+        shutil.copy2(STANDALONE_BUILD, target / "build_system.py")
+        (target / "build_system.py").chmod(0o755)
+        manifest["build_script"] = {
+            "file": "input/build_system.py", "sha256": _digest(target / "build_system.py"),
+            "copied_from": "md_tools/reference/standalone_build.py, byte for byte"}
+        rows.append("| `build_system.py` | build-top's steps without md-tools; checks its result "
+                    "against the files here |")
+    leap = leap_sequence_origin(structure) if settings["route"] == "peptide" else None
+    if leap is not None:
+        (target / "structure.leap").write_text(leap["script"], encoding="utf-8")
+        manifest["structure_origin"] = {
+            "file": "input/structure.leap", "sha256": _digest(target / "structure.leap"),
+            "leaprc": leap["leaprc"], "sequence": leap["sequence"],
+            "verified": "tleap's output for this sequence matches every atom record of the "
+                        "structure in columns 1-66"}
+        rows.append(f"| `structure.leap` | the tleap commands that write `{structure.name}` |")
+    else:
+        manifest["structure_origin"] = (
+            {"made_by": "build_system.py, from the SMILES"} if settings["route"] == "ligand"
+            else {"made_by": None, "why": "not tleap sequence output, and not recorded"})
+
     table = "| file | what it is |\n|---|---|\n" + "\n".join(rows)
     (target / "README.md").write_text(
-        INPUT_README.format(rows=table, structure=structure.name, config_flag=config_flag),
+        INPUT_README.format(rows=table, structure=structure.name, config_flag=config_flag,
+                            origin=_origin_text(structure, settings, leap),
+                            standalone=_standalone_text(settings),
+                            stage_commands="\n".join(commands) or
+                            "    (the records name no md-run stage inputs)"),
         encoding="utf-8")
     return manifest
 
@@ -423,7 +701,7 @@ def export_reference(run_dir: Path, out_dir: Path, *, stage: str = "cMD") -> dic
         found[role] = source
 
     # Proven before the directory exists, like every other refusal here.
-    inputs_plan = user_inputs_plan(run_dir, found["system"])
+    inputs_plan = user_inputs_plan(run_dir, found["system"], found["topology"])
 
     out_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(found["topology"], out_dir / "topology.pdb")

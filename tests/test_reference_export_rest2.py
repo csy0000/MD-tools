@@ -246,6 +246,14 @@ def test_input_holds_what_the_user_supplied_each_one_proven(ladder):
     assert recorded["structure"]["sha256"] == hashlib.sha256(ALA.read_bytes()).hexdigest()
     assert recorded["build_top_config"]["file"] == "input/build-top.config"
     assert "resolves to the build-top record" in recorded["build_top_config"]["verified"]
+    names = {p.name for p in inputs.iterdir()}
+    assert {"eq_nvt_posres.in", "REST2.in", "built.xml", "built.pdb", "build_system.py",
+            "build_settings.json", "structure.leap"} <= names
+    assert (inputs / "REST2.in").read_bytes() == (run / "REST2.in").read_bytes()
+    readme = (inputs / "README.md").read_text(encoding="utf-8")
+    assert (f"mpirun -n {RUNGS} md-openmm md-run -ng {RUNGS} -i input/REST2.in "
+            "-p input/built.pdb -s input/built.xml -c eq.xml") in readme
+    assert str(root) not in readme
 
 
 def test_the_bundle_never_imports_md_tools(ladder):

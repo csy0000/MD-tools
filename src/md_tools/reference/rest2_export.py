@@ -396,7 +396,7 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
         raise ValueError(f"built {len(systems)} rung System(s) for {len(taus)} tau value(s)")
 
     # Proven before the directory exists, like every other refusal here.
-    inputs_plan = user_inputs_plan(run_dir, found["system"])
+    inputs_plan = user_inputs_plan(run_dir, found["system"], found["topology"])
 
     out_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(found["topology"], out_dir / "topology.pdb")

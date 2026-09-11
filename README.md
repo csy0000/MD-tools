@@ -216,8 +216,12 @@ AIS — is refused before anything is written.
 
 A bundle holds the System(s) that were integrated, the topology, the state the run continued from,
 a runner, `provenance.json` and a `SHA256SUMS` inventory, and `input/`: the structure, the
-`build-top` configuration and the run's `resolved.config`, each proven against the run's own
-records before it is copied, with the two commands that rebuild the run. A REST2 bundle also
+`build-top` configuration, the run's `resolved.config`, the built System and topology every stage
+ran on and the `.in` file each stage read, each proven against the run's own records before it is
+copied. `input/build_system.py` performs build-top's steps as plain OpenMM, RDKit, OpenFF and
+AmberTools calls -- no md-tools -- and checks that it rebuilds the same System, byte for byte;
+`input/README.md` gives the four ways to reproduce the run, and says where the structure came
+from (for a capped peptide, the tleap `sequence` that writes it, when it provably does). A REST2 bundle also
 carries the code that built its rungs (`ladder/hamiltonian.py`, copied byte for byte) and
 `verify_rungs.py`, which rebuilds every rung from rung 0 with OpenMM alone and checks each one.
 
