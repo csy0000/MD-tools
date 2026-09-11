@@ -260,7 +260,46 @@ def build_parser() -> argparse.ArgumentParser:
     reg.add_argument("--orcid", default=None, help="with --init, an ORCID, or omit for none")
     reg.set_defaults(func=cmd_data_register)
 
+    ref = sub.add_parser(
+        "export-reference",
+        help="export a finished stage as a standalone bundle that needs only OpenMM",
+        description="Write a reference bundle: the System that was integrated, the topology, a "
+                    "standalone run.py and run.sh, the settings read from the run's own record, "
+                    "provenance, and a SHA256SUMS inventory. Nothing in the bundle imports "
+                    "md_tools, so it outlives this package.")
+    ref.add_argument("-idata", "--idata", required=True, metavar="DIR",
+                     help="a finished run directory")
+    ref.add_argument("-odir", "--odir", required=True, metavar="DIR",
+                     help="where to write the bundle")
+    ref.add_argument("--stage", default="cMD", metavar="NAME",
+                     help="which finished stage to export (default: cMD)")
+    ref.set_defaults(func=cmd_export_reference)
+
+
+
     return parser
+
+
+# ------------------------------------------------------------------------------------------------
+# export-reference
+# ------------------------------------------------------------------------------------------------
+
+def cmd_export_reference(args) -> int:
+    """A finished stage -> a bundle that runs on OpenMM alone."""
+    from ..reference import export_reference
+
+    try:
+        manifest = export_reference(Path(args.idata), Path(args.odir), stage=args.stage)
+    except (FileNotFoundError, ValueError, KeyError) as refusal:
+        print(f"export-reference: {refusal}", file=sys.stderr)
+        return 2
+    settings = manifest["settings"]
+    nanoseconds = settings["steps"] * settings["timestep_fs"] * 1e-6
+    print(f"  exported {manifest['files']} file(s) to {args.odir}")
+    print(f"  {settings['name']}: {nanoseconds:g} ns {settings['ensemble']}, "
+          f"tau = {settings['tau']:g}, seed {settings['seed']}")
+    print("  needs OpenMM only -- run it with ./run.sh")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
