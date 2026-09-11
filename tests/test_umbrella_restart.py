@@ -38,6 +38,7 @@ from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMEN
 
 from .conftest import ALA_PDB, REPO_ROOT
 
+
 CLI = [sys.executable, "-c",
        "import sys; from md_tools.cli.md_openmm import main; sys.argv[0]='md-openmm'; main()"]
 
@@ -102,11 +103,25 @@ def _environment(work: Path | None = None, extra=None) -> dict[str, str]:
     return base
 
 
+def _platform_flags():
+    """`--cpu` where there is no CUDA, which is what this file's exemption already claims.
+
+    The docstring says "whatever platform is available", and the tests then asked for none -- so
+    the runtime applied its default, CUDA, and refused on a machine without it: "CUDA is required
+    and this OpenMM build does not provide it". That is the correct refusal; the test was simply
+    not asking for what it said it wanted, and it turned CI's non-GPU lane red.
+    """
+    from openmm import Platform
+
+    available = {Platform.getPlatform(i).getName() for i in range(Platform.getNumPlatforms())}
+    return () if "CUDA" in available else ("--cpu",)
+
+
 def _run(project_root: Path, work: Path, *, extra_env=None, extra=()):
     return subprocess.run(
         [sys.executable, str(project_root / "project" / "umbrella.py"),
          "-p", str(project_root / "built.pdb"), "-s", str(project_root / "built.xml"),
-         "-odir", str(work), *extra],
+         "-odir", str(work), *_platform_flags(), *extra],
         cwd=work, capture_output=True, text=True, timeout=1800,
         env=_environment(work, extra_env))
 

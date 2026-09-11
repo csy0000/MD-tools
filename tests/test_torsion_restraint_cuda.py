@@ -23,10 +23,11 @@ from md_tools.md.torsion_restraints import (FLAT_BOTTOM, HARMONIC, TORSION_RESTR
 
 from .conftest import ALA_PDB
 
-pytestmark = pytest.mark.skipif(
-    "CUDA" not in [Platform.getPlatform(i).getName()
-                   for i in range(Platform.getNumPlatforms())],
-    reason="no CUDA platform")
+# DESELECTED on a CPU-only machine, not skipped. `conftest` states the rule -- a GPU test that
+# skips reports coverage the run did not have -- and CI enforces it by failing on any skip in the
+# `-m "not slow and not gpu"` lane. A `skipif` cannot satisfy that: the test is still collected,
+# still runs, and still prints SKIPPED. The marker is what `-m` selects on.
+pytestmark = [pytest.mark.gpu, pytest.mark.slow]
 
 K = 500.0                    # kJ/mol/rad^2
 
