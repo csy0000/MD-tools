@@ -749,3 +749,61 @@ def test_when_nothing_holds_the_examples_the_refusal_says_where_it_looked(tmp_pa
         configs.example_root()
     message = str(refusal.value)
     assert str(hollow) in message and "does not hold all" in message, message
+
+
+# --- a dataset name may be a path, and every component of it is still checked -------------------
+
+def test_a_dataset_name_may_be_several_segments_deep():
+    """A reference set is browsable by system and by method, not one flattened name.
+
+    `data_name` was a single segment, so `2026-09/ALA/cMD-hot/run1` could only be expressed as
+    `2026-09_ALA_cMD-hot_run1` -- findable by globbing and by nothing else. Depth costs none of
+    the guarantees: the year still leads, `common/` still separates shared data, and each
+    component is validated on its own.
+    """
+    from md_tools.data_contract.model import canonical_path
+
+    assert canonical_path(year="2026", project_name="reference",
+                          data_name="2026-09/ALA/cMD-hot/run1", common=True) == \
+        "2026/common/reference/2026-09/ALA/cMD-hot/run1"
+    assert canonical_path(year="2026", project_name="MD-project",
+                          data_name="2026-09/ALA/REST2/run1") == \
+        "2026/MD-project/2026-09/ALA/REST2/run1"
+    # The single-segment form is unchanged; this is an extension, not a replacement.
+    assert canonical_path(year="2026", project_name="p", data_name="d") == "2026/p/d"
+
+
+@pytest.mark.parametrize("name, why", [
+    ("a/../b", "a traversal in a component that is not the first"),
+    ("../escape", "a traversal in the first component"),
+    ("/absolute", "an absolute form"),
+    ("trailing/", "a trailing separator, whose empty component would collapse"),
+    ("a//b", "an empty middle component"),
+    ("a/.hidden", "a leading dot below the top level"),
+    ("a/b\\c", "a Windows separator inside a component"),
+])
+def test_every_component_of_a_dataset_name_is_validated_not_just_the_first(name, why):
+    """Depth must not become a way past the validation, which is the whole risk of allowing it.
+
+    A name reaching the filesystem decides where data are written. Checking only the first
+    component would let `ok/../../escape` through, so each one goes through `check_segment`
+    separately and the error names which component failed.
+    """
+    from md_tools.data_contract.model import DatasetError, check_data_path
+
+    with pytest.raises(DatasetError):
+        check_data_path("data_name", name)
+
+
+def test_a_nested_name_cannot_escape_the_storage_root(tmp_path):
+    """The property that matters, asserted on real paths rather than on the string."""
+    from md_tools.data_contract.model import DatasetError, canonical_path
+
+    root = tmp_path / "MD_DATA"
+    root.mkdir()
+    good = (root / canonical_path(year="2026", project_name="reference",
+                                  data_name="2026-09/ALA/cMD-hot/run1", common=True)).resolve()
+    assert str(good).startswith(str(root.resolve()) + "/")
+    with pytest.raises(DatasetError):
+        canonical_path(year="2026", project_name="reference",
+                       data_name="2026-09/../../../../etc", common=True)

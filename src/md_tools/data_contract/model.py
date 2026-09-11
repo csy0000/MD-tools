@@ -263,11 +263,40 @@ def canonical_path(*, year: str, project_name: str, data_name: str, common: bool
             raise DatasetError(f"{label}: must be a non-empty string")
     if not re.fullmatch(YEAR_PATTERN, year):
         raise DatasetError(f"year: {year!r} is not exactly four decimal digits")
-    for label, value in (("project_name", project_name), ("data_name", data_name)):
-        check_segment(label, value)
+    check_segment("project_name", project_name)
+    check_data_path("data_name", data_name)
     if common:
         return f"{year}/{COMMON_SEGMENT}/{project_name}/{data_name}"
     return f"{year}/{project_name}/{data_name}"
+
+
+def check_data_path(label: str, value: str) -> str:
+    """A dataset name that MAY be several segments deep, each one validated on its own.
+
+    `data_name` used to be a single segment, which made the whole hierarchy of a reference set --
+    `2026-09/ALA/cMD-hot/run1` -- expressible only by flattening it into one name. A directory
+    tree that can be browsed by system and by method is worth more than a name that can be
+    globbed, and nothing about the guarantees depends on the depth.
+
+    What does NOT change is what a segment may be. Every component goes through `check_segment`,
+    so `..`, absolute forms, leading dots, control characters and the Windows separator are
+    refused exactly as before -- the traversal this validation exists to stop is stopped at every
+    level rather than at the first. Empty components (`a//b`, a leading or trailing slash) are
+    refused too: they would collapse silently and two different names would resolve to one path.
+    """
+    if not isinstance(value, str) or not value:
+        raise DatasetError(f"{label}: must be a non-empty string")
+    if value.startswith("/") or value.endswith("/"):
+        raise DatasetError(
+            f"{label}: {value!r} begins or ends with a separator. A dataset path is relative and "
+            f"its components are named; an empty component would collapse and two different "
+            f"names would land on one path.")
+    parts = value.split("/")
+    if any(not part for part in parts):
+        raise DatasetError(f"{label}: {value!r} has an empty component")
+    for index, part in enumerate(parts):
+        check_segment(f"{label}[{index}]" if len(parts) > 1 else label, part)
+    return value
 
 
 def check_segment(label: str, value: str) -> str:

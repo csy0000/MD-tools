@@ -36,7 +36,8 @@ import yaml
 from ..data_contract.extension import (EXTENSION_NAME, check_dataset_extension,
                                        validate_extension_file)
 from ..data_contract.model import (INVENTORY_NAME, MANIFEST_NAME, RESOLVED_NAME, Dataset,
-                                   DatasetError, canonical_path, check_segment,
+                                   DatasetError, canonical_path, check_data_path,
+                                   check_segment,
                                    validate_dataset)
 from . import discovery, inventory
 from .errors import RegistrationError
@@ -113,7 +114,10 @@ def register_dataset(*, source: Path, project_name: str, data_name: str, year: s
     # bug rather than a refusal, and should not be reported as if the user had mistyped something.
     try:
         check_segment("project_name", project_name)
-        check_segment("data_name", data_name)
+        # MAY be several segments: a reference set is browsable as
+        # `<yyyy-mm>/<system>/<method>/run<n>` rather than one flattened name. Every component is
+        # still validated individually -- see `check_data_path`.
+        check_data_path("data_name", data_name)
         relative = canonical_path(year=year, project_name=project_name, data_name=data_name,
                                   common=common)
     except DatasetError as exc:
