@@ -41,3 +41,23 @@ anything a test fixture can reproduce. That evidence is in these journals:
 
 The last instruction is the one that created this repository as a standalone package. Its journal
 was about the other repository and stayed there.
+
+## Commit hashes before 2026-09-11
+
+This repository's history was rewritten on 2026-09-11, before it was made public, to remove one
+workstation's hostname and absolute paths from old files and commit messages, and to give every
+commit one author address. Nothing else changed: the same commits, in the same order, with the
+same dates, messages and final file tree. Every commit hash changed with it.
+
+Records written before then cite the old hashes -- run records, dataset manifests and notes,
+exported bundles, and release notes in this directory tree. [`commit-map.tsv`](commit-map.tsv)
+maps every old hash to its new one. The ones those records cite most:
+
+| cited as | now | what it is |
+|---|---|---|
+| `514e44b` | `6e94dbe` | the engine content the 2026-09 ALA campaign ran on |
+| `ae6e994` | `d386899` | the exporter behind the campaign's REST2 bundles |
+| `cd2b1d1` | `3cbe56b` | the 0.5.2 release commit before the final fixes |
+| `c7e7265` | `3fc244f` | `main` at 0.5.1 |
+
+The original history is kept in a private archive.
