@@ -208,6 +208,12 @@ That also settles the question this entry left hanging. The fix is one keyword â
 ligand and peptide-like build, including any comparison against a dataset built before it. Paying
 that to remove a problem the practice already avoids is the wrong trade while the practice holds.
 
+**Since 0.5.2 it is visible in every bundle.** `input/build_system.py` rebuilds a System from its
+structure and compares bytes. It rebuilds phenol identically, and for a molecule like
+cyclo(Gly-Asp-Arg) it would report DIFFERS and exit 1 -- correctly -- but the bundle's
+`input/README.md` does not yet say why. Add that sentence to its ligand route when this entry is
+picked up, whichever way it is settled.
+
 **Not fixed here, deliberately.** **Trigger.** Pick this up before any study that needs to reproduce a build from its inputs, before
 comparing two builds for anything but their radii, or when deciding whether recorded conformer
 provenance should be binding. The fix is small; its consequences are not.
@@ -392,6 +398,22 @@ works -- so the wording of unfollowable advice was improved.
 >
 > 36 distinct tokens across 12 rows now resolve. The audit is a dozen lines of grep and is worth
 > re-running whenever a writer is retired â€” that is how all four of these got stale.
+
+---
+
+## 11. `export-reference -idata .` cannot find the built System
+
+Found 2026-09-11, exporting the test-systems campaign with the 0.5.2 release. A run directory made
+by build-md sits beside `built.xml`/`built.pdb`, and its records name them relative to the command
+line (`-p ../built.pdb` is recorded as `built.pdb`), so the exporter finds them by digest "beside
+the run directory or above it". Given `-idata .`, "above it" is `Path('.').parents`, which is empty,
+and the export is refused with a message saying the topology is not beside or above -- true of the
+path as written, false of the directory. An absolute `-idata` works.
+
+The fix is to resolve `-idata` (and `-odir`) before any search, in `export_reference` and
+`export_rest2_reference` alike, with a test that exports from inside the run directory with `.`.
+Deferred rather than fixed in 0.5.2 because the release had been tagged and registered datasets
+already name its commit. `docs/campaigns/test-systems-2026-09/run_tests.py` passes absolute paths.
 
 ---
 

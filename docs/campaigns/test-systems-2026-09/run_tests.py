@@ -200,8 +200,10 @@ def export(root: Path) -> None:
             directory = build / method
             if (directory / "bundle").exists():
                 raise SystemExit(f"{directory / 'bundle'} exists; export replaces nothing")
-            md_openmm("export-reference", "-idata", ".", "-odir", "./bundle", "--stage", stage,
-                      cwd=directory)
+            # Absolute: 0.5.2's exporter looks for the built System "beside or above" -idata, and
+            # a bare `.` has no parents to look in. See docs/backlog.md.
+            md_openmm("export-reference", "-idata", str(directory), "-odir",
+                      str(directory / "bundle"), "--stage", stage, cwd=directory)
             note(root, f"exported {directory.relative_to(root)}/bundle")
 
 

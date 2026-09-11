@@ -24,8 +24,9 @@ now reproduced exchange for exchange, and tested so.
 `resolved.config`, the built System and topology every stage ran on, and each stage's `.in` -- each
 proven against the run's own records before it is copied. `input/build_system.py` rebuilds the
 System from the structure with OpenMM and its chemistry libraries alone, no md-tools, and checks it
-is the same bytes; a test holds that for peptide and SMILES inputs in implicit and explicit
-solvent. The README gives four ways to reproduce a run, starting with OpenMM alone, and says where
+is the same bytes; a test holds that for ALA and phenol in implicit and explicit solvent. A
+flexible molecule charged with AM1-BCC may not rebuild identically (backlog entry 6: OpenFF
+generates the charge conformer unseeded), and the script then reports the difference. The README gives four ways to reproduce a run, starting with OpenMM alone, and says where
 the structure came from -- for a capped peptide, the tleap `sequence` that writes it, checked by
 running tleap at export.
 

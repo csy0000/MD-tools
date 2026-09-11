@@ -4,8 +4,11 @@ The script is a second implementation of build-top's steps, written as plain lib
 reader can see them and so a bundle can be rebuilt in `openmm-env` without the `md-openmm` command.
 Second implementations drift. So each route is built BOTH ways here -- `md-openmm build-top`, then
 the script under an import hook that refuses md_tools -- and the Systems must be the same bytes.
-Equality is possible because every random step in build-top is seeded: the SMILES embedding, the
-hydrogens `addHydrogens` places, the waters `addSolvent` swaps for ions.
+Equality is possible because build-top seeds its own random steps: the SMILES embedding, the
+hydrogens `addHydrogens` places, the waters `addSolvent` swaps for ions. One step is not its own:
+the OpenFF toolkit computes AM1-BCC charges on a conformer it generates unseeded
+(`docs/backlog.md` entry 6). Phenol is rigid and lands on the same conformer every time, which is
+why it is the ligand here; a flexible one would not be a stable test.
 
 The topology is compared without its first line, which `PDBFile.writeFile` stamps with the date.
 """
