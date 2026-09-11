@@ -302,7 +302,21 @@ def pytest_runtest_setup(item):
     Set per TEST rather than per worker: a worker runs both classes over its lifetime, so a single
     assignment at startup would either starve the ladders of devices or keep the ordinary tests
     off device 0 for no reason.
+
+    RESET FIRST, EVERY TEST. The assignment is written into this worker's `os.environ` and nothing
+    took it back, so a test that received no assignment -- a non-GPU test, or a module in
+    `UNASSIGNED_MODULES` -- inherited whatever the previous test on the same worker had been given.
+    `test_cuda_coverage_matrix.py`, the one module that must see the machine as it is, therefore
+    saw ONE card whenever an ordinary CUDA test had run before it on that worker: its four-state
+    ladder reported "4 states need 4 devices; 1 visible" on a machine with nine free GPUs, and
+    before its guard counted visible devices it ran all four ranks on that one card instead.
+    Which tests passed depended on how xdist distributed them.
     """
+    if _INHERITED_VISIBLE_DEVICES is None:
+        os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = _INHERITED_VISIBLE_DEVICES
+
     if "gpu" not in item.keywords or _INHERITED_VISIBLE_DEVICES:
         return
 

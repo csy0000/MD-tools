@@ -52,7 +52,9 @@ with `nvidia-smi`, which ignores `CUDA_VISIBLE_DEVICES`: on a suite confined to 
 one asked for device 8, and a six-state ladder passed its own "needs six devices" guard and failed
 later with two ranks on one card. They count the devices the process can use now. The third read a
 directory another test created, and its module built the wheel inside the checkout, where parallel
-workers collided and the collision was reported as a skip.
+workers collided and the collision was reported as a skip. Behind all of them, `conftest.py` wrote
+each test's GPU assignment into the worker's environment and never took it back, so a test given
+no assignment inherited the previous test's card; it now resets before every test.
 
 **Three tests were not running and reported it as a fact about the software** — a stale filename
 (`cMD.csv` for what is now `mdout.csv`) that had never once been satisfied, two tests reading
