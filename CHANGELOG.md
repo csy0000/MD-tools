@@ -16,7 +16,9 @@ state-to-walker mapping, not merely a similar acceptance rate. Its `md_tools_com
 that ran, as recorded; the commit the modules were copied from is `ladder_modules_from`. The rung
 construction travels too: `rest2/hamiltonian.py` (OpenMM only, the one implementation) is copied
 into the bundle, the solute atoms and omega bonds are recorded, and `verify_rungs.py` rebuilds
-every rung from rung 0 and requires an identical System.
+every rung from rung 0 and requires an identical System. The runner also performs the ladder's
+per-state `equilibration_steps`, which it used to skip; a ladder with that setting above zero is
+now reproduced exchange for exchange, and tested so.
 
 **Every bundle carries `input/`**: the structure, the build-top configuration and the run's
 `resolved.config` -- what a person supplied -- each proven against the run's own records before it

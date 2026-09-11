@@ -199,6 +199,20 @@ def main(argv=None):
     for index in range(n):
         engine.set_configuration(index, configurations[state_to_walker[index]])
 
+    # Per-state relaxation before the first exchange, exactly as the engine's `_equilibrate` does
+    # it: every rung propagated under ITS OWN Hamiltonian from the shared start, on the rung's own
+    # seeded integrator, and not counted as production -- the step counter and the exchange stream
+    # are untouched. This runner used to skip it, so a ladder with `equilibration_steps` > 0 was
+    # reproduced from the wrong configurations and diverged at its first close exchange.
+    equilibration = int(SETTINGS.get("equilibration_steps") or 0)
+    if equilibration:
+        print(f"# equilibration      : {{equilibration}} step(s) per state, NOT counted as "
+              f"production")
+        for index in range(n):
+            engine.propagate(index, equilibration)
+        for index in range(n):
+            configurations[state_to_walker[index]] = engine.get_configuration(index)
+
     rule = NeighbouringExchangeRule()
     rng = np.random.default_rng(stream_seed(protocol.random_seed, "exchange"))
     interval = int(SETTINGS["exchange_interval_steps"])

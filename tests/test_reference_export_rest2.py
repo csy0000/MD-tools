@@ -48,12 +48,28 @@ pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("reference-export-rest2"
 @pytest.fixture(scope="module")
 def ladder(tmp_path_factory):
     """A real four-rung ladder through the engine, and the bundle exported from it."""
+    return _engine_ladder_and_bundle(tmp_path_factory.mktemp("rest2reference"),
+                                     equilibration_steps=0)
+
+
+@pytest.fixture(scope="module")
+def equilibrated_ladder(tmp_path_factory):
+    """The same ladder with per-state equilibration: each rung relaxes under ITS OWN Hamiltonian,
+    from the shared equilibrated start, before the first exchange."""
+    return _engine_ladder_and_bundle(tmp_path_factory.mktemp("rest2reference-eq"),
+                                     equilibration_steps=EQUILIBRATION_STEPS)
+
+
+#: Long enough that a hot rung relaxed for this many steps is clearly not the shared start.
+EQUILIBRATION_STEPS = 200
+
+
+def _engine_ladder_and_bundle(root, *, equilibration_steps):
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
     if subprocess.run(["which", "mpirun"], capture_output=True).returncode != 0:
         pytest.skip("no mpirun on PATH; a ladder needs one rank per rung")
 
-    root = tmp_path_factory.mktemp("rest2reference")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     assert subprocess.run(
         CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
@@ -67,6 +83,7 @@ def ladder(tmp_path_factory):
         " unrestrained_npt_steps: 0, production_steps: 500}\n"
         "reporting: {crd_printout_solute: 50, info_printout: 50, checkpoint_printout: 500}\n"
         f"rest2: {{number_of_replicas: {RUNGS}, tau_max: 0.5, "
+        f"equilibration_steps: {equilibration_steps}, "
         f"exchange_interval_steps: {INTERVAL}, number_of_exchanges: {EXCHANGES}, "
         "state_trajectory: true, rem_log: true, neighbour_acceptance_report: true}\n",
         encoding="utf-8")
@@ -256,7 +273,28 @@ def test_the_bundle_reproduces_the_engines_ladder_exchange_for_exchange(ladder):
     run, bundle, _manifest = ladder
     assert (bundle / "exchange.csv").is_file(), (
         "run the bundle first; test_the_bundle_never_imports_md_tools does that")
+    _assert_same_mapping(run, bundle)
 
+
+def test_a_ladder_that_equilibrates_each_state_is_reproduced_too(equilibrated_ladder):
+    """`equilibration_steps` relaxes every rung under its own Hamiltonian before the first exchange.
+
+    The runner used to skip it, so a bundle of such a ladder started its hot rungs from the shared
+    start instead of from where the engine's equilibration left them -- a different run that still
+    completes and still reports a plausible acceptance rate. Only ladders with the setting at 0,
+    the default and the only case the first test covered, were reproduced.
+    """
+    run, bundle, _manifest = equilibrated_ladder
+    (bundle / "_blocked.py").write_text(
+        _blocked("run.py", "--exchanges", str(EXCHANGES), "--platform", "CPU"), encoding="utf-8")
+    done = subprocess.run([sys.executable, "_blocked.py"], cwd=bundle, capture_output=True,
+                          text=True, timeout=3600, env={**ONE_THREAD, "PYTHONPATH": ""})
+    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+    _assert_same_mapping(run, bundle)
+
+
+def _assert_same_mapping(run, bundle):
+    """The engine's state-to-walker mapping after every exchange, against the bundle's."""
     engine = {}
     with (run / "exchange.csv").open(encoding="utf-8") as handle:
         for row in csv.DictReader(handle):
