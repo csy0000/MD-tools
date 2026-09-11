@@ -207,12 +207,26 @@ def export(root: Path) -> None:
             note(root, f"exported {directory.relative_to(root)}/bundle")
 
 
+def quiet(directory: Path, seconds: float = 70.0) -> None:
+    """Wait until nothing in `directory` was written in the last `seconds`.
+
+    The registry refuses a file younger than 60 s as one still being written, so registering
+    straight after `export` is refused -- which is what happened the first time this was run.
+    """
+    while True:
+        age = time.time() - max(p.stat().st_mtime for p in directory.rglob("*") if p.is_file())
+        if age > seconds:
+            return
+        time.sleep(min(15.0, seconds + 1 - age))
+
+
 def register(root: Path, project_repo: Path, dry_run: bool) -> None:
     from md_tools.build.record import read_record
 
     for system, solvent, build in builds(root):
         for method, (_stem, stage) in METHODS.items():
             directory = build / method
+            quiet(directory)
             environment = read_record(directory / f"{stage}.log").get("environment") or {}
             # The version is a PACKAGE the record lists, beside openmm and the rest; there is no
             # top-level `md_tools_version`, and reading one wrote "md-tools None" into the first
