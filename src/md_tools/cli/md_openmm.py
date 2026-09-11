@@ -139,6 +139,7 @@ def cmd_data_register(args) -> int:
             user_config=args.user_config,
             md_data_override=args.md_data,
             project_repo=args.project_repo,
+            notes=args.notes,
         )
     except RegistrationError as exc:
         print(f"data-register: {exc}", file=sys.stderr)
@@ -263,6 +264,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="the project repository that produced this data, when the data are "
                           "not inside it. Normally omitted: the repository is resolved from "
                           "-idata, never from the shell's working directory.")
+    reg.add_argument("--notes", default=None, metavar="TEXT",
+                     help="free text stored in the manifest. The only field asserted by you "
+                          "rather than derived from the run's own records, so say how you know "
+                          "whatever you put here.")
     reg.set_defaults(func=cmd_data_register)
 
     ref = sub.add_parser(

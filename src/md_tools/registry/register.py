@@ -98,7 +98,8 @@ def _missing_source_reason(source: Path, destination: Path, relative: str) -> st
 def register_dataset(*, source: Path, project_name: str, data_name: str, year: str,
                      common: bool = False, dry_run: bool = False, verify_only: bool = False,
                      user_config: str | None = None, md_data_override: str | None = None,
-                     project_repo: str | None = None, echo: bool = True) -> dict[str, Any]:
+                     project_repo: str | None = None, notes: str | None = None,
+                     echo: bool = True) -> dict[str, Any]:
     def say(message: str = "") -> None:
         if echo:
             print(message)
@@ -164,8 +165,11 @@ def register_dataset(*, source: Path, project_name: str, data_name: str, year: s
     say(f"machine records      : {len(found['records'])} accepted, all reporting completion")
 
     # -- 5: lineage --------------------------------------------------------------------------
-    notes = discovery.check_lineage(found["records"], source)
-    say(f"lineage              : {len(notes)} stage handoff(s) verified by digest")
+    # Named for what it is. It was `notes`, which silently shadowed the manifest's `notes`
+    # parameter at the call site below -- the lineage list went into the manifest and the
+    # caller's text was dropped, with the contract reporting only "not a valid string".
+    lineage = discovery.check_lineage(found["records"], source)
+    say(f"lineage              : {len(lineage)} stage handoff(s) verified by digest")
 
     # -- 6: inventory -------------------------------------------------------------------------
     entries = inventory.build(source)
@@ -180,7 +184,7 @@ def register_dataset(*, source: Path, project_name: str, data_name: str, year: s
     manifest = _manifest(source=source, relative=relative, year=year,
                          project_name=project_name, data_name=data_name, common=common,
                          records=found["records"], user=document["user"],
-                         project_repo=project_repo,
+                         project_repo=project_repo, notes=notes,
                          derived_from=[parent] if parent else [])
     try:
         dataset = validate_dataset(manifest)
@@ -200,7 +204,7 @@ def register_dataset(*, source: Path, project_name: str, data_name: str, year: s
         "source_recorded_as": str(source.name),
         "records": [{"log": entry["log"], "record": entry["record"]}
                     for entry in found["records"]],
-        "lineage": notes,
+        "lineage": lineage,
         "inventory": entries,
         "extension": extension,
     }
@@ -461,7 +465,7 @@ def _declared_parent(source: Path) -> str | None:
 
 
 def _manifest(*, source: Path, relative: str, year: str, project_name: str, data_name: str,
-              project_repo: str | None = None,
+              project_repo: str | None = None, notes: str | None = None,
               common: bool, records: list[dict[str, Any]], user: dict[str, Any],
               derived_from: list[str] | None = None) -> dict[str, Any]:
     """Derive `dataset.yaml` from the records, never from the directory looking finished."""
@@ -519,7 +523,12 @@ def _manifest(*, source: Path, relative: str, year: str, project_name: str, data
         "software": software,
         "components": components,
         "derived_from": list(derived_from or []),
-        "notes": None,
+        # Free text, and deliberately the ONLY place a fact about the data may be asserted by the
+        # person registering rather than derived from the records. `software` stays null when the
+        # run reported no commit: it means "what the run said", and backfilling it would make
+        # every other manifest's copy of that field less trustworthy. A commit established some
+        # other way belongs here, with how it was established, where a reader can weigh it.
+        "notes": notes,
     }
 
 
