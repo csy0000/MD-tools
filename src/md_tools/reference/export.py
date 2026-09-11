@@ -393,7 +393,8 @@ bundle one level up holds the Hamiltonian the run integrated and the state it co
 
 **3. With md-tools, from the built System.** No `build-top`: these are the commands the run's
 own records say it ran, pointed at the files here. Each continues from the state the one before
-it wrote.
+it wrote; the exported stage's `-c` state is `start.xml` in the bundle one level up, for when the
+stages before it are not part of this dataset.
 
 {stage_commands}
 
