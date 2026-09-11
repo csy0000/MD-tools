@@ -252,8 +252,12 @@ jobs:
           SHORT = {"stages": {"minimization_iterations": 10, "restrained_nvt_steps": 10,
                               "restrained_npt_steps": 10, "unrestrained_npt_steps": 10,
                               "production_steps": 10},
-                   "reporting": {"solute_printout": 10, "system_printout": 10,
-                                 "checkpoint_printout": 10}}
+                   # The names 7d76b05 gave these. They were renamed in the source, the tests
+                   # and the docs, and not here -- so every CI run since has failed on this step
+                   # while the suite it guards was green, because the schema refuses unknown keys
+                   # rather than ignoring them.
+                   "reporting": {"crd_printout_solute": 10, "crd_printout_whole": 10,
+                                 "info_printout": 10, "checkpoint_printout": 10}}
           cases = [
               ("cMD-explicit", {"protocol": "cMD", "solvent": "explicit", **SHORT}, [],
                {"min.py", "eq_nvt_posres.py", "eq_npt_posres.py", "eq_npt_free.py", "cMD.py", "run.sh"}),
