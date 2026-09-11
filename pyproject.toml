@@ -1,6 +1,9 @@
 [build-system]
 requires = ["setuptools>=64"]
-build-backend = "setuptools.build_meta"
+# An in-tree backend that wraps setuptools and bakes the source commit into the distribution
+# before delegating. See `_build_backend.py` for why a wheel cannot work this out afterwards.
+build-backend = "_build_backend"
+backend-path = ["."]
 
 [project]
 name = "md-tools"

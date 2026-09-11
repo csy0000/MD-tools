@@ -148,6 +148,13 @@ exec python run.py "$@"
 '''
 
 
+#: What this exporter can turn into a bundle. A stage record describes ONE Context integrated
+#: for a fixed number of steps, which is the shape `RUNNER` drives. Everything else -- a replica
+#: ladder, an AIS path set -- has a different control flow and needs its own runner and its own
+#: equivalence test before it can be handed out.
+EXPORTABLE_RECORD_PREFIX = "md-stage:"
+
+
 def _record(run_dir: Path, stage: str) -> dict[str, Any]:
     from ..build.record import read_record
 
@@ -158,6 +165,19 @@ def _record(run_dir: Path, stage: str) -> dict[str, Any]:
     if record.get("status") != "completed":
         raise ValueError(f"{log} reports status {record.get('status')!r}, not 'completed'. A "
                          f"reference is exported from a finished run, never from a partial one.")
+
+    # BEFORE anything is created. Asked for a ladder, this used to fall through to `block["name"]`
+    # on a record whose block is called `ladder` rather than `stage`, report the bare KeyError key
+    # `'name'`, and leave a half-written directory holding a topology behind it. A refusal that
+    # writes files is not a refusal.
+    kind = str(record.get("record_type") or "")
+    if not kind.startswith(EXPORTABLE_RECORD_PREFIX):
+        raise ValueError(
+            f"{log} is a {kind!r} record, and only {EXPORTABLE_RECORD_PREFIX}* records can be "
+            f"exported. This writes a bundle that drives ONE Context through a fixed number of "
+            f"steps; a replica ladder or an AIS path set is a different control flow, and a "
+            f"bundle claiming to reproduce one without it would run and sample something else. "
+            f"Nothing has been written.")
     return record
 
 

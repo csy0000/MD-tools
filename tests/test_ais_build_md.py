@@ -68,7 +68,11 @@ def test_ais_is_a_build_md_protocol_and_not_a_command_of_its_own():
     for action in build_parser()._actions:
         if getattr(action, "choices", None):
             names |= {str(k) for k in action.choices}
-    assert names == {"build-top", "build-md", "md-run", "data-register"}, names
+    from tests.public_commands import PUBLIC_COMMANDS
+
+    assert names == set(PUBLIC_COMMANDS), names
+    # The assertion this test exists for. The set above stops the surface growing unnoticed; THIS
+    # stops it growing an AIS-shaped hole, and it holds no matter how long that set becomes.
     assert not [name for name in names if "ais" in name.lower()], names
 
     from md_tools.build.md import PROTOCOLS

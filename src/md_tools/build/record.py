@@ -205,20 +205,48 @@ def package_versions() -> dict[str, Any]:
 def source_commit() -> str | None:
     """The immutable commit of the MD-tools tree, when it can be established.
 
-    Returns None rather than a guess. An installed wheel has no git tree, and inventing a commit
-    would put an unverifiable claim into a provenance record.
+    Two sources, in this order, because they are right in different situations:
+
+      1. LIVE GIT, when this file is the one inside a git worktree. A developer's checkout moves
+         between commits without rebuilding anything, so only git knows what is running.
+      2. THE BAKED VALUE, written into `_commit.py` by `_build_backend` at build time. An
+         installed wheel has no git tree -- this used to be the end of the story, and is why
+         every record said `md_tools_commit: null`.
+
+    Returns None rather than a guess: not a checkout, not a baked build, or a build from a dirty
+    tree. Inventing a commit would put an unverifiable claim into a provenance record.
+
+    "This file is inside a worktree" is checked by IDENTITY, not by whether a git command
+    succeeds. `git rev-parse` walks upward from any directory, so a virtual environment that
+    happens to live inside some unrelated repository would otherwise report that repository's
+    commit as the engine's -- a wrong answer that looks exactly like a right one.
     """
     import subprocess
     here = Path(__file__).resolve()
+
+    def git(*args):
+        try:
+            done = subprocess.run(["git", "-C", str(here.parent), *args],
+                                  capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return done.stdout.strip() if done.returncode == 0 else None
+
+    toplevel = git("rev-parse", "--show-toplevel")
+    if toplevel:
+        tracked = Path(toplevel) / "src" / "md_tools" / "build" / "record.py"
+        try:
+            same = tracked.resolve() == here
+        except OSError:
+            same = False
+        if same:
+            return git("rev-parse", "HEAD") or None
+
     try:
-        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(here.parent),
-                                capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
+        from .._commit import COMMIT
+    except ImportError:
         return None
-    if result.returncode != 0:
-        return None
-    commit = result.stdout.strip()
-    return commit or None
+    return COMMIT or None
 
 
 def environment_facts() -> dict[str, Any]:

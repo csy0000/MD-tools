@@ -1,4 +1,4 @@
-"""The public command surface: exactly three work commands, with contractual option spellings.
+"""The public command surface, with contractual option spellings.
 
 The single-dash multi-character options (`-os`, `-op`, `-log`, `-odir`, `-idata`, `-project_name`,
 `-data_name`, `-year`, `-p`, `-s`) are what the documented examples type. argparse's prefix
@@ -14,11 +14,10 @@ import pytest
 
 from md_tools.cli.md_openmm import build_parser
 
-PUBLIC_COMMANDS = ("build-top", "build-md", "md-run", "data-register")
-RETIRED_COMMANDS = ("sys-config", "sys-gen", "md-gen", "setup", "show-default")
+from tests.public_commands import PUBLIC_COMMANDS, RETIRED_COMMANDS
 
 
-def test_the_help_lists_exactly_the_three_public_commands(md_openmm):
+def test_the_help_lists_every_public_command(md_openmm):
     result = md_openmm("--help")
     assert result.returncode == 0
     for name in PUBLIC_COMMANDS:
@@ -40,7 +39,7 @@ def test_the_retired_commands_are_gone():
         assert "invalid choice" in result.stderr or "usage:" in result.stderr
 
 
-def test_the_subparsers_are_exactly_the_public_four():
+def test_the_subparsers_are_exactly_the_public_commands():
     actions = [a for a in build_parser()._actions if hasattr(a, "choices") and a.choices]
     names = set()
     for action in actions:

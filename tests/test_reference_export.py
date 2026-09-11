@@ -188,3 +188,32 @@ def test_the_bundle_reproduces_the_engines_own_final_state(finished):
     assert np.array_equal(mine, theirs), (
         "the exported bundle and the engine end in different places from the same System, seed, "
         "start and platform, so the bundle does not reproduce the run it describes")
+
+
+def test_a_ladder_record_is_refused_before_anything_is_written(finished, tmp_path):
+    """A refusal that leaves files behind is not a refusal.
+
+    Asked for `--stage REST2`, the exporter used to reach `block["name"]` on a record whose block
+    is called `ladder` rather than `stage`, report the bare KeyError key -- `export-reference:
+    'name'` -- and leave a directory holding a topology behind it. Someone reading that directory
+    has a partial bundle and a message that names nothing.
+
+    The record type is the discriminator and it is checked first: `md-stage:cMD` is exportable,
+    `md-replica:REST2` is not, and the difference is the control flow the runner drives.
+    """
+    _root, run, _bundle, _manifest = finished
+
+    ladder = tmp_path / "ladder"
+    ladder.mkdir()
+    (ladder / "REST2.log").write_text(
+        (run / "cMD.log").read_text(encoding="utf-8")
+        .replace("record_type: md-stage:cMD", "record_type: md-replica:REST2"),
+        encoding="utf-8")
+
+    from md_tools.reference import export_reference
+
+    out = tmp_path / "bundle-that-must-not-appear"
+    with pytest.raises(ValueError) as refusal:
+        export_reference(ladder, out, stage="REST2")
+    assert "md-replica:REST2" in str(refusal.value)
+    assert not out.exists(), "the refusal created a directory"

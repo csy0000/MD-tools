@@ -79,3 +79,9 @@ campaigns/*/phase1_controls/
 # artifact was built from. Regenerated on every build, so tracking it would only ever record a
 # stale commit and make every build look like a source change.
 src/md_tools/_build_info.py
+
+# --- written by the build backend, never committed ---
+# `_build_backend.py` writes this at build time with the commit being packaged. Tracking it
+# would make every build dirty the tree, and a stale committed copy would be a provenance
+# record that lies. A checkout reads live git instead; see `build/record.source_commit`.
+src/md_tools/_commit.py
