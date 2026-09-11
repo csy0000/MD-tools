@@ -21,79 +21,18 @@ from openmm import (CustomExternalForce, LangevinMiddleIntegrator, MonteCarloBar
                     XmlSerializer, unit)
 from openmm.app import Simulation
 
-#: U = 1/2 k |r - r0|^2, with k given in kcal mol^-1 A^-2.
-KCAL_PER_MOL_ANGSTROM2 = 418.4          # kJ mol^-1 nm^-2
-RESTRAINT_PARAMETER = "restraint_k"
-#: OpenMM seeds are 32-bit signed; 0 means "pick one at random", which is not reproducible.
-MAX_SEED = 2 ** 31 - 1
+# The seed derivation and the positional restraint are DEFINED in `md_tools.remd.rung_equilibration`,
+# which imports nothing from md_tools, so that a reference bundle can carry them byte for byte --
+# per-tau equilibration restrains every rung with exactly this Force and seeds it with exactly this
+# derivation. Re-exported here, where every cMD stage has always found them: one implementation.
+from ..remd.rung_equilibration import (  # noqa: F401
+    KCAL_PER_MOL_ANGSTROM2, MAX_SEED, NONPERIODIC_RESTRAINT, PERIODIC_RESTRAINT,
+    RESTRAINT_PARAMETER, add_positional_restraint, derive_seed)
 
 # The barostat attempt interval is NOT declared here. It is `common.barostat_frequency_steps` in
 # md.config.yaml, copied into every stage.yaml by build-md, and passed in by the caller. A constant
 # in this file would be a second declaration of a public default, and the one that silently wins
 # when the two disagree.
-
-
-def derive_seed(base, *purpose):
-    """A distinct, deterministic seed per (base, purpose).
-
-    Every replica needs its own integrator, velocity and barostat seed. Sharing one seed across
-    replicas correlates their trajectories, and a ladder whose rungs move together samples less
-    than it appears to.
-    """
-    value = int(base)
-    for part in purpose:
-        text = str(part).encode("utf-8")
-        for byte in text:
-            value = (value * 1000003 + byte) & 0xFFFFFFFF
-    seed = value % MAX_SEED
-    return seed if seed else 1              # never 0: OpenMM reads that as "choose randomly"
-
-
-#: U = 1/2 k |r - r0|^2 under periodic boundaries: the minimum image, so an atom that crosses a
-#: box face is pulled back to the nearest image of its reference rather than across the whole cell.
-PERIODIC_RESTRAINT = "0.5*{k}*periodicdistance(x, y, z, x0, y0, z0)^2"
-#: The same energy without a box. There is no minimum image to take, and asking for one is not
-#: merely redundant -- see `add_positional_restraint`.
-NONPERIODIC_RESTRAINT = "0.5*{k}*((x-x0)^2 + (y-y0)^2 + (z-z0)^2)"
-
-
-def add_positional_restraint(system, reference_positions, atom_indices):
-    """A `CustomExternalForce` holding `atom_indices` near their reference coordinates.
-
-    The energy expression depends on whether the System has a box:
-
-        periodic      0.5*k*periodicdistance(x, y, z, x0, y0, z0)^2
-        non-periodic  0.5*k*((x-x0)^2 + (y-y0)^2 + (z-z0)^2)
-
-    They are the same energy whenever an atom is far from any box face, so the difference is easy
-    to miss. It matters because `periodicdistance` makes the Force report
-    `usesPeriodicBoundaryConditions() == True`, and OpenMM answers that question for a System by
-    asking its Forces: adding a periodic restraint to an implicit GBn2 system flips
-    `System.usesPeriodicBoundaryConditions()` from False to True. The system then describes itself
-    as periodic while having no meaningful box, which is a false statement about the physics being
-    sampled and the kind of thing a later check reads and trusts.
-
-    Periodicity is taken from the System, not from a file name or a solvent label: the System is
-    what OpenMM will actually integrate. It must be read BEFORE the Force is added, because adding
-    a periodic Force is precisely what would change the answer.
-
-    The Force stays in the System for the whole run so the checkpoint layout never changes; its
-    strength is a global Context parameter, set to zero before production. Removing the Force
-    instead would make a production checkpoint structurally incompatible with the equilibration
-    that produced it.
-    """
-    periodic = system.usesPeriodicBoundaryConditions()
-    template = PERIODIC_RESTRAINT if periodic else NONPERIODIC_RESTRAINT
-    force = CustomExternalForce(template.format(k=RESTRAINT_PARAMETER))
-    force.addGlobalParameter(RESTRAINT_PARAMETER, 0.0)
-    for name in ("x0", "y0", "z0"):
-        force.addPerParticleParameter(name)
-    positions = reference_positions.value_in_unit(unit.nanometer)
-    for index in atom_indices:
-        x, y, z = positions[int(index)]
-        force.addParticle(int(index), [x, y, z])
-    system.addForce(force)
-    return force
 
 
 def add_barostat(system, pressure_bar, temperature, seed, frequency):

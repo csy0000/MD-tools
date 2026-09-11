@@ -125,7 +125,7 @@ protocol = REST2Protocol(
     random_seed={seed},
     hydrogen_mass_amu=None,
     cv_interval_steps={cv_interval_steps!r},
-    platform={platform!r},
+{per_tau_line}    platform={platform!r},
     precision=None,
 )
 '''
@@ -189,6 +189,19 @@ def reservoir_declaration_text(ladder: dict[str, Any], out: Path) -> str:
     return yaml.safe_dump(declaration, sort_keys=False)
 
 
+def _per_tau_line(ladder: dict[str, Any]) -> str:
+    """The `per_tau_equilibration=[...]` line, or nothing at all when the setting is off.
+
+    NOTHING, not `per_tau_equilibration=None`: `_protocol.py` is content-addressed, so one extra
+    line in every ladder's helper would refuse every existing directory's `--resume` until
+    `--overwrite`, for a setting none of them uses.
+    """
+    stages = ladder.get("per_tau_equilibration") or []
+    if not stages:
+        return ""
+    return f"    per_tau_equilibration={[dict(stage) for stage in stages]!r},\n"
+
+
 def protocol_file_text(ladder: dict[str, Any]) -> str:
     """The protocol module a ladder is described by, as text.
 
@@ -197,6 +210,7 @@ def protocol_file_text(ladder: dict[str, Any]) -> str:
     carries no machine-specific string.
     """
     dynamics = ladder["dynamics"]
+    per_tau_line = _per_tau_line(ladder)
     timestep = float(dynamics["timestep_fs"])
     states = int(ladder["n_states"])
     taus = tau_ladder(states, float(ladder["tau_max"]))
@@ -227,7 +241,8 @@ def protocol_file_text(ladder: dict[str, Any]) -> str:
             friction=float(dynamics["friction_per_ps"]), equilibration_ps=equilibration_ps,
             seed=int(dynamics["seed"]), platform=dynamics.get("platform"),
             cv_interval_steps=(int((ladder.get("collective_variables") or {}).get(
-                "interval_steps") or 0) or None))
+                "interval_steps") or 0) or None),
+            per_tau_line=per_tau_line)
 
     def interval_ps(key, what):
         """A reporting interval in ps, or None when it is disabled (0 steps)."""
@@ -276,7 +291,8 @@ def protocol_file_text(ladder: dict[str, Any]) -> str:
         friction=float(dynamics["friction_per_ps"]), equilibration_ps=equilibration_ps,
         seed=int(dynamics["seed"]), platform=dynamics.get("platform"),
         cv_interval_steps=(int((ladder.get("collective_variables") or {}).get(
-            "interval_steps") or 0) or None))
+            "interval_steps") or 0) or None),
+        per_tau_line=per_tau_line)
 
 
 def replica_parser(description: str = "one coordinated replica-exchange ladder"):
@@ -552,6 +568,26 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
         return 2
     coordination = checked.coordination
 
+    # A LADDER STOPPED DURING PER-TAU EQUILIBRATION has no checkpoint: it took no exchange step.
+    # Refused here, by name, read-only -- before `-odir`, a helper, a log or the run state is
+    # touched -- rather than by the executor finding no checkpoint NetCDF after this function has
+    # already opened the rank report. Every rank reads the same file and reaches the same answer.
+    if args.resume or (args.extend and not args.extend_from):
+        from .rung_equilibration import INTERRUPTED_PHASE
+        from .storage import read_run_state
+
+        analysis = Path(args.trajectory) if args.trajectory else out / f"{protocol_name}.nc"
+        recorded = read_run_state(analysis)
+        if recorded and recorded.get("phase") == INTERRUPTED_PHASE:
+            print(f"{protocol_name}: {analysis} was interrupted during per-tau equilibration "
+                  f"(stage {recorded.get('stage')!r}), before the ladder took a single exchange "
+                  f"step, so there is no checkpoint to resume from. Nothing is lost that cannot "
+                  f"be redone exactly: that equilibration is deterministic from the recorded "
+                  f"seeds. Rerun with --overwrite instead of "
+                  f"{'--resume' if args.resume else '--extend'}. Nothing was written.",
+                  file=sys.stderr)
+            return 2
+
     if args.check:
         # READ-ONLY, returning before `-odir` exists. `--check` was not even accepted here: it
         # was forwarded by `md-run` and died in argparse, so `md-openmm md-run --check` on a
@@ -802,6 +838,19 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     log.field("exchange every", f"{ladder['exchange_interval_steps']} steps = {exchange_ps:g} ps")
     log.field("attempts", ladder["number_of_exchanges"])
     log.field("temperature", f"{dynamics['temperature_K']} K (every state, NVT)")
+    per_tau = ladder.get("per_tau_equilibration") or []
+    if per_tau:
+        log.heading("Per-tau equilibration")
+        for stage in per_tau:
+            strength = float(stage.get("restraint_kcal_per_mol_A2") or 0.0)
+            log.field(stage["name"], f"{stage['steps']} steps on every rung, under its own tau, "
+                                     + (f"restrained at {strength:g} kcal/mol/A^2"
+                                        if strength else "unrestrained") + ", NVT")
+        log.field("starts from", f"-c {args.continue_from}")
+        log.field("order", f"these stages, then equilibration_steps "
+                           f"({int(ladder.get('equilibration_steps') or 0)}), then the first "
+                           f"exchange; none of it production")
+        log.field("seeds", "derive_seed(seed, stage, 'state<i>'), one per stage and rung")
     log.update(ladder=dict(ladder), tau=taus, exchange_interval_ps=exchange_ps,
                inputs={"topology": file_facts(Path(args.topology)),
                        "system": file_facts(Path(args.system))})
@@ -860,6 +909,9 @@ def ladder_from_resolved(resolved: dict[str, Any], protocol: str) -> dict[str, A
     One derivation, used by `build-md` when it writes the log and by the generated script when it
     runs -- so the two cannot describe different ladders.
     """
+    from ..build.md import per_tau_equilibration_stages
+
+    per_tau = per_tau_equilibration_stages(resolved)
     return {
         "protocol": protocol,
         "solvent": resolved["solvent"],
@@ -888,6 +940,9 @@ def ladder_from_resolved(resolved: dict[str, Any], protocol: str) -> dict[str, A
         # `protocol_file_text`, which keeps that behaviour when this key is absent.
         "reporting": (dict(resolved["reporting"]) if resolved.get("reporting") is not None
                       else None),
+        # `rest2.equilibration_per_tau`, as the stages every rung runs. Present only when on, so
+        # a ladder that does not use it is described exactly as it was before the field existed.
+        **({"per_tau_equilibration": per_tau} if per_tau else {}),
     }
 
 

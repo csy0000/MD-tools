@@ -103,6 +103,7 @@ As REST2, plus `reservoir.yaml` (the resolved declaration — frame count and ti
 | `reservoir.path` | null | the phase-space file. Required when enabled |
 | `reservoir.refresh_interval_exchanges` | 1 | how often the top rung is refreshed |
 | `reservoir.velocities` | `resample` | `inherit` installs the stored momenta; `resample` redraws them |
+| `rest2.equilibration_per_tau` | false | the equilibration chain on every rung under its own τ, as in [REST2](../REST2/README.md#equilibrating-every-rung-under-its-own-tau). The reservoir first refreshes the top rung at the first exchange, after it |
 
 ## Limitations
 

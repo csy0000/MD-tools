@@ -60,11 +60,19 @@ def equilibrated_ladder(tmp_path_factory):
                                      equilibration_steps=EQUILIBRATION_STEPS)
 
 
+@pytest.fixture(scope="module")
+def per_tau_ladder(tmp_path_factory):
+    """`rest2.equilibration_per_tau`: every rung runs the equilibration stages under its own tau
+    from `min.xml`, then `equilibration_steps`, then exchanges."""
+    return _engine_ladder_and_bundle(tmp_path_factory.mktemp("rest2reference-per-tau"),
+                                     equilibration_steps=EQUILIBRATION_STEPS, per_tau=True)
+
+
 #: Long enough that a hot rung relaxed for this many steps is clearly not the shared start.
 EQUILIBRATION_STEPS = 200
 
 
-def _engine_ladder_and_bundle(root, *, equilibration_steps):
+def _engine_ladder_and_bundle(root, *, equilibration_steps, per_tau=False):
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
     if subprocess.run(["which", "mpirun"], capture_output=True).returncode != 0:
@@ -76,14 +84,21 @@ def _engine_ladder_and_bundle(root, *, equilibration_steps):
                "-log", "built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800).returncode == 0
 
+    # Per-tau: two per-rung stages (restrained, then free), and a real minimisation, since the
+    # ladder then starts from `min.xml` rather than from an equilibrated state.
+    stages = ("stages: {minimization_iterations: 50, restrained_nvt_steps: 100, "
+              "restrained_npt_steps: 0, unrestrained_npt_steps: 100, production_steps: 500}\n"
+              if per_tau else
+              "stages: {minimization_iterations: 0, restrained_nvt_steps: 100, "
+              "restrained_npt_steps: 0, unrestrained_npt_steps: 0, production_steps: 500}\n")
     (root / "REST2.config").write_text(
         "protocol: REST2\nsolvent: implicit\n"
         "dynamics: {timestep_fs: 2.0, temperature_K: 300.0, seed: 7}\n"
-        "stages: {minimization_iterations: 0, restrained_nvt_steps: 100, restrained_npt_steps: 0,"
-        " unrestrained_npt_steps: 0, production_steps: 500}\n"
+        + stages +
         "reporting: {crd_printout_solute: 50, info_printout: 50, checkpoint_printout: 500}\n"
         f"rest2: {{number_of_replicas: {RUNGS}, tau_max: 0.5, "
         f"equilibration_steps: {equilibration_steps}, "
+        + ("equilibration_per_tau: true, " if per_tau else "") +
         f"exchange_interval_steps: {INTERVAL}, number_of_exchanges: {EXCHANGES}, "
         "state_trajectory: true, rem_log: true, neighbour_acceptance_report: true}\n",
         encoding="utf-8")
@@ -92,8 +107,11 @@ def _engine_ladder_and_bundle(root, *, equilibration_steps):
                           cwd=root, capture_output=True, text=True, timeout=600).returncode == 0
 
     run = root / "run"
+    # The tau = 0 chain: minimisation alone under per-tau equilibration (implicit solvent), the
+    # restrained NVT stage otherwise. Either way its end state is `eq.xml`, the ladder's `-c`.
     equilibration = subprocess.run(
-        CLI + ["md-run", "-i", "eq_nvt_posres.in", "-p", "../built.pdb", "-s", "../built.xml",
+        CLI + ["md-run", "-i", "min.in" if per_tau else "eq_nvt_posres.in",
+               "-p", "../built.pdb", "-s", "../built.xml",
                "-r", "eq.xml", "-chk", "eq.chk", "-o", "eq.out", "-log", "eq.log",
                "-odir", ".", "--cpu"],
         cwd=run, capture_output=True, text=True, timeout=1800, env=ONE_THREAD)
@@ -299,6 +317,40 @@ def test_a_ladder_that_equilibrates_each_state_is_reproduced_too(equilibrated_la
                           text=True, timeout=3600, env={**ONE_THREAD, "PYTHONPATH": ""})
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
     _assert_same_mapping(run, bundle)
+
+
+def test_a_ladder_that_equilibrates_every_rung_under_its_own_tau_is_reproduced_too(per_tau_ladder):
+    """`rest2.equilibration_per_tau`: the bundle runs the same per-rung stages with the same code.
+
+    Every rung starts its exchanges from where ITS OWN restrained and free stages left it, then
+    from `equilibration_steps` on top. A runner that skipped the stages, seeded them differently,
+    restrained different atoms or set the restraint before the configuration would start the hot
+    rungs somewhere else and diverge within the first few close exchanges.
+    """
+    import json
+
+    run, bundle, manifest = per_tau_ladder
+    assert "rung_equilibration.py" in manifest["vendored"]
+    settings = json.loads((bundle / "settings.json").read_text(encoding="utf-8"))
+    assert [s["name"] for s in settings["per_tau_equilibration"]] == ["eq_nvt_posres",
+                                                                      "eq_nvt_free"]
+    assert (run / "per_tau_equilibration.json").is_file()
+    (bundle / "_blocked.py").write_text(
+        _blocked("run.py", "--exchanges", str(EXCHANGES), "--platform", "CPU"), encoding="utf-8")
+    done = subprocess.run([sys.executable, "_blocked.py"], cwd=bundle, capture_output=True,
+                          text=True, timeout=3600, env={**ONE_THREAD, "PYTHONPATH": ""})
+    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+    assert "# per-tau equilibration" in done.stdout, done.stdout[-2000:]
+    _assert_same_mapping(run, bundle)
+
+
+def test_a_ladder_without_per_tau_equilibration_bundles_an_empty_plan(ladder):
+    """Off is recorded as off, and the runner then does exactly what it did before."""
+    import json
+
+    _run, bundle, _manifest = ladder
+    assert json.loads((bundle / "settings.json").read_text(
+        encoding="utf-8"))["per_tau_equilibration"] == []
 
 
 def _assert_same_mapping(run, bundle):

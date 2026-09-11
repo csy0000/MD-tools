@@ -67,6 +67,11 @@ CUDA_SITES = {
         "to them: the decomposition asks the device for numbers the run would not otherwise "
         "compute, once per group, at the state table's cadence",
         "test_cmd_cuda_smoke.py, and every cMD lane that reports a state table"),
+    "remd/rung_equilibration.py::run_stage": (
+        "per-tau equilibration: one Context per stage per rung, on the platform and properties "
+        "the ladder's preflight resolved -- restraint strength pushed in after the configuration, "
+        "`integrator.step`, and the equilibrated positions, velocities and box read back",
+        "test_rest2_equilibration_per_tau_cuda.py::test_per_tau_equilibration_under_mpi_on_cuda"),
     "openmm/platform_policy.py::_prove_cuda_initialises": (
         "opens a one-particle CUDA Context to prove the platform works before any output exists",
         "test_platform_policy.py, and every preflight in every lane below"),

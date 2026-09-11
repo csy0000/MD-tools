@@ -243,11 +243,17 @@ class ReplicaRun:
         systems, self._audit = self._rung_systems()
 
         interruption = _Interruption().install()
+        # Read between per-tau equilibration stages as well as in `_loop`.
+        self._interruption = interruption
         state = None
         result = None
         try:
             state = self._begin(identity, systems, rule_identity, resume=resume,
                                 extend=extend, extend_from=extend_from)
+            if state.get("per_tau_interrupted"):
+                # Stopped between two per-tau stages, collectively, before the ladder took a
+                # step: there is no checkpoint, and the record says so by name.
+                return self._record_per_tau_interruption(state, identity)
             self._open_reservoir(systems)
             if self.reservoir is not None:
                 self.reservoir.check_box_matches(state["configurations"][0].box)
@@ -641,6 +647,8 @@ class ReplicaRun:
             # fabricated event. Empty is the honest record.
             "storage_migrations": [],
         }
+        if self._equilibrate_per_tau(state, systems):
+            return state
         self._equilibrate(state)
         if self.coordinator.is_root:
             storage.write_run_state(
@@ -1204,6 +1212,169 @@ class ReplicaRun:
             self.engine.propagate(index, steps)
         state["configurations"] = self._gather_configurations(state)
 
+    def _equilibrate_per_tau(self, state, systems):
+        """`rest2.equilibration_per_tau`: the equilibration stages on every rung, under its own tau.
+
+        Runs on a fresh start only, before `_equilibrate` and before the step-0 observation, so the
+        first CV row and the first exchange both see each rung's own equilibrated state. Resume and
+        extension never repeat it. What each stage does is `rung_equilibration.run_stage` -- the
+        function an exported bundle calls too -- on a restrained COPY of the rung: the Systems in
+        `systems` are the ones the ladder propagates and are never modified.
+
+        Stage by stage across the rungs this process owns, so every rank reaches the same
+        boundaries and an interruption can stop them together. Returns True when it did.
+        """
+        plan = getattr(self.protocol, "per_tau_equilibration", None)
+        if not plan:
+            return False
+        from openmm.app import PDBFile
+
+        from .rung_equilibration import (RECORD_NAME, RESTRAINT_PARAMETER, handoff_name,
+                                         restrained_clone, run_stage)
+
+        # The seed every stream of this ladder is derived from; see `_begin`.
+        seed = int(self.protocol.random_seed or 20260830)
+        # The stage chain restrains towards the topology's coordinates (`-p`), not towards the
+        # starting state, and so does this.
+        reference = PDBFile(str(self.files.topology)).positions
+        print("# per-tau equilibration: "
+              + ", ".join(f"{stage['name']} {stage['steps']} step(s)" for stage in plan)
+              + " on every rung, under its own tau, NOT counted as production")
+        sys.stdout.flush()
+
+        clones = {index: restrained_clone(systems[index], reference, self.solute_indices)
+                  for index in self.owned}
+        current = {index: state["configurations"][index] for index in self.owned}
+        records = {index: [] for index in self.owned}
+        finals = {}
+        interruption = getattr(self, "_interruption", None)
+        for stage in plan:
+            if self.coordinator.any_true(bool(interruption is not None
+                                              and interruption.requested)):
+                state.update(per_tau_interrupted=True, per_tau_stage=stage["name"],
+                             interrupt_signal=getattr(interruption, "signal", None))
+                return True
+            self._fail_at("per-tau-equilibration")
+            for index in self.owned:
+                current[index], record, finals[index] = run_stage(
+                    clones[index], current[index], stage, state_index=index, seed=seed,
+                    temperature_k=self.protocol.temperature_k,
+                    friction_per_ps=self.protocol.friction_per_ps,
+                    timestep_fs=self.protocol.timestep_fs,
+                    constraint_tolerance=self.protocol.constraint_tolerance,
+                    platform=self._platform, properties=self._properties)
+                records[index].append(record)
+            print(f"# per-tau {stage['name']:<16}: {stage['steps']} step(s) on state(s) "
+                  f"{self.owned}")
+            sys.stdout.flush()
+        del clones
+
+        for index in self.owned:
+            self.engine.set_configuration(index, current[index])
+        state["configurations"] = self._gather_configurations(state)
+        boxes = [configuration.box for configuration in state["configurations"]]
+        if boxes[0] is not None and any(not np.array_equal(box, boxes[0]) for box in boxes[1:]):
+            raise DriverError(
+                "after per-tau equilibration the rungs do not share one box. Every per-tau stage "
+                "is NVT from the ladder's one starting box, so this cannot come from the physics; "
+                "exchanging configurations of different volume would not be REST2, so the ladder "
+                "is refused.")
+
+        local = {index: (finals[index], records[index]) for index in self.owned}
+        if self.coordinator.size > 1:
+            gathered = {}
+            for piece in self.coordinator.allgather(local):
+                gathered.update(piece)
+            local = gathered
+        if self.coordinator.is_root:
+            directory = Path(self.files.trajectory).parent
+            entries = []
+            for index in range(self.protocol.n_states):
+                text, stages_run = local[index]
+                name = handoff_name(index)
+                storage.write_atomic(directory / name, text)
+                entries.append({"state_index": index, "tau": float(self.protocol.tau[index]),
+                                "stages": stages_run, "file": name,
+                                "sha256": _sha256_of(directory / name)})
+            record = {
+                "format": "md-tools-per-tau-equilibration/v1",
+                "stages": [dict(stage) for stage in plan],
+                "order": ("these stages on every rung under its own tau, then "
+                          "equilibration_steps, then the first exchange; none of it production"),
+                "started_from": {"path": Path(self.files.coordinates).name,
+                                 "sha256": _sha256_of(self.files.coordinates)},
+                "restraint": {"atoms": len(self.solute_indices),
+                              "reference": f"{Path(self.files.topology).name} coordinates",
+                              "parameter": RESTRAINT_PARAMETER},
+                "integrator": {"temperature_k": float(self.protocol.temperature_k),
+                               "friction_per_ps": float(self.protocol.friction_per_ps),
+                               "timestep_fs": float(self.protocol.timestep_fs),
+                               "constraint_tolerance": float(
+                                   self.protocol.constraint_tolerance)},
+                "seed_base": seed,
+                "seeds": "derive_seed(seed_base, stage, 'state<i>')",
+                "velocities": "carried from the starting state, never redrawn",
+                "box_shared": None if boxes[0] is None else True,
+                "states": entries,
+            }
+            storage.write_atomic(directory / RECORD_NAME,
+                                 json.dumps(record, indent=2, default=str) + "\n")
+        self.coordinator.barrier()
+        return False
+
+    def _record_per_tau_interruption(self, state, identity):
+        """A clean, collective stop between two per-tau stages. Nothing to resume from."""
+        from .rung_equilibration import INTERRUPTED_PHASE
+
+        stage = state.get("per_tau_stage")
+        if self.coordinator.is_root:
+            storage.write_run_state(
+                self.files.trajectory, "interrupted", identity=identity, step=0,
+                total_steps=self.protocol.total_steps, signal=state.get("interrupt_signal"),
+                phase=INTERRUPTED_PHASE, stage=stage, storage_migrations=[],
+                note=(f"stopped during per-tau equilibration, before its stage {stage!r} and "
+                      f"before the ladder's first step. There is no checkpoint, so --resume "
+                      f"refuses this run: rerun with --overwrite. The equilibration is "
+                      f"deterministic from the recorded seeds."))
+            print(f"# interrupted during per-tau equilibration, before {stage}; no checkpoint "
+                  f"exists, so rerun with --overwrite")
+            for handle in (self.trajectories, self.solute_trajectories):
+                if handle is not None:
+                    handle.close()
+            if self.reporter is not None:
+                self.reporter.close()
+        return {"run_status": "interrupted", "step": 0, "phase": INTERRUPTED_PHASE}
+
+    def _per_tau_manifest(self, state):
+        """The completion manifest's record of per-tau equilibration, verified, or None if off."""
+        if not getattr(self.protocol, "per_tau_equilibration", None):
+            return None
+        from .rung_equilibration import RECORD_NAME
+
+        directory = Path(self.files.trajectory).parent
+        path = directory / RECORD_NAME
+        if not path.is_file():
+            if state.get("extends"):
+                return {"performed_here": False,
+                        "why": "an out-of-place extension continues its parent's ladder; the "
+                               "per-tau equilibration ran there and is in the parent's manifest"}
+            raise DriverError(
+                f"this ladder was configured with rest2.equilibration_per_tau, and {path.name} -- "
+                f"the record of it -- is not in {directory}. A completion manifest must not "
+                f"describe an equilibration it cannot show.")
+        record = json.loads(path.read_text(encoding="utf-8"))
+        problems = []
+        for entry in record.get("states") or []:
+            handoff = directory / str(entry.get("file"))
+            if not handoff.is_file():
+                problems.append(f"{entry.get('file')} is missing")
+            elif _sha256_of(handoff) != entry.get("sha256"):
+                problems.append(f"{entry.get('file')} no longer has the sha256 recorded for it")
+        if problems:
+            raise DriverError("the per-tau equilibration record does not verify:\n  - "
+                              + "\n  - ".join(problems))
+        return dict(record, record_file=RECORD_NAME, record_sha256=_sha256_of(path))
+
     # -- the loop ------------------------------------------------------------------------------------
 
     def _gather_configurations(self, state):
@@ -1331,7 +1502,7 @@ class ReplicaRun:
     #: counts exist for, and it cannot be provoked any other way in a real launch.
     FAIL_BOUNDARY_ENVIRONMENT = "MD_TOOLS_FAIL_LADDER_AT"
     FAIL_BOUNDARIES = ("propagation", "before-cv-row", "after-cv-row",
-                       "before-checkpoint", "after-checkpoint")
+                       "before-checkpoint", "after-checkpoint", "per-tau-equilibration")
 
     def _fail_at(self, boundary):
         """Raise a rank-local failure at a named boundary, if the tests armed it. Never in use."""
@@ -1915,6 +2086,10 @@ class ReplicaRun:
                 raise DriverError(
                     "this ladder's collective-variable output is not a completed set:\n  - "
                     + "\n  - ".join(problems))
+
+        # PER-TAU EQUILIBRATION, verified like the CV series: `None` when the ladder did not use
+        # it, stated rather than omitted for the same reason.
+        record["per_tau_equilibration"] = self._per_tau_manifest(state)
 
         if state.get("extends"):
             record["extends"] = self._extension_provenance(state, report)

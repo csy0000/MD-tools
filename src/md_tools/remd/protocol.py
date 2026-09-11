@@ -95,7 +95,8 @@ class REST2Protocol:
                  solute_output_interval_ps=None, checkpoint_interval_ps=None,
                  pressure_bar=None, friction_per_ps=1.0, equilibration_ps=0.0, random_seed=None,
                  hydrogen_mass_amu=None, constraint_tolerance=1.0e-8,
-                 platform=None, precision=None, cv_interval_steps=None, **legacy):
+                 platform=None, precision=None, cv_interval_steps=None,
+                 per_tau_equilibration=None, **legacy):
         if "segment_ps" in legacy:
             raise ProtocolError(
                 "`segment_ps` is no longer a scientific input and its old meaning does not map "
@@ -140,6 +141,17 @@ class REST2Protocol:
         # every replica run silently took whatever OpenMM picked.
         self.platform = platform
         self.precision = precision
+        # `rest2.equilibration_per_tau`: the stages every rung runs under its own tau before the
+        # first exchange, as `[{"name", "steps", "restraint_kcal_per_mol_A2"}, ...]`. None -- the
+        # default, and what an empty list means -- runs none, exactly as before the field existed.
+        self.per_tau_equilibration = None
+        if per_tau_equilibration:
+            from .rung_equilibration import validate_plan
+
+            try:
+                self.per_tau_equilibration = validate_plan(per_tau_equilibration)
+            except ValueError as bad_plan:
+                raise ProtocolError(str(bad_plan)) from None
 
         try:
             self.schedule = EventSchedule(
@@ -222,6 +234,17 @@ class REST2Protocol:
                                         "temperature REMD and would change the ensemble here"),
         }
         record.update(self.schedule.describe())
+        if self.per_tau_equilibration:
+            # Only when set. A continuation compares this record key by key over the UNION of both
+            # sides' keys, so a key present-but-null here would refuse every ladder started before
+            # it existed; an absent key is exactly what those ladders recorded.
+            record["per_tau_equilibration"] = {
+                "stages": [dict(stage) for stage in self.per_tau_equilibration],
+                "order": ("these stages on every rung under its own tau, then "
+                          "equilibration_steps, then the first exchange; none of it production"),
+                "restraint": "the stage chain's, on the solute, towards the topology coordinates",
+                "seeds": "derive_seed(random_seed, stage, 'state<i>') per stage and rung",
+            }
         return record
 
     # -- building the ladder ------------------------------------------------------------------------

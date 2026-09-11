@@ -160,6 +160,13 @@
   ! unit: steps; minimum: 0
   equilibration_steps         = 0,
   !
+  ! Run the equilibration stages on EVERY RUNG, under that rung's own tau, instead of once at
+  ! tau = 0. REST2 and rREST2 only; off by default. When true the tau = 0 chain stops at
+  ! minimisation (implicit) or after its NPT stages (explicit, which fix the shared box), and
+  ! every rung then runs eq_nvt_posres, eq_nvt_posres_2 and eq_nvt_free at fixed volume, then
+  ! equilibration_steps, then the first exchange.
+  equilibration_per_tau       = false,
+  !
   ! Write one trajectory per fixed thermodynamic STATE (remd0.nc .. remdN.nc). A state
   ! trajectory follows a state, not a walker; the filename carries the state index and never
   ! the tau value.

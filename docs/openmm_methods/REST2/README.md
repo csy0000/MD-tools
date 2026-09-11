@@ -112,6 +112,34 @@ mpirun -n 4 md-openmm md-run -ng 4 -i REST2.in -p ../built.pdb -s ../built.xml \
 
 A world size that is neither 1 nor exactly the number of states is refused.
 
+## Equilibrating every rung under its own tau
+
+By default the equilibration chain runs once, at τ = 0, and every rung starts from its end state.
+`rest2.equilibration_per_tau: true` (off by default, REST2 and rREST2 only) runs the
+equilibration **on every rung, under that rung's own τ**, instead:
+
+| solvent | the τ = 0 chain (`run.sh`) | the ladder's `-c` | then, on every rung including τ = 0 |
+|---|---|---|---|
+| implicit | `min` only | `min.xml` | `eq_nvt_posres`, `eq_nvt_posres_2`, `eq_nvt_free` |
+| explicit | `min`, `eq_nvt_posres`, `eq_npt_posres`, `eq_npt_free` — the NPT stages fix the box | `eq_npt_free.xml` | the same three, at that box |
+
+The per-rung stages are the fixed-volume stages a scaled run gets — a scaled Hamiltonian is NVT
+throughout, and a ladder's rungs share one volume — with the lengths `stages.restrained_nvt_steps`,
+`stages.restrained_npt_steps` and `stages.unrestrained_npt_steps`; a stage of 0 steps is skipped
+and all three at 0 is refused. Each is done as the stage chain does it: a fresh integrator seeded
+`derive_seed(seed, stage, "state<i>")`, the previous stage's positions, velocities and box
+installed (velocities are carried, never redrawn), then the restraint strength set; the restraint
+is the chain's own Force, on the solute, towards the topology's coordinates, on a **copy** of the
+rung — the rung Systems the ladder propagates never carry it.
+
+Order: these stages, then `rest2.equilibration_steps` (if any), then the step-0 observation and
+the first exchange. None of it is production. Each rung's end state is kept as
+`per_tau_state<i>.xml`, described (seeds, stages, digests) by `per_tau_equilibration.json` and
+recorded in `restart.json` under `per_tau_equilibration`; no trajectory or CV series is written
+for it. A ladder interrupted during it has taken no exchange step and has no checkpoint, so
+`--resume` refuses it by name — rerun with `--overwrite`; the equilibration is deterministic from
+the recorded seeds. An exported reference bundle performs it too, with the same code.
+
 ## Generated files
 
 ```text
@@ -205,6 +233,8 @@ If no file is supplied, the classifier derives the selection and writes the reso
 | `rest2.tau_max` | 0.5 | the top rung. τ = 0.5 scales solute–solute terms by 0.25 |
 | `rest2.exchange_interval_steps` | 5000 | steps between exchange attempts |
 | `rest2.number_of_exchanges` | 500 | the length of the run, in exchanges |
+| `rest2.equilibration_steps` | 0 | a free relaxation of every rung under its own τ before the first exchange |
+| `rest2.equilibration_per_tau` | false | the whole equilibration chain on every rung under its own τ; see above |
 | `rest2.state_trajectory` | true | one trajectory per state |
 | `rest2.rem_log` | true | the Amber-format exchange log |
 

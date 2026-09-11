@@ -17,6 +17,7 @@ So this export does not reimplement anything. The modules that decide what happe
     engine.py      the Contexts, propagation, and the reduced potential
     statistics.py  acceptance accounting
     rem_log.py     the Amber-format exchange log
+    rung_equilibration.py  per-tau equilibration, when the ladder ran with it
 
 -- are copied VERBATIM into the bundle. They already import nothing from md_tools: after
 `BAR_NM3_TO_KJ_PER_MOL` and `stream_seed` moved into `core.py`, every one of them needs only the
@@ -42,7 +43,10 @@ from typing import Any
 from .export import _continue_from, _digest, _locate, user_inputs_plan, write_user_inputs
 
 #: Copied byte for byte. Each is dependency-free by construction; see the module docstring.
-VENDORED = ("core.py", "rules.py", "engine.py", "statistics.py", "rem_log.py")
+#: `rung_equilibration.py` is the per-tau equilibration (`rest2.equilibration_per_tau`), which the
+#: runner performs with the same calls the driver makes.
+VENDORED = ("core.py", "rules.py", "engine.py", "statistics.py", "rem_log.py",
+            "rung_equilibration.py")
 
 #: `md_tools/rest2/hamiltonian.py`, copied byte for byte beside them: the code that turns the
 #: unscaled System into a rung. With it, `verify_rungs.py` rebuilds every bundled rung from rung 0
@@ -198,6 +202,28 @@ def main(argv=None):
     state_to_walker = list(range(n))
     for index in range(n):
         engine.set_configuration(index, configurations[state_to_walker[index]])
+
+    # Per-tau equilibration (`rest2.equilibration_per_tau`), exactly as the engine's
+    # `_equilibrate_per_tau` does it: the equilibration stages on every rung under ITS OWN tau, on
+    # a restrained copy of that rung, from the shared start, with `ladder/rung_equilibration.py`
+    # -- the same bytes the engine ran. Before the per-state relaxation below, as there.
+    per_tau = SETTINGS.get("per_tau_equilibration") or []
+    if per_tau:
+        from ladder.rung_equilibration import equilibrate_rung
+
+        print("# per-tau equilibration: "
+              + ", ".join(f"{{stage['name']}} {{stage['steps']}} step(s)" for stage in per_tau)
+              + " on every rung, under its own tau, NOT counted as production")
+        solute = [int(i) for i in PROVENANCE["derivation"]["solute_atom_indices"]]
+        for index in range(n):
+            configurations[index], _stages = equilibrate_rung(
+                systems[index], configurations[index], per_tau,
+                reference_positions=pdb.positions, restrained_atoms=solute,
+                state_index=index, seed=protocol.random_seed,
+                temperature_k=protocol.temperature_k, friction_per_ps=protocol.friction_per_ps,
+                timestep_fs=protocol.timestep_fs,
+                constraint_tolerance=protocol.constraint_tolerance, platform=platform)
+            engine.set_configuration(index, configurations[index])
 
     # Per-state relaxation before the first exchange, exactly as the engine's `_equilibrate` does
     # it: every rung propagated under ITS OWN Hamiltonian from the shared start, on the rung's own
@@ -447,6 +473,9 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
         # streams are seed + 977*rung, and the acceptance draw is its own named substream.
         "seed": int(dynamics["seed"]),
         "equilibration_steps": int(ladder.get("equilibration_steps") or 0),
+        # `rest2.equilibration_per_tau`, as the stages the ladder ran on every rung; [] when off.
+        "per_tau_equilibration": [dict(stage) for stage in
+                                  (ladder.get("per_tau_equilibration") or [])],
     }
     (out_dir / "settings.json").write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
 

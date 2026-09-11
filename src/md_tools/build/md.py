@@ -174,6 +174,22 @@ MD_SCHEMA = Schema(
                       "by every record that describes them.\n"
                       "  The driver has always relaxed each rung under its own scaled "
                       "Hamiltonian; only the number was unreachable from a configuration file."),
+            Field("equilibration_per_tau", bool, default=False,
+                  doc="Run the equilibration stages on EVERY RUNG, under that rung's own tau, "
+                      "instead of once at tau = 0. REST2 and rREST2 only; refused for any other "
+                      "protocol. Off by default.\n"
+                      "  When true, the tau = 0 chain stops early: at minimisation under implicit "
+                      "solvent, and after its NPT stages under explicit solvent, which run once at "
+                      "tau = 0 to fix the box every rung then shares. Every rung -- tau = 0 "
+                      "included -- then runs eq_nvt_posres (restrained_nvt_steps), "
+                      "eq_nvt_posres_2 (restrained_npt_steps) and eq_nvt_free "
+                      "(unrestrained_npt_steps), all at fixed volume, from the ladder's starting "
+                      "state, each stage with its own seed per rung. The restraint is the stage "
+                      "chain's, on the same atoms at the same strength; the rung Systems the "
+                      "ladder propagates never carry it.\n"
+                      "  Order: these stages, then `equilibration_steps`, then the first "
+                      "exchange. Neither is production. Stages of 0 steps are skipped, and all "
+                      "three at 0 is refused."),
             Field("state_trajectory", bool, default=True,
                   doc="Write one trajectory per fixed thermodynamic STATE (remd0.nc .. remdN.nc). "
                       "A state trajectory follows a state, not a walker; the filename carries the "
@@ -371,6 +387,19 @@ def _check_protocol(resolved: dict[str, Any]) -> None:
             "dynamics.phase_space_printout is set but dynamics.tau is 0.0. A phase-space stream "
             "exists to seed a reservoir at the ladder's TOP rung; writing one from the unscaled "
             "Hamiltonian would produce a reservoir for a rung nothing runs at.")
+    if (resolved.get("rest2") or {}).get("equilibration_per_tau"):
+        if protocol not in ("REST2", "rREST2"):
+            raise ConfigError(
+                f"rest2.equilibration_per_tau is true but protocol is {protocol}. It runs the "
+                f"equilibration stages on every rung of a REST2/rREST2 ladder under that rung's "
+                f"own tau; {protocol} has no ladder, so the setting would do nothing. Remove it, "
+                f"or set it to false.")
+        if not per_tau_equilibration_stages(resolved):
+            raise ConfigError(
+                "rest2.equilibration_per_tau is true but stages.restrained_nvt_steps, "
+                "stages.restrained_npt_steps and stages.unrestrained_npt_steps are all 0, so no "
+                "rung would be equilibrated at all. Give at least one of them a step count, or "
+                "set rest2.equilibration_per_tau to false.")
 
 
 def _check_ais(resolved: dict[str, Any]) -> None:
@@ -666,6 +695,12 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
                  "trajectory_interval_steps": 0, "state_interval_steps": 0,
                  "checkpoint_interval_steps": 0,
                  "description": "Restrained energy minimisation of the built system."})
+    if implicit and _equilibrates_per_tau(resolved):
+        # The equilibration stages belong to the RUNGS now, each under its own tau -- see
+        # `per_tau_equilibration_stages`. Implicit solvent has no box to fix first, so the tau = 0
+        # chain is minimisation alone and the ladder starts from `min.xml`. (Explicit solvent
+        # keeps its chain: the NPT stages at tau = 0 decide the volume every rung shares.)
+        return plan
     plan.append({**common, "name": "eq_nvt_posres", "ensemble": "NVT",
                  "steps": stages["restrained_nvt_steps"],
                  "restraint_kcal_per_mol_A2": dyn["restraint_kcal_per_mol_A2"],
@@ -740,6 +775,34 @@ def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
                      "checkpoint_interval_steps": rep["checkpoint_printout"],
                      "description": "Production molecular dynamics."})
     return plan
+
+
+#: The stages `rest2.equilibration_per_tau` runs on every rung, in order. Pinned by a test to
+#: `md_tools.remd.rung_equilibration.PER_TAU_STAGE_NAMES`, which runs them; spelled here too so
+#: resolving a configuration does not import the ladder runtime.
+PER_TAU_STAGE_NAMES = ("eq_nvt_posres", "eq_nvt_posres_2", "eq_nvt_free")
+
+
+def _equilibrates_per_tau(resolved: dict[str, Any]) -> bool:
+    return (resolved.get("protocol") in ("REST2", "rREST2")
+            and bool((resolved.get("rest2") or {}).get("equilibration_per_tau")))
+
+
+def per_tau_equilibration_stages(resolved: dict[str, Any]) -> list[dict[str, Any]]:
+    """The stages every rung runs under its own tau, or [] when the setting is off.
+
+    Taken from `stage_plan` itself, for the fixed-volume chain -- the renamed stages a scaled or an
+    implicit run gets -- so "the same equilibration" is the same stage dicts rather than a second
+    description of them. A stage of 0 steps is left out, as the stage chain would run nothing.
+    """
+    if not _equilibrates_per_tau(resolved):
+        return []
+    fixed_volume = dict(resolved, solvent="implicit",
+                        rest2=dict(resolved["rest2"], equilibration_per_tau=False))
+    return [{"name": stage["name"], "steps": int(stage["steps"]),
+             "restraint_kcal_per_mol_A2": float(stage["restraint_kcal_per_mol_A2"])}
+            for stage in stage_plan(fixed_volume)
+            if stage["name"] in PER_TAU_STAGE_NAMES and int(stage["steps"]) > 0]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1218,6 +1281,15 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
         else:
             log.field("equilibration", f"{equilibration} steps per state, at that state's own "
                                        f"Hamiltonian, not production")
+        per_tau = per_tau_equilibration_stages(resolved)
+        if per_tau:
+            log.field("per-tau equilibration",
+                      "every rung, under its own tau, before `equilibration` above: "
+                      + ", ".join(f"{s['name']} {s['steps']} steps"
+                                  + (f" restrained at {s['restraint_kcal_per_mol_A2']:g} "
+                                     f"kcal/mol/A^2" if s["restraint_kcal_per_mol_A2"] else "")
+                                  for s in per_tau))
+            log.field("ladder starts from", f"{plan[-1]['name']}.xml (the tau = 0 chain above)")
 
     # The Amber-like inputs, beside the Python entry points. Two shapes over ONE resolved run:
     # `python min.py` and `md-openmm md-run -i min.in` reach the same function with the same

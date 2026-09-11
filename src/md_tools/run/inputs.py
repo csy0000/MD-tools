@@ -81,6 +81,8 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         # out rather than abbreviated: Amber has no counterpart, so there is no established short
         # name to borrow and inventing one would only be a second thing to remember.
         "equilibration_steps": "rest2.equilibration_steps",
+        # The equilibration stages on every rung under its own tau, rather than once at tau = 0.
+        "equilibration_per_tau": "rest2.equilibration_per_tau",
         "state_trajectory": "rest2.state_trajectory",
         "rem_log": "rest2.rem_log",
         "neighbour_acceptance_report": "rest2.neighbour_acceptance_report",

@@ -1030,7 +1030,8 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
     inventory = _ladder_inventory(protocol=protocol, replicas=int(replicas), output=output,
                                   log=log, trajectory=trajectory, restart=restart,
                                   checkpoint=checkpoint, groupfile=groupfile,
-                                  reservoir=bool(reservoir))
+                                  reservoir=bool(reservoir),
+                                  per_tau=bool((ladder or {}).get("per_tau_equilibration")))
 
     coordination, machine, acceleration, index, detail, particles, loaded = _common(
         topology=topology, system=system,
@@ -1130,6 +1131,40 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
         built_systems, audit = collectively(coordination, _rungs,
                                             what="the ladder's rung Systems")
         rung_systems = tuple(built_systems)
+
+    # -- per-tau equilibration, checked HERE ---------------------------------------------------
+    #
+    # The plan, the solute it restrains and the restrained copy of the hottest rung, all before
+    # any output exists. The driver builds one such copy per rung; a Force that cannot be added
+    # would otherwise be found with the analysis file and every trajectory already created.
+    per_tau = (ladder or {}).get("per_tau_equilibration") or []
+    if per_tau and loaded is not None:
+        def _per_tau():
+            from ..remd.rung_equilibration import restrained_clone, validate_plan
+
+            try:
+                validate_plan(per_tau)
+            except ValueError as refusal:
+                raise PreflightError(f"{protocol}: rest2.equilibration_per_tau: {refusal}") \
+                    from None
+            if not solute_indices:
+                raise PreflightError(
+                    f"{protocol}: rest2.equilibration_per_tau restrains the solute during its "
+                    f"restrained stages, and this System has no solute atoms.")
+            if not coordinates:
+                raise PreflightError(
+                    f"{protocol}: rest2.equilibration_per_tau equilibrates every rung FROM the "
+                    f"ladder's starting state, and no -c was given.")
+            try:
+                restrained_clone(rung_systems[-1] if rung_systems else loaded.system,
+                                 loaded.pdb.positions, solute_indices)
+            except Exception as broken:
+                raise PreflightError(
+                    f"{protocol}: rest2.equilibration_per_tau could not restrain the top rung: "
+                    f"{type(broken).__name__}: {broken}") from None
+            return None
+
+        collectively(coordination, _per_tau, what="the per-tau equilibration plan")
 
     # -- the rREST2 reservoir, validated HERE ---------------------------------------------------
     #
@@ -1279,7 +1314,7 @@ def _cv_interval_of(document) -> int:
 
 
 def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, checkpoint,
-                      groupfile, reservoir=False) -> OutputInventory:
+                      groupfile, reservoir=False, per_tau=False) -> OutputInventory:
     """A ladder's complete inventory: the run-level files AND every per-state and per-rank one.
 
     `remd0.nc .. remdN-1.nc` are the scientific result and were not in any inventory at all --
@@ -1340,6 +1375,15 @@ def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, c
         # calculation that no longer exists, with nothing in the directory saying so.
         roles[f"state_cv_{state}"] = directory / f"cv_state{state}.csv"
         roles[f"state_cv_definition_{state}"] = directory / f"cv_state{state}.json"
+    if per_tau:
+        # `rest2.equilibration_per_tau`: each rung's equilibrated state and the record naming
+        # them. Listed only when the setting is on, so `--overwrite` governs them and a ladder
+        # that does not use it has the inventory it always had.
+        from ..remd.rung_equilibration import RECORD_NAME, handoff_name
+
+        for state in range(int(replicas)):
+            roles[f"per_tau_state_{state}"] = directory / handoff_name(state)
+        roles["per_tau_record"] = directory / RECORD_NAME
     if checkpoint:
         # What a `--resume` READS. Its presence is never itself the reason to refuse a
         # continuation, which is what `resumable` says.

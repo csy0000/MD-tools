@@ -180,7 +180,14 @@ def test_the_two_seed_derivations_have_different_names():
         "the two derivations now agree, so one of them changed; check which projects that moves")
     definitions = sorted(p.relative_to(SRC).as_posix() for p in SRC.rglob("*.py")
                          if "def derive_seed" in p.read_text(encoding="utf-8"))
-    assert definitions == ["md/_stages.py"], definitions
+    # Still ONE definition. It moved from `md/_stages.py` into `remd/rung_equilibration.py`, which
+    # imports nothing from md_tools, so a reference bundle can carry the seed derivation its
+    # per-tau equilibration uses; `md._stages` re-exports that same object.
+    assert definitions == ["remd/rung_equilibration.py"], definitions
+    from md_tools.md import _stages
+    from md_tools.remd import rung_equilibration
+
+    assert _stages.derive_seed is rung_equilibration.derive_seed
 
 
 def test_there_is_no_second_platform_resolver_left():
