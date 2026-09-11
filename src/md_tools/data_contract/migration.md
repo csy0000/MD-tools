@@ -16,7 +16,7 @@ with a message that names the difference.
 |---|---|---|
 | `schema_version` | `1.0` | `2.0` |
 | canonical path | `{namespace}/{yyyy-mm}/{dataset_name}` | `{year}/{project_name}/{data_name}` |
-| shared datasets | the reserved `baseline/` namespace | `{year}/common/{project_name}/{data_name}` |
+| shared datasets | the reserved `baseline/` namespace | `common/{project_name}/{data_name}` |
 | `role` | `baseline` \| `project` | `common` \| `project` |
 | dated segment | creation **month**, `yyyy-mm` | completion **year**, `YYYY` |
 | identity fields | `namespace`, `dataset_name` | `year`, `project_name`, `data_name` |

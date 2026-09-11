@@ -169,7 +169,7 @@
   "$id": "https://github.com/csy0000/MD-tools/schemas/dataset-v2.0.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "The authoritative manifest at the root of one dataset directory.\n\nCanonical location, contract v2:\n\n    $MD_DATA/{year}/{project_name}/{data_name}/dataset.yaml\n    $MD_DATA/{year}/common/{project_name}/{data_name}/dataset.yaml",
+  "description": "The authoritative manifest at the root of one dataset directory.\n\nCanonical location, contract v2:\n\n    $MD_DATA/{year}/{project_name}/{data_name}/dataset.yaml           role: project\n    $MD_DATA/common/{project_name}/{data_name}/dataset.yaml           role: common\n\nA project dataset leads with the year because a project is a thing that happened in a year;\na COMMON dataset does not, because it is shared infrastructure that outlives the year it was\nproduced in. Putting one under `2026/` would say a reference simulation belongs to 2026, and\nthe next person looking for it would have to know when it was made to find it. The date has\nnot been lost: `year` is still a required field, and a common dataset's `data_name` normally\nopens with a `YYYY-MM` segment of its own.",
   "properties": {
     "archived_at": {
       "anyOf": [

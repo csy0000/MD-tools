@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -86,9 +87,19 @@ def test_the_project_path_is_year_first_with_no_month(world):
     assert (world["root"] / "2026" / "ALA" / "ALA-cMD").is_dir()
 
 
-def test_the_common_path_inserts_common_after_the_year(world):
+def test_the_common_path_leads_with_common_and_carries_no_year(world):
+    """Shared data are not owned by the year they were produced in.
+
+    A project dataset is year-first because a project is something that happened in a year. A
+    reference simulation is the opposite: it is used by whoever needs it, for as long as it is
+    the best available, and filing it under `2026/` means the next person has to already know
+    when it was made in order to find it. The date is still recorded in `year`, and a common
+    dataset's own `data_name` normally opens with a `YYYY-MM` segment.
+    """
     result = _register(world, common=True)
-    assert result["canonical_path"] == "2026/common/ALA/ALA-cMD"
+    assert result["canonical_path"] == "common/ALA/ALA-cMD"
+    assert not re.fullmatch(r"\d{4}", result["canonical_path"].split("/")[0])
+    assert (world["root"] / "common" / "ALA" / "ALA-cMD").is_dir()
 
 
 def test_no_registered_path_contains_a_month_segment(world):
@@ -765,7 +776,7 @@ def test_a_dataset_name_may_be_several_segments_deep():
 
     assert canonical_path(year="2026", project_name="reference",
                           data_name="2026-09/ALA/cMD-hot/run1", common=True) == \
-        "2026/common/reference/2026-09/ALA/cMD-hot/run1"
+        "common/reference/2026-09/ALA/cMD-hot/run1"
     assert canonical_path(year="2026", project_name="MD-project",
                           data_name="2026-09/ALA/REST2/run1") == \
         "2026/MD-project/2026-09/ALA/REST2/run1"

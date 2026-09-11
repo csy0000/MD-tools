@@ -239,7 +239,7 @@ def build_parser() -> argparse.ArgumentParser:
     reg.add_argument("-year", "--year", default=None, metavar="YYYY",
                      help="four digits; the year the data were COMPLETED (see the migration note)")
     reg.add_argument("--common-data", action="store_true",
-                     help="register under {year}/common/{project}/{data} instead of "
+                     help="register under common/{project}/{data} instead of "
                           "{year}/{project}/{data}")
     reg.add_argument("--dry-run", action="store_true",
                      help="run every check and print the destination, writing nothing at all")

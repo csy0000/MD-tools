@@ -122,8 +122,15 @@ class Dataset(StrictModel):
 
     Canonical location, contract v2:
 
-        $MD_DATA/{year}/{project_name}/{data_name}/dataset.yaml
-        $MD_DATA/{year}/common/{project_name}/{data_name}/dataset.yaml
+        $MD_DATA/{year}/{project_name}/{data_name}/dataset.yaml           role: project
+        $MD_DATA/common/{project_name}/{data_name}/dataset.yaml           role: common
+
+    A project dataset leads with the year because a project is a thing that happened in a year;
+    a COMMON dataset does not, because it is shared infrastructure that outlives the year it was
+    produced in. Putting one under `2026/` would say a reference simulation belongs to 2026, and
+    the next person looking for it would have to know when it was made to find it. The date has
+    not been lost: `year` is still a required field, and a common dataset's `data_name` normally
+    opens with a `YYYY-MM` segment of its own.
     """
 
     schema_version: str = Field(min_length=1, max_length=4096)
@@ -181,10 +188,10 @@ class Dataset(StrictModel):
                 f"path: {self.path!r} does not match the canonical path for these fields, "
                 f"{expected!r}. The path is derived from year, role, project_name and data_name; "
                 f"it is never written independently of them.")
-        if self.role == "common" and parts[1] != COMMON_SEGMENT:
+        if self.role == "common" and parts[0] != COMMON_SEGMENT:
             raise ValueError(f"path: a 'common' dataset lives under "
-                             f"{{year}}/{COMMON_SEGMENT}/...; got {self.path!r}")
-        if self.role == "project" and len(parts) > 1 and parts[1] == COMMON_SEGMENT:
+                             f"{COMMON_SEGMENT}/...; got {self.path!r}")
+        if self.role == "project" and parts[0] == COMMON_SEGMENT:
             raise ValueError(
                 f"role: the {COMMON_SEGMENT!r} segment is reserved for shared datasets; a "
                 f"project-owned dataset must not be placed under it")
@@ -254,6 +261,10 @@ class Dataset(StrictModel):
 def canonical_path(*, year: str, project_name: str, data_name: str, common: bool = False) -> str:
     """The canonical logical path, relative to $MD_DATA. No month segment.
 
+    A project dataset is year-first; a common one leads with `common/` and carries no year
+    segment at all -- see `Dataset` for why. `year` is required either way: it is metadata about
+    when the data were finished, and for a project dataset it is also the first segment.
+
     One function, used both to build a destination and to check a manifest, so the two cannot
     disagree about what canonical means.
     """
@@ -266,7 +277,7 @@ def canonical_path(*, year: str, project_name: str, data_name: str, common: bool
     check_segment("project_name", project_name)
     check_data_path("data_name", data_name)
     if common:
-        return f"{year}/{COMMON_SEGMENT}/{project_name}/{data_name}"
+        return f"{COMMON_SEGMENT}/{project_name}/{data_name}"
     return f"{year}/{project_name}/{data_name}"
 
 

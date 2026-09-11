@@ -40,7 +40,7 @@ order, and the command always prints which source supplied it:
 
 ```text
 $MD_DATA/{year}/{project_name}/{data_name}/          # role: project
-$MD_DATA/{year}/common/{project_name}/{data_name}/   # role: common
+$MD_DATA/common/{project_name}/{data_name}/   # role: common
 ```
 
 **No month segment.** `year` is the year the dataset was *completed*, and it is checked against the
