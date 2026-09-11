@@ -818,3 +818,90 @@ def test_a_nested_name_cannot_escape_the_storage_root(tmp_path):
     with pytest.raises(DatasetError):
         canonical_path(year="2026", project_name="reference",
                        data_name="2026-09/../../../../etc", common=True)
+
+
+# --- the project repository is resolved from the DATA, never from the shell --------------------
+
+def _tiny_repo(path, remote="https://github.com/example/project"):
+    """A git repository with one commit and an https origin, shaped like a project."""
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "README.md").write_text("project\n", encoding="utf-8")
+    for argv in (["init", "-q"], ["config", "user.email", "t@example.invalid"],
+                 ["config", "user.name", "T"], ["remote", "add", "origin", remote],
+                 ["add", "-A"], ["commit", "-qm", "initial"]):
+        assert subprocess.run(["git", "-C", str(path), *argv],
+                              capture_output=True).returncode == 0, argv
+    return subprocess.run(["git", "-C", str(path), "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+
+
+def test_the_origin_is_the_repository_holding_the_data_not_the_shells_directory(tmp_path,
+                                                                                monkeypatch):
+    """This recorded the wrong repository for three real datasets.
+
+    Every git command ran with no `-C`, so `origin` meant "whichever repository the person was
+    standing in". Registering a campaign belonging to one project from another project's checkout
+    recorded the second one, and both surrounding guards -- refuse a dirty tree, refuse a
+    non-https remote -- passed, which is what made the wrong answer convincing.
+    """
+    from md_tools.registry.register import _origin
+
+    project = tmp_path / "project"
+    head = _tiny_repo(project)
+    data = project / "data" / "run"
+    data.mkdir(parents=True)
+
+    elsewhere = tmp_path / "elsewhere"
+    _tiny_repo(elsewhere, remote="https://github.com/example/not-this-one")
+    monkeypatch.chdir(elsewhere)
+
+    origin = _origin(data)
+    assert origin["commit"] == head
+    assert origin["repository"] == "https://github.com/example/project"
+
+
+def test_ignored_data_still_resolves_its_project(tmp_path):
+    """`data/**` is routinely gitignored, and ignore status is not worktree membership.
+
+    Resolution is `rev-parse --show-toplevel`, which answers "which worktree is this path in"
+    regardless of whether git tracks the path.
+    """
+    from md_tools.registry.register import _origin
+
+    project = tmp_path / "project"
+    head = _tiny_repo(project)
+    (project / ".gitignore").write_text("/data/**\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(project), "add", "-A"], capture_output=True)
+    subprocess.run(["git", "-C", str(project), "commit", "-qm", "ignore data"],
+                   capture_output=True)
+    head = subprocess.run(["git", "-C", str(project), "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    data = project / "data" / "run"
+    data.mkdir(parents=True)
+    assert _origin(data)["commit"] == head
+
+
+def test_data_outside_any_repository_is_refused_and_the_flag_is_named(tmp_path):
+    """No silent fall back to the cwd: that fall back is what recorded the wrong repository.
+
+    A refusal that names the way forward is checkable; a guess is not.
+    """
+    from md_tools.registry.errors import RegistrationError
+    from md_tools.registry.register import _origin
+
+    loose = tmp_path / "no-repo-here" / "run"
+    loose.mkdir(parents=True)
+    with pytest.raises(RegistrationError) as refusal:
+        _origin(loose)
+    assert "--project-repo" in str(refusal.value)
+
+
+def test_project_repo_names_the_project_when_the_data_live_outside_it(tmp_path):
+    """The escape hatch, for data on a scratch volume or a mounted share."""
+    from md_tools.registry.register import _origin
+
+    project = tmp_path / "project"
+    head = _tiny_repo(project)
+    loose = tmp_path / "scratch" / "run"
+    loose.mkdir(parents=True)
+    assert _origin(loose, project_repo=str(project))["commit"] == head

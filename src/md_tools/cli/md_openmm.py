@@ -138,6 +138,7 @@ def cmd_data_register(args) -> int:
             verify_only=bool(args.verify_only),
             user_config=args.user_config,
             md_data_override=args.md_data,
+            project_repo=args.project_repo,
         )
     except RegistrationError as exc:
         print(f"data-register: {exc}", file=sys.stderr)
@@ -258,6 +259,10 @@ def build_parser() -> argparse.ArgumentParser:
     reg.add_argument("--name", default=None, help="with --init, the user's name")
     reg.add_argument("--person-id", default=None, help="with --init, a stable person identifier")
     reg.add_argument("--orcid", default=None, help="with --init, an ORCID, or omit for none")
+    reg.add_argument("--project-repo", default=None, metavar="DIR",
+                     help="the project repository that produced this data, when the data are "
+                          "not inside it. Normally omitted: the repository is resolved from "
+                          "-idata, never from the shell's working directory.")
     reg.set_defaults(func=cmd_data_register)
 
     ref = sub.add_parser(

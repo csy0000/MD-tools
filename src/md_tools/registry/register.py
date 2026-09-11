@@ -98,7 +98,7 @@ def _missing_source_reason(source: Path, destination: Path, relative: str) -> st
 def register_dataset(*, source: Path, project_name: str, data_name: str, year: str,
                      common: bool = False, dry_run: bool = False, verify_only: bool = False,
                      user_config: str | None = None, md_data_override: str | None = None,
-                     echo: bool = True) -> dict[str, Any]:
+                     project_repo: str | None = None, echo: bool = True) -> dict[str, Any]:
     def say(message: str = "") -> None:
         if echo:
             print(message)
@@ -180,6 +180,7 @@ def register_dataset(*, source: Path, project_name: str, data_name: str, year: s
     manifest = _manifest(source=source, relative=relative, year=year,
                          project_name=project_name, data_name=data_name, common=common,
                          records=found["records"], user=document["user"],
+                         project_repo=project_repo,
                          derived_from=[parent] if parent else [])
     try:
         dataset = validate_dataset(manifest)
@@ -460,6 +461,7 @@ def _declared_parent(source: Path) -> str | None:
 
 
 def _manifest(*, source: Path, relative: str, year: str, project_name: str, data_name: str,
+              project_repo: str | None = None,
               common: bool, records: list[dict[str, Any]], user: dict[str, Any],
               derived_from: list[str] | None = None) -> dict[str, Any]:
     """Derive `dataset.yaml` from the records, never from the directory looking finished."""
@@ -513,7 +515,7 @@ def _manifest(*, source: Path, relative: str, year: str, project_name: str, data
                        "orcid": user.get("orcid"), "affiliation": user.get("affiliation")},
         "status": "complete",
         "completed_at": completed_at,
-        "origin": _origin(),
+        "origin": _origin(source, project_repo=project_repo),
         "software": software,
         "components": components,
         "derived_from": list(derived_from or []),
@@ -552,32 +554,68 @@ def _system_description(records: list[dict[str, Any]], data_name: str) -> str:
     return f"Registered as {data_name}. No build record was present to describe the system."
 
 
-def _origin() -> dict[str, Any]:
-    """The project repository this data came from, pinned at an exact commit.
+def _origin(source: Path, *, project_repo: str | None = None) -> dict[str, Any]:
+    """The project repository THIS DATA came from, pinned at an exact commit.
 
-    Refused rather than guessed when the working tree is dirty: a commit that does not describe
-    what actually ran is a false provenance claim, which is worse than none.
+    The repository is resolved from the DATA, not from the shell's working directory.
+
+    It used to be the shell's. Every git command ran with no `-C`, so the field meant "whichever
+    repository the person happened to be standing in", and three reference datasets were
+    registered claiming MD-tools' HEAD as the project that produced a campaign belonging to
+    MD-project. The two guards around it -- refuse a dirty tree, refuse a non-https remote --
+    both passed, which is what made the wrong answer convincing.
+
+    Resolution is by `rev-parse --show-toplevel` from the data directory, which works whether or
+    not the data are tracked: `data/**` is routinely gitignored and ignore status has nothing to
+    do with which worktree a path is in.
+
+    When the data are not inside a repository at all, this REFUSES and names `--project-repo`.
+    The silent fall back to the cwd is precisely what produced the wrong field, so there is no
+    fall back; an explicit answer can be checked, a guess cannot.
     """
     import subprocess
 
-    def git(*args: str) -> str | None:
+    def git_in(where, *args: str) -> str | None:
         try:
-            result = subprocess.run(["git", *args], capture_output=True, text=True, timeout=15)
+            result = subprocess.run(["git", "-C", str(where), *args],
+                                    capture_output=True, text=True, timeout=15)
         except (OSError, subprocess.SubprocessError):
             return None
         return result.stdout.strip() if result.returncode == 0 else None
 
+    if project_repo is not None:
+        start = Path(project_repo)
+        if not start.is_dir():
+            raise RegistrationError(f"--project-repo {start}: not a directory")
+    else:
+        start = Path(source)
+        start = start if start.is_dir() else start.parent
+
+    toplevel = git_in(start, "rev-parse", "--show-toplevel")
+    if not toplevel:
+        raise RegistrationError(
+            f"{start} is not inside a git repository, so the project that produced this data "
+            f"cannot be established. A dataset manifest pins the repository and commit that "
+            f"produced it, and registering without one would record a provenance nobody can "
+            f"check.\n\n"
+            f"If the data legitimately live outside the project tree, name the project "
+            f"explicitly:\n"
+            f"    --project-repo /path/to/the/project")
+
+    def git(*args: str) -> str | None:
+        return git_in(toplevel, *args)
+
     commit = git("rev-parse", "HEAD")
     if not commit:
         raise RegistrationError(
-            "cannot establish the project commit: this is not a git repository, or git is "
-            "unavailable. A dataset manifest pins the repository and commit that produced it; "
-            "registering without one would record a provenance nobody can check.")
+            f"cannot establish the commit of {toplevel}: git reports no HEAD there. A dataset "
+            f"manifest pins the repository and commit that produced it; registering without one "
+            f"would record a provenance nobody can check.")
     dirty = git("status", "--porcelain")
     if dirty:
         raise RegistrationError(
-            "the project working tree has uncommitted changes, so the commit recorded in the "
-            "manifest would not describe what actually ran:\n"
+            f"the project working tree at {toplevel} has uncommitted changes, so the commit "
+            f"recorded in the manifest would not describe what actually ran:\n"
             + "\n".join(f"  {line}" for line in dirty.splitlines()[:10])
             + "\n\nCommit or stash them, then register.")
     url = git("remote", "get-url", "origin") or ""
@@ -587,7 +625,7 @@ def _origin() -> dict[str, Any]:
         url = url[: -len(".git")]
     if not url.startswith("https://"):
         raise RegistrationError(
-            f"the project's origin remote ({url or 'unset'}) is not an https URL, and the "
+            f"the origin remote of {toplevel} ({url or 'unset'}) is not an https URL, and the "
             f"manifest records one so that a reader can reach it.")
     return {"repository": url, "commit": commit, "version": None}
 
