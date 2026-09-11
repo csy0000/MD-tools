@@ -199,6 +199,11 @@ NON_CUDA_CONTEXT_SITES = {
     "remd/driver.py::ReplicaRun._begin":
         "constructs an ExchangeContext, which is bookkeeping around Simulations the engine "
         "already created on CUDA -- the kernels are the engine's, and are covered by its entry.",
+    "reference/standalone_build.py::explicit_system":
+        "build-top's System construction written out for a bundle's input/build_system.py: it "
+        "calls createSystem and reads values back off the System it just built. No Context and "
+        "no platform exist; the script rebuilds a System and compares its bytes, and never "
+        "integrates anything.",
     "openmm/solvation.py::solvate":
         "reads box vectors off a Topology while building the solvated system. A Topology is "
         "geometry on the host; no Context exists yet, and nothing has been computed on a device.",
