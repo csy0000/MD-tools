@@ -112,15 +112,17 @@ def built(tmp_path_factory):
 
 # --- example 1: cMD ------------------------------------------------------------------------------
 
-def test_example_1_plain_md_from_a_structure_to_a_trajectory(built):
-    """The simplest complete run: minimise, equilibrate, produce.
+@pytest.fixture(scope="module")
+def cmd_run(built):
+    """EXAMPLE 1's output, produced by a FIXTURE rather than by another test.
 
-        md-openmm build-md -odir ./cMD --config cMD.config
-        cd cMD && ./run.sh ../built.pdb ../built.xml
+    `test_example_1b` used to require that `test_example_1` had already run, and said so by
+    skipping when the directory was absent. Under `-n 24` the two land on different workers with
+    separate module-scoped fixtures, so the directory legitimately was not there and a real test
+    quietly did not run -- CI's no-skip policy being satisfied by which worker drew which test.
 
-    `build-md` writes one `.in` per stage, one thin `.py` entry point per stage, `run.sh` which
-    calls them in order, and `resolved.config`. Each stage hands its final state to the next
-    through `-c`, which `run.sh` wires up for you.
+    A fixture states the dependency instead of assuming it: any worker that needs this output
+    builds it.
     """
     (built / "cMD.config").write_text(yaml.safe_dump({
         "protocol": "cMD",
@@ -134,20 +136,31 @@ def test_example_1_plain_md_from_a_structure_to_a_trajectory(built):
         "reporting": {"crd_printout_solute": 20, "info_printout": 50, "checkpoint_printout": 50},
     }), encoding="utf-8")
     _md_openmm(built, "build-md", "-odir", "./cMD", "--config", "cMD.config")
-
-    generated = {p.name for p in (built / "cMD").iterdir()}
-    assert {"run.sh", "resolved.config", "min.in", "cMD.in", "min.py", "cMD.py"} <= generated
-
     _run_sh(built / "cMD", "--cpu")
+    return built / "cMD"
+
+
+def test_example_1_plain_md_from_a_structure_to_a_trajectory(built, cmd_run):
+    """The simplest complete run: minimise, equilibrate, produce.
+
+        md-openmm build-md -odir ./cMD --config cMD.config
+        cd cMD && ./run.sh ../built.pdb ../built.xml
+
+    `build-md` writes one `.in` per stage, one thin `.py` entry point per stage, `run.sh` which
+    calls them in order, and `resolved.config`. Each stage hands its final state to the next
+    through `-c`, which `run.sh` wires up for you.
+    """
+    generated = {p.name for p in cmd_run.iterdir()}
+    assert {"run.sh", "resolved.config", "min.in", "cMD.in", "min.py", "cMD.py"} <= generated
 
     # What you get: a trajectory, a final state to continue from, a human-readable output and a
     # machine-readable provenance record, per stage.
-    assert (built / "cMD" / "solute_prod1.nc").is_file()
-    assert (built / "cMD" / "cMD.xml").is_file()
-    assert "completed" in (built / "cMD" / "cMD.out").read_text(encoding="utf-8")
+    assert (cmd_run / "solute_prod1.nc").is_file()
+    assert (cmd_run / "cMD.xml").is_file()
+    assert "completed" in (cmd_run / "cMD.out").read_text(encoding="utf-8")
 
 
-def test_example_1b_the_same_run_one_stage_at_a_time(built):
+def test_example_1b_the_same_run_one_stage_at_a_time(built, cmd_run):
     """`run.sh` is a convenience, not a second interface. Any stage can be run directly.
 
     These three are the SAME run reaching the same installed code:
@@ -156,9 +169,7 @@ def test_example_1b_the_same_run_one_stage_at_a_time(built):
         md-openmm md-run -i min.in -p ../built.pdb -s ../built.xml -o min.out ...
         python min.py    -p ../built.pdb -s ../built.xml -o min.out ...
     """
-    directory = built / "cMD"
-    if not directory.is_dir():
-        pytest.skip("example 1 has not run")
+    directory = cmd_run
     _md_openmm(directory, "md-run", "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
                "-o", "min_again.out", "-x", "min_again.dcd", "-r", "min_again.xml",
                "-log", "min_again.log", "--cpu", "-odir", "./again")
@@ -168,7 +179,39 @@ def test_example_1b_the_same_run_one_stage_at_a_time(built):
 
 # --- example 2: REST2 ----------------------------------------------------------------------------
 
-def test_example_2_a_rest2_ladder_under_a_launcher(built):
+@pytest.fixture(scope="module")
+def rest2_run(built):
+    """EXAMPLE 2's output, as a fixture. Same reason as `cmd_run`: a test must not depend on
+    another test having run, because under `-n 24` it may not have run HERE."""
+    if shutil.which("mpirun") is None:
+        pytest.skip("no mpirun on PATH")
+    _write_rest2_config(built)
+    _md_openmm(built, "build-md", "-odir", "./REST2", "--config", "REST2.config")
+    _run_sh(built / "REST2", "--cpu", timeout=7200)
+    return built / "REST2"
+
+
+def _write_rest2_config(built):
+    """The ladder configuration, written by whoever needs it first."""
+    (built / "REST2.config").write_text(yaml.safe_dump({
+        "protocol": "REST2",
+        "solvent": "implicit",
+        "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "seed": 20260908},
+        "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 20,
+                   "restrained_npt_steps": 20, "unrestrained_npt_steps": 20,
+                   "production_steps": 0},        # the ladder owns production, not a stage
+        "reporting": {"crd_printout_solute": 50, "info_printout": 50, "checkpoint_printout": 50},
+        "rest2": {
+            "number_of_replicas": 3,              # -> mpirun -n 3
+            "tau_max": 0.5,                       # ladder is linear 0 -> 0.5 over the states
+            "exchange_interval_steps": 50,
+            "number_of_exchanges": 4,             # production per state = 50 * 4 = 200 steps
+            "equilibration_steps": 50,            # per state, at that state's own Hamiltonian
+        },
+    }), encoding="utf-8")
+
+
+def test_example_2_a_rest2_ladder_under_a_launcher(built, rest2_run):
     """Replica exchange: N states of one system, differing only in Hamiltonian.
 
         mpirun -n 3 md-openmm md-run -ng 3 -i REST2.in -p ../built.pdb -s ../built.xml ...
@@ -189,33 +232,10 @@ def test_example_2_a_rest2_ladder_under_a_launcher(built):
     relaxing out of a distribution that is not theirs -- while every record calls those samples
     production.
     """
-    if shutil.which("mpirun") is None:
-        pytest.skip("no mpirun on PATH")
-
-    (built / "REST2.config").write_text(yaml.safe_dump({
-        "protocol": "REST2",
-        "solvent": "implicit",
-        "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "seed": 20260908},
-        "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 20,
-                   "restrained_npt_steps": 20, "unrestrained_npt_steps": 20,
-                   "production_steps": 0},        # the ladder owns production, not a stage
-        "reporting": {"crd_printout_solute": 50, "info_printout": 50, "checkpoint_printout": 50},
-        "rest2": {
-            "number_of_replicas": 3,              # -> mpirun -n 3
-            "tau_max": 0.5,                       # ladder is linear 0 -> 0.5 over the states
-            "exchange_interval_steps": 50,
-            "number_of_exchanges": 4,             # production per state = 50 * 4 = 200 steps
-            "equilibration_steps": 50,            # per state, at that state's own Hamiltonian
-        },
-    }), encoding="utf-8")
-    _md_openmm(built, "build-md", "-odir", "./REST2", "--config", "REST2.config")
-
-    run_sh = (built / "REST2" / "run.sh").read_text(encoding="utf-8")
+    run_sh = (rest2_run / "run.sh").read_text(encoding="utf-8")
     assert "mpirun -n 3" in run_sh and "-ng 3" in run_sh
 
-    _run_sh(built / "REST2", "--cpu", timeout=7200)
-
-    out = (built / "REST2" / "REST2.out").read_text(encoding="utf-8")
+    out = (rest2_run / "REST2.out").read_text(encoding="utf-8")
     assert "run_status: completed" in out
     # One trajectory per fixed thermodynamic STATE -- never per walker, never tau-named.
     for state in range(3):
@@ -361,7 +381,7 @@ def test_example_3_an_interrupted_cmd_chain_resumes_by_rerunning_the_same_comman
     assert "--resume is not a cMD flag" in resumed.stdout + resumed.stderr
 
 
-def test_example_3b_resuming_a_ladder_is_a_different_command(built):
+def test_example_3b_resuming_a_ladder_is_a_different_command(built, rest2_run):
     """A ladder takes `--resume`, but NOT through `run.sh`.
 
         # this does NOT work -- run.sh forwards its arguments to every stage, and the
@@ -376,11 +396,7 @@ def test_example_3b_resuming_a_ladder_is_a_different_command(built):
     It continues to the ORIGINAL budget and does not extend it. Run against a ladder that already
     finished it reports completion rather than repeating the work.
     """
-    if shutil.which("mpirun") is None:
-        pytest.skip("no mpirun on PATH")
-    directory = built / "REST2"
-    if not (directory / "REST2.out").is_file():
-        pytest.skip("example 2 has not run")
+    directory = rest2_run
 
     # The wrong way, demonstrated so nobody has to discover it.
     wrong = _run_sh(directory, "--cpu", "--resume", expect_success=False)

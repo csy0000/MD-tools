@@ -420,9 +420,20 @@ def test_a_resume_truncates_the_state_csv_as_well_as_the_trajectory(project, ref
     assert crashed.returncode != 0
 
     committed = read_committed(_checkpoints(work))["state"]["streams"]
-    csv_path = work / "cMD.csv"
-    if not csv_path.is_file() or "state_csv" not in committed:
-        pytest.skip("this stage wrote no state CSV, so there is nothing to truncate")
+
+    # `mdout.csv`, NOT `cMD.csv`. The production state table was renamed to match what Amber
+    # calls it, and this test kept the old name -- so `csv_path.is_file()` was false every time
+    # and the guard below turned into an unconditional skip. The test did not become flaky; it
+    # stopped running, and reported that as a property of the stage ("this stage wrote no state
+    # CSV") rather than as a stale filename here.
+    #
+    # So the premise is ASSERTED now. If the production stage ever stops committing a state CSV,
+    # that is a defect in the thing under test and this must fail, not opt out.
+    csv_path = work / "mdout.csv"
+    assert csv_path.is_file(), (
+        f"the production stage wrote no state table; {sorted(p.name for p in work.iterdir())}")
+    assert "state_csv" in committed, (
+        f"the state CSV is not a committed stream, so a resume cannot truncate it: {committed}")
 
     with csv_path.open(encoding="utf-8") as handle:
         before = max(sum(1 for _ in handle) - 1, 0)
@@ -430,7 +441,7 @@ def test_a_resume_truncates_the_state_csv_as_well_as_the_trajectory(project, ref
 
     resumed = _run_stage(project, work)
     assert resumed.returncode == 0, resumed.stdout + resumed.stderr
-    with (reference_work / "cMD.csv").open(encoding="utf-8") as handle:
+    with (reference_work / "mdout.csv").open(encoding="utf-8") as handle:
         expected = max(sum(1 for _ in handle) - 1, 0)
     with csv_path.open(encoding="utf-8") as handle:
         after = max(sum(1 for _ in handle) - 1, 0)
