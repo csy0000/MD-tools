@@ -227,6 +227,67 @@ def test_example_2_a_rest2_ladder_under_a_launcher(built):
 
 # --- example 3: interrupt and resume ---------------------------------------------------------------
 
+
+def _has_committed_checkpoint(directory):
+    """A `.checkpoints` directory exists AND holds a committed generation.
+
+    The directory is created before the first checkpoint lands in it, so its mere existence is
+    not the event worth waiting for.
+    """
+    return directory.is_dir() and any(directory.iterdir())
+
+
+def _interrupt_when(directory, condition, *, what, until_output=None, timeout=900):
+    """Run `run.sh`, wait for something to be TRUE, then SIGINT it. Returns the output.
+
+    The signal goes to the process GROUP. `run.sh` is a shell that execs `md-openmm` children,
+    and signalling only the shell leaves the integrator running -- a mistake already paid for
+    once outside the suite, where a campaign's stages kept going after their launcher had been
+    told to stop. `start_new_session=True` gives the group a known leader to signal.
+    """
+    import os
+    import signal
+    import time
+
+    process = subprocess.Popen(
+        ["bash", "run.sh", "../built.pdb", "../built.xml", "--cpu"],
+        cwd=directory, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        start_new_session=True)
+    group = os.getpgid(process.pid)
+    collected = []
+
+    def _ready():
+        if until_output is not None:
+            return any(until_output in line for line in collected)
+        return condition()
+
+    try:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                break
+            if until_output is not None:
+                # Reading a line at a time so the condition can be about the output itself.
+                line = process.stdout.readline()
+                if line:
+                    collected.append(line)
+            else:
+                time.sleep(0.25)
+            if _ready():
+                break
+        else:
+            raise AssertionError(f"waited {timeout}s for {what} and it did not happen")
+        assert process.poll() is None, (
+            f"the run finished on its own; it was meant to be interrupted while {what}")
+        os.killpg(group, signal.SIGINT)
+        remaining, _ = process.communicate(timeout=300)
+        return "".join(collected) + (remaining or "")
+    finally:
+        if process.poll() is None:
+            os.killpg(group, signal.SIGKILL)
+            process.communicate()
+
+
 def test_example_3_an_interrupted_cmd_chain_resumes_by_rerunning_the_same_command(built):
     """READ THIS BEFORE RUNNING A LONG cMD CHAIN ON A SCHEDULER.
 
@@ -260,33 +321,33 @@ def test_example_3_an_interrupted_cmd_chain_resumes_by_rerunning_the_same_comman
     }), encoding="utf-8")
     _md_openmm(built, "build-md", "-odir", "./interrupted", "--config", "interrupt.config")
 
-    killed = subprocess.run(
-        ["timeout", "-s", "INT", "45", "bash", "run.sh", "../built.pdb", "../built.xml", "--cpu"],
-        cwd=directory, capture_output=True, text=True, timeout=300)
-    assert killed.returncode != 0, "the run finished; it was meant to be interrupted"
+    # THE INTERRUPT LANDS ON A CONDITION, NOT ON A TIMER.
+    #
+    # This used to be `timeout -s INT 45`, and 45 seconds is a statement about the machine rather
+    # than about the software: under `-n 24` the chain often had not reached production yet, so
+    # the test skipped -- announcing "this machine is too loaded to demonstrate the resume". A
+    # test that stops testing when the machine is busy stops testing exactly when a resume defect
+    # would matter most, and CI's no-skip policy was then satisfied by luck.
+    #
+    # The premise is that the interrupt reaches PRODUCTION, the only stage here long enough to
+    # hold a committed checkpoint short of its step count. So wait for that checkpoint and
+    # interrupt then. Slow machines take longer; they no longer take a different code path.
+    killed = _interrupt_when(
+        directory, lambda: _has_committed_checkpoint(directory / "cMD.checkpoints"),
+        what="the production stage to commit a checkpoint")
     assert list(directory.glob("*.checkpoints")), "nothing was committed"
-
-    # THE PREMISE, checked rather than assumed: the interrupt must have landed in production,
-    # which is the only stage here long enough to hold a committed checkpoint short of its step
-    # count. On a loaded machine 45 seconds may not get past the per-stage System setup, and the
-    # chain then stops in an equilibration stage that has outputs and no checkpoint -- which is
-    # refused, correctly and by design, since a stage continues on the strength of a committed
-    # checkpoint rather than on the fact that it was interrupted. Asserting the resume without
-    # this made the example pass alone and fail under `-n 24`, which reads as a defect in the
-    # resume and is a statement about the fixture.
-    if not (directory / "cMD.checkpoints").is_dir():
-        reached = sorted(p.stem for p in directory.glob("*.checkpoints"))
-        pytest.skip(f"the interrupt did not reach production; it stopped after {reached}. "
-                    f"This machine is too loaded to demonstrate the resume in 45 s.")
+    assert (directory / "cMD.checkpoints").is_dir(), (
+        "the interrupt did not reach production, which this test now waits for rather than "
+        "hoping for: " + killed[-2000:])
 
     # Re-running the same command is the route, and it works. The production stage is long on
     # purpose (400,000 steps), so this is interrupted again rather than run to the end: what is
     # being shown is that the chain PROCEEDS, not that it finishes.
-    again = subprocess.run(
-        ["timeout", "-s", "INT", "45", "bash", "run.sh",
-         "../built.pdb", "../built.xml", "--cpu"],
-        cwd=directory, capture_output=True, text=True, timeout=300)
-    output = again.stdout + again.stderr
+    #
+    # Interrupted on the line being asserted, for the same reason as above.
+    output = _interrupt_when(
+        directory, None, what="the chain to report a skipped stage and resume",
+        until_output="already completed and verified")
     assert "already exist" not in output, (
         "the chain refused on outputs a completed stage of its own wrote:\n" + output[-3000:])
     assert "already completed and verified" in output, (

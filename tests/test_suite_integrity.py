@@ -13,6 +13,7 @@ Written there, they never ran, which is the same silence they exist to break.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -66,6 +67,19 @@ def test_no_source_file_is_hidden_from_git_by_an_ignore_rule():
     """
     import subprocess
 
+    #: The ONLY files under a source root that may be ignored, each because the build writes it
+    #: and committing it would be worse than not having it.
+    #:
+    #: `_commit.py` holds the commit the wheel was built from. A tracked copy would dirty the tree
+    #: on every build and, once stale, would be a provenance record that lies -- and a clone does
+    #: not need it, because `build/record.source_commit` reads live git when it is running from a
+    #: checkout and only falls back to this file for an installed wheel.
+    #:
+    #: Named one at a time on purpose. The rule this test enforces was learned from `build/`
+    #: silently swallowing the package implementing `build-top` and `build-md`; an exemption
+    #: PATTERN would be able to swallow something the same way.
+    GENERATED = {"src/md_tools/_commit.py"}
+
     repo = Path(__file__).resolve().parents[1]
     tracked_roots = [d for d in ("src", "tests", "configs") if (repo / d).is_dir()]
     candidates = []
@@ -84,11 +98,42 @@ def test_no_source_file_is_hidden_from_git_by_an_ignore_rule():
     result = subprocess.run(["git", "check-ignore", "--stdin"], cwd=repo, text=True,
                             input="\n".join(str(c) for c in candidates),
                             capture_output=True)
-    ignored = [line for line in result.stdout.splitlines() if line.strip()]
+    ignored = [line for line in result.stdout.splitlines()
+               if line.strip() and line.strip() not in GENERATED]
     assert not ignored, (
         "these source files are invisible to git because an ignore rule matches them:\n  "
         + "\n  ".join(ignored)
-        + "\n\nAnchor the rule to the repository root (`/build/`, not `build/`).")
+        + "\n\nAnchor the rule to the repository root (`/build/`, not `build/`). If the file is "
+          "written by the build rather than by a person, add it to GENERATED above, by name, "
+          "with the reason.")
+
+
+def test_the_generated_file_exemption_is_not_load_bearing():
+    """`md_tools` must import when the one ignored file is absent -- which is a fresh clone.
+
+    The exemption above is only defensible while the package works without it. If `_commit.py`
+    ever became a real import rather than an optional one, a clone would fail at import and this
+    test would say so here instead of in somebody else's checkout.
+    """
+    import subprocess
+    import sys
+
+    done = subprocess.run(
+        [sys.executable, "-c",
+         "import sys\n"
+         "class Block:\n"
+         "    def find_spec(self, name, path=None, target=None):\n"
+         "        if name == 'md_tools._commit':\n"
+         "            raise ImportError('pretending this generated file is not there')\n"
+         "        return None\n"
+         "sys.meta_path.insert(0, Block())\n"
+         "from md_tools.build.record import source_commit, environment_facts\n"
+         "environment_facts()\n"
+         "print('ok')\n"],
+        capture_output=True, text=True, timeout=300,
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src")})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "ok" in done.stdout
 
 
 def test_no_test_hard_codes_a_path_on_one_machine():

@@ -54,6 +54,24 @@ from openmm.app import DCDReporter, PDBFile, Simulation, StateDataReporter
 
 HERE = Path(__file__).resolve().parent
 SETTINGS = json.loads((HERE / "settings.json").read_text(encoding="utf-8"))
+PROVENANCE = json.loads((HERE / "provenance.json").read_text(encoding="utf-8"))
+
+
+def check_openmm():
+    """Say when the running OpenMM is not the one that produced the data beside this script.
+
+    Not a refusal: running a reference on a newer OpenMM is frequently the whole point. But the
+    random stream and the order of force summation both change with it, so the frames WILL
+    differ -- and that must not be something a reader discovers by accident after comparing two
+    trajectories and concluding the reference is wrong.
+    """
+    import openmm
+
+    recorded, running = PROVENANCE.get("openmm"), openmm.__version__
+    print(f"# openmm            : {{running}} (this bundle was produced with {{recorded}})")
+    if recorded and running != recorded:
+        print("# NOTE              : OpenMM differs from the recorded one. The ensemble is "
+              "reproduced; individual frames will not be.")
 
 
 def build(platform_name=None, properties=None):
@@ -107,6 +125,7 @@ def main(argv=None):
                         help="minimise first; the state in {start_name} is already equilibrated")
     args = parser.parse_args(argv)
 
+    check_openmm()
     simulation = build(args.platform)
     if args.minimise:
         simulation.minimizeEnergy()
@@ -311,6 +330,11 @@ def export_reference(run_dir: Path, out_dir: Path, *, stage: str = "cMD") -> dic
         "md_tools_commit": environment.get("md_tools_commit"),
         "openmm": (environment.get("packages") or {}).get("openmm"),
         "python": (environment.get("packages") or {}).get("python"),
+        # Everything the run recorded. None of it is needed to RUN this bundle -- the System is
+        # frozen, so the tools that built it are out of the picture -- but they are what decided
+        # the Hamiltonian, and a reader asking which openff produced these charges should not have
+        # to go back to the original run to find out.
+        "built_with": dict(sorted((environment.get("packages") or {}).items())),
         "stage_fingerprint": record.get("fingerprint"),
         "started_utc": record.get("started_utc"),
         "finished_utc": record.get("finished_utc"),

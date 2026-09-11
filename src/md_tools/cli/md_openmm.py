@@ -272,7 +272,9 @@ def build_parser() -> argparse.ArgumentParser:
     ref.add_argument("-odir", "--odir", required=True, metavar="DIR",
                      help="where to write the bundle")
     ref.add_argument("--stage", default="cMD", metavar="NAME",
-                     help="which finished stage to export (default: cMD)")
+                     help="which finished stage or ladder to export (default: cMD; use REST2 "
+                          "for a ladder). The bundle's shape follows the record type, not this "
+                          "name.")
     ref.set_defaults(func=cmd_export_reference)
 
 
@@ -285,10 +287,35 @@ def build_parser() -> argparse.ArgumentParser:
 # ------------------------------------------------------------------------------------------------
 
 def cmd_export_reference(args) -> int:
-    """A finished stage -> a bundle that runs on OpenMM alone."""
-    from ..reference import export_reference
+    """A finished run -> a bundle that runs on OpenMM alone.
+
+    Which exporter is decided by the RECORD, not by a flag. `md-stage:*` is one Context driven
+    for a fixed number of steps; `md-replica:*` is a ladder, a different control flow with a
+    different bundle. Asking the caller to say which would let them say the wrong one.
+    """
+    from ..build.record import RecordError, read_record
+    from ..reference import export_reference, export_rest2_reference
+
+    log = Path(args.idata) / f"{args.stage}.log"
+    try:
+        kind = str(read_record(log).get("record_type") or "")
+    except (RecordError, OSError) as refusal:
+        print(f"export-reference: {refusal}", file=sys.stderr)
+        return 2
 
     try:
+        if kind.startswith("md-replica:"):
+            manifest = export_rest2_reference(Path(args.idata), Path(args.odir), stage=args.stage)
+            settings = manifest["settings"]
+            per_rung_ns = (settings["exchange_interval_steps"] * settings["number_of_exchanges"]
+                           * settings["timestep_fs"] * 1e-6)
+            print(f"  exported {manifest['files']} file(s) to {args.odir}")
+            print(f"  {settings['name']}: {settings['n_states']} rungs, tau "
+                  f"{settings['tau'][0]:g}..{settings['tau'][-1]:g}, "
+                  f"{settings['number_of_exchanges']} exchange(s), {per_rung_ns:g} ns per rung")
+            print(f"  {len(manifest['vendored'])} module(s) copied verbatim into ladder/")
+            print("  needs OpenMM and numpy only -- run it with ./run.sh")
+            return 0
         manifest = export_reference(Path(args.idata), Path(args.odir), stage=args.stage)
     except (FileNotFoundError, ValueError, KeyError) as refusal:
         print(f"export-reference: {refusal}", file=sys.stderr)

@@ -32,7 +32,7 @@ VELOCITIES ARE NOT RESCALED
 import numpy as np
 from openmm import LangevinMiddleIntegrator, Platform, unit
 
-from .protocol import BAR_NM3_TO_KJ_PER_MOL
+from .core import BAR_NM3_TO_KJ_PER_MOL
 
 
 class EngineError(RuntimeError):

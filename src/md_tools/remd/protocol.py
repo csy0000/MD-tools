@@ -25,7 +25,9 @@ KB_KJ_PER_MOL_K = 0.008314462618
 
 #: 1 bar * 1 nm^3, in kJ/mol. Present so a pV term can be written down explicitly and shown to
 #: cancel, rather than being omitted and trusted.
-BAR_NM3_TO_KJ_PER_MOL = 0.0602214076
+#: Re-exported so existing importers keep working; DEFINED in `core`, which a
+#: reference bundle can carry and this module -- importing md_tools.rest2 -- cannot.
+from .core import BAR_NM3_TO_KJ_PER_MOL  # noqa: F401
 
 
 class ProtocolError(ValueError):

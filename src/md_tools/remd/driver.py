@@ -44,6 +44,7 @@ from . import state_trajectories as state_trajectories
 from .rules import (ExchangeContext, NeighbouringExchangeRule, builtin_rule_identity,
                             load_rule)
 from .mpi import Coordination
+from .core import stream_seed
 from .engine import (Configuration, ReplicaEngine,
                             select_device_for_rank, visible_cuda_devices)
 from md_tools.rest2 import require_compatible_implementation
@@ -1935,11 +1936,11 @@ class ReplicaRun:
         return record
 
 
-def _stream_seed(base, name):
-    value = int(base)
-    for byte in str(name).encode("utf-8"):
-        value = (value * 1000003 + byte) & 0xFFFFFFFF
-    return (value % (2 ** 31 - 1)) or 1
+#: The seed derivation now lives in `core`, which carries no md_tools imports and so can be
+#: copied verbatim into an exported reference bundle. It had to move: it decides which random
+#: stream an exchange acceptance draws from, so a bundle deriving it independently would propose
+#: the same swaps and accept a different set of them.
+_stream_seed = stream_seed
 
 
 def _sha256_of(path, *, chunk=1 << 20):
