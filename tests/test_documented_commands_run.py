@@ -25,7 +25,9 @@ REPO = Path(__file__).resolve().parents[1]
 ALA = REPO / "tests" / "data" / "ALA.pdb"
 CLI = [sys.executable, "-m", "md_tools.cli.md_openmm"]
 
-pytestmark = pytest.mark.slow
+#: ONE worker for this module. Its fixtures build a wheel, a venv and a system; scattered across
+#: workers they are built once per worker that draws a test.
+pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("documented-commands")]
 
 #: The pages whose command blocks are contractual.
 PAGES = [REPO / "README.md", REPO / "CLAUDE.md", REPO / "docs" / "md-run.md",
@@ -88,13 +90,13 @@ def installed(tmp_path_factory):
     """A wheel, installed into a clean environment, exercised from outside the checkout."""
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
-    root = tmp_path_factory.mktemp("wheel")
+    from tests.wheel_build import build_wheel_from_copy
 
-    build = subprocess.run([sys.executable, "-m", "build", "--wheel", "--outdir", str(root)],
-                           cwd=REPO, capture_output=True, text=True, timeout=1800)
-    if build.returncode != 0:
-        pytest.skip(f"the wheel could not be built here: {build.stderr[-500:]}")
-    wheel = next(root.glob("*.whl"))
+    root = tmp_path_factory.mktemp("wheel")
+    # From a copy, and a failure is a failure. This used to build in the checkout and SKIP on any
+    # error, so two xdist workers colliding in `<repo>/build/` reported "the wheel could not be
+    # built here" -- a concurrency bug presented as a fact about the machine.
+    wheel = build_wheel_from_copy(REPO, root)
 
     environment = root / "venv"
     subprocess.run([sys.executable, "-m", "venv", "--system-site-packages", str(environment)],
@@ -154,9 +156,17 @@ def test_md_run_resolves_outside_the_checkout(installed):
     assert str(REPO / "src") not in done.stdout, done.stdout
 
 
-def test_the_canonical_stage_command_runs_against_the_installed_wheel(installed):
-    """The exact command `docs/md-run.md` opens with, on the CPU, end to end."""
-    binaries, work = installed
+@pytest.fixture(scope="module")
+def generated(installed):
+    """A built system and a generated project, made ONCE with the installed commands.
+
+    Every test below that reads `md_script` takes this fixture. They used to read the directory
+    `test_the_canonical_stage_command_runs_against_the_installed_wheel` left behind, so which of
+    them passed depended on whether xdist had put that test on the same worker first -- and a
+    refusal test failed with `FileNotFoundError: .../outside/md_script`, a statement about test
+    ordering reported as one about the command.
+    """
+    _binaries, work = installed
     (work / "ALA.pdb").write_bytes(ALA.read_bytes())
 
     built = _run(installed, "build-top", "-i", "ALA.pdb", "-os", "built.xml",
@@ -170,10 +180,15 @@ def test_the_canonical_stage_command_runs_against_the_installed_wheel(installed)
                    "production_steps": 40},
         "reporting": {"crd_printout_solute": 20, "info_printout": 20,
                       "checkpoint_printout": 40}}, sort_keys=False), encoding="utf-8")
-    generated = _run(installed, "build-md", "-odir", "md_script", "--config", "c.config")
-    assert generated.returncode == 0, generated.stdout[-2000:] + generated.stderr[-2000:]
+    made = _run(installed, "build-md", "-odir", "md_script", "--config", "c.config")
+    assert made.returncode == 0, made.stdout[-2000:] + made.stderr[-2000:]
+    return work / "md_script"
 
-    script = work / "md_script"
+
+def test_the_canonical_stage_command_runs_against_the_installed_wheel(installed, generated):
+    """The exact command `docs/md-run.md` opens with, on the CPU, end to end."""
+    _binaries, work = installed
+    script = generated
     done = _run(installed, "md-run", "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
                 "-o", "cMD.out", "-x", "cMD.dcd", "-r", "cMD.xml", "-log", "cMD.log", "--cpu",
                 cwd=script)
@@ -195,10 +210,9 @@ def test_the_canonical_stage_command_runs_against_the_installed_wheel(installed)
     assert (work / "built.xml").read_text(encoding="utf-8").lstrip().startswith("<")
 
 
-def test_the_generated_project_names_no_checkout_path(installed):
+def test_the_generated_project_names_no_checkout_path(generated):
     """A generated directory has to be movable, and must not import a source tree."""
-    _, work = installed
-    script = work / "md_script"
+    script = generated
     for path in list(script.glob("*.py")) + list(script.glob("*.in")) + \
             [script / "run.sh", script / "resolved.config"]:
         text = path.read_text(encoding="utf-8")
@@ -206,24 +220,23 @@ def test_the_generated_project_names_no_checkout_path(installed):
         assert "site-packages" not in text, path.name
 
 
-def test_the_installed_command_refuses_the_retired_platform_flag(installed):
+def test_the_installed_command_refuses_the_retired_platform_flag(installed, generated):
     done = _run(installed, "md-run", "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
-                "--platform", "CUDA", cwd=installed[1] / "md_script")
+                "--platform", "CUDA", cwd=generated)
     assert done.returncode != 0
     assert "platform" in done.stderr.lower(), done.stderr
 
 
-def test_the_installed_command_refuses_a_system_in_the_trajectory_flag(installed):
+def test_the_installed_command_refuses_a_system_in_the_trajectory_flag(installed, generated):
     done = _run(installed, "md-run", "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
-                "-x", "../built.xml", cwd=installed[1] / "md_script")
+                "-x", "../built.xml", cwd=generated)
     assert done.returncode != 0
     assert "-x" in done.stderr and "-s" in done.stderr, done.stderr
 
 
-def test_the_generated_run_sh_examples_match_the_flag_contract(installed):
+def test_the_generated_run_sh_examples_match_the_flag_contract(generated):
     """run.sh is a documented command too, and it is the one most people actually execute."""
-    _, work = installed
-    text = (work / "md_script" / "run.sh").read_text(encoding="utf-8")
+    text = (generated / "run.sh").read_text(encoding="utf-8")
     assert '-s "${SYSTEM}"' in text and '-x "${SYSTEM}"' not in text, text
     # NO `-x`: a stage writes two coordinate streams and names them itself. See
     # `test_md_run_inputs.py` for the same contract stated there.

@@ -118,7 +118,7 @@ export MAMBA_ROOT_PREFIX=$PWD
 ### 2. The environment
 
 ```bash
-micromamba create -y -p ~/software/md-stack/envs/md-tools -f environment-ci.yml
+micromamba create -y -p ~/software/md-stack/envs/openmm-env -f environment-ci.yml
 ```
 
 That installs Python 3.12, OpenMM 8.6, OpenFF, AmberTools, ParmEd, RDKit, MDTraj, OpenMMTools and
@@ -128,7 +128,7 @@ NetCDF4 — everything the five commands import.
 against, and CI has no GPU and no second device to bind a rank to. For real work add both:
 
 ```bash
-micromamba install -y -p ~/software/md-stack/envs/md-tools -c conda-forge mpi4py openmpi
+micromamba install -y -p ~/software/md-stack/envs/openmm-env -c conda-forge mpi4py openmpi
 ```
 
 CUDA needs nothing extra on a machine with a working NVIDIA driver — conda-forge's OpenMM carries
@@ -165,7 +165,7 @@ not found even though it is installed, `AmberToolsToolkitWrapper` is silently ab
 registry, and AM1-BCC becomes unavailable under its own name.
 
 ```bash
-micromamba activate ~/software/md-stack/envs/md-tools
+micromamba activate ~/software/md-stack/envs/openmm-env
 ```
 
 Or put the environment on `PATH` from your shell profile, which is what a shared machine usually
@@ -173,7 +173,7 @@ wants:
 
 ```bash
 # ~/.bashrc
-export PATH="$HOME/software/md-stack/envs/md-tools/bin:$PATH"
+export PATH="$HOME/software/md-stack/envs/openmm-env/bin:$PATH"
 export MD_DATA="/path/to/your/managed/storage"     # where data-register writes
 ```
 

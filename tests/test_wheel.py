@@ -46,43 +46,16 @@ def test_the_package_and_project_versions_agree():
 @pytest.fixture(scope="module")
 def installed(tmp_path_factory):
     """Build the wheel and install it into a bare prefix, with no source checkout on the path."""
+    from tests.wheel_build import build_wheel_from_copy
+
     work = tmp_path_factory.mktemp("wheel")
-
-    # BUILT FROM A COPY, not from the checkout. `pip wheel <repo>` has setuptools write into
-    # `<repo>/build/`, which every pytest-xdist worker shares: several of them building at once
-    # corrupt each other's intermediate tree and the whole module errors at setup with nothing
-    # but "Processing ./." to show for it. Every one of these tests passes serially, so the
-    # failure looks like a packaging bug and is a concurrency bug.
-    #
-    # The copy is of the WORKING TREE, not of HEAD -- a wheel test that silently ignored
-    # uncommitted changes would pass on a checkout whose packaging is broken.
-    import shutil
-
-    #: Dropped ONLY at the repository root. `shutil.ignore_patterns` matches on basename at every
-    #: depth, so a bare "build" also drops `src/md_tools/build/` -- a real package -- and the
-    #: wheel then installs cleanly and raises `ModuleNotFoundError: md_tools.build` at import.
-    root_only = {".git", "build", "dist", ".conda-env", "tests"}
-    anywhere = {"__pycache__", ".pytest_cache", ".ruff_cache"}
-
-    def ignore(directory, names):
-        dropped = {name for name in names
-                   if name in anywhere or name.endswith(".egg-info")}
-        if pathlib.Path(directory) == pathlib.Path(REPO_ROOT):
-            dropped |= {name for name in names if name in root_only}
-        return dropped
-
-    source = work / "checkout"
-    shutil.copytree(REPO_ROOT, source, ignore=ignore)
-    built = subprocess.run([sys.executable, "-m", "pip", "wheel", "--no-deps",
-                            "--wheel-dir", str(work / "dist"), str(source)],
-                           capture_output=True, text=True, timeout=900)
-    assert built.returncode == 0, built.stdout[-3000:] + built.stderr[-3000:]
-    wheels = list((work / "dist").glob("md_tools-*.whl"))
-    assert len(wheels) == 1, wheels
+    # From a copy of the working tree, never the checkout: see `tests/wheel_build.py` for the
+    # concurrency bug that building in `<repo>/build/` produces under xdist.
+    wheel = build_wheel_from_copy(REPO_ROOT, work)
 
     site = work / "site"
     installed = subprocess.run([sys.executable, "-m", "pip", "install", "--no-deps",
-                                "--target", str(site), str(wheels[0])],
+                                "--target", str(site), str(wheel)],
                                capture_output=True, text=True, timeout=900)
     assert installed.returncode == 0, installed.stdout[-3000:] + installed.stderr[-3000:]
     return site, work

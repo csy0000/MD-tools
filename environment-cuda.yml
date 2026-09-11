@@ -1,7 +1,7 @@
 # The GPU environment. environment-ci.yml plus a CUDA pin, for machines that have a driver.
 #
 #   micromamba create -f environment-cuda.yml
-#   micromamba activate md-tools-cuda
+#   micromamba activate openmm-env
 #   pip install --no-deps dist/md_tools-*.whl
 #
 # WHY THE PIN EXISTS, and why it is 13.0 rather than "the newest".
@@ -34,7 +34,7 @@
 # Raise this pin only together with a stated minimum driver, and check `nvidia-smi` (the "CUDA
 # Version" it reports is the newest the driver can assemble) on the machines that must keep working.
 
-name: md-tools-cuda
+name: openmm-env
 
 channels:
   - conda-forge

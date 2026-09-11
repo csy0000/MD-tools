@@ -39,6 +39,19 @@ Each method page carries a minimal, runnable `example.config` beside it.
 | [Data registration](data_register/README.md) | how to register a finished run, with worked examples |
 | [The dataset contract](data-contract.md) | the schema-level authority: paths, records, immutability |
 
+## Reference campaigns
+
+| page | |
+|---|---|
+| [ALA, 2026-09](campaigns/ala-2026-09/README.md) | the alanine-dipeptide reference campaign: configurations, built Systems, what was registered and what was withdrawn |
+| [Validation throughput, 2026-08](reports/20260831_validation_matrix_speed.md) | measured ns/day for the 2026-08 validation matrix, with its CSVs |
+
+## Contributing a method
+
+| page | |
+|---|---|
+| [Promoting a method](promoting-a-method.md) | the gate a method built elsewhere passes before this package carries it |
+
 ## Releases
 
 | page | |
@@ -46,3 +59,9 @@ Each method page carries a minimal, runnable `example.config` beside it.
 | [v0.5.0](release-notes/v0.5.0.md) | the current development cycle: what changed and what was verified |
 | [Runtime closure and CV evidence](release-notes/20260904-cv-and-runtime-closure-evidence.md) | the measured lanes, hardware, wheel and CUDA coverage behind the collective-variable and runtime-closure work |
 | [CUDA coverage matrix](release-notes/cuda-coverage-matrix.md) | every CUDA-relevant source site and the lane that exercises it, generated from a real run |
+
+## History
+
+| page | |
+|---|---|
+| [Development history](history/README.md) | the instructions and execution journals behind the REST2, rREST2 and file-interface work, kept as evidence. Not a description of how the package works now |

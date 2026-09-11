@@ -10,7 +10,8 @@ validated migration rather than a v3 that would make every existing v2 file unre
 runtime that can in fact read it.
 
 PLATFORM_POLICY_EXEMPTION: NetCDF schema and storage-contract tests. Nothing here propagates
-dynamics; the runtime evidence is the real resume/extend recorded in the MD-project journal.
+dynamics; the runtime evidence is the real resume/extend recorded in
+`docs/history/journals/20260831_rest2-v2-append-compatibility.md`.
 """
 from __future__ import annotations
 

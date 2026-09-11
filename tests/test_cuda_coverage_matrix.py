@@ -412,6 +412,21 @@ def hardware():
     return devices
 
 
+def _visible() -> int:
+    """How many devices THIS process may use -- the count every capacity check is about.
+
+    Not `len(hardware)`. `hardware` is what `nvidia-smi` reports, and `nvidia-smi` ignores
+    `CUDA_VISIBLE_DEVICES`, so a suite confined to five of nine cards counted nine: the placement
+    lane asked OpenMM for device 8 ("Illegal value for DeviceIndex: 8"), and the six-state ladder
+    passed its own "needs six devices" guard, ran, and failed later with two ranks on one card.
+    The inventory stays what the evidence records; the count comes from the engine's own
+    `visible_cuda_devices`, which is what the runtime places ranks with.
+    """
+    from md_tools.remd.engine import visible_cuda_devices
+
+    return len(visible_cuda_devices(probe=True))
+
+
 def _environment(work: Path, **extra) -> dict[str, str]:
     base = dict(os.environ)
     base["PYTHONPATH"] = os.pathsep.join(
@@ -571,10 +586,11 @@ def test_explicit_device_placement_lane(built, hardware, tmp_path):
     Run on the last visible device rather than device 0, so a placement that was ignored shows up
     as a difference instead of coinciding with the default.
     """
-    if len(hardware) < 2:
-        pytest.fail(f"only {len(hardware)} CUDA device(s) visible; explicit placement cannot be "
+    visible = _visible()
+    if visible < 2:
+        pytest.fail(f"only {visible} CUDA device(s) visible; explicit placement cannot be "
                     f"distinguished from the default. Reported as an unmet criterion.")
-    wanted = len(hardware) - 1
+    wanted = visible - 1
 
     work = tmp_path / "device"
     work.mkdir()
@@ -603,7 +619,7 @@ def test_explicit_device_placement_lane(built, hardware, tmp_path):
     assert str(acceleration["cuda_device_index"]) == str(wanted), acceleration
     _record("test_explicit_device_placement_lane", feature="cMD implicit, --device placement",
             precision="mixed", device=str(wanted),
-            detail=f"{len(hardware)} devices visible; ran on the last")
+            detail=f"{visible} of {len(hardware)} devices visible; ran on the last")
 
 
 # --- the tau-basis decomposition, on CUDA ---------------------------------------------------------
@@ -971,8 +987,8 @@ def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_
 
     if shutil.which("mpirun") is None:
         pytest.fail("no mpirun on PATH; the multi-rank CUDA lane is an unmet criterion")
-    if len(hardware) < states:
-        pytest.fail(f"{states} states need {states} devices; {len(hardware)} visible")
+    if _visible() < states:
+        pytest.fail(f"{states} states need {states} devices; {_visible()} visible")
 
     work = tmp_path / f"ladder-{states}"
     work.mkdir()
@@ -1122,8 +1138,8 @@ def test_multi_rank_rrest2_with_a_real_reservoir(built, hardware, tmp_path):
 
     if shutil.which("mpirun") is None:
         pytest.fail("no mpirun on PATH; the multi-rank rREST2 lane is an unmet criterion")
-    if len(hardware) < 2:
-        pytest.fail(f"2 states need 2 devices; {len(hardware)} visible")
+    if _visible() < 2:
+        pytest.fail(f"2 states need 2 devices; {_visible()} visible")
 
     work = tmp_path / "rrest2-mpi"
     work.mkdir()
@@ -1421,8 +1437,8 @@ def test_a_hundred_paths_under_real_mpi_produce_exactly_their_own_files(built, h
 
     if shutil.which("mpirun") is None:
         pytest.fail("no mpirun on PATH; the multi-rank AIS lane is an unmet criterion")
-    if len(hardware) < 4:
-        pytest.fail(f"4 ranks need 4 devices; {len(hardware)} visible")
+    if _visible() < 4:
+        pytest.fail(f"4 ranks need 4 devices; {_visible()} visible")
 
     work = tmp_path / "hundred"
     work.mkdir()

@@ -313,8 +313,8 @@ mpirun -n 4 md-openmm md-run -ng 4 -i REST2.in -p built.pdb -s built.xml \
        -c eq_nvt_free.xml --overwrite
 ```
 
-A preserved failing directory is at
-`MD-project/data/ala-campaign/run_1_rest2.implicit.aborted-20260910`.
+A preserved failing directory was kept until 2026-09-11 and then removed: the entry is resolved
+and the reproduction is pinned by the test named above, which needs no preserved directory.
 
 **Three faults, and the second and third are why it cost an hour rather than a minute.**
 

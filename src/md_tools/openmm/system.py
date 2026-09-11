@@ -223,8 +223,8 @@ def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
         if method == "am1bcc" and "AmberToolsToolkitWrapper" not in wrappers:
             raise RuntimeError(
                 "forcefield.ligand_charge_method='am1bcc' needs AmberTools' sqm, but the OpenFF "
-                f"toolkit registry only has {wrappers}.  Activate the md-tools environment "
-                "(conda activate md-tools) so antechamber/sqm are on PATH, or set "
+                f"toolkit registry only has {wrappers}.  Activate the environment "
+                "(micromamba activate openmm-env) so antechamber/sqm are on PATH, or set "
                 "forcefield.ligand_charge_method to 'am1bcc_nagl' if that is intended -- NAGL is "
                 "a graph network TRAINED to predict AM1-BCC ELF10 charges and needs no sqm, but it "
                 "is not that calculation and not numerically identical to it, so it is a different "

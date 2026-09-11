@@ -11,7 +11,8 @@ mutation it describes -- so a process killed immediately after migrating still l
 says it was migrated.
 
 PLATFORM_POLICY_EXEMPTION: provenance records and NetCDF attributes. Nothing here propagates
-dynamics; the real continuation evidence is the CPU end-to-end sequence in the MD-project journal.
+dynamics; the real continuation evidence is the CPU end-to-end sequence recorded in
+`docs/history/journals/20260831_rest2-migration-provenance.md`.
 """
 from __future__ import annotations
 

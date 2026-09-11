@@ -1,7 +1,7 @@
-"""Regressions for the contract gates MD-project depends on.
+"""Regressions for the contract gates a consuming project depends on.
 
-Each of these would have failed before the fixes in this branch. They are implementation-level
-tests: MD-project keeps a thin consumer gate that goes through generated files and public
+Each of these would have failed before the fixes that introduced them. They are implementation-level
+tests: a consuming project keeps a thin gate that goes through generated files and public
 commands, and the detail lives here.
 
 The generation tests build a real system, so they carry the `gpu` marker where they integrate.

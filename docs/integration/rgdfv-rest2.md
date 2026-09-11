@@ -1,8 +1,7 @@
 # Integration experiment: c(RGDfV) six-state REST2, Sage 2.2.1 + AM1-BCC, GBn2
 
 **Date:** 2026-09-07
-**Project:** `../RGDfV-REST2/`, a sibling of the MD-tools checkout (here
-`/path/to/scheme/RGDfV-REST2`)
+**Project:** `../RGDfV-REST2/`, a sibling of the MD-tools checkout
 **Engine pin used:** `8e95a589aebddb945fe160764dc34999fddade75` (the build and the ladder both ran on this commit; later commits on `dev` touch only documentation and a test)
 **Engine pin requested:** `443fc736f3a8f426414e244a50a1a438d2d8a497` — changed by two blockers,
 both fixed here and both with focused regression tests.
@@ -320,12 +319,12 @@ name and `person_id`. The user then created it, and registration ran.
 
 | | |
 |---|---|
-| managed storage root | `/path/to/DATA` (from `machine.md_data`) |
+| managed storage root | `$MD_DATA` (from `machine.md_data`) |
 | user configuration | `~/.config/md-tools/user.config` (XDG default) |
 | canonical path | `2026/RGDfV-REST2/RGDfV-Sage221-GBn2-REST2` |
-| **destination** | `/path/to/DATA/2026/RGDfV-REST2/RGDfV-Sage221-GBn2-REST2` |
+| **destination** | `$MD_DATA/2026/RGDfV-REST2/RGDfV-Sage221-GBn2-REST2` |
 | **dataset id** | `rgdfv-rest2-rgdfv-sage221-gbn2-rest2` |
-| creator | `person_id: chen` |
+| creator | the registering user's `person_id` |
 | manifest | `dataset.yaml`, schema 2.0, contract v2, 5 components |
 | inventory | **57 files, 5.8 MB, all hashed** |
 

@@ -1,0 +1,9 @@
+job,tree,kind,status,gpus,devices,started_utc,finished_utc,seconds
+eq:ALA_exp_hot_cMD,ALA_exp_hot_cMD,equilibrate,ok,1,1,2026-09-01T06:39:35Z,2026-09-01T06:39:46Z,11.3
+eq:ALA_imp_hot_cMD,ALA_imp_hot_cMD,equilibrate,ok,1,2,2026-09-01T06:39:35Z,2026-09-01T06:39:42Z,7.4
+eq:PHENOL_exp_hot_cMD,PHENOL_exp_hot_cMD,equilibrate,ok,1,3,2026-09-01T06:39:35Z,2026-09-01T06:39:46Z,10.8
+eq:PHENOL_imp_hot_cMD,PHENOL_imp_hot_cMD,equilibrate,ok,1,4,2026-09-01T06:39:35Z,2026-09-01T06:39:42Z,7.7
+cmd:ALA_imp_hot_cMD,ALA_imp_hot_cMD,cmd,ok,1,2,2026-09-01T06:39:42Z,2026-09-01T06:42:19Z,156.4
+cmd:PHENOL_imp_hot_cMD,PHENOL_imp_hot_cMD,cmd,ok,1,4,2026-09-01T06:39:42Z,2026-09-01T06:41:50Z,127.4
+cmd:PHENOL_exp_hot_cMD,PHENOL_exp_hot_cMD,cmd,ok,1,3,2026-09-01T06:39:46Z,2026-09-01T06:44:06Z,260.4
+cmd:ALA_exp_hot_cMD,ALA_exp_hot_cMD,cmd,ok,1,1,2026-09-01T06:39:46Z,2026-09-01T06:44:24Z,277.5

@@ -5,7 +5,9 @@ Each test names the gap it pins, and each fails against
 
 PLATFORM_POLICY_EXEMPTION: declaration parsing, selection arithmetic, storage refusals and CLI
 argument validation. Nothing here propagates dynamics; the runtime evidence stays in the
-CUDA-marked files and in the smoke matrix recorded in the MD-project journal.
+CUDA-marked files and in the smoke matrix recorded in
+`docs/history/journals/20260831_rest2-rrest2-edge-contracts.md` and
+`docs/history/journals/20260831_rest2-state-trajectories.md`.
 """
 from __future__ import annotations
 

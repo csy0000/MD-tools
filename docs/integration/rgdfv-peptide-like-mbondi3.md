@@ -210,9 +210,9 @@ about which model is more correct.
 | | |
 |---|---|
 | dataset id | `rgdfv-rest2-rgdfv-sage221-gbn2-rest2-corrected-mbondi3` |
-| destination | `/path/to/DATA/2026/RGDfV-REST2/RGDfV-Sage221-GBn2-REST2-corrected-mbondi3` |
+| destination | `$MD_DATA/2026/RGDfV-REST2/RGDfV-Sage221-GBn2-REST2-corrected-mbondi3` |
 | inventory | **54 files, 5.8 MB, all digests verified** |
-| creator | `chen` |
+| creator | the registering user's `person_id` |
 
 Dry run → transaction → `--verify-only`, all passing. The project path is now a symlink into
 managed storage, and trajectories and CV series reopen through it. **The historical dataset was

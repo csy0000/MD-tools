@@ -37,6 +37,23 @@ repository the person was standing in — three datasets claimed MD-tools' HEAD 
 campaign, passing both guards on the way. It resolves from `-idata` now and refuses when the data
 are not in a repository, naming `--project-repo`. New `--notes TEXT`.
 
+**The environment is `openmm-env`.** `environment-cuda.yml` creates `openmm-env` and the CPU
+file `openmm-env-ci`; the README installs to `envs/openmm-env`. `md-openmm` is the command the
+environment provides, and naming the environment after it made "install md-openmm" and "run
+md-openmm" sentences about different objects.
+
+**The development history and the ALA reference campaign live here now**, under `docs/history/`
+and `docs/campaigns/ala-2026-09/`, copied from the project repository where that work was done.
+Four tests cited "the MD-project journal" as their real-run evidence; they cite a file in this
+repository instead, and nothing here refers to another repository's working tree.
+
+**Three more tests that failed for reasons outside the code.** Two counted the machine's GPUs
+with `nvidia-smi`, which ignores `CUDA_VISIBLE_DEVICES`: on a suite confined to five of nine cards
+one asked for device 8, and a six-state ladder passed its own "needs six devices" guard and failed
+later with two ranks on one card. They count the devices the process can use now. The third read a
+directory another test created, and its module built the wheel inside the checkout, where parallel
+workers collided and the collision was reported as a skip.
+
 **Three tests were not running and reported it as a fact about the software** — a stale filename
 (`cMD.csv` for what is now `mdout.csv`) that had never once been satisfied, two tests reading
 another test's output, and an interrupt driven by a 45-second timer. One skip remains, an opt-in

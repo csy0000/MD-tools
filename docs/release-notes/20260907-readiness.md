@@ -21,7 +21,7 @@ establish*, below.
 | MPI | Open MPI 5.0.8 (`mpiexec`) |
 | CUDA driver | 580.173.02 |
 | Devices | 1 × RTX A5000, 8 × RTX 3080 (9 total) |
-| Interpreter | `/path/to/software/md-stack/envs/openmm-rest2/bin/python` |
+| Interpreter | the `python` of the shared environment, then named `openmm-rest2` |
 
 **One invocation note that cost a run.** The MPI fail-closed lane launches the `md-openmm`
 console script through `mpiexec`, so the environment's `bin` must be on `PATH`. Invoking pytest

@@ -48,7 +48,7 @@ jobs:
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-file: environment-ci.yml
-          environment-name: md-tools-ci
+          environment-name: openmm-env-ci
           cache-environment: true
           cache-downloads: true
 

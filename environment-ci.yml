@@ -1,7 +1,7 @@
 # The documented CPU preparation environment, for release validation.
 #
 #   micromamba create -f environment-ci.yml
-#   micromamba activate md-tools-ci
+#   micromamba activate openmm-env-ci
 #   pip install --no-deps dist/md_tools-*.whl
 #
 # This is the package list MD-tools is developed and tested against, with the CUDA pin removed,
@@ -24,7 +24,7 @@
 #
 # NOT A LOCK FILE. Primary packages only; transitive dependencies and build strings are free.
 
-name: md-tools-ci
+name: openmm-env-ci
 
 channels:
   - conda-forge

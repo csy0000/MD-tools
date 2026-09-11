@@ -13,7 +13,8 @@ file that says what was in progress. These tests kill real subprocesses with `os
 an exception and closing the file cleanly would prove nothing about crash safety.
 
 PLATFORM_POLICY_EXEMPTION: NetCDF transaction semantics and provenance records. No dynamics are
-propagated here; the real continuation evidence is the CPU sequence in the MD-project journal.
+propagated here; the real continuation evidence is the CPU sequence recorded in
+`docs/history/journals/20260831_rest2-migration-transaction.md`.
 """
 from __future__ import annotations
 
