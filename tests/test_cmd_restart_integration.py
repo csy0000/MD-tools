@@ -54,7 +54,9 @@ ALA = REPO / "tests" / "data" / "ALA.pdb"
 from md_tools.openmm.checkpoint import (BOUNDARIES, FAULT_AFTER_ENVIRONMENT,  # noqa: E402
                                         FAULT_ENVIRONMENT, POINTER_NAME, read_committed)
 
-pytestmark = pytest.mark.slow
+#: ONE worker for this module. Its module-scoped fixture builds a system and runs
+#: dynamics; scattered across workers it is built once per worker that draws a test.
+pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("cmd-restart")]
 
 #: Short enough to run many times, long enough that several checkpoints are committed before the
 #: crash: 40 steps at a checkpoint every 10 is four commits.

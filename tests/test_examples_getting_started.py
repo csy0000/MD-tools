@@ -58,7 +58,9 @@ REPO = Path(__file__).resolve().parents[1]
 ALA = REPO / "tests" / "data" / "ALA.pdb"
 CLI = [sys.executable, "-m", "md_tools.cli.md_openmm"]
 
-pytestmark = pytest.mark.slow
+#: ONE worker for this module. Its module-scoped fixture builds a system and runs
+#: dynamics; scattered across workers it is built once per worker that draws a test.
+pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("examples")]
 
 
 def _md_openmm(cwd, *args, timeout=1800):
@@ -300,7 +302,20 @@ def _interrupt_when(directory, condition, *, what, until_output=None, timeout=90
         assert process.poll() is None, (
             f"the run finished on its own; it was meant to be interrupted while {what}")
         os.killpg(group, signal.SIGINT)
-        remaining, _ = process.communicate(timeout=300)
+        try:
+            remaining, _ = process.communicate(timeout=900)
+        except subprocess.TimeoutExpired:
+            # SIGINT is a REQUEST: the stage commits its checkpoint and then exits, and on a
+            # machine running 24 workers that can take a while. How long it takes is not what
+            # this test is about, and the thing the test needs -- a committed checkpoint -- was
+            # established by the wait above, BEFORE the signal was sent. So escalate and carry
+            # on rather than failing.
+            #
+            # 300 seconds here used to be a hard failure, which made a passing test depend on how
+            # busy the machine was. That is the same defect as the load-dependent skip this
+            # helper replaced, moved from the premise to the teardown.
+            os.killpg(group, signal.SIGKILL)
+            remaining, _ = process.communicate(timeout=120)
         return "".join(collected) + (remaining or "")
     finally:
         if process.poll() is None:

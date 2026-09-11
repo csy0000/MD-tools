@@ -43,7 +43,9 @@ ONE_THREAD = {**os.environ, "OPENMM_CPU_THREADS": "1"}
 
 PRODUCTION_STEPS = 400
 
-pytestmark = pytest.mark.slow
+#: ONE worker for this module. Its module-scoped fixture builds a system and runs
+#: dynamics; scattered across workers it is built once per worker that draws a test.
+pytestmark = [pytest.mark.slow, pytest.mark.xdist_group("reference-export")]
 
 
 @pytest.fixture(scope="module")

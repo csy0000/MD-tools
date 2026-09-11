@@ -72,10 +72,26 @@ include = ["md_tools*"]
 # The MD smoke tests build systems and integrate them, so they are marked slow and run before a
 # release rather than on every commit. `pytest tests/ -m "not slow"` is the fast lane.
 testpaths = ["tests"]
+
+# `loadgroup` rather than the default `load`, and it is HERE rather than on the command line so
+# that a plain `pytest -n 24` gets it too.
+#
+# Under `load`, xdist scatters a module's tests across workers, and a module-scoped fixture is
+# then built once PER WORKER that drew one of them. For a fixture that builds a system and runs a
+# replica ladder, that is the same expensive work several times over, concurrently -- which is
+# how a 300-second subprocess timeout started firing after two tests stopped depending on each
+# other's output and began depending on the fixture instead.
+#
+# `loadgroup` behaves exactly like `load` except that tests marked `xdist_group("<name>")` are
+# sent to the same worker. Modules whose module-scoped fixture is expensive carry that marker, so
+# their fixture is built once again. Everything unmarked distributes as before.
+addopts = "--dist loadgroup"
 markers = [
     "slow: builds a system or runs dynamics (deselect with '-m \"not slow\"')",
     # Anything that minimises or integrates a molecular system. These run on CUDA and are the
     # only evidence that the runtime works; a CPU-only machine cannot produce that evidence, so
     # they are DESELECTED there rather than quietly passing on the wrong platform.
     "gpu: needs a working CUDA platform (deselect with '-m \"not gpu\"')",
+    # Registered so `--strict-markers` stays usable; xdist provides the behaviour.
+    "xdist_group: run this module's tests on ONE worker, so its module-scoped fixture is built once",
 ]
