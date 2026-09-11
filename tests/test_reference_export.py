@@ -126,6 +126,18 @@ def test_input_holds_what_the_user_supplied_each_one_proven(finished):
         "a path from the machine the run was on reached the bundle"
 
 
+def test_export_reference_works_from_inside_the_run_directory_with_a_dot(finished, tmp_path):
+    """`-idata .` used to be refused: the built System is found "beside or above" the run
+    directory, and a bare `.` has no parents to search."""
+    _root, run, bundle, _manifest = finished
+    done = subprocess.run(CLI + ["export-reference", "-idata", ".", "-odir",
+                                 str(tmp_path / "dot-bundle")],
+                          cwd=run, capture_output=True, text=True, timeout=600)
+    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+    for name in ("system.xml", "topology.pdb", "start.xml", "input/built.xml"):
+        assert (tmp_path / "dot-bundle" / name).read_bytes() == (bundle / name).read_bytes(), name
+
+
 def test_the_system_rebuilds_from_the_structure_without_md_tools(finished, tmp_path):
     """Route 2 of input/README.md: openmm-env and the bundle, nothing of md-tools, same bytes."""
     import shutil

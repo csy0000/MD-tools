@@ -373,7 +373,8 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
     from ..remd.protocol import build_rung_systems
     from ..run.preflight import load_inputs
 
-    run_dir, out_dir = Path(run_dir), Path(out_dir)
+    # Resolved before anything is searched; see `export_reference`.
+    run_dir, out_dir = Path(run_dir).resolve(), Path(out_dir).resolve()
     record = _ladder_record(run_dir, stage)
     ladder = record.get("ladder") or {}
     inputs = record.get("inputs") or {}

@@ -210,9 +210,9 @@ that to remove a problem the practice already avoids is the wrong trade while th
 
 **Since 0.5.2 it is visible in every bundle.** `input/build_system.py` rebuilds a System from its
 structure and compares bytes. It rebuilds phenol identically, and for a molecule like
-cyclo(Gly-Asp-Arg) it would report DIFFERS and exit 1 -- correctly -- but the bundle's
-`input/README.md` does not yet say why. Add that sentence to its ligand route when this entry is
-picked up, whichever way it is settled.
+cyclo(Gly-Asp-Arg) it would report DIFFERS and exit 1 -- correctly -- and the bundle's
+`input/README.md` says why for any ligand charged with AM1-BCC. Revise that sentence when this
+entry is settled.
 
 **Not fixed here, deliberately.** **Trigger.** Pick this up before any study that needs to reproduce a build from its inputs, before
 comparing two builds for anything but their radii, or when deciding whether recorded conformer
@@ -401,9 +401,13 @@ works -- so the wording of unfollowable advice was improved.
 
 ---
 
-## 11. `export-reference -idata .` cannot find the built System
+## 11. `export-reference -idata .` could not find the built System -- FIXED in 0.5.2
 
-Found 2026-09-11, exporting the test-systems campaign with the 0.5.2 release. A run directory made
+Both exporters now resolve `-idata` and `-odir` before searching, and
+`tests/test_reference_export.py` exports from inside a run directory with `-idata .`. Kept here
+as the record of what was found:
+
+Found 2026-09-11, exporting the test-systems campaign with a 0.5.2 release candidate. A run directory made
 by build-md sits beside `built.xml`/`built.pdb`, and its records name them relative to the command
 line (`-p ../built.pdb` is recorded as `built.pdb`), so the exporter finds them by digest "beside
 the run directory or above it". Given `-idata .`, "above it" is `Path('.').parents`, which is empty,

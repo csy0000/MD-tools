@@ -529,13 +529,21 @@ def _standalone_text(settings: dict[str, Any]) -> str:
         water=str(b["solvation"]["water_model"]).upper(),
         charges=b["forcefield"]["ligand_charge_method"], ligand=b["forcefield"]["ligand"],
         radii=(settings["implicit"] or {}).get("radii"), gb=(settings["implicit"] or {}).get("model"))
+    caveat = ""
+    if (settings["route"] == "ligand"
+            and str(b["forcefield"]["ligand_charge_method"]).lower() == "am1bcc"):
+        caveat = (" For this molecule that equality is not guaranteed: the OpenFF toolkit computes "
+                  "AM1-BCC charges on a conformer it generates itself, unseeded, so a flexible "
+                  "molecule can rebuild with different charges and the script then reports "
+                  "DIFFERS. A rigid one lands on the same conformer every time. Either way the "
+                  "System here is the one the run used.")
     return (f"`build_system.py` performs every step `build-top` performed -- {steps} -- as plain "
             f"library calls, with this build's values from `build_settings.json`, and compares "
             f"what it builds with the System and topology here:\n\n"
             f"    python input/build_system.py --out rebuilt\n\n"
             f"It exits 0 only when the rebuilt System is byte-identical and the topology identical "
-            f"apart from the date OpenMM writes into its first line. The rebuilt pair then runs "
-            f"through route 1 or 3. It needs the libraries build-top uses and nothing of "
+            f"apart from the date OpenMM writes into its first line.{caveat} The rebuilt pair then "
+            f"runs through route 1 or 3. It needs the libraries build-top uses and nothing of "
             f"md-tools: OpenMM"
             + (", AmberTools (tleap) and ParmEd" if settings["route"] == "peptide"
                and settings["solvent"] == "implicit" else "")
@@ -679,7 +687,9 @@ def export_reference(run_dir: Path, out_dir: Path, *, stage: str = "cMD") -> dic
     from ..md._stages import KCAL_PER_MOL_ANGSTROM2, RESTRAINT_PARAMETER, derive_seed
     from ..run.preflight import _prepare_stage, load_inputs
 
-    run_dir, out_dir = Path(run_dir), Path(out_dir)
+    # Resolved before anything is searched: the built System is found "beside or above" the run
+    # directory, and a relative `.` has no parents -- `-idata .` used to be refused for that.
+    run_dir, out_dir = Path(run_dir).resolve(), Path(out_dir).resolve()
     record = _record(run_dir, stage)
     block = record.get("stage") or {}
     inputs = record.get("inputs") or {}

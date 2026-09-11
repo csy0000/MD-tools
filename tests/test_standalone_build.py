@@ -154,6 +154,26 @@ def test_a_peptide_like_solute_in_implicit_solvent_is_said_to_be_unsupported(tmp
     assert "peptide map" in settings["unsupported"]
 
 
+@pytest.mark.parametrize("method, warned", [("am1bcc", True), ("nagl", False)])
+def test_a_ligand_bundle_says_why_an_am1bcc_rebuild_may_differ(tmp_path, method, warned):
+    """OpenFF computes AM1-BCC charges on a conformer it generates unseeded (backlog entry 6), so
+    a flexible molecule may rebuild with other charges. The README must say so, not leave a
+    reader to take DIFFERS for a broken bundle. NAGL has no conformer step, so no such sentence."""
+    from md_tools.build.top import recorded_configuration
+    from md_tools.reference.export import _standalone_text, standalone_settings
+
+    config = tmp_path / "sys.config"
+    config.write_text(f"solute:\n  kind: ligand\n  ligand_charge_method: {method}\n"
+                      "solvent:\n  model: GBn2\n", encoding="utf-8")
+    resolved, _stated = recorded_configuration(config)
+    for name in ("in.smi", "built.xml", "built.pdb"):
+        (tmp_path / name).write_text("x\n", encoding="utf-8")
+    settings = standalone_settings({"resolved_config": resolved}, tmp_path / "in.smi",
+                                   tmp_path / "built.xml", tmp_path / "built.pdb")
+    text = _standalone_text(settings)
+    assert ("conformer it generates itself, unseeded" in text) is warned
+
+
 @pytest.mark.slow
 def test_a_tleap_sequence_structure_is_recognised_and_an_edited_one_is_not(tmp_path):
     """ALA.pdb is tleap's `sequence { ACE ALA NME }` output; one moved atom and it is not."""
