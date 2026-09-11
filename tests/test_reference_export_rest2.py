@@ -143,6 +143,94 @@ def test_the_bundle_names_the_engine_that_ran_not_the_one_that_exported_it(ladde
     assert provenance["md_tools_commit"] is None, "a commit the run never recorded was invented"
 
 
+def _blocked(script: str, *args: str) -> str:
+    """A runner that raises on any md_tools import, then executes `script` with `args`."""
+    return ("import sys, runpy\n"
+            "class B:\n"
+            "    def find_spec(self, name, path=None, target=None):\n"
+            "        if name.split('.')[0] == 'md_tools':\n"
+            "            raise ImportError('bundle imported md_tools: ' + name)\n"
+            "        return None\n"
+            "sys.meta_path.insert(0, B())\n"
+            f"sys.argv = [{script!r}, *{list(args)!r}]\n"
+            f"runpy.run_path({script!r}, run_name='__main__')\n")
+
+
+def test_the_bundled_scaling_module_is_the_packages_own(ladder):
+    """The rung construction travels as the same bytes, like the exchange modules beside it."""
+    _run, bundle, manifest = ladder
+    source = Path(__import__("md_tools.rest2", fromlist=["__file__"]).__file__).parent
+    name = manifest["scaling_module"]
+    assert (bundle / "ladder" / name).read_bytes() == (source / name).read_bytes()
+
+
+def test_every_rung_rebuilds_from_rung_zero_without_md_tools(ladder, tmp_path):
+    """How the scaled Systems were derived, checked with OpenMM alone."""
+    import shutil
+
+    _run, bundle, _manifest = ladder
+    copy = tmp_path / "bundle"
+    shutil.copytree(bundle, copy)
+    (copy / "_blocked.py").write_text(_blocked("verify_rungs.py"), encoding="utf-8")
+    done = subprocess.run([sys.executable, "_blocked.py"], cwd=copy, capture_output=True,
+                          text=True, timeout=600, env={**ONE_THREAD, "PYTHONPATH": ""})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert f"all {RUNGS} rungs rebuild identically from rung 0" in done.stdout, done.stdout
+
+
+def test_a_tampered_rung_is_named(ladder, tmp_path):
+    """The check must be able to fail: change one torsion in one rung and it has to say which."""
+    import shutil
+
+    from openmm import PeriodicTorsionForce, XmlSerializer
+
+    _run, bundle, _manifest = ladder
+    copy = tmp_path / "bundle"
+    shutil.copytree(bundle, copy)
+    path = copy / "system_rung2.xml"
+    system = XmlSerializer.deserialize(path.read_text(encoding="utf-8"))
+    torsions = next(system.getForce(i) for i in range(system.getNumForces())
+                    if isinstance(system.getForce(i), PeriodicTorsionForce))
+    parameters = list(torsions.getTorsionParameters(1))
+    parameters[6] = parameters[6] * 1.01
+    torsions.setTorsionParameters(1, *parameters)
+    path.write_text(XmlSerializer.serialize(system), encoding="utf-8")
+    done = subprocess.run([sys.executable, "verify_rungs.py"], cwd=copy, capture_output=True,
+                          text=True, timeout=600, env={**ONE_THREAD, "PYTHONPATH": ""})
+    assert done.returncode == 1, done.stdout + done.stderr
+    assert "rung 2" in done.stdout and "DIFFERS" in done.stdout, done.stdout
+    assert "rung(s) [2]" in done.stdout, done.stdout
+
+
+def test_the_derivation_names_the_solute_and_the_omega_bonds(ladder):
+    """Every input `build_scaled_system` takes besides tau, so a reader can execute the rules."""
+    import json
+
+    _run, bundle, _manifest = ladder
+    derivation = json.loads((bundle / "provenance.json").read_text(encoding="utf-8"))["derivation"]
+    assert derivation["solute_atom_indices"] == list(range(22))      # capped ALA, implicit
+    assert len(derivation["excluded_bonds"]) == 2                     # ACE-ALA and ALA-NME amides
+    assert derivation["check"] == "python verify_rungs.py"
+
+
+def test_input_holds_what_the_user_supplied_each_one_proven(ladder):
+    """The structure by digest, build-top's configuration by resolution, build-md's by contract."""
+    import hashlib
+    import json
+
+    run, bundle, _manifest = ladder
+    root = run.parent
+    inputs = bundle / "input"
+    assert (inputs / "ALA.pdb").read_bytes() == ALA.read_bytes()
+    assert (inputs / "build-top.config").read_bytes() == (root / "sys.config").read_bytes()
+    assert (inputs / "build-md.config").read_bytes() == (run / "resolved.config").read_bytes()
+    assert (inputs / "README.md").is_file()
+    recorded = json.loads((bundle / "provenance.json").read_text(encoding="utf-8"))["inputs"]
+    assert recorded["structure"]["sha256"] == hashlib.sha256(ALA.read_bytes()).hexdigest()
+    assert recorded["build_top_config"]["file"] == "input/build-top.config"
+    assert "resolves to the build-top record" in recorded["build_top_config"]["verified"]
+
+
 def test_the_bundle_never_imports_md_tools(ladder):
     """Enforced by blocking the import, not by reading the source."""
     _run, bundle, _manifest = ladder

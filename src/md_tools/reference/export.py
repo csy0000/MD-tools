@@ -240,6 +240,161 @@ def _continue_from(record: dict[str, Any]) -> str | None:
     return None
 
 
+def _same(left: Any, right: Any) -> bool:
+    return (json.dumps(left, sort_keys=True, default=str)
+            == json.dumps(right, sort_keys=True, default=str))
+
+
+def user_inputs_plan(run_dir: Path, system_path: Path) -> dict[str, Any]:
+    """What a person supplied to produce this run, each file found and PROVEN, before any write.
+
+    A bundle's `input/` holds exactly these:
+
+      the structure   what `build-top -i` read, found by the digest its record holds
+      build-top       the configuration file `build-top --config` read, accepted only if resolving
+                      it NOW reproduces both the resolved configuration and the stated keys the
+                      record holds; otherwise the record's resolved configuration, labelled so
+      build-md        the run's own `resolved.config`, which is authoritative by contract and which
+                      `build-md --config` reads back
+
+    A file is never taken on its name. The campaign this was written for is the reason: its
+    protocol configurations were edited after the runs started, so the file named
+    `rest2_implicit.config` beside a registered ladder was not the configuration that produced it.
+    """
+    from ..build.record import RecordError, read_record
+    from ..build.top import recorded_configuration
+
+    run_dir, system_path = Path(run_dir), Path(system_path)
+    wanted = _digest(system_path)
+    found = None
+    for log in sorted(system_path.parent.glob("*.log")):
+        try:
+            record = read_record(log)
+        except (RecordError, OSError):
+            continue
+        output = ((record.get("outputs") or {}).get("system_xml") or {})
+        if record.get("record_type") == "build-top" and output.get("sha256") == wanted:
+            found = (log, record)
+            break
+    if found is None:
+        raise FileNotFoundError(
+            f"no build-top record beside {system_path} names it as its output (sha256 "
+            f"{wanted[:16]}...). A bundle's input/ holds only files proven to be the ones used, and "
+            f"without that record the structure cannot be proven. Nothing has been written.")
+    log, record = found
+    command = list(record.get("command") or [])
+
+    def argument(flag):
+        if flag in command and command.index(flag) + 1 < len(command):
+            return command[command.index(flag) + 1]
+        return None
+
+    def candidates(named, name):
+        paths = []
+        if named:
+            path = Path(named)
+            paths.append(path if path.is_absolute() else log.parent / path)
+        paths += [directory / name for directory in (log.parent, *log.parent.parents[:2], run_dir)]
+        return paths
+
+    entry = record.get("input") or {}
+    structure = next((path for path in candidates(argument("-i"), Path(entry.get("path", "")).name)
+                      if path.is_file() and _digest(path) == entry.get("sha256")), None)
+    if structure is None:
+        raise FileNotFoundError(
+            f"the structure build-top read ({entry.get('path')!r}, sha256 "
+            f"{str(entry.get('sha256'))[:16]}...) is not where the record says, nor beside the "
+            f"build. input/ would otherwise hold a file that only shares its name. Nothing has "
+            f"been written.")
+
+    named_config = argument("--config")
+    top_config = None
+    for path in (candidates(named_config, Path(named_config).name) if named_config else []):
+        if not path.is_file():
+            continue
+        try:
+            resolved, stated = recorded_configuration(path)
+        except Exception:
+            continue
+        if _same(resolved, record.get("resolved_config")) and _same(stated,
+                                                                   record.get("stated_keys")):
+            top_config = path
+            break
+
+    protocol = run_dir / "resolved.config"
+    if not protocol.is_file():
+        raise FileNotFoundError(f"{run_dir} has no resolved.config, which is the authoritative "
+                                f"input build-md generated this run from. Nothing has been written.")
+    return {"structure": structure, "build_top_config": top_config,
+            "build_top_config_named": named_config,
+            "build_top_resolved": record.get("resolved_config"), "build_md_config": protocol}
+
+
+INPUT_README = """# Inputs
+
+What a person supplied to produce this run. Everything else in the bundle was derived from these,
+and each one here was checked against the run's own records before it was copied.
+
+{rows}
+
+To rebuild the run from scratch with md-tools:
+
+    md-openmm build-top -i input/{structure} {config_flag}-os built.xml -op built.pdb -log built.log
+    md-openmm build-md --config input/build-md.config -odir md_script
+
+The bundled Systems stay the authority. A peptide built from a PDB rebuilds to the same System; a
+molecule built from SMILES does not, because AM1-BCC charges differ between builds of the same
+input -- which is why the bundle carries the Systems themselves.
+"""
+
+
+def write_user_inputs(plan: dict[str, Any], out_dir: Path) -> dict[str, Any]:
+    """Copy what `user_inputs_plan` proved into `out_dir/input/`, and describe it."""
+    import yaml
+
+    target = Path(out_dir) / "input"
+    target.mkdir(parents=True, exist_ok=True)
+    structure = Path(plan["structure"])
+    shutil.copy2(structure, target / structure.name)
+    manifest = {"structure": {"file": f"input/{structure.name}",
+                              "sha256": _digest(target / structure.name),
+                              "verified": "sha256 matches the build-top record's input"}}
+    rows = [f"| `{structure.name}` | the structure `build-top -i` read |"]
+    config_flag = ""
+    if plan["build_top_config"] is not None:
+        shutil.copy2(plan["build_top_config"], target / "build-top.config")
+        manifest["build_top_config"] = {
+            "file": "input/build-top.config", "sha256": _digest(target / "build-top.config"),
+            "verified": "resolves to the build-top record's resolved configuration and stated keys"}
+        rows.append("| `build-top.config` | the configuration `build-top --config` read |")
+        config_flag = "--config input/build-top.config "
+    elif plan["build_top_config_named"]:
+        (target / "build-top.resolved.yaml").write_text(
+            yaml.safe_dump(plan["build_top_resolved"], sort_keys=False), encoding="utf-8")
+        manifest["build_top_config"] = {
+            "file": "input/build-top.resolved.yaml", "verified": False,
+            "why": (f"the configuration build-top read ({plan['build_top_config_named']!r}) was "
+                    f"not found, or no longer resolves to what the record holds. This is the "
+                    f"record's resolved configuration: what the build used, in the form the "
+                    f"record keeps it, which build-top does not read back.")}
+        rows.append("| `build-top.resolved.yaml` | what build-top resolved; its original "
+                    "configuration file could not be verified |")
+    else:
+        manifest["build_top_config"] = {"file": None,
+                                        "why": "build-top ran with its built-in defaults"}
+        rows.append("| (none) | build-top ran with its built-in defaults |")
+    shutil.copy2(plan["build_md_config"], target / "build-md.config")
+    manifest["build_md_config"] = {
+        "file": "input/build-md.config", "sha256": _digest(target / "build-md.config"),
+        "verified": "the run's own resolved.config, authoritative by contract"}
+    rows.append("| `build-md.config` | the run's `resolved.config`, which `build-md` reads back |")
+    table = "| file | what it is |\n|---|---|\n" + "\n".join(rows)
+    (target / "README.md").write_text(
+        INPUT_README.format(rows=table, structure=structure.name, config_flag=config_flag),
+        encoding="utf-8")
+    return manifest
+
+
 def export_reference(run_dir: Path, out_dir: Path, *, stage: str = "cMD") -> dict[str, Any]:
     """Write a standalone bundle for one finished stage. Returns its manifest."""
     from ..md._stages import KCAL_PER_MOL_ANGSTROM2, RESTRAINT_PARAMETER, derive_seed
@@ -267,8 +422,12 @@ def export_reference(run_dir: Path, out_dir: Path, *, stage: str = "cMD") -> dic
                 f"`built.pdb` here; the file has to be found by digest.")
         found[role] = source
 
+    # Proven before the directory exists, like every other refusal here.
+    inputs_plan = user_inputs_plan(run_dir, found["system"])
+
     out_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(found["topology"], out_dir / "topology.pdb")
+    user_inputs = write_user_inputs(inputs_plan, out_dir)
 
     # -- the System the stage INTEGRATED, not the one it was built from -------------------------
     #
@@ -344,6 +503,7 @@ def export_reference(run_dir: Path, out_dir: Path, *, stage: str = "cMD") -> dic
             "system": {"path": inputs["system"]["path"], "sha256": _digest(found["system"])},
             "continued_from": parent,
         },
+        "inputs": user_inputs,
         "note": "system.xml here is the System this stage integrated: the build System above with "
                 "the solute scaled at tau, the positional-restraint force added, and the barostat "
                 "added for explicit solvent. It is not the build System. This bundle needs OpenMM "

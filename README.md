@@ -214,6 +214,13 @@ single Context driven for a fixed number of steps, `md-replica:*` is a ladder, a
 caller to say which would let them say the wrong one. A protocol with no exporter yet — umbrella,
 AIS — is refused before anything is written.
 
+A bundle holds the System(s) that were integrated, the topology, the state the run continued from,
+a runner, `provenance.json` and a `SHA256SUMS` inventory, and `input/`: the structure, the
+`build-top` configuration and the run's `resolved.config`, each proven against the run's own
+records before it is copied, with the two commands that rebuild the run. A REST2 bundle also
+carries the code that built its rungs (`ladder/hamiltonian.py`, copied byte for byte) and
+`verify_rungs.py`, which rebuilds every rung from rung 0 with OpenMM alone and checks each one.
+
 ## End to end
 
 ```bash

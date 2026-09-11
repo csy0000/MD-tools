@@ -92,6 +92,72 @@ def finished(tmp_path_factory):
     return root, run, bundle, manifest
 
 
+def test_input_holds_what_the_user_supplied_each_one_proven(finished):
+    """The structure by digest, build-top's configuration by resolution, build-md's by contract."""
+    import hashlib
+
+    root, run, bundle, _manifest = finished
+    inputs = bundle / "input"
+    assert sorted(p.name for p in inputs.iterdir()) == ["ALA.pdb", "README.md",
+                                                        "build-md.config", "build-top.config"]
+    assert (inputs / "ALA.pdb").read_bytes() == ALA.read_bytes()
+    assert (inputs / "build-top.config").read_bytes() == (root / "sys.config").read_bytes()
+    assert (inputs / "build-md.config").read_bytes() == (run / "resolved.config").read_bytes()
+    recorded = json.loads((bundle / "provenance.json").read_text(encoding="utf-8"))["inputs"]
+    assert recorded["structure"]["sha256"] == hashlib.sha256(ALA.read_bytes()).hexdigest()
+    assert "resolves to the build-top record" in recorded["build_top_config"]["verified"]
+    readme = (inputs / "README.md").read_text(encoding="utf-8")
+    assert "md-openmm build-top -i input/ALA.pdb --config input/build-top.config" in readme
+
+
+def _copy_of_the_run(finished, tmp_path):
+    """The finished tree, copied, so a test can damage it without touching the shared fixture."""
+    import shutil
+
+    root, _run, _bundle, _manifest = finished
+    copy = tmp_path / "copy"
+    shutil.copytree(root, copy, ignore=shutil.ignore_patterns("bundle"))
+    return copy
+
+
+def test_a_configuration_edited_after_the_build_is_not_passed_off_as_the_one_used(finished,
+                                                                                 tmp_path):
+    """The campaign case: a file with the right name that no longer describes the build."""
+    from md_tools.reference import export_reference
+
+    copy = _copy_of_the_run(finished, tmp_path)
+    # The build ran with absolute paths, so the copied record still names the fixture's own
+    # `sys.config`. Point it at the copy's, then change the copy's: same name, same place the
+    # record says, different content -- and the shared fixture is never touched.
+    log = copy / "built.log"
+    log.write_text(log.read_text(encoding="utf-8").replace(str(finished[0]), str(copy)),
+                   encoding="utf-8")
+    (copy / "sys.config").write_text("solvent:\n  model: OBC2\n", encoding="utf-8")
+    manifest = export_reference(copy / "run", tmp_path / "bundle")
+    inputs = tmp_path / "bundle" / "input"
+    assert not (inputs / "build-top.config").exists()
+    assert (inputs / "build-top.resolved.yaml").is_file()
+    assert manifest["provenance"]["inputs"]["build_top_config"]["verified"] is False
+
+
+def test_a_structure_that_is_not_the_one_recorded_refuses_before_writing(finished, tmp_path):
+    """input/ must never hold a file that merely shares its name with the one used."""
+    from md_tools.reference import export_reference
+
+    copy = _copy_of_the_run(finished, tmp_path)
+    log = copy / "built.log"
+    text = log.read_text(encoding="utf-8")
+    import hashlib
+
+    real = hashlib.sha256(ALA.read_bytes()).hexdigest()
+    assert real in text
+    log.write_text(text.replace(real, "0" * 64), encoding="utf-8")
+    target = tmp_path / "bundle"
+    with pytest.raises(FileNotFoundError, match="the structure build-top read"):
+        export_reference(copy / "run", target)
+    assert not target.exists(), "a refused export wrote files"
+
+
 def test_the_bundle_holds_the_system_the_stage_integrated_not_the_one_it_was_built_from(finished):
     """At tau = 0.5 the build System is a DIFFERENT Hamiltonian, and exporting it is the bug.
 

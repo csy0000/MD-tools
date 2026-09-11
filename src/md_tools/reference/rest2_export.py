@@ -39,15 +39,21 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from .export import _continue_from, _digest, _locate
+from .export import _continue_from, _digest, _locate, user_inputs_plan, write_user_inputs
 
 #: Copied byte for byte. Each is dependency-free by construction; see the module docstring.
 VENDORED = ("core.py", "rules.py", "engine.py", "statistics.py", "rem_log.py")
 
+#: `md_tools/rest2/hamiltonian.py`, copied byte for byte beside them: the code that turns the
+#: unscaled System into a rung. With it, `verify_rungs.py` rebuilds every bundled rung from rung 0
+#: using OpenMM alone, so how the scaled Systems were derived is checkable rather than described.
+SCALING_MODULE = "hamiltonian.py"
+
 PACKAGE_INIT = '''"""The ladder's own decision-making, copied verbatim from md-tools {version}.
 
-Every module beside this one is a byte-for-byte copy -- `md_tools/remd/<name>` at commit
-{commit}. None of them imports md_tools; they need the standard library, numpy and OpenMM.
+Every module beside this one is a byte-for-byte copy at commit {commit}: `md_tools/remd/<name>`,
+and `hamiltonian.py`, which is `md_tools/rest2/hamiltonian.py` -- the code that built the rungs.
+None of them imports md_tools; they need the standard library, numpy and OpenMM.
 
 This file is the exception: it is written by the export, because the package's own `__init__`
 imports a great deal that a bundle has no use for.
@@ -73,6 +79,13 @@ WHAT IS REPRODUCED
     run split those segments further wherever a trajectory or checkpoint event fell, which is
     dynamically neutral -- the same integration steps drawn from the same stream -- and the
     equivalence test in md-tools asserts exactly that against the engine's own output.
+
+HOW THE RUNGS WERE BUILT
+
+    system_rung0.xml is the unscaled System; every other rung is that System with the solute
+    scaled at its tau. `ladder/hamiltonian.py` is the code that did it, and `python
+    verify_rungs.py` rebuilds each rung from rung 0 with it and checks the result is identical.
+    provenance.json's `derivation` block holds the solute atoms and the omega bonds it needs.
 """
 import argparse
 import json
@@ -240,6 +253,59 @@ exec python run.py "$@"
 '''
 
 
+VERIFY = '''#!/usr/bin/env python
+"""Rebuild every rung of this ladder from rung 0, and check it is the rung this bundle carries.
+
+Standalone. Needs OpenMM only. `ladder/hamiltonian.py` is the code md-tools built the rungs with,
+copied byte for byte, so this is the derivation that ran rather than a restatement of it.
+
+    python verify_rungs.py
+
+Each rung is compared after both Systems are serialised by the RUNNING OpenMM, so a newer OpenMM
+that formats its XML differently still compares like with like. Exits 0 when every rung is
+identical, and 1 naming the rungs that are not.
+"""
+import json
+import sys
+from pathlib import Path
+
+from openmm import XmlSerializer
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from ladder.hamiltonian import build_scaled_system    # noqa: E402
+
+
+def main():
+    settings = json.loads((HERE / "settings.json").read_text(encoding="utf-8"))
+    derivation = json.loads((HERE / "provenance.json").read_text(encoding="utf-8"))["derivation"]
+    solute = [int(i) for i in derivation["solute_atom_indices"]]
+    excluded = [tuple(int(a) for a in pair) for pair in derivation["excluded_bonds"]]
+    base = XmlSerializer.deserialize((HERE / "system_rung0.xml").read_text(encoding="utf-8"))
+
+    differing = []
+    for index, tau in enumerate(settings["tau"]):
+        bundled = XmlSerializer.serialize(XmlSerializer.deserialize(
+            (HERE / f"system_rung{index}.xml").read_text(encoding="utf-8")))
+        rebuilt = XmlSerializer.serialize(
+            build_scaled_system(base, solute, float(tau), excluded_bonds=excluded))
+        same = rebuilt == bundled
+        print(f"rung {index}  tau {float(tau):<10g} {'identical' if same else 'DIFFERS'}")
+        if not same:
+            differing.append(index)
+    if differing:
+        print(f"rebuilt from rung 0, rung(s) {differing} do not match the bundled System(s)")
+        return 1
+    print(f"all {len(settings['tau'])} rungs rebuild identically from rung 0")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+
 def _ladder_record(run_dir: Path, stage: str) -> dict[str, Any]:
     from ..build.record import read_record
 
@@ -315,9 +381,13 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
     if len(systems) != len(taus):
         raise ValueError(f"built {len(systems)} rung System(s) for {len(taus)} tau value(s)")
 
+    # Proven before the directory exists, like every other refusal here.
+    inputs_plan = user_inputs_plan(run_dir, found["system"])
+
     out_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(found["topology"], out_dir / "topology.pdb")
     shutil.copy2(start, out_dir / "start.xml")
+    user_inputs = write_user_inputs(inputs_plan, out_dir)
     for index, system in enumerate(systems):
         (out_dir / f"system_rung{index}.xml").write_text(XmlSerializer.serialize(system),
                                                          encoding="utf-8")
@@ -344,6 +414,8 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
     remd = Path(__import__("md_tools.remd", fromlist=["__file__"]).__file__).parent
     for name in VENDORED:
         shutil.copy2(remd / name, package / name)
+    rest2 = Path(__import__("md_tools.rest2", fromlist=["__file__"]).__file__).parent
+    shutil.copy2(rest2 / SCALING_MODULE, package / SCALING_MODULE)
 
     dynamics = ladder.get("dynamics") or {}
     settings = {
@@ -383,12 +455,25 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
             "system": {"path": inputs["system"]["path"], "sha256": _digest(found["system"])},
             "continued_from": parent,
         },
+        "inputs": user_inputs,
         "force_audit": audit,
-        "note": "The modules in ladder/ are byte-for-byte copies of md_tools/remd/* at "
-                "`ladder_modules_from` -- the exporter's commit, which is not necessarily the "
-                "engine that ran (`md_tools_commit`). They are md_tools' own acceptance criterion "
-                "and sweep schedule, not a reimplementation. system_rung<i>.xml are the Systems "
-                "the ladder propagated. Needs OpenMM and numpy only.",
+        # What rung i IS, in terms a reader can execute: rung 0 and these two lists are every
+        # input `build_scaled_system` takes besides tau. The solute list used to be absent, so a
+        # bundle stated the scaling rules but not which atoms they applied to.
+        "derivation": {
+            "rung_0": "system_rung0.xml, the unscaled System every other rung is derived from",
+            "code": "ladder/hamiltonian.py: build_scaled_system(rung_0, solute_atom_indices, "
+                    "tau, excluded_bonds)",
+            "check": "python verify_rungs.py",
+            "solute_atom_indices": [int(i) for i in solute],
+            "excluded_bonds": [[int(a), int(b)] for a, b in excluded],
+        },
+        "note": "The modules in ladder/ are byte-for-byte copies of md_tools/remd/* and "
+                "md_tools/rest2/hamiltonian.py at `ladder_modules_from` -- the exporter's commit, "
+                "which is not necessarily the engine that ran (`md_tools_commit`). They are "
+                "md_tools' own acceptance criterion, sweep schedule and rung construction, not a "
+                "reimplementation. system_rung<i>.xml are the Systems the ladder propagated; "
+                "verify_rungs.py rebuilds them from rung 0. Needs OpenMM and numpy only.",
     }
     (out_dir / "provenance.json").write_text(json.dumps(provenance, indent=2, default=str) + "\n",
                                              encoding="utf-8")
@@ -398,6 +483,7 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
     title = (f"{stage}: {len(taus)} rungs, tau {taus[0]:g}..{taus[-1]:g}, "
              f"{total_ps * 1e-3:g} ns per rung")
     (out_dir / "run.py").write_text(RUNNER.format(title=title), encoding="utf-8")
+    (out_dir / "verify_rungs.py").write_text(VERIFY, encoding="utf-8")
     shell = out_dir / "run.sh"
     shell.write_text(SHELL.format(exchanges=settings["number_of_exchanges"]), encoding="utf-8")
     shell.chmod(0o755)
@@ -408,4 +494,4 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
         lines.append(f"{_digest(path)}  {path.relative_to(out_dir).as_posix()}")
     (out_dir / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return {"settings": settings, "provenance": provenance, "files": len(lines) + 1,
-            "vendored": list(VENDORED)}
+            "vendored": list(VENDORED), "scaling_module": SCALING_MODULE}

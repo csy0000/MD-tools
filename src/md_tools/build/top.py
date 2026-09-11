@@ -451,6 +451,32 @@ def _assigned_residue_name(stated: str | None, name_field: str | None, source: P
     return "LIG"
 
 
+def _resolution(config_path: Path | None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """The build configuration, the keys the user stated, and what the record calls resolved.
+
+    Record what RESOLVES, not what was requested. `resolve_sys_config` nulls the force fields that
+    do not participate: a ligand-only build loads no protein force field, and an implicit build
+    loads no water model. Recording the pre-resolution document would put a force field into the
+    provenance that never loaded.
+    """
+    from ..openmm.system_config import resolve_sys_config
+
+    resolved = resolve_build_config(config_path)
+    stated = resolved.pop("_stated", {})
+    return resolved, stated, resolve_sys_config(_sys_document(resolved))
+
+
+def recorded_configuration(config_path: Path | None) -> tuple[dict[str, Any], dict[str, list]]:
+    """What a build-top record would hold as `resolved_config` and `stated_keys` for this file.
+
+    The same resolution `build_topology` records, so a checker can prove a configuration file is
+    the one a recorded build used -- by resolving it now and comparing -- without a second copy of
+    the rules. The reference exporter uses it to decide what goes into a bundle's `input/`.
+    """
+    _resolved, stated, sys_resolved = _resolution(config_path)
+    return sys_resolved, {k: list(v) for k, v in stated.items()}
+
+
 def build_topology(*, input_path: Path, config_path: Path | None = None,
                    out_system: Path, out_pdb: Path, out_log: Path,
                    overwrite: bool = False, echo: bool = True) -> dict[str, Any]:
@@ -483,8 +509,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     for target in (out_system, out_pdb, out_log):
         target.parent.mkdir(parents=True, exist_ok=True)
 
-    resolved = resolve_build_config(config_path)
-    stated = resolved.pop("_stated", {})
+    resolved, stated, sys_resolved = _resolution(config_path)
     solvent = canonical_solvent(resolved["solvent"]["model"])
     implicit = is_implicit(solvent)
     kind = str(resolved["solute"]["kind"])
@@ -538,17 +563,11 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     log.field("solvent treatment", "implicit (no box, no ions, no barostat)" if implicit
                                    else f"explicit {solvent}, periodic")
 
-    document = _sys_document(resolved)
-
-    from ..openmm.system_config import pairing_warnings, resolve_sys_config
+    from ..openmm.system_config import pairing_warnings
     from ..openmm.builders import (Log as _BuilderLog, _build_explicit, _build_implicit,
                                _legacy_cfg)
 
-    # Record what RESOLVES, not what was requested. `resolve_sys_config` nulls the force fields
-    # that do not participate: a ligand-only build loads no protein force field, and an implicit
-    # build loads no water model. Recording the pre-resolution document would put a force field
-    # into the provenance that never loaded.
-    sys_resolved = resolve_sys_config(document)
+    # `sys_resolved` came from `_resolution`, which records what RESOLVES; see there.
     cfg = _legacy_cfg(sys_resolved)
 
     # A supported-but-unvalidated combination is allowed and never silent. Emitted on stderr so a
