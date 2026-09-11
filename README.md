@@ -3,18 +3,24 @@
 Standalone, pip-installable OpenMM tools for building systems, generating MD workflows, and
 registering MD datasets.
 
-One executable, `md-openmm`, and four commands. It builds a solvated, parameterised OpenMM system
+One executable, `md-openmm`, and five commands. It builds a solvated, parameterised OpenMM system
 from a structure; generates readable entry points and Amber-like inputs for a chosen protocol —
 ordinary MD, REST2, rREST2 or annealed importance sampling; runs them on CUDA, under `mpirun` when
-the protocol is parallel; and moves a finished run into managed storage as a verified, immutable
-dataset.
+the protocol is parallel; moves a finished run into managed storage as a verified, immutable
+dataset; and exports one as a bundle that runs on OpenMM alone, with nothing of this package in
+it.
 
-**Status:** `0.5.1`, tagged `openmm-v0.5.1`, on `dev` and `main`. Not on PyPI.
+**Status:** `0.5.2`, tagged `openmm-v0.5.2`, on `dev` and `main`. Not on PyPI.
 
-`0.5.1` fixes one thing, and it is the one a scheduler-killed campaign needs: an interrupted
-CV-enabled REST2 ladder can be resumed. Four-, eight- and twelve-rung ladders could not be, because
-three implementations of one tau ladder disagreed in the seventh decimal and the resume check used
-one that never ran. See [`docs/release-notes/v0.5.1.md`](docs/release-notes/v0.5.1.md).
+`0.5.2` adds `export-reference`: a finished run becomes a directory someone can run in ten years
+with OpenMM and nothing of ours. cMD and REST2 today; umbrella and AIS are not done. A wheel also
+knows which commit it was built from now, so `md_tools_commit` stops being `null` in every record
+and every manifest. See [`docs/release-notes/v0.5.2.md`](docs/release-notes/v0.5.2.md) — including
+the four ways the first version of the exporter was wrong, and why its test agreed with all of
+them.
+
+`0.5.1` fixed the one a scheduler-killed campaign needs: an interrupted CV-enabled REST2 ladder can
+be resumed. See [`docs/release-notes/v0.5.1.md`](docs/release-notes/v0.5.1.md).
 
 Known limitations are stated
 in [`docs/release-notes/v0.5.0.md`](docs/release-notes/v0.5.0.md); open and closed gaps, each with
@@ -116,7 +122,7 @@ micromamba create -y -p ~/software/md-stack/envs/md-tools -f environment-ci.yml
 ```
 
 That installs Python 3.12, OpenMM 8.6, OpenFF, AmberTools, ParmEd, RDKit, MDTraj, OpenMMTools and
-NetCDF4 — everything the four commands import.
+NetCDF4 — everything the five commands import.
 
 **It is deliberately CPU-only and single-rank.** `environment-ci.yml` is what CI validates
 against, and CI has no GPU and no second device to bind a rank to. For real work add both:
@@ -188,19 +194,25 @@ md-openmm data-register --init
 ```
 
 It asks for a stable lowercase `person_id`, your name for provenance, and `$MD_DATA`. Nothing else
-in the four commands needs it — building and running work without it.
+in the five commands needs it — building and running work without it.
 
-## The four commands
+## The five commands
 
 ```text
-md-openmm build-top      a structure       -> built.xml + built.pdb + built.log
-md-openmm build-md       a protocol config -> run scripts, .in files and run.sh in ./md_script/
-md-openmm md-run         an Amber-like .in -> a stage, a ladder, or AIS switching paths
-md-openmm data-register  a finished tree   -> a verified dataset under $MD_DATA
+md-openmm build-top         a structure       -> built.xml + built.pdb + built.log
+md-openmm build-md          a protocol config -> run scripts, .in files and run.sh in ./md_script/
+md-openmm md-run            an Amber-like .in -> a stage, a ladder, or AIS switching paths
+md-openmm data-register     a finished tree   -> a verified dataset under $MD_DATA
+md-openmm export-reference  a finished run    -> a bundle that runs on OpenMM alone
 ```
 
 Nothing else is public. AIS is `protocol: AIS` in a `build-md` configuration, not a command of its
 own, and `md-run` is a subcommand rather than a second executable.
+
+`export-reference` chooses what to write from the RECORD TYPE, not from a flag: `md-stage:*` is a
+single Context driven for a fixed number of steps, `md-replica:*` is a ladder, and asking the
+caller to say which would let them say the wrong one. A protocol with no exporter yet — umbrella,
+AIS — is refused before anything is written.
 
 ## End to end
 

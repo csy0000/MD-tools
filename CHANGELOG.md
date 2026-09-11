@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.5.2 — 2026-09-11
+
+**A finished run can leave this package behind.** `md-openmm export-reference -idata <run> -odir
+<out>` writes a directory that runs on OpenMM alone — the System that was integrated, the topology,
+the state the stage continued from, a standalone runner, provenance and a `SHA256SUMS` inventory.
+Nothing in it imports `md_tools`, enforced by running the bundle under an import hook rather than
+by reading the source. cMD and REST2; umbrella and AIS are not done.
+
+A REST2 bundle does not reimplement the ladder. The modules that decide what happens — the
+acceptance criterion, the sweep schedule, the reduced potential, the seed derivation — are copied
+byte for byte, which took moving `BAR_NM3_TO_KJ_PER_MOL` and `driver._stream_seed` into
+`remd/core.py`. Checked against the engine's own run: 10 of 10 exchanges with an identical
+state-to-walker mapping, not merely a similar acceptance rate.
+
+The first version of the cMD exporter carried the **build** System rather than the integrated one
+— a different Hamiltonian at non-zero tau — plus the config seed instead of the derived one, the
+built coordinates instead of the continuation state, and a restraint left on by `setState`. All
+four ran perfectly and none was visible from reading the script. The test did not catch them
+because it compared the export against a Context built in the test file, sharing all of its
+assumptions. It compares against the engine now.
+
+**A wheel knows its own commit.** `md_tools_commit` was `null` everywhere, because a wheel is built
+from a directory and nothing in the build consults git. An in-tree PEP 517 backend bakes it at
+build time; a dirty tree bakes nothing, since a commit that does not describe the wheel is worse
+than no commit.
+
+**Shared datasets leave the year.** `--common-data` registers to `common/{project}/{data}` rather
+than `{year}/common/{project}/{data}`: a reference is used for as long as it is the best one
+available, and a year segment means finding it requires knowing when it was made. `data_name` may
+be several segments deep, each validated separately.
+
+**`origin` named the wrong repository.** It ran git with no `-C`, so it recorded whichever
+repository the person was standing in — three datasets claimed MD-tools' HEAD for another project's
+campaign, passing both guards on the way. It resolves from `-idata` now and refuses when the data
+are not in a repository, naming `--project-repo`. New `--notes TEXT`.
+
+**Three tests were not running and reported it as a fact about the software** — a stale filename
+(`cMD.csv` for what is now `mdout.csv`) that had never once been satisfied, two tests reading
+another test's output, and an interrupt driven by a 45-second timer. One skip remains, an opt-in
+evidence writer. `--dist loadgroup` is now the default so an expensive module-scoped fixture is
+built once rather than once per worker.
+
 ## 0.5.1 — 2026-09-10
 
 **An interrupted CV-enabled REST2 ladder can be resumed.** It could not be, on any ladder whose tau
