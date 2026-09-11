@@ -214,9 +214,13 @@ def register(root: Path, project_repo: Path, dry_run: bool) -> None:
         for method, (_stem, stage) in METHODS.items():
             directory = build / method
             environment = read_record(directory / f"{stage}.log").get("environment") or {}
+            # The version is a PACKAGE the record lists, beside openmm and the rest; there is no
+            # top-level `md_tools_version`, and reading one wrote "md-tools None" into the first
+            # registration of these datasets.
+            version = (environment.get("packages") or {}).get("md-tools")
             notes = (f"md-tools test data: {system}, {solvent} solvent, {method}, 1 ns per "
                      f"state. Engine as the run records it: md-tools "
-                     f"{environment.get('md_tools_version')}, commit "
+                     f"{version}, commit "
                      f"{environment.get('md_tools_commit')}, from the wheel installed in "
                      f"openmm-env. Built and run by docs/campaigns/test-systems-2026-09/"
                      f"run_tests.py; see that directory's README.")
