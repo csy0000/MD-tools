@@ -29,6 +29,22 @@ solvent. The README gives four ways to reproduce a run, starting with OpenMM alo
 the structure came from -- for a capped peptide, the tleap `sequence` that writes it, checked by
 running tleap at export.
 
+**A ladder can equilibrate every rung under its own tau.** `rest2.equilibration_per_tau: true`
+(REST2/rREST2, off by default) stops the tau = 0 chain at minimisation under implicit solvent, or
+after its NPT stages under explicit solvent, which fix the box every rung shares; every rung, tau = 0
+included, then runs `eq_nvt_posres`, `eq_nvt_posres_2` and `eq_nvt_free` under its own tau at fixed
+volume, then `equilibration_steps`, then exchanges. The stages are done as the stage chain does them
+-- a fresh integrator per stage seeded per rung, velocities carried, the chain's restraint set after
+the configuration -- on a restrained copy of each rung, so the propagated rungs are unchanged. Each
+rung's end state is kept and verified into `restart.json`; an interruption during it is refused by
+`--resume` by name. A reference bundle carries the same code (`ladder/rung_equilibration.py`) and
+reproduces such a ladder exchange for exchange. Off, every generated script, `run.sh`,
+`_protocol.py` and the resume identity are byte-identical to before; each `.in` gains one line.
+
+**Test datasets.** `docs/campaigns/test-systems-2026-09/` builds, runs, exports and registers ALA
+and phenol, implicit and explicit, cold and hot cMD and REST2, 1 ns each, under
+`$MD_DATA/2026/md-tools/<system>-test/`.
+
 The first version of the cMD exporter carried the **build** System rather than the integrated one
 — a different Hamiltonian at non-zero tau — plus the config seed instead of the derived one, the
 built coordinates instead of the continuation state, and a restraint left on by `setState`. All
