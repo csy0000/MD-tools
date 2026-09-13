@@ -215,8 +215,20 @@ def test_no_message_tells_an_md_run_user_to_pass_a_flag_md_run_does_not_define()
     # Modules on the `md-run` path. The executor and the generated script have their own parsers
     # and their own flags; these are the ones whose messages a plain `md-run` can print.
     on_the_md_run_path = ("run/main.py", "remd/generated.py", "remd/state_trajectories.py",
-                          "md/stage.py", "ais/run.py")
-    remedy = re.compile(r"(?:pass|Pass)\s+(--[a-z][a-z0-9-]+)")
+                          "md/stage.py", "ais/run.py",
+                          # `remd/executor.py` is reachable from `md-run` -- md-run dispatches a
+                          # grouped ladder into it -- and was missing from this list, so its own
+                          # remedy strings were never scanned by the test written to catch exactly
+                          # this. A list of "the files on a path" is only as good as its
+                          # completeness, and the gap is invisible: the test passes either way.
+                          "remd/executor.py")
+    # EVERY flag in a remedy sentence, not just the first. "Pass --resume to continue that run,
+    # --extend N to lengthen it, or --force to replace it" offers three remedies and a pattern
+    # anchored on the word "pass" checked only one -- so `--force`, which md-run does not define,
+    # went unnoticed in the very message this test exists to police. The sentence runs to the next
+    # full stop, so a later paragraph describing another command is still out of scope.
+    remedy_sentence = re.compile(r"(?:pass|Pass)\s+--[a-z][a-z0-9-]+[^.]*")
+    flag = re.compile(r"(--[a-z][a-z0-9-]+)")
     root = Path(__file__).resolve().parents[1] / "src" / "md_tools"
 
     offenders = []
@@ -226,9 +238,11 @@ def test_no_message_tells_an_md_run_user_to_pass_a_flag_md_run_does_not_define()
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                for flag in remedy.findall(node.value):
-                    if flag not in defined:
-                        offenders.append(f"{relative}:{node.lineno} says 'pass {flag}'")
+                for sentence in remedy_sentence.findall(node.value):
+                    for named in flag.findall(sentence):
+                        if named not in defined:
+                            offenders.append(
+                                f"{relative}:{node.lineno} offers '{named}' as a remedy")
     assert not offenders, (
         "these messages tell an md-run user to pass a flag md-run does not define:\n  "
         + "\n  ".join(offenders) + f"\n  md-run defines: {' '.join(sorted(defined))}")

@@ -295,6 +295,31 @@ def info_csv_name(stage_name: str, segment: int = 1) -> str:
     return "mdout.csv" if int(segment) <= 1 else f"mdout_prod{int(segment)}.csv"
 
 
+def stage_artifact_name(stage_name: str, extension: str, segment: int = 1) -> str:
+    """`<stage>.<ext>` for production segment 1, `<stage>_prod<N>.<ext>` past one.
+
+    THE DEFAULTS FOR `-o`, `-log`, `-r` AND `-chk`. The trajectories, the state table and the
+    per-force-group energies have carried a segment for a while; these four did not, because they
+    come from the command line and whatever path is handed over is what gets written. `SimOut`
+    opens its file `"w"`, so a second segment run in place with the same command line DESTROYED
+    the first segment's human-readable output and its provenance record, leaving a directory in
+    which `mdout_prod2.csv` and `solute_prod2.nc` sat beside a `cMD.log` describing only segment 2.
+    The half of the directory this package names was safe; the half the caller named was not, and
+    the two halves look alike.
+
+    An explicitly passed path still wins. This changes the default, not the override.
+
+    The rule is `info_csv_name`'s, deliberately: segment 1 keeps the plain name because it is the
+    file anybody opens, and a directory whose two halves disagree about that is worse than either
+    convention applied consistently.
+    """
+    ext = extension.lstrip(".")
+    name = str(stage_name or "stage")
+    if name not in PRODUCTION_STAGE_NAMES or int(segment) <= 1:
+        return f"{name}.{ext}"
+    return f"{name}_prod{int(segment)}.{ext}"
+
+
 def energy_components_name(stage_name: str, segment: int = 1) -> str:
     """`energy_components.csv`, the per-force-group energy table beside `mdout.csv`.
 

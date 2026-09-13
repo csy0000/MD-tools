@@ -143,11 +143,15 @@ def report_path_for_rank(output, rank):
 
 # --- the group file ----------------------------------------------------------------------------
 
-def parse_group_file(path):
+def parse_group_file(path, *, extending=False):
     """One group per line, parsed with `shlex`. Never evaluated by a shell.
 
     Returns a list of dictionaries in file order. Every failure names the line number, because a
     group file is written by hand often enough that "somewhere in this file" is not good enough.
+
+    `extending` says a `--extend-from` is in force, which makes `-c` optional: see
+    `_parse_group_line`. It is a parameter rather than a lookup because the group file is parsed
+    before `resolve()` runs, so this function cannot ask the resolved inputs what mode it is in.
     """
     path = Path(path)
     if not path.is_file():
@@ -163,7 +167,7 @@ def parse_group_file(path):
             raise GroupFileError(f"{path}:{number}: cannot be parsed ({failure})") from None
         if not tokens:
             continue
-        groups.append(_parse_group_line(path, number, tokens))
+        groups.append(_parse_group_line(path, number, tokens, extending=extending))
     if not groups:
         raise GroupFileError(f"{path} contains no group lines")
     _check_group_indices(path, groups)
@@ -215,7 +219,7 @@ def _require_homogeneous_groups(path, groups):
                 f"while every exchange log looked healthy.\n  {listed}")
 
 
-def _parse_group_line(path, number, tokens):
+def _parse_group_line(path, number, tokens, *, extending=False):
     group = {"line": number}
     index = 0
     while index < len(tokens):
@@ -240,9 +244,22 @@ def _parse_group_line(path, number, tokens):
                 f"{path}:{number}: {token} has no value (followed by {value!r})")
         group[field] = value
         index += 2
-    for required in ("input", "topology", "system", "coordinates"):
-        if required not in group:
-            raise GroupFileError(f"{path}:{number}: no {required} given")
+    # COORDINATES ARE NOT REQUIRED ON AN EXTENSION, and requiring them made
+    # `--extend-from` generate a file its own parser rejected. An extension takes the physical
+    # state from the parent's checkpoint -- positions, velocities, box, the state-to-walker map,
+    # the RNG stream, the exchange count -- so a `-c` on the line would never be read for its
+    # contents; and the generated group file, correctly, does not write one. The result was
+    # `no coordinates given` and every rank aborting on a run that had asked for nothing wrong.
+    required = ["input", "topology", "system"]
+    if not extending:
+        required.append("coordinates")
+    for name in required:
+        if name not in group:
+            raise GroupFileError(
+                f"{path}:{number}: no {name} given"
+                + ("" if name != "coordinates" else
+                   " (coordinates are optional only with --extend-from, where the state comes "
+                   "from the parent)"))
     if "group_index" not in group:
         raise GroupFileError(
             f"{path}:{number}: no --group-index. Group order in the file is not the assignment; "
@@ -505,10 +522,18 @@ def validate(files, arguments, *, rank=0, groups=None):
         existing = [f"--{name} {value}" for name, value in outputs.items()
                     if Path(value).exists()]
         if existing:
+            # WHICH COMMAND IS THE USER HOLDING. This executor is reached both directly and by
+            # dispatch from `md-run`, and the two define different flags: `--resume` is on both,
+            # `--extend` and `--force` are on this executor only, and `md-run` replaces outputs
+            # with `--overwrite`. A single imperative naming all three sent md-run users to
+            # `unrecognized arguments: --force`, and from there to deleting files by hand -- the
+            # more dangerous of the remedies offered. The imperative now names only the flag both
+            # commands have; the rest are described, and attributed to the command that has them.
             problems.append(
                 "these outputs already exist: " + ", ".join(existing)
-                + ". Pass --resume to continue that run, --extend N to lengthen it, or --force to "
-                  "replace it deliberately.")
+                + ". Pass --resume to continue that run. To lengthen a finished run, the replica "
+                  "executor takes --extend N; to replace outputs deliberately it takes --force, "
+                  "and md-run takes --overwrite.")
     return problems
 
 
@@ -769,7 +794,11 @@ def main(argv=None, *, prepared=None):
     groups = None
     if arguments.groupfile:
         try:
-            groups = parse_group_file(arguments.groupfile)
+            # Whether an extension is in force decides if `-c` is required on each line; the
+            # env var mirrors `resolve()`, which has not run yet at this point.
+            extending = bool(getattr(arguments, "extend_from", None)
+                             or os.environ.get("OPENMM_EXTEND_FROM"))
+            groups = parse_group_file(arguments.groupfile, extending=extending)
         except GroupFileError as failure:
             print(f"replica executor: {failure}", file=sys.stderr)
             return 2

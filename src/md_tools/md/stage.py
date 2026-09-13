@@ -533,9 +533,15 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
               "--overwrite to start over.", file=sys.stderr)
         return 2
 
+    from ._stages import stage_artifact_name
+
     base = Path(args.out_dir) if args.out_dir else Path(".")
-    log_path = Path(args.log) if args.log else base / f"{name}.log"
-    out_path = Path(args.output) if args.output else base / f"{name}.out"
+    # The segment, needed HERE and not only further down: the four caller-named artefacts default
+    # by segment now, so a second in-place segment cannot overwrite the first one's output, log,
+    # restart state or checkpoint. See `stage_artifact_name`.
+    segment = int(stage.get("segment") or 1)
+    log_path = Path(args.log) if args.log else base / stage_artifact_name(name, "log", segment)
+    out_path = Path(args.output) if args.output else base / stage_artifact_name(name, "out", segment)
     # The `-o` / `-log` collision is checked by the shared preflight below, together with every
     # other output pair and with the inputs. A second comparison here was a second policy: it
     # compared only those two, missed `-x`, `-r` and `-chk`, and fired first -- so the message a
@@ -561,7 +567,6 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     #
     # `<N>` is the segment, which advances when a run is extended in place.
     production = str(stage.get("name") or "") in ("cMD", "umbrella")
-    segment = int(stage.get("segment") or 1)
     stem = f"prod{segment}" if production else str(stage.get("name") or "stage")
     # BESIDE THE LOG, not beside `base`.
     #
@@ -586,8 +591,10 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     from ._stages import energy_components_name
     components_path = outputs / energy_components_name(
         str(stage.get("name") or "stage"), segment)
-    restart_path = Path(args.restart) if args.restart else base / f"{name}.xml"
-    chk_path = Path(args.checkpoint) if args.checkpoint else base / f"{name}.chk"
+    restart_path = (Path(args.restart) if args.restart
+                    else base / stage_artifact_name(name, "xml", segment))
+    chk_path = (Path(args.checkpoint) if args.checkpoint
+                else base / stage_artifact_name(name, "chk", segment))
 
     for path, what in ((topology_path, "-p topology"), (system_path, "-s system")):
         if not path.is_file():

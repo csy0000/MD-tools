@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.3 — 2026-09-13
+
+**An extension can run the group file an extension writes.** `--extend-from` takes the physical
+state from the parent's checkpoint and so writes no `-c`; the parser required `coordinates` on
+every group line regardless, and every rank aborted with `no coordinates given`. That stopped an
+explicit-solvent ladder at 100 ns/state of the 500 it was asked for. Coordinates are now required
+only when an extension is not in force, the refusal says so, and a test parses the exact shape
+`--extend-from` emits — nothing had exercised the generated file against the parser that reads it.
+
+**`-o`, `-log`, `-r` and `-chk` default by segment.** They come from the command line, and `SimOut`
+opens its file `"w"`, so a second in-place segment destroyed the first segment's output and
+provenance record while `mdout_prod2.csv` and `solute_prod2.nc` sat beside them. `stage_artifact_name`
+applies `info_csv_name`'s rule to all four; an explicitly passed path still wins.
+
+**A remedy message named flags `md-run` does not define.** The 0.5.1 test that polices this omitted
+`remd/executor.py` from its file list and captured only the first flag after "pass". Widening both
+found a live instance offering `--extend` and `--force` to `md-run` users.
+
 ## 0.5.2 — 2026-09-11
 
 **A finished run can leave this package behind.** `md-openmm export-reference -idata <run> -odir
