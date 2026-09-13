@@ -143,6 +143,25 @@ def _build_and_equilibrate(built: Path, name: str, config: str) -> Path:
     return run
 
 
+#: The helpers an extension's own directory needs. `_protocol.py`, `solute.yaml` and the group
+#: file are written by rank 0 at run time -- the group file by `--extend-from` itself, which is the
+#: fix under test -- so only the entry point and the resolved declaration are copied.
+EXTENSION_FILES = ("REST2.py", "resolved.config", "REST2.in")
+
+
+def _generated(work: Path, *extra: str, timeout: int = 3600):
+    """The GENERATED entry point under mpirun: what a `build-md` tree gives a user.
+
+    `md-openmm md-run` defines neither `--extend` nor `--extend-from` -- its parser stops at
+    `--resume`/`--overwrite` -- and `REST2.py` forwards both to the executor. So this is the only
+    way to launch an extension of a generated ladder, and using `md-run` here would fail in
+    argparse before any of the behaviour under test ran.
+    """
+    return subprocess.run(["mpirun", "-n", str(RUNGS), sys.executable, "REST2.py",
+                           "-p", "../built.pdb", "-s", "../built.xml", "-ng", str(RUNGS), *extra],
+                          cwd=str(work), capture_output=True, text=True, timeout=timeout)
+
+
 def _run_ladder(run: Path, *extra: str, timeout: int = 3600):
     return _cli(run, "md-run", "-ng", str(RUNGS), "-i", "REST2.in", "-p", "../built.pdb",
                 "-s", "../built.xml", "-x", "REST2.nc", "-r", "restart.json", "-o", "REST2.out",
@@ -197,16 +216,12 @@ def test_an_extension_continues_its_parent_without_coordinates(baseline, tmp_pat
     before = _digests(baseline)
     extension = baseline.parent / "extension"
     extension.mkdir()
-    shutil.copy2(baseline / "REST2.in", extension / "REST2.in")
-    shutil.copy2(baseline / "resolved.config", extension / "resolved.config")
-    for helper in ("_protocol.py", "solute.yaml"):
-        if (baseline / helper).is_file():
-            shutil.copy2(baseline / helper, extension / helper)
+    for helper in EXTENSION_FILES:
+        shutil.copy2(baseline / helper, extension / helper)
 
-    done = _cli(extension, "md-run", "-ng", str(RUNGS), "-i", "REST2.in", "-p", "../built.pdb",
-                "-s", "../built.xml", "-x", "REST2.nc", "-r", "restart.json", "-o", "REST2.out",
-                "-log", "REST2.log", "--extend", str(EXTEND), "--extend-from", str(baseline),
-                launch=["mpirun", "-n", str(RUNGS)])
+    # Through the GENERATED entry point, which is what a build-md tree gives a user: `md-run`
+    # defines neither --extend nor --extend-from, and `REST2.py` forwards both to the executor.
+    done = _generated(extension, "--extend", str(EXTEND), "--extend-from", str(baseline))
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
 
     child = json.loads((extension / "restart.json").read_text(encoding="utf-8"))
@@ -234,14 +249,9 @@ def test_supplying_coordinates_to_an_extension_is_inert(baseline, tmp_path):
     for name, extra in (("without_c", ()), ("with_c", ("-c", str(baseline / "eq.xml")))):
         out = baseline.parent / f"inert-{name}"
         out.mkdir()
-        for helper in ("REST2.in", "resolved.config", "_protocol.py", "solute.yaml"):
-            if (baseline / helper).is_file():
-                shutil.copy2(baseline / helper, out / helper)
-        done = _cli(out, "md-run", "-ng", str(RUNGS), "-i", "REST2.in", "-p", "../built.pdb",
-                    "-s", "../built.xml", "-x", "REST2.nc", "-r", "restart.json", "-o",
-                    "REST2.out", "-log", "REST2.log", "--extend", "2",
-                    "--extend-from", str(baseline), *extra,
-                    launch=["mpirun", "-n", str(RUNGS)])
+        for helper in EXTENSION_FILES:
+            shutil.copy2(baseline / helper, out / helper)
+        done = _generated(out, "--extend", "2", "--extend-from", str(baseline), *extra)
         assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
         manifest = json.loads((out / "restart.json").read_text(encoding="utf-8"))
         results[name] = {"resumed_from_step": manifest.get("resumed_from_step"),

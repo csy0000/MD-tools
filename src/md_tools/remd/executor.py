@@ -666,8 +666,13 @@ def run_grouped(files, arguments, groups, *, prepared=None):
     # once, on rank 0, behind a barrier, and every rank then reads the same prepared file.
     run = ReplicaRun(
         protocol=protocol,
+        # `.get`, not `[...]`: an extension's group file carries no `-c`, because `--extend-from`
+        # takes positions, velocities, box, the state-to-walker map and the RNG stream from the
+        # parent's checkpoint. Reading it unconditionally raised `KeyError: 'coordinates'` here,
+        # one step past the announcement that raised it a moment earlier -- the parser had been
+        # made conditional and both of its consumers had not.
         files=SimpleNamespace(topology=first["topology"], system=first["system"],
-                              coordinates=first["coordinates"],
+                              coordinates=first.get("coordinates"),
                               trajectory=files.trajectory, restart=files.restart,
                               checkpoint=files.checkpoint, output=files.output,
                               rem=getattr(files, "rem", None)),
@@ -877,9 +882,15 @@ def _announce(arguments, files, groups, rank, size):
           f"{Path(files.checkpoint).name if files.checkpoint else 'none'}")
     print(f"# manifest           : {Path(files.restart).name if files.restart else 'none'}")
     for group in groups:
+        # An extension's group file carries NO `-c`: `--extend-from` takes the physical state from
+        # the parent's checkpoint, which is the whole point of it. Printing the coordinates
+        # unconditionally raised `KeyError: 'coordinates'` here -- after the header above had
+        # already been written, so the run looked like it had started -- and every rank aborted.
+        # The parser was taught that a coordinate-free line is legal; this half was not.
+        state = (f"-c {Path(group['coordinates']).name}" if group.get("coordinates")
+                 else "-c (none: continued from the parent's checkpoint)")
         print(f"#   group {group['group_index']}: -i {Path(group['input']).name} "
-              f"-p {Path(group['topology']).name} -s {Path(group['system']).name} "
-              f"-c {Path(group['coordinates']).name}")
+              f"-p {Path(group['topology']).name} -s {Path(group['system']).name} {state}")
     sys.stdout.flush()
 
 
