@@ -524,6 +524,11 @@ class LadderPreflight(ExecutionPreflight):
     #: created. An unclassifiable force in a middle rung surfaced attached to a tree that looks
     #: exactly like a run that started.
     rung_systems: tuple = ()
+    #: The torsion restraints every rung carries, resolved here against the collective-variable
+    #: definition and already built into `rung_systems`. Carried so the run RECORDS what it was
+    #: biased by: `_protocol.py` names the definition file, and the resolved torsions -- which
+    #: four atoms, which centre, which force constant -- exist only here. Empty unless declared.
+    ladder_restraints: tuple = ()
     #: rREST2 only. The exact `reservoir.yaml` text rank 0 will publish, built and validated
     #: BEFORE `-odir` exists -- see `preflight_ladder`. Carried here so the source is opened once,
     #: by the preflight, rather than reopened after output creation to rediscover the same facts.
@@ -1099,6 +1104,55 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
     # These are built through `build_rung_systems` -- the SAME function `Protocol.build_systems`
     # delegates to -- and not through `check_scaling_plan`, whose `prepare_for_switching=True`
     # makes a different rung 0. The driver consumes exactly these.
+    # -- restraints on every rung, resolved BEFORE the rungs are built --------------------------
+    #
+    # A ladder may carry torsion restraints -- the same ones on every rung, which is what keeps
+    # the bias out of the exchange criterion. They have to be resolved here, before
+    # `build_rung_systems`, because that is where they are added to each scaled System; and here
+    # rather than in the driver, because a restraint naming an atom selector that does not resolve
+    # must refuse before `-odir` exists.
+    #
+    # The collective-variable definition is loaded for this even when reporting is off: a
+    # restraint names a CV to get its four atoms, which is a different question from whether the
+    # series is written. The reporting block further down loads it again for its own reasons; two
+    # reads of one file are tolerable here only because neither can bias anything -- the FORCE is
+    # built from this one alone.
+    ladder_restraints = ()
+    umbrella_file = ((ladder or {}).get("umbrella") or {}).get("file") if ladder else None
+    if umbrella_file and loaded is not None:
+        def _beside_config(name):
+            path = Path(name)
+            if path.is_absolute():
+                return path
+            beside = (ladder or {}).get("resolved_config")
+            base = Path(beside).parent if beside else (Path(out_dir) if out_dir else Path("."))
+            return base / path
+
+        def _restraints():
+            from ..cv import CVDefinitionError, load_cv_definition
+            from ..umbrella import UmbrellaError, load_umbrella_definition
+
+            cv_file = ((ladder or {}).get("collective_variables") or {}).get("file")
+            if not cv_file:
+                raise PreflightError(
+                    f"{protocol}: umbrella.file = {umbrella_file!r} restrains collective "
+                    f"variables, but collective_variables.file is not set, so there is nothing to "
+                    f"resolve the restraint against. Nothing has been written.")
+            try:
+                definition = load_cv_definition(
+                    _beside_config(cv_file), topology=loaded.pdb.topology,
+                    particles=loaded.system.getNumParticles())
+            except CVDefinitionError as refusal:
+                raise PreflightError(f"{protocol}: {refusal}") from None
+            try:
+                entries = load_umbrella_definition(_beside_config(umbrella_file), definition)
+            except UmbrellaError as refusal:
+                raise PreflightError(f"{protocol}: {refusal}") from None
+            return tuple(entry.record() for entry in entries)
+
+        ladder_restraints = collectively(coordination, _restraints,
+                                         what="the ladder's torsion restraints")
+
     rung_systems = ()
     rungs_tau = ()
     if solute_indices is not None and ladder is not None and loaded is not None:
@@ -1119,7 +1173,10 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                     # the config block may still name a pressure for the equilibration stages that
                     # precede the ladder. Reading it here refused every healthy explicit-solvent
                     # ladder for requesting a barostat nobody had asked the ladder for.
-                    pressure_bar=None)
+                    pressure_bar=None,
+                    # The same restraints on every rung, added after scaling. Empty unless
+                    # `umbrella.file` is set, so every existing ladder builds exactly as before.
+                    restraints=ladder_restraints)
             except ProtocolError as refusal:
                 raise PreflightError(f"{protocol}: {refusal}") from None
             except Exception as broken:
@@ -1301,6 +1358,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                            excluded_bonds=tuple(tuple(int(a) for a in b) for b in excluded_bonds),
                            reservoir_declaration=declaration, reservoir_digest=digest,
                            reservoir_source=source_facts, cv_definition=cv_definition,
+                           ladder_restraints=tuple(ladder_restraints),
                            notes={"solute_document": solute_record} if solute_record else {})
 
 

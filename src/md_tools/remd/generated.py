@@ -125,7 +125,7 @@ protocol = REST2Protocol(
     random_seed={seed},
     hydrogen_mass_amu=None,
     cv_interval_steps={cv_interval_steps!r},
-{per_tau_line}    platform={platform!r},
+{per_tau_line}{umbrella_line}    platform={platform!r},
     precision=None,
 )
 '''
@@ -202,6 +202,17 @@ def _per_tau_line(ladder: dict[str, Any]) -> str:
     return f"    per_tau_equilibration={[dict(stage) for stage in stages]!r},\n"
 
 
+def _umbrella_line(ladder: dict[str, Any]) -> str:
+    """The `umbrella_file=` line, or nothing at all when no restraints are declared.
+
+    Nothing, not `umbrella_file=None`, for the reason `_per_tau_line` gives: `_protocol.py` is
+    content-addressed, and one extra line in every ladder's helper would refuse every existing
+    directory's `--resume`.
+    """
+    path = (ladder.get("umbrella") or {}).get("file")
+    return f"    umbrella_file={str(path)!r},\n" if path else ""
+
+
 def protocol_file_text(ladder: dict[str, Any]) -> str:
     """The protocol module a ladder is described by, as text.
 
@@ -242,7 +253,7 @@ def protocol_file_text(ladder: dict[str, Any]) -> str:
             seed=int(dynamics["seed"]), platform=dynamics.get("platform"),
             cv_interval_steps=(int((ladder.get("collective_variables") or {}).get(
                 "interval_steps") or 0) or None),
-            per_tau_line=per_tau_line)
+            per_tau_line=per_tau_line, umbrella_line=_umbrella_line(ladder))
 
     def interval_ps(key, what):
         """A reporting interval in ps, or None when it is disabled (0 steps)."""
@@ -292,7 +303,7 @@ def protocol_file_text(ladder: dict[str, Any]) -> str:
         seed=int(dynamics["seed"]), platform=dynamics.get("platform"),
         cv_interval_steps=(int((ladder.get("collective_variables") or {}).get(
             "interval_steps") or 0) or None),
-        per_tau_line=per_tau_line)
+        per_tau_line=per_tau_line, umbrella_line=_umbrella_line(ladder))
 
 
 def replica_parser(description: str = "one coordinated replica-exchange ladder"):
@@ -851,6 +862,13 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
                            f"({int(ladder.get('equilibration_steps') or 0)}), then the first "
                            f"exchange; none of it production")
         log.field("seeds", "derive_seed(seed, stage, 'state<i>'), one per stage and rung")
+    restraint_file = (ladder.get("umbrella") or {}).get("file")
+    if restraint_file:
+        log.heading("Torsion restraints")
+        log.field("definition", restraint_file)
+        log.field("applied to", "every rung, identically, AFTER scaling -- never scaled by tau")
+        log.field("exchange criterion", "the bias is identical on both rungs of every attempted "
+                                        "swap, so it cancels from log alpha exactly")
     log.update(ladder=dict(ladder), tau=taus, exchange_interval_ps=exchange_ps,
                inputs={"topology": file_facts(Path(args.topology)),
                        "system": file_facts(Path(args.system))})
@@ -929,6 +947,10 @@ def ladder_from_resolved(resolved: dict[str, Any], protocol: str) -> dict[str, A
         "reservoir": dict(resolved["reservoir"]),
         "dynamics": dict(resolved["dynamics"]),
         "collective_variables": dict(resolved.get("collective_variables") or {}),
+        # Torsion restraints, the SAME on every rung. Present only when declared, so a ladder
+        # without them is described exactly as it was before the field existed.
+        **({"umbrella": {"file": (resolved.get("umbrella") or {})["file"]}}
+           if (resolved.get("umbrella") or {}).get("file") else {}),
         # THE REPORTING INTERVALS. Absent here until now, so `protocol_file_text` had nothing to
         # honour and hard-wired both output streams to the exchange interval while passing no
         # checkpoint interval at all. The values were resolved, logged and written into

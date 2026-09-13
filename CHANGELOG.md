@@ -18,6 +18,17 @@ applies `info_csv_name`'s rule to all four; an explicitly passed path still wins
 `remd/executor.py` from its file list and captured only the first flag after "pass". Widening both
 found a live instance offering `--extend` and `--force` to `md-run` users.
 
+**A ladder can carry torsion restraints.** `umbrella.file` is accepted with `protocol: REST2` and
+`rREST2`, meaning the SAME restraints on every rung, resolved against `collective_variables.file`.
+They are added after the REST2 scaling and never scaled by tau, which is what makes the bias cancel
+from the exchange criterion exactly: `u_i(x)` and `u_j(x)` both contain `W(x)`, so `log alpha` is
+the number it would have been unbiased. Per-rung variation is not offered. `restart.json` records
+the definition and every resolved restraint under `scientific_identity.torsion_restraints`, and
+`export-reference` refuses such a ladder by name, because a bundle's `verify_rungs.py` rebuilds
+each rung by scaling rung 0 and a restraint is not part of what that reconstructs. Tested by
+arithmetic: `log alpha` with and without the bias at the same configurations, equal to 1e-6 kJ/mol,
+with a counter-example proving a bias that differs between rungs does not cancel.
+
 ## 0.5.2 — 2026-09-11
 
 **A finished run can leave this package behind.** `md-openmm export-reference -idata <run> -odir

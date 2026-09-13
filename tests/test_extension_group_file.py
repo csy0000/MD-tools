@@ -63,6 +63,54 @@ def test_homogeneity_is_unaffected_by_absent_coordinates(tmp_path):
     parse_group_file(_write(tmp_path, LINE), extending=True)      # would raise if it did
 
 
+def test_the_executor_can_ANNOUNCE_a_group_file_with_no_coordinates(tmp_path, capsys):
+    """Parsing it is half the job; the executor then PRINTS what it is about to run.
+
+    `_announce` read `group['coordinates']` unconditionally, so an extension died with
+    `KeyError: 'coordinates'` immediately after writing its header -- every rank, before any
+    dynamics, on a run that had asked for nothing wrong. The parser had been made conditional and
+    this half had not, which is the same defect one step further along: the two halves of one
+    change have to be exercised together, and only a test that gets past the parser does that.
+    """
+    from types import SimpleNamespace
+
+    from md_tools.remd.executor import _announce
+
+    groups = parse_group_file(_write(tmp_path, LINE, n=2), extending=True)
+    arguments = SimpleNamespace(groupfile=str(tmp_path / "REST2.group"), exchange_rule=None,
+                                reservoir=None)
+    files = SimpleNamespace(trajectory="REST2.nc", checkpoint="REST2_checkpoint.nc",
+                            restart="restart.json")
+    _announce(arguments, files, groups, 0, 2)                     # must not raise
+    printed = capsys.readouterr().out
+    assert "group 0" in printed and "group 1" in printed
+    assert "continued from the parent's checkpoint" in printed, \
+        "an extension's announcement must say where its state comes from, not omit it"
+
+
+def test_every_consumer_of_a_group_reads_its_coordinates_conditionally():
+    """Parsing it is not enough: whatever READS a parsed group must tolerate an absent `-c`.
+
+    Two consumers did not -- `_announce` and `run_grouped` -- so an extension died with
+    `KeyError: 'coordinates'` twice over, at the second one only after the first was fixed. A
+    source check is the honest guard here: reaching `run_grouped` needs a real ladder, and the
+    defect is textual, in a file this test can read.
+    """
+    import re
+
+    from md_tools.remd import executor
+
+    source = pathlib.Path(executor.__file__).read_text(encoding="utf-8")
+    offenders = [line.strip() for line in source.splitlines()
+                 if re.search(r"""\[['"]coordinates['"]\]""", line)
+                 # A read GUARDED on the same line is the fix, not the defect: the announcement
+                 # prints the name only when there is one.
+                 and 'get("coordinates")' not in line and "get('coordinates')" not in line]
+    assert not offenders, (
+        "a parsed group's coordinates must be read with .get(): an extension's group file has "
+        f"none. Offending line(s): {offenders}")
+
+
 def test_a_generated_extension_group_file_is_parseable_by_this_parser(tmp_path):
     """The regression in one line: generate the shape --extend-from writes, then parse it."""
     generated = tmp_path / "REST2.group"
