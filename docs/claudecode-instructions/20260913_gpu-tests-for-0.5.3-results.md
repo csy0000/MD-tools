@@ -151,6 +151,33 @@ difference is **not** zero), and on the states this CUDA ladder actually visited
   reverted it rather than leave a `settings.json` field that is always empty.
 * **Restraint strength vs acceptance** was not studied.
 
+### How restrained export should be done (decided 2026-09-13, not yet implemented)
+
+The bundle should carry the two files that DEFINE the restraint, the way the hpREST2 workflow names
+them: `angres.in` — the collective variables — and `input_res.in` — how they are imported and
+applied. In this package those are `collective_variables.file` (`cv.yaml`) and `umbrella.file`
+(`umbrella.yaml`), and the exporter already copies both of them, content-addressed, into the run
+directory; `input/` is where they belong in a bundle.
+
+That reframes the problem, because the hard part is smaller than it looked:
+
+1. **The bundled rungs are already restrained.** The restraint is added after scaling, so
+   `system_rung*.xml` carry it and the bundle's `run.py` propagates the biased Hamiltonian with no
+   change at all. Nothing about the runner needs to know what a restraint is.
+2. **`verify_rungs.py` is the only thing that breaks.** It rebuilds rung *i* from rung 0 by
+   scaling, and rung 0 carries a `CustomTorsionForce` the scaler would refuse or scale. It needs
+   three lines: remove the restraint forces from rung 0, scale what is left, add them back with
+   `md_tools/md/torsion_restraints.py` vendored into `ladder/` — it imports OpenMM, `math` and
+   `typing` and nothing else.
+3. **The two refusals then narrow rather than lift.** The reservoir refusal stays. The
+   collective-variable refusal should become "the bundle does not reproduce a CV SERIES" — true,
+   and orthogonal to carrying the definition that resolves a restraint.
+
+`settings.json` should carry the resolved restraints (from
+`restart.json`'s `scientific_identity.torsion_restraints`) so `verify_rungs.py` can rebuild them
+without reparsing YAML. That plumbing was written and then reverted on 2026-09-13, because without
+step 2 it would have been a field that is always empty; it is a small change to put back.
+
 ## Two defects in my own tests, for the record
 
 Both were mine, not the engine's, and both were fixed rather than loosened:
