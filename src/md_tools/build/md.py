@@ -505,12 +505,29 @@ def _check_umbrella(resolved: dict[str, Any]) -> None:
     protocol = resolved["protocol"]
     path = (resolved.get("umbrella") or {}).get("file")
 
+    # A LADDER may carry restraints: the same ones on every rung, which is what hpREST2 runs and
+    # what keeps the bias out of the exchange criterion (see `remd.protocol.apply_ladder_restraints`).
+    # Per-rung variation is not offered: a bias that differed between rungs would enter the
+    # acceptance probability, and the ladder would sample something nobody asked for.
+    if protocol in ("REST2", "rREST2"):
+        if not path:
+            return
+        variables = resolved.get("collective_variables") or {}
+        if not variables.get("file"):
+            raise ConfigError(
+                f"umbrella.file = {path!r} restrains collective variables, but "
+                f"collective_variables.file is not set. A restraint NAMES a variable from that "
+                f"file rather than defining one, so without it there is nothing to resolve the "
+                f"restraint against.")
+        return
+
     if protocol != "umbrella":
         if path:
             raise ConfigError(
                 f"umbrella.file = {path!r} defines restraints, but protocol is {protocol}. A "
                 f"restraint biases the dynamics, so it is never applied as a side effect of "
-                f"another protocol -- either run `protocol: umbrella`, or remove the file.")
+                f"another protocol -- either run `protocol: umbrella`, `protocol: REST2` or "
+                f"`protocol: rREST2`, or remove the file.")
         return
 
     if not path:
@@ -864,9 +881,14 @@ raise SystemExit(run_generated_workflow(__file__))
 #: protocol reports them the same way.
 _IN_SECTIONS = {
     "cMD": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables")),),
-    "REST2": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables")),
+    # `umbrella` rides in &cntrl for a ladder too: a ladder may carry the same torsion restraints
+    # on every rung, and an `.in` that dropped the file would run unrestrained while
+    # `resolved.config` beside it said otherwise.
+    "REST2": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables",
+                         "umbrella")),
               ("remd", ("rest2", "reservoir"))),
-    "rREST2": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables")),
+    "rREST2": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables",
+                          "umbrella")),
                ("remd", ("rest2", "reservoir"))),
     "AIS": (("cntrl", ("", "dynamics", "reporting", "collective_variables")),
             ("AIS", ("ais", "ais_source"))),

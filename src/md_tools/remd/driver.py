@@ -170,6 +170,16 @@ class ReplicaRun:
         #: settings are CONSUMED; nothing here re-resolves them. See `_build_platform`.
         self.prepared = prepared
 
+        # THE RESOLVED RESTRAINTS, consumed the same way. `_protocol.py` names the definition
+        # file, because that is what a generated helper can carry; which four atoms each restraint
+        # holds, at what centre and what force constant, is resolved by the preflight against the
+        # collective-variable definition -- and it is what the rungs were actually built with.
+        # Without this the record said "restrained by umbrella.yaml" beside an EMPTY restraint
+        # list, which understates a biased run in the one file a reader trusts.
+        prepared_restraints = tuple(getattr(prepared, "ladder_restraints", ()) or ())
+        if prepared_restraints and not getattr(protocol, "umbrella_restraints", ()):
+            protocol.umbrella_restraints = tuple(dict(entry) for entry in prepared_restraints)
+
         self.coordinator = prepared.coordination if prepared is not None else Coordinator()
         self.owned = owned_states(protocol, self.coordinator)
         self.engine = None

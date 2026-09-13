@@ -140,6 +140,44 @@ for it. A ladder interrupted during it has taken no exchange step and has no che
 `--resume` refuses it by name — rerun with `--overwrite`; the equilibration is deterministic from
 the recorded seeds. An exported reference bundle performs it too, with the same code.
 
+## Restraining every rung
+
+A ladder may carry torsion restraints: `umbrella.file` names a restraint definition, exactly as
+`protocol: umbrella` does, and `collective_variables.file` must name the definition those
+restraints resolve their torsions against.
+
+```yaml
+collective_variables: {file: cv.yaml, interval_steps: 500}
+umbrella: {file: umbrella.yaml}      # the SAME restraints on every rung
+```
+
+**The same restraints on every rung, and that is the point.** The exchange criterion compares
+`u_i(x)` and `u_j(x)`, each evaluated by installing a configuration in that rung's own Context, so
+a bias `W(x)` present identically on both rungs enters both reduced potentials and cancels from
+`log alpha` exactly. The ladder therefore samples the restrained ensemble at every rung with an
+acceptance probability that is the unrestrained one. Per-rung variation is not offered: a bias that
+differed between rungs would enter the acceptance probability and tilt the ladder towards whichever
+rung restrains least, silently and with every output still well formed.
+
+The restraint is added **after** the REST2 scaling and is never scaled by τ — it is not part of the
+molecular Hamiltonian REST2 weakens, and a τ-dependent bias would not cancel. Each restraint's
+force constant rides on its own per-torsion `scale`, so one definition may mix strengths and forms
+(`harmonic`, `flat_bottom`) freely; the force's global parameter defaults to 1.0, so a rung is
+biased from its first step without a runtime call. `restart.json` records the definition file and
+every resolved restraint — which four atoms, which centre, which constant — under
+`scientific_identity.torsion_restraints`, and the rank log prints them under "Torsion restraints".
+
+Tested by arithmetic rather than by sampling: `tests/test_ladder_torsion_restraints.py` computes
+`log alpha` with and without the bias at the same configurations and requires equality to 1e-6
+kJ/mol, with a counter-example showing a bias that differs between rungs does **not** cancel;
+`tests/test_hprest2_gpu_evidence.py` repeats the identity on a real CUDA ladder's own states.
+
+Two consequences worth stating. A restrained and an unrestrained ladder from the same seed do not
+accept the same exchanges — the bias changes the forces, so their trajectories diverge from the
+first propagation; what is identical is the criterion at the same configurations. And a restrained
+ladder cannot be exported as a reference bundle: `verify_rungs.py` rebuilds each rung from rung 0
+by scaling, which is not how a restraint is applied, so `export-reference` refuses it by name.
+
 ## Generated files
 
 ```text

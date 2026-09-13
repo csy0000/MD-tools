@@ -388,7 +388,11 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
     if (ladder.get("collective_variables") or {}).get("file"):
         raise ValueError(
             f"{run_dir} ran with a collective-variable definition, which this bundle does not "
-            f"carry or report. Nothing has been written.")
+            f"carry or report"
+            + (", and torsion restraints, which its `verify_rungs.py` would rebuild by scaling "
+               "rung 0 -- a restraint is added after scaling and is not part of what that check "
+               "reconstructs" if (ladder.get("umbrella") or {}).get("file") else "")
+            + ". Nothing has been written.")
 
     found = {}
     for role in ("topology", "system"):

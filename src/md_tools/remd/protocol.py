@@ -96,7 +96,8 @@ class REST2Protocol:
                  pressure_bar=None, friction_per_ps=1.0, equilibration_ps=0.0, random_seed=None,
                  hydrogen_mass_amu=None, constraint_tolerance=1.0e-8,
                  platform=None, precision=None, cv_interval_steps=None,
-                 per_tau_equilibration=None, **legacy):
+                 per_tau_equilibration=None, umbrella_file=None, umbrella_restraints=None,
+                 **legacy):
         if "segment_ps" in legacy:
             raise ProtocolError(
                 "`segment_ps` is no longer a scientific input and its old meaning does not map "
@@ -152,6 +153,13 @@ class REST2Protocol:
                 self.per_tau_equilibration = validate_plan(per_tau_equilibration)
             except ValueError as bad_plan:
                 raise ProtocolError(str(bad_plan)) from None
+        # Torsion restraints carried by every rung. The FILE is what the identity keys on -- the
+        # resolved torsions come from it, and a changed file is a changed ladder -- while the
+        # resolved records are what `build_systems` needs if this object builds its own rungs.
+        # Both are absent unless declared, so a ladder without restraints records exactly what it
+        # recorded before the field existed.
+        self.umbrella_file = str(umbrella_file) if umbrella_file else None
+        self.umbrella_restraints = tuple(dict(entry) for entry in (umbrella_restraints or ()))
 
         try:
             self.schedule = EventSchedule(
@@ -245,6 +253,17 @@ class REST2Protocol:
                 "restraint": "the stage chain's, on the solute, towards the topology coordinates",
                 "seeds": "derive_seed(random_seed, stage, 'state<i>') per stage and rung",
             }
+        if self.umbrella_file or self.umbrella_restraints:
+            # Only when set, for the same reason the block above is: a present-but-null key would
+            # refuse the continuation of every ladder started before this existed.
+            record["torsion_restraints"] = {
+                "definition": self.umbrella_file,
+                "restraints": [dict(entry) for entry in self.umbrella_restraints],
+                "applied_to": "every rung, identically, after REST2 scaling",
+                "scaled_by_tau": False,
+                "exchange_criterion": ("identical on both rungs of every attempted swap, so the "
+                                       "bias cancels from log alpha exactly"),
+            }
         return record
 
     # -- building the ladder ------------------------------------------------------------------------
@@ -282,13 +301,61 @@ class REST2Protocol:
         these BEFORE any output exists, and hands them to the driver to consume -- and this
         method cannot construct different Systems from the same inputs. See that function.
         """
+        if self.umbrella_file and not self.umbrella_restraints:
+            raise ProtocolError(
+                f"this ladder declares torsion restraints ({self.umbrella_file}) but was given "
+                f"none resolved, so rungs built here would carry no bias while the record says "
+                f"they do. The preflight resolves them against the collective-variable "
+                f"definition and hands them over; build the ladder through it.")
         return build_rung_systems(base_system, solute_indices, self.tau,
                                   excluded_bonds=excluded_bonds,
-                                  pressure_bar=self.pressure_bar)
+                                  pressure_bar=self.pressure_bar,
+                                  restraints=self.umbrella_restraints)
+
+
+def apply_ladder_restraints(system, restraints):
+    """Add the SAME torsion restraints to one rung, after it has been scaled. Returns their record.
+
+    Why after, and why identical on every rung:
+
+    * **After scaling**, because a restraint is not part of the molecular Hamiltonian REST2 weakens.
+      Scaling it would make the bias itself tau-dependent, and the force classification
+      (`audit_force_classes`) describes the System the ladder was built FROM, which carries no
+      restraint.
+    * **Identical on every rung**, because that is what makes the bias cancel from the exchange
+      criterion. `reduced_potential_of` installs a configuration in a rung's Context and reads its
+      potential energy, so the same `W(x)` enters `u_i` and `u_j` and drops out of `log alpha`
+      exactly. A restraint that differed between rungs would enter the acceptance probability, and
+      the ladder would no longer sample the restrained ensemble it claims to.
+
+    The global parameter's DEFAULT is set to 1.0 here rather than left at zero: a Context built
+    from this System is biased from its first step, with no runtime call to remember. Each
+    restraint's force constant rides on its own per-torsion `scale`, as a stage's does.
+    """
+    from ..md.torsion_restraints import TORSION_RESTRAINT_PARAMETER, TorsionRestraint
+
+    record = []
+    by_form = {}
+    for entry in restraints or ():
+        entry = dict(entry)
+        form = str(entry["form"])
+        force = by_form.get(form)
+        if force is None:
+            force = by_form[form] = TorsionRestraint(system, form)
+        force.add_torsion(entry["atom_indices"], entry["centre_deg"],
+                          entry.get("half_width_deg") or 0.0,
+                          scale=entry["force_constant_kj_mol_rad2"])
+        record.append(entry)
+    for force in by_form.values():
+        built = system.getForce(force.force_index)
+        for index in range(built.getNumGlobalParameters()):
+            if built.getGlobalParameterName(index) == TORSION_RESTRAINT_PARAMETER:
+                built.setGlobalParameterDefaultValue(index, 1.0)
+    return record
 
 
 def build_rung_systems(base_system, solute_indices, taus, *, excluded_bonds=(),
-                       pressure_bar=None):
+                       pressure_bar=None, restraints=()):
     """One scaled System per tau rung, plus the complete force audit. THE one implementation.
 
     Called from two places, deliberately: `Protocol.build_systems` (the driver's route) and the
@@ -313,6 +380,16 @@ def build_rung_systems(base_system, solute_indices, taus, *, excluded_bonds=(),
     systems = [build_scaled_system(base_system, solute_indices, tau,
                                    excluded_bonds=excluded_bonds)
                for tau in taus]
+    if restraints:
+        # The same bias on every rung, added after scaling; see `apply_ladder_restraints`.
+        applied = [apply_ladder_restraints(system, restraints) for system in systems]
+        audit["ladder_restraints"] = {
+            "restraints": applied[0],
+            "applied_to": "every rung, identically, after scaling",
+            "scaled_by_rest2": False,
+            "cancels_from_exchange": ("identical on every rung, so W(x) enters u_i and u_j alike "
+                                      "and cancels from log alpha exactly"),
+        }
     # What the omega exclusion actually did, in terms of the torsions it protected, recorded
     # against the SAME System the ladder was built from. A stored pair of atom indices needs
     # a force field to mean anything; this says which torsion terms it left alone.
