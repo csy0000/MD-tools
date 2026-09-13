@@ -37,20 +37,22 @@ mpirun -n 4 python REST2.py -p ../built.pdb -s ../built.xml -ng 4 --extend 10 --
 
 ## 1. REST2 still runs and still exchanges
 
-40 exchanges × 250 steps = 10,000 steps per state.
+200 exchanges × 250 steps = 50,000 steps per state. (It was 40 exchanges first; 60 proposals put
+an uncertainty of about 6 percentage points on every rate below, which is too loose to compare with
+anything, so the ladder was lengthened to 300 proposals for two more minutes of GPU time.)
 
 | measured | value |
 |---|---|
 | `run_status` | `completed` |
-| `exchanges_committed` | 40 of 40 asked for |
-| `steps_completed` | 10,000 |
-| `mapping_integrity` | 40 rows, `every_row_is_a_permutation: true`, no offending rows |
-| `rem.log` | 40 exchange blocks, one row per rung, partner relation symmetric in every block |
-| acceptance, overall | 32 / 60 = **53.3 %** |
-| pair 0↔1 (τ 0 → 0.1667) | 11 / 20 = 55 % |
-| pair 1↔2 (τ 0.1667 → 0.3333) | 10 / 20 = 50 % |
-| pair 2↔3 (τ 0.3333 → 0.5) | 11 / 20 = 55 % |
-| final state→walker | `[1, 2, 0, 3]` |
+| `exchanges_committed` | 200 of 200 asked for |
+| `steps_completed` | 50,000 |
+| `mapping_integrity` | 200 rows, `every_row_is_a_permutation: true`, no offending rows |
+| `rem.log` | 200 exchange blocks, one row per rung, partner relation symmetric in every block |
+| acceptance, overall | 154 / 300 = **51.3 %** |
+| pair 0↔1 (τ 0 → 0.1667) | 45 / 100 = 45 % |
+| pair 1↔2 (τ 0.1667 → 0.3333) | 53 / 100 = 53 % |
+| pair 2↔3 (τ 0.3333 → 0.5) | 56 / 100 = 56 % |
+| final state→walker | `[2, 3, 0, 1]` |
 
 ## 2. Extension across a boundary
 
@@ -58,28 +60,30 @@ Launched with **no `-c`** — the case that used to abort every rank.
 
 | measured | value |
 |---|---|
-| parent `steps_completed` | 10,000 |
-| child `resumed_from_step` | **10,000** (exactly, not approximately) |
-| child `steps_completed` | **12,500** = 10,000 + 10 × 250 |
+| parent `steps_completed` | 50,000 |
+| child `resumed_from_step` | **50,000** (exactly, not approximately) |
+| child `steps_completed` | **52,500** = 50,000 + 10 × 250 |
 | parent afterwards | byte-identical; **0** files changed of the full digest set |
-| parent → child final map | `[1, 2, 0, 3]` → `[1, 0, 2, 3]`, a permutation |
+| parent → child final map | `[2, 3, 0, 1]` → `[0, 2, 3, 1]`, a permutation |
 
-**The trajectory joins rather than restarting.** Per state, the RMS distance between the parent's
-last frame and the extension's first, against one ordinary frame interval inside the parent and the
-parent's own first-to-last spread:
+**The trajectory joins rather than restarting, matched by WALKER.** A per-state file changes
+occupant at every accepted exchange, so comparing state *s* in the parent with state *s* in the
+child measures the exchange, not the join. Frames are written with the state→walker mapping in
+force, so the mapping says where each walker was: the parent's final row and the child's first.
+RMS distance, per walker:
 
-| state | join (Å) | one interval within parent (Å) | parent first→last (Å) |
-|---|---|---|---|
-| 0 | 1.24 | 1.33 | 5.16 |
-| 1 | 1.39 | 4.60 | 4.47 |
-| 2 | 4.21 | 4.57 | 4.36 |
-| 3 | 3.66 | 1.90 | 3.23 |
+| walker | parent state → child state | matched join (Å) | same-state join (Å) | one interval in parent (Å) | parent first→last (Å) |
+|---|---|---|---|---|---|
+| 0 | 2 → 3 | **1.39** | 4.02 | 4.99 | 4.08 |
+| 1 | 3 → 2 | **2.15** | 4.34 | 1.91 | 2.37 |
+| 2 | 0 → 0 | **1.03** | 1.03 | 0.97 | 4.56 |
+| 3 | 1 → 1 | **1.93** | 1.93 | 4.77 | 2.18 |
 
-Every join is within the range of ordinary frame-to-frame movement; a re-thermalised restart would
-not be. **Read this as a range check, not a tight bound**: these are per-STATE files, whose occupant
-changes at every accepted exchange, which is why one interval inside the parent varies from 1.3 to
-4.6 Å. A sharper version would follow a WALKER across the boundary; that needs walker-indexed
-output this test did not use.
+The two walkers that changed state across the boundary show it plainly: matched 1.39 Å and 2.15 Å
+against same-state 4.02 Å and 4.34 Å. Every matched join is one exchange interval of ordinary
+motion, below the parent's own first-to-last spread; a re-thermalised restart would not be. The
+first version of this table was per state and therefore a range check — the numbers above are the
+corrected measurement, not a re-tuned threshold.
 
 ### `-c` supplied to an extension is inert
 
@@ -126,16 +130,25 @@ What is testable exactly is the identity, and it is tested twice: at fixed confi
 CPU (1e-6 kJ/mol, with a counter-example where one rung is restrained differently and the
 difference is **not** zero), and on the states this CUDA ladder actually visited.
 
-## What is not covered
+## What was left open, and what became of it
 
-* **rREST2 + reservoir + restraints.** Untested. A reservoir sample is drawn from a distribution
-  generated WITHOUT the bias, so refreshing the top rung installs an unrestrained configuration
-  into a restrained ladder. Noted in the rREST2 README; decide deliberately before using both.
-* **A restrained ladder cannot be exported** as a reference bundle: `verify_rungs.py` rebuilds rung
-  *i* by scaling rung 0, and a restraint is not part of what that reconstructs.
-  `export-reference` refuses by name.
-* **Short runs.** 10 ps per state; the acceptance rates come from 60 proposals, so they place the
-  ladder in the right region rather than pinning it down.
+* **rREST2 + reservoir + restraints — now REFUSED, not merely cautioned.** A reservoir sample is
+  drawn from a distribution generated WITHOUT the bias, so refreshing the top rung would install an
+  unrestrained configuration into a restrained ladder, which then samples neither ensemble with
+  nothing in the output saying so. `umbrella.file` together with `reservoir.enabled` is refused by
+  name at configuration time, with a test for both directions; the rREST2 README says the same.
+* **Acceptance statistics — tightened.** 300 proposals instead of 60.
+* **Trajectory continuity — sharpened.** Walker-matched, as above, instead of a per-state range
+  check.
+* **A restrained ladder still cannot be exported**, and the reason is not the one I first gave.
+  `verify_rungs.py` rebuilding rung *i* by scaling rung 0 is a real obstacle — the restraint is
+  added after scaling — but it is second. The first is that a restrained ladder must declare
+  `collective_variables.file`, and `_check_collective_variables` refuses a file with
+  `interval_steps: 0`, so such a ladder always REPORTS a CV series, which a bundle does not carry
+  or reproduce. Making export reachable therefore needs a deliberate schema decision — allowing a
+  CV definition that exists only to resolve restraints, reporting disabled — before any exporter
+  work is worth doing. I started the exporter plumbing, found that it could never be exercised, and
+  reverted it rather than leave a `settings.json` field that is always empty.
 * **Restraint strength vs acceptance** was not studied.
 
 ## Two defects in my own tests, for the record

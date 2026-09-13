@@ -50,7 +50,10 @@ pytestmark = [pytest.mark.gpu, pytest.mark.slow, pytest.mark.xdist_group("hprest
 
 RUNGS = 4
 INTERVAL = 250
-EXCHANGES = 40
+#: Long enough that the acceptance rates mean something. At 40 exchanges the ladder proposed 60
+#: swaps, so a rate carried an uncertainty of about 6 percentage points and could not be compared
+#: with anything; 200 exchanges is 300 proposals for a couple of minutes on two GPUs.
+EXCHANGES = 200
 EXTEND = 10
 
 
@@ -258,15 +261,32 @@ def test_an_extension_continues_its_parent_without_coordinates(baseline, tmp_pat
         with Dataset(str(path)) as dataset:
             return np.array(dataset.variables["coordinates"][:], dtype=float)
 
+    def occupancy(run):
+        with Dataset(str(run / "REST2.nc")) as dataset:
+            return np.array(dataset.variables["state_to_walker"][:], dtype=int)
+
     def rms(a, b):
         return float(np.sqrt(((np.asarray(a) - np.asarray(b)) ** 2).sum(axis=-1).mean()))
 
+    # MATCHED BY WALKER, not by state. A per-state file changes occupant at every accepted
+    # exchange, so the parent's last frame of state s and the child's first frame of state s are
+    # usually different molecules and comparing them measures the exchange, not the join. Frames
+    # are written with the mapping in force, so the mapping says which state each walker was in:
+    # the parent's final row, and the child's first.
+    parent_map, child_map = occupancy(baseline)[-1], occupancy(extension)[0]
     continuity = {}
-    for state in range(RUNGS):
-        parent_frames = frames(baseline / f"solute_state{state}_prod1.nc")
-        child_frames = frames(extension / f"solute_state{state}_prod1.nc")
-        continuity[state] = {
-            "join_angstrom": rms(parent_frames[-1], child_frames[0]),
+    for walker in range(RUNGS):
+        from_state = int(np.where(parent_map == walker)[0][0])
+        into_state = int(np.where(child_map == walker)[0][0])
+        parent_frames = frames(baseline / f"solute_state{from_state}_prod1.nc")
+        child_frames = frames(extension / f"solute_state{into_state}_prod1.nc")
+        continuity[walker] = {
+            "parent_state": from_state,
+            "child_state": into_state,
+            "walker_matched_join_angstrom": rms(parent_frames[-1], child_frames[0]),
+            # The same comparison done by state, which is what the earlier version measured.
+            "same_state_join_angstrom": rms(
+                parent_frames[-1], frames(extension / f"solute_state{from_state}_prod1.nc")[0]),
             "one_interval_within_parent_angstrom": rms(parent_frames[-2], parent_frames[-1]),
             "parent_first_to_last_angstrom": rms(parent_frames[0], parent_frames[-1]),
         }
@@ -281,11 +301,14 @@ def test_an_extension_continues_its_parent_without_coordinates(baseline, tmp_pat
         "parent_files_changed": sorted(k for k in before if before[k] != after.get(k)),
         "trajectory_continuity": continuity,
     })
-    for state, measured in continuity.items():
-        assert measured["join_angstrom"] <= 3.0 * measured["one_interval_within_parent_angstrom"], (
-            f"state {state}: the extension's first frame is {measured['join_angstrom']:.3f} A from "
-            f"the parent's last, against {measured['one_interval_within_parent_angstrom']:.3f} A "
-            f"for one interval inside the parent -- that is a restart, not a continuation")
+    for walker, measured in continuity.items():
+        # One exchange interval of dynamics for the SAME molecule must move it less than the
+        # parent's own first-to-last spread, which is what "somewhere else entirely" looks like.
+        assert (measured["walker_matched_join_angstrom"]
+                < measured["parent_first_to_last_angstrom"]), (
+            f"walker {walker}: it is {measured['walker_matched_join_angstrom']:.3f} A from where "
+            f"the parent left it, against {measured['parent_first_to_last_angstrom']:.3f} A "
+            f"across the parent's whole run -- that is a restart, not a continuation")
     assert child["resumed_from_step"] == parent["steps_completed"], "not a continuation"
     assert child["steps_completed"] == parent["steps_completed"] + EXTEND * INTERVAL
     assert sorted(child["final_state_to_walker"]) == list(range(RUNGS))

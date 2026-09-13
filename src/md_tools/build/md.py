@@ -512,6 +512,14 @@ def _check_umbrella(resolved: dict[str, Any]) -> None:
     if protocol in ("REST2", "rREST2"):
         if not path:
             return
+        if (resolved.get("reservoir") or {}).get("enabled"):
+            raise ConfigError(
+                f"umbrella.file = {path!r} restrains every rung, and reservoir.enabled is true. A "
+                f"reservoir sample is drawn from a distribution generated WITHOUT this bias, so "
+                f"refreshing the top rung installs an unrestrained configuration into a restrained "
+                f"ladder -- the rung then samples neither ensemble, and nothing in the output says "
+                f"so. Refused rather than combined: generate the reservoir under the same "
+                f"restraints and it is a different file, or drop one of the two.")
         variables = resolved.get("collective_variables") or {}
         if not variables.get("file"):
             raise ConfigError(
