@@ -77,17 +77,28 @@ def _digests(directory: Path) -> dict:
 
 
 def _rem_log_rows(path: Path):
-    """`rem.log` as (exchange, [state -> walker]) pairs, in Amber's H-REMD layout."""
+    """`rem.log` as `{exchange: {replica: neighbour}}`, in Amber's H-REMD layout.
+
+    The exchange number is on a `# exchange N` COMMENT line; the data rows beneath it are
+    `Rep# Neibr# Temp0 PotE(x_1) PotE(x_2) left_fe right_fe Success rate`. Reading three integers
+    off a data row instead finds `300.00` in the third column and silently drops every row, which
+    is what this parser did first: the log was well formed and the test saw nothing in it.
+    """
     rows: dict[int, dict[int, int]] = {}
+    exchange = None
     for line in path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("#") or not line.strip():
+        text = line.strip()
+        if text.startswith("# exchange"):
+            exchange = int(text.split()[-1])
+            rows.setdefault(exchange, {})
             continue
-        fields = line.split()
+        if text.startswith("#") or not text or exchange is None:
+            continue
+        fields = text.split()
         try:
-            exchange, replica, neighbour = int(fields[0]), int(fields[1]), int(fields[2])
+            rows[exchange][int(fields[0])] = int(fields[1])
         except (ValueError, IndexError):
             continue
-        rows.setdefault(exchange, {})[replica] = neighbour
     return rows
 
 
@@ -183,9 +194,16 @@ def test_a_ladder_runs_and_every_exchange_is_a_permutation(baseline):
     manifest = json.loads((baseline / "restart.json").read_text(encoding="utf-8"))
     rows = _rem_log_rows(baseline / "rem.log")
     assert rows, "rem.log has no exchange rows"
-    for exchange, mapping in rows.items():
-        assert sorted(mapping) == list(range(1, RUNGS + 1)), \
-            f"exchange {exchange} has rows {sorted(mapping)}, not one per rung"
+    for exchange, pairing in rows.items():
+        assert sorted(pairing) == list(range(1, RUNGS + 1)), \
+            f"exchange {exchange} has rows {sorted(pairing)}, not one per rung"
+        # Each row names its partner, so the pairing must be an involution: if 1 names 2, 2 names
+        # 1. A log in which a replica's partner does not name it back describes swaps that cannot
+        # all have happened.
+        for replica, neighbour in pairing.items():
+            assert pairing[neighbour] == replica, \
+                f"exchange {exchange}: replica {replica} names {neighbour}, which names " \
+                f"{pairing[neighbour]}"
     final = list(manifest["final_state_to_walker"])
     assert sorted(final) == list(range(RUNGS)), "the final map is not a permutation"
     statistics = manifest.get("lifetime_statistics") or {}
@@ -226,6 +244,32 @@ def test_an_extension_continues_its_parent_without_coordinates(baseline, tmp_pat
 
     child = json.loads((extension / "restart.json").read_text(encoding="utf-8"))
     after = _digests(baseline)
+
+    # THE PART A UNIT TEST CANNOT REACH: does the extension's trajectory JOIN its parent's, or did
+    # it re-equilibrate? Every check above passes either way. The scale for "joined" is the
+    # parent's own frame-to-frame movement: consecutive frames are one exchange interval apart, and
+    # the child's first frame is exactly one such interval after the parent's last. A restart from
+    # re-thermalised coordinates would be a far bigger jump -- compared here against the parent's
+    # own first-to-last spread, which is what "a different configuration" looks like.
+    import numpy as np
+    from netCDF4 import Dataset
+
+    def frames(path):
+        with Dataset(str(path)) as dataset:
+            return np.array(dataset.variables["coordinates"][:], dtype=float)
+
+    def rms(a, b):
+        return float(np.sqrt(((np.asarray(a) - np.asarray(b)) ** 2).sum(axis=-1).mean()))
+
+    continuity = {}
+    for state in range(RUNGS):
+        parent_frames = frames(baseline / f"solute_state{state}_prod1.nc")
+        child_frames = frames(extension / f"solute_state{state}_prod1.nc")
+        continuity[state] = {
+            "join_angstrom": rms(parent_frames[-1], child_frames[0]),
+            "one_interval_within_parent_angstrom": rms(parent_frames[-2], parent_frames[-1]),
+            "parent_first_to_last_angstrom": rms(parent_frames[0], parent_frames[-1]),
+        }
     report("2-extension", {
         "parent_steps_completed": parent["steps_completed"],
         "child_resumed_from_step": child.get("resumed_from_step"),
@@ -235,7 +279,13 @@ def test_an_extension_continues_its_parent_without_coordinates(baseline, tmp_pat
         "child_final_state_to_walker": list(child["final_state_to_walker"]),
         "parent_unchanged": before == after,
         "parent_files_changed": sorted(k for k in before if before[k] != after.get(k)),
+        "trajectory_continuity": continuity,
     })
+    for state, measured in continuity.items():
+        assert measured["join_angstrom"] <= 3.0 * measured["one_interval_within_parent_angstrom"], (
+            f"state {state}: the extension's first frame is {measured['join_angstrom']:.3f} A from "
+            f"the parent's last, against {measured['one_interval_within_parent_angstrom']:.3f} A "
+            f"for one interval inside the parent -- that is a restart, not a continuation")
     assert child["resumed_from_step"] == parent["steps_completed"], "not a continuation"
     assert child["steps_completed"] == parent["steps_completed"] + EXTEND * INTERVAL
     assert sorted(child["final_state_to_walker"]) == list(range(RUNGS))
@@ -289,16 +339,28 @@ def test_a_restrained_ladder_runs_and_its_bias_cancels_from_the_exchange(built):
     # The restrained torsion, as the run itself reported it.
     import csv
 
-    values = []
+    values, start_values = [], []
     for state in range(RUNGS):
         path = run / f"cv_state{state}.csv"
         if not path.is_file():
             continue
         with path.open() as handle:
             for row in csv.DictReader(handle):
-                if "phi_ALA" in row:
+                if "phi_ALA" not in row:
+                    continue
+                # The step-0 observation, marked `exchange_attempt = -1`, is taken BEFORE a single
+                # step is propagated: it is the shared, unrestrained starting configuration, one
+                # per state, and it is where phi still sits at about -160 degrees. Judging the
+                # restraint by it measures the structure the ladder began from, not the hold.
+                if int(row.get("exchange_attempt", 0)) < 0:
+                    start_values.append(float(row["phi_ALA"]))
+                else:
                     values.append(float(row["phi_ALA"]))
-    deviation = [abs((v - (-60.0) + 180.0) % 360.0 - 180.0) for v in values]
+    def deviations(series):
+        return [abs((v - (-60.0) + 180.0) % 360.0 - 180.0) for v in series]
+
+    deviation = deviations(values)
+    started_at = deviations(start_values)
 
     # The identity, on configurations this ladder actually visited.
     system = XmlSerializer.deserialize((built / "built.xml").read_text(encoding="utf-8"))
@@ -334,7 +396,9 @@ def test_a_restrained_ladder_runs_and_its_bias_cancels_from_the_exchange(built):
         "run_status": manifest["run_status"],
         "exchanges_committed": manifest["exchanges_committed"],
         "restraint_record": restraints,
-        "phi_samples": len(values),
+        "phi_propagated_samples": len(values),
+        "phi_start_samples_excluded": len(start_values),
+        "phi_start_deviation_deg": max(started_at) if started_at else None,
         "phi_mean_abs_deviation_from_centre_deg": (sum(deviation) / len(deviation)
                                                    if deviation else None),
         "phi_max_abs_deviation_deg": max(deviation) if deviation else None,
@@ -350,4 +414,6 @@ def test_a_restrained_ladder_runs_and_its_bias_cancels_from_the_exchange(built):
     assert restraints.get("scaled_by_tau") is False
     assert abs(difference) < 0.05, "the restraint did not cancel from the exchange criterion"
     if deviation:
-        assert max(deviation) < 90.0, "the restraint did not hold the torsion at all"
+        assert max(deviation) < 90.0, "the restraint did not hold the torsion"
+        assert sum(deviation) / len(deviation) < 30.0, \
+            "the restrained torsion sits far from its centre on average"
