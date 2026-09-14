@@ -292,11 +292,8 @@ configuration.
 
 ## Still pending
 
-1. **The 8-state overnight run** — τ = 0 → 0.5, 100 ns/state, 800 ns aggregate, GPUs 1–8, started
-   21:07:11. At 21:52 it was ~18.5% in (9250 CV rows of ~50000), projecting a finish near **01:10**.
-   Outputs: `<scratchpad>/reaf/md_script8/`. **Verify `restart.json` completion, the 8 CV series
-   against their recorded digests, `rem.log`/`exchange.csv` at N=8, and checkpoint integrity.**
-2. **The slow lane** — my `_prod2` guard has never executed.
+1. ~~The 8-state overnight run~~ — **DONE and verified.** See the section below.
+2. **The slow lane** — my `_prod2` guard has never executed. Launched 01:56 on GPUs 1–8.
 3. **Interrupt/resume test of a ladder** — the clean run does not exercise it.
 4. **The 8-state Amber comparison** at matched settings; only 2 states were compared.
 5. **The timing half of the three-combination matrix.** The structural findings above are
@@ -311,3 +308,75 @@ Items 2–4 need GPUs, which the overnight run holds.
 (Amber's `runmd.F90:1718` trick). `openmm.Context` exposes only `getState`/`reinitialize`/`setState`
 — no way to mark forces valid — and `step()` owns its evaluations. There is no OpenMM seam, and
 `_install_owned` changes positions after every accepted swap anyway.
+
+---
+
+## The 8-state overnight run: completed and verified
+
+τ = 0 → 0.5, eight states on GPUs 1–8 (eight identical RTX 3080s; GPU 0, the peer's A5000, left
+alone). Ran the 0.5.3 checkout out of a throwaway venv, so it exercised these fixes rather than the
+0.5.2 installed in the shared environment. Started 2026-09-14 21:07:11, `exit=0` at
+2026-09-15 01:54:44 — **4 h 47 m**.
+
+**Completion, from `restart.json`:**
+
+```
+run_status                   completed
+steps_expected / completed   50000000 / 50000000
+exchanges_committed          10000
+production_ps_per_replica    100000.0          (100 ns per state, 800 ns aggregate)
+whole_frames / solute_frames 1 / 50000
+resumed_from_step            None
+```
+
+**All eight CV series re-hash to their recorded digests** — 50001 rows each (step 0 … 50,000,000 at
+a 1000-step cadence, endpoints included exactly once, as the CV cadence invariant requires):
+
+| state | τ | rows | digest | final step |
+|---|---|---|---|---|
+| 0 | 0.0 | 50001 | OK | 50,000,000 |
+| 1 | 0.071429 | 50001 | OK | 50,000,000 |
+| 2 | 0.142857 | 50001 | OK | 50,000,000 |
+| 3 | 0.214286 | 50001 | OK | 50,000,000 |
+| 4 | 0.285714 | 50001 | OK | 50,000,000 |
+| 5 | 0.357143 | 50001 | OK | 50,000,000 |
+| 6 | 0.428571 | 50001 | OK | 50,000,000 |
+| 7 | 0.5 | 50001 | OK | 50,000,000 |
+
+**Acceptance across all seven pairs** — even, with no impassable gap, which is what the per-pair
+report exists to expose:
+
+| pair | accepted/proposed | rate |
+|---|---|---|
+| 0 ↔ 1 | 3218/5000 | 0.644 |
+| 1 ↔ 2 | 3127/5000 | 0.625 |
+| 2 ↔ 3 | 3095/5000 | 0.619 |
+| 3 ↔ 4 | 3099/5000 | 0.620 |
+| 4 ↔ 5 | 3125/5000 | 0.625 |
+| 5 ↔ 6 | 3137/5000 | 0.627 |
+| 6 ↔ 7 | 3104/5000 | 0.621 |
+| **overall** | **21905/35000** | **0.626** |
+
+**Integrity:** `every_row_is_a_permutation: True` over 10 000 rows, no offenders;
+`last_exchange: 9999`; `system_sha256 7521d7a0…` identical to the smoke runs; 22 solute atoms with
+2 omega bonds excluded; final state→walker `[7, 2, 3, 1, 5, 4, 0, 6]`.
+
+**The renderers agree with the arithmetic**, which is the point of keeping the matrix dense:
+`exchange.csv` is **80001** lines = 10000 × 8 + 1, and `rem.log` is **90006** lines = 10000 ×
+(8 + 1) + 6 header lines. The final `rem.log` block carries all eight states with correct pairing
+and the unpaired-replica convention (`8  8  300.00 … 0.00`).
+
+**The new `TIMINGS` block, with real numbers:**
+
+```
+# TIMINGS:
+#   elapsed               17234.6 s
+#   throughput            501.32 ns/day per replica, 4010.54 ns/day aggregate over 8 state(s)
+#   per step              0.3447 ms
+```
+
+**On speed, stated carefully.** Amber's 2-state REAF reached 646.86 ns/day per replica on the same
+system, against 501.32 here — Amber ~29% faster per replica. That is **not** a like-for-like engine
+comparison: Amber ran 2 replicas on 2 GPUs with 1000 exchanges, this ran 8 on 8 with 10 000, so
+exchange overhead, the N² cross-energy matrix and GPU contention all differ. The matched comparison
+is still pending (item 4 above).
