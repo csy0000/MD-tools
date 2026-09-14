@@ -738,6 +738,64 @@ def _print_grouped_summary(record, protocol):
     overall = report["overall"]
     shown = "n/a" if overall["acceptance"] is None else f"{overall['acceptance']:.3f}"
     print(f"#   overall               {overall['accepted']}/{overall['proposed']}   {shown}")
+
+    # THE LADDER'S OWN HAMILTONIAN IDENTITY. Amber prints its REAF block -- the tau, the
+    # `gti_add_re` scheme, and the mask with its matched atom count -- so a reader can tell what
+    # was scaled. It cannot name the resulting Hamiltonian, because `gti_add_re=6` is an index
+    # into a table in the manual and the scaled potential exists only inside the binary. A rung
+    # here IS a serialised System, so this can do what Amber structurally cannot: name it and
+    # give its digest.
+    identity = record.get("scientific_identity") or {}
+    implementation = identity.get("rest2_implementation") or {}
+    hamiltonian = identity.get("hamiltonian") or {}
+    if identity:
+        print("# REST2:")
+        taus = identity.get("tau") or []
+        print(f"#   tau ladder            {', '.join(f'{float(t):g}' for t in taus)}"
+              f"   ({identity.get('n_states')} state(s), one temperature "
+              f"{identity.get('temperature_k')} K, {identity.get('ensemble')})")
+        if implementation:
+            print(f"#   scaling               solute-solute "
+                  f"{implementation.get('solute_solute_nonbonded_scale')}, "
+                  f"solute-environment {implementation.get('solute_environment_nonbonded_scale')}")
+            print(f"#   left unscaled         bonds {implementation.get('bonds')}, "
+                  f"angles {implementation.get('angles')}, ordinary amide omega "
+                  f"{implementation.get('ordinary_amide_omega')}")
+        if hamiltonian:
+            print(f"#   solute region         {hamiltonian.get('n_solute_atoms')} atom(s), "
+                  f"{hamiltonian.get('n_omega_excluded_bonds')} omega bond(s) excluded")
+            digest = hamiltonian.get("system_sha256")
+            if digest:
+                print(f"#   system sha256         {digest}")
+        print(f"#   velocities on swap    "
+              f"{'rescaled' if identity.get('velocity_rescaling_on_exchange') else 'never rescaled'}"
+              f" (one beta across the ladder)")
+
+    # TIMINGS, as Amber's `5. TIMINGS` section gives them. "How long, and how fast" is the first
+    # question after "did it finish", and it was answerable only by subtracting two timestamps in
+    # the manifest.
+    started, finished = record.get("started_utc"), record.get("finished_utc")
+    elapsed = None
+    if started and finished:
+        from datetime import datetime
+
+        try:
+            elapsed = (datetime.fromisoformat(finished)
+                       - datetime.fromisoformat(started)).total_seconds()
+        except ValueError:
+            elapsed = None
+    if elapsed:
+        produced = float(record.get("production_ps_per_replica") or 0.0) / 1000.0
+        print("# TIMINGS:")
+        print(f"#   elapsed               {elapsed:.1f} s")
+        if produced:
+            per_replica = produced / (elapsed / 86400.0)
+            states = int(identity.get("n_states") or 1)
+            print(f"#   throughput            {per_replica:.2f} ns/day per replica, "
+                  f"{per_replica * states:.2f} ns/day aggregate over {states} state(s)")
+        steps = int(record.get("steps_completed") or 0)
+        if steps:
+            print(f"#   per step              {elapsed / steps * 1000.0:.4f} ms")
     if "reservoir" in report:
         r, stats_r = report["reservoir"], stats["reservoir"]
         print(f"# reservoir refreshes   : {r['accepted']}/{r['attempts']} at state(s) "
