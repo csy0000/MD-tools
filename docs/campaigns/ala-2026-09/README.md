@@ -20,10 +20,16 @@ applied. Solute coordinates every 5 ps; explicit whole-system coordinates every 
 **The implicit arm is complete and registered** as shared reference data:
 
 ```text
-$MD_DATA/common/reference/2026-09/ALA-dipeptide-implicit/cMD-hot/run1
-$MD_DATA/common/reference/2026-09/ALA-dipeptide-implicit/cMD-cold/run1   (and run2, run3)
-$MD_DATA/common/reference/2026-09/ALA-dipeptide-implicit/REST2/run1
+$MD_DATA/common/2026/reference/2026-09/ALA-dipeptide-implicit/cMD-hot/run1
+$MD_DATA/common/2026/reference/2026-09/ALA-dipeptide-implicit/cMD-cold/run1   (and run2, run3)
+$MD_DATA/common/2026/reference/2026-09/ALA-dipeptide-implicit/REST2/run1
 ```
+
+These five datasets were registered at `common/reference/...` and **moved** to the paths above when
+the canonical common path gained its year segment; their manifests were rewritten to match. The
+journals beside this file quote the original paths, and are left as written: they record where the
+data went at the time. Any symlink still pointing at the old `common/reference/...` prefix dangles
+and must be re-pointed where it lives.
 
 Each carries an OpenMM-only bundle made by `md-openmm export-reference`. The REST2 dataset is the
 whole run directory, so its stage-to-stage handoffs are verified by digest; the cMD ones were

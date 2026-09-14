@@ -87,19 +87,21 @@ def test_the_project_path_is_year_first_with_no_month(world):
     assert (world["root"] / "2026" / "ALA" / "ALA-cMD").is_dir()
 
 
-def test_the_common_path_leads_with_common_and_carries_no_year(world):
-    """Shared data are not owned by the year they were produced in.
+def test_the_common_path_leads_with_common_then_the_year(world):
+    """Shared data are filed by completion year like everything else; `common/` says who, not when.
 
-    A project dataset is year-first because a project is something that happened in a year. A
-    reference simulation is the opposite: it is used by whoever needs it, for as long as it is
-    the best available, and filing it under `2026/` means the next person has to already know
-    when it was made in order to find it. The date is still recorded in `year`, and a common
-    dataset's own `data_name` normally opens with a `YYYY-MM` segment.
+    This test used to assert the OPPOSITE -- that a common path carries no year segment at all --
+    on the argument that shared infrastructure outlives the year it was produced in. That made
+    `year` authoritative metadata for one role and a path segment for the other, and left a
+    reference set's date living inside `data_name` by convention. The year is now a segment in
+    both layouts, so the roles differ only in the reserved first segment.
     """
     result = _register(world, common=True)
-    assert result["canonical_path"] == "common/ALA/ALA-cMD"
-    assert not re.fullmatch(r"\d{4}", result["canonical_path"].split("/")[0])
-    assert (world["root"] / "common" / "ALA" / "ALA-cMD").is_dir()
+    assert result["canonical_path"] == "common/2026/ALA/ALA-cMD"
+    parts = result["canonical_path"].split("/")
+    assert parts[0] == "common"
+    assert re.fullmatch(r"\d{4}", parts[1]), "the year must follow the common segment"
+    assert (world["root"] / "common" / "2026" / "ALA" / "ALA-cMD").is_dir()
 
 
 def test_no_registered_path_contains_a_month_segment(world):
@@ -769,14 +771,14 @@ def test_a_dataset_name_may_be_several_segments_deep():
 
     `data_name` was a single segment, so `2026-09/ALA/cMD-hot/run1` could only be expressed as
     `2026-09_ALA_cMD-hot_run1` -- findable by globbing and by nothing else. Depth costs none of
-    the guarantees: the year still leads, `common/` still separates shared data, and each
-    component is validated on its own.
+    the guarantees: the year is a segment in both layouts, `common/` still separates shared data,
+    and each component is validated on its own.
     """
     from md_tools.data_contract.model import canonical_path
 
     assert canonical_path(year="2026", project_name="reference",
                           data_name="2026-09/ALA/cMD-hot/run1", common=True) == \
-        "common/reference/2026-09/ALA/cMD-hot/run1"
+        "common/2026/reference/2026-09/ALA/cMD-hot/run1"
     assert canonical_path(year="2026", project_name="MD-project",
                           data_name="2026-09/ALA/REST2/run1") == \
         "2026/MD-project/2026-09/ALA/REST2/run1"

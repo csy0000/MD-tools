@@ -107,7 +107,7 @@ One contract, version 2, in `md_tools.data_contract`. Canonical paths:
 
 ```text
 $MD_DATA/{year}/{project_name}/{data_name}/
-$MD_DATA/{year}/common/{project_name}/{data_name}/
+$MD_DATA/common/{year}/{project_name}/{data_name}/
 ```
 
 No month segment. No `baseline/` namespace. **`md_data` is never imported at runtime.** Schemas are

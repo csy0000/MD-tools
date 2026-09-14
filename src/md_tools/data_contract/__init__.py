@@ -11,7 +11,7 @@ path lost its month segment:
 
     v1   $MD_DATA/{namespace}/{yyyy-mm}/{dataset_name}/
     v2   $MD_DATA/{year}/{project_name}/{data_name}/
-         $MD_DATA/common/{project_name}/{data_name}/     (role: common)
+         $MD_DATA/common/{year}/{project_name}/{data_name}/     (role: common)
 
 A v1 validator was not widened until it happened to accept the new shape. Widening it would have
 left one model that accepts both, which is precisely the state in which a path can be wrong in a

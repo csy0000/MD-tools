@@ -42,7 +42,7 @@ The accurate version:
 
 ```text
 $MD_DATA/{year}/{project_name}/{data_name}/
-$MD_DATA/common/{project_name}/{data_name}/
+$MD_DATA/common/{year}/{project_name}/{data_name}/
 ```
 
 There is no month segment, and no reserved `baseline/` namespace. `year` is the year the data were

@@ -16,7 +16,7 @@ with a message that names the difference.
 |---|---|---|
 | `schema_version` | `1.0` | `2.0` |
 | canonical path | `{namespace}/{yyyy-mm}/{dataset_name}` | `{year}/{project_name}/{data_name}` |
-| shared datasets | the reserved `baseline/` namespace | `common/{project_name}/{data_name}` |
+| shared datasets | the reserved `baseline/` namespace | `common/{year}/{project_name}/{data_name}` |
 | `role` | `baseline` \| `project` | `common` \| `project` |
 | dated segment | creation **month**, `yyyy-mm` | completion **year**, `YYYY` |
 | identity fields | `namespace`, `dataset_name` | `year`, `project_name`, `data_name` |
@@ -39,8 +39,9 @@ label. `year` is a fact about the data, not a decision made at registration.
 
 v1 grouped by namespace and then by month, so one project's datasets were scattered across twelve
 directories a year. v2 groups by year and then by project, so everything one project produced in a
-year sits together, and `--common-data` inserts a single `common/` segment rather than reserving a
-top-level namespace.
+year sits together, and `--common-data` prefixes a reserved `common/` segment rather than reserving
+a top-level namespace: the year follows it, so a shared dataset lands at
+`common/{year}/{project_name}/{data_name}` and the two roles differ only in that first segment.
 
 ## What was ported unchanged
 
