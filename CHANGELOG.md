@@ -43,6 +43,95 @@ each rung by scaling rung 0 and a restraint is not part of what that reconstruct
 arithmetic: `log alpha` with and without the bias at the same configurations, equal to 1e-6 kJ/mol,
 with a counter-example proving a bias that differs between rungs does not cancel.
 
+**A stage's `.out` now says what ran.** Amber's `mdout` opens with a topology census and a full
+echo of every resolved control variable, which is why an Amber run can nearly be reconstructed from
+its own output. This wrote the inputs, the step count and the platform: the cutoff, the PME
+treatment, the constraint count, the net charge and the size of the restrained selection all
+existed — in `resolved.config`, in the machine record, in `solute.yaml` — and a reader had to open
+three files to assemble them. A stage `.out` now carries `System` (atoms, residues by name, net
+charge, degrees of freedom, box and volume), `Method` (nonbonded treatment and cutoff, Ewald
+tolerance, dispersion correction, switching, 1-4 exception count, constraints, barostat present,
+force inventory) and `Selections` (the solute count, and the omega bonds left unscaled). All
+derived from the serialised System, never from the configuration that asked for it: a config
+claiming a 1.0 nm cutoff and a System carrying 0.8 nm are different runs and only one integrates.
+The same facts go into the `.log` as structured fields, because prose is not a database.
+
+A box is reported only when the System is actually PERIODIC. `getDefaultPeriodicBoxVectors` cannot
+answer "is there a box" — an OpenMM System defaults to a 2 nm cube — so an implicit-solvent stage
+would have printed `2.000 x 2.000 x 2.000 nm` and a volume of 8 nm³, invented and stated in the
+same voice as the measurement above it.
+
+**An rms fluctuation over one sample is not zero, it is absent.** `sqrt(<x²> - <x>²)` over a single
+report is exactly 0, which reads as "this quantity did not move" when it means "there was nothing
+to compare it against" — and a stage shorter than `state_interval_steps` produces exactly one row,
+so this was the common case. It now says `n/a (single sample)`.
+
+**A ladder's `.out` names the Hamiltonian it integrated.** The grouped summary now prints the τ
+ladder, the scaling laws in force, which terms were left unscaled, the solute region with its
+omega-bond exclusions, and the rung's `system_sha256` — plus a `TIMINGS` block with elapsed time,
+ns/day per replica and aggregate, and ms/step. Amber prints its REAF equivalent but cannot name the
+resulting Hamiltonian, because `gti_add_re=6` is an index into a table in the manual and the scaled
+potential exists only inside the binary. A rung here IS a serialised System, so it can be named and
+digested.
+
+**`energy_components.csv` is a decomposition on every build route, not just one.** OpenMM can only
+separate energies by force group, and the two routes disagree: ParmEd's `createSystem` (implicit)
+assigns bonds 0, angles 1, torsions 2, nonbonded and GB 11, while OpenMM's `ForceField.createSystem`
+(explicit) leaves every force in group 0. So an implicit run decomposed and an explicit one produced
+a single column holding the total potential energy under a joined name that promised a breakdown —
+with nothing in the output distinguishing the two. 31 such files exist under `$MD_DATA`. Where the
+System carries no groups, a group-separated COPY is now probed instead; `built.xml`, the production
+Context and every digest taken from them are untouched, because a force group is part of the
+serialised System and regrouping the run's own would change `system_sha256` and invalidate every
+checkpoint fingerprint in flight. Bonds, angles, torsions and nonbonded direct space come apart
+cleanly and PME reciprocal splits out for free. `EELEC` from `VDWAALS`, and the 1-4 terms from
+either, do NOT: all 7988 1-4 pairs are exceptions inside the single `NonbondedForce`, which
+evaluates charge and dispersion in one kernel. That split needs duplicated forces and belongs in
+post-hoc analysis, where nothing integrates.
+
+**A ladder no longer recomputes the energy it already had.** `u[i][state_to_walker[i]]` is the
+energy of the configuration state *i*'s Context is already holding — `_gather_configurations` read
+it out of that very Context — so installing it again to measure it was a round trip to the device
+for a number in hand. It is now read directly, through the same `reduced_potential` conversion, so
+the value is identical rather than close, and read before any cross energy so it is measured on the
+Context as propagation left it. This is the value Amber takes for free as
+`my_ene_temp%energy_1`, paying one force call only for the cross term it calls "my pot ene with
+THEIR coordinates".
+
+Rules may now declare which reduced potentials they will read, through `required_entries` —
+honouring a promise `ExchangeContext` already made ("a callable rather than a precomputed matrix so
+a rule that needs only four numbers pays for four, not for N squared"). The driver records the
+declaration and deliberately still evaluates every entry: `rem_log.block_rows` indexes
+`u[state, state]` and `u[state, mate]`, `exchange_free_energies` needs both cross terms of every
+proposed pair, and `exchange.csv` indexes `u[state][walker]` — two conventions over three
+renderers, so a sparse matrix would leave holes that some of them index and a hole reaches the
+reader as `nan` in `rem.log`.
+
+**`u_evaluated` is observed rather than asserted.** It documents "1 where u was actually computed"
+and was written as `np.ones(...)`: true, but a claim that cannot become false cannot catch the day
+it stops being true. It is now derived from the matrix.
+
+**Output names in the documentation matched no file.** `remd0.nc .. remdN.nc` and
+`remd<N>.cv.csv` appeared in CLAUDE.md, all four shipped `configs/md/*.config`, `build/md.py`'s
+`state_trajectory` help, `storage.py`, `preflight.py`, two published docs and two `example.in`
+files — and nothing has ever written either. A ladder writes `solute_state<i>_prod<N>.nc` and
+`whole_state<i>_prod<N>.nc` (`state_trajectory_name` is the one authority) and its CV series are
+`cv_state<i>.csv` with `cv_state<i>.json` sidecars; `<stage>.cv.json` is the STAGE sidecar and was
+being quoted as though it covered both shapes. Corrected everywhere it is a live instruction, and
+left alone in `docs/history/**`, `docs/release-notes/**` and `docs/reports/**`, which record what
+was true when written. One test asserted that `remd0.nc.1` does not exist — vacuously true of a
+name nothing writes — and now guards against a second SEGMENT (`..._prod2.nc`) appearing, which is
+how an in-place `--extend` could actually break its contract.
+
+**One docstring overstated a refusal.** `reduced_potential_of` said a cross energy is never
+inferred from another because the Hamiltonians differ by more than a single factor. True of
+rescaling a total, and the method still evaluates directly — but as written it denies the exact
+three-term identity `md_tools.ais.decomposition` is built on, and would talk the next reader out of
+a sound optimisation. It now says which shortcut is wrong and which is arithmetic, and names the
+real constraint: under PME with the long-range dispersion correction the scaler declines global
+switching altogether, because the tail term is computed from stored epsilons and does not follow a
+parameter offset.
+
 ## 0.5.2 — 2026-09-11
 
 **A finished run can leave this package behind.** `md-openmm export-reference -idata <run> -odir
