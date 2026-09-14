@@ -374,6 +374,43 @@ def _ladder_record(run_dir: Path, stage: str) -> dict[str, Any]:
     return record
 
 
+def _openmm_build(record: dict[str, Any], packages: dict[str, Any],
+                  run_dir: Path) -> str | None:
+    """The PRECISE OpenMM build this ladder ran, from whichever record carries it.
+
+    `packages.openmm` is `openmm.__version__`, which is only major.minor: it reads "8.6" for
+    every 8.6.x, so a different patch release and a different dev build both compare equal to it
+    -- and both change the random stream and the order of force summation, which for a ladder
+    means different exchange decisions. A bundle has to be able to say "this is not the OpenMM
+    that produced the data", and with the coarse string it cannot.
+
+    Three sources, in order, because no single record is the richer one:
+
+      1. `acceleration.openmm_version` -- what a STAGE record carries. A replica record has no
+         platform block at all, so this is absent for ladders.
+      2. `packages.openmm_build` -- recorded for every record type from 0.5.3 onward.
+      3. `restart.json`'s `versions.openmm` -- which 0.5.2 ladders ALREADY wrote, beside the log
+         this bundle is exported from. Without this a ladder finished before 0.5.3 could never
+         gain the comparison, and those are exactly the finished reference runs someone wants a
+         bundle of. It is read defensively: a missing or unreadable manifest yields None and the
+         runner then says it can only see major.minor, rather than the export failing over a
+         provenance nicety.
+    """
+    from_platform = (record.get("acceleration") or {}).get("openmm_version")
+    if from_platform:
+        return str(from_platform)
+    from_packages = packages.get("openmm_build")
+    if from_packages:
+        return str(from_packages)
+    manifest = Path(run_dir) / "restart.json"
+    try:
+        versions = (json.loads(manifest.read_text(encoding="utf-8")) or {}).get("versions") or {}
+    except (OSError, ValueError):
+        return None
+    recorded = versions.get("openmm")
+    return str(recorded) if recorded else None
+
+
 def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2") -> dict[str, Any]:
     """Write a standalone bundle for one finished REST2 ladder. Returns its manifest."""
     from openmm import XmlSerializer
@@ -501,15 +538,7 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
         "md_tools_commit": environment.get("md_tools_commit"),
         "ladder_modules_from": copied_from,
         "openmm": packages.get("openmm"),
-        # The PRECISE build. `packages.openmm` is `openmm.__version__`, only major.minor, so it
-        # reads "8.6" for every 8.6.x and cannot distinguish two dev builds -- which is exactly
-        # what changes the exchange decisions. A ladder record carries NO platform block, so
-        # `packages.openmm_build` -- recorded for every record type -- is what actually supplies
-        # this for a REST2 bundle; `acceleration.openmm_version` is preferred because older
-        # records have that and not the package field. A run made before either existed has
-        # neither, and the runner says so rather than implying the builds were compared.
-        "openmm_build": ((record.get("acceleration") or {}).get("openmm_version")
-                         or packages.get("openmm_build")),
+        "openmm_build": _openmm_build(record, packages, run_dir),
         "python": packages.get("python"),
         # Everything the run recorded. None of it is needed to RUN this bundle -- the Systems are
         # frozen -- but these are the tools that decided the Hamiltonian, and a reader asking

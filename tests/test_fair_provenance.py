@@ -62,6 +62,40 @@ def test_environment_records_absent_packages_as_null_not_missing():
         assert name in versions, name
 
 
+def test_a_ladder_bundle_finds_the_openmm_build_a_0_5_2_run_already_recorded(tmp_path):
+    """Three records carry this, and none of them is the richer one in general.
+
+    A STAGE record has `acceleration.openmm_version`; a REPLICA record has no platform block at
+    all. From 0.5.3 every record carries `packages.openmm_build`. But a ladder finished BEFORE
+    that wrote the exact build into `restart.json`'s versions block -- and those are precisely
+    the finished reference runs someone wants a bundle of, so refusing to look there would make
+    the comparison unavailable exactly where it is most wanted.
+    """
+    import json as _json
+
+    from md_tools.reference.rest2_export import _openmm_build
+
+    run = tmp_path / "run"
+    run.mkdir()
+
+    # 1. The stage-record source wins when present.
+    assert _openmm_build({"acceleration": {"openmm_version": "8.6.0.dev-aaaaaaa"}},
+                         {"openmm_build": "8.6.0.dev-bbbbbbb"}, run) == "8.6.0.dev-aaaaaaa"
+    # 2. Then the package field, which 0.5.3 records for every record type.
+    assert _openmm_build({}, {"openmm_build": "8.6.0.dev-bbbbbbb"}, run) == "8.6.0.dev-bbbbbbb"
+    # 3. Then restart.json, which is all a 0.5.2 ladder left behind.
+    (run / "restart.json").write_text(
+        _json.dumps({"versions": {"openmm": "8.6.0.dev-c6173db", "openmm_short": "8.6.0"}}),
+        encoding="utf-8")
+    assert _openmm_build({}, {"openmm": "8.6"}, run) == "8.6.0.dev-c6173db"
+
+    # And a run with none of the three degrades to None rather than failing the export.
+    (run / "restart.json").write_text("{ not json", encoding="utf-8")
+    assert _openmm_build({}, {"openmm": "8.6"}, run) is None
+    (run / "restart.json").unlink()
+    assert _openmm_build({}, {"openmm": "8.6"}, run) is None
+
+
 def test_the_record_carries_openmm_s_precise_build_not_only_its_minor_version():
     """`openmm.__version__` is major.minor, and that is not enough to identify what ran.
 
