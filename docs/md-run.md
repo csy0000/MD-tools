@@ -307,8 +307,8 @@ rank keeps its own `.out` and log beside rank 0's — a rank that failed to bind
 exactly what a multi-GPU run needs to be able to show.
 
 What the ladder writes is unchanged: one trajectory per fixed thermodynamic **state**
-(`remd0.nc` … `remd7.nc`, never walker- or tau-named), an Amber-compatible `rem.log`, the
-neighbouring-pair acceptance report, and `restart.json`.
+(`solute_state0_prod1.nc` … `solute_state7_prod1.nc`, never walker- or tau-named), an
+Amber-compatible `rem.log`, the neighbouring-pair acceptance report, and `restart.json`.
 
 A group file is still supported through `-groupfile`, but an ordinary homogeneous ladder shares one
 topology and one System, and restating the same two paths eight times is a way to get one of them

@@ -191,9 +191,10 @@ MD_SCHEMA = Schema(
                       "exchange. Neither is production. Stages of 0 steps are skipped, and all "
                       "three at 0 is refused."),
             Field("state_trajectory", bool, default=True,
-                  doc="Write one trajectory per fixed thermodynamic STATE (remd0.nc .. remdN.nc). "
-                      "A state trajectory follows a state, not a walker; the filename carries the "
-                      "state index and never the tau value."),
+                  doc="Write one trajectory per fixed thermodynamic STATE "
+                      "(solute_state<i>_prod<N>.nc, and whole_state<i>_prod<N>.nc when a "
+                      "whole-system cadence is set). A state trajectory follows a state, not a "
+                      "walker; the filename carries the state index and never the tau value."),
             Field("rem_log", bool, default=True,
                   doc="Write an Amber-style rem.log projection of the exchange history."),
             Field("neighbour_acceptance_report", bool, default=True,

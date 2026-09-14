@@ -1375,8 +1375,9 @@ def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, c
                       groupfile, reservoir=False, per_tau=False) -> OutputInventory:
     """A ladder's complete inventory: the run-level files AND every per-state and per-rank one.
 
-    `remd0.nc .. remdN-1.nc` are the scientific result and were not in any inventory at all --
-    one per thermodynamic state, written by the root, and silently replaceable. So were
+    The per-state trajectories -- `solute_state<i>_prod<N>.nc`, and `whole_state<i>_prod<N>.nc`
+    when a whole-system cadence is set -- are the scientific result and were not in any inventory
+    at all: one per thermodynamic state, written by the root, and silently replaceable. So were
     `solute.yaml`, `_protocol.py`, the group file and `rem.log`.
 
     Nor were the ones a PLURAL launch writes. A ladder of N states runs on N ranks and each keeps

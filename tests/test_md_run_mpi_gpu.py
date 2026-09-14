@@ -98,7 +98,8 @@ def ladder(built):
 
 
 def test_a_two_rank_ladder_writes_one_trajectory_per_state(ladder):
-    """Fixed thermodynamic states, not walkers: `remd0.nc` and `remd1.nc`, and no third."""
+    """Fixed thermodynamic states, not walkers: `whole_state0_prod1.nc` and
+    `whole_state1_prod1.nc`, and no third."""
     states = sorted(p.name for p in ladder.glob("whole_state*_prod1.nc"))
     assert states == ["whole_state0_prod1.nc", "whole_state1_prod1.nc"], states
     assert (ladder / "rem.log").is_file()

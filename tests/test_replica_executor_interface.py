@@ -207,7 +207,8 @@ def ladder(prepared, tmp_path):
     """A private copy of the real two-state ladder, so a run may mutate it.
 
     Copies the INPUTS, not the tree. `prepared` is session-scoped and other modules run in it, so
-    a `copytree` brought their `remd0.nc`, `exchange.runstate.json` and checkpoint tree along --
+    a `copytree` brought their state trajectories (`whole_state<i>_prod<N>.nc`),
+    `exchange.runstate.json` and checkpoint tree along --
     and the executor then correctly refused to write a new run over existing state trajectories.
     The refusal was right; the fixture was wrong. Naming what an input IS cannot rot the way a
     list of files to delete does: a new output appears and is simply not copied.

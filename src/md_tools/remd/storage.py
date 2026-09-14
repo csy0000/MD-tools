@@ -40,7 +40,8 @@ import numpy as np
 #:
 #: v3 removed the bundled coordinate arrays. Coordinates now live in one Amber NetCDF trajectory
 #: per
-#: fixed thermodynamic state (`remd0.nc` ...), and this file keeps the exchange record and the one
+#: fixed thermodynamic state (`solute_state<i>_prod<N>.nc`, and `whole_state<i>_prod<N>.nc` when a
+#: whole-system cadence is set), and this file keeps the exchange record and the one
 #: committed-frame marker that says how much of that set is real. A v2 file is not a v3 file
 #: missing
 #: a feature -- it holds its coordinates somewhere else entirely -- so it is refused rather than

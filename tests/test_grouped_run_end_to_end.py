@@ -226,7 +226,15 @@ def test_a_resumed_run_continues_the_same_state_trajectories(prepared, tmp_path_
     after = {index: amber.read_frames(work / amber.state_trajectory_name(index))["n_frames"]
              for index in range(len(TAUS))}
     assert set(after.values()) == {before * 2}, (before, after)
-    assert not (work / "remd0.nc.1").exists()
+    # NO SECOND SET. This guarded `remd0.nc.1`, a name nothing has ever written -- so it passed
+    # vacuously and tested nothing. Under the current naming a second set would appear as a new
+    # SEGMENT beside the first (`..._prod2.nc`), which is what an in-place `--extend` must not do:
+    # its whole contract is that the existing per-state files carry on, as the doubled frame
+    # counts above assert.
+    assert not list(work.glob("whole_state*_prod2.nc")), sorted(
+        p.name for p in work.glob("whole_state*_prod2.nc"))
+    assert not list(work.glob("solute_state*_prod2.nc")), sorted(
+        p.name for p in work.glob("solute_state*_prod2.nc"))
 
     record = json.loads((work / "restart.json").read_text(encoding="utf-8"))
     assert set(after.values()) == {record["whole_frames"]}

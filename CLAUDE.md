@@ -122,7 +122,10 @@ Do not change these without a failing test that demonstrates a defect.
   solute torsions and CMAP by `(1-tau)²`; solute–solute nonbonded and 1-4 by `(1-tau)²`;
   solute–environment by `(1-tau)`; generalized-Born by `(1-tau)`. Exchanges never rescale
   velocities. The runtime is NVT. One trajectory per fixed thermodynamic **state**
-  (`remd0.nc`…), never per walker.
+  (`solute_state<i>_prod<N>.nc` and, when a whole-system cadence is set,
+  `whole_state<i>_prod<N>.nc` — `state_trajectory_name` is the one authority), never per walker.
+  The index is the STATE's, not the walker's: Amber and GROMACS write walker-following files and
+  sort them afterwards, which is why `cpptraj` needs `remdtrajtemp` and GROMACS ships `demux.pl`.
 * **AIS**: `tau` is the only public, persisted coordinate — never persist `s` or `sqrt(s)`.
   Work is `ΔW_j = U(τ_{j+1}, x_j) − U(τ_j, x_j)`: parameters move at frozen coordinates, then the
   configuration propagates. Observation 0 precedes all work and has exactly zero. Switching is at
@@ -268,7 +271,7 @@ Do not change these without a failing test that demonstrates a defect.
   and a `time_ps` for them would be a fiction. An interval that does not divide is refused, never
   rounded: a final partial gap breaks the uniform spacing every downstream time-series analysis
   assumes and none can detect.
-* **A CV series follows a thermodynamic STATE, as trajectories do.** `remd2.cv.csv` holds
+* **A CV series follows a thermodynamic STATE, as trajectories do.** `cv_state2.csv` holds
   whatever configuration occupied state 2, and `walker_index` says which walker supplied it. Rows
   on an exchange boundary are **pre-exchange** — the configuration as propagated, before any swap
   — so a state's series never contains values from a trajectory that never visited it. The
@@ -316,10 +319,13 @@ Do not change these without a failing test that demonstrates a defect.
 * **A CPU test is never CUDA evidence.** The coverage matrix must name a test that runs the
   function on a device with the feature ENABLED. It once cited a `--cpu` file for the AIS CV
   path, which is worse than an empty cell: a gap invites work, a false entry closes the question.
-* **The CV output sidecar is `<name>.cv.json`**, and is named in one place. It is not the input
-  `cv.yaml`, and not the content-addressed copy in the generated directory. The inventory once
-  named a `.cv.yaml` that never existed, so the real sidecar was governed by no collision or
-  overwrite policy at all.
+* **Every CV series has a sidecar, and each shape is named in one place.** A stage's is
+  `<stage>.cv.json` beside `<stage>.cv.csv` (`md_tools.cv.reporter.SIDECAR_SUFFIX`); a ladder's is
+  `cv_state<i>.json` beside `cv_state<i>.csv` (`md_tools.remd.cv_states`). Neither is the input
+  `cv.yaml`, and neither is the content-addressed copy in the generated directory. The inventory
+  once named a `.cv.yaml` that never existed, so the real sidecar was governed by no collision or
+  overwrite policy at all — and it later named `remd<N>.cv.csv` for a ladder, which never existed
+  either. A stale name in this file is not a typo: it is a contract nobody can check.
 * **CV output failure is simulation failure.** Reporting is never silently disabled, and CV
   evaluation count and wall time are recorded under their own `cv_*` names — a position-only
   torsion is not an energy evaluation, and folding it into that total would corrupt the one

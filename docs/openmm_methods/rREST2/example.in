@@ -167,7 +167,8 @@
   ! equilibration_steps, then the first exchange.
   equilibration_per_tau       = false,
   !
-  ! Write one trajectory per fixed thermodynamic STATE (remd0.nc .. remdN.nc). A state
+  ! Write one trajectory per fixed thermodynamic STATE (solute_state<i>_prod<N>.nc, and
+  ! whole_state<i>_prod<N>.nc when a whole-system cadence is set). A state
   ! trajectory follows a state, not a walker; the filename carries the state index and never
   ! the tau value.
   state_trajectory            = true,

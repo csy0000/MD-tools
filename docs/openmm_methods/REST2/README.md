@@ -67,7 +67,8 @@ that one implementation.
 * a linear τ ladder from 0 to `tau_max`, one Context per **thermodynamic state**;
 * neighbouring-pair exchange with a Metropolis criterion evaluated by recomputing both
   Hamiltonians, never by comparing two stored claims;
-* one trajectory per fixed state (`remd0.nc`, `remd1.nc`, …), never per walker;
+* one trajectory per fixed state (`solute_state0_prod1.nc`, `solute_state1_prod1.nc`, …, plus
+  `whole_state<i>_prod<N>.nc` when a whole-system cadence is set), never per walker;
 * an Amber-format `rem.log`, parseable by `cpptraj` as type Hamiltonian;
 * four independent schedules — exchange, whole-system output, solute output, checkpointing;
 * checkpoint, restart and out-of-place extension.
@@ -188,9 +189,11 @@ md_script/
 └── run.sh
 ```
 
-Running produces `solute.yaml` (the resolved scaling selection), `remd0.nc` … `remdN.nc` (one per
-state), `rem.log`, `REST2.nc` (the analysis file), `REST2_checkpoint.nc`, `REST2.out` and
-`REST2.log` (the machine record).
+Running produces `solute.yaml` (the resolved scaling selection), `solute_state<i>_prod<N>.nc` (one
+per state, and `whole_state<i>_prod<N>.nc` when a whole-system cadence is set), `rem.log`,
+`exchange.csv`, `REST2.nc` (the analysis file), `REST2.solute.nc`, `REST2_checkpoint.nc`,
+`REST2.out` and `REST2.log` (the machine record). With collective variables enabled it also writes
+`cv_state<i>.csv` and its `cv_state<i>.json` sidecar, one pair per state.
 
 ## Restart and continuation
 
