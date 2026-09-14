@@ -152,12 +152,23 @@ def _check_openmm():
     """
     import openmm
 
-    recorded = PROVENANCE.get("openmm")
-    running = openmm.__version__
-    print(f"# openmm            : {{running}} (this bundle was produced with {{recorded}})")
-    if recorded and running != recorded:
+    running_build = getattr(openmm.version, "version", None) or openmm.__version__
+    revision = getattr(openmm.version, "git_revision", None)
+    recorded_build = PROVENANCE.get("openmm_build")
+    recorded = recorded_build or PROVENANCE.get("openmm")
+
+    print(f"# openmm            : {{running_build}} (this bundle was produced with {{recorded}})")
+    if revision:
+        print(f"# openmm commit     : {{revision}}")
+    if recorded_build and running_build != recorded_build:
+        print(f"# NOTE              : OpenMM is a DIFFERENT BUILD from the one that produced "
+              f"this data. The ensemble is reproduced; the exchange decisions will not be.")
+    elif not recorded_build and recorded and openmm.__version__ != recorded:
         print(f"# NOTE              : OpenMM differs from the recorded one. The ensemble is "
               f"reproduced; individual frames will not be.")
+    elif not recorded_build:
+        print(f"# NOTE              : this bundle records only OpenMM's major.minor version, so "
+              f"a different 8.x.y build cannot be detected here.")
 
 
 def _start_configuration(periodic):
@@ -490,6 +501,15 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
         "md_tools_commit": environment.get("md_tools_commit"),
         "ladder_modules_from": copied_from,
         "openmm": packages.get("openmm"),
+        # The PRECISE build. `packages.openmm` is `openmm.__version__`, only major.minor, so it
+        # reads "8.6" for every 8.6.x and cannot distinguish two dev builds -- which is exactly
+        # what changes the exchange decisions. A ladder record carries NO platform block, so
+        # `packages.openmm_build` -- recorded for every record type -- is what actually supplies
+        # this for a REST2 bundle; `acceleration.openmm_version` is preferred because older
+        # records have that and not the package field. A run made before either existed has
+        # neither, and the runner says so rather than implying the builds were compared.
+        "openmm_build": ((record.get("acceleration") or {}).get("openmm_version")
+                         or packages.get("openmm_build")),
         "python": packages.get("python"),
         # Everything the run recorded. None of it is needed to RUN this bundle -- the Systems are
         # frozen -- but these are the tools that decided the Hamiltonian, and a reader asking

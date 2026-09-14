@@ -64,14 +64,33 @@ def check_openmm():
     random stream and the order of force summation both change with it, so the frames WILL
     differ -- and that must not be something a reader discovers by accident after comparing two
     trajectories and concluding the reference is wrong.
+
+    The comparison is on the BUILD string, not on `openmm.__version__`. The latter is only
+    major.minor -- "8.6" for every 8.6.x -- so a different patch release and a different dev
+    build both compare equal to it, and both change the frames. The commit is printed because a
+    dev build is identified by nothing else: "8.6.0.dev-c6173db" is a commit, not a release.
     """
     import openmm
 
-    recorded, running = PROVENANCE.get("openmm"), openmm.__version__
-    print(f"# openmm            : {{running}} (this bundle was produced with {{recorded}})")
-    if recorded and running != recorded:
+    running_build = getattr(openmm.version, "version", None) or openmm.__version__
+    revision = getattr(openmm.version, "git_revision", None)
+    recorded_build = PROVENANCE.get("openmm_build")
+    recorded = recorded_build or PROVENANCE.get("openmm")
+
+    print(f"# openmm            : {{running_build}} (this bundle was produced with {{recorded}})")
+    if revision:
+        print(f"# openmm commit     : {{revision}}")
+    if recorded_build and running_build != recorded_build:
+        print("# NOTE              : OpenMM is a DIFFERENT BUILD from the one that produced this "
+              "data. The ensemble is reproduced; individual frames will not be.")
+    elif not recorded_build and recorded and openmm.__version__ != recorded:
+        # An older bundle, exported before the build string was carried. Only major.minor is
+        # available to compare, so say so rather than implying the builds were checked.
         print("# NOTE              : OpenMM differs from the recorded one. The ensemble is "
               "reproduced; individual frames will not be.")
+    elif not recorded_build:
+        print("# NOTE              : this bundle records only OpenMM's major.minor version, so a "
+              "different 8.x.y build cannot be detected here.")
 
 
 def build(platform_name=None, properties=None):
@@ -198,6 +217,77 @@ def _record(run_dir: Path, stage: str) -> dict[str, Any]:
             f"bundle claiming to reproduce one without it would run and sample something else. "
             f"Nothing has been written.")
     return record
+
+
+def _resolved_timestep_fs(record: dict[str, Any], stage_block: dict[str, Any], log: Path) -> float:
+    """The timestep the stage INTEGRATED at, never the one it requested.
+
+    `dynamics.timestep_fs` may be the string `auto`, which `md_tools.openmm.timestep` resolves
+    against the masses in the built System -- 2 fs on ordinary hydrogens, 4 fs on repartitioned
+    ones. The stage block carries the REQUEST verbatim, so reading it and calling `float` on it
+    raised `could not convert string to float: 'auto'` for every HMR run, after the bundle
+    directory and four of its files already existed.
+
+    The answer is in the same record: the stage writes `resolve_timestep_fs`'s whole record under
+    `timestep` (`md_tools.md.stage`), unconditionally and for every stage, so `timestep_fs` there
+    is always the resolved number whatever was asked for. The stage block is the fallback for a
+    record written before that block existed, and only when it is already numeric -- resolving
+    `auto` a second time here would need the System's masses and would be a second implementation
+    of the rule.
+    """
+    resolved = (record.get("timestep") or {}).get("timestep_fs")
+    if isinstance(resolved, (int, float)):
+        return float(resolved)
+
+    requested = stage_block.get("timestep_fs")
+    if isinstance(requested, (int, float)):
+        return float(requested)
+
+    raise ValueError(
+        f"{log} records dynamics.timestep_fs as {requested!r} and carries no resolved "
+        f"`timestep.timestep_fs` beside it, so the timestep this stage integrated at cannot be "
+        f"established. It is not recoverable here: resolving {requested!r} needs the masses in "
+        f"the built System, which is the run's job and not the exporter's. Nothing has been "
+        f"written.")
+
+
+def _stage_settings(block: dict[str, Any], prepared: dict[str, Any], *,
+                    timestep_fs: float) -> dict[str, Any]:
+    """Everything `run.py`, `run.sh` and `settings.json` need, built BEFORE the directory exists.
+
+    Every value comes from the record or from `_prepare_stage`, and the one field that had to be
+    resolved -- the timestep -- arrives already resolved. So this cannot fail on record content,
+    which is the point of it being a function called above the `mkdir`: it used to be a dict
+    literal built between the file copies, and one `float('auto')` in it left a bundle directory
+    holding four files and none of the three that make it runnable.
+    """
+    from ..md._stages import KCAL_PER_MOL_ANGSTROM2, RESTRAINT_PARAMETER
+
+    restraint_kcal = float(block.get("restraint_kcal_per_mol_A2") or 0.0)
+    return {
+        "name": block["name"],
+        "ensemble": block["ensemble"],
+        "steps": int(block["steps"]),
+        "timestep_fs": float(timestep_fs),
+        "temperature_K": float(block["temperature_K"]),
+        "friction_per_ps": float(block["friction_per_ps"]),
+        "pressure_bar": float(block.get("pressure_bar") or 0.0),
+        "barostat_interval_steps": int(block.get("barostat_interval_steps") or 0),
+        # The integrator's seed, which is derived from the configured one and the stage name --
+        # the raw config value is written beside it so the derivation stays checkable.
+        "seed": int(prepared["seed"]),
+        "config_seed": int(block["seed"]),
+        "tau": float(block.get("tau") or 0.0),
+        # The positional restraint is a Force that is always in the System and a global parameter
+        # that decides whether it does anything. Both halves have to travel with the bundle.
+        "restraint": {
+            "parameter": RESTRAINT_PARAMETER,
+            "kcal_per_mol_A2": restraint_kcal,
+            "value_kj_per_mol_nm2": restraint_kcal * KCAL_PER_MOL_ANGSTROM2,
+        },
+        "trajectory_interval_steps": int(block.get("trajectory_interval_steps") or 0),
+        "state_interval_steps": int(block.get("state_interval_steps") or 0) or 10000,
+    }
 
 
 def _digest(path: Path) -> str:
@@ -714,61 +804,49 @@ def export_reference(run_dir: Path, out_dir: Path, *, stage: str = "cMD") -> dic
     # Proven before the directory exists, like every other refusal here.
     inputs_plan = user_inputs_plan(run_dir, found["system"], found["topology"])
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(found["topology"], out_dir / "topology.pdb")
-    user_inputs = write_user_inputs(inputs_plan, out_dir)
-
-    # -- the System the stage INTEGRATED, not the one it was built from -------------------------
+    # -- everything that can REFUSE, before anything is written --------------------------------
     #
+    # This block used to sit below `out_dir.mkdir()`, interleaved with the copies. Every failure
+    # in it therefore left a directory holding `input/`, `topology.pdb`, `system.xml` and
+    # `start.xml` and none of `run.py`, `settings.json` or `SHA256SUMS` -- wreckage that passes
+    # the eye test, from a module whose every other refusal says "Nothing has been written" and
+    # means it. `float(block["timestep_fs"])` on an `auto` record was exactly that: a ValueError
+    # raised after four files existed. Nothing below the mkdir may raise on record content now.
+    timestep_fs = _resolved_timestep_fs(record, block, run_dir / f"{stage}.log")
+
     # `_prepare_stage` is the engine's own preparation: scale at tau, then restrain, then add the
     # barostat, in that order and with those seeds. Calling it here rather than reimplementing it
-    # is the whole reason the exported Hamiltonian cannot drift from the one that ran.
+    # is the whole reason the exported Hamiltonian cannot drift from the one that ran. It is pure
+    # computation, so it belongs above the mkdir with the other refusals.
     loaded = load_inputs(found["topology"], found["system"])
     prepared = _prepare_stage(loaded, stage=block, name=block["name"],
                               where=f"reference export of {run_dir}")
-    from openmm import XmlSerializer
 
-    (out_dir / "system.xml").write_text(
-        XmlSerializer.serialize(prepared["prepared_system"]), encoding="utf-8")
-
-    # -- the state the stage continued from ----------------------------------------------------
-    start_name = ""
+    start_source = None
     parent = _continue_from(record)
     if parent:
-        source = run_dir / Path(parent).name
-        if not source.is_file():
+        start_source = run_dir / Path(parent).name
+        if not start_source.is_file():
             raise FileNotFoundError(
                 f"{run_dir} continued from {parent!r}, which is not there now. The bundle would "
                 f"otherwise start from the built coordinates -- an unequilibrated structure -- "
                 f"and present the result as a reproduction of this run.")
-        start_name = "start.xml"
-        shutil.copy2(source, out_dir / start_name)
+    start_name = "start.xml" if start_source is not None else ""
 
-    settings = {
-        "name": block["name"],
-        "ensemble": block["ensemble"],
-        "steps": int(block["steps"]),
-        "timestep_fs": float(block["timestep_fs"]),
-        "temperature_K": float(block["temperature_K"]),
-        "friction_per_ps": float(block["friction_per_ps"]),
-        "pressure_bar": float(block.get("pressure_bar") or 0.0),
-        "barostat_interval_steps": int(block.get("barostat_interval_steps") or 0),
-        # The integrator's seed, which is derived from the configured one and the stage name --
-        # the raw config value is written beside it so the derivation stays checkable.
-        "seed": int(prepared["seed"]),
-        "config_seed": int(block["seed"]),
-        "tau": float(block.get("tau") or 0.0),
-        # The positional restraint is a Force that is always in the System and a global parameter
-        # that decides whether it does anything. Both halves have to travel with the bundle.
-        "restraint": {
-            "parameter": RESTRAINT_PARAMETER,
-            "kcal_per_mol_A2": float(block.get("restraint_kcal_per_mol_A2") or 0.0),
-            "value_kj_per_mol_nm2": (float(block.get("restraint_kcal_per_mol_A2") or 0.0)
-                                     * KCAL_PER_MOL_ANGSTROM2),
-        },
-        "trajectory_interval_steps": int(block.get("trajectory_interval_steps") or 0),
-        "state_interval_steps": int(block.get("state_interval_steps") or 0) or 10000,
-    }
+    settings = _stage_settings(block, prepared, timestep_fs=timestep_fs)
+
+    # -- from here on, only writes -------------------------------------------------------------
+    out_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(found["topology"], out_dir / "topology.pdb")
+    user_inputs = write_user_inputs(inputs_plan, out_dir)
+
+    from openmm import XmlSerializer
+
+    (out_dir / "system.xml").write_text(
+        XmlSerializer.serialize(prepared["prepared_system"]), encoding="utf-8")
+    if start_source is not None:
+        shutil.copy2(start_source, out_dir / start_name)
+
     (out_dir / "settings.json").write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
 
     environment = record.get("environment") or {}
@@ -777,6 +855,17 @@ def export_reference(run_dir: Path, out_dir: Path, *, stage: str = "cMD") -> dic
         "md_tools_version": (environment.get("packages") or {}).get("md-tools"),
         "md_tools_commit": environment.get("md_tools_commit"),
         "openmm": (environment.get("packages") or {}).get("openmm"),
+        # The PRECISE build, which `packages.openmm` is not: that field is
+        # `openmm.__version__`, only major.minor, so it reads "8.6" for every 8.6.x -- a
+        # different patch release and a different dev build both compare equal to it, and those
+        # are exactly the cases that change the random stream and the order of force summation.
+        # `acceleration.openmm_version` is `openmm.version.version`, e.g.
+        # "8.6.0.dev-c6173db", and it is already in the record this bundle is built from.
+        # `packages.openmm_build` is the same string recorded for EVERY record type, including
+        # the ladder records that carry no platform block at all; the platform block is
+        # preferred because older records have it and not the package field.
+        "openmm_build": ((record.get("acceleration") or {}).get("openmm_version")
+                         or (environment.get("packages") or {}).get("openmm_build")),
         "python": (environment.get("packages") or {}).get("python"),
         # Everything the run recorded. None of it is needed to RUN this bundle -- the System is
         # frozen, so the tools that built it are out of the picture -- but they are what decided

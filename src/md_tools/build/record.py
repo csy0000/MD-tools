@@ -197,6 +197,13 @@ def package_versions() -> dict[str, Any]:
     try:  # OpenMM reports its own version independently of distribution metadata.
         import openmm
         out["openmm"] = openmm.__version__
+        # And the PRECISE build beside it. `__version__` is only major.minor -- "8.6" for every
+        # 8.6.x -- so a different patch release and a different dev build both compare equal to
+        # it, and both change the random stream and the order of force summation. A reference
+        # bundle exported from this record has to be able to say "this is not the OpenMM that
+        # produced the data", and it could not: a ladder record carries no platform block, so
+        # `packages` was the only place the information could live for every record type.
+        out["openmm_build"] = getattr(openmm.version, "version", None) or openmm.__version__
     except Exception:
         pass
     return out

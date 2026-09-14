@@ -62,6 +62,34 @@ def test_environment_records_absent_packages_as_null_not_missing():
         assert name in versions, name
 
 
+def test_the_record_carries_openmm_s_precise_build_not_only_its_minor_version():
+    """`openmm.__version__` is major.minor, and that is not enough to identify what ran.
+
+    It reads "8.6" for every 8.6.x, so a different patch release and a different dev build both
+    compare equal to it -- and both change the random stream and the order of force summation.
+    A reference bundle exported from this record has to be able to tell a reader "this is not
+    the OpenMM that produced the data", and with only the coarse string it could not.
+
+    `packages` is the one place this can live for EVERY record type: a replica (ladder) record
+    carries no platform block at all, so the exporter had nothing precise to read for a REST2
+    bundle.
+    """
+    import openmm
+
+    from md_tools.build.record import environment_facts, package_versions
+
+    packages = package_versions()
+    assert packages["openmm"] == openmm.__version__
+    assert packages["openmm_build"], "the precise build must be recorded"
+    # More specific, not merely different: the coarse string is a prefix of the build for a
+    # release, and the build carries the commit for a dev build.
+    build = packages["openmm_build"]
+    assert build == (getattr(openmm.version, "version", None) or openmm.__version__)
+    assert len(build) >= len(packages["openmm"])
+    # And it reaches the record through the block every log writes.
+    assert environment_facts()["packages"]["openmm_build"] == build
+
+
 # --- checksum manifests ------------------------------------------------------
 
 

@@ -310,6 +310,60 @@ def test_the_bundle_reproduces_the_engines_own_final_state(finished):
         "start and platform, so the bundle does not reproduce the run it describes")
 
 
+def test_an_auto_timestep_exports_at_the_timestep_the_stage_integrated(finished, tmp_path):
+    """`dynamics.timestep_fs: auto` is a REQUEST; the bundle must carry the resolved answer.
+
+    The stage block records the request verbatim, so reading it and calling `float` on it raised
+    `could not convert string to float: 'auto'` -- and raised it after the bundle directory and
+    four of its files already existed. Every HMR run records `auto`, which made reference export
+    impossible for a whole campaign's cMD stages while the ladders were unaffected.
+
+    The resolved value is in the same record: `md_tools.md.stage` writes `resolve_timestep_fs`'s
+    record under `timestep` for every stage, so nothing has to be re-resolved here.
+    """
+    from md_tools.reference import export_reference
+
+    copy = _copy_of_the_run(finished, tmp_path)
+    log = copy / "run" / "cMD.log"
+    text = log.read_text(encoding="utf-8")
+    assert "timestep_fs: 2.0" in text, "the fixture no longer records an explicit timestep"
+    # Only the STAGE block's value becomes `auto`; `timestep.timestep_fs` keeps the resolved 2.0,
+    # which is exactly the shape an HMR run writes.
+    stage_at = text.index("# stage:")
+    text = text[:stage_at] + text[stage_at:].replace("timestep_fs: 2.0", "timestep_fs: auto", 1)
+    log.write_text(text, encoding="utf-8")
+
+    out = tmp_path / "auto-bundle"
+    manifest = export_reference(copy / "run", out)
+    assert manifest["settings"]["timestep_fs"] == 2.0
+    settings = json.loads((out / "settings.json").read_text(encoding="utf-8"))
+    assert settings["timestep_fs"] == 2.0, "the bundle carries the request instead of the answer"
+    # The derived title and run.sh are computed from it, so a string would have poisoned both.
+    assert "ns" in (out / "run.sh").read_text(encoding="utf-8")
+
+
+def test_a_record_whose_timestep_cannot_be_established_writes_nothing(finished, tmp_path):
+    """The atomicity half: a refusal on record content must not leave a partial bundle.
+
+    `auto` with no resolved `timestep` block beside it is unrecoverable here -- resolving it needs
+    the built System's masses, which is the run's job. What matters is where it fails: this used
+    to happen below `out_dir.mkdir()`, leaving `input/`, `topology.pdb`, `system.xml` and
+    `start.xml` with no `run.py`, `settings.json` or `SHA256SUMS`.
+    """
+    from md_tools.reference import export_reference
+
+    copy = _copy_of_the_run(finished, tmp_path)
+    log = copy / "run" / "cMD.log"
+    text = log.read_text(encoding="utf-8")
+    # Both the stage request and the resolved block, so nothing is left to fall back to.
+    log.write_text(text.replace("timestep_fs: 2.0", "timestep_fs: auto"), encoding="utf-8")
+
+    out = tmp_path / "bundle-that-must-not-appear"
+    with pytest.raises(ValueError, match="cannot be established"):
+        export_reference(copy / "run", out)
+    assert not out.exists(), "a refused export left a partial bundle behind"
+
+
 def test_a_ladder_record_is_refused_before_anything_is_written(finished, tmp_path):
     """A refusal that leaves files behind is not a refusal.
 
