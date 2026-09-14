@@ -9,6 +9,20 @@ explicit-solvent ladder at 100 ns/state of the 500 it was asked for. Coordinates
 only when an extension is not in force, the refusal says so, and a test parses the exact shape
 `--extend-from` emits — nothing had exercised the generated file against the parser that reads it.
 
+**An interrupted extension is redone, and now says so.** An extension segment is atomic, and
+atomic *by omission*: no resume path knows `extends` exists, so `--resume` on a segment's own
+directory would have continued it and written a `restart.json` with no `extends` block — parent
+pinning, segment-local counts and chain accounting silently gone — while `--resume` with
+`--extend-from` is refused as two different operations, which reads as a flag complaint rather
+than an answer. Nothing refused the dangerous one and nothing documented either, so the obvious
+move after an interruption was the wrong one; a campaign lost two hours of six-GPU time to it.
+The `interrupted` run-state note, the driver's printed line, the `DriverError` on a short run and
+the executor's stderr now all distinguish an in-place run from a segment and name re-running the
+segment with `--extend-from` into a **fresh** directory. `tests/test_extension_directory.py`
+interrupts a real extension after a committed checkpoint and asserts the advice, and the two dead
+ends are tests rather than folklore. The behaviour is unchanged — this is what it always did, now
+stated.
+
 **`-o`, `-log`, `-r` and `-chk` default by segment.** They come from the command line, and `SimOut`
 opens its file `"w"`, so a second in-place segment destroyed the first segment's output and
 provenance record while `mdout_prod2.csv` and `solute_prod2.nc` sat beside them. `stage_artifact_name`

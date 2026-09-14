@@ -220,6 +220,21 @@ so two runs can be told apart from two thread counts.
 and pins the parent by content. The parent is left byte-for-byte unchanged, so a chain is a
 sequence of immutable segments rather than a file that grows and loses its own history.
 
+**An extension segment is atomic: an interrupted one is REDONE, not resumed.** There is no
+mid-extension restart. `--resume` with `--extend-from` is refused as two different operations, and
+`--resume` alone on the segment's own directory is worse than refused — it would physically
+continue the run and write a `restart.json` with no `extends` block at all, so the segment would
+finish looking like an ordinary run with its parent pinning, its segment-local counts and its
+chain accounting silently gone. Nothing refuses that: an extension is atomic *by omission*,
+because no resume path knows `extends` exists. Re-running into the partial directory is refused
+three separate ways (`--force` is refused with `--extend-from`, `--overwrite` does not apply, and
+the existing `-x`/`-r`/checkpoint collide), so the answer is a **fresh** directory and the whole
+segment re-run. A partial segment costs what it cost; chunk a long chain into several smaller
+`--extend` segments, each extending the previous completed one, so an interruption loses one
+small segment rather than a long one. The chunk's own generated script is never the right entry
+point either — the helpers in an extension directory are written and digest-verified by whichever
+generated script runs with `-odir`, which is the **parent's**.
+
 ## Storage, restart and validation
 
 Four records, four jobs:
@@ -229,7 +244,7 @@ Four records, four jobs:
 | analysis NetCDF (`-x`) | every committed iteration | the authoritative history, plus the scientific identity written **before** propagation begins |
 | checkpoint NetCDF | every whole-output interval | configurations, mapping, RNG states, rule state, iteration and budget |
 | `<stem>.runstate.json` | atomically, on transition | `initialized` → `running` → `completed`/`interrupted`/`failed`; never claims completion |
-| `restart.json` (`-r`) | atomically, at the end | evidence of completion; **never** a precondition for resuming |
+| `restart.json` (`-r`) | atomically, at the end | evidence of completion; **never** a precondition for resuming an in-place run — but an out-of-place extension has no resume at all, so for a segment its absence means the segment is redone |
 
 Each stream's marker is written **after** every array for that row, so an interrupted write leaves
 the counter on the previous complete row. A marker may lag its data but never lead it, and one that
@@ -245,6 +260,12 @@ dropped attempt in the middle still leaves steps increasing and can still reach 
 `--resume` needs no `restart.json`. `--extend N` requires a run that reached its budget and adds N
 attempts to **the budget that run reached**, not to the one in the configuration — a run already
 extended stores a larger budget than the configuration describes.
+
+Both of those are about a run continuing **in place**. The auto-continue contract and every
+sentence above about resuming cover in-place runs only: an interrupted out-of-place extension
+(`--extend-from`) is re-run as a whole segment into a fresh directory, as described under
+*Extension is out of place*. The `interrupted` run-state note and the executor's message say
+which of the two you are holding, so the file itself answers the question.
 
 An interruption is neither success nor failure and exits with its own status (130). Verification
 **opens and reads** the files: a file that exists is what a crashed run leaves behind, so existence

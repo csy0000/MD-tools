@@ -845,8 +845,18 @@ def main(argv=None, *, prepared=None):
                 status = 1
 
     if status == INTERRUPTED_STATUS:
-        print(f"replica executor: interrupted at an event boundary; the checkpoint is complete and "
-              f"--resume continues it. See {report}", file=sys.stderr)
+        # An out-of-place extension is atomic: `--resume` does not continue a segment, it
+        # finishes it as an ordinary run with no `extends` at all. The discriminator is the one
+        # line 831 already uses to decide the report's open mode.
+        if getattr(files, "extend_from", None):
+            print(f"replica executor: interrupted at an event boundary; the checkpoint is "
+                  f"complete, but an out-of-place extension CANNOT be resumed -- --resume "
+                  f"carries no parent linkage and would finish this segment as an ordinary run. "
+                  f"Re-run the whole segment with --extend-from into a fresh directory. "
+                  f"See {report}", file=sys.stderr)
+        else:
+            print(f"replica executor: interrupted at an event boundary; the checkpoint is "
+                  f"complete and --resume continues it. See {report}", file=sys.stderr)
         return status
 
     if status == 0 and rank == 0:

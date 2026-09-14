@@ -447,13 +447,21 @@ class ReplicaRun:
                     history = self._recover_history_readonly()
                 if history is not None:
                     interrupted = isinstance(failure, KeyboardInterrupt)
+                    # `_begin` may never have returned, so `state` is not always a dict here --
+                    # which is also why an absent `extends` is read as "not an extension" rather
+                    # than as unknown: the in-place advice is the safe default, and the only run
+                    # that gets the extension advice is one whose state proves it is one.
+                    extending = isinstance(state, dict) and bool(state.get("extends"))
                     storage.write_run_state(
                         self.files.trajectory, "interrupted" if interrupted else "failed",
                         identity=identity,
                         reason=f"{type(failure).__name__}: {failure}"[:400],
                         storage_migrations=history,
-                        note=("the analysis NetCDF holds every committed record and this run can "
-                              "be continued with --resume; no completion manifest exists"))
+                        note=("the analysis NetCDF holds every committed record, but "
+                              + self._EXTENSION_REDO + "; no completion manifest exists")
+                        if extending else
+                        ("the analysis NetCDF holds every committed record and this run can "
+                         "be continued with --resume; no completion manifest exists"))
                 # If it could not be read, the existing run state is left exactly as it is. An
                 # incomplete claim about provenance is worse than a slightly stale true one, and
                 # the exception the caller re-raises is the thing that actually needs reporting.
@@ -1983,6 +1991,27 @@ class ReplicaRun:
             },
         }
 
+    #: What an interrupted OUT-OF-PLACE EXTENSION must be told, and why it is not `--resume`.
+    #:
+    #: An extension segment is atomic, and atomic by OMISSION rather than by a guard: `_continue`
+    #: builds no `extends` key, and nothing reads one back from storage, so a resumed segment
+    #: finishes as an ordinary run -- no parent pinning, no segment-local counts, no chain
+    #: accounting, and with per-tau equilibration it cannot even write a manifest. No code
+    #: refuses that, which is precisely why the advice has to carry the answer instead.
+    _EXTENSION_REDO = (
+        "an out-of-place extension CANNOT be resumed: a resume carries no `extends`, so this "
+        "segment would finish as an ordinary run and lose its parent pinning and its segment "
+        "and chain accounting. Re-run the whole segment with --extend-from into a FRESH "
+        "directory -- re-running into this one is refused")
+
+    def _interruption_note(self, state):
+        """The run-state note for an interruption, which differs by what this run IS."""
+        if isinstance(state, dict) and state.get("extends"):
+            return ("stopped at an event boundary with a complete checkpoint, but "
+                    + self._EXTENSION_REDO + ". No completion manifest exists.")
+        return ("stopped at an event boundary with a complete checkpoint; --resume "
+                "continues it. No completion manifest exists.")
+
     def _record_interruption(self, state, identity):
         if self.coordinator.is_root:
             storage.write_run_state(
@@ -1990,10 +2019,15 @@ class ReplicaRun:
                 step=state["step"], total_steps=state["schedule"].total_steps,
                 signal=state.get("interrupt_signal"),
                 storage_migrations=list(state.get("storage_migrations") or []),
-                note=("stopped at an event boundary with a complete checkpoint; --resume "
-                      "continues it. No completion manifest exists."))
-            print(f"# interrupted at step {state['step']} of {state['schedule'].total_steps}; "
-                  f"a checkpoint was committed and --resume will continue it")
+                note=self._interruption_note(state))
+            if isinstance(state, dict) and state.get("extends"):
+                print(f"# interrupted at step {state['step']} of "
+                      f"{state['schedule'].total_steps}; a checkpoint was committed, but this is "
+                      f"an out-of-place extension and --resume will NOT continue it: re-run the "
+                      f"segment with --extend-from into a fresh directory")
+            else:
+                print(f"# interrupted at step {state['step']} of {state['schedule'].total_steps}; "
+                      f"a checkpoint was committed and --resume will continue it")
         return {"run_status": "interrupted", "step": state["step"]}
 
     def _finish(self, state, identity, rule_identity, started):
@@ -2006,12 +2040,17 @@ class ReplicaRun:
             return {"run_status": "completed_by_rank", "rank": rank}
 
         if completed < expected:
-            storage.write_run_state(self.files.trajectory, "interrupted", identity=identity,
-                                    storage_migrations=list(state.get('storage_migrations') or []),
-                                    step=completed, note="stopped before the budget; resumable")
+            extending = bool(state.get("extends"))
+            storage.write_run_state(
+                self.files.trajectory, "interrupted", identity=identity,
+                storage_migrations=list(state.get('storage_migrations') or []),
+                step=completed,
+                note=("stopped before the budget; " + self._EXTENSION_REDO) if extending
+                else "stopped before the budget; resumable")
             raise DriverError(
                 f"the run stopped at step {completed} of {expected}. No completion manifest was "
-                f"written; --resume will continue it.")
+                + (f"written, and {self._EXTENSION_REDO}." if extending
+                   else "written; --resume will continue it."))
 
         from .statistics import (completion_report, lifetime_statistics,
                                         mapping_is_permutation_every_iteration)

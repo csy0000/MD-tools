@@ -31,6 +31,7 @@ pytest.importorskip("netCDF4")
 pytest.importorskip("openmm")
 
 from md_tools.remd import amber_trajectory as amber
+from md_tools.remd.executor import INTERRUPTED_STATUS
 
 from .conftest import EXCHANGES, TAUS                               # noqa: E402
 
@@ -382,3 +383,149 @@ def test_the_parent_file_names_are_read_from_its_manifest_not_assumed(prepared,
     record = json.loads((extension / "restart.json").read_text(encoding="utf-8"))
     assert record["extends"]["parent"]["analysis"]["name"] == "rest2.nc"
     assert record["extends"]["parent"]["checkpoint"]["name"] == "rest2_checkpoint.nc"
+
+
+# --- an interrupted extension is redone, not resumed --------------------------------------------
+
+
+def _detach(work, *extra):
+    """`_invoke`'s command, started in its own process group so it can be signalled mid-run.
+
+    The signal goes to the GROUP rather than to the child. Here the executor integrates in
+    process, but under `mpirun` the launcher is not the process doing the dynamics, and
+    signalling only the parent leaves the ranks running -- a mistake already paid for outside
+    the suite. Using the group in both cases means the idiom survives a change of launch.
+    """
+    environment = dict(os.environ, PYTHONPATH=str(SRC), OPENMM_CPU_THREADS="1")
+    return subprocess.Popen(
+        [sys.executable, "-m", "md_tools.remd.executor",
+         "--groupfile", "ladder.group", "-ng", str(len(TAUS)),
+         "-x", "exchange.nc", "-r", "restart.json", "--checkpoint", "checkpoint.nc",
+         "-o", "run.out", "--rem", "rem.log", *extra],
+        cwd=str(work), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        start_new_session=True, env=environment)
+
+
+def _interrupt_once_committed(process, checkpoint, *, timeout=600):
+    """SIGINT the process group once `checkpoint` exists. Returns the collected output.
+
+    Waiting for the checkpoint rather than for a duration is what keeps this test about the
+    interruption instead of about how busy the machine is: a committed checkpoint is the
+    precondition the whole resume question is asked under, and it is established BEFORE the
+    signal is sent, so an escalation in the teardown cannot invalidate it.
+    """
+    import signal
+    import time
+
+    group = os.getpgid(process.pid)
+    try:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise AssertionError(
+                    "the extension reached its budget before a checkpoint was committed; "
+                    "--extend is too short for this test to interrupt anything")
+            if Path(checkpoint).is_file():
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError(f"waited {timeout}s for {checkpoint} and it never appeared")
+        os.killpg(group, signal.SIGINT)
+        try:
+            collected, _ = process.communicate(timeout=600)
+        except subprocess.TimeoutExpired:
+            # SIGINT is a REQUEST: the driver commits at the next event boundary and then exits.
+            # How long that takes is not what this test is about, and the thing it needs -- a
+            # committed checkpoint -- was established above, before the signal.
+            os.killpg(group, signal.SIGKILL)
+            collected, _ = process.communicate(timeout=120)
+        return collected or ""
+    finally:
+        if process.poll() is None:
+            os.killpg(group, signal.SIGKILL)
+            process.communicate()
+
+
+@pytest.mark.slow
+def test_an_interrupted_extension_is_redone_not_resumed(prepared, tmp_path_factory):
+    """An extension SEGMENT is atomic: interrupted, it is redone into a fresh directory.
+
+    This is the question a production campaign lost two hours of six-GPU time to, and the answer
+    was in no test and no document. The shape of it: nothing REFUSES a mid-extension resume. An
+    extension is atomic by OMISSION -- no resume path knows that `extends` exists -- so both
+    things a person reaches for fail with messages about something else, and the more dangerous
+    one does not fail at all:
+
+      * `--resume` together with `--extend-from` is refused as two different operations, which
+        reads as a flag-combination complaint rather than an answer.
+      * `--resume` ALONE, on the segment's own directory, would physically continue it and write
+        a `restart.json` with no `extends` block: the parent pinning, the segment-local counts
+        and the chain accounting are silently gone, and what is left reads as an ordinary run.
+
+    Which is why what the interruption SAYS is the thing under test. A note advising `--resume`
+    is advice that produces the second case, so the segment must be named as something to re-run.
+    """
+    source, _, _ = prepared
+    root = tmp_path_factory.mktemp("interrupted-extension")
+    parent, extension = root / "REST2", root / "REST2_ext1"
+    for directory in (parent, extension):
+        directory.mkdir()
+        for name in ("system.xml", "topology.pdb", "coordinates.xml", "protocol.py",
+                     "ladder.group"):
+            shutil.copy(source / name, directory / name)
+    assert _invoke(parent).returncode == 0
+    before = _fingerprint(parent)
+
+    # Long enough that a checkpoint -- every third exchange at this protocol's cadence -- lands
+    # well before the budget does, so there is a genuine mid-segment state to interrupt.
+    process = _detach(extension, "--extend-from", str(parent), "--extend", "200")
+    output = _interrupt_once_committed(process, extension / "checkpoint.nc")
+
+    assert process.returncode == INTERRUPTED_STATUS, (process.returncode, output[-3000:])
+    assert (extension / "checkpoint.nc").is_file()
+    # An interruption is not a completion and never leaves the evidence of one.
+    assert not (extension / "restart.json").exists()
+    # And it did not touch its parent on the way out.
+    assert _fingerprint(parent) == before
+
+    state = json.loads((extension / "exchange.runstate.json").read_text(encoding="utf-8"))
+    assert state["status"] == "interrupted"
+
+    advice = (state.get("note") or "") + output
+    assert "--extend-from" in advice, (
+        "the interruption must name re-running the SEGMENT; advice was: " + advice[-2000:])
+    for misleading in ("--resume continues it", "--resume will continue it"):
+        assert misleading not in advice, (
+            f"an interrupted extension advised {misleading!r}, which produces a restart.json "
+            f"with no extends block: " + advice[-2000:])
+
+    # The obvious next move -- re-run the same command into the partial directory -- is refused,
+    # which is why the answer is a FRESH directory rather than a cleaned one.
+    again = _invoke(extension, "--extend-from", str(parent), "--extend", "200")
+    assert again.returncode != 0, again.stdout[-3000:]
+    assert not (extension / "restart.json").exists()
+
+
+@pytest.mark.slow
+def test_resume_together_with_extend_from_is_refused(prepared, tmp_path_factory):
+    """The first dead end, stated as a test so the next person does not have to guess it.
+
+    Continuing in place and writing a new output set are different operations on different
+    directories. The refusal is read-only: nothing of the extension is created.
+    """
+    source, _, _ = prepared
+    root = tmp_path_factory.mktemp("resume-and-extend-from")
+    parent, extension = root / "REST2", root / "REST2_ext1"
+    for directory in (parent, extension):
+        directory.mkdir()
+        for name in ("system.xml", "topology.pdb", "coordinates.xml", "protocol.py",
+                     "ladder.group"):
+            shutil.copy(source / name, directory / name)
+    assert _invoke(parent).returncode == 0
+
+    result = _invoke(extension, "--extend-from", str(parent), "--extend", str(EXCHANGES),
+                     "--resume")
+    assert result.returncode != 0
+    assert "different operations" in (result.stdout + result.stderr)
+    assert not (extension / "exchange.nc").exists()
+    assert not (extension / "restart.json").exists()
