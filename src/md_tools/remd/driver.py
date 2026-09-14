@@ -1410,11 +1410,51 @@ class ReplicaRun:
                 assembled[walker] = Configuration(positions, velocities, box)
         return [assembled[w] for w in range(self.protocol.n_states)]
 
-    def _reduced_potential_matrix(self, configurations):
-        """u[i][w]: walker w's sample in state i's Hamiltonian. Rank i computes row i."""
+    def _reduced_potential_matrix(self, configurations, *, state_to_walker=None):
+        """u[i][w]: walker w's sample in state i's Hamiltonian. Rank i computes row i.
+
+        THE DIAGONAL IS NOT RE-EVALUATED. `_gather_configurations` read walker
+        `state_to_walker[i]`'s configuration OUT OF state `i`'s own Context, so `u[i][that
+        walker]` is the energy of what that Context is already holding. Installing it again to
+        measure it is a round trip to the device for a number already in hand -- and it is the one
+        Amber takes for free: `hamiltonian_exchange` sets `my_ene_temp%energy_1 = my_pot_ene_tot`
+        from the value the last dynamics step already produced, and pays one force call only for
+        the CROSS term it names `my pot ene with THEIR coordinates`.
+
+        Not an inference and not a shortcut of the kind `reduced_potential_of` refuses: that
+        refusal is about deriving one Hamiltonian's energy from another's by scaling, which is
+        wrong because the scale factors differ per term. This is the same configuration in the
+        same Hamiltonian, converted by the same `reduced_potential`, so the number is identical
+        rather than merely close.
+
+        It is read FIRST, before any cross energy, so it is measured on the Context as propagation
+        left it -- never on one that a cross evaluation has saved and restored.
+
+        The matrix stays DENSE. `rem_log.block_rows` indexes `u[state, state]` and
+        `u[state, mate]`, `exchange_free_energies` needs both cross terms of every proposed pair,
+        and `_write_exchange_csv` indexes `u[state][walker]` -- two different conventions over
+        three renderers. Evaluating only what a rule declares would leave holes that some of them
+        index, so `required_entries` is recorded as the rules' contract and not used to skip work
+        here.
+        """
+        from .engine import reduced_potential
+
         n = self.protocol.n_states
-        rows = {index: [self.engine.reduced_potential_of(index, configurations[w])
-                        for w in range(n)] for index in self.owned}
+        rows = {}
+        for index in self.owned:
+            own = None if state_to_walker is None else int(state_to_walker[index])
+            row = [None] * n
+            if own is not None:
+                box = configurations[own].box
+                volume = None if box is None else float(abs(np.linalg.det(box)))
+                row[own] = reduced_potential(
+                    self.engine.potential_energy(index), self.protocol.beta,
+                    pressure_bar=self.protocol.pressure_bar, volume_nm3=volume)
+            for walker in range(n):
+                if row[walker] is None:
+                    row[walker] = self.engine.reduced_potential_of(
+                        index, configurations[walker])
+            rows[index] = row
         if self.coordinator.size > 1:
             for piece in self.coordinator.allgather(rows):
                 rows.update(piece)
@@ -1722,7 +1762,8 @@ class ReplicaRun:
 
     def _exchange(self, state, rule, step, schedule):
         n = self.protocol.n_states
-        matrix = self._reduced_potential_matrix(state["configurations"])
+        matrix = self._reduced_potential_matrix(
+            state["configurations"], state_to_walker=state["state_to_walker"])
         state["exchange_index"] += 1
 
         payload = None
@@ -1764,7 +1805,11 @@ class ReplicaRun:
             self.reporter.write_exchange(
                 state["exchange_index"], step=step, time_ps=schedule.step_to_ps(step),
                 state_to_walker=state["state_to_walker"], proposed=proposed, accepted=accepted,
-                u=matrix, u_evaluated=np.ones((n, n), dtype=np.int8),
+                # OBSERVED, not asserted. `np.ones(...)` stated that every entry was computed;
+                # it happened to be true, but a claim that cannot be wrong also cannot catch a
+                # day when it stops being true. `u_evaluated` means "1 where u was actually
+                # computed", so it is derived from the matrix itself.
+                u=matrix, u_evaluated=np.isfinite(matrix).astype(np.int8),
                 reservoir=reservoir_event)
         return reservoir_event
 
@@ -2210,9 +2255,17 @@ def environment_versions():
             record[name] = __import__(name).__version__
         except ImportError:
             record[name] = None
+    # READ FROM DISTRIBUTION METADATA RATHER THAN BY IMPORTING IT. `import openmmtools` pulls in
+    # PyMBAR, which writes a timeseries caveat and a JAX 64-bit banner to STDERR at import time.
+    # The grouped executor deliberately redirects BOTH streams into the run's `.out` -- that is
+    # how a real runtime failure reaches the report file it then checks for a completion marker
+    # -- so a provenance document ended up carrying another library's advice about statistical
+    # inefficiency. The version is a fact about what is installed; establishing it does not
+    # require executing the package.
     try:
-        import openmmtools
-        record["openmmtools_present_but_unused"] = openmmtools.__version__
-    except ImportError:
+        from importlib.metadata import version as _distribution_version
+
+        record["openmmtools_present_but_unused"] = _distribution_version("openmmtools")
+    except Exception:                                     # noqa: BLE001 - absent, or no metadata
         record["openmmtools_present_but_unused"] = None
     return record

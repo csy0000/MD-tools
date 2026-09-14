@@ -145,6 +145,39 @@ class NeighbouringExchangeRule:
                 "criterion": "log(alpha) = [u_i(x_i)+u_j(x_j)] - [u_i(x_j)+u_j(x_i)]",
                 "source": "built in to exchange_rules.py"}
 
+    def required_entries(self, *, n_states, state_to_walker, exchange_index):
+        """Exactly the `(state, walker)` reduced potentials `propose` will read. Optional.
+
+        THE CONTRACT `ExchangeContext` ALREADY STATES. Its docstring promises that the potential
+        is "a callable rather than a precomputed matrix so a rule that needs only four numbers
+        pays for four, not for N squared" -- and a sweep of adjacent pairs needs about 2N of the
+        N^2 entries. The driver could not honour that promise on its own: under MPI a rank may
+        only evaluate rows for the states it owns, and the rule runs on one rank, so a lazily
+        evaluating callable would have to communicate on demand and make a collective depend on
+        one rank's control flow. Declaring the entries up front keeps the single gather and
+        evaluates nothing that will not be read.
+
+        PLAIN DATA, NOT A CONTEXT, on purpose: this decides WHICH energies to compute, so it must
+        not be handed an object that can compute them. Everything it needs is replicated on every
+        rank, so every rank derives the same set without communicating.
+
+        `exchange_index` is the value `propose` will see -- the post-increment one -- because
+        `deterministic_phase` keys the odd/even sweep off it. Asking with the pre-increment value
+        would declare the other phase's pairs and the run would refuse its own reads.
+
+        Returning None means "no declaration, compute everything", which is what a rule that has
+        not been taught this gets by omission.
+        """
+        phase = deterministic_phase(int(n_states), int(exchange_index))
+        occupancy = [int(w) for w in state_to_walker]
+        entries = set()
+        for state_i, state_j in alternating_pairs(int(n_states), phase):
+            walker_i, walker_j = occupancy[state_i], occupancy[state_j]
+            # The four of the criterion: both own energies and both cross terms.
+            entries.update({(state_i, walker_i), (state_j, walker_j),
+                            (state_i, walker_j), (state_j, walker_i)})
+        return entries
+
     def propose(self, context):
         phase = deterministic_phase(context.n_states, context.exchange_index)
         proposals, swaps = [], []

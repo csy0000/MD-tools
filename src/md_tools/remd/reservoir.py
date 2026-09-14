@@ -491,6 +491,17 @@ class ReservoirRefreshRule:
             "source": "md_tools.remd.reservoir.ReservoirRefreshRule",
         }
 
+    def required_entries(self, *, n_states, state_to_walker, exchange_index):
+        """The sweep's entries. A refresh reads no reduced potential at all.
+
+        Delegated rather than restated: the sweep this rule performs IS
+        `NeighbouringExchangeRule.propose`, so the entries it reads must come from the same place
+        that decides them. The reservoir half accepts with probability one under the
+        Boltzmann/same-state contract and consults no energy, so it adds nothing here.
+        """
+        return self.neighbouring.required_entries(
+            n_states=n_states, state_to_walker=state_to_walker, exchange_index=exchange_index)
+
     def propose(self, context):
         # 1. the ordinary sweep, unchanged.
         outcome = self.neighbouring.propose(context)

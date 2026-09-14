@@ -218,11 +218,22 @@ class ReplicaEngine:
     def reduced_potential_of(self, state_index, configuration):
         """u = beta * (U + pV) for `configuration` evaluated in state `state_index`.
 
-        The configuration is INSTALLED and the energy evaluated. It is never inferred by scaling a
-        previously computed energy: the scaled Hamiltonians differ by more than a single factor --
-        solute-solute goes as s while solute-environment goes as sqrt(s), and torsions and CMAP
-        follow their own rules -- so any such shortcut would be a different number that happens to
-        look plausible.
+        The configuration is INSTALLED and the energy evaluated, never obtained by rescaling a
+        previously computed TOTAL. That shortcut is wrong because one rung's total is a sum over
+        terms carrying different powers of `a = 1 - tau` -- solute-solute goes as `a^2` while
+        solute-environment goes as `a`, and torsions and CMAP follow their own rules -- so no
+        single factor converts one rung's number into another's, and the result would look
+        entirely plausible.
+
+        WHAT IS NOT REFUSED, so the next person does not read the above as more than it says: the
+        potential IS exactly quadratic in `a` at frozen coordinates, and `md_tools.ais.
+        decomposition` reconstructs it from three evaluations as an identity, not an
+        approximation. Obtaining every cross energy of a ladder that way is sound ARITHMETIC
+        where the three-term basis is available -- which is the real constraint, because under
+        PME with the long-range dispersion correction the scaler declines global switching
+        altogether (see `global_switching_refusal`: the tail term is computed from stored
+        epsilons and does not follow a parameter offset). This method evaluates directly because
+        it must serve every case, not because reconstruction is unsound.
 
         The context's own configuration is restored afterwards, so evaluating a cross energy never
         disturbs the run.
