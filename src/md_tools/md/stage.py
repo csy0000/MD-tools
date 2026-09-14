@@ -142,19 +142,93 @@ class _AmberStreamReporter:
             pass
 
 
+class _EnergyDecompositionProbe:
+    """A group-separated COPY of a System, read for energies and never integrated.
+
+    WHY THIS EXISTS. OpenMM can only separate energies BY FORCE GROUP, and the two build routes
+    disagree about them. ParmEd's `Structure.createSystem` -- the implicit route -- assigns bonds
+    0, angles 1, torsions 2, nonbonded and GB 11, so an implicit run decomposes. OpenMM's
+    `ForceField.createSystem` -- the explicit route -- leaves EVERY force in group 0, so an
+    explicit run produced one column, holding the total potential energy, under a joined name
+    that promised a breakdown. Nothing in the output distinguished the two, which is the worst
+    property a diagnostic can have.
+
+    WHY A COPY RATHER THAN REGROUPING THE RUN'S SYSTEM. A force group is part of the serialised
+    System. Reassigning one would change `system_sha256`, invalidate the checkpoint fingerprint
+    of every run in flight, and make already-registered datasets incomparable with new ones --
+    all for a diagnostic. So this deserialises a SEPARATE System, groups that one, and never
+    steps it. `built.xml`, the production Context and every digest taken from them are untouched.
+
+    WHAT IT CAN AND CANNOT SEPARATE. Bonds, angles, torsions, the restraint and nonbonded direct
+    space come apart cleanly, and PME reciprocal space splits out for free. Electrostatics from
+    Lennard-Jones, and the 1-4 terms from either, do NOT: the 1-4 pairs are *exceptions inside*
+    the single `NonbondedForce`, which evaluates charge and dispersion in one kernel. Amber can
+    print `EELEC` beside `VDWAALS` because its energy routines are written term by term; getting
+    there in OpenMM needs duplicated forces, which belongs in post-hoc analysis where nothing
+    integrates -- not here.
+    """
+
+    def __init__(self, system):
+        from openmm import NonbondedForce, XmlSerializer
+
+        # A serialise/deserialise round trip is the one deep copy OpenMM guarantees.
+        self._system = XmlSerializer.deserialize(XmlSerializer.serialize(system))
+        self._context = None
+        labels = {}
+        for index, force in enumerate(self._system.getForces()):
+            name = type(force).__name__
+            if name == "CMMotionRemover":                 # carries no energy
+                continue
+            group = index + 1
+            force.setForceGroup(group)
+            labels[group] = name
+            if isinstance(force, NonbondedForce):
+                force.setReciprocalSpaceForceGroup(31)
+                labels[31] = f"{name} [PME reciprocal]"
+        self.groups = [(group, labels[group]) for group in sorted(labels)]
+
+    def energies(self, live):
+        """Per-group potential energy at the live Context's current configuration."""
+        from openmm import Context, LangevinMiddleIntegrator, unit
+
+        state = live.getState(getPositions=True)
+        if self._context is None:
+            # The run's own platform, so a CUDA run is not silently probed on the CPU. The
+            # integrator is required to build a Context and is never stepped.
+            self._context = Context(
+                self._system,
+                LangevinMiddleIntegrator(300.0 * unit.kelvin, 1.0 / unit.picosecond,
+                                         1.0 * unit.femtosecond),
+                live.getPlatform())
+        try:
+            box = state.getPeriodicBoxVectors()
+        except Exception:                                 # noqa: BLE001 - no box in this System
+            box = None
+        if box is not None:
+            self._context.setPeriodicBoxVectors(*box)
+        self._context.setPositions(state.getPositions())
+        return [self._context.getState(getEnergy=True, groups={group})
+                .getPotentialEnergy().value_in_unit(unit.kilojoule_per_mole)
+                for group, _ in self.groups]
+
+
 class _EnergyComponentsReporter:
     """Per-force-group potential energy at the state table's cadence.
 
     THE ATTRIBUTION AMBER'S `mdout` GIVES AND A SINGLE TOTAL CANNOT. One `getState` per group per
-    report, and the groups are read off the System as it already is -- MD-tools assigns them
-    meaningfully when it builds (bonds 0, angles 1, torsions 2, nonbonded and GB 11), so nothing
-    here reassigns anything. That matters more than the convenience: a force group is part of the
-    serialised System, so changing one would change `system_sha256` and make every run in flight
-    unresumable for the sake of a diagnostic.
+    report. Where the System already carries meaningful groups they are read off it as it is and
+    nothing is reassigned -- a force group is part of the serialised System, so changing one
+    would change `system_sha256` and make every run in flight unresumable for the sake of a
+    diagnostic.
 
     Groups are labelled by the forces IN them, so `NonbondedForce+CustomGBForce` says plainly
     that those two share a group and are not separable here. Naming them apart would be a nicer
     header over a number that is their sum.
+
+    WHEN THE SYSTEM CARRIES NO GROUPS AT ALL -- every force in group 0, which is what OpenMM's
+    `ForceField.createSystem` produces and therefore what every explicit-solvent run had -- one
+    joined column holding the total is not a decomposition. That case is served by
+    `_EnergyDecompositionProbe`, which groups a COPY and leaves the run's System alone.
     """
 
     def __init__(self, path, interval, system, *, append=False):
@@ -165,9 +239,20 @@ class _EnergyComponentsReporter:
         for force in system.getForces():
             by_group[int(force.getForceGroup())].append(type(force).__name__)
         # CMMotionRemover contributes no energy and would add a column of zeros.
-        self._groups = [(group, "+".join(sorted(set(names) - {"CMMotionRemover"})))
-                        for group, names in sorted(by_group.items())
-                        if set(names) - {"CMMotionRemover"}]
+        energetic = {group: names for group, names in by_group.items()
+                     if set(names) - {"CMMotionRemover"}}
+        self._probe = None
+        if (len(energetic) == 1
+                and len(set(next(iter(energetic.values()))) - {"CMMotionRemover"}) > 1):
+            # One group holding several energy-carrying forces: nothing to attribute. Probe a
+            # separated copy instead. A System with a single force needs no probe -- its one
+            # column is already that force.
+            self._probe = _EnergyDecompositionProbe(system)
+            self._groups = list(self._probe.groups)
+        else:
+            self._groups = [(group, "+".join(sorted(set(names) - {"CMMotionRemover"})))
+                            for group, names in sorted(by_group.items())
+                            if set(names) - {"CMMotionRemover"}]
         self._handle = open(path, "a" if append else "w", encoding="utf-8")
         if not append:
             # Joined WITH the fixed columns rather than appended to them: a System whose only
@@ -188,10 +273,13 @@ class _EnergyComponentsReporter:
         from openmm import unit
 
         context = simulation.context
-        values = []
-        for group, _ in self._groups:
-            energy = context.getState(getEnergy=True, groups={group}).getPotentialEnergy()
-            values.append(f"{energy.value_in_unit(unit.kilojoule_per_mole):.10g}")
+        if self._probe is not None:
+            values = [f"{value:.10g}" for value in self._probe.energies(context)]
+        else:
+            values = []
+            for group, _ in self._groups:
+                energy = context.getState(getEnergy=True, groups={group}).getPotentialEnergy()
+                values.append(f"{energy.value_in_unit(unit.kilojoule_per_mole):.10g}")
         time_ps = context.getState().getTime().value_in_unit(unit.picosecond)
         self._handle.write(f"{simulation.currentStep},{time_ps!r},{','.join(values)}\n")
         self._handle.flush()
@@ -201,6 +289,138 @@ class _EnergyComponentsReporter:
             self._handle.close()
         except Exception:                                     # noqa: BLE001 - best effort
             pass
+
+
+def _system_census(topology, system):
+    """What this run is made of: the counts Amber's `1. RESOURCE USE` section states.
+
+    THE CHEAPEST SETUP CHECK THERE IS. A net charge that is not what was intended, a water count
+    off by a factor, a box that never got set -- each is one line here and otherwise shows up as a
+    puzzling energy much later. Amber prints `Sum of charges from parm topology file` and forces
+    neutrality out loud; this had no equivalent anywhere in the human-readable output.
+
+    Derived from the SERIALISED System and the topology that was actually loaded, never from the
+    configuration that asked for them.
+    """
+    from collections import Counter
+
+    import openmm
+    from openmm import unit
+
+    counts = Counter(residue.name for residue in topology.residues())
+    charge = 0.0
+    for force in system.getForces():
+        if isinstance(force, openmm.NonbondedForce):
+            for particle in range(force.getNumParticles()):
+                charge += force.getParticleParameters(particle)[0].value_in_unit(
+                    unit.elementary_charge)
+            break
+
+    # 3N minus the constraints, minus 3 for a centre-of-mass remover if one is present. This is
+    # the count behind every reported temperature, and Amber's own step-0 temperature looks wrong
+    # until you know it.
+    atoms = system.getNumParticles()
+    dof = 3 * atoms - system.getNumConstraints()
+    if any(isinstance(f, openmm.CMMotionRemover) for f in system.getForces()):
+        dof -= 3
+
+    # A BOX ONLY IF THE SYSTEM IS ACTUALLY PERIODIC. `getDefaultPeriodicBoxVectors` is not a
+    # question about whether there IS a box: an OpenMM System defaults to a 2 nm cube, so an
+    # implicit-solvent System -- which has no box, no volume and no barostat -- would otherwise
+    # report `2.000 x 2.000 x 2.000 nm` and a volume of 8 nm^3. Both invented, and stated with the
+    # same confidence as a real measurement.
+    #
+    # Periodicity is decided by the nonbonded method, which is what actually makes the box
+    # load-bearing. GBn2 uses NoCutoff or a non-periodic cutoff and correctly reports neither.
+    periodic = False
+    for force in system.getForces():
+        if isinstance(force, openmm.NonbondedForce):
+            periodic = force.getNonbondedMethod() in (
+                openmm.NonbondedForce.CutoffPeriodic, openmm.NonbondedForce.Ewald,
+                openmm.NonbondedForce.PME, openmm.NonbondedForce.LJPME)
+            break
+
+    box = None
+    volume = None
+    if periodic:
+        try:
+            vectors = system.getDefaultPeriodicBoxVectors()
+            lengths = [vectors[i][i].value_in_unit(unit.nanometer) for i in range(3)]
+            if all(length > 0 for length in lengths):
+                box = " x ".join(f"{length:.3f}" for length in lengths) + " nm"
+                volume = lengths[0] * lengths[1] * lengths[2]
+        except Exception:                                 # noqa: BLE001 - no box in this System
+            box = None
+
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return {
+        "atoms": atoms,
+        "residues": dict(counts),
+        "residues_summary": (f"{sum(counts.values())} "
+                             f"({', '.join(f'{name} {n}' for name, n in ordered[:6])}"
+                             f"{', ...' if len(ordered) > 6 else ''})"),
+        "net_charge_e": charge,
+        "degrees_of_freedom": dof,
+        "constraints": system.getNumConstraints(),
+        "box_nm": box,
+        "volume_nm3": volume,
+    }
+
+
+def _method_summary(system):
+    """The resolved nonbonded and constraint treatment, as Amber's `Ewald parameters` block does.
+
+    Read off the System rather than off the configuration, for the same reason the timestep is
+    resolved against the serialised masses: by run time these are facts, not requests. A
+    configuration claiming a 1.0 nm cutoff and a System carrying 0.8 nm differ, and only one of
+    them integrates.
+    """
+    import openmm
+    from openmm import unit
+
+    summary = {}
+    for force in system.getForces():
+        if isinstance(force, openmm.NonbondedForce):
+            method = {openmm.NonbondedForce.NoCutoff: "no cutoff",
+                      openmm.NonbondedForce.CutoffNonPeriodic: "cutoff, non-periodic",
+                      openmm.NonbondedForce.CutoffPeriodic: "cutoff, periodic",
+                      openmm.NonbondedForce.Ewald: "Ewald",
+                      openmm.NonbondedForce.PME: "PME",
+                      openmm.NonbondedForce.LJPME: "LJPME"}.get(
+                          force.getNonbondedMethod(), str(force.getNonbondedMethod()))
+            line = f"{method}, cutoff {force.getCutoffDistance().value_in_unit(unit.nanometer)} nm"
+            if force.getNonbondedMethod() in (openmm.NonbondedForce.PME,
+                                              openmm.NonbondedForce.Ewald,
+                                              openmm.NonbondedForce.LJPME):
+                line += f", Ewald tolerance {force.getEwaldErrorTolerance():.3g}"
+                # The grid is ZERO unless it was pinned explicitly, in which case OpenMM chooses
+                # it per Context from the tolerance and the box. Reported only when the System
+                # really carries it, so this never states a grid the run did not use.
+                try:
+                    alpha, nx, ny, nz = force.getPMEParameters()
+                    alpha = alpha.value_in_unit(unit.nanometer ** -1)
+                    if nx and ny and nz:
+                        line += f", grid {nx}x{ny}x{nz}"
+                    if alpha:
+                        line += f", alpha {alpha:.5f}/nm"
+                    else:
+                        line += ", grid chosen per Context from the tolerance"
+                except Exception:                         # noqa: BLE001 - not a PME-capable force
+                    pass
+            summary["nonbonded"] = line
+            summary["dispersion correction"] = ("on" if force.getUseDispersionCorrection()
+                                                else "off")
+            summary["switching"] = (
+                f"on, {force.getSwitchingDistance().value_in_unit(unit.nanometer)} nm"
+                if force.getUseSwitchingFunction() else "off")
+            summary["exceptions (1-4 pairs)"] = force.getNumExceptions()
+            break
+    summary["constraints"] = f"{system.getNumConstraints()} bond(s)"
+    barostats = [type(f).__name__ for f in system.getForces()
+                 if "Barostat" in type(f).__name__]
+    summary["barostat in system"] = ", ".join(barostats) if barostats else "none"
+    summary["forces"] = ", ".join(type(f).__name__ for f in system.getForces())
+    return summary
 
 
 def _state_table_statistics(path):
@@ -841,6 +1061,32 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         solute = list(checked.solute)
         seed = checked.seed
 
+        # THE SYSTEM AND THE METHOD, BEFORE THE SETTINGS. Amber's `mdout` opens with a census of
+        # the topology (`1. RESOURCE USE`) and a full echo of every resolved control variable
+        # (`2. CONTROL DATA FOR THE RUN`), which is why an Amber run can be reconstructed from
+        # its own output. This wrote neither: the facts existed in `resolved.config` and the
+        # machine record, so a reader had to open three files to answer "what was the cutoff".
+        # They are cheap to state and the `.log` keeps carrying them for machines.
+        census = _system_census(pdb.topology, system)
+        method = _method_summary(system)
+        # BOTH READERS. `-o` and `-log` are two files for two readers: the person tailing the run
+        # and the machine parsing the record. The census and the method belong in the `.out`,
+        # because that is the file being held against Amber's `mdout`; they go into the record as
+        # structured fields as well, because prose is not a database.
+        for writer in (out, log):
+            writer.heading("System")
+            writer.field("atoms", census["atoms"])
+            writer.field("residues", census["residues_summary"])
+            writer.field("net charge", f"{census['net_charge_e']:+.3f} e")
+            writer.field("degrees of freedom", census["degrees_of_freedom"])
+            if census["box_nm"] is not None:
+                writer.field("box",
+                             f"{census['box_nm']}  volume {census['volume_nm3']:.3f} nm^3")
+            writer.heading("Method")
+            for key, value in method.items():
+                writer.field(key, value)
+        log.update(system_census=census, method_summary=method)
+
         log.heading("Resolved settings")
         for key in ("ensemble", "steps", "timestep_fs", "temperature_K", "pressure_bar",
                     "friction_per_ps", "barostat_interval_steps", "restraint_kcal_per_mol_A2",
@@ -874,6 +1120,24 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         # rung it is supposed to match.
         tau = float(stage.get("tau") or 0.0)
         excluded = list(checked.excluded_bonds)
+        # THE SELECTIONS, RESOLVED, WITH THEIR COUNTS -- and only once `excluded` exists, which is
+        # here. Amber prints `Mask :1-3 & !@H=; matches 10 atoms`, so a mistyped mask shows up in
+        # the output rather than in a trajectory three days later. `restraint_kcal_per_mol_A2`
+        # says how hard the restraint pulls; this says what it pulls on.
+        for writer in (out, log):
+            writer.heading("Selections")
+            writer.field("solute", f"{len(solute)} atom(s) (restraint and REST2 region)")
+            # EMPTY IS NOT THE SAME AS NONE FOUND. At tau = 0 nothing is scaled, so there is
+            # nothing to exempt and the list is legitimately empty -- while the same system on a
+            # REST2 ladder excludes two amide omegas. Saying "0: none" invites the reader to
+            # conclude the classifier found no omega bonds, which is a different claim.
+            writer.field("omega bonds unscaled",
+                         (f"{len(excluded)}: " + ", ".join(f"{a}-{b}" for a, b in excluded))
+                         if excluded else
+                         "not applicable at tau = 0 (nothing is scaled, so nothing is exempted)"
+                         if tau == 0.0 else "0 (none classified)")
+        log.update(selections={"n_solute_atoms": len(solute),
+                               "omega_excluded_bonds": [[int(a), int(b)] for a, b in excluded]})
         if tau > 0.0:
             log.field("tau", f"{tau}  (fixed REST2 scaling; ordinary amide omega left unscaled, "
                              f"{len(excluded)} bond(s) excluded)")
@@ -1393,8 +1657,15 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
         if statistics:
             out.heading("Averages")
             out.field("over", f"{statistics[0][3]} report(s) in {info_path.name}")
-            for header, mean, fluctuation, _ in statistics:
-                out.field(header, f"mean {mean:.6g}   rms fluctuation {fluctuation:.6g}")
+            for header, mean, fluctuation, count in statistics:
+                # A FLUCTUATION NEEDS TWO SAMPLES. Over one report sqrt(<x^2> - <x>^2) is
+                # exactly zero, which reads as "this quantity did not move" when it means
+                # "there was nothing to compare it against" -- and a stage shorter than
+                # `state_interval_steps` produces exactly one row, so this was the common case
+                # rather than the corner one.
+                spread = (f"rms fluctuation {fluctuation:.6g}" if count > 1
+                          else "rms fluctuation n/a (single sample)")
+                out.field(header, f"mean {mean:.6g}   {spread}")
 
         log.heading("Summary")
         log(f"  {name}: {steps} steps completed, {steps * timestep_fs / 1000.0:g} ps")
