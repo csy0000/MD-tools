@@ -1641,12 +1641,32 @@ def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str,
             'if [[ "${NPROC}" -gt 1 ]]; then LAUNCH=(mpirun -n "${NPROC}"); fi',
             '',
             'echo "== AIS =="',
-            '"${LAUNCH[@]}" md-openmm md-run -i AIS.in \\',
+            # THE SHARED INPUT. `build-md` writes the AIS input to `<system>/input/AIS.in` -- an
+            # input says what a method was asked to do, which is a property of the system rather
+            # than of one repeat -- so an AIS run directory holds no `.in` of its own. This typed
+            # a bare `AIS.in` and every `./run.sh` on a generated AIS tree died with
+            # `md-run: -i AIS.in: no such run input file`.
+            # `../input/AIS.in` as a literal: this function is handed the plan, the protocol and
+            # the stage targets, and an AIS plan is deliberately EMPTY -- a switching campaign has
+            # no preparation chain -- so `targets` carries no AIS entry to take the path from. The
+            # shared input is `dataset.stage_input("AIS")`, one level up from the run directory
+            # this script sits in, which is what that resolves to for every protocol.
+            '"${LAUNCH[@]}" md-openmm md-run -i ../input/AIS.in \\',
             '  -p "${TOPOLOGY}" -s "${SYSTEM}" -source-traj "${SOURCE}" \\',
             '  -o AIS.out -log AIS.log "$@"',
             '']
     elif all_in_one:
-        lines += ['md-openmm md-run -i cMD.in -p "${TOPOLOGY}" -s "${SYSTEM}" "$@"', '']
+        # THE SHARED INPUT, AND THE PROTOCOL'S OWN.
+        #
+        # An all-in-one tree holds no `.in` file at all: the inputs belong to the SYSTEM and sit in
+        # `../input/`, exactly as they do for a split run. This typed a bare `cMD.in`, so
+        # `./run.sh` on an all-in-one directory died with `md-run: -i cMD.in: no such run input
+        # file` -- and it named `cMD` literally, so an all-in-one `umbrella` run asked for a file
+        # no generation has ever written. `input_rel` is the same path the split branch below
+        # types, computed once in `_stage_targets`.
+        production = plan[-1]["name"] if plan else protocol
+        source = targets[production]["input_rel"] if production in targets else f"../input/{protocol}.in"
+        lines += [f'md-openmm md-run -i {source} -p "${{TOPOLOGY}}" -s "${{SYSTEM}}" "$@"', '']
     else:
         previous = None
         for stage in plan:

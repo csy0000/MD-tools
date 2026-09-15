@@ -22,6 +22,7 @@ import csv
 import json
 import math
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -86,12 +87,37 @@ def _build(root: Path):
 
 
 def _generate(root: Path, name: str, document: dict, *extra):
-    (root / f"{name}.config").write_text(yaml.safe_dump(document), encoding="utf-8")
+    """Generate one run into a SYSTEM ROOT OF ITS OWN, and return the run directory.
+
+    `build/`, `min/` and `input/` belong to the SYSTEM and are shared by every run on it -- and
+    the sharing is enforced: `input/min.in` is refused if a second configuration resolves it
+    differently. The variants here are deliberately DIFFERENT experiments -- `cudaC` runs at
+    `tau = 0.5` with phase-space output, the ladders differ in protocol and in reservoir -- so
+    generating them into one root made the second one refuse with
+
+        build-md: input/min.in already exists and is not what this configuration resolves to.
+
+    Each gets its own root, seeded from the module's built system. `build/` is copied rather than
+    rebuilt: the physics is identical and `build-top` is the slow part.
+
+    The RELATIVE inputs a configuration names -- `../reservoir.nc` for rREST2, `../source.dcd`
+    for AIS -- resolve against the run directory, so they are copied in as well. `cv.yaml` is
+    named by absolute path and needs no copy; it is carried anyway so a root is self-contained.
+    """
+    system = root / f"system-{name}"
+    shutil.copytree(root / "build", system / "build")
+    for helper in ("cv.yaml", "initial_state.xml", "reservoir.nc", "source.dcd"):
+        source = root / helper
+        if source.is_file():
+            shutil.copy2(source, system / helper)
+
+    (system / f"{name}.config").write_text(yaml.safe_dump(document), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", f"./{name}-run1", "--config", str(root / f"{name}.config"), *extra],
-        cwd=root, capture_output=True, text=True, timeout=900)
+        CLI + ["build-md", "-odir", f"./{name}-run1",
+               "--config", str(system / f"{name}.config"), *extra],
+        cwd=system, capture_output=True, text=True, timeout=900)
     assert done.returncode == 0, done.stdout + done.stderr
-    return root / f"{name}-run1"
+    return system / f"{name}-run1"
 
 
 def _initial_state(root: Path):
@@ -154,7 +180,11 @@ def _cmd_config(root: Path, *, tau=0.0, phase_space=0):
     }
 
 
-def _run_cmd(root, scripts, destination, *, environment=None, expect=0):
+def _run_cmd(scripts, destination, *, environment=None, expect=0):
+    # THE VARIANT'S OWN ROOT, which is the run directory's parent. Taking the module
+    # fixture's root would read `build/` from a system this run was not generated
+    # against, now that each variant has a root of its own.
+    root = Path(scripts).parent
     done = subprocess.run(
         [sys.executable, str(scripts / "md.py"),
          "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
@@ -175,7 +205,7 @@ def test_cmd_cv_runs_on_cuda_and_writes_the_declared_grid(cmd_project, tmp_path)
 
     scripts = _generate(cmd_project, "cudaA", _cmd_config(cmd_project), "--all-in-one")
     destination = tmp_path / "fresh"
-    _run_cmd(cmd_project, scripts, destination)
+    _run_cmd(scripts, destination)
 
     _assert_cuda(read_record(destination / "cMD.log"), "cMD")
     series = sorted(destination.rglob("*.cv.csv"))
@@ -190,11 +220,11 @@ def test_cmd_cv_resume_on_cuda_reproduces_the_grid_and_cost(cmd_project, tmp_pat
 
     scripts = _generate(cmd_project, "cudaB", _cmd_config(cmd_project), "--all-in-one")
     destination = tmp_path / "resumed"
-    crashed = _run_cmd(cmd_project, scripts, destination, expect=1,
+    crashed = _run_cmd(scripts, destination, expect=1,
                        environment={FAULT_ENVIRONMENT: "after-pointer-replace",
                                     FAULT_AFTER_ENVIRONMENT: "6"})
     assert crashed.returncode != 0
-    _run_cmd(cmd_project, scripts, destination)
+    _run_cmd(scripts, destination)
 
     record = read_record(destination / "cMD.log")
     _assert_cuda(record, "cMD resume")
@@ -221,10 +251,10 @@ def test_fixed_tau_phase_space_and_cv_resume_on_cuda(cmd_project, tmp_path):
     scripts = _generate(cmd_project, "cudaC",
                         _cmd_config(cmd_project, tau=0.5, phase_space=5), "--all-in-one")
     destination = tmp_path / "ps"
-    _run_cmd(cmd_project, scripts, destination, expect=1,
+    _run_cmd(scripts, destination, expect=1,
              environment={FAULT_ENVIRONMENT: "after-pointer-replace",
                           FAULT_AFTER_ENVIRONMENT: "6"})
-    _run_cmd(cmd_project, scripts, destination)
+    _run_cmd(scripts, destination)
 
     _assert_cuda(read_record(destination / "cMD.log"), "fixed-tau cMD")
     stream = sorted(destination.rglob("*.phase_space.nc"))
@@ -257,7 +287,8 @@ def _ladder_config(root: Path, *, reservoir=False, states=3):
     return document
 
 
-def _run_ladder(root, scripts, destination, name, *extra, environment=None, expect=0):
+def _run_ladder(scripts, destination, name, *extra, environment=None, expect=0):
+    root = Path(scripts).parent
     done = subprocess.run(
         [sys.executable, str(scripts / f"{name}.py"),
          "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
@@ -286,7 +317,7 @@ def test_rest2_cv_runs_on_cuda_fresh_and_resumed(ladder_project, tmp_path):
     scripts = _generate(ladder_project, "REST2", _ladder_config(ladder_project))
 
     fresh = tmp_path / "fresh"
-    _run_ladder(ladder_project, scripts, fresh, "REST2")
+    _run_ladder(scripts, fresh, "REST2")
     manifest = json.loads((fresh / "restart.json").read_text(encoding="utf-8"))
     assert (manifest.get("execution") or {}).get("platform") == "CUDA", manifest.get("execution")
     assert manifest["collective_variables"] is not None
@@ -294,11 +325,11 @@ def test_rest2_cv_runs_on_cuda_fresh_and_resumed(ladder_project, tmp_path):
         assert [int(r["step"]) for r in _rows(fresh / f"cv_state{index}.csv")] == EXPECTED
 
     resumed = tmp_path / "resumed"
-    _run_ladder(ladder_project, scripts, resumed, "REST2", expect=1,
+    _run_ladder(scripts, resumed, "REST2", expect=1,
                 environment={"MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": "0",
                              "MD_TOOLS_FAIL_LADDER_AT": "after-cv-row",
                              "MD_TOOLS_FAIL_PROPAGATION_AFTER": "2"})
-    _run_ladder(ladder_project, scripts, resumed, "REST2", "--resume")
+    _run_ladder(scripts, resumed, "REST2", "--resume")
     for index in range(3):
         assert [int(r["step"]) for r in _rows(resumed / f"cv_state{index}.csv")] == EXPECTED
 
@@ -317,7 +348,7 @@ def test_rrest2_cv_on_cuda_holds_the_pre_refresh_configuration(ladder_project, t
     scripts = _generate(ladder_project, "rREST2",
                         _ladder_config(ladder_project, reservoir=True))
     destination = tmp_path / "rrest2"
-    _run_ladder(ladder_project, scripts, destination, "rREST2")
+    _run_ladder(scripts, destination, "rREST2")
 
     manifest = json.loads((destination / "restart.json").read_text(encoding="utf-8"))
     assert (manifest.get("execution") or {}).get("platform") == "CUDA", manifest.get("execution")
@@ -377,7 +408,11 @@ def ais_project(tmp_path_factory):
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
         "dynamics": {"seed": 20260904},
     })
-    return root
+    # THE VARIANT'S ROOT, not the module's. `_generate` gives each variant a system root of its
+    # own -- `build/`, `min/` and `input/` are shared per SYSTEM and refuse a second, different
+    # configuration -- so `AIS-run1`, `build/` and `source.dcd` all live under `system-AIS/`, and
+    # `_run_ais` resolves every one of them from what this returns.
+    return root / "system-AIS"
 
 
 def _run_ais(root, destination, *extra, environment=None, expect=0):
@@ -441,7 +476,7 @@ def test_cmd_cv_survives_two_interruptions_on_cuda(cmd_project, tmp_path):
     scripts = _generate(cmd_project, "cudaD", _cmd_config(cmd_project), "--all-in-one")
 
     reference = tmp_path / "reference"
-    _run_cmd(cmd_project, scripts, reference)
+    _run_cmd(scripts, reference)
     want = (sorted(reference.rglob("*.cv.csv"))[0]).read_text(encoding="utf-8")
 
     # Both counts come from what the runs actually do, not from a guess. The first invocation
@@ -459,7 +494,7 @@ def test_cmd_cv_survives_two_interruptions_on_cuda(cmd_project, tmp_path):
     destination = tmp_path / "twice"
     committed = []
     for allowed in ("4", "0"):
-        crashed = _run_cmd(cmd_project, scripts, destination, expect=1,
+        crashed = _run_cmd(scripts, destination, expect=1,
                            environment={FAULT_ENVIRONMENT: "after-pointer-replace",
                                         FAULT_AFTER_ENVIRONMENT: allowed})
         assert crashed.returncode != 0
@@ -467,7 +502,7 @@ def test_cmd_cv_survives_two_interruptions_on_cuda(cmd_project, tmp_path):
     assert committed[0] < committed[1] < len(EXPECTED), (
         f"the two interruptions left {committed} rows of {len(EXPECTED)}: they must land at "
         f"different, incomplete points or nothing about repeated carrying is exercised")
-    _run_cmd(cmd_project, scripts, destination)
+    _run_cmd(scripts, destination)
 
     record = read_record(destination / "cMD.log")
     _assert_cuda(record, "cMD twice resumed")
@@ -482,21 +517,21 @@ def test_cmd_cv_survives_two_interruptions_on_cuda(cmd_project, tmp_path):
         "the final segment equals the cumulative, so earlier segments were not carried")
 
 
-def _ladder_twice(project, scripts, name, tmp_path):
+def _ladder_twice(scripts, name, tmp_path):
     """Fresh reference, then two interruptions and completion. Returns (reference, resumed)."""
     reference = tmp_path / f"{name}-reference"
-    _run_ladder(project, scripts, reference, name)
+    _run_ladder(scripts, reference, name)
 
     resumed = tmp_path / f"{name}-twice"
-    _run_ladder(project, scripts, resumed, name, expect=1,
+    _run_ladder(scripts, resumed, name, expect=1,
                 environment={"MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": "0",
                              "MD_TOOLS_FAIL_LADDER_AT": "after-cv-row",
                              "MD_TOOLS_FAIL_PROPAGATION_AFTER": "2"})
-    _run_ladder(project, scripts, resumed, name, "--resume", expect=1,
+    _run_ladder(scripts, resumed, name, "--resume", expect=1,
                 environment={"MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": "0",
                              "MD_TOOLS_FAIL_LADDER_AT": "after-checkpoint",
                              "MD_TOOLS_FAIL_PROPAGATION_AFTER": "1"})
-    _run_ladder(project, scripts, resumed, name, "--resume")
+    _run_ladder(scripts, resumed, name, "--resume")
     return reference, resumed
 
 
@@ -514,7 +549,7 @@ def _assert_ladder_matches(reference: Path, resumed: Path, states=3):
 
 def test_rest2_cv_survives_two_interruptions_on_cuda(ladder_project, tmp_path):
     scripts = _generate(ladder_project, "REST2twice", _ladder_config(ladder_project))
-    reference, resumed = _ladder_twice(ladder_project, scripts, "REST2", tmp_path)
+    reference, resumed = _ladder_twice(scripts, "REST2", tmp_path)
     _assert_ladder_matches(reference, resumed)
 
     cost = json.loads(
@@ -534,7 +569,7 @@ def test_rrest2_cv_survives_two_interruptions_on_cuda(ladder_project, tmp_path):
     _reservoir(ladder_project)
     scripts = _generate(ladder_project, "rREST2twice",
                         _ladder_config(ladder_project, reservoir=True))
-    reference, resumed = _ladder_twice(ladder_project, scripts, "rREST2", tmp_path)
+    reference, resumed = _ladder_twice(scripts, "rREST2", tmp_path)
     _assert_ladder_matches(reference, resumed)
 
     from md_tools.remd import storage

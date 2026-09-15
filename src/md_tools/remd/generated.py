@@ -942,7 +942,28 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     # The executor owns the run and writes its own authoritative records. This log exists so that
     # every artefact this package produces carries the SAME machine record, and so registration
     # never has to read the executor's prose summary to decide whether a ladder finished.
-    restart = out / "restart.json"
+    # THE MANIFEST THIS LAUNCH ACTUALLY WROTE, resolved exactly as the executor's `-r` was.
+    #
+    # `executor_argv` above builds `-r` as `args.restart or out / "restart.json"`, so a caller
+    # that names one -- `run.sh` passes `-r remd_records/restart_prod<N>.json`, because a ladder
+    # extended in place writes a `_prod2` set beside the first rather than over it -- gets its
+    # manifest there. This line hardcoded the default, so the two disagreed whenever `-r` was
+    # given: `code` was 0 and `restart.is_file()` was False, the completion branch was skipped,
+    # and a ladder that had just finished recorded
+    #
+    #     status: failed      failure_reason: "the executor returned 0"
+    #
+    # while its own `.out` ended `run_status: completed`. Two records of one run contradicting
+    # each other is what "completion is read from a machine record, never from prose" exists to
+    # prevent -- and registration reads the record, so every completed ladder driven by `run.sh`
+    # was unregistrable. It stayed hidden because `run.sh` is the only caller that passes `-r`,
+    # and no ladder had ever reached this line through `run.sh` before.
+    # RESOLVED AGAINST `-odir`, not against the process's working directory. `run.sh` passes a
+    # RELATIVE `-r remd_records/restart_prod<N>.json`, and `out` is absolute, so taking the flag
+    # verbatim made `file_facts(restart, relative_to=out)` raise `ValueError` -- the manifest was
+    # found but could not be named relative to the run.
+    restart = (Path(args.restart) if args.restart and Path(args.restart).is_absolute()
+               else out / args.restart if args.restart else out / "restart.json")
     if code == 0 and restart.is_file():
         outputs = {"restart_json": file_facts(restart, relative_to=out)}
         # BOTH per-state streams, under the names the driver writes. This globbed `remd*.nc` --

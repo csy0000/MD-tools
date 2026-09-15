@@ -262,18 +262,18 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
         [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", "./hot-run1",
          "--config", str(hot)], cwd=work, capture_output=True, text=True).returncode == 0
     ran = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml"],
-                         cwd=work / "hot", capture_output=True, text=True, timeout=3600)
+                         cwd=work / "hot-run1", capture_output=True, text=True, timeout=3600)
     assert ran.returncode == 0, ran.stdout[-3000:] + ran.stderr[-3000:]
 
-    result = _build_md(work, _base(ais_source={"trajectory": "../hot/whole_prod1.nc"},
+    result = _build_md(work, _base(ais_source={"trajectory": "../hot-run1/whole_prod1.nc"},
                                    dynamics={}))
     assert result.returncode == 0, result.stdout + result.stderr
 
     ais = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml", "../hot-run1/whole_prod1.nc"],
-                         cwd=work / "md_script", capture_output=True, text=True, timeout=3600)
+                         cwd=work / "AIS-run1", capture_output=True, text=True, timeout=3600)
     assert ais.returncode == 0, ais.stdout[-3000:] + ais.stderr[-3000:]
 
-    record = read_record(work / "md_script" / "AIS.log")
+    record = read_record(work / "AIS-run1" / "AIS.log")
     assert record["status"] == "completed"
     assert record["platform"]["name"] in (None, "CUDA")
     assert record["thermodynamic_states"]["source_tau"] == 0.5
@@ -283,7 +283,7 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
 
     totals = []
     for index in range(3):
-        directory = work / "md_script" / f"path_{index:04d}"
+        directory = work / "AIS-run1" / f"path_{index:04d}"
         rows = list(csv.DictReader((directory / "observations.csv").open()))
         assert len(rows) == 6, rows
 

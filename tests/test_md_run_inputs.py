@@ -265,6 +265,66 @@ def test_run_sh_drives_the_installed_command_rather_than_a_second_interface(tmp_
     assert "/data3" not in text and str(tmp_path) not in text, "a machine path leaked into run.sh"
 
 
+def test_run_sh_reaches_the_shared_input_for_every_protocol_and_shape(tmp_path):
+    """`-i` in a generated `run.sh` is ALWAYS the shared `../input/<name>.in`.
+
+    The inputs belong to the SYSTEM -- an input says what a method was asked to do, which is a
+    property of the system rather than of one repeat -- so no run directory holds a `.in` of its
+    own, whatever its protocol or shape. Two branches of the generator typed a bare basename
+    anyway, and both were invisible here because the only `run.sh` assertion above is for a SPLIT
+    REST2 tree:
+
+        AIS:          md-openmm md-run -i AIS.in   -> "md-run: -i AIS.in: no such run input file"
+        --all-in-one: md-openmm md-run -i cMD.in   -> "md-run: -i cMD.in: no such run input file"
+
+    The all-in-one line named `cMD` literally as well, so an all-in-one `umbrella` run asked for a
+    file no generation has ever written. Both are checked here, by shape, so a third branch cannot
+    reintroduce it quietly.
+    """
+    import mdtraj
+
+    from .conftest import make_dataset_root
+
+    make_dataset_root(tmp_path)
+
+    # --- all-in-one cMD: one md.py, and the shared production input -----------------------------
+    single = tmp_path / "single.config"
+    single.write_text(yaml.safe_dump(
+        {"protocol": "cMD", "solvent": "implicit", "dynamics": {"seed": 5},
+         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 5,
+                    "restrained_npt_steps": 5, "unrestrained_npt_steps": 5,
+                    "production_steps": 5},
+         "reporting": {"crd_printout_solute": 5, "info_printout": 5,
+                       "checkpoint_printout": 5}}), encoding="utf-8")
+    subprocess.run(CLI + ["build-md", "-odir", "./cMD-run1", "--config", str(single),
+                          "--all-in-one"],
+                   cwd=tmp_path, capture_output=True, text=True, timeout=600, check=True)
+    text = (tmp_path / "cMD-run1" / "run.sh").read_text(encoding="utf-8")
+    assert "md-openmm md-run -i ../input/cMD.in" in text, text
+    assert "md-run -i cMD.in" not in text, text
+    assert not (tmp_path / "cMD-run1" / "cMD.in").exists(), (
+        "an all-in-one run directory holds no .in of its own")
+
+    # --- AIS: no preparation chain, still a shared input ----------------------------------------
+    frames = mdtraj.load(str(tmp_path / "build" / "built.pdb"))
+    mdtraj.join([frames] * 4).save_dcd(str(tmp_path / "source.dcd"))
+    ais = tmp_path / "ais.config"
+    ais.write_text(yaml.safe_dump(
+        {"protocol": "AIS", "solvent": "implicit", "dynamics": {"seed": 5},
+         "ais": {"number_of_paths": 2, "switching_steps": 10,
+                 "observation_interval_steps": 5},
+         "ais_source": {"trajectory": "../source.dcd"},
+         "reporting": {"crd_printout_solute": 5, "info_printout": 5,
+                       "checkpoint_printout": 5}}), encoding="utf-8")
+    subprocess.run(CLI + ["build-md", "-odir", "./AIS-run1", "--config", str(ais)],
+                   cwd=tmp_path, capture_output=True, text=True, timeout=600, check=True)
+    text = (tmp_path / "AIS-run1" / "run.sh").read_text(encoding="utf-8")
+    assert "md-openmm md-run -i ../input/AIS.in" in text, text
+    assert "md-run -i AIS.in" not in text, text
+    assert not (tmp_path / "AIS-run1" / "AIS.in").exists(), (
+        "an AIS run directory holds no .in of its own")
+
+
 def test_the_input_language_can_express_every_field_of_the_resolved_model():
     """A key the `.in` language cannot say is a key a generated input silently drops.
 

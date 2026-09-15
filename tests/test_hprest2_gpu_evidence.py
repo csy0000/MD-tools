@@ -169,9 +169,16 @@ def _build_and_equilibrate(built: Path, name: str, config: str) -> Path:
     done = _cli(root, "build-md", "-odir", f"./{name}-run1", "--config", f"{name}.config")
     assert done.returncode == 0, done.stdout[-2000:] + done.stderr[-2000:]
     run = root / f"{name}-run1"
-    done = _cli(run, "md-run", "-i", "../input/eq_1.in", "-p", "../build/built.pdb", "-s",
-                "../build/built.xml", "-r", "eq.xml", "-chk", "eq.chk", "-o", "eq.out", "-log",
-                "eq.log", "-odir", ".")
+    # `-odir eq`, AND NO `-r`/`-chk`/`-o`/`-log`.
+    #
+    # The equilibration stage belongs to the run's `eq/`, and md-run names all four artefacts
+    # inside `-odir` under the stage's FILING KEY -- so this stage writes `eq/eq_1.xml`. A value
+    # given explicitly is taken verbatim against the WORKING directory instead, which is how
+    # `-odir .` with `-r eq.xml` put the restart at the run root while the run's own
+    # `resolved.config` there described a REST2 ladder: resolving the method-neutral
+    # `../input/eq_1.in` against it was refused with `protocol: was 'REST2', now 'cMD'`.
+    done = _cli(run, "md-run", "-i", "../input/eq_1.in", "-p", "../build/built.pdb",
+                "-s", "../build/built.xml", "-odir", "eq")
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
     return run
 
@@ -207,7 +214,7 @@ def _run_ladder(run: Path, *extra: str, timeout: int = 3600):
 @pytest.fixture(scope="module")
 def baseline(built):
     run = _build_and_equilibrate(built, "baseline", _ladder_config())
-    done = _run_ladder(run, "-c", "eq.xml")
+    done = _run_ladder(run, "-c", "eq/eq_1.xml")
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return run
 
@@ -338,7 +345,7 @@ def test_supplying_coordinates_to_an_extension_is_inert(baseline, tmp_path):
     """`-c` on an extension is accepted and ignored; if it were read, the runs would differ."""
     parent = json.loads((baseline / "restart.json").read_text(encoding="utf-8"))
     results = {}
-    for name, extra in (("without_c", ()), ("with_c", ("-c", str(baseline / "eq.xml")))):
+    for name, extra in (("without_c", ()), ("with_c", ("-c", str(baseline / "eq" / "eq_1.xml")))):
         out = baseline.parent / f"inert-{name}"
         out.mkdir()
         for helper in EXTENSION_FILES:
@@ -373,7 +380,7 @@ def test_a_restrained_ladder_runs_and_its_bias_cancels_from_the_exchange(built):
 
     run = _build_and_equilibrate(built, "restrained", _ladder_config(exchanges=20,
                                                                     restrained=True))
-    done = _run_ladder(run, "-c", "eq.xml")
+    done = _run_ladder(run, "-c", "eq/eq_1.xml")
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     manifest = json.loads((run / "restart.json").read_text(encoding="utf-8"))
     restraints = ((manifest.get("scientific_identity") or {}).get("torsion_restraints") or {})

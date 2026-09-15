@@ -82,18 +82,28 @@ def ladder(built):
     assert _cli(built, "build-md", "-odir", "./rest2-run1", "--config", str(config)).returncode == 0
 
     out = built / "rest2-run1"
+    # EACH PREPARATION STAGE INTO ITS OWN DIRECTORY, and no `-r`/`-log`.
+    #
+    # `min/` belongs to the SYSTEM and `eq/` to the run, which is what `run.sh` types. Run without
+    # `-odir`, every stage landed in the run root -- where `resolved.config` describes a REST2
+    # ladder -- and resolving the method-neutral `../input/min.in` against it was refused with
+    # `protocol: was 'REST2', now 'cMD'`. md-run names all four artefacts inside `-odir` under the
+    # stage's FILING KEY, so a stage filed as `eq_1` writes `eq/eq_1.xml`; naming them explicitly
+    # would resolve them against the working directory instead.
     previous = None
-    for stage in ("min", "eq_nvt_posres", "eq_nvt_posres_2", "eq_nvt_free"):
-        argv = ["-i", f"../input/{stage}.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-                "-r", f"{stage}.xml", "-log", f"{stage}.log"]
+    for key, source in (("min", "min"), ("eq_1", "eq_nvt_posres"),
+                        ("eq_2", "eq_nvt_posres_2"), ("eq_3", "eq_nvt_free")):
+        odir = "../min" if key == "min" else "eq"
+        argv = ["-i", f"../input/{source}.in", "-p", "../build/built.pdb",
+                "-s", "../build/built.xml", "-odir", odir]
         if previous:
-            argv += ["-c", f"{previous}.xml"]
+            argv += ["-c", previous]
         done = _md_run(out, *argv)
         assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
-        previous = stage
+        previous = f"../min/min.xml" if key == "min" else f"eq/{key}.xml"
 
-    done = _md_run(out, "-ng", "2", "-i", "../input/REST2.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-                   "-c", f"{previous}.xml", "-log", "REST2.log", ranks=2)
+    done = _md_run(out, "-ng", "2", "-i", "../input/REST2.in", "-p", "../build/built.pdb",
+                   "-s", "../build/built.xml", "-c", previous, "-log", "REST2.log", ranks=2)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return out
 
@@ -109,9 +119,12 @@ def test_a_two_rank_ladder_writes_one_trajectory_per_state(ladder):
 
 def test_each_rank_kept_its_own_record_and_ran_on_cuda(ladder):
     """Two ranks, two records, two devices. A rank that lost its GPU has to be able to say so."""
-    assert (ladder / "REST2.log").is_file() and (ladder / "REST2.log.rank01").is_file()
-    text = (ladder / "REST2.out").read_text(encoding="utf-8")
-    other = (ladder / "REST2.out.rank01").read_text(encoding="utf-8")
+    # PER SEGMENT, in `remd_records/`: a ladder extended in place writes a `_prod2` set beside
+    # the first rather than over it, so there is no `REST2.out` at the run root.
+    records = ladder / "remd_records"
+    assert (records / "REST2_prod1.log").is_file() and (records / "REST2_prod1.log.rank01").is_file()
+    text = (records / "REST2_prod1.out").read_text(encoding="utf-8")
+    other = (records / "REST2_prod1.out.rank01").read_text(encoding="utf-8")
     assert "platform           : CUDA" in text, text
     assert "platform           : CUDA" in other, other
     # Deterministic placement, recorded: not "a GPU" but WHICH one, and by what rule.
@@ -251,7 +264,7 @@ def test_path_identity_does_not_depend_on_the_worker_count(built, source):
     for ranks in (1, 3):
         out = _ais_project(built, f"ais_n{ranks}", 12)
         done = _md_run(out, "-ng", str(ranks), "-i", "../input/AIS.in", "-p", "../build/built.pdb",
-                       "-s", "../build/built.xml", "-source-traj", "../source/whole_prod1.nc",
+                       "-s", "../build/built.xml", "-source-traj", "../source-run1/whole_prod1.nc",
                        "-odir", ".", "-log", "AIS.log", ranks=ranks)
         assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
         tables[ranks] = {r["path_index"]: r
@@ -276,7 +289,7 @@ def test_a_rerun_does_not_touch_a_path_that_already_completed(built, source):
     """
     out = _ais_project(built, "ais_restart", 4)
     argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-            "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-log", "AIS.log")
+            "-source-traj", "../source-run1/whole_prod1.nc", "-odir", ".", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
 
     def fingerprint():
@@ -302,7 +315,7 @@ def test_overwrite_starts_the_ais_directory_over(built, source):
     """
     out = _ais_project(built, "ais_overwrite", 4)
     argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-            "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-log", "AIS.log")
+            "-source-traj", "../source-run1/whole_prod1.nc", "-odir", ".", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
     assert len(sorted(out.glob("AIS_traj*.nc"))) == 4
 
@@ -463,7 +476,7 @@ def _cadence_project(built: Path, name: str) -> Path:
         "ais": {"number_of_paths": 2, "tau_start": 0.5, "tau_end": 0.0,
                 "switching_steps": 1000, "parameter_update_interval_steps": 1,
                 "observation_interval_steps": 100},
-        "ais_source": {"trajectory": "../source/whole_prod1.nc"},
+        "ais_source": {"trajectory": "../source-run1/whole_prod1.nc"},
         "reporting": {"crd_printout_solute": 200, "info_printout": 500,
                       "checkpoint_printout": 200}}, sort_keys=False), encoding="utf-8")
     assert _cli(built, "build-md", "-odir", f"./{name}-run1", "--config", str(config)).returncode == 0
@@ -481,7 +494,7 @@ def test_each_ais_cadence_controls_its_own_stream(built, source):
 
     out = _cadence_project(built, "cadences")
     done = _md_run(out, "-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-                   "-source-traj", "../source/whole_prod1.nc", "-odir", ".",
+                   "-source-traj", "../source-run1/whole_prod1.nc", "-odir", ".",
                    "-o", "AIS.out", "-log", "AIS.log")
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
 
@@ -521,7 +534,7 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
 
     out = _cadence_project(built, "resume")
     argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-            "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
+            "-source-traj", "../source-run1/whole_prod1.nc", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
 
     crashed = subprocess.run(["md-openmm", "md-run", *argv], cwd=out, capture_output=True,
                              text=True, timeout=1800,
@@ -585,7 +598,7 @@ def test_a_completed_path_is_not_touched_by_a_resume(built, source):
     """
     out = _cadence_project(built, "untouched")
     argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-            "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
+            "-source-traj", "../source-run1/whole_prod1.nc", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
 
     before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
