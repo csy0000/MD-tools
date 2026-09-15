@@ -3,7 +3,7 @@
 `md_tools.remd.amber_trajectory` decides every per-state name. This file pins the layout itself,
 because the layout is a contract with whoever reads a finished run:
 
-    remd<i>/  system_state<i>.xml
+    remd<i>/  build_state<i>.xml
               whole_state<i>_prod<N>.nc     solute_state<i>_prod<N>.nc
               cv_state<i>_prod<N>.dat       cv_state<i>_prod<N>.json
               restart_state<i>_prod<N>.json restart_state<i>_prod<N>.xml
@@ -55,7 +55,7 @@ def test_a_negative_state_index_is_refused_everywhere_it_appears():
 
 def test_the_rung_system_is_named_for_its_state_and_carries_no_segment():
     """The Hamiltonian does not change between segments, so a segment in the name would lie."""
-    assert amber.state_system_name(3) == "system_state3.xml"
+    assert amber.state_system_name(3) == "build_state3.xml"
 
 
 @pytest.mark.parametrize("segment", [1, 2, 5])

@@ -104,13 +104,13 @@ RANK_DIRECTORY = "rank"
 
 
 def state_system_name(state_index):
-    """`system_state<i>.xml` -- the serialised rung Hamiltonian for one state.
+    """`build_state<i>.xml` -- the serialised rung Hamiltonian for one state.
 
     This is what makes a state reproducible: the exact System its Context was created from, rather
     than a tau value and a promise that the same scaling would be re-derived the same way. The
     preflight already builds every rung (`rung_systems`); this is that object, written down.
     """
-    return f"system_state{_checked_index(state_index)}.xml"
+    return f"build_state{_checked_index(state_index)}.xml"
 
 
 def state_cv_name(state_index, *, segment=1, suffix="dat"):

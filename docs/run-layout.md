@@ -1,9 +1,14 @@
 # The run directory layout
 
-**Status: proposed for the code; already realised for one migrated reference run.** The code still
-writes the old flat layout. `data/reference/ALA-explicit-HMR/` has been reorganised to this shape
-by `data/reference/migrate_run1.py`, which is how the errors in the first two drafts of this
-document were found.
+**Status: proposed for the code; already realised for nine migrated reference runs.** The code
+still writes the old flat layout. `data/reference/{ALA-explicit-HMR,ALA-implicit-HMR,
+RGDfV-implicit-HMR}/` have been reorganised to this shape, which is how the errors in the first
+three drafts of this document were found -- the missing exchange ledger, `build/` being a sibling
+rather than absent, and the equilibration streams being solvent-dependent.
+
+The migration scripts under `data/reference/` are deliberately THROWAWAY and untracked: the point
+is for the code to write this layout natively, so there is nothing to migrate in future. They are
+not part of the package and will not be maintained.
 
 Read the tree, correct what is wrong, and the implementation follows the corrected version.
 
@@ -141,7 +146,7 @@ invariant survives; the evidence for it changes location. Stage order comes from
 ### `remd<n>/` — one directory per thermodynamic state
 
 ```text
-remd<n>/  system_state<n>.xml                   the rung Hamiltonian, serialised
+remd<n>/  build_state<n>.xml                   the rung Hamiltonian, serialised
           remd_state<n>_prod<x>.nc              whole-system trajectory, segment x
           solute_state<n>_prod<x>.nc            solute trajectory, segment x
           cv_state<n>_prod<x>.dat               CV series
@@ -159,7 +164,7 @@ segment in order — which is the common analysis operation. The segment is a su
 files are indexed by state *and* segment; the records in `remd_records/` are indexed by segment
 alone, which is why they are grouped the other way.
 
-**`system_state<n>.xml` is new**, and cannot be backfilled. The preflight builds every rung
+**`build_state<n>.xml` is new**, and cannot be backfilled. The preflight builds every rung
 (`rung_systems`) and never serialises one; no `XmlSerializer.serialize` call for a rung exists in
 `md_tools/remd/`. Writing one for the migrated run would mean re-scaling `built.xml` to each tau
 *now* and asserting the result matches a run from September. Migrated runs therefore legitimately
@@ -239,7 +244,7 @@ its **own copy** of what it needs from `build/` and `min/`, because standing alo
 | `REST2.runstate.json` | `<run>/remd_records/runstate_prod<x>.json` |
 | `REST2.out`, `REST2.log`, `REST2.group` | `<run>/remd_records/REST2_prod<x>.{out,log,group}` |
 | `REST2.out.rank<r>`, `REST2.log.rank<r>` | `<run>/rank/` |
-| *(nothing)* | `<run>/remd<n>/system_state<n>.xml` — new, not backfillable |
+| *(nothing)* | `<run>/remd<n>/build_state<n>.xml` — new, not backfillable |
 | *(nothing)* | `<run>/run.config` — the seed |
 
 ## 3. Registration
@@ -283,7 +288,7 @@ The migration:
 5. **dry-runs first**, printing every planned move; **verifies sha256** after copying; and
    **removes a source only after** its copy verifies — and only when explicitly told to.
 6. **records what does not exist rather than synthesising it.** Absent from the source and
-   therefore from the migrated tree: `system_state<n>.xml`, per-state restart records, CV series,
+   therefore from the migrated tree: `build_state<n>.xml`, per-state restart records, CV series,
    per-state `.out`/`.log`, `bundles/`. `restart.json`'s `states` entries carry only `index`,
    `trajectory`, `tau` and `effective_temperature_k`, and the per-state digests inside `extends`
    describe the PARENT segment's outputs — deriving this segment's per-state record from them
@@ -320,7 +325,9 @@ second `--apply`, sources intact at 251 files.
 4. `build/`, `min/` and `input/` hoisted, with the digests a run records.
 5. The per-run reorganisation, one directory at a time, with the suite green between each.
 6. `validate.py` and the manifest, including the implicit directory prefix.
-7. Serialising `system_state<n>.xml` per rung, which is new behaviour rather than a move.
+7. Serialising `build_state<n>.xml` per rung, which is new behaviour rather than a move.
 8. The registration gate.
-9. The migration tool updated to this layout, dry-run first.
+9. ~~A migration tool~~ -- not needed. The nine existing reference runs are already
+   migrated, and future runs are written into this layout directly, so no tool has to
+   exist for it.
 10. `data-register` and the data contract.
