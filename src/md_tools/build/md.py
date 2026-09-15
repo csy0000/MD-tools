@@ -698,7 +698,61 @@ def _refuse_retired_platform(document: dict[str, Any]) -> None:
         f"asked for. Delete this key; the protocol is the same experiment on every machine.")
 
 
-def resolve_md_config(path: Path | None) -> dict[str, Any]:
+#: What a per-run `run.config` may set, and nothing else. `{section: {keys}}`.
+#:
+#: DELIBERATELY ONE KEY. The seed is the whole reason two repeats of one method on one system
+#: differ -- `derive_seed` hashes it with each stage and replica name, so every stream in a run
+#: descends from that number -- which is why it is the one thing that cannot live in the shared
+#: `input/`. An override file that could set anything else would be a SECOND configuration
+#: authority, and `md_tools.build.md` exists to be the only one. Widening this is not a
+#: convenience: two files that can both set a step count is two answers waiting to disagree, and
+#: the resolved document would record the winner without saying there had been a contest.
+RUN_CONFIG_ALLOWED: dict[str, frozenset[str]] = {"dynamics": frozenset({"seed"})}
+
+
+def load_run_config(path: Path | None) -> dict[str, Any]:
+    """The per-run override document, validated against `RUN_CONFIG_ALLOWED`.
+
+    An absent path is an empty override, not an error: a run that does not state a seed takes the
+    schema's default, exactly as one generated before `run.config` existed does.
+    """
+    if path is None:
+        return {}
+    path = Path(path)
+    if not path.is_file():
+        return {}
+    document = load_yaml_strictly(path.read_text(encoding="utf-8"), source=str(path)) or {}
+    if not isinstance(document, dict):
+        raise ConfigError(f"{path}: expected a mapping of sections, got "
+                          f"{type(document).__name__}")
+    for section, block in document.items():
+        if section not in RUN_CONFIG_ALLOWED:
+            allowed = ", ".join(f"{s}.{k}" for s, keys in RUN_CONFIG_ALLOWED.items()
+                                for k in sorted(keys))
+            raise ConfigError(
+                f"{path}: `{section}` may not be set per run. A run.config carries only what is "
+                f"genuinely per-run, which is {allowed} -- everything else belongs in the shared "
+                f"input, where every repeat of this method reads the same value. An override that "
+                f"could set anything would be a second configuration authority.")
+        if not isinstance(block, dict):
+            raise ConfigError(f"{path}: `{section}` must be a mapping, got "
+                              f"{type(block).__name__}")
+        for key in block:
+            if key not in RUN_CONFIG_ALLOWED[section]:
+                raise ConfigError(
+                    f"{path}: `{section}.{key}` may not be set per run; only "
+                    f"{', '.join(sorted(RUN_CONFIG_ALLOWED[section]))} may.")
+    return document
+
+
+def resolve_md_config(path: Path | None, *, run_config: Path | None = None) -> dict[str, Any]:
+    """Resolve a configuration, optionally layered with a per-run override.
+
+    `run_config` is the narrow per-run document (§`RUN_CONFIG_ALLOWED`): the shared `input/*.in`
+    says what the method was asked to do, and this says which repeat it is. The two resolve to
+    one `resolved.config`, which stays authoritative -- so the round trip a generated input
+    promises is `input` + `run.config` -> `resolved.config`, not `input` alone.
+    """
     document: dict[str, Any] = {}
     if path is not None:
         document = load_yaml_strictly(Path(path).read_text(encoding="utf-8"),
@@ -706,6 +760,17 @@ def resolve_md_config(path: Path | None) -> dict[str, Any]:
         if not Path(path).is_file():
             raise ConfigError(f"{path}: no such configuration file")
     _refuse_retired_platform(document)
+
+    # MERGED BEFORE `stated` IS TAKEN, not after. `stated` is what
+    # `_apply_ais_reporting_defaults` consults to tell a value the user WROTE from one it
+    # defaulted, so a seed supplied per run has to count as stated -- otherwise layering would
+    # silently change which reporting intervals AIS considers user-chosen.
+    override = load_run_config(run_config)
+    for section, block in override.items():
+        merged = dict(document.get(section) or {})
+        merged.update(block)
+        document[section] = merged
+
     stated = {name: set(block) for name, block in document.items() if isinstance(block, dict)}
     MD_SCHEMA.after_resolve = (lambda resolved: _apply_ais_reporting_defaults(resolved, stated),)
     try:
@@ -1002,6 +1067,20 @@ def _in_value(value: Any) -> str | None:
     return str(value)
 
 
+#: Resolved fields that are NOT written into a generated `.in`, because the input is SHARED.
+#:
+#: `input/` sits at the dataset root and every repeat of a method reads the same files -- which
+#: the reference data bears out exactly: the three ALA-explicit REST2 runs' inputs differ by one
+#: line each, `random_seed = 700501` against `700502`, and nothing else. So the seed is the one
+#: thing that cannot be in there, and it lives in the per-run `run.config` instead
+#: (`RUN_CONFIG_ALLOWED`).
+#:
+#: It stays ACCEPTED by `SECTION_KEYS`: nine migrated reference runs carry `random_seed` in their
+#: inputs, and `md-run` must keep reading them. Emission and acceptance are different questions,
+#: and conflating them would make every existing input unparseable.
+_NOT_IN_INPUT = frozenset({"dynamics.seed"})
+
+
 def in_file_text(resolved: dict[str, Any], *, stage: str | None = None,
                  heading: str = "") -> str:
     """One `.in` file for this resolved workflow, optionally naming one stage of it."""
@@ -1031,6 +1110,11 @@ def in_file_text(resolved: dict[str, Any], *, stage: str | None = None,
                 # field they set (`random_seed` -> `dynamics.seed`, `reservoir_enabled` ->
                 # `reservoir.enabled`), and reconstruction silently dropped every one of them.
                 if target.startswith("_"):
+                    continue
+                # NOT WRITTEN INTO A SHARED INPUT. Keyed by target rather than by key so both
+                # spellings are covered at once -- `random_seed` is accepted in &cntrl AND in
+                # &AIS, deliberately, so an AIS input reads as one block.
+                if target in _NOT_IN_INPUT:
                     continue
                 where, _, leaf = target.rpartition(".")
                 if where != block:
@@ -1441,6 +1525,27 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
         "# Every default is written out, so this file alone reproduces the generation.\n"
         + yaml.safe_dump(resolved, sort_keys=False, default_flow_style=False), encoding="utf-8")
     written.append("resolved.config")
+
+    # THE PER-RUN DECLARATION, and it is what closes the round trip. The generated `.in` files
+    # deliberately do NOT carry `random_seed`: `input/` is shared by every repeat of a method on
+    # one system, and the seed is the one value that differs between them (the three ALA-explicit
+    # reference runs' inputs differ by exactly that line and nothing else).
+    #
+    # But `md-run` re-resolves the `.in` and compares the result against the `resolved.config`
+    # beside it -- "every .in that build-md writes resolves back to exactly the resolved.config
+    # beside it" is a test, not a convention. With the seed emitted nowhere, that comparison fails
+    # with `dynamics.seed: was 11, now 1` and refuses to continue. So the seed is written HERE, and
+    # `md-run` layers `-odir/run.config` over the input to resolve the same document again.
+    (out_dir / "run.config").write_text(
+        "# What is per RUN rather than per method. The shared inputs in input/ say what this\n"
+        "# protocol was asked to do; this says which repeat it is.\n"
+        "#\n"
+        "# Only the seed may be set here -- see `RUN_CONFIG_ALLOWED`. `derive_seed` hashes it with\n"
+        "# each stage and replica name, so every stream in this run descends from this number, and\n"
+        "# two runs sharing an input and a seed would be bit-identical rather than repeats.\n"
+        + yaml.safe_dump({"dynamics": {"seed": resolved["dynamics"]["seed"]}}, sort_keys=False),
+        encoding="utf-8")
+    written.append("run.config")
 
     log.heading("Outputs")
     for name in written:

@@ -328,7 +328,11 @@ def md_run_main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        run_input = parse_run_input(args.input, source_trajectory=args.source_traj)
+        # THE PER-RUN OVERRIDE, located here rather than inside the parser. `-odir` is this
+        # run's directory, so `run.config` beside it is this run's seed; an absent one is an
+        # empty override and resolves exactly as an input generated before it existed.
+        run_input = parse_run_input(args.input, source_trajectory=args.source_traj,
+                                    run_config=Path(args.out_dir) / "run.config")
     except ConfigError as invalid:
         print(f"md-run: {invalid}", file=sys.stderr)
         return 2

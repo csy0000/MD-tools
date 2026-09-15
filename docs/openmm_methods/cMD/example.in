@@ -91,11 +91,6 @@
   ! unit: steps; minimum: 0
   phase_space_printout      = 0,
   !
-  ! Base random seed. Each stage derives its own from this plus the stage name, so stages are
-  ! independent and the whole chain is reproducible.
-  ! minimum: 0
-  random_seed               = 1,
-  !
   ! Minimiser ITERATIONS, not a time interval: minimisation does not integrate and has no
   ! timestep. 0 skips minimisation.
   ! minimum: 0

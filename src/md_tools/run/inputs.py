@@ -226,10 +226,17 @@ def _suggest(section: str, key: str) -> str:
     return f" Known keys in &{section}: {', '.join(sorted(known))}."
 
 
-def parse_run_input(path: str | Path, *, source_trajectory: str | None = None) -> RunInput:
+def parse_run_input(path: str | Path, *, source_trajectory: str | None = None,
+                    run_config: str | Path | None = None) -> RunInput:
     """Read one Amber-like input and resolve it through the schema that owns the defaults.
 
     Parsing and every semantic check finish before any caller opens OpenMM or creates an output.
+
+    `run_config` is the per-run override, and is PASSED IN rather than discovered here. A parser
+    that went looking for a file beside its input would let a run silently acquire settings
+    nobody named on the command line -- and the seed is exactly the setting whose silent
+    acquisition would make two repeats bit-identical or, worse, quietly different from what the
+    caller intended. `md-run` locates it from `-odir` and hands it over.
     """
     from ..build.md import resolve_md_config
 
@@ -314,7 +321,7 @@ def parse_run_input(path: str | Path, *, source_trajectory: str | None = None) -
     projected = Path(tempfile.mkdtemp()) / "projected.config"
     projected.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     try:
-        resolved = resolve_md_config(projected)
+        resolved = resolve_md_config(projected, run_config=run_config)
     except ConfigError as invalid:
         # Re-point the message at the file the user actually wrote.
         raise ConfigError(str(invalid).replace(str(projected), str(path))) from None

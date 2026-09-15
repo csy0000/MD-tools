@@ -101,11 +101,6 @@
   ! unit: steps; minimum: 0
   phase_space_printout      = 0,
   !
-  ! Base random seed. Each stage derives its own from this plus the stage name, so stages are
-  ! independent and the whole chain is reproducible.
-  ! minimum: 0
-  random_seed               = 1,
-  !
   ! Trajectory output interval. 1000 steps = 2 ps at 2 fs.
   ! unit: steps; minimum: 0
   crd_printout_solute       = 500,

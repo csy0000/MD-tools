@@ -154,7 +154,8 @@ def test_under_implicit_solvent_the_tau_zero_chain_is_minimisation_alone(tmp_pat
     out = _build_md(tmp_path, {"protocol": "REST2", "solvent": "implicit",
                                "rest2": {"equilibration_per_tau": True}})
     assert sorted(p.name for p in out.iterdir()) == sorted(
-        ["REST2.in", "REST2.py", "build-md.log", "min.in", "min.py", "resolved.config", "run.sh"])
+        ["REST2.in", "REST2.py", "build-md.log", "min.in", "min.py", "resolved.config", "run.config",
+         "run.sh"])
     assert "-c min.xml" in (out / "run.sh").read_text(encoding="utf-8")
     assert "per-tau equilibration" in (out / "build-md.log").read_text(encoding="utf-8")
 
@@ -199,30 +200,32 @@ def test_every_generated_input_resolves_back_to_its_resolved_config(tmp_path):
 #: that is the thing to look at rather than to overwrite.
 BEFORE = {
     "explicit": {
-        "eq_npt_free.in": "7f069da94d44b80f072b3ed2080907a525a4bb1c4a62bfc448f79ef0f9ddf25a",
+        "eq_npt_free.in": "67315b30f5cd6687da2b98834a90940df979deb9b33b3a075f5bd06ecb9e7853",
         "eq_npt_free.py": "6daed6d160528e34e730c67997fb015667e2a3fe5cf80677be6b3f1e68b3ccad",
-        "eq_npt_posres.in": "81b550eb7e420aeffb77c47875f002cda7ae896d31364426f97bff1772812f55",
+        "eq_npt_posres.in": "9f3703823253dc6a622b616fbe1abcb91f5a1171d52bd9d7d2e19ac00d5bb649",
         "eq_npt_posres.py": "a9a19c6c5e8f839a7a51e81a1ec554f89655bd04d581bc0c1babaa6aa07e6562",
-        "eq_nvt_posres.in": "1368cf3488975818bf3ec89f0baa3c5661cdefa5f78b209ee737745e1cf70e7c",
+        "eq_nvt_posres.in": "8c8b5302118f6dfe5335ac815d1d31a4bb0412e6385fd082580504765fdc7771",
         "eq_nvt_posres.py": "b5a332209934c06cbc1fe47f8cb780933bd672cf13de18f2d76214bb6cf89019",
-        "min.in": "f4e6932b1baf9328279ee5526d89948cb1f10f9009f0752e205bf9c4ff453b6a",
+        "min.in": "50563461ea8c8e1fdcf4b8fb6da3c1a24ffe3c97b315c6737c7ca6b2af511ece",
         "min.py": "c85b0c6bfd43627551e84f9fec6a0e76db4d16f089a640053d78fba522d9d601",
+        "run.config": "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
         "resolved.config": "6f2fec67bd208c7510d537405614a064b225baf4d693757170319806b8714093",
-        "REST2.in": "1ae0792348eb5a20accdbb5296bab7eb57a68e23c40ee2889c33318879ac4e96",
+        "REST2.in": "27a4680a77717baa66132b0e38b0daa07fa0a78ac7ad4cbbf3d35d10414ff1bb",
         "REST2.py": "3e039fcc9c24d68ebadeda2c73c88b47c628011583e55b75430d80e4cd1c2f87",
         "run.sh": "700b5d0b4013c2c48faba7de66905ac9c62e84122d4f5e3505bb0add98234ead",
     },
     "implicit": {
-        "eq_nvt_free.in": "e752e9d786765ee03bbfeb1bc005857bd18b8a7d191560fafb61fb1873ecef15",
+        "eq_nvt_free.in": "f7d57ec788cd4d0d7951ec23fb2f96b976fbc57faf28ffed9370172f45ebf9b6",
         "eq_nvt_free.py": "63f242cd9e3c1bf26ae98ff86e95792d76bbe4d94d06653bdaa6c1b140628f62",
-        "eq_nvt_posres_2.in": "1962fa101d2bc707b32c9727f5386b0344f7e2d908f640fe4e205f81d62a806e",
+        "eq_nvt_posres_2.in": "19e66b88628f024abc9d0edbec8b45e63064d55ff835cbb4124fda0be999585e",
         "eq_nvt_posres_2.py": "3054435667e24ebc079e4ecae1f1ddbc3de854035a6ee440f1a61e4f95c2cd35",
-        "eq_nvt_posres.in": "0bb523155922ccb4ff64252aa7d0b86ee6e2bb79198d58fde37c983b58d80955",
+        "eq_nvt_posres.in": "52459b5537ee1f9216e8d9d085e3fbb5b1c7d2a0a0005df6935df62eaa9fd5ba",
         "eq_nvt_posres.py": "b5a332209934c06cbc1fe47f8cb780933bd672cf13de18f2d76214bb6cf89019",
-        "min.in": "f156fce24799290387ddb192ffef350420fa05d714cff2ac69ebaef751279bee",
+        "min.in": "ed705e88d4c8f258f5e26c00ab550014fbb066bc57c67aa3db700afda400f530",
         "min.py": "c85b0c6bfd43627551e84f9fec6a0e76db4d16f089a640053d78fba522d9d601",
+        "run.config": "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
         "resolved.config": "51ebec05d57459fa2916373958a75bc720d7939bd684681a9aa113cc53c11c94",
-        "REST2.in": "38b63fe39dd4afc13a496cfac2f5cdc78b10be3e2bd5e2e39e2c2f7fcc74999e",
+        "REST2.in": "71c6044025a3923ba08a1ed4a0ce5fcc4eef571b828b2fbd580298194ecff4da",
         "REST2.py": "3e039fcc9c24d68ebadeda2c73c88b47c628011583e55b75430d80e4cd1c2f87",
         "run.sh": "56855931c369e433e8b2111ff9309aea6d564e892194d3720a0cf5a5ec861d14",
     },
