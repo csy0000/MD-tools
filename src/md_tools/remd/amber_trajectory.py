@@ -69,36 +69,104 @@ def state_trajectory_name(state_index, *, content="whole", segment=1):
     return f"{content}_state{index}_prod{int(segment)}.nc"
 
 
-def state_cv_name(state_index, *, suffix="csv"):
-    """`cv_state<i>.csv` / `.json` -- the CV series and its sidecar, for one STATE.
-
-    `<content>_state<i>`, the same shape as `solute_state<i>_prod<N>.nc` and
-    `whole_state<i>_prod<N>.nc`, because it describes the same thing: whatever occupied state i.
-    These were `remd<i>.cv.csv` -- the last place the pre-rename name survived, which left one
-    run directory using two spellings of "state i" and no way to tell from a filename whether a
-    given file followed the state or the walker.
-    """
+def _checked_index(state_index):
     index = int(state_index)
     if index < 0:
         raise ValueError(f"a state index cannot be negative; got {state_index}")
-    return f"cv_state{index}.{suffix}"
+    return index
+
+
+def state_directory(state_index):
+    """`remd<i>` -- the directory holding everything that belongs to ONE state.
+
+    Every per-state artefact lives here: the rung System, both trajectory streams, the CV series
+    and the per-state restarts. The alternative -- N states' files flat in one directory -- made a
+    finished run a list of a hundred names in which the only grouping was a substring, and made
+    "everything state 3 produced" a glob rather than a directory.
+
+    `remd` rather than `state`, because that is the name the ladder is known by in the
+    configuration (`protocol: REST2`, `rem.log`) and a reader arriving at a run directory should
+    not have to learn a second word for the same thing. The INDEX is still the state's, exactly as
+    in `state_trajectory_name`: after an accepted exchange the configuration in `remd2/` is a
+    different walker's, and that is the point.
+    """
+    return f"remd{_checked_index(state_index)}"
+
+
+#: Where the rank-indexed process reports live, relative to the run directory.
+#:
+#: NOT `remd<i>/`, and this is a correctness point rather than tidiness. A rank is a PROCESS and a
+#: state is a THERMODYNAMIC STATE, and they are not in bijection: a real 6-state ladder ran on 5
+#: ranks, so `REST2.out.rank01` is the report of a process that owned more than one state and
+#: belongs to no single one of them. Filing it under `remd1/` would assert a correspondence that
+#: does not exist.
+RANK_DIRECTORY = "rank"
+
+
+def state_system_name(state_index):
+    """`system_state<i>.xml` -- the serialised rung Hamiltonian for one state.
+
+    This is what makes a state reproducible: the exact System its Context was created from, rather
+    than a tau value and a promise that the same scaling would be re-derived the same way. The
+    preflight already builds every rung (`rung_systems`); this is that object, written down.
+    """
+    return f"system_state{_checked_index(state_index)}.xml"
+
+
+def state_cv_name(state_index, *, segment=1, suffix="dat"):
+    """`cv_state<i>_prod<N>.dat` / `.json` -- the CV series and its sidecar, for one STATE.
+
+    THE SEGMENT IS PART OF THE NAME, for the reason every other per-state stream carries one: a
+    second segment run into the same state directory would otherwise append to, or overwrite, the
+    first segment's series. The CV series had no segment at all, which was safe only while the
+    trajectories beside it were equally unsegmented -- and they were, which was the bug.
+    """
+    return f"cv_state{_checked_index(state_index)}_prod{int(segment)}.{suffix}"
+
+
+def state_restart_name(state_index, *, segment=1, suffix="json"):
+    """`restart_state<i>_prod<N>.json` / `.xml` -- what one state finished a segment holding.
+
+    Two files, two jobs. The `.xml` is the serialised final state -- positions, velocities, box --
+    which is what a continuation installs. The `.json` is that segment's record for this state:
+    digests, sizes, frame and row counts, the tau it ran at.
+
+    Neither carries a fact about the LADDER. Exchange statistics, the state-to-walker mapping and
+    whether the run completed are properties of the whole ladder and live in its own record; an
+    exchange happens BETWEEN states and no per-state file can hold it.
+    """
+    return f"restart_state{_checked_index(state_index)}_prod{int(segment)}.{suffix}"
 
 
 def state_index_from_name(name):
-    """Only for validating a groupfile that names its outputs. Never used to discover order."""
+    """Only for validating a groupfile that names its outputs. Never used to discover order.
+
+    The INDEX COMES FROM THE FILENAME, always. A parent directory is inspected only when it is
+    itself a state directory, and then it must AGREE: a group file naming
+    `remd2/whole_state3_prod1.nc` describes a file whose directory and name disagree about which
+    state it holds, and picking either would be a guess.
+
+    Any other parent is ignored rather than refused. This function is handed absolute paths and
+    paths under arbitrary run directories, and requiring `remd<i>/` of all of them would make the
+    layout a precondition for reading an index out of a name -- which it is not, and which would
+    refuse `/somewhere/whole_state3_prod1.nc` for no reason.
+    """
     import re
 
-    stem = Path(name).name
+    path = Path(name)
+    stem = path.name
     matched = re.fullmatch(r"(whole|solute)_state(\d+)_prod(\d+)\.nc", stem)
-    if matched:
-        return int(matched.group(2))
-    raise ValueError(
-        f"{stem!r} is not a state trajectory name; expected "
-        f"<whole|solute>_state<index>_prod<segment>.nc")
-    digits = stem[len("remd"):-len(".nc")]
-    if not digits.isdigit():
-        raise ValueError(f"{stem!r} does not carry a numeric state index")
-    return int(digits)
+    if not matched:
+        raise ValueError(
+            f"{stem!r} is not a state trajectory name; expected "
+            f"<whole|solute>_state<index>_prod<segment>.nc")
+    index = int(matched.group(2))
+    directory = re.fullmatch(r"remd(\d+)", path.parent.name)
+    if directory is not None and int(directory.group(1)) != index:
+        raise ValueError(
+            f"{name!r} disagrees with itself: the directory names state "
+            f"{int(directory.group(1))} and the file names state {index}")
+    return index
 
 
 def validate_state_outputs(names):

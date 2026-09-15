@@ -114,6 +114,23 @@ MD_SCHEMA = Schema(
             Field("production_steps", int, default=2_500_000, minimum=0, unit="steps",
                   doc="Production length. 2,500,000 steps = 5 ns at 2 fs. This is the "
                       "authoritative number; the log prints the derived ps and ns beside it."),
+            Field("number_of_segments", int, default=1, minimum=1,
+                  doc="How many SEGMENTS the production run is written as. 1, the default, is a "
+                      "single `prod1` segment and the historical behaviour.\n"
+                      "  It SPLITS the production total rather than multiplying it: "
+                      "`production_steps` stays the whole run and each segment gets "
+                      "`production_steps / number_of_segments`, so raising this re-divides the "
+                      "same trajectory and never lengthens it. A value that does not divide "
+                      "exactly is refused with the arithmetic that would fix it, because a final "
+                      "short segment would make the last chunk incomparable with the others.\n"
+                      "  On a REST2/rREST2 ladder there is no `production_steps`: production is "
+                      "`number_of_exchanges * exchange_interval_steps`, so the split is of "
+                      "`number_of_exchanges` and an exchange is never allowed to straddle two "
+                      "segments.\n"
+                      "  Each segment writes its own files -- `solute_state<i>_prod<N>.nc`, "
+                      "`cv_state<i>_prod<N>.dat`, `restart_state<i>_prod<N>.json` -- so segments "
+                      "cannot overwrite one another. That was a real defect: every chunk of a "
+                      "five-chunk reference run wrote `_prod1`."),
         ], doc="Stage lengths, as exact integer step counts."),
         Section("reporting", [
             Field("crd_printout_solute", int, default=1000, minimum=0, unit="steps",
@@ -364,6 +381,7 @@ def _check_timestep(resolved: dict[str, Any]) -> None:
 
 def _check_protocol(resolved: dict[str, Any]) -> None:
     protocol = resolved["protocol"]
+    _check_segments(resolved)
     if protocol == "AIS":
         _check_ais(resolved)
     elif resolved["ais_source"]["trajectory"]:
@@ -401,6 +419,68 @@ def _check_protocol(resolved: dict[str, Any]) -> None:
                 "stages.restrained_npt_steps and stages.unrestrained_npt_steps are all 0, so no "
                 "rung would be equilibrated at all. Give at least one of them a step count, or "
                 "set rest2.equilibration_per_tau to false.")
+
+
+def _check_segments(resolved: dict[str, Any]) -> None:
+    """`stages.number_of_segments` must divide the production total exactly.
+
+    A SPLIT, never a multiplier: the production total is what the configuration already states,
+    and this decides how many files it is written as. So the only question is whether it divides,
+    and a remainder is refused rather than rounded -- a final short segment would make the last
+    chunk incomparable with the others, which is exactly the comparison segments exist to enable.
+
+    The quantity being divided differs by protocol, and that is not cosmetic. A ladder has no
+    `production_steps`: its production is `number_of_exchanges * exchange_interval_steps`, and the
+    indivisible unit is an EXCHANGE. Splitting its step count instead could put a segment boundary
+    part-way through an exchange interval, leaving a segment whose last interval was propagated but
+    never attempted.
+    """
+    segments = int(resolved["stages"]["number_of_segments"])
+    if segments == 1:
+        return
+
+    protocol = resolved["protocol"]
+    # AIS HAS NO PRODUCTION STAGE TO SPLIT, so accepting this would be accepting an inert
+    # setting -- which is worse than refusing it, because the run would report a segment count
+    # nothing honoured and write `prod1` regardless. A switching campaign's unit is a PATH, and
+    # `ais.number_of_paths` already says how many there are; each writes its own
+    # `AIS_traj000n.nc` and is resumable on its own.
+    if protocol == "AIS":
+        raise ConfigError(
+            f"stages.number_of_segments is {segments} but protocol is AIS, which has no "
+            f"production stage to divide -- it never reads stages.production_steps. A switching "
+            f"campaign is already divided: ais.number_of_paths sets how many paths there are, "
+            f"and each writes its own trajectory and resumes independently. Remove "
+            f"number_of_segments, or set it to 1.")
+    if protocol in ("REST2", "rREST2"):
+        quantity, total = "rest2.number_of_exchanges", int(
+            resolved["rest2"]["number_of_exchanges"])
+        unit = "exchange attempt"
+    else:
+        quantity, total = "stages.production_steps", int(
+            resolved["stages"]["production_steps"])
+        unit = "step"
+
+    if total == 0:
+        raise ConfigError(
+            f"stages.number_of_segments is {segments} but {quantity} is 0, so the segments would "
+            f"each hold nothing. Either give the run a production length or leave "
+            f"number_of_segments at 1.")
+    if total % segments:
+        divisors = [d for d in range(1, total + 1) if total % d == 0]
+        near = [d for d in divisors if d <= segments * 4] or divisors
+        raise ConfigError(
+            f"stages.number_of_segments is {segments}, which does not divide {quantity} = "
+            f"{total} ({total} % {segments} = {total % segments}).\n"
+            f"  Segments split the production total; they do not extend it. With this value the "
+            f"last segment would be shorter than the rest, and the point of segmenting is that "
+            f"each one is comparable with the others.\n"
+            f"  Divisors of {total}: {', '.join(str(d) for d in sorted(near)[:12])}.")
+    per_segment = total // segments
+    if protocol in ("REST2", "rREST2") and per_segment < 1:
+        raise ConfigError(
+            f"stages.number_of_segments is {segments} and {quantity} is {total}, which is fewer "
+            f"than one {unit} per segment.")
 
 
 def _check_ais(resolved: dict[str, Any]) -> None:

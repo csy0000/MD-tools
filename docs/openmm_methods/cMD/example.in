@@ -120,6 +120,15 @@
   ! unit: steps; minimum: 0
   production_steps          = 100000,
   !
+  ! How many SEGMENTS the production run is written as. 1 is a single `prod1` segment.
+  ! It SPLITS the production total rather than multiplying it: each segment gets
+  ! `production_steps / number_of_segments`, and a value that does not divide exactly is
+  ! refused. On a REST2/rREST2 ladder the split is of `number_of_exchanges`, so an exchange
+  ! never straddles a boundary. Each segment writes its own files, so segments cannot
+  ! overwrite one another.
+  ! minimum: 1
+  number_of_segments        = 1,
+  !
   ! Trajectory output interval. 1000 steps = 2 ps at 2 fs.
   ! unit: steps; minimum: 0
   crd_printout_solute       = 500,

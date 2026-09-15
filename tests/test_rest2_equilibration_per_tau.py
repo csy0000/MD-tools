@@ -181,35 +181,48 @@ def test_every_generated_input_resolves_back_to_its_resolved_config(tmp_path):
             assert parsed.resolved[block] == expected[block], (path.name, block)
 
 
-#: What `build-md` generated for a default REST2 ladder BEFORE this setting existed, by sha256.
-#: With the setting off, every script, `run.sh` and the protocol helper must still be these bytes,
-#: and each `.in` and `resolved.config` these bytes once the one added line is taken out again.
+#: What `build-md` generates for a default REST2 ladder, by sha256. Originally captured BEFORE
+#: `rest2.equilibration_per_tau` existed, which is what makes it evidence: with the setting off,
+#: every script, `run.sh` and the protocol helper must still be these bytes, and each `.in` and
+#: `resolved.config` these bytes once the one added line is taken out again.
+#:
+#: THESE DIGESTS MOVE WHEN THE SCHEMA GAINS A FIELD, and that is expected rather than a
+#: regression: a generated `.in` and `resolved.config` list every resolved key, so one new field
+#: rewrites eleven of the files below. `stages.number_of_segments` did exactly that -- the six
+#: `.in`/`resolved.config` entries per solvent changed and the `.py` files and `run.sh` did not,
+#: which is itself the shape a schema-only change should have.
+#:
+#: HOW TO REFRESH THEM HONESTLY. Do not just paste the new hashes: that absorbs any unintended
+#: drift sitting beside the intended change. Strip the NEW field's line out of the freshly
+#: generated text and check the PINNED digest comes back. If it does, that line is the only
+#: difference and the snapshot can be updated. If it does not, something else moved as well, and
+#: that is the thing to look at rather than to overwrite.
 BEFORE = {
     "explicit": {
-        "eq_npt_free.in": "7b611f88bdf9c1635a40436fe84af5c56f65a01f079f0f5eb37d48f4c3b3e7bf",
+        "eq_npt_free.in": "7f069da94d44b80f072b3ed2080907a525a4bb1c4a62bfc448f79ef0f9ddf25a",
         "eq_npt_free.py": "6daed6d160528e34e730c67997fb015667e2a3fe5cf80677be6b3f1e68b3ccad",
-        "eq_npt_posres.in": "cc1d7c86850b287199b216270c8f4bd5e0cb469207c2e2cfc0311d44167cf921",
+        "eq_npt_posres.in": "81b550eb7e420aeffb77c47875f002cda7ae896d31364426f97bff1772812f55",
         "eq_npt_posres.py": "a9a19c6c5e8f839a7a51e81a1ec554f89655bd04d581bc0c1babaa6aa07e6562",
-        "eq_nvt_posres.in": "67437abe94123611d3762267720983e6f66e78d4e4b7fae9ec8d659ce696049d",
+        "eq_nvt_posres.in": "1368cf3488975818bf3ec89f0baa3c5661cdefa5f78b209ee737745e1cf70e7c",
         "eq_nvt_posres.py": "b5a332209934c06cbc1fe47f8cb780933bd672cf13de18f2d76214bb6cf89019",
-        "min.in": "b29150c6447edc00da37a2ab8a3949a8877487f4ee7014ddcec01fcd2aaddd4a",
+        "min.in": "f4e6932b1baf9328279ee5526d89948cb1f10f9009f0752e205bf9c4ff453b6a",
         "min.py": "c85b0c6bfd43627551e84f9fec6a0e76db4d16f089a640053d78fba522d9d601",
-        "resolved.config": "baf7c1a7560ec0a73cf34ac541c09a9cee50aa5e6e800f66713df91b803f12de",
-        "REST2.in": "22efc564eb3d63cf4cf4b9644a35acf2fe0a30a743864159d9a0ffa37cf9b78a",
+        "resolved.config": "6f2fec67bd208c7510d537405614a064b225baf4d693757170319806b8714093",
+        "REST2.in": "1ae0792348eb5a20accdbb5296bab7eb57a68e23c40ee2889c33318879ac4e96",
         "REST2.py": "3e039fcc9c24d68ebadeda2c73c88b47c628011583e55b75430d80e4cd1c2f87",
         "run.sh": "700b5d0b4013c2c48faba7de66905ac9c62e84122d4f5e3505bb0add98234ead",
     },
     "implicit": {
-        "eq_nvt_free.in": "04f9e04712232d74191107a24f2d537b40d18be5fec92367dd2edc6ed2088148",
+        "eq_nvt_free.in": "e752e9d786765ee03bbfeb1bc005857bd18b8a7d191560fafb61fb1873ecef15",
         "eq_nvt_free.py": "63f242cd9e3c1bf26ae98ff86e95792d76bbe4d94d06653bdaa6c1b140628f62",
-        "eq_nvt_posres_2.in": "a14654a8d486e0e3f99ea1b241d7ad6bdefaa81993bbb8957b977a3d5d88808f",
+        "eq_nvt_posres_2.in": "1962fa101d2bc707b32c9727f5386b0344f7e2d908f640fe4e205f81d62a806e",
         "eq_nvt_posres_2.py": "3054435667e24ebc079e4ecae1f1ddbc3de854035a6ee440f1a61e4f95c2cd35",
-        "eq_nvt_posres.in": "50dfb30e6f6cab2030586c9705687c3772f6eac313425e50b09cca0f28bf2e85",
+        "eq_nvt_posres.in": "0bb523155922ccb4ff64252aa7d0b86ee6e2bb79198d58fde37c983b58d80955",
         "eq_nvt_posres.py": "b5a332209934c06cbc1fe47f8cb780933bd672cf13de18f2d76214bb6cf89019",
-        "min.in": "9ec87ff3ebbaf8c2e4efbb9dfb615458ba3150f6e1e2ab3785bc32d2708680fc",
+        "min.in": "f156fce24799290387ddb192ffef350420fa05d714cff2ac69ebaef751279bee",
         "min.py": "c85b0c6bfd43627551e84f9fec6a0e76db4d16f089a640053d78fba522d9d601",
-        "resolved.config": "6e4db465d97c5cc34b273f9cd9216b7248075c39928c7379b6e5bc59ad4e5ccf",
-        "REST2.in": "fce91cdaa4230a511390b46f3cd909aadd91f7a9706b9237dac573c3d4935553",
+        "resolved.config": "51ebec05d57459fa2916373958a75bc720d7939bd684681a9aa113cc53c11c94",
+        "REST2.in": "38b63fe39dd4afc13a496cfac2f5cdc78b10be3e2bd5e2e39e2c2f7fcc74999e",
         "REST2.py": "3e039fcc9c24d68ebadeda2c73c88b47c628011583e55b75430d80e4cd1c2f87",
         "run.sh": "56855931c369e433e8b2111ff9309aea6d564e892194d3720a0cf5a5ec861d14",
     },

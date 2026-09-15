@@ -58,6 +58,11 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "restrained_npt_steps": "stages.restrained_npt_steps",
         "unrestrained_npt_steps": "stages.unrestrained_npt_steps",
         "production_steps": "stages.production_steps",
+        # How many segments the production run is written as. Spelled out, and with no Amber
+        # alias: the alias table below maps real mdin names, and Amber has no segment concept to
+        # borrow a short name from. Inventing one would be a second thing to remember for no
+        # gain -- the reasoning `equilibration_steps` and `work_measurement` already record.
+        "number_of_segments": "stages.number_of_segments",
         "crd_printout_solute": "reporting.crd_printout_solute",
         "crd_printout_whole": "reporting.crd_printout_whole",
         "info_printout": "reporting.info_printout",
