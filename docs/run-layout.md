@@ -14,8 +14,10 @@ Read the tree, correct what is wrong, and the implementation follows the correct
 <system>/                     THE DATASET ROOT. One dataset is a system and every run on it.
   system/                     the built system: shared by every method and every repeat
   min/                        the minimised structure: shared for the same reason
+  input/                      every .in: shared, because an input is not per-repeat
   REST2-run1/                 one run
-    input/                    every .in for this run
+    run.config                the ONLY per-run declaration: the seed
+    resolved.config           authoritative, written per run from input/ + run.config
     eq/                       this run's equilibration
     remd0/  remd1/  ...       one directory per thermodynamic STATE
     rank/                     per-PROCESS reports
@@ -63,22 +65,58 @@ min/  min.xml            the minimised coordinates: what every run's eq_1 starts
 
 A run's first equilibration stage installs `../min/min.xml`. Nothing in a run writes here.
 
-### `input/`
+### `input/` — at the dataset root
 
-Every `.in` for this run, in one place, so "what was this run asked to do" is one directory
-rather than a pattern across five.
+Every `.in`, shared. An input says what a method was *asked* to do, and two repeats of one method
+on one system are asked to do the same thing — so a second copy could only drift from the first,
+exactly as with `system/` and `min/`.
 
 ```text
-input/  min.in                  the minimisation this run was built against
+input/  min.in                  the minimisation, shared with min/
         eq_1.in  eq_2.in  eq_3.in
-        rest2.in
-        resolved.config         AUTHORITATIVE, and one per run
+        REST2.in  cMD.in  AIS.in       one production input per method
 ```
 
-**Every segment shares one `rest2.in`.** The runtime loops it, so a segment is not a stage and one
-`.in` no longer corresponds to one stage — a change to a currently tested contract
+`min.in` and `eq_*.in` are shared across methods as well as across repeats. **That sharing is a
+claim, and it is enforced rather than assumed**: a run registers only if the inputs it resolved
+against are byte-identical to these (§2). If two methods on one system would need different
+equilibration, they are not comparable and belong under a different `<system>` — which is a
+refusal, not a subdirectory.
+
+AIS reads neither `min.in` nor `eq_*.in`: a switching campaign starts from a source ensemble that
+already exists, so it has no minimisation or equilibration chain of its own. The files being
+present and unused by one method is not a problem; the files differing between methods would be.
+
+**Every segment shares one `<method>.in`.** The runtime loops it, so a segment is not a stage and
+one `.in` no longer corresponds to one stage — a change to a currently tested contract
 (`test_method_example_inputs.py` asserts `example.in` matches what `build-md` generates for the
 production stage). The segment number is a runtime fact, not an input fact.
+
+### `run.config` — the only thing that is per-run
+
+```text
+<method>-run<N>/  run.config        dynamics.seed, and nothing that is not genuinely per-run
+                  resolved.config   AUTHORITATIVE: input/ + run.config, resolved and written here
+```
+
+**The seed is the whole reason two repeats differ.** `derive_seed(base, *purpose)` hashes the base
+seed with each stage and replica name, so every stream in a run descends from that one number:
+two runs sharing an identical input and an identical seed would be bit-identical, not repeats.
+
+It is a file rather than a command-line flag (`md-run` has no seed override today, and adding one
+would leave the seed living only in a shell history until `resolved.config` was written — a re-run
+typed without it would silently repeat run 1), and rather than a number parsed out of the
+directory name (`REST2-run2` → 2), which would make a filename load-bearing data. The same
+objection already keeps tau out of a trajectory filename.
+
+`resolved.config` stays per-run and authoritative, as it is today: it is what the run actually
+read, merged from the shared input and this run's seed.
+
+**This needs layering, which does not exist yet.** `resolve_md_config` takes one path. A shared
+input plus a per-run override is a second document, and the strict resolver will need to accept
+both while keeping unknown keys refused and `run.config` narrow — an override file that can set
+anything is a second configuration authority, which is the thing `md_tools.build.md` exists to
+prevent.
 
 ### `eq/` — per run
 
@@ -156,12 +194,16 @@ REST2_checkpoint.nc    configurations, mapping, RNG states, rule state, iteratio
 
 ## 2. Registration
 
-**A `<method>-run<N>/` is registered only after the `system/` and `min/` it was run against
-validate as the same construct.** Not by path and not by directory name: each run records the
-sha256 of `system/system.xml` and `min/min.xml` in its own `.log` and restart record, and
-registration recomputes both and compares. A run whose digests do not match the dataset's
-`system/` and `min/` is refused rather than filed beside them, because "these runs are on the same
-system" is the claim every comparison between them rests on.
+**A `<method>-run<N>/` is registered only after the `system/`, `min/` and `input/` it was run
+against validate as the same construct.** Not by path and not by directory name: each run records
+the sha256 of `system/system.xml`, `min/min.xml` and every `.in` it read, in its own `.log` and
+restart record, and registration recomputes them and compares. A run whose digests do not match
+the dataset's is refused rather than filed beside them, because "these runs are on the same
+system, from the same structure, under the same instructions" is the claim every comparison
+between them rests on.
+
+The seed is deliberately outside that check: `run.config` is *expected* to differ per run, and it
+is the only thing that may.
 
 This is what makes sharing safe. One copy cannot drift from itself, and a run that was somehow
 produced against a different System is detectable instead of silently comparable.
@@ -177,8 +219,9 @@ it, as the contract already requires.
 |---|---|
 | `built.xml`, `built.pdb`, `built.solute.pdb` | `<system>/system/system.{xml,pdb}`, `system.solute.pdb` |
 | `min.{xml,out,log}`, `min.checkpoints/` (per run) | `<system>/min/` — shared |
-| `min.in`, `eq_*.in`, `REST2.in` (run root) | `<run>/input/` |
-| `resolved.config` (run root) | `<run>/input/resolved.config` |
+| `min.in`, `eq_*.in`, `REST2.in` (run root) | `<system>/input/` — shared |
+| `resolved.config` (run root) | `<run>/resolved.config` — stays per run |
+| *(nothing)* | `<run>/run.config` — the seed, the only per-run declaration |
 | `eq_nvt_posres.*`, `eq_npt_posres.*`, `eq_npt_free.*` | `<run>/eq/eq_1.*`, `eq_2.*`, `eq_3.*` |
 | `whole_state<n>_prod<x>.nc` (run root) | `<run>/remd<n>/remd_state<n>_prod<x>.nc` |
 | `solute_state<n>_prod<x>.nc` (run root) | `<run>/remd<n>/solute_state<n>_prod<x>.nc` |
@@ -236,9 +279,14 @@ spot-verified) to develop this against. The originals in `hpREST2` have not been
    `(dataset_root, run, state, segment)`. Partly done — `md_tools.remd.amber_trajectory` has the
    per-state names.
 2. `number_of_segments` reaching the runtime. The field exists and validates; nothing reads it.
-3. `system/` and `min/` hoisted to the dataset root, with the digests a run records.
-4. The per-run reorganisation, one directory at a time, with the suite green between each.
-5. `validate.py` and the manifest, including the implicit `remd<index>/` prefix.
-6. The registration gate: a run registers only when `system/` and `min/` verify.
-7. The migration tool, dry-run first.
-8. `data-register` and the data contract.
+3. Config layering: a shared `input/*.in` plus a narrow per-run `run.config`, resolving to the
+   per-run `resolved.config`. `resolve_md_config` takes one path today, and `run.config` must be
+   restricted to the seed rather than able to set anything — an override that can set everything
+   is a second configuration authority.
+4. `system/`, `min/` and `input/` hoisted to the dataset root, with the digests a run records.
+5. The per-run reorganisation, one directory at a time, with the suite green between each.
+6. `validate.py` and the manifest, including the implicit `remd<index>/` prefix.
+7. The registration gate: a run registers only when `system/`, `min/` and every `.in` it read
+   verify by digest. The seed in `run.config` is deliberately exempt.
+8. The migration tool, dry-run first.
+9. `data-register` and the data contract.
