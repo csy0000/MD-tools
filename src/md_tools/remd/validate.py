@@ -306,8 +306,23 @@ def _validate(reporter, analysis_path, checkpoint, record, result, *, expect_com
         result.fail(f"exchange statistics could not be read ({type(failure).__name__}: {failure})")
 
     # -- the coordinate streams ------------------------------------------------------------------
-    if reporter.last_frame() < 0:
-        result.fail("no whole-system frame was ever stored")
+    #
+    # BOTH STREAMS ARE JUDGED AGAINST WHAT WAS PROMISED, not against what a finished run happens
+    # to have. This one was unconditional, and refused an INTERRUPTED ladder continuation for
+    # lacking a whole-system frame -- while the configuration had never asked for one.
+    # `whole_output_interval` is unset by default in `configs/md/REST2.config`, so a run records
+    # `whole_output_interval_steps: None` and owes no frame at all; the 100 ns eight-state run
+    # reported `whole frames: 1 (every None steps)` for exactly that reason. A real 4-state ladder
+    # interrupted at step 266500 of 1000000 -- checkpoint and run-state agreeing on the step, the
+    # exchange index and the walker count -- was refused `--resume` on this line alone.
+    #
+    # A promise that WAS made and not kept is still a failure, for either question: that is the
+    # rule the solute check below already applies, and the two now agree in shape.
+    whole_interval = identity.get("whole_output_interval_steps")
+    if whole_interval and reporter.last_frame() < 0:
+        result.fail(
+            "a whole-system output interval was configured but no whole-system frame was stored; "
+            "the stream is a promise the storage must keep")
     solute_interval = identity.get("solute_output_interval_steps")
     if solute_interval and reporter.last_solute_frame() < 0:
         result.fail(
