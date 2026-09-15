@@ -293,16 +293,13 @@ configuration.
 ## Still pending
 
 1. ~~The 8-state overnight run~~ — **DONE and verified.** See the section below.
-2. **The slow lane** — my `_prod2` guard has never executed. Launched 01:56 on GPUs 1–8.
-3. **Interrupt/resume test of a ladder** — the clean run does not exercise it.
-4. **The 8-state Amber comparison** at matched settings; only 2 states were compared.
-5. **The timing half of the three-combination matrix.** The structural findings above are
-   platform-independent, but ns/day and the switch fraction for ff14SB+GBn2, ff14SB+TIP3P and
-   ff19SB+TIP3P all need GPUs. See `AIS.md` for why the three are expected to differ — GBn2 is
-   already on the fast switching path, and only ff19SB carries the CMAP residue (16 maps /
-   1 torsion, against 22 particles + 98 exceptions + 29 torsions that become offsets).
+2. ~~The slow lane~~ — **DONE.** 535 passed, 1 skipped, 40 m 43 s; the `_prod2` guard executed
+   and passed. Its one failure was mine, and is classified in `d8f5185`.
+3. ~~Interrupt/resume test of a ladder~~ — **DONE, and it found a real defect.** See below.
+4. ~~The 8-state Amber comparison~~ — **DONE.** See below.
+5. ~~The timing half of the three-combination matrix~~ — **DONE**, with its scope stated. See below.
 
-Items 2–4 need GPUs, which the overnight run holds.
+Nothing on this list is outstanding. What remains is two judgement calls flagged at the end.
 
 **Closed as infeasible:** reusing the post-exchange force call as the next segment's first step
 (Amber's `runmd.F90:1718` trick). `openmm.Context` exposes only `getState`/`reinitialize`/`setState`
@@ -380,3 +377,134 @@ system, against 501.32 here — Amber ~29% faster per replica. That is **not** a
 comparison: Amber ran 2 replicas on 2 GPUs with 1000 exchanges, this ran 8 on 8 with 10 000, so
 exchange overhead, the N² cross-energy matrix and GPU contention all differ. The matched comparison
 is still pending (item 4 above).
+
+---
+
+## Interrupt/resume found a real defect, now fixed
+
+**A REST2 ladder left on the default output cadence could not be resumed after an interruption.**
+Not an exotic configuration: `whole_output_interval` is unset by default in `REST2.config`, so a run
+records `whole_output_interval_steps: None` and owes no whole-system frame at all — the 100 ns
+eight-state run reported `whole frames: 1 (every None steps)` for exactly that reason.
+
+The interrupt machinery was flawless. SIGTERM at an event boundary, checkpoint and run-state agreeing
+on **step 266500 of 1000000**, exchange index **532**, four walkers, and — correctly — no
+`restart.json`, because that is the *completion* manifest and an interrupted run has none. `--resume`
+was then refused:
+
+```
+INVALID: 1 problem(s)
+  - no whole-system frame was ever stored
+```
+
+`validate_replica_output` answers two questions: "is this complete and coherent"
+(`expect_completed=True`, the extension path) and "may this be continued" (`expect_completed=False`,
+the resume path, `driver.py:997`). The exchange-budget checks honour that flag; the coordinate-stream
+check did not. So an interrupted run was judged against a finished run's property — one it had never
+promised. The check three lines below already had the right shape, conditioning on whether the
+*solute* interval was configured before demanding a solute frame; the whole-system check now matches
+it. Not relaxed: an interval that *was* configured and produced nothing still fails, either way.
+
+Fixed in `dcf9de0`, failing-test-first — three of five cases in
+`tests/test_ladder_resume_without_whole_frames.py` failed on exactly this and pass after; the two
+that must keep passing did so throughout; 178 tests across the five suites owning that validator
+still pass.
+
+**Confirmed end to end**, on the same interrupted ladder rather than only in unit tests:
+
+```
+run_status         completed
+steps_completed    1000000 of 1000000
+exchanges          2000
+RESUMED FROM STEP  266500        <-- not None
+cv series          4, rows [4001, 4001, 4001, 4001]
+permutation rows   2000  ok=True
+```
+
+4001 = 1,000,000 ÷ 250 + 1 exactly, `system_sha256` unchanged across the interruption, permutation
+integrity holding across the join.
+
+It took three attempts, and the first two were my errors. Take one was sized so small (100,000 steps)
+that it *finished* before the interrupt landed — testing instead the refusal of a re-run into a
+populated directory, which named all 30 existing outputs on all four ranks, and is incidental
+evidence for the "one identity per output directory" invariant. Take two cut correctly but I
+restarted without `--resume`: CLAUDE.md's "`--resume` is not required" is scoped to a cMD **stage**,
+while a **ladder** requires it, as `driver.py:2057` and `REST2/README.md:263` both say — the latter
+adding that `--resume` needs no `restart.json`, which is exactly what an interruption leaves.
+
+## The 8-state Amber comparison: Amber closes the ring, we don't
+
+Matched — same `prmtop`, τ = 0 → 0.5 in 8 states, `gti_add_re=6`, `reaf_mask1=":1-3"`, NVT, 10 ps
+exchanges, 1000 × 5000 steps = 10 ns/state, `exit=0` in 1404 s.
+
+Parsed over all 1000 exchanges (8000 rows), Amber's `set_partners` pairs **1↔8** as well as the seven
+adjacent pairs:
+
+| pair | accepted/proposed | rate |
+|---|---|---|
+| 1↔2 | 502/1000 | 0.502 |
+| 2↔3 | 508/1000 | 0.508 |
+| 3↔4 | 492/1000 | 0.492 |
+| 4↔5 | 496/1000 | 0.496 |
+| 5↔6 | 524/1000 | 0.524 |
+| 6↔7 | 540/1000 | 0.540 |
+| 7↔8 | 534/1000 | 0.534 |
+| **1↔8** | 272/1000 | **0.272** ← wrap-around |
+
+Adjacent only: **0.5137**. The wrap-around is real, not a parsing artefact — all 858 rows with
+|free energy| > 100 kcal/mol belong to the two pairs touching state 8, `(1,8)` 429 and `(7,8)` 429,
+which is what pairing an endpoint across the full τ span produces.
+
+**So 0.6259 (ours) and 0.5137 (Amber, adjacent) are not the same measurement**, and should not be
+quoted side by side as an engine comparison. `alternating_pairs` does strict odd/even adjacent sweeps
+with no wrap, as CLAUDE.md specifies; Amber spends an eighth of its attempts on a pairing worth 0.27.
+
+Normalised per step, so the 10× length difference flatters neither side:
+
+| | wall | per replica | per step | exchanges |
+|---|---|---|---|---|
+| Amber, 10 ns × 8 states | 1404 s | 613.6–618.5 ns/day | **~0.281 ms** | 1000 |
+| MD-tools, 100 ns × 8 states | 17234.6 s | 501.3 ns/day | **~0.345 ms** | 10000 |
+
+Amber ~23% faster per step, with a tenth of the exchanges to pay for — consistent with `AIS.md`'s
+architectural finding that its λ change is a constant-block copy while ours re-uploads parameters.
+
+**The gap between our own two runs is physics, not a defect.** Δτ per rung is 0.166667 at 4 states
+against 0.071429 at 8 — 2.33× wider spacing over the same τ span — so acceptance falling from 0.6259
+to 0.1917 is what a coarse ladder gives. The two runs corroborate each other.
+
+## The three-combination timings, and what they do not measure
+
+Identical fixed-τ cMD stages (τ = 0.25, 50 000 production steps), one GPU, one at a time:
+
+| combination | wall | Speed (ns/day) |
+|---|---|---|
+| ff14SB + GBn2 | 5.42 s | **2175** ± 734 |
+| ff14SB + TIP3P | 7.83 s | **1371** ± 463 |
+| ff19SB + TIP3P | 8.10 s | **1215** ± 435 |
+
+Implicit fastest; CMAP costs ff19SB ~11% against ff14SB on the same box. The expected ordering.
+
+**What these do not measure: the switching cost.** τ is set once and never moves, so these are
+*integration* rates. The re-upload that dominates an explicit-solvent AIS path — and the ~13× gain
+`AIS.md` projects from carrying the dispersion tail analytically — is not exercised here at all. The
+rms fluctuations are large relative to the means because a 50 000-step run's `Speed` column includes
+startup, so treat these as indicative. A switching benchmark is the outstanding measurement for
+`AIS.md`.
+
+---
+
+## Two judgement calls for you
+
+Both are mine, made without you, and both could reasonably go the other way.
+
+1. **Conditioning the whole-frame check on `whole_output_interval_steps`** is one fix; the other
+   would be to have the resume path call a narrower validator instead of teaching this one to
+   distinguish the two questions. I chose the former because it makes the two coordinate-stream
+   checks symmetric and the asymmetry was the defect — but it does widen what
+   `expect_completed=True` accepts, and that deserves a second opinion.
+2. **`docs/release-notes/cuda-coverage-matrix.md` is deliberately not regenerated.** The invariant is
+   satisfied by classifying the sites in the test module, which `d8f5185` does. The published
+   document is a *record of a run*, and its own comment warns that an ordinary GPU run must not
+   rewrite it as a side effect — so regenerating it from a lane I ran for another purpose would
+   produce something that looks like evidence and isn't quite. Yours to trigger.
