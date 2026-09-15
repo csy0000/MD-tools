@@ -202,7 +202,7 @@ def _resolve_group_paths(path, groups):
 #: line naming a different topology or a different starting state is not a per-state input this
 #: build implements. It is a mistake, and accepting it would run a ladder whose rungs are not
 #: states of the same Hamiltonian while every exchange log looked healthy.
-HOMOGENEOUS_GROUP_FIELDS = ("input", "topology", "system", "coordinates", "solute")
+HOMOGENEOUS_GROUP_FIELDS = ("input", "topology", "coordinates", "solute")
 
 
 def _require_homogeneous_groups(path, groups):
@@ -213,10 +213,71 @@ def _require_homogeneous_groups(path, groups):
                                for group in groups[:4])
             raise GroupFileError(
                 f"{path}: the group lines give {len(values)} different values for {field}, and "
-                f"this ladder is homogeneous -- N rungs of ONE system, differing only in tau, "
-                f"which is derived from --group-index. Per-state inputs are not implemented, so "
-                f"accepting these would run rungs that are not states of the same Hamiltonian "
-                f"while every exchange log looked healthy.\n  {listed}")
+                f"this ladder is homogeneous -- N rungs of ONE system, differing only in tau. "
+                f"Per-state inputs are not implemented, so accepting these would run rungs that "
+                f"are not states of the same Hamiltonian while every exchange log looked "
+                f"healthy.\n  {listed}")
+    _require_one_rung_system_per_state(path, groups)
+
+
+def _require_one_rung_system_per_state(path, groups):
+    """`system` is PER STATE now, and that is a stronger check rather than a weaker one.
+
+    Scaling moved to build time: each rung is serialised to `remd<n>/build_state<n>.xml`, so the
+    lines of a ladder's group file name N DIFFERENT Systems by design. `system` was in
+    `HOMOGENEOUS_GROUP_FIELDS` on the premise that tau was derived from `--group-index` at run
+    time, which is no longer how a rung comes to be scaled -- keeping it there refused every group
+    file this architecture writes.
+
+    Dropping it and stopping there would be the real defect. The old check did rule something out:
+    with one shared System, two lines naming different files could not both be rungs of the same
+    ladder. With one file per rung, the mistake to rule out is a line whose System is not the rung
+    its own `--group-index` claims -- `remd2/build_state2.xml` on the line for state 3. That
+    swaps two rungs' Hamiltonians, runs perfectly, and reports healthy exchange statistics while
+    the ladder is not the one anybody asked for.
+
+    So: a line whose System follows the `build_state<n>.xml` convention must agree with its group
+    index, and no two lines may name the same file. A System that does NOT follow the convention is
+    left alone -- a by-hand ladder pointing at files of its own naming is legitimate, and this
+    function is not the place to invent a mandatory filename.
+    """
+    import re
+
+    # NOT `state_index_from_name`: that one parses TRAJECTORY names
+    # (`<whole|solute>_state<n>_prod<x>.nc`) and raises on anything else, so handing it a
+    # `build_state<n>.xml` raised every time and a blanket `except` turned this whole check into a
+    # no-op that still read as one.
+    rung = re.compile(r"^build_state(\d+)\.xml$")
+    seen: dict[str, int] = {}
+    for group in groups:
+        system = group.get("system")
+        if not system:
+            continue
+        index = group.get("group_index")
+        matched = rung.fullmatch(Path(system).name)
+        if matched is None:
+            # NOT THE GENERATED CONVENTION, and it must stay accepted. Before scaling moved to
+            # build time a ladder named ONE shared `built.xml` on every line and derived tau from
+            # `--group-index` -- which is what every group file written until now looks like, the
+            # nine migrated reference runs included. Applying the per-rung rules below to those
+            # would refuse a ladder that is perfectly well formed for the architecture that wrote
+            # it, so a name outside the convention is left entirely alone here.
+            continue
+        if system in seen:
+            raise GroupFileError(
+                f"{path}:{group['line']}: this rung System is already used by the line for state "
+                f"{seen[system]}. Each rung is its own serialised Hamiltonian, so two states "
+                f"sharing one file are two states at the same tau -- a ladder with a rung "
+                f"missing, which exchanges perfectly and samples the wrong set of "
+                f"Hamiltonians.\n  {system}")
+        seen[system] = index
+        named = int(matched.group(1))
+        if index is not None and named != int(index):
+            raise GroupFileError(
+                f"{path}:{group['line']}: --group-index {index} is given the System of state "
+                f"{named} ({Path(system).name}). Each rung is pre-scaled to its own tau now, so "
+                f"this does not run state {index} -- it runs state {named}'s Hamiltonian under "
+                f"state {index}'s identity, and every exchange log looks healthy.")
 
 
 def _parse_group_line(path, number, tokens, *, extending=False):

@@ -168,9 +168,10 @@ def generated(installed):
     """
     _binaries, work = installed
     (work / "ALA.pdb").write_bytes(ALA.read_bytes())
+    (work / "build").mkdir(exist_ok=True)
 
-    built = _run(installed, "build-top", "-i", "ALA.pdb", "-os", "built.xml",
-                 "-op", "built.pdb", "-log", "built.log")
+    built = _run(installed, "build-top", "-i", "ALA.pdb", "-os", "build/built.xml",
+                 "-op", "build/built.pdb", "-log", "build/built.log")
     assert built.returncode == 0, built.stdout[-2000:] + built.stderr[-2000:]
 
     (work / "c.config").write_text(yaml.safe_dump({
@@ -180,16 +181,16 @@ def generated(installed):
                    "production_steps": 40},
         "reporting": {"crd_printout_solute": 20, "info_printout": 20,
                       "checkpoint_printout": 40}}, sort_keys=False), encoding="utf-8")
-    made = _run(installed, "build-md", "-odir", "md_script", "--config", "c.config")
+    made = _run(installed, "build-md", "-odir", "cMD-run1", "--config", "c.config")
     assert made.returncode == 0, made.stdout[-2000:] + made.stderr[-2000:]
-    return work / "md_script"
+    return work / "cMD-run1"
 
 
 def test_the_canonical_stage_command_runs_against_the_installed_wheel(installed, generated):
     """The exact command `docs/md-run.md` opens with, on the CPU, end to end."""
     _binaries, work = installed
     script = generated
-    done = _run(installed, "md-run", "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
+    done = _run(installed, "md-run", "-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                 "-o", "cMD.out", "-x", "cMD.dcd", "-r", "cMD.xml", "-log", "cMD.log", "--cpu",
                 cwd=script)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
@@ -207,7 +208,7 @@ def test_the_canonical_stage_command_runs_against_the_installed_wheel(installed,
     assert "status               completed" in (script / "cMD.out").read_text(encoding="utf-8")
     assert read_record(script / "cMD.log")["status"] == "completed"
     # -s was not overwritten by -x, which is the accident the old mapping invited.
-    assert (work / "built.xml").read_text(encoding="utf-8").lstrip().startswith("<")
+    assert (work / "build" / "built.xml").read_text(encoding="utf-8").lstrip().startswith("<")
 
 
 def test_the_generated_project_names_no_checkout_path(generated):
@@ -221,15 +222,15 @@ def test_the_generated_project_names_no_checkout_path(generated):
 
 
 def test_the_installed_command_refuses_the_retired_platform_flag(installed, generated):
-    done = _run(installed, "md-run", "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
+    done = _run(installed, "md-run", "-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                 "--platform", "CUDA", cwd=generated)
     assert done.returncode != 0
     assert "platform" in done.stderr.lower(), done.stderr
 
 
 def test_the_installed_command_refuses_a_system_in_the_trajectory_flag(installed, generated):
-    done = _run(installed, "md-run", "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
-                "-x", "../built.xml", cwd=generated)
+    done = _run(installed, "md-run", "-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
+                "-x", "../build/built.xml", cwd=generated)
     assert done.returncode != 0
     assert "-x" in done.stderr and "-s" in done.stderr, done.stderr
 
@@ -244,4 +245,18 @@ def test_the_generated_run_sh_examples_match_the_flag_contract(generated):
     # names them itself. The ladder line legitimately keeps `-x REST2.nc`, which is
     # the exchange record rather than a trajectory, so the check is specific.
     assert not re.search(r"-x \S+\.dcd", text), text
-    assert re.search(r"-o \w+\.out", text) and re.search(r"-log \w+\.log", text), text
+    # `-r`, `-chk`, `-o` and `-log` ARE OPTIONAL, and run.sh leaves them off deliberately.
+    #
+    # Two files for two readers is still the contract -- `.out` is what a person tails, `.log` is
+    # the machine record -- but md-run names both itself, inside the directory `-odir` points at
+    # (`main.py`: `args.output or str(out_dir / f"{name}.out")`). So a stage writes
+    # `../min/min.out` and `../min/min.log` without run.sh restating either.
+    #
+    # Spelling them here would be worse than redundant: a value that IS given is taken verbatim
+    # against the WORKING directory, not against `-odir`, so `-o min.out` from a run root would
+    # put the minimisation's output beside run.sh instead of in `min/`. That is the defect the
+    # per-stage `-odir` removes, so the assertion is inverted rather than dropped.
+    assert re.search(r"-odir \S+", text), text
+    assert not re.search(r"-o \w+\.out", text), (
+        "run.sh names an output path explicitly; md-run resolves a given -o against the working "
+        "directory, so the file would land beside run.sh rather than in -odir")

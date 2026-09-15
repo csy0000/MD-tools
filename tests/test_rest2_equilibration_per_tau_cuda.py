@@ -29,8 +29,8 @@ def test_per_tau_equilibration_under_mpi_on_cuda(tmp_path):
     _build_top(tmp_path, "solvent:\n  model: GBn2\n")
     document = json.loads(json.dumps(IMPLICIT))
     document["dynamics"].pop("timestep_fs")           # `auto`, as a user would leave it
-    run = _build_md(tmp_path, document, odir="run")
-    done = subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml"], cwd=run,
+    run = _build_md(tmp_path, document)
+    done = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml"], cwd=run,
                           capture_output=True, text=True, timeout=3600)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
 

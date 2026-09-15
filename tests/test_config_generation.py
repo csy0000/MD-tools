@@ -651,7 +651,13 @@ def test_the_hmr_reasoning_survived_the_move_out_of_docs_examples():
 
 # --- the generated stage files, explicit and implicit ---------------------------------------------
 
-def _generate(tmp_path, config: dict, odir="md_script"):
+def _generate(tmp_path, config: dict, odir="cMD-run1"):
+    """Generate one run and return every file it wrote, keyed by path RELATIVE TO THE DATASET.
+
+    Names alone are no longer enough to identify a generated file: `min.py` is at
+    `<system>/min/min.py`, an equilibration script at `<run>/eq/eq_1.py`, and a bare basename
+    would make those indistinguishable from each other and from a run-root file.
+    """
     import subprocess
     import sys
 
@@ -661,26 +667,93 @@ def _generate(tmp_path, config: dict, odir="md_script"):
         [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", odir,
          "--config", str(path)], cwd=tmp_path, capture_output=True, text=True, timeout=600)
     assert result.returncode == 0, result.stdout + result.stderr
-    return {p.name for p in (tmp_path / odir).iterdir()}
+    return {str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*") if p.is_file()}
 
 
 def test_the_explicit_stage_files_are_the_documented_ones(tmp_path):
+    """The stage NAMES survive the layout; where they live is what changed.
+
+    A stage is generated as `eq_nvt_posres` and FILED as `eq_1`, so the ensemble that used to be
+    in the filename is now in the stage's own `.out` header and resolved configuration. The
+    documented set is therefore the same stages at their layout paths.
+    """
     written = _generate(tmp_path, {"protocol": "cMD", "solvent": "explicit"})
-    assert {"min.py", "eq_nvt_posres.py", "eq_npt_posres.py", "eq_npt_free.py", "cMD.py",
-            "run.sh"} <= written, written
+    assert {"min/min.py", "cMD-run1/eq/eq_1.py", "cMD-run1/eq/eq_2.py", "cMD-run1/eq/eq_3.py",
+            "cMD-run1/cMD.py", "cMD-run1/run.sh"} <= written, sorted(written)
+    # The inputs are SHARED, at the dataset root rather than inside the run.
+    assert {"input/min.in", "input/eq_1.in", "input/eq_2.in", "input/eq_3.in",
+            "input/cMD.in"} <= written, sorted(written)
+
+
+def test_every_declaration_carries_the_definition_it_names(tmp_path):
+    """A `resolved.config` that names a definition must sit beside that definition.
+
+    The copy is recorded by BARE NAME so the directory stays movable, and the runtime resolves
+    that name beside whichever declaration it read -- `resolved_config_beside(script)` for a
+    generated script, `-odir` or the input's directory for `md-run`. The layout puts declarations
+    in four places, and the copy was written into the run root ALONE:
+
+        input/cMD.in        names cv.<digest>.yaml   input/ held none
+        min/resolved.config names cv.<digest>.yaml   min/ held none
+        eq/resolved.config  names cv.<digest>.yaml   eq/ held none
+
+    So `md-openmm md-run -i ../input/cMD.in` could not resolve its own definition from any
+    directory. That is not only an inconvenience: `md_tools.run.continuation` has to LOAD the
+    definition to know what an invocation intends to continue, so it got None and the read-only
+    boundary returned early -- letting a REFUSED continuation write `resolved.config`, `<stage>.out`
+    and `<stage>.log` into the tree it was declining to touch. This is the fast guard on that; the
+    end-to-end refusal is `test_cv_cost_refusal_end_to_end`.
+    """
+    import hashlib
+
+    (tmp_path / "cv.yaml").write_text(
+        "schema_version: 1\n"
+        "collective_variables:\n"
+        "  - name: phi\n"
+        "    type: torsion\n"
+        "    atom_indices: [6, 8, 14, 16]\n", encoding="utf-8")
+    written = _generate(tmp_path, {
+        "protocol": "cMD", "solvent": "implicit",
+        "collective_variables": {"file": "cv.yaml", "interval_steps": 5},
+        "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 10,
+                   "restrained_npt_steps": 0, "unrestrained_npt_steps": 10,
+                   "production_steps": 20},
+        "reporting": {"crd_printout_solute": 10, "info_printout": 10,
+                      "checkpoint_printout": 10}})
+
+    digest = hashlib.sha256((tmp_path / "cv.yaml").read_bytes()).hexdigest()
+    copy = f"cv.{digest[:12]}.yaml"
+    for directory in ("input", "min", "cMD-run1", "cMD-run1/eq"):
+        assert f"{directory}/{copy}" in written, (
+            f"{directory}/ names the definition but does not carry it: {sorted(written)}")
+
+    # CONTENT-ADDRESSED AND IDENTICAL, which is what makes sharing one safe: a definition that
+    # changed would get a different name and could not quietly replace this one.
+    payload = (tmp_path / "cv.yaml").read_bytes()
+    for directory in ("input", "min", "cMD-run1", "cMD-run1/eq"):
+        assert (tmp_path / directory / copy).read_bytes() == payload, directory
+
+    # And every declaration names exactly this file, by bare name.
+    for declaration in ("min/resolved.config", "cMD-run1/resolved.config",
+                        "cMD-run1/eq/resolved.config"):
+        document = yaml.safe_load((tmp_path / declaration).read_text(encoding="utf-8"))
+        assert document["collective_variables"]["file"] == copy, declaration
 
 
 def test_the_implicit_stages_are_renamed_not_silently_run_as_nvt(tmp_path):
-    """GBn2 has no box, so there is no NPT stage -- and the FILE NAMES say so.
+    """GBn2 has no box, so there is no NPT stage -- and nothing generated says otherwise.
 
-    An `eq_npt_free.py` that quietly ran NVT would be a stage whose name is a false claim about
-    the ensemble a trajectory was produced in.
+    THE EVIDENCE MOVED WITH THE LAYOUT. It used to be the filenames: an `eq_npt_free.py` on a
+    boxless run would have been a stage whose name was a false claim about the ensemble. Under
+    `eq_1/eq_2/eq_3` the name can no longer carry it, so the claim is checked where it now lives
+    -- the resolved plan's ensembles, and the absence of any pressure-coupled name anywhere in
+    the generated tree, inputs included.
     """
     written = _generate(tmp_path, {"protocol": "cMD", "solvent": "implicit"})
-    assert {"min.py", "eq_nvt_posres.py", "eq_nvt_posres_2.py", "eq_nvt_free.py", "cMD.py",
-            "run.sh"} <= written, written
+    assert {"min/min.py", "cMD-run1/eq/eq_1.py", "cMD-run1/eq/eq_2.py", "cMD-run1/eq/eq_3.py",
+            "cMD-run1/cMD.py", "cMD-run1/run.sh"} <= written, sorted(written)
     assert not any("npt" in name for name in written), (
-        f"an implicit run generated a pressure-coupled stage name: {sorted(written)}")
+        f"an implicit run generated a pressure-coupled name: {sorted(written)}")
 
     from md_tools.build.md import resolve_md_config, stage_plan
     plan = stage_plan(resolve_md_config(None) | {"solvent": "implicit"})

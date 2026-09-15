@@ -204,15 +204,33 @@ def validate_stage_continuation(destination, *, stage, definition, overwrite=Fal
             + "\n  - ".join(problems))
 
 
-def _definition_from(resolved, *, config_directory=None):
-    """The CV definition a resolved document names, or None when reporting is off."""
+def _definition_from(resolved, *, config_directory=None, fallback_directory=None):
+    """The CV definition a resolved document names, or None when reporting is off.
+
+    TWO DIRECTORIES, TRIED IN ORDER, because the definition copy is PER RUN and the input is
+    SHARED. `build-md` copies the content-addressed definition into the run directory and
+    `md-run` writes its own beside the `resolved.config` it creates, so `-odir` is where a copy
+    actually is; `input/` at the dataset root holds none. Resolving only against the input's
+    directory returned None here, and a None definition makes `validate_public_entry` return
+    early -- so the read-only boundary silently did nothing and a refused continuation wrote into
+    the tree it was declining to touch.
+
+    The fallback is not redundant: before the layout split the input and the copy shared one
+    directory, and every run generated then still resolves that way.
+    """
     block = (resolved or {}).get("collective_variables") or {}
     path = block.get("file")
     if not path:
         return None
     candidate = Path(path)
-    if not candidate.is_absolute() and config_directory is not None:
-        candidate = Path(config_directory) / candidate
+    if not candidate.is_absolute():
+        for directory in (config_directory, fallback_directory):
+            if directory is None:
+                continue
+            attempt = Path(directory) / candidate
+            if attempt.is_file():
+                candidate = attempt
+                break
     if not candidate.is_file():
         return None
     try:
@@ -224,7 +242,8 @@ def _definition_from(resolved, *, config_directory=None):
 
 
 def validate_public_entry(resolved, out_dir, *, protocol, stage=None,
-                          config_directory=None, overwrite=False) -> None:
+                          config_directory=None, fallback_directory=None,
+                          overwrite=False) -> None:
     """The same read-only boundary, for `md-openmm md-run`.
 
     `md-run` creates `-odir` and writes `resolved.config` and the content-addressed definition
@@ -240,7 +259,8 @@ def validate_public_entry(resolved, out_dir, *, protocol, stage=None,
     out_dir = Path(out_dir)
     if not out_dir.is_dir():
         return                                  # nothing exists yet; nothing to protect
-    definition = _definition_from(resolved, config_directory=config_directory)
+    definition = _definition_from(resolved, config_directory=config_directory,
+                                  fallback_directory=fallback_directory)
     if definition is None:
         return
 

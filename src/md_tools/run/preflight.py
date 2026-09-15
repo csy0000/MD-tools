@@ -690,11 +690,20 @@ def _common(*, topology, system, outputs, inputs, cpu, device, number_of_groups,
         resolved = _resolve_platform(machine, cpu=cpu, device=device, coordination=coordination)
         # Loaded once when the mode has refusals that need to look inside the System; the
         # particle comparison then comes from the loaded pair rather than a second parse.
-        prepared = load_inputs(topology, system) if load else None
+        # NO SYSTEM TO LOAD OR TO COMPARE AGAINST on a grouped launch.
+        #
+        # A REST2/rREST2 ladder driven by a group file names one System PER LINE -- each rung's
+        # own pre-scaled Hamiltonian -- so there is no single `-s` for this launch, and
+        # `remd.executor` validates those paths where it reads them. Passing `None` down here
+        # would have `check_topology_matches_system` call `PDBFile(str(None))` and report a
+        # missing file for a flag nobody was asked to give.
+        prepared = load_inputs(topology, system) if (load and system) else None
         if prepared is not None:
             count = prepared.particles
+        elif check_particles and system:
+            count = check_topology_matches_system(topology, system)
         else:
-            count = check_topology_matches_system(topology, system) if check_particles else None
+            count = None
         return resolved, prepared, count
 
     # THE COLLECTIVE POINT. Everything above is a property of the command line or of files every
@@ -1032,6 +1041,29 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                                                        where=protocol))
     if groupfile:
         inputs["groupfile"] = groupfile
+
+    # NO `-s`, BUT STILL A SYSTEM TO CHECK: the group file's FIRST line names one.
+    #
+    # A grouped ladder carries no single `-s` -- each line names its own pre-scaled rung -- and
+    # the checks below genuinely need a System: the timestep is resolved from the MASSES actually
+    # serialised in it, which is what refuses a 4 fs step that HMR does not support. Skipping
+    # those checks when `-s` is absent would drop that refusal for every ladder, silently.
+    #
+    # The first line is representative, and not by assumption. `parse_group_file` validates every
+    # line and requires `system` on each; scaling changes force CONSTANTS, not masses, so all N
+    # rungs of a ladder carry identical masses (measured: three rungs of a 22-particle solute,
+    # byte-identical mass signatures). `_preflight_from_groups` already reads the launch's inputs
+    # from this same first line for the same reason.
+    #
+    # Its paths resolve against the GROUP FILE rather than the working directory, so
+    # `remd0/build_state0.xml` is found wherever the launch was started from.
+    if not system and groupfile:
+        from ..remd.executor import GroupFileError, parse_group_file
+
+        try:
+            system = parse_group_file(groupfile)[0]["system"]
+        except GroupFileError as refusal:
+            raise PreflightError(f"{protocol}: {refusal}") from None
     inventory = _ladder_inventory(protocol=protocol, replicas=int(replicas), output=output,
                                   log=log, trajectory=trajectory, restart=restart,
                                   checkpoint=checkpoint, groupfile=groupfile,

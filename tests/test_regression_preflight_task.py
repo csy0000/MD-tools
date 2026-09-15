@@ -148,14 +148,19 @@ def test_the_executor_barrier_is_not_a_second_implementation():
 @pytest.fixture(scope="module")
 def generated(tmp_path_factory):
     """One generated project per protocol, so the wrappers can be called directly."""
+    from .conftest import make_dataset_root
+
     root = tmp_path_factory.mktemp("wrappers")
+    # A ladder's rungs are scaled from `build/built.xml` at BUILD time now, so the dataset's
+    # shared System has to exist before any run is generated.
+    make_dataset_root(root)
     for protocol in ("REST2", "AIS"):
         configuration = root / f"{protocol}.config"
         document = {"protocol": protocol, "solvent": "explicit"}
         if protocol == "AIS":
             document["ais_source"] = {"trajectory": "../source.dcd"}
         configuration.write_text(yaml.safe_dump(document), encoding="utf-8")
-        done = subprocess.run(CLI + ["build-md", "-odir", str(root / protocol),
+        done = subprocess.run(CLI + ["build-md", "-odir", str(root / f"{protocol}-run1"),
                                      "--config", str(configuration)],
                               capture_output=True, text=True, timeout=600)
         assert done.returncode == 0, done.stdout + done.stderr
@@ -169,7 +174,7 @@ def test_a_generated_wrapper_refuses_a_plural_world_without_mpi4py(protocol, gen
     `md-run` grew one and the wrappers did not, which made the guard a property of one entry point
     rather than of the runtime -- and the runtime is what the public Python API calls.
     """
-    project = generated / protocol
+    project = generated / f"{protocol}-run1"
     destination = tmp_path / "never"
     argv = [sys.executable, str(project / f"{protocol}.py"),
             "-p", "missing.pdb", "-s", "missing.xml", "-odir", str(destination)]
@@ -291,11 +296,11 @@ def project(tmp_path):
     configuration = tmp_path / "cMD.config"
     configuration.write_text(yaml.safe_dump({"protocol": "cMD", "solvent": "explicit"}),
                              encoding="utf-8")
-    done = subprocess.run(CLI + ["build-md", "-odir", str(tmp_path / "md_script"),
+    done = subprocess.run(CLI + ["build-md", "-odir", str(tmp_path / "cMD-run1"),
                                  "--config", str(configuration)],
                           capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
-    return tmp_path / "md_script", tmp_path / "never"
+    return tmp_path / "cMD-run1", tmp_path / "never"
 
 
 @pytest.mark.parametrize("case, extra, environment", [
@@ -317,7 +322,7 @@ def test_a_preflight_failure_creates_no_output_at_all(case, extra, environment, 
         broken = _machine("machine:\n  openmm:\n    platform: CUDA\n    platform: CPU\n")
         environment_map["MD_TOOLS_CONFIG"] = str(broken)
 
-    argv = CLI + ["md-run", "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
+    argv = CLI + ["md-run", "-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                   "-odir", str(destination)]
     for index, value in enumerate(extra):
         argv.append(value)

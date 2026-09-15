@@ -46,8 +46,8 @@ def project(tmp_path_factory):
     root = tmp_path_factory.mktemp("remd-cv")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
 
@@ -64,7 +64,7 @@ def project(tmp_path_factory):
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./REST2", "--config", str(root / "REST2.config")],
+        CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
 
@@ -87,8 +87,8 @@ def completed(project, tmp_path_factory):
     from openmm import XmlSerializer, unit
     from openmm.app import PDBFile
 
-    pdb = PDBFile(str(project / "built.pdb"))
-    system = XmlSerializer.deserialize((project / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(project / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((project / "build" / "built.xml").read_text(encoding="utf-8"))
     integrator = openmm.VerletIntegrator(1.0 * unit.femtosecond)
     context = openmm.Context(system, integrator, openmm.Platform.getPlatformByName("Reference"))
     context.setPositions(pdb.positions)
@@ -103,10 +103,10 @@ def completed(project, tmp_path_factory):
         [str(REPO / "src"), *([base["PYTHONPATH"]] if base.get("PYTHONPATH") else [])])
     base["MD_TOOLS_CONFIG"] = str(project / "user.config")
     done = subprocess.run(
-        [sys.executable, str(project / "REST2" / "REST2.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+        [sys.executable, str(project / "REST2-run1" / "REST2.py"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-c", str(initial), "-odir", str(destination), "--cpu"],
-        cwd=project / "REST2", capture_output=True, text=True, timeout=1800, env=base)
+        cwd=project / "REST2-run1", capture_output=True, text=True, timeout=1800, env=base)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return destination
 
@@ -233,10 +233,17 @@ def test_a_cv_interval_that_does_not_divide_the_exchange_interval_is_refused(pro
     configuration["collective_variables"]["interval_steps"] = 3      # 10 % 3 != 0
     (tmp_path / "bad.config").write_text(yaml.safe_dump(configuration), encoding="utf-8")
 
+    # A DATASET ROOT for the throwaway generation. The subject here is the CV schedule -- a
+    # configuration error -- and a ladder's rungs are now scaled from `build/built.xml` at build
+    # time, so without one build-md refuses for the missing System and never reaches the check
+    # this test is named for.
+    from .conftest import make_dataset_root
+
+    make_dataset_root(tmp_path)
     done = subprocess.run(
-        CLI + ["build-md", "-odir", str(tmp_path / "bad"),
+        CLI + ["build-md", "-odir", str(tmp_path / "bad-run1"),
                "--config", str(tmp_path / "bad.config")],
-        cwd=project, capture_output=True, text=True, timeout=600)
+        cwd=tmp_path, capture_output=True, text=True, timeout=600)
     message = done.stdout + done.stderr
     if done.returncode == 0:
         # Refused at run time instead of build time is acceptable; refused nowhere is not.
@@ -244,10 +251,10 @@ def test_a_cv_interval_that_does_not_divide_the_exchange_interval_is_refused(pro
         base["PYTHONPATH"] = str(REPO / "src")
         base["MD_TOOLS_CONFIG"] = str(project / "user.config")
         done = subprocess.run(
-            [sys.executable, str(tmp_path / "bad" / "REST2.py"),
-             "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+            [sys.executable, str(tmp_path / "bad-run1" / "REST2.py"),
+             "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
              "-odir", str(tmp_path / "bad-run"), "--cpu", "--check"],
-            cwd=tmp_path / "bad", capture_output=True, text=True, timeout=900, env=base)
+            cwd=tmp_path / "bad-run1", capture_output=True, text=True, timeout=900, env=base)
         message = done.stdout + done.stderr
     assert done.returncode != 0, message[-3000:]
     assert "does not divide" in message, message[-3000:]

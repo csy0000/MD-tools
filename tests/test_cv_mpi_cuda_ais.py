@@ -83,10 +83,11 @@ def project(tmp_path_factory):
         pytest.skip("no ALA fixture")
     _require_mpi_and_cuda()
     root = tmp_path_factory.mktemp("ais-mpi-cuda")
+    (root / "build").mkdir(exist_ok=True)
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
     (root / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
@@ -103,13 +104,13 @@ def project(tmp_path_factory):
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./AIS", "--config", str(root / "AIS.config")],
+        CLI + ["build-md", "-odir", "./AIS-run1", "--config", str(root / "AIS.config")],
         cwd=root, capture_output=True, text=True, timeout=900)
     assert done.returncode == 0, done.stdout + done.stderr
 
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
     return root
 
@@ -125,11 +126,11 @@ def _launch(project: Path, destination: Path, *extra, ranks=RANKS, environment=N
     base["MD_TOOLS_CONFIG"] = str(user)
     base.update(environment or {})
     done = subprocess.run(
-        ["mpirun", "-n", str(ranks), sys.executable, str(project / "AIS" / "AIS.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+        ["mpirun", "-n", str(ranks), sys.executable, str(project / "AIS-run1" / "AIS.py"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-source-traj", str(project / "source.dcd"),
          "-ng", str(ranks), "-odir", str(destination), *extra],
-        cwd=project / "AIS", capture_output=True, text=True, timeout=LAUNCH_TIMEOUT, env=base)
+        cwd=project / "AIS-run1", capture_output=True, text=True, timeout=LAUNCH_TIMEOUT, env=base)
     if expect is not None:
         assert (done.returncode == 0) == (expect == 0), \
             done.stdout[-4000:] + done.stderr[-4000:]
@@ -437,11 +438,11 @@ def test_one_rank_dying_fails_the_campaign_and_invents_no_completed_paths(projec
 
     done = subprocess.run(
         ["mpirun", "-n", str(RANKS), str(shim), sys.executable,
-         str(project / "AIS" / "AIS.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+         str(project / "AIS-run1" / "AIS.py"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-source-traj", str(project / "source.dcd"),
          "-ng", str(RANKS), "-odir", str(destination)],
-        cwd=project / "AIS", capture_output=True, text=True, timeout=LAUNCH_TIMEOUT, env=base)
+        cwd=project / "AIS-run1", capture_output=True, text=True, timeout=LAUNCH_TIMEOUT, env=base)
 
     assert done.returncode != 0, (
         "a campaign that lost a worker reported success:\n" + done.stdout[-3000:])

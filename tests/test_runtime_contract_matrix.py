@@ -29,6 +29,10 @@ from .test_direct_runtime_preflight import (ENTRY, MODES, PROTOCOL_ONLY,  # noqa
                                             VALID_USER, _config, _launch, _refused, _run,
                                             _snapshot, workspace)
 
+# `ENTRY` gives each mode's script path relative to the dataset root, so the directory a launch
+# runs from is derived from it rather than restated. Restating it is how `split` came to name a
+# `split/` directory that the run layout no longer creates. (`Path` is already imported above.)
+
 CONFIG = "MD_TOOLS_CONFIG"
 
 
@@ -239,17 +243,17 @@ def test_a_run_refuses_to_write_over_an_existing_one_and_says_which_files(worksp
     """End to end, through `md-run`: the second invocation must not half-overwrite the first."""
     destination = tmp_path / "twice"
     first = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
-                  "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
+                  "-i", "../input/min.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                   "-odir", str(destination), *PROTOCOL_ONLY],
-                 cwd=workspace / "split", environment=good_config)
+                 cwd=workspace / Path(ENTRY["split"][0]).parent, environment=good_config)
     assert first.returncode == 0, first.stdout + first.stderr
 
     # Rerunning a stage that COMPLETED under this exact configuration is the idempotent case and
     # stays a success: it is how a chain is safely re-driven.
     second = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
-                   "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
+                   "-i", "../input/min.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                    "-odir", str(destination), *PROTOCOL_ONLY],
-                  cwd=workspace / "split", environment=good_config)
+                  cwd=workspace / Path(ENTRY["split"][0]).parent, environment=good_config)
     assert second.returncode == 0, second.stdout + second.stderr
     assert "already completed" in second.stdout + second.stderr
 
@@ -258,17 +262,17 @@ def test_a_run_refuses_to_write_over_an_existing_one_and_says_which_files(worksp
     for log in destination.glob("*.log"):
         log.unlink()
     third = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
-                  "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
+                  "-i", "../input/min.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                   "-odir", str(destination), *PROTOCOL_ONLY],
-                 cwd=workspace / "split", environment=good_config)
+                 cwd=workspace / Path(ENTRY["split"][0]).parent, environment=good_config)
     assert third.returncode != 0, third.stdout + third.stderr
     message = third.stdout + third.stderr
     assert "already exist" in message and "--overwrite" in message, message
 
     fourth = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
-                   "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
+                   "-i", "../input/min.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                    "-odir", str(destination), "--overwrite", *PROTOCOL_ONLY],
-                  cwd=workspace / "split", environment=good_config)
+                  cwd=workspace / Path(ENTRY["split"][0]).parent, environment=good_config)
     assert fourth.returncode == 0, fourth.stdout + fourth.stderr
 
 
@@ -415,10 +419,10 @@ def test_a_cmd_stage_launched_under_mpirun_is_refused(workspace, tmp_path, good_
 
     destination = tmp_path / "plural-cmd"
     before = _snapshot(destination)
-    done = _run(["mpirun", "-n", "2", sys.executable, str(workspace / "split" / "min.py"),
-                 "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
+    done = _run(["mpirun", "-n", "2", sys.executable, str(workspace / ENTRY["split"][0]),
+                 "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination),
                  *PROTOCOL_ONLY],
-                cwd=workspace / "split", environment=good_config)
+                cwd=workspace / Path(ENTRY["split"][0]).parent, environment=good_config)
     message = done.stdout + done.stderr
     assert done.returncode != 0, message[-2000:]
     assert "serial protocol" in message, message[-2000:]
@@ -435,10 +439,10 @@ def test_the_all_in_one_workflow_is_refused_under_a_plural_launch(workspace, tmp
 
     destination = tmp_path / "plural-chain"
     before = _snapshot(destination)
-    done = _run(["mpirun", "-n", "2", sys.executable, str(workspace / "allinone" / "md.py"),
-                 "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
+    done = _run(["mpirun", "-n", "2", sys.executable, str(workspace / ENTRY["allinone"][0]),
+                 "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination),
                  *PROTOCOL_ONLY],
-                cwd=workspace / "allinone", environment=good_config)
+                cwd=workspace / Path(ENTRY["allinone"][0]).parent, environment=good_config)
     assert done.returncode != 0
     assert "serial protocol" in (done.stdout + done.stderr)
     _untouched(destination, before)
@@ -582,13 +586,13 @@ def test_an_incompatible_ais_source_refuses_without_creating_the_directory(works
     assert before and any(name == "AIS_run.json" for name in before)
 
     other = tmp_path / "other_source.dcd"
-    frames = mdtraj.load(str(workspace / "built.pdb"))
+    frames = mdtraj.load(str(workspace / "build" / "built.pdb"))
     mdtraj.join([frames] * 5).save_dcd(str(other))          # a different length, so a different digest
 
-    done = _run([sys.executable, str(workspace / "AIS" / "AIS.py"),
-                 "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
+    done = _run([sys.executable, str(workspace / ENTRY["AIS"][0]),
+                 "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination),
                  "-source-traj", str(other), *PROTOCOL_ONLY],
-                cwd=workspace / "AIS", environment=good_config)
+                cwd=workspace / Path(ENTRY["AIS"][0]).parent, environment=good_config)
     _refused(done, fragment="different AIS run")
     _untouched(destination, before)
 
@@ -604,14 +608,14 @@ def test_an_ais_refusal_on_a_fresh_directory_leaves_it_absent(workspace, tmp_pat
 
     import mdtraj.core.element as element  # noqa: F401
 
-    frames = mdtraj.load(str(workspace / "built.pdb"))
+    frames = mdtraj.load(str(workspace / "build" / "built.pdb"))
     sliced = frames.atom_slice(list(range(frames.n_atoms - 1)))
     mdtraj.join([sliced] * 4).save_dcd(str(wrong))
 
-    done = _run([sys.executable, str(workspace / "AIS" / "AIS.py"),
-                 "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
+    done = _run([sys.executable, str(workspace / ENTRY["AIS"][0]),
+                 "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination),
                  "-source-traj", str(wrong), *PROTOCOL_ONLY],
-                cwd=workspace / "AIS", environment=good_config)
+                cwd=workspace / Path(ENTRY["AIS"][0]).parent, environment=good_config)
     assert done.returncode != 0, done.stdout + done.stderr
     assert not destination.exists(), sorted(p.name for p in destination.iterdir())
 
@@ -747,7 +751,7 @@ def test_an_invalid_last_stage_stops_the_chain_before_stage_one_writes_anything(
     destination = tmp_path / "chain-out"
     before = _snapshot(destination)
     done = _run([sys.executable, str(project / "md.py"),
-                 "-p", str(workspace / "built.pdb"), "-s", str(workspace / "built.xml"),
+                 "-p", str(workspace / "build" / "built.pdb"), "-s", str(workspace / "build" / "built.xml"),
                  "-odir", str(destination), *PROTOCOL_ONLY],
                 cwd=project, environment=good_config)
     message = done.stdout + done.stderr
@@ -924,11 +928,11 @@ def ladder_start(workspace):
     from openmm import LangevinMiddleIntegrator, XmlSerializer, unit
     from openmm.app import PDBFile, Simulation
 
-    destination = workspace / "REST2" / "start.xml"
+    destination = workspace / "REST2-run1" / "start.xml"
     if destination.is_file():
         return destination
-    pdb = PDBFile(str(workspace / "built.pdb"))
-    system = XmlSerializer.deserialize((workspace / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(workspace / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((workspace / "build" / "built.xml").read_text(encoding="utf-8"))
     simulation = Simulation(pdb.topology, system,
                             LangevinMiddleIntegrator(300.0 * unit.kelvin, 1.0 / unit.picosecond,
                                                      0.002 * unit.picoseconds))
@@ -1068,3 +1072,67 @@ def test_a_ladder_without_a_reservoir_does_not_claim_one(tmp_path):
         protocol="REST2", replicas=2, output=tmp_path / "REST2.out", log=None,
         trajectory=None, restart=None, checkpoint=None, groupfile=None, reservoir=False)
     assert "reservoir_declaration" not in inventory.roles
+
+# --- the System and the group file are alternatives, never both ------------------------------------
+
+def test_a_ladder_takes_a_group_file_instead_of_a_system(workspace, tmp_path, good_config):
+    """Exactly one of `-s` and `--groupfile`, refused BY NAME when that is not what arrived.
+
+    A ladder's rungs are scaled and serialised at BUILD time -- `remd<n>/build_state<n>.xml` --
+    so each line of the group file names its OWN pre-scaled System and there is no single System
+    for the launch to carry. `-s` was `required=True` in four parsers above the runtime's grouped
+    exemption, so a grouped launch was impossible through every public surface: `run.sh` -- the
+    documented way to run a ladder -- died on every rank with
+
+        md-openmm md-run: error: the following arguments are required: -s/--system
+
+    and nothing caught it, because the only grouped end-to-end test invokes `remd.executor`
+    directly and never passes through `md-run` or the generated ladder script.
+
+    `_refused` rejects an argparse complaint, which is exactly right here: the refusals below must
+    come from the rule, and the accepted case must not be refused by the parser at all.
+    """
+    run_dir = workspace / "REST2-run1"
+    group = run_dir / "remd_groupfile.1"
+    assert group.is_file(), (
+        f"build-md wrote no group file for a ladder: {sorted(p.name for p in run_dir.iterdir())}")
+
+    script = str(run_dir / "REST2.py")
+
+    # NEITHER: nothing says what to integrate.
+    destination = tmp_path / "neither"
+    before = _snapshot(destination)
+    done = _run([sys.executable, script, "-p", "../build/built.pdb", "-odir", str(destination),
+                 "--cpu", "--check"], cwd=run_dir, environment=good_config)
+    message = _refused(done, fragment="-groupfile")
+    assert "-s" in message, message[-2000:]
+    _untouched(destination, before)
+
+    # BOTH: two answers to one question. One `-s` beside a group file claims a single Hamiltonian
+    # for every rung, which is the error the per-rung files exist to prevent.
+    destination = tmp_path / "both"
+    before = _snapshot(destination)
+    done = _run([sys.executable, script, "-p", "../build/built.pdb",
+                 "-s", "../build/built.xml", "--groupfile", group.name,
+                 "-odir", str(destination), "--cpu", "--check"],
+                cwd=run_dir, environment=good_config)
+    _refused(done, fragment="both")
+    _untouched(destination, before)
+
+    # THE GROUP FILE ALONE reaches the runtime. It still needs one rank per state, and this test
+    # launches a single process, so the launch itself is correctly refused -- but for the WORLD
+    # SIZE, never for a missing `-s`. That distinction is the whole point: the parser must stop
+    # standing in the way. A real grouped run is exercised under mpirun by
+    # `test_examples_getting_started` and the GPU ladder modules.
+    destination = tmp_path / "grouped"
+    before = _snapshot(destination)
+    done = _run([sys.executable, script, "-p", "../build/built.pdb",
+                 "--groupfile", group.name, "-ng", "2",
+                 "-odir", str(destination), "--cpu", "--check"],
+                cwd=run_dir, environment=good_config)
+    combined = done.stdout + done.stderr
+    assert "required: -s/--system" not in combined, (
+        "argparse still blocks a grouped launch:\n" + combined[-2000:])
+    assert "neither -s nor --groupfile" not in combined, (
+        "the group file was not recognised as saying what to integrate:\n" + combined[-2000:])
+    _untouched(destination, before)

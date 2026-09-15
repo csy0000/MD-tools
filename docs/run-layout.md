@@ -1,10 +1,74 @@
 # The run directory layout
 
-**Status: proposed for the code; already realised for nine migrated reference runs.** The code
-still writes the old flat layout. `data/reference/{ALA-explicit-HMR,ALA-implicit-HMR,
-RGDfV-implicit-HMR}/` have been reorganised to this shape, which is how the errors in the first
-three drafts of this document were found -- the missing exchange ledger, `build/` being a sibling
-rather than absent, and the equilibration streams being solvent-dependent.
+**Status: IMPLEMENTED. `build-md` writes this layout.** `md-openmm build-md -odir REST2-run1`
+produces it directly, and the nine migrated reference runs under
+`data/reference/{ALA-explicit-HMR,ALA-implicit-HMR,RGDfV-implicit-HMR}/` already have this shape
+-- which is how the errors in the first three drafts of this document were found: the missing
+exchange ledger, `build/` being a sibling rather than absent, and the equilibration streams being
+solvent-dependent.
+
+WHAT THE IMPLEMENTATION ADDED that this document did not originally anticipate, each because a
+test found it:
+
+* **`min/run.config` and `eq/run.config`.** A generated script reads the `resolved.config`
+  strictly beside itself, so every directory holding one needs the declaration AND the per-run
+  seed it was resolved with. `min/` is shared, so it carries its OWN seed, which may differ from
+  every run on the system: minimisation draws no velocities and has no seeded stochastic element.
+  Without `eq/run.config`, every equilibration stage refused with
+  `eq/resolved.config describes a different run: dynamics.seed: was <run>, now 1`.
+* **`min/resolved.config` AND `eq/resolved.config` are METHOD-NEUTRAL**, through one shared
+  projection so the two cannot drift apart. Both directories hold scripts driven by the shared
+  `input/*.in`, which carry no `protocol` -- that absence is what lets one `min.in` and one
+  `eq_<k>.in` serve every method -- so a per-run document here recorded `protocol: REST2` while
+  the input it is compared against resolves to the default, and every preparation stage of a
+  ladder refused with `protocol: was 'REST2', now 'cMD'`. The stored document matches the input
+  rather than the run. THE COST: nothing inside `min/` or `eq/` says which method the run was.
+  That is recorded at the run root and in `build-md.log`.
+* **A recorded path is resolved against the run directory, never reduced to its basename.** Five
+  places assumed a run's artefacts sit flat in one directory -- `_stage_inputs`, `_locate` and
+  the cMD `-c` parent in `reference/export.py`, the ladder's starting state in
+  `reference/rest2_export.py`, and `_stage_inputs`' record glob, which searched the run root only
+  and so bundled ONE stage where two had run, silently omitting the equilibration input a
+  reproduction needs. Each now resolves the recorded path first and falls back to the bare name,
+  which is where it sits for a run generated before the split.
+* **`min.in` carries no collective-variable cadence.** Minimisation produces no series -- its
+  iterations have no timestep -- so the cadence cannot change what it does, and leaving it in
+  made two runs differing only in CV reporting collide on a shared input.
+* **Every declaration travels with the definition it names.** `resolved.config` records the CV and
+  umbrella copies by BARE NAME, so that a generated directory stays movable and the name resolves
+  beside whichever declaration a reader started from. The content-addressed copy is therefore
+  written into the run root, the SHARED `input/`, `min/` and `eq/` alike.
+
+  It was written into the run root ALONE, and the layout then put declarations in four places. So
+  `input/cMD.in` named `cv.<digest>.yaml` while `input/` held no such file — `md-run -i
+  ../input/cMD.in` could not resolve its own definition from any directory, and an `eq/` stage
+  resolving beside its own declaration found nothing either. `md_tools.run.continuation` has to
+  LOAD the definition to know what an invocation intends to continue, so it got `None` and
+  returned early: the read-only boundary silently did nothing and let a REFUSED `md-run` write
+  `resolved.config`, `<stage>.out` and `<stage>.log` into a tree it was declining to touch.
+
+  Sharing one copy is safe by construction rather than by convention — the name carries the
+  digest, so a definition that changed gets a different name and cannot quietly replace the one a
+  previous run read. An existing copy of the same name whose bytes differ is refused, because then
+  one of the two digests does not describe its own file — and `--overwrite` replaces it, as it does
+  every other file in the shared tree, so one corrupt copy cannot block regenerating the run.
+
+STILL OPEN, and deliberately not decided here: two runs on one system that differ only in CV
+reporting have different `eq_*.in` bytes and the second is refused. Reporting is observation and
+changes no Hamiltonian -- it adds no Force, and the System, force inventory, force groups and a
+single-point energy are asserted identical with it on and off -- so those two runs are the same
+experiment in every respect except what they record.
+
+`--overwrite` is NOT the remedy, and this was established by measurement rather than argument.
+It rewrites `input/eq_*.in` to the second run's form, and every later generation with the first
+run's setting then refuses against that: within one root the collision moves rather than
+resolving, whichever order the runs go in. So the choice is real and narrow:
+
+* **the cadence becomes a per-run value beside the seed**, which widens `RUN_CONFIG_ALLOWED` --
+  a deliberately one-key schema, on the reasoning that an override able to set everything is a
+  second configuration authority; or
+* **such runs take separate `<system>` roots**, which is what the tests do today, at the cost
+  that a CV-on and a CV-off run on the same molecule are no longer one comparable dataset.
 
 The migration scripts under `data/reference/` are deliberately THROWAWAY and untracked: the point
 is for the code to write this layout natively, so there is nothing to migrate in future. They are
@@ -127,9 +191,24 @@ set everything is a second configuration authority.
 ### `eq/` — per run
 
 ```text
-eq/  eq_1.{xml,out,log}  eq_1.whole.nc  eq_1.solute.nc
-     eq_1.energy_components.csv  eq_1.mdout.csv  eq_1.py  eq_1.checkpoints/
+eq/  eq_1.{xml,out,log,chk}  eq_1.py  eq_1.checkpoints/
+     whole_eq_1.nc  solute_eq_1.nc
+     mdout_eq_1.csv  energy_components_eq_1.csv
      eq_2.*  eq_3.*
+```
+
+Every name here is the stage's FILING KEY, not the stage name: `eq_nvt_posres` is filed as `eq_1`,
+because the ensemble moved out of the filename so that a renamed stage cannot make a filename
+claim something false. `stage_plan` stamps the key onto every plan entry, so the layout that writes
+`run.sh` and the runtime that writes the files read it from one place. They did not, once: the
+runtime named outputs from the stage, `run.sh` chained `-c eq/eq_1.xml`, and no cMD or REST2 chain
+could complete through `run.sh` — the documented way to run one.
+
+The stream and table names keep the affix style the runtime uses everywhere else
+(`solute_<key>.nc`, `mdout_<key>.csv`), rather than a `eq_1.solute.nc` form that would apply to
+these files alone:
+
+```text
 ```
 
 **Two trajectory streams per stage**, as the reference data has: a single `eq_N.nc` cannot hold

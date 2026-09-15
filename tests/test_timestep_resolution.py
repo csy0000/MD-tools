@@ -138,17 +138,22 @@ def test_one_generated_script_resolves_two_and_four_fs_from_two_real_systems(tmp
         # A directory PER SYSTEM. Running the same stage twice against two different Systems in
         # one directory is correctly refused -- the checkpoint fingerprint binds the System -- and
         # that refusal is asserted in its own test rather than worked around here.
-        out = f"md{int(enabled)}"
+        # A SYSTEM ROOT per System, because `min/` is shared by every run on a system: the
+        # generated minimisation now lives in `<system>/min/`, not in the run directory, so two
+        # Systems sharing one root would share one minimisation -- which is exactly the refusal
+        # this test must not depend on.
+        root = tmp_path / f"sys{int(enabled)}"
+        root.mkdir()
         assert subprocess.run(
-            [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", f"./{out}",
-             "--config", str(md)], cwd=tmp_path, capture_output=True, text=True).returncode == 0
+            [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", "./md-run1",
+             "--config", str(md)], cwd=root, capture_output=True, text=True).returncode == 0
         pdb, xml = built[enabled]
         done = subprocess.run(
-            [sys.executable, "min.py", "-p", f"../{pdb}", "-s", f"../{xml}",
+            [sys.executable, "min.py", "-p", f"../../{pdb}", "-s", f"../../{xml}",
              "-r", "m.xml", "-log", "m.log"],
-            cwd=tmp_path / out, capture_output=True, text=True, timeout=1800)
+            cwd=root / "min", capture_output=True, text=True, timeout=1800)
         assert done.returncode == 0, done.stdout + done.stderr
-        record = read_record(tmp_path / out / "m.log")["timestep"]
+        record = read_record(root / "min" / "m.log")["timestep"]
         assert record["timestep_fs"] == expected, record
         assert record["basis"] == basis
         assert record["requested"] == "auto"

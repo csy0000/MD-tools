@@ -60,7 +60,16 @@ def _resolve(tmp_path, document):
     return resolve_md_config(path)
 
 
-def _build_md(root, document, odir="md_script"):
+def _build_md(root, document, odir="REST2-run1"):
+    """Generate one run into a dataset root, and return the RUN directory.
+
+    The dataset root is made first because a ladder's rungs are scaled from `build/built.xml` at
+    build time now. Callers that need the shared `input/` or `min/` reach them through
+    `root`, not through the returned run directory.
+    """
+    from .conftest import make_dataset_root
+
+    make_dataset_root(root)
     path = root / f"{odir}.config"
     path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     done = subprocess.run(CLI + ["build-md", "-odir", odir, "--config", str(path)], cwd=root,
@@ -151,34 +160,63 @@ def test_the_stage_names_agree_between_the_resolver_and_the_runtime():
 # --- what build-md writes ---------------------------------------------------------------------------
 
 def test_under_implicit_solvent_the_tau_zero_chain_is_minimisation_alone(tmp_path):
+    """No equilibration stage belongs to the RUN: the rungs each equilibrate under their own tau.
+
+    Implicit solvent has no box to fix first, so the tau = 0 chain is minimisation alone -- and
+    minimisation is shared, at `<system>/min/`. So the run itself has no `eq/` at all, which is
+    the assertion: an `eq/` here would mean a tau = 0 equilibration ran as well as the per-rung
+    ones.
+    """
     out = _build_md(tmp_path, {"protocol": "REST2", "solvent": "implicit",
                                "rest2": {"equilibration_per_tau": True}})
-    assert sorted(p.name for p in out.iterdir()) == sorted(
-        ["REST2.in", "REST2.py", "build-md.log", "min.in", "min.py", "resolved.config", "run.config",
-         "run.sh"])
-    assert "-c min.xml" in (out / "run.sh").read_text(encoding="utf-8")
+    root = out.parent
+    assert not (out / "eq").exists(), sorted(p.name for p in (out / "eq").iterdir())
+    assert sorted(p.name for p in root.joinpath("input").iterdir()) == ["REST2.in", "min.in"]
+    assert (root / "min" / "min.py").is_file()
+    # The ladder starts from the shared minimised structure -- and that now lives in the GROUP
+    # FILE rather than in run.sh. `-c` is a per-replica INPUT, and each line of a group file
+    # carries its own; the executor call names only what describes the coordinated run.
+    assert "-c ../min/min.xml" in (out / "remd_groupfile.1").read_text(encoding="utf-8")
     assert "per-tau equilibration" in (out / "build-md.log").read_text(encoding="utf-8")
 
 
 def test_under_explicit_solvent_the_npt_stages_still_fix_the_box_first(tmp_path):
+    """The NPT chain at tau = 0 decides the volume every rung shares, so it survives -- filed by
+    position, as `eq_1/eq_2/eq_3`, with the ensemble in each stage's own header."""
     out = _build_md(tmp_path, {"protocol": "REST2", "solvent": "explicit",
                                "rest2": {"equilibration_per_tau": True}})
-    assert {"eq_nvt_posres.in", "eq_npt_posres.in", "eq_npt_free.in"} <= {
-        p.name for p in out.iterdir()}
-    assert "-c eq_npt_free.xml" in (out / "run.sh").read_text(encoding="utf-8")
+    root = out.parent
+    assert {"eq_1.in", "eq_2.in", "eq_3.in"} <= {p.name for p in (root / "input").iterdir()}
+    assert {"eq_1.py", "eq_2.py", "eq_3.py"} <= {p.name for p in (out / "eq").iterdir()}
+    assert "-c eq/eq_3.xml" in (out / "remd_groupfile.1").read_text(encoding="utf-8")
 
 
 def test_every_generated_input_resolves_back_to_its_resolved_config(tmp_path):
+    """The method input carries the ladder; the shared preparation inputs deliberately do not.
+
+    `min.in` and `eq_<k>.in` serve every method on this system, so they carry no `protocol` and
+    no `&remd` -- their `rest2` block is therefore the schema's defaults, not this run's ladder.
+    Only `REST2.in` is checked for the ladder blocks, and the preparation inputs for the ones
+    that genuinely are theirs.
+    """
     from md_tools.build.md import resolve_md_config
     from md_tools.run.inputs import parse_run_input
 
     out = _build_md(tmp_path, {"protocol": "REST2", "solvent": "implicit",
                                "rest2": {"equilibration_per_tau": True}})
+    shared = out.parent / "input"
     expected = resolve_md_config(out / "resolved.config")
     assert expected["rest2"]["equilibration_per_tau"] is True
-    for path in sorted(out.glob("*.in")):
-        parsed = parse_run_input(path)
-        for block in ("rest2", "stages", "dynamics"):
+
+    method = parse_run_input(shared / "REST2.in", run_config=out / "run.config")
+    for block in ("rest2", "stages", "dynamics"):
+        assert method.resolved[block] == expected[block], ("REST2.in", block)
+
+    for path in sorted(shared.glob("*.in")):
+        if path.name == "REST2.in":
+            continue
+        parsed = parse_run_input(path, run_config=out / "run.config")
+        for block in ("stages", "dynamics"):
             assert parsed.resolved[block] == expected[block], (path.name, block)
 
 
@@ -198,37 +236,109 @@ def test_every_generated_input_resolves_back_to_its_resolved_config(tmp_path):
 #: generated text and check the PINNED digest comes back. If it does, that line is the only
 #: difference and the snapshot can be updated. If it does not, something else moved as well, and
 #: that is the thing to look at rather than to overwrite.
+#: REFRESHED FOR THE RUN LAYOUT, and the refresh is itself the evidence. Every path below moved
+#: when `build/`, `min/` and `input/` became dataset-level and the run gained `eq/` and
+#: `remd<n>/`, so the old keys could not survive. Rather than pasting new hashes -- which this
+#: comment has always forbidden, because it absorbs unintended drift alongside the intended
+#: change -- each old digest was checked against the file at its NEW path. The result, identically
+#: for both solvents:
+#:
+#:   7 of 13 files are BIT-IDENTICAL under their new paths: every `.py` entry point
+#:   (`min/min.py`, `eq/eq_{1,2,3}.py`, `REST2.py`), `run.config` and `resolved.config`. The move
+#:   changed where they live and nothing about what they say.
+#:
+#:   6 changed, and each had to: the five `.in` files lost `protocol` and (for the preparation
+#:   ones) the whole `&remd` block so that `min.in`/`eq_<k>.in` can be shared across METHODS, and
+#:   gained the ensemble in their heading now that the filename can no longer carry it; `run.sh`
+#:   gained `-odir` per stage and the `../build/` defaults.
+#:
+#: WHAT THE RUNG DIGESTS ARE NOT. `remd<n>/build_state<n>.xml` is identical between the explicit
+#: and implicit tables because the fixture System is the same GBn2 one in both -- an md
+#: configuration's `solvent` key does not change the built System. They pin that scaling is
+#: deterministic, and they are NOT explicit-solvent evidence.
 BEFORE = {
     "explicit": {
-        "eq_npt_free.in": "67315b30f5cd6687da2b98834a90940df979deb9b33b3a075f5bd06ecb9e7853",
-        "eq_npt_free.py": "6daed6d160528e34e730c67997fb015667e2a3fe5cf80677be6b3f1e68b3ccad",
-        "eq_npt_posres.in": "9f3703823253dc6a622b616fbe1abcb91f5a1171d52bd9d7d2e19ac00d5bb649",
-        "eq_npt_posres.py": "a9a19c6c5e8f839a7a51e81a1ec554f89655bd04d581bc0c1babaa6aa07e6562",
-        "eq_nvt_posres.in": "8c8b5302118f6dfe5335ac815d1d31a4bb0412e6385fd082580504765fdc7771",
-        "eq_nvt_posres.py": "b5a332209934c06cbc1fe47f8cb780933bd672cf13de18f2d76214bb6cf89019",
-        "min.in": "50563461ea8c8e1fdcf4b8fb6da3c1a24ffe3c97b315c6737c7ca6b2af511ece",
-        "min.py": "c85b0c6bfd43627551e84f9fec6a0e76db4d16f089a640053d78fba522d9d601",
-        "run.config": "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
-        "resolved.config": "6f2fec67bd208c7510d537405614a064b225baf4d693757170319806b8714093",
-        "REST2.in": "27a4680a77717baa66132b0e38b0daa07fa0a78ac7ad4cbbf3d35d10414ff1bb",
-        "REST2.py": "3e039fcc9c24d68ebadeda2c73c88b47c628011583e55b75430d80e4cd1c2f87",
-        "run.sh": "700b5d0b4013c2c48faba7de66905ac9c62e84122d4f5e3505bb0add98234ead",
+        "REST2-run1/REST2.py": "3e039fcc9c24d68ebadeda2c73c88b47c628011583e55b75430d80e4cd1c2f87",
+        "REST2-run1/eq/eq_1.py": "b5a332209934c06cbc1fe47f8cb780933bd672cf13de18f2d76214bb6cf89019",
+        "REST2-run1/eq/eq_2.py": "a9a19c6c5e8f839a7a51e81a1ec554f89655bd04d581bc0c1babaa6aa07e6562",
+        "REST2-run1/eq/eq_3.py": "6daed6d160528e34e730c67997fb015667e2a3fe5cf80677be6b3f1e68b3ccad",
+        "REST2-run1/resolved.config":
+            "6f2fec67bd208c7510d537405614a064b225baf4d693757170319806b8714093",
+        # BYTE-IDENTICAL to the run root's, and the equality is the assertion: `eq/` holds
+        # generated scripts, and a generated script reads the `resolved.config` strictly beside
+        # itself, so the copy must be the same document rather than a second one.
+        "REST2-run1/eq/resolved.config":
+            "8bf04c0240f9678a1859aa267103bd4c56e941396bfffff9ea7077c06345e782",
+        # The SHARED minimisation's declaration: method-neutral, so it is the same file whichever
+        # method generates it first. Its digest therefore differs from the run's by construction.
+        "min/resolved.config":
+            "8bf04c0240f9678a1859aa267103bd4c56e941396bfffff9ea7077c06345e782",
+        "REST2-run1/run.config":
+            "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
+        "REST2-run1/run.sh": "b62d46bee2e7d56ea7c1699d93c9ce37bf0c3545bd77ab4d35b551263392c5fb",
+        "input/REST2.in": "b17734119b56cb502a5a0a0c5a71ef2ae04a926eaf97a5c109febc687b3dc189",
+        "input/eq_1.in": "149c24d1d7536173034b74f8f8dfa035292b2710aebe1d62449fcc7d2a8cd4eb",
+        "input/eq_2.in": "1e803fb37f931840ea037601df2255831815a0e4e2aea7676f35af5a3cf74cd3",
+        "input/eq_3.in": "372e78ebdae42eac63ca85445c397739e73258f6f4353b05f20114503bc35586",
+        "input/min.in": "23a1345e686f06ba7c5b440d4d75154a1a1c9b4637e27e5d54d7ab2ef25fc71b",
+        "min/min.py": "c85b0c6bfd43627551e84f9fec6a0e76db4d16f089a640053d78fba522d9d601",
     },
     "implicit": {
-        "eq_nvt_free.in": "f7d57ec788cd4d0d7951ec23fb2f96b976fbc57faf28ffed9370172f45ebf9b6",
-        "eq_nvt_free.py": "63f242cd9e3c1bf26ae98ff86e95792d76bbe4d94d06653bdaa6c1b140628f62",
-        "eq_nvt_posres_2.in": "19e66b88628f024abc9d0edbec8b45e63064d55ff835cbb4124fda0be999585e",
-        "eq_nvt_posres_2.py": "3054435667e24ebc079e4ecae1f1ddbc3de854035a6ee440f1a61e4f95c2cd35",
-        "eq_nvt_posres.in": "52459b5537ee1f9216e8d9d085e3fbb5b1c7d2a0a0005df6935df62eaa9fd5ba",
-        "eq_nvt_posres.py": "b5a332209934c06cbc1fe47f8cb780933bd672cf13de18f2d76214bb6cf89019",
-        "min.in": "ed705e88d4c8f258f5e26c00ab550014fbb066bc57c67aa3db700afda400f530",
-        "min.py": "c85b0c6bfd43627551e84f9fec6a0e76db4d16f089a640053d78fba522d9d601",
-        "run.config": "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
-        "resolved.config": "51ebec05d57459fa2916373958a75bc720d7939bd684681a9aa113cc53c11c94",
-        "REST2.in": "71c6044025a3923ba08a1ed4a0ce5fcc4eef571b828b2fbd580298194ecff4da",
-        "REST2.py": "3e039fcc9c24d68ebadeda2c73c88b47c628011583e55b75430d80e4cd1c2f87",
-        "run.sh": "56855931c369e433e8b2111ff9309aea6d564e892194d3720a0cf5a5ec861d14",
+        "REST2-run1/REST2.py": "3e039fcc9c24d68ebadeda2c73c88b47c628011583e55b75430d80e4cd1c2f87",
+        "REST2-run1/eq/eq_1.py": "b5a332209934c06cbc1fe47f8cb780933bd672cf13de18f2d76214bb6cf89019",
+        "REST2-run1/eq/eq_2.py": "3054435667e24ebc079e4ecae1f1ddbc3de854035a6ee440f1a61e4f95c2cd35",
+        "REST2-run1/eq/eq_3.py": "63f242cd9e3c1bf26ae98ff86e95792d76bbe4d94d06653bdaa6c1b140628f62",
+        "REST2-run1/resolved.config":
+            "51ebec05d57459fa2916373958a75bc720d7939bd684681a9aa113cc53c11c94",
+        "REST2-run1/eq/resolved.config":
+            "299fd1aa5d3e8f67bf8887d68e782d6878a54cae88b1ac8a01af70f98da19d0a",
+        "min/resolved.config":
+            "299fd1aa5d3e8f67bf8887d68e782d6878a54cae88b1ac8a01af70f98da19d0a",
+        "REST2-run1/run.config":
+            "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
+        "REST2-run1/run.sh": "b62d46bee2e7d56ea7c1699d93c9ce37bf0c3545bd77ab4d35b551263392c5fb",
+        "input/REST2.in": "11ed2bef6c9eb724d1efa4ed382125a001e7fde3745c51324b241e9d33411b7a",
+        "input/eq_1.in": "97f1e792f92394f75abb30a88161566cc617990a3ad32d075401afd421057e20",
+        "input/eq_2.in": "42adbaf0eac18587f548d8b040d915f89b41078a94600e4d0972f9dd2d1756e8",
+        "input/eq_3.in": "e4b9e3b368a7261715c33468a67e008257eee7c42227ff42f17990d18f1caecc",
+        "input/min.in": "cc7b66db65f7edfb399d26856e5d1b74116c598a81e04fbac778bef95a817940",
+        "min/min.py": "c85b0c6bfd43627551e84f9fec6a0e76db4d16f089a640053d78fba522d9d601",
     },
+}
+#: What this layout ADDED, pinned separately: these are new behaviour rather than a move, so they
+#: have no "before" to be compared against and belong outside the table above. Every one of them
+#: is solvent-independent -- the rungs because an md configuration's `solvent` key does not change
+#: the built System, `min/run.config` because it holds one number.
+NEW_IN_THIS_LAYOUT = {
+    # One group file per segment, naming one rung per line. New behaviour with the rungs.
+    # REFRESHED: `-i` on every group line is `_protocol.py`, not `../input/REST2.in`.
+    #
+    # The executor's grouped mode imports a group line's `-i` as PYTHON and expects one `protocol`
+    # object -- it is the module that describes the ladder. Naming the Amber-like input made every
+    # grouped launch through `run.sh` die with "could not be loaded as a Python file", after the
+    # whole equilibration chain had completed. `remd.generated._group_file_text` had always
+    # written `_protocol.py`; the two group-file writers disagreed and the build-time one was the
+    # wrong half.
+    "REST2-run1/remd_groupfile.1":
+        "10814e4a3ac058da51b4425004e93583ccffd344351b3563b041620b4e93dd9a",
+    # THE MINIMISATION'S OWN SEED. `min/` is shared, so it cannot hold a run's seed -- and it does
+    # not need to: minimisation draws no velocities, so no run's sampling descends from this
+    # number. Every run on the system may carry a different one without disturbing it.
+    "min/run.config":
+        "7a4e8aa29726c2975dea4be7fc2162d1f24a91964ea1b4504336821657bfcde9",
+    # The RUN's seed, beside the equilibration scripts. `md-run` layers `run.config` from `-odir`,
+    # so a stage run into `eq/` needs one there or it resolves the seed to the schema default and
+    # refuses against `eq/resolved.config`. Same bytes whichever solvent, since it holds one number.
+    "REST2-run1/eq/run.config":
+        "09847c0816635b3e559e754923710c189bb044551c0b9fae61af85120821f30b",
+    "REST2-run1/remd0/build_state0.xml":
+        "b4e773404dafae2dd0c51152e0819d376e98a0500a8db1938d846b906d670689",
+    "REST2-run1/remd1/build_state1.xml":
+        "c158fe1947f2503b3e025bd4b070c9a5fd5b81706ab6b9a9fe6ca48158d6b55f",
+    "REST2-run1/remd2/build_state2.xml":
+        "e7bfc43a5f858e2389417eb1ec0fcb965dd872934665422ee146c3f65355fdb8",
+    "REST2-run1/remd3/build_state3.xml":
+        "c18ff9d18240b31d85f694736ffc23f85d20b1b164e5bb5c050488f3d6ac5184",
 }
 #: The `_protocol.py` a default four-state ladder materialises at 2 fs, before this setting.
 PROTOCOL_HELPER_BEFORE = "806d23669d38b89fa27af10b37250f5ee72e598ad124e71ec62723fa37a0bc91"
@@ -237,14 +347,29 @@ PROTOCOL_HELPER_BEFORE = "806d23669d38b89fa27af10b37250f5ee72e598ad124e71ec62723
 @pytest.mark.parametrize("solvent", ["explicit", "implicit"])
 def test_off_leaves_every_generated_file_as_it_was(tmp_path, solvent):
     out = _build_md(tmp_path, {"protocol": "REST2", "solvent": solvent})
-    assert {p.name for p in out.iterdir()} - {"build-md.log"} == set(BEFORE[solvent])
-    for name, digest in BEFORE[solvent].items():
-        text = (out / name).read_text(encoding="utf-8")
-        if name.endswith(".in") or name == "resolved.config":
+    root = out.parent
+    generated = {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()}
+    # `build/` is the INPUT to this generation rather than a product of it, and the two configs
+    # are the test's own scaffolding.
+    generated -= {name for name in generated
+                  if name.startswith("build/") or name.endswith(".config")
+                  and "/" not in name}
+    generated -= {"REST2-run1/build-md.log", "REST2-run1/build_states.log"}
+    assert generated == set(BEFORE[solvent]) | set(NEW_IN_THIS_LAYOUT), sorted(generated)
+
+    for name, digest in {**BEFORE[solvent], **NEW_IN_THIS_LAYOUT}.items():
+        text = (root / name).read_text(encoding="utf-8")
+        # The `.in` files and `resolved.config` gain exactly one line when the setting exists but
+        # is off. The preparation inputs are the exception: they carry no `&remd` at all now, so
+        # there is no `equilibration_per_tau` line in them to take out.
+        if name.endswith("resolved.config") or name in ("input/REST2.in",):
             added = [line for line in text.splitlines() if "equilibration_per_tau" in line]
             assert len(added) == 1 and "false" in added[0], (name, added)
             text = "".join(line for line in text.splitlines(keepends=True)
                            if "equilibration_per_tau" not in line)
+        elif name.endswith(".in"):
+            assert "equilibration_per_tau" not in text, (
+                f"{name} is a SHARED preparation input and must carry no ladder setting")
         assert hashlib.sha256(text.encode("utf-8")).hexdigest() == digest, name
 
 
@@ -424,29 +549,77 @@ def test_an_interruption_stops_between_stages_and_names_the_phase(tmp_path, monk
 # --- real ladders, CPU ----------------------------------------------------------------------------------
 
 def _build_top(root, config_text):
+    """The REAL build-top, into the dataset's `build/`.
+
+    Into `build/` because that is where a run reads its System from, and because
+    `make_dataset_root` -- which `_build_md` calls -- now declines to overwrite an existing built
+    System. The two therefore agree instead of racing: whichever runs first provides the System,
+    and these tests want this one, built by tleap under the stated solvent model.
+    """
     (root / "sys.config").write_text(config_text, encoding="utf-8")
+    (root / "build").mkdir(exist_ok=True)
     done = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
 
 
+#: Stage name -> (shared input, `-odir` relative to the run, the state it leaves behind).
+#:
+#: A stage is GENERATED under its physics name (`eq_nvt_posres`) and FILED by position (`eq_1`),
+#: and the two are different things: the first decides what runs, the second where it lands.
+#: Minimisation is shared at `<system>/min/`, equilibration is per run in `<run>/eq/`.
+_LAYOUT = {
+    # The third element is the restart the stage LEAVES, and it is FILED BY POSITION -- `eq_1.xml`
+    # for the first equilibration stage whatever that stage is called. The stage name decides the
+    # physics; the filing key decides the filename, and `stage_plan` stamps it so the layout and
+    # the runtime cannot disagree.
+    #
+    # They did disagree: the runtime named outputs from the stage, so `run.sh` chained
+    # `-c eq/eq_1.xml` against a stage that had written `eq/eq_nvt_posres.xml` and no chain could
+    # complete through `run.sh` at all.
+    "min": ("../input/min.in", "../min", "../min/min.xml"),
+    "eq_nvt_posres": ("../input/eq_1.in", "eq", "eq/eq_1.xml"),
+    "eq_nvt_posres_2": ("../input/eq_2.in", "eq", "eq/eq_2.xml"),
+    "eq_npt_posres": ("../input/eq_2.in", "eq", "eq/eq_2.xml"),
+    "eq_nvt_free": ("../input/eq_3.in", "eq", "eq/eq_3.xml"),
+    "eq_npt_free": ("../input/eq_3.in", "eq", "eq/eq_3.xml"),
+}
+
+
 def _stage(run, name, parent=None):
-    argv = CLI + ["md-run", "-i", f"{name}.in", "-p", "../built.pdb", "-s", "../built.xml",
-                  "-r", f"{name}.xml", "-chk", f"{name}.chk", "-o", f"{name}.out",
-                  "-log", f"{name}.log", "-odir", ".", "--cpu"]
+    """Run one preparation stage the way `run.sh` does, and return the state it wrote.
+
+    NO `-r`, `-chk`, `-o` or `-log`. md-run names all four inside `-odir`, and a value that IS
+    given is taken verbatim against the WORKING directory -- so spelling them here would put the
+    minimisation's restart beside the run root instead of in `min/`, which is the defect the
+    per-stage `-odir` exists to remove.
+    """
+    source, odir, produced = _LAYOUT[name]
+    argv = CLI + ["md-run", "-i", source, "-p", "../build/built.pdb", "-s", "../build/built.xml",
+                  "-odir", odir, "--cpu"]
     if parent:
         argv += ["-c", parent]
     done = subprocess.run(argv, cwd=run, capture_output=True, text=True, timeout=1800,
                           env=ONE_THREAD)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+    return produced
 
 
 def _ladder_argv(start, *extra):
-    return ["mpirun", "-n", str(RUNGS), *CLI, "md-run", "-ng", str(RUNGS), "-i", "REST2.in",
-            "-p", "../built.pdb", "-s", "../built.xml", "-c", start, "-x", "REST2.nc",
-            "-r", "restart.json", "-o", "REST2.out", "-log", "REST2.log", "--cpu", *extra]
+    """The ladder, driven as `run.sh` drives it.
+
+    `-s` IS STILL REQUIRED HERE, and dropping it was wrong. Per-rung Systems arrive through a
+    GROUP FILE -- one `-s` per line -- and these tests drive `md-run` directly with no group
+    file, where `-s` is mandatory and names the System the ladder scales from. Leaving it off got
+    an argparse usage error, not a per-rung ladder.
+    """
+    return ["mpirun", "-n", str(RUNGS), *CLI, "md-run", "-ng", str(RUNGS),
+            "-i", "../input/REST2.in", "-p", "../build/built.pdb",
+            "-s", "../build/built.xml", "-c", start,
+            "-x", "REST2.nc", "-r", "restart.json", "-o", "REST2.out", "-log", "REST2.log",
+            "--cpu", *extra]
 
 
 def _needs_mpirun():
@@ -474,8 +647,8 @@ def implicit_ladder(tmp_path_factory):
     root = tmp_path_factory.mktemp("per-tau-implicit")
     _build_top(root, "solvent:\n  model: GBn2\n")
     run = _build_md(root, IMPLICIT, odir="run")
-    _stage(run, "min")
-    done = subprocess.run(_ladder_argv("min.xml"), cwd=run, capture_output=True, text=True,
+    start = _stage(run, "min")
+    done = subprocess.run(_ladder_argv(start), cwd=run, capture_output=True, text=True,
                           timeout=3600, env=ONE_THREAD)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return root, run, done.stdout
@@ -501,7 +674,7 @@ def test_every_rung_ends_its_equilibration_at_its_own_state(implicit_ladder):
     seeds = [stage["seed"] for entry in record["states"] for stage in entry["stages"]]
     assert len(set(seeds)) == len(seeds) == 2 * RUNGS
 
-    start = _positions(run / "min.xml")
+    start = _positions(run.parent / "min" / "min.xml")
     ends = []
     for entry in record["states"]:
         assert _sha256(run / entry["file"]) == entry["sha256"]
@@ -539,19 +712,19 @@ def test_a_rungs_end_state_is_what_the_documented_procedure_gives(implicit_ladde
     rung = 2
     tau = record["states"][rung]["tau"]
     system = build_scaled_system(
-        XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8")),
+        XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8")),
         atoms, tau, excluded_bonds=excluded)
 
     force = CustomExternalForce("0.5*restraint_k*((x-x0)^2 + (y-y0)^2 + (z-z0)^2)")
     force.addGlobalParameter("restraint_k", 0.0)
     for name in ("x0", "y0", "z0"):
         force.addPerParticleParameter(name)
-    reference = PDBFile(str(root / "built.pdb")).positions.value_in_unit(unit.nanometer)
+    reference = PDBFile(str(root / "build" / "built.pdb")).positions.value_in_unit(unit.nanometer)
     for index in atoms:
         force.addParticle(index, list(reference[index]))
     system.addForce(force)
 
-    start = XmlSerializer.deserialize((run / "min.xml").read_text(encoding="utf-8"))
+    start = XmlSerializer.deserialize((run.parent / "min" / "min.xml").read_text(encoding="utf-8"))
     positions = start.getPositions(asNumpy=True)
     velocities = start.getVelocities(asNumpy=True)
     for name, strength in (("eq_nvt_posres", 1.0), ("eq_nvt_free", 0.0)):
@@ -610,7 +783,7 @@ def test_resume_after_an_interruption_during_it_is_refused_and_writes_nothing(im
     state_path.write_text(json.dumps(document), encoding="utf-8")
     before = _tree(copy)
 
-    done = subprocess.run(_ladder_argv("min.xml", "--resume"), cwd=run, capture_output=True,
+    done = subprocess.run(_ladder_argv("../min/min.xml", "--resume"), cwd=run, capture_output=True,
                           text=True, timeout=1800, env=ONE_THREAD)
     assert done.returncode != 0, done.stdout[-2000:]
     assert "per-tau equilibration" in done.stderr and "--overwrite" in done.stderr, done.stderr
@@ -621,12 +794,13 @@ def test_resume_after_an_interruption_during_it_is_refused_and_writes_nothing(im
 def test_a_failure_during_it_stops_the_whole_ladder(implicit_ladder, tmp_path):
     """A rank that fails in per-tau equilibration aborts every rank; nothing claims completion."""
     root, _run, _stdout = implicit_ladder
-    for name in ("built.xml", "built.pdb", "built.log"):
+    (tmp_path / "build").mkdir(exist_ok=True)
+    for name in ("build/built.xml", "build/built.pdb", "build/built.log"):
         shutil.copy2(root / name, tmp_path / name)
     run = _build_md(tmp_path, IMPLICIT, odir="run")
-    _stage(run, "min")
+    start = _stage(run, "min")
     done = subprocess.run(
-        _ladder_argv("min.xml"), cwd=run, capture_output=True, text=True, timeout=1800,
+        _ladder_argv(start), cwd=run, capture_output=True, text=True, timeout=1800,
         env={**ONE_THREAD, "MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": "2",
              "MD_TOOLS_FAIL_LADDER_AT": "per-tau-equilibration"})
     assert done.returncode != 0
@@ -653,9 +827,10 @@ def explicit_ladder(tmp_path_factory):
     }, odir="run")
     parent = None
     for name in ("min", "eq_nvt_posres", "eq_npt_posres", "eq_npt_free"):
-        _stage(run, name, parent)
-        parent = f"{name}.xml"
-    done = subprocess.run(_ladder_argv("eq_npt_free.xml"), cwd=run, capture_output=True,
+        # The parent is the LAYOUT path of the state the previous stage wrote, not `<name>.xml`
+        # at the run root: minimisation leaves `../min/min.xml` and equilibration `eq/eq_<k>.xml`.
+        parent = _stage(run, name, parent)
+    done = subprocess.run(_ladder_argv(parent), cwd=run, capture_output=True,
                           text=True, timeout=3600, env=ONE_THREAD)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return root, run
@@ -671,7 +846,7 @@ def test_explicit_rungs_share_the_box_the_npt_stages_fixed(explicit_ladder):
         state = XmlSerializer.deserialize(Path(path).read_text(encoding="utf-8"))
         return np.asarray(state.getPeriodicBoxVectors(asNumpy=True).value_in_unit(unit.nanometer))
 
-    fixed = box(run / "eq_npt_free.xml")
+    fixed = box(run / "eq" / "eq_3.xml")
     record = json.loads((run / "per_tau_equilibration.json").read_text(encoding="utf-8"))
     assert record["box_shared"] is True
     assert [s["name"] for s in record["stages"]] == list(STAGES)

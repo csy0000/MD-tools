@@ -123,8 +123,11 @@ def default_project(tmp_path_factory):
         "reporting": {"crd_printout_solute": 25, "info_printout": 25,
                       "checkpoint_printout": 25},
     }, sort_keys=False), encoding="utf-8")
-    assert _build_md(work, "cMD.config", "./cMD").returncode == 0
-    (work / "REST2.config").write_text(yaml.safe_dump({
+    assert _build_md(work, "cMD.config", "./cMD-run1").returncode == 0
+    ladder = work / "ladder"
+    ladder.mkdir()
+    assert _build_top(ladder, ALA_PDB).returncode == 0
+    (ladder / "REST2.config").write_text(yaml.safe_dump({
         "protocol": "REST2", "solvent": "explicit",
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 25,
                    "restrained_npt_steps": 25, "unrestrained_npt_steps": 25,
@@ -134,7 +137,7 @@ def default_project(tmp_path_factory):
         "rest2": {"number_of_replicas": 2, "tau_max": 0.05,
                   "exchange_interval_steps": 25, "number_of_exchanges": 2},
     }, sort_keys=False), encoding="utf-8")
-    assert _build_md(work, "REST2.config", "./REST2").returncode == 0
+    assert _build_md(ladder, "REST2.config", "./REST2-run1").returncode == 0
     return work
 
 
@@ -156,7 +159,7 @@ def hmr_project(tmp_path_factory):
         "reporting": {"crd_printout_solute": 10, "info_printout": 10,
                       "checkpoint_printout": 10},
     }, sort_keys=False), encoding="utf-8")
-    assert _build_md(work, "fast.config", "./md_script").returncode == 0
+    assert _build_md(work, "fast.config", "./cMD-run1").returncode == 0
     return work
 
 
@@ -166,7 +169,7 @@ def _build_top(work, structure, config=None):
     import sys as _sys
 
     argv = [_sys.executable, "-m", "md_tools.cli.md_openmm", "build-top", "-i", str(structure),
-            "-os", "built.xml", "-op", "built.pdb", "-log", "built.log"]
+            "-os", "build/built.xml", "-op", "build/built.pdb", "-log", "build/built.log"]
     if config:
         argv += ["--config", str(config)]
     return subprocess.run(argv, cwd=work, capture_output=True, text=True, timeout=1800)
@@ -194,6 +197,21 @@ def _stage(work, directory, name):
     return next(entry for entry in plan if entry["name"] == name)
 
 
+#: Where each stage of a default (explicit-solvent) cMD run writes its provenance record.
+#:
+#: THE STAGE NAME IS NOT THE FILENAME, and the directory is not one directory. A stage is
+#: GENERATED as `eq_nvt_posres` and FILED as `eq_1`, so its record is `eq/eq_1.log`; the
+#: minimisation belongs to the SYSTEM and writes into the shared `min/`; only the production
+#: stage sits at the run root. Reading `cMD-run1/<name>.log` for all five found none of them.
+_STAGE_LOG = {
+    "min": Path("min") / "min.log",
+    "eq_nvt_posres": Path("cMD-run1") / "eq" / "eq_1.log",
+    "eq_npt_posres": Path("cMD-run1") / "eq" / "eq_2.log",
+    "eq_npt_free": Path("cMD-run1") / "eq" / "eq_3.log",
+    "cMD": Path("cMD-run1") / "cMD.log",
+}
+
+
 @pytest.mark.slow
 def test_the_built_default_system_is_ff14sb_tip3p_pme_1nm(default_project):
     """The record and the serialized System must agree, and both must say ff14SB + TIP3P."""
@@ -201,7 +219,7 @@ def test_the_built_default_system_is_ff14sb_tip3p_pme_1nm(default_project):
 
     from openmm import NonbondedForce, XmlSerializer, unit
 
-    record = read_record(default_project / "built.log")["forcefield_record"]
+    record = read_record(default_project / "build" / "built.log")["forcefield_record"]
     assert record["protein"]["openmm_resource"] == "amber14-all.xml"
     assert "amber14/protein.ff14SB.xml" in record["protein"]["openmm_resource_includes"]
     assert record["water"]["openmm_resource"] == "amber14/tip3p.xml"
@@ -209,7 +227,7 @@ def test_the_built_default_system_is_ff14sb_tip3p_pme_1nm(default_project):
     assert record["explicit_solvent"]["box_shape"] == "dodecahedron"
     assert record["explicit_solvent"]["padding_nm"] == 1.5
 
-    system = XmlSerializer.deserialize((default_project / "built.xml").read_text())
+    system = XmlSerializer.deserialize((default_project / "build" / "built.xml").read_text())
     nonbonded = next(system.getForce(i) for i in range(system.getNumForces())
                      if isinstance(system.getForce(i), NonbondedForce))
     assert record["nonbonded"]["method"] == "PME"
@@ -263,12 +281,12 @@ def test_the_default_system_has_unmodified_hydrogen_masses(default_project):
     """2 fs without HMR is the baseline, and the baseline is checked on the MASSES."""
     from openmm import XmlSerializer, unit
 
-    system = XmlSerializer.deserialize((default_project / "built.xml").read_text())
-    solute = read_record(default_project / "built.log")["counts"]["solute_atoms"]
+    system = XmlSerializer.deserialize((default_project / "build" / "built.xml").read_text())
+    solute = read_record(default_project / "build" / "built.log")["counts"]["solute_atoms"]
     masses = [system.getParticleMass(i).value_in_unit(unit.amu) for i in range(int(solute))]
     assert max(m for m in masses if m < 4.0) < 1.1, "a hydrogen above 1.1 amu means HMR ran"
 
-    stage = _stage(default_project, "cMD", "cMD")
+    stage = _stage(default_project, "cMD-run1", "cMD")
     # The generated stage declares `auto`, not a number: `build-md` never opened built.xml and so
     # cannot know these masses. What this test establishes is the other half -- that the System
     # really is unrepartitioned, which is what `auto` resolves against to give 2 fs. That
@@ -282,14 +300,14 @@ def test_the_generated_stages_declare_the_thermostat_and_the_barostat_they_will_
         default_project):
     """What `provenance.yaml` used to record now lives in each stage script's own settings."""
     for name in ("min", "eq_nvt_posres"):
-        stage = _stage(default_project, "cMD", name)
+        stage = _stage(default_project, "cMD-run1", name)
         assert stage["ensemble"] == "NVT"
     for name in ("eq_npt_posres", "eq_npt_free", "cMD"):
-        stage = _stage(default_project, "cMD", name)
+        stage = _stage(default_project, "cMD-run1", name)
         assert stage["ensemble"] == "NPT"
         assert stage["barostat_interval_steps"] == 25
         assert stage["pressure_bar"] == 1.0
-    common = _stage(default_project, "cMD", "cMD")
+    common = _stage(default_project, "cMD-run1", "cMD")
     assert common["temperature_K"] == 300.0
     assert common["friction_per_ps"] == 1.0
 
@@ -305,22 +323,22 @@ def test_the_configured_barostat_frequency_is_what_the_stages_actually_run(defau
     """
     import subprocess
 
-    result = subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml"],
-                            cwd=default_project / "cMD", capture_output=True, text=True,
+    result = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml"],
+                            cwd=default_project / "cMD-run1", capture_output=True, text=True,
                             timeout=3600)
     assert result.returncode == 0, result.stdout[-3000:] + result.stderr[-3000:]
 
     for name in ("min", "eq_nvt_posres", "eq_npt_posres", "eq_npt_free", "cMD"):
-        record = read_record(default_project / "cMD" / f"{name}.log")
+        record = read_record(default_project / _STAGE_LOG[name])
         assert record["platform"]["name"] == "CUDA", name
         # One barostat in EVERY explicit stage, so the Force layout -- and the checkpoint layout --
         # does not change along the chain.
         assert record["barostats"]["in_system"] == 1, name
 
     for name in ("min", "eq_nvt_posres"):
-        assert read_record(default_project / "cMD" / f"{name}.log")["barostats"]["active"] == 0
+        assert read_record(default_project / _STAGE_LOG[name])["barostats"]["active"] == 0
     for name in ("eq_npt_posres", "eq_npt_free", "cMD"):
-        barostats = read_record(default_project / "cMD" / f"{name}.log")["barostats"]
+        barostats = read_record(default_project / _STAGE_LOG[name])["barostats"]
         assert barostats["active"] == 1, name
         assert barostats["frequency_steps"] == 25, name
         assert barostats["interval_ps"] == pytest.approx(0.05), name
@@ -329,11 +347,11 @@ def test_the_configured_barostat_frequency_is_what_the_stages_actually_run(defau
 @pytest.mark.slow
 def test_a_rest2_ladder_carries_no_barostat_at_all(default_project):
     """REST2 is NVT by construction: the ladder samples a fixed volume."""
-    resolved = yaml.safe_load((default_project / "REST2" / "resolved.config").read_text())
+    resolved = yaml.safe_load((default_project / "ladder" / "REST2-run1" / "resolved.config").read_text())
     assert resolved["protocol"] == "REST2"
-    assert (default_project / "REST2" / "REST2.py").is_file()
+    assert (default_project / "ladder" / "REST2-run1" / "REST2.py").is_file()
     for name in ("min", "eq_nvt_posres"):
-        assert _stage(default_project, "REST2", name)["ensemble"] == "NVT"
+        assert _stage(default_project, Path("ladder") / "REST2-run1", name)["ensemble"] == "NVT"
 
 
 @pytest.mark.slow
@@ -345,7 +363,7 @@ def test_the_opc_alternative_still_builds_and_records_ff19sb_opc(tmp_path):
     built = _build_top(tmp_path, ALA_PDB, "opc.config")
     assert built.returncode == 0, built.stdout + built.stderr
 
-    record = read_record(tmp_path / "built.log")["forcefield_record"]
+    record = read_record(tmp_path / "build" / "built.log")["forcefield_record"]
     assert record["protein"]["openmm_resource"] == "amber19-all.xml"
     assert record["water"]["model"] == "OPC"
     assert "amber19" in record["water"]["openmm_resource"]
@@ -360,14 +378,14 @@ def test_the_implicit_peptide_route_is_ff14sb_gbn2_mbondi3_without_sasa_and_has_
     built = _build_top(tmp_path, ALA_PDB, "gb.config")
     assert built.returncode == 0, built.stdout + built.stderr
 
-    built_record = read_record(tmp_path / "built.log")
+    built_record = read_record(tmp_path / "build" / "built.log")
     record = built_record["forcefield_record"]
     assert record["implicit_solvent"]["model"] == "GBn2"
     assert record["implicit_solvent"]["radii"] == "mbondi3"
     assert record["implicit_solvent"]["nonpolar_sasa"] is False
     assert record["water"]["openmm_resource"] is None, "no water participates in an implicit build"
 
-    system = XmlSerializer.deserialize((tmp_path / "built.xml").read_text())
+    system = XmlSerializer.deserialize((tmp_path / "build" / "built.xml").read_text())
     assert not system.usesPeriodicBoundaryConditions()
     assert not any("Barostat" in type(system.getForce(i)).__name__
                    for i in range(system.getNumForces()))

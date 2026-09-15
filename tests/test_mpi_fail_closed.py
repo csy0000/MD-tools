@@ -51,18 +51,12 @@ def _environment(**extra):
 def projects(tmp_path_factory):
     """Generated REST2 and AIS directories, so the wrappers can be launched directly."""
     root = tmp_path_factory.mktemp("failclosed")
-    for protocol in ("REST2", "AIS"):
-        configuration = root / f"{protocol}.config"
-        document = {"protocol": protocol, "solvent": "explicit"}
-        if protocol == "REST2":
-            document["rest2"] = {"number_of_replicas": 2}
-        else:
-            document["ais_source"] = {"trajectory": "../source.dcd"}
-        configuration.write_text(yaml.safe_dump(document), encoding="utf-8")
-        done = subprocess.run(CLI + ["build-md", "-odir", str(root / protocol),
-                                     "--config", str(configuration)],
-                              capture_output=True, text=True, timeout=600)
-        assert done.returncode == 0, done.stdout + done.stderr
+
+    # THE BUILT SYSTEM COMES FIRST NOW, and the order is load-bearing rather than tidy. A
+    # ladder's rungs are scaled and serialised from `build/built.xml` at BUILD time, so
+    # `build-md` for REST2 refuses outright if the System is not there yet. This fixture used to
+    # generate first and build afterwards, which was harmless while scaling happened at run time.
+    #
     # A REAL built pair and a REAL source trajectory.
     #
     # These were a one-line PDB, a `<System/>` stub and 200 zero bytes behind a DCD magic number,
@@ -75,18 +69,32 @@ def projects(tmp_path_factory):
         pytest.skip("no ALA fixture")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ala), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ala), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
 
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     # Enough eligible frames for the default 100 paths. With eight, the AIS preflight refused on
     # the frame count and every test using this fixture stopped BEFORE the runtime behaviour it
     # was written for -- passing on the return code while never reaching the phase under test.
     mdtraj.join([frames] * 128).save_dcd(str(root / "source.dcd"))
+
+    # ...and only now the runs, each into its own `<method>-run<N>`.
+    for protocol in ("REST2", "AIS"):
+        configuration = root / f"{protocol}.config"
+        document = {"protocol": protocol, "solvent": "explicit"}
+        if protocol == "REST2":
+            document["rest2"] = {"number_of_replicas": 2}
+        else:
+            document["ais_source"] = {"trajectory": "../source.dcd"}
+        configuration.write_text(yaml.safe_dump(document), encoding="utf-8")
+        done = subprocess.run(CLI + ["build-md", "-odir", str(root / f"{protocol}-run1"),
+                                     "--config", str(configuration)],
+                              capture_output=True, text=True, timeout=600)
+        assert done.returncode == 0, done.stdout + done.stderr
     return root
 
 
@@ -102,15 +110,15 @@ def test_a_real_two_rank_launch_without_mpi4py_refuses_and_writes_nothing(entry,
     guard that lives only in `md-run` leaves it open. That is exactly what the baseline did.
     """
     _require_mpirun()
-    project = projects / protocol
+    project = projects / f"{protocol}-run1"
     destination = tmp_path / "never"
 
     if entry == "md-run":
-        argv = ["md-openmm", "md-run", "-i", f"{protocol}.in",
-                "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination)]
+        argv = ["md-openmm", "md-run", "-i", f"../input/{protocol}.in",
+                "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination)]
     else:
         argv = [sys.executable, str(project / f"{protocol}.py"),
-                "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination)]
+                "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination)]
     if protocol == "AIS":
         argv += ["-source-traj", "../source.dcd"]
 
@@ -145,11 +153,11 @@ def test_a_serial_run_still_needs_no_mpi4py(projects, tmp_path):
 def test_a_launcher_size_that_the_communicator_contradicts_is_refused(projects, tmp_path):
     """`mpirun -n 2` with the environment claiming 4. The two must agree about the world."""
     _require_mpirun()
-    project = projects / "REST2"
+    project = projects / "REST2-run1"
     destination = tmp_path / "never"
     done = subprocess.run(
-        ["mpirun", "-n", "2", "md-openmm", "md-run", "-i", "REST2.in",
-         "-p", "../built.pdb", "-s", "../built.xml", "-ng", "4", "-odir", str(destination)],
+        ["mpirun", "-n", "2", "md-openmm", "md-run", "-i", "../input/REST2.in",
+         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-ng", "4", "-odir", str(destination)],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment())
     assert done.returncode != 0
@@ -236,15 +244,15 @@ def test_one_rank_failing_preflight_stops_the_whole_launch_promptly(entry, proto
     forever cannot detect it.
     """
     _require_mpirun()
-    project = projects / protocol
+    project = projects / f"{protocol}-run1"
     destination = tmp_path / "never"
 
     if entry == "md-run":
-        argv = ["md-openmm", "md-run", "-i", f"{protocol}.in",
-                "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination)]
+        argv = ["md-openmm", "md-run", "-i", f"../input/{protocol}.in",
+                "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination)]
     else:
         argv = [sys.executable, str(project / f"{protocol}.py"),
-                "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination)]
+                "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination)]
     if protocol == "AIS":
         argv += ["-source-traj", "../source.dcd"]
 
@@ -261,11 +269,11 @@ def test_one_rank_failing_preflight_stops_the_whole_launch_promptly(entry, proto
 def test_every_rank_failing_reports_the_reason_once_rather_than_n_times(projects, tmp_path):
     """A condition every rank hits is not rank-local, and repeating it N times only hides it."""
     _require_mpirun()
-    project = projects / "REST2"
+    project = projects / "REST2-run1"
     destination = tmp_path / "never"
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
-         "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination)],
+         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination)],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(**{FAIL_RANKS: "0,1"}))
     message = done.stdout + done.stderr
@@ -308,7 +316,7 @@ def test_a_rank_zero_helper_failure_stops_every_rank_rather_than_hanging_them(pr
     real reason a preparation fails, and one only rank 0 encounters.
     """
     _require_mpirun()
-    project = projects / "REST2"
+    project = projects / "REST2-run1"
     destination = tmp_path / "hung"
     destination.mkdir()
     # A helper from another ladder: content-addressed, so rank 0 refuses it rather than replacing
@@ -317,7 +325,7 @@ def test_a_rank_zero_helper_failure_stops_every_rank_rather_than_hanging_them(pr
 
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
-         "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination)],
+         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination)],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment())
     message = done.stdout + done.stderr
@@ -365,12 +373,12 @@ def test_a_rank_local_failure_after_preflight_stops_the_whole_ladder(failing_ran
                                                                      projects, tmp_path):
     """Rank 0 AND a nonzero rank, at two phases. Neither may leave the other waiting."""
     _require_mpirun()
-    project = projects / "REST2"
+    project = projects / "REST2-run1"
     destination = tmp_path / f"phase-{failing_rank}-{phase.replace(' ', '-')}"
 
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
-         "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination)],
+         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination)],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(**{FAIL_PHASE: f"REST2: {phase}:{failing_rank}"}))
     message = done.stdout + done.stderr
@@ -385,12 +393,12 @@ def test_a_rank_local_failure_after_preflight_stops_the_whole_ladder(failing_ran
 def test_a_rank_local_failure_after_preflight_stops_the_whole_ais_run(failing_rank, projects,
                                                                       tmp_path):
     _require_mpirun()
-    project = projects / "AIS"
+    project = projects / "AIS-run1"
     destination = tmp_path / f"ais-phase-{failing_rank}"
 
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(project / "AIS.py"),
-         "-p", "../built.pdb", "-s", "../built.xml", "-source-traj", "../source.dcd",
+         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-source-traj", "../source.dcd",
          "-odir", str(destination)],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(**{FAIL_PHASE: f"AIS: opening the rank reports:{failing_rank}"}))
@@ -428,8 +436,8 @@ def initial_state(projects):
     from openmm import XmlSerializer, unit
     from openmm.app import PDBFile
 
-    pdb = PDBFile(str(projects / "built.pdb"))
-    system = XmlSerializer.deserialize((projects / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(projects / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((projects / "build" / "built.xml").read_text(encoding="utf-8"))
     integrator = openmm.VerletIntegrator(1.0 * unit.femtosecond)
     context = openmm.Context(system, integrator, openmm.Platform.getPlatformByName("Reference"))
     context.setPositions(pdb.positions)
@@ -446,12 +454,12 @@ def test_a_rank_local_failure_during_propagation_stops_the_whole_ladder_without_
         failing_rank, projects, initial_state, tmp_path):
     """A real REST2 ladder, two ranks, one fails mid-loop. Neither rank may survive or hang."""
     _require_mpirun()
-    project = projects / "REST2"
+    project = projects / "REST2-run1"
     destination = tmp_path / f"propagation-fail-{failing_rank}"
 
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
-         "-p", "../built.pdb", "-s", "../built.xml", "-c", str(initial_state),
+         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-c", str(initial_state),
          "-odir", str(destination)],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(**{PROPAGATION_FAIL_RANKS: str(failing_rank)}))

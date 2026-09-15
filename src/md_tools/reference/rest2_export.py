@@ -451,8 +451,19 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
                 f"not beside {run_dir} or above it; it has to be found by digest.")
         found[role] = source
 
+    # THE RECORDED `-c`, RESOLVED AGAINST THE RUN DIRECTORY -- then the bare name beside the
+    # records. The fifth site holding this same assumption, after `_stage_inputs`, `_locate` and
+    # the cMD `-c` parent in `export.py`: a ladder now starts from `eq/eq.xml` or `../min/eq.xml`
+    # because preparation stages write into their own directories, so stripping to the basename
+    # looked at the run root and refused every ladder built under this layout. The basename stays
+    # as the fallback for a run generated before the split, when every stage wrote to one place.
     parent = _continue_from(record)
-    start = run_dir / Path(parent).name if parent else None
+    start = None
+    if parent:
+        recorded = Path(parent)
+        options = [run_dir / recorded] if not recorded.is_absolute() else [recorded]
+        options.append(run_dir / recorded.name)
+        start = next((option for option in options if option.is_file()), None)
     if start is None or not start.is_file():
         raise FileNotFoundError(
             f"{run_dir} names no starting state that exists ({parent!r}). Every rung of this "

@@ -122,8 +122,8 @@ contents disagree is refused with both named.
 ## Minimal sequence
 
 ```bash
-md-openmm build-md -odir ./md_script/ --config example.config
-cd md_script && ./run.sh ../built.pdb ../built.xml ../hot/whole_prod1.nc
+md-openmm build-md -odir ./AIS-run1 --config example.config
+cd AIS-run1 && ./run.sh ../built.pdb ../built.xml ../hot/whole_prod1.nc
 ```
 
 `run.sh` **requires** the source explicitly. There is no default for it: a wrong source is not a
@@ -135,7 +135,7 @@ slower run, it is a different measurement.
 ## Generated files
 
 ```text
-md_script/
+AIS-run1/
 ├── resolved.config
 ├── AIS.py           the compact entry point
 ├── run.sh

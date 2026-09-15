@@ -56,8 +56,8 @@ Generate into a local, git-ignored `data/` directory, then register:
 ```bash
 # 1. produce it
 md-openmm build-top -i ALA.pdb -os built.xml -op built.pdb -log built.log
-md-openmm build-md  -odir ./data/ALA-cMD/md_script/ --config cMD.config
-cd data/ALA-cMD/md_script && ./run.sh && cd -
+md-openmm build-md  -odir ./data/ALA-cMD/cMD-run1 --config cMD.config
+cd data/ALA-cMD/cMD-run1 && ./run.sh && cd -
 
 # 2. look before you leap: dry run writes nothing, anywhere
 md-openmm data-register -idata ./data/ALA-cMD \

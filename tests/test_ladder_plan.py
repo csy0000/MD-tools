@@ -120,8 +120,8 @@ def project(tmp_path_factory):
     root = tmp_path_factory.mktemp("ladder-plan")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
 
@@ -135,7 +135,7 @@ def project(tmp_path_factory):
         "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./REST2", "--config", str(root / "REST2.config")],
+        CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
     return root
@@ -154,7 +154,7 @@ def test_the_preflight_prepares_one_system_per_rung_before_anything_is_written(p
               "exchange_interval_steps": 5, "number_of_exchanges": 2}
 
     checked = preflight_ladder(
-        topology=str(project / "built.pdb"), system=str(project / "built.xml"),
+        topology=str(project / "build" / "built.pdb"), system=str(project / "build" / "built.xml"),
         replicas=3, output=destination / "REST2.out", log=destination / "REST2.log",
         trajectory=destination / "REST2.nc", cpu=True, protocol="REST2",
         timestep_fs=2.0, route="peptide", ladder=ladder, out_dir=destination, tau=0.5)
@@ -248,8 +248,8 @@ def test_a_real_ladder_runs_on_the_prepared_systems(project, tmp_path):
     from openmm.app import PDBFile
     import openmm
 
-    pdb = PDBFile(str(project / "built.pdb"))
-    system = XmlSerializer.deserialize((project / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(project / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((project / "build" / "built.xml").read_text(encoding="utf-8"))
     integrator = openmm.VerletIntegrator(1.0 * unit.femtosecond)
     context = openmm.Context(system, integrator, openmm.Platform.getPlatformByName("Reference"))
     context.setPositions(pdb.positions)
@@ -275,11 +275,11 @@ def test_a_real_ladder_runs_on_the_prepared_systems(project, tmp_path):
         [sys.executable, "-c",
          f"exec(open({str(probe)!r}).read()); "
          f"import runpy, sys; "
-         f"sys.argv = ['REST2.py', '-p', {str(project / 'built.pdb')!r}, "
-         f"'-s', {str(project / 'built.xml')!r}, '-c', {str(initial)!r}, "
+         f"sys.argv = ['REST2.py', '-p', {str(project / 'build' / 'built.pdb')!r}, "
+         f"'-s', {str(project / 'build' / 'built.xml')!r}, '-c', {str(initial)!r}, "
          f"'-odir', {str(destination)!r}, '--cpu']; "
-         f"runpy.run_path({str(project / 'REST2' / 'REST2.py')!r}, run_name='__main__')"],
-        cwd=project / "REST2", capture_output=True, text=True, timeout=900, env=environment)
+         f"runpy.run_path({str(project / 'REST2-run1' / 'REST2.py')!r}, run_name='__main__')"],
+        cwd=project / "REST2-run1", capture_output=True, text=True, timeout=900, env=environment)
 
     probe_out = tmp_path / "probe.json"
     assert probe_out.is_file(), done.stdout[-3000:] + done.stderr[-3000:]

@@ -73,8 +73,8 @@ def project(tmp_path_factory):
     root = tmp_path_factory.mktemp("skipped-checks")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
     (root / "cv.yaml").write_text(
@@ -91,13 +91,13 @@ def project(tmp_path_factory):
         "dynamics": {"seed": 20260907},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./AIS", "--config", str(root / "AIS.config")],
+        CLI + ["build-md", "-odir", "./AIS-run1", "--config", str(root / "AIS.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
 
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
     return root
 
@@ -117,11 +117,11 @@ def _environment(project: Path, extra=None):
 
 def _run(project: Path, destination: Path, *extra, environment=None, expect=0):
     done = subprocess.run(
-        [sys.executable, str(project / "AIS" / "AIS.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+        [sys.executable, str(project / "AIS-run1" / "AIS.py"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-source-traj", str(project / "source.dcd"),
          "-odir", str(destination), "--cpu", *extra],
-        cwd=project / "AIS", capture_output=True, text=True, timeout=1800,
+        cwd=project / "AIS-run1", capture_output=True, text=True, timeout=1800,
         env=_environment(project, environment))
     if expect is not None:
         assert (done.returncode == 0) == (expect == 0), \
@@ -348,7 +348,9 @@ def test_md_run_refuses_a_damaged_partial_path_without_writing_into_the_tree(
         state["cv_prefix"]["prefix_sha256"] = "0" * 64
     _edit_committed_state(staged / damaged.name, edit)
 
-    generated = project / "AIS"
+    # `input/` is SHARED by every run on this system, so the method's input is at the
+    # dataset root rather than inside the run.
+    generated = project / "input"
     inputs = sorted(generated.glob("*.in"))
     assert inputs, f"no .in file in {generated}"
     stage_input = next((p for p in inputs if p.stem == "AIS"), inputs[-1])
@@ -358,11 +360,26 @@ def test_md_run_refuses_a_damaged_partial_path_without_writing_into_the_tree(
     # `_tree` keys on names, so a file the refused `md-run` ADDS is a difference. That addition
     # is the defect, since the same file in a tree written by `md-run` would be an overwrite of
     # the prior run's authoritative configuration record.
+    # THE STAGED TREE IS THE SAME RUN, so it carries that run's `run.config`. The seed lives
+    # there now, and `md-run` layers it from `-odir`: without it the seed resolved to the schema
+    # default, which changed the selected source frames, so the damaged path was no longer in the
+    # selection, the read-only boundary found nothing to object to, and the refusal came later --
+    # from the runtime's own identity check, after `resolved.config` had been written.
+    shutil.copy2(project / "AIS-run1" / "run.config", staged / "run.config")
+    # AND THE CV DEFINITION, for the same reason. `_carry_cv_definition` is called only by
+    # `md-run`; a generated wrapper reads `resolved.config` beside itself and copies nothing, so
+    # the destination this campaign ran into holds no `cv.<digest>.yaml`. The refused `md-run`
+    # reads the SHARED `../input/AIS.in`, which cannot say which run's definition copy to use, so
+    # without this the cadence resolved to 0, the schedule differed from the recorded one, and the
+    # refusal came from the identity check instead of the read-only boundary.
+    for definition in (project / "AIS-run1").glob("cv.*.yaml"):
+        shutil.copy2(definition, staged / definition.name)
+
     before = _tree(staged)
     refused = subprocess.run(
         [sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
-         "-i", str(stage_input), "-p", str(project / "built.pdb"),
-         "-s", str(project / "built.xml"),
+         "-i", str(stage_input), "-p", str(project / "build" / "built.pdb"),
+         "-s", str(project / "build" / "built.xml"),
          "-source-traj", str(project / "source.dcd"),
          "-odir", str(staged), "--cpu", "--resume"],
         cwd=generated, capture_output=True, text=True, timeout=1800,

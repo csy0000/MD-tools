@@ -81,8 +81,8 @@ def project(request, tmp_path_factory):
     root = tmp_path_factory.mktemp(f"cost-{protocol}")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
     (root / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
@@ -108,7 +108,7 @@ def project(request, tmp_path_factory):
                                  "refresh_interval_exchanges": 1, "velocities": "inherit"}
     (root / f"{protocol}.config").write_text(yaml.safe_dump(document), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", f"./{protocol}", "--config", str(root / f"{protocol}.config")],
+        CLI + ["build-md", "-odir", f"./{protocol}-run1", "--config", str(root / f"{protocol}.config")],
         cwd=root, capture_output=True, text=True, timeout=900)
     assert done.returncode == 0, done.stdout + done.stderr
 
@@ -116,8 +116,8 @@ def project(request, tmp_path_factory):
     from openmm import XmlSerializer, unit
     from openmm.app import PDBFile
 
-    pdb = PDBFile(str(root / "built.pdb"))
-    system = XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(root / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
     integrator = openmm.VerletIntegrator(1.0 * unit.femtosecond)
     context = openmm.Context(system, integrator, openmm.Platform.getPlatformByName("Reference"))
     context.setPositions(pdb.positions)
@@ -138,10 +138,10 @@ def _run(project, destination: Path, *extra, environment=None, expect=0):
     base["MD_TOOLS_CONFIG"] = str(user)
     base["OPENMM_CPU_THREADS"] = "1"     # see WHY ONE CPU THREAD
     done = subprocess.run(
-        [sys.executable, str(root / protocol / f"{protocol}.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+        [sys.executable, str(root / f"{protocol}-run1" / f"{protocol}.py"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-c", str(root / "initial_state.xml"), "-odir", str(destination), "--cpu", *extra],
-        cwd=root / protocol, capture_output=True, text=True, timeout=1800,
+        cwd=root / f"{protocol}-run1", capture_output=True, text=True, timeout=1800,
         env={**base, **(environment or {})})
     if expect is not None:
         assert (done.returncode == 0) == (expect == 0), \

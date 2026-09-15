@@ -32,7 +32,7 @@ def _build_md(work: Path, config: dict, *extra: str):
     path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     return subprocess.run(
         [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md",
-         "-odir", "./md_script/", "--config", str(path), *extra],
+         "-odir", "./AIS-run1", "--config", str(path), *extra],
         cwd=work, capture_output=True, text=True, timeout=600)
 
 
@@ -82,7 +82,7 @@ def test_ais_is_a_build_md_protocol_and_not_a_command_of_its_own():
 def test_build_md_generates_an_ais_bundle(tmp_path):
     result = _build_md(tmp_path, _base())
     assert result.returncode == 0, result.stdout + result.stderr
-    written = {p.name for p in (tmp_path / "md_script").iterdir()}
+    written = {p.name for p in (tmp_path / "AIS-run1").iterdir()}
     assert {"AIS.py", "run.sh", "resolved.config"} <= written, written
 
 
@@ -90,15 +90,18 @@ def test_ais_has_no_equilibration_chain(tmp_path):
     """AIS consumes an ensemble that already exists; generating one would run it too early."""
     result = _build_md(tmp_path, _base())
     assert result.returncode == 0, result.stdout + result.stderr
-    written = {p.name for p in (tmp_path / "md_script").iterdir()}
-    for stage in ("min.py", "eq_nvt_posres.py", "eq_npt_posres.py", "eq_npt_free.py", "cMD.py"):
+    # Nothing anywhere in the dataset: AIS has no preparation chain, so neither the run nor the
+    # SHARED `min/` and `input/` may have gained one.
+    written = {str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*") if p.is_file()}
+    for stage in ("min/min.py", "input/min.in", "input/eq_1.in",
+                  "AIS-run1/eq/eq_1.py", "AIS-run1/cMD.py"):
         assert stage not in written, f"AIS generated {stage}; it has no stage chain"
     assert stage_plan(resolve_md_config(None) | {"protocol": "AIS"}) is not None
 
 
 def test_the_generated_script_imports_the_installed_runtime_and_names_no_absolute_path(tmp_path):
     _build_md(tmp_path, _base())
-    text = (tmp_path / "md_script" / "AIS.py").read_text(encoding="utf-8")
+    text = (tmp_path / "AIS-run1" / "AIS.py").read_text(encoding="utf-8")
     assert "from md_tools.ais import run_generated_ais" in text
     assert "run_generated_ais(__file__)" in text
     assert str(REPO) not in text, "the generated script names the source checkout"
@@ -112,7 +115,7 @@ def test_the_generated_script_imports_the_installed_runtime_and_names_no_absolut
 def test_run_sh_requires_the_source_explicitly(tmp_path):
     """A wrong source is not a slower run; it is a different measurement."""
     _build_md(tmp_path, _base())
-    run_sh = (tmp_path / "md_script" / "run.sh").read_text(encoding="utf-8")
+    run_sh = (tmp_path / "AIS-run1" / "run.sh").read_text(encoding="utf-8")
     assert "SOURCE" in run_sh
 
     # Real topology and system files, so the SOURCE check is the one under test rather than the
@@ -120,7 +123,7 @@ def test_run_sh_requires_the_source_explicitly(tmp_path):
     (tmp_path / "a.pdb").write_text("END\n")
     (tmp_path / "b.xml").write_text("<System/>\n")
     result = subprocess.run(["bash", "run.sh", "../a.pdb", "../b.xml"],
-                            cwd=tmp_path / "md_script", capture_output=True, text=True)
+                            cwd=tmp_path / "AIS-run1", capture_output=True, text=True)  # noqa: E501
     assert result.returncode == 2, result.stdout + result.stderr
     combined = result.stdout + result.stderr
     assert "SOURCE_TRAJECTORY" in combined, combined
@@ -132,7 +135,7 @@ def test_run_sh_requires_the_source_explicitly(tmp_path):
 def test_the_public_coordinate_is_tau_and_there_is_no_second_one(tmp_path):
     """`s` may be derived inside the scaler; it is not an alternative persisted coordinate."""
     _build_md(tmp_path, _base())
-    resolved = yaml.safe_load((tmp_path / "md_script" / "resolved.config").read_text())
+    resolved = yaml.safe_load((tmp_path / "AIS-run1" / "resolved.config").read_text())
     assert "tau_start" in resolved["ais"] and "tau_end" in resolved["ais"]
     text = yaml.safe_dump(resolved["ais"])
     for forbidden in ("\ns:", "sqrt_s", "lambda"):
@@ -145,7 +148,7 @@ def test_the_public_coordinate_is_tau_and_there_is_no_second_one(tmp_path):
 
 def test_every_length_is_an_integer_step_count(tmp_path):
     _build_md(tmp_path, _base())
-    resolved = yaml.safe_load((tmp_path / "md_script" / "resolved.config").read_text())
+    resolved = yaml.safe_load((tmp_path / "AIS-run1" / "resolved.config").read_text())
     for key in ("switching_steps", "observation_interval_steps",
                 "parameter_update_interval_steps"):
         assert isinstance(resolved["ais"][key], int), key
@@ -236,7 +239,7 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
     work = tmp_path
     build = subprocess.run(
         [sys.executable, "-m", "md_tools.cli.md_openmm", "build-top", "-i", str(ala),
-         "-os", "built.xml", "-op", "built.pdb", "-log", "built.log",
+         "-os", "build/built.xml", "-op", "build/built.pdb", "-log", "build/built.log",
          "--config", str(_implicit_config(work))],
         cwd=work, capture_output=True, text=True, timeout=1800)
     assert build.returncode == 0, build.stdout + build.stderr
@@ -256,9 +259,9 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
                       "info_printout": 100, "checkpoint_printout": 200},
     }, sort_keys=False), encoding="utf-8")
     assert subprocess.run(
-        [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", "./hot",
+        [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", "./hot-run1",
          "--config", str(hot)], cwd=work, capture_output=True, text=True).returncode == 0
-    ran = subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml"],
+    ran = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml"],
                          cwd=work / "hot", capture_output=True, text=True, timeout=3600)
     assert ran.returncode == 0, ran.stdout[-3000:] + ran.stderr[-3000:]
 
@@ -266,7 +269,7 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
                                    dynamics={}))
     assert result.returncode == 0, result.stdout + result.stderr
 
-    ais = subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml", "../hot/whole_prod1.nc"],
+    ais = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml", "../hot-run1/whole_prod1.nc"],
                          cwd=work / "md_script", capture_output=True, text=True, timeout=3600)
     assert ais.returncode == 0, ais.stdout[-3000:] + ais.stderr[-3000:]
 

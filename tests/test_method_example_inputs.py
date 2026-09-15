@@ -68,8 +68,14 @@ def test_the_example_input_parses(method):
 @pytest.mark.parametrize("method", METHODS)
 def test_the_example_input_matches_what_build_md_generates(method, tmp_path):
     """The values in `example.in` are `build-md`'s, not a human's recollection of them."""
+    from .conftest import make_dataset_root
+
     directory = REPO_ROOT / "docs" / "openmm_methods" / method
-    out = tmp_path / "md_script"
+    # A dataset root, because a ladder's rungs are scaled from `build/built.xml` at BUILD time
+    # now. The inputs this test compares are generated text and do not depend on which System
+    # produced them -- see `make_dataset_root` on what that fixture may and may not stand for.
+    make_dataset_root(tmp_path)
+    out = tmp_path / f"{method}-run1"
     done = subprocess.run(
         [sys.executable, "-c",
          "import sys;from md_tools.cli.md_openmm import main;"
@@ -78,8 +84,10 @@ def test_the_example_input_matches_what_build_md_generates(method, tmp_path):
         capture_output=True, text=True, cwd=REPO_ROOT)
     assert done.returncode == 0, f"build-md failed for {method}:\n{done.stderr[-2000:]}"
 
-    generated = out / PRODUCTION_STAGE[method]
-    assert generated.is_file(), f"build-md produced no {PRODUCTION_STAGE[method]}"
+    # THE INPUT IS SHARED, so it is at the dataset root rather than inside the run: `input/` is
+    # read by every repeat of a method on one system.
+    generated = tmp_path / "input" / PRODUCTION_STAGE[method]
+    assert generated.is_file(), f"build-md produced no input/{PRODUCTION_STAGE[method]}"
 
     shipped = _significant((directory / "example.in").read_text(encoding="utf-8"))
     fresh = _significant(generated.read_text(encoding="utf-8"))

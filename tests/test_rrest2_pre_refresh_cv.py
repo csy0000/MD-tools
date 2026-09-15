@@ -57,8 +57,8 @@ CV_EVERY = 5
 def _build(root: Path):
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
     (root / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
@@ -80,7 +80,7 @@ def _reservoir(root: Path, *, frames: int = 6, tau_max: float = 0.5):
     from md_tools.rest2 import identity as hamiltonian_identity
     from md_tools.run.preflight import check_scaling_plan, load_inputs
 
-    loaded = load_inputs(str(root / "built.pdb"), str(root / "built.xml"))
+    loaded = load_inputs(str(root / "build" / "built.pdb"), str(root / "build" / "built.xml"))
     document = solute_document(loaded.pdb.topology, loaded.system, route="peptide")
     span = document.get("solute_atom_range")
     if span and document.get("solute_atom_indices_are_contiguous", False):
@@ -92,7 +92,7 @@ def _reservoir(root: Path, *, frames: int = 6, tau_max: float = 0.5):
     _audit, top = check_scaling_plan(loaded, solute_indices=indices, excluded_bonds=excluded,
                                      tau=tau_max, where="reservoir fixture")
 
-    base = mdtraj.load(str(root / "built.pdb")).xyz[0]
+    base = mdtraj.load(str(root / "build" / "built.pdb")).xyz[0]
 
     def _rotated(positions, degrees):
         """`positions` with the phi quartet's terminal atom rotated about the j-k axis.
@@ -164,7 +164,7 @@ def project(request, tmp_path_factory):
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./rREST2", "--config", str(root / "rREST2.config")],
+        CLI + ["build-md", "-odir", "./rREST2-run1", "--config", str(root / "rREST2.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
 
@@ -172,8 +172,8 @@ def project(request, tmp_path_factory):
     from openmm import XmlSerializer, unit
     from openmm.app import PDBFile
 
-    pdb = PDBFile(str(root / "built.pdb"))
-    system = XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(root / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
     integrator = openmm.VerletIntegrator(1.0 * unit.femtosecond)
     context = openmm.Context(system, integrator, openmm.Platform.getPlatformByName("Reference"))
     context.setPositions(pdb.positions)
@@ -203,11 +203,11 @@ def _run(project: Path, destination: Path, *extra, expect=0):
     # touched; the run being irreproducible is.
     base["OPENMM_CPU_THREADS"] = "1"
     done = subprocess.run(
-        [sys.executable, str(project / "rREST2" / "rREST2.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+        [sys.executable, str(project / "rREST2-run1" / "rREST2.py"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-c", str(project / "initial_state.xml"),
          "-odir", str(destination), "--cpu", *extra],
-        cwd=project / "rREST2", capture_output=True, text=True, timeout=1800, env=base)
+        cwd=project / "rREST2-run1", capture_output=True, text=True, timeout=1800, env=base)
     if expect is not None:
         assert (done.returncode == 0) == (expect == 0), \
             done.stdout[-4000:] + done.stderr[-4000:]
@@ -319,7 +319,7 @@ def test_unaffected_states_still_name_their_frames_correctly(completed, project)
     checked = 0
     for state_index in range(STATES):
         frames = mdtraj.load(str(completed / f"whole_state{state_index}_prod1.nc"),
-                             top=str(project / "built.pdb"))
+                             top=str(project / "build" / "built.pdb"))
         for row in _rows(completed / f"cv_state{state_index}.csv"):
             named = row["trajectory_frame_index"]
             if named == "":

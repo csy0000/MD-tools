@@ -160,7 +160,7 @@ def test_an_invalid_configuration_stops_the_command_before_any_output(case, tmp_
     work.mkdir()
     (work / "cMD.config").write_text(yaml.safe_dump({"protocol": "cMD", "solvent": "explicit"}),
                                      encoding="utf-8")
-    generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "md_script"),
+    generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "cMD-run1"),
                                       "--config", str(work / "cMD.config")],
                                capture_output=True, text=True, timeout=600)
     assert generated.returncode == 0, generated.stdout + generated.stderr
@@ -169,9 +169,9 @@ def test_an_invalid_configuration_stops_the_command_before_any_output(case, tmp_
 
     destination = tmp_path / "never"
     done = subprocess.run(
-        CLI + ["md-run", "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
+        CLI + ["md-run", "-i", "../input/cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
                "-odir", str(destination)],
-        cwd=work / "md_script", capture_output=True, text=True, timeout=600,
+        cwd=work / "cMD-run1", capture_output=True, text=True, timeout=600,
         env=dict(os.environ, MD_TOOLS_CONFIG=str(broken)))
 
     assert done.returncode != 0, done.stdout

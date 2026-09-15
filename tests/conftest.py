@@ -77,6 +77,60 @@ _pin_this_process_to_the_checkout()
 
 
 
+def make_dataset_root(root: Path) -> Path:
+    """A dataset root with `build/built.{xml,pdb}`, built WITHOUT tleap. Returns `root`.
+
+    WHY THIS EXISTS. Scaling moved to build time: `build-md` for a ladder now deserialises
+    `../build/built.xml`, scales it to every rung and serialises the result, so a REST2 or rREST2
+    generation cannot be produced from an empty directory any more. Every fixture that used to do
+    exactly that needs a built System.
+
+    WHY NOT `build-top`. The honest route needs `tleap` from AmberTools and takes long enough that
+    the fixtures using it carry 1800 s timeouts. Most tests that generate a project only INSPECT
+    THE GENERATED TEXT -- which files exist, what run.sh types, whether an `.in` round-trips --
+    and for those the System's provenance is not the variable. `openmm.app.ForceField` gives a
+    real, fully parameterised, serialisable System in ~0.1 s with no external executable.
+
+    WHAT THIS IS THEREFORE NOT. It is not what `build-top` produces, so it must not be used to
+    assert anything ABOUT `build-top`, about a System's provenance, or as evidence for a run's
+    scientific content. A test whose subject is the built System itself uses `build-top` --
+    `test_direct_runtime_preflight.py` and `test_consumer_contract_gates.py` still do, and they
+    keep their tleap dependency deliberately.
+
+    It is nonetheless a genuine exercise of the rung path: ALA.pdb is ACE-ALA-NME, so
+    `classify_omega_bonds` finds two ordinary amide omega and protects the torsions around them
+    rather than finding nothing to do.
+    """
+    from openmm import XmlSerializer, app
+
+    build = Path(root) / "build"
+    build.mkdir(parents=True, exist_ok=True)
+
+    # NEVER OVERWRITE AN EXISTING BUILT SYSTEM, and this is a correctness guard rather than an
+    # optimisation. Several modules call the real `build-top` into `build/` AND reach this helper
+    # through a shared fixture; writing unconditionally would replace a tleap-built System with
+    # this hand-parameterised stand-in, and the tests that followed would integrate a DIFFERENT
+    # Hamiltonian while every path still resolved. That is a silent substitution of scientific
+    # content, which is exactly what a fixture must not do.
+    if (build / "built.xml").is_file() and (build / "built.pdb").is_file():
+        return Path(root)
+
+    pdb = app.PDBFile(str(ALA_PDB))
+    forcefield = app.ForceField("amber14-all.xml", "implicit/gbn2.xml")
+    system = forcefield.createSystem(pdb.topology, nonbondedMethod=app.NoCutoff,
+                                     constraints=app.HBonds, rigidWater=True)
+    (build / "built.xml").write_text(XmlSerializer.serialize(system), encoding="utf-8")
+    with open(build / "built.pdb", "w") as handle:
+        app.PDBFile.writeFile(pdb.topology, pdb.positions, handle)
+    return Path(root)
+
+
+@pytest.fixture
+def dataset_root(tmp_path):
+    """A dataset root for one test. See `make_dataset_root`."""
+    return make_dataset_root(tmp_path)
+
+
 def run_cli(module: str, *args, cwd: Path | None = None):
     """Invoke an entry point the way a user does. Pinned via os.environ, see above.
 

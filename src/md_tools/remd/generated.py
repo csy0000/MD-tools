@@ -316,7 +316,19 @@ def replica_parser(description: str = "one coordinated replica-exchange ladder")
 
     parser = argparse.ArgumentParser(description=description, allow_abbrev=False)
     parser.add_argument("-p", "--topology", required=True, metavar="PDB")
-    parser.add_argument("-s", "--system", required=True, metavar="XML")
+    # EXACTLY ONE OF `-s` AND `--groupfile`, and this is the parser where that matters most.
+    #
+    # A ladder's rungs are scaled and serialised at BUILD time (`remd<n>/build_state<n>.xml`), so
+    # a group file names one System PER LINE and there is no single System for the launch to
+    # carry. `required=True` made that launch impossible: argparse refused before
+    # `remd.executor.resolve`'s grouped exemption could be reached, and `run.sh` -- the documented
+    # way to run a ladder -- died on every rank with "the following arguments are required:
+    # -s/--system". Relaxing it in `md-run` alone was not enough, because the generated
+    # `REST2.py` and `rREST2.py` call `replica_main` DIRECTLY: a refusal that lives only in the
+    # outer command is a property of that command rather than of the ladder.
+    parser.add_argument("-s", "--system", default=None, metavar="XML",
+                        help="the serialised System, for a homogeneous ladder. Omit it and pass "
+                             "--groupfile when each rung has its own pre-scaled Hamiltonian")
     parser.add_argument("-c", "--continue-from", default=None, metavar="XML",
                         help="equilibrated state every replica starts from")
     parser.add_argument("-log", "--log", default=None, metavar="LOG")
@@ -533,6 +545,33 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     protocol_name = ladder["protocol"]
+
+    # EXACTLY ONE OF `-s` AND `--groupfile`, refused BY NAME and READ-ONLY -- before `-odir`, a
+    # helper, a log or the run state is touched.
+    #
+    # Here as well as in `md-run`, because this function IS the ladder's entry point: the
+    # generated `REST2.py` and `rREST2.py` call it directly, so a refusal that lived only in the
+    # outer command would leave them open. That is the same reason the launch check and the
+    # per-tau resume refusal sit here rather than there.
+    #
+    # They are two answers to one question -- which System each replica integrates. `-s` is ONE
+    # System for the whole launch; a group file names one PER LINE, which is what a ladder has now
+    # that its rungs are scaled and serialised at build time. Neither is refused too: without a
+    # System and without a group file, `group_file` below would be derived for a launch that
+    # never said what to integrate.
+    if args.system and args.groupfile:
+        print(f"{protocol_name}: -s {args.system} and --groupfile {args.groupfile} were both "
+              f"given, and they are two answers to one question: which System each replica "
+              f"integrates. A group file names one System per line -- each rung's own pre-scaled "
+              f"Hamiltonian -- so a single -s beside it would claim one Hamiltonian for every "
+              f"rung. Pass one or the other, never both. Nothing was written.", file=sys.stderr)
+        return 2
+    if not args.system and not args.groupfile:
+        print(f"{protocol_name}: neither -s nor --groupfile was given, so nothing says which "
+              f"System each replica integrates. Pass -s for a homogeneous ladder, or --groupfile "
+              f"whose lines name each rung's own pre-scaled System. Nothing was written.",
+              file=sys.stderr)
+        return 2
 
     # THE LAUNCH IS VALIDATED BEFORE `-odir` EXISTS. This runs here, in the shared runtime, and
     # not only in `md-openmm md-run`, because the generated `REST2.py` and `rREST2.py` call this
@@ -869,9 +908,28 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
         log.field("applied to", "every rung, identically, AFTER scaling -- never scaled by tau")
         log.field("exchange criterion", "the bias is identical on both rungs of every attempted "
                                         "swap, so it cancels from log alpha exactly")
-    log.update(ladder=dict(ladder), tau=taus, exchange_interval_ps=exchange_ps,
-               inputs={"topology": file_facts(Path(args.topology)),
-                       "system": file_facts(Path(args.system))})
+    # WHAT THIS LADDER INTEGRATED, recorded as it actually is.
+    #
+    # A homogeneous ladder has ONE System and records it under `system`, which is the key every
+    # existing reader expects. A grouped ladder has no such file: each line of the group file
+    # names its own pre-scaled rung, so recording `system` would mean either a path that does not
+    # exist (this crashed with `Path(None)`) or one rung standing in for all N -- which is exactly
+    # the "one Hamiltonian for every rung" claim the per-rung files exist to prevent.
+    #
+    # So the group file is named, and every rung it names is named beside it. The provenance then
+    # says which Hamiltonian each state ran under, which is the question a reader of a REST2
+    # record actually has.
+    inputs: dict[str, Any] = {"topology": file_facts(Path(args.topology))}
+    if args.system:
+        inputs["system"] = file_facts(Path(args.system))
+    else:
+        from .executor import parse_group_file
+
+        inputs["group_file"] = file_facts(Path(group_file).resolve())
+        for group in parse_group_file(group_file):
+            inputs[f"system_state{int(group['group_index'])}"] = file_facts(
+                Path(group["system"]))
+    log.update(ladder=dict(ladder), tau=taus, exchange_interval_ps=exchange_ps, inputs=inputs)
 
     # The validated result travels WITH the call. The executor would otherwise run its own
     # preflight (it is independently callable and must be safe alone), and the driver would

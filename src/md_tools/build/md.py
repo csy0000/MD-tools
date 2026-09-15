@@ -809,6 +809,51 @@ def _apply_ais_reporting_defaults(resolved: dict[str, Any],
 # ---------------------------------------------------------------------------------------------
 
 def stage_plan(resolved: dict[str, Any]) -> list[dict[str, Any]]:
+    """The ordered stages, each fully resolved, each carrying the name it is FILED under.
+
+    A STAGE HAS TWO NAMES AND THEY ARE DIFFERENT THINGS. It is GENERATED as `eq_nvt_posres` /
+    `eq_npt_posres` / `eq_npt_free` -- renamed to NVT spellings under implicit solvent or a scaled
+    run, so a pressure-coupled name never appears on a boxless one -- and it is FILED as `eq_1` /
+    `eq_2` / `eq_3`, by position in the chain. The stage name decides the physics; `file_key`
+    decides the filename.
+
+    THE KEY IS STAMPED HERE because this is the one function every surface goes through --
+    `build-md`, `md-run` and `load_generated_plan` for a generated script -- and the plan is
+    RECOMPUTED from `resolved.config` at every execution rather than persisted, so an older
+    generated tree gets the key too.
+
+    It used to be computed in `_stage_targets` alone, which is the layout's side. The runtime named
+    its outputs from the stage instead, so `run.sh` chained `-c eq/eq_1.xml` while the stage wrote
+    `eq/eq_nvt_posres.xml` and NO cMD or REST2 chain could complete through `run.sh` -- the
+    documented way to run one. Two namers for one file is the defect; this is the single authority.
+    """
+    return _with_file_keys(_stage_plan_entries(resolved))
+
+
+def _with_file_keys(plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stamp each entry with the name its artefacts are filed under.
+
+    Positional for the equilibration stages, because that is what the key means -- `eq_2` is the
+    second equilibration stage of this chain, whatever ensemble it ended up with. Every other
+    stage is filed under its own name: `min` and `cMD` already agree, which is why they were never
+    affected by the divergence this removes.
+    """
+    from ..layout import eq_stage_key
+
+    order = 0
+    stamped: list[dict[str, Any]] = []
+    for stage in plan:
+        name = str(stage["name"])
+        if name.startswith("eq_"):
+            order += 1
+            key = eq_stage_key(order)
+        else:
+            key = name
+        stamped.append(dict(stage, file_key=key))
+    return stamped
+
+
+def _stage_plan_entries(resolved: dict[str, Any]) -> list[dict[str, Any]]:
     """The ordered stages, each fully resolved.
 
     Under implicit solvent the two pressure-coupled stages become NVT and are RENAMED, so nothing
@@ -1081,12 +1126,69 @@ def _in_value(value: Any) -> str | None:
 _NOT_IN_INPUT = frozenset({"dynamics.seed"})
 
 
+#: Suppressed from a PREPARATION input (`min.in`, `eq_<k>.in`), which is shared across METHODS.
+#:
+#: `input/` sits at the dataset root, and minimisation and equilibration are the same physics
+#: whichever method follows them -- so `min.in` is meant to be one file that every method reads.
+#: It could not be: the generated text carried `protocol = cMD` against `protocol = REST2` plus an
+#: entire `&remd` block, so the bytes differed by method and the second method on a system was
+#: refused against the first method's file.
+#:
+#: What is dropped is METHOD IDENTITY, never physics. Every setting that decides what the stage
+#: does -- the timestep, the temperature, the restraint, tau, the stage lengths, the reporting
+#: cadences -- is still written, so a preparation input still resolves to the run it prepares.
+#:
+#: This is why it is safe: `protocol` is DEFAULTED rather than required (`Field("protocol", str,
+#: default="cMD")`), and `md-run` dispatches on the STAGE a named input asks for rather than on
+#: the protocol -- "`stage` decides, not `protocol`". An input naming `min` reaches `stage_main`
+#: whether or not a protocol is written in it.
+#: `umbrella.file` is here and the CV keys deliberately are NOT, and the difference is what each
+#: one does to a preparation stage. `stage_plan` attaches `umbrella_file` to the umbrella
+#: PRODUCTION stage alone, so writing it into `min.in` describes a bias that stage never applies
+#: -- spurious text that made the file method-specific for nothing. Collective variables are the
+#: opposite: they are in `common`, so every dynamics stage reports them on the same cadence, and
+#: watching a torsion relax through equilibration is a legitimate thing to ask for. A cMD run that
+#: reports CVs and a REST2 run that does not therefore have genuinely different `eq_1.in` files,
+#: and that collision is a real disagreement for `_write_shared_input` to refuse rather than
+#: something to paper over by dropping the setting.
+#: `collective_variables.*` joins them for the MINIMISATION alone -- see `_preparation_suppressed`.
+_NOT_IN_PREPARATION_INPUT = frozenset({"protocol", "umbrella.file"})
+
+#: Additionally suppressed from `min.in`, and from nothing else.
+#:
+#: Minimisation produces NO collective-variable series at all: its iterations have no timestep,
+#: and a `time_ps` for them would be a fiction, so the schedule refuses to invent a time axis for
+#: them. The cadence therefore cannot change what a minimisation does -- but it was still written
+#: into the shared `min.in`, so two runs on one system differing only in whether they report CVs
+#: had different `min.in` bytes and the second was refused against the first. That refusal
+#: arrives from the shared-input gate BEFORE the `min/resolved.config` comparison that already
+#: exempts the same keys, which is why exempting them there alone changed nothing.
+#:
+#: The equilibration inputs keep theirs: those stages DO integrate, and watching a torsion relax
+#: through equilibration is a legitimate thing to ask for.
+_NOT_IN_MINIMISATION_INPUT = frozenset({"collective_variables.file",
+                                        "collective_variables.interval_steps"})
+
+
+def _preparation_suppressed(stage: str | None) -> frozenset:
+    """Targets a shared preparation input must not carry, for this stage."""
+    if stage == "min":
+        return _NOT_IN_PREPARATION_INPUT | _NOT_IN_MINIMISATION_INPUT
+    return _NOT_IN_PREPARATION_INPUT
+
+
 def in_file_text(resolved: dict[str, Any], *, stage: str | None = None,
-                 heading: str = "") -> str:
-    """One `.in` file for this resolved workflow, optionally naming one stage of it."""
+                 heading: str = "", preparation: bool = False) -> str:
+    """One `.in` file for this resolved workflow, optionally naming one stage of it.
+
+    `preparation` writes the SHARED form used for `min.in` and `eq_<k>.in`: `&cntrl` alone, with
+    no method identity in it, so one file serves every method on the system. See
+    `_NOT_IN_PREPARATION_INPUT`.
+    """
     from ..run.inputs import SECTION_KEYS
 
     protocol = resolved["protocol"]
+    suppressed = _NOT_IN_INPUT | (_preparation_suppressed(stage) if preparation else frozenset())
     lines = [f"! {heading or protocol}",
              "!",
              "! Generated by `md-openmm build-md`. Run it with:",
@@ -1097,7 +1199,14 @@ def in_file_text(resolved: dict[str, Any], *, stage: str | None = None,
              "! and writes the result there, and that resolved document is what the run reads.",
              "! This file resolves to exactly that document -- editing it changes the run.",
              ""]
-    for section, blocks in _IN_SECTIONS[protocol]:
+    sections = _IN_SECTIONS[protocol]
+    if preparation:
+        # &cntrl ONLY. `&remd`, `&AIS` and the reservoir block describe the method that follows
+        # this stage, not the stage, and carrying them made the same minimisation two different
+        # files.
+        sections = tuple((section, blocks) for section, blocks in sections
+                         if section == "cntrl")
+    for section, blocks in sections:
         known = SECTION_KEYS[section]
         body: list[str] = []
         if section == "cntrl" and stage is not None:
@@ -1114,7 +1223,7 @@ def in_file_text(resolved: dict[str, Any], *, stage: str | None = None,
                 # NOT WRITTEN INTO A SHARED INPUT. Keyed by target rather than by key so both
                 # spellings are covered at once -- `random_seed` is accepted in &cntrl AND in
                 # &AIS, deliberately, so an AIS input reads as one block.
-                if target in _NOT_IN_INPUT:
+                if target in suppressed:
                     continue
                 where, _, leaf = target.rpartition(".")
                 if where != block:
@@ -1131,8 +1240,331 @@ def in_file_text(resolved: dict[str, Any], *, stage: str | None = None,
     return "\n".join(lines)
 
 
+def _stage_targets(plan: list[dict[str, Any]], *, run, dataset) -> dict[str, dict[str, Any]]:
+    """Where each stage's `.in`, `.py` and output directory go under the run layout.
+
+    THE TWO NAMES OF A STAGE ARE DIFFERENT THINGS, and this is where they are kept apart. A stage
+    is GENERATED as `eq_nvt_posres` / `eq_npt_posres` / `eq_npt_free` -- renamed to NVT spellings
+    under implicit solvent or a scaled run, precisely so a pressure-coupled name never appears on
+    a boxless one -- and it is FILED as `eq_1` / `eq_2` / `eq_3`, by position in the chain. The
+    stage name still decides the physics and still reaches the runtime; the layout name decides
+    the filename. `eq_stage_key` owns the second, the plan owns the first, and the ensemble that
+    can no longer live in the filename lives in each stage's `.out` header and resolved
+    configuration, which state it explicitly.
+
+    `min` and every `.in` are DATASET paths, not run paths: minimisation draws no velocities and
+    has no seeded stochastic element, so every run on one system minimises to the same structure,
+    and an input says what a method was asked to do rather than which repeat this is.
+    """
+    targets: dict[str, dict[str, Any]] = {}
+    for stage in plan:
+        name = stage["name"]
+        # THE KEY COMES FROM THE PLAN, which is the single authority for it (`stage_plan` stamps
+        # it). This function used to recount the equilibration positions itself while the runtime
+        # named its outputs from the stage -- two namers for one file, and the reason `run.sh`
+        # chained a restart no stage ever wrote.
+        key = str(stage.get("file_key") or name)
+        if name == "min":
+            odir, script = dataset.min, dataset.min / "min.py"
+        elif name.startswith("eq_"):
+            odir, script = run.eq, run.eq / f"{key}.py"
+        else:
+            odir, script = run.root, run.root / f"{name}.py"
+        targets[name] = {
+            "key": key,
+            "input": dataset.stage_input(key),
+            "script": script,
+            "odir": odir,
+            # Relative to the RUN ROOT, which is where run.sh cds to. A generated script carries
+            # no absolute path, and these are what it types.
+            "input_rel": os.path.relpath(dataset.stage_input(key), run.root),
+            "odir_rel": os.path.relpath(odir, run.root),
+            "restart_rel": os.path.relpath(odir / f"{key}.xml", run.root),
+        }
+    return targets
+
+
+def _write_min_directory(directory: Path, document: dict[str, Any], *, resolved: dict[str, Any],
+                         why: str, overwrite: bool, log, note, run) -> None:
+    """The shared `min/`: its declaration, and its OWN seed beside it.
+
+    FIRST WRITER WINS, and the seed is exempt from the comparison. `min/` is shared, so a second
+    run must not replace what the first one minimised under -- but two runs on one system are
+    *expected* to differ in their seed, and the minimisation's own seed is not a run's. So an
+    existing directory is kept when it agrees about everything EXCEPT `dynamics.seed`, and refused
+    when it disagrees about anything else: a different `minimization_iterations` or restraint
+    really is a different minimisation, and silently reusing it would make two runs claim a
+    starting structure neither produced.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    resolved_path, run_config_path = directory / "resolved.config", directory / "run.config"
+    seed = resolved["dynamics"]["seed"]
+
+    if resolved_path.is_file() and not overwrite:
+        existing = load_yaml_strictly(resolved_path.read_text(encoding="utf-8"),
+                                      source=str(resolved_path))
+        mine, theirs = dict(document), dict(existing)
+        # Compared with the seed removed from BOTH sides, so "everything except the seed" is
+        # exactly what is checked rather than approximately.
+        for side in (mine, theirs):
+            side["dynamics"] = {k: v for k, v in (side.get("dynamics") or {}).items()
+                               if k != "seed"}
+            # AND COLLECTIVE VARIABLES, for the same reason as the seed: they cannot change what
+            # a minimisation does. CV reporting is in `common`, so it reaches every stage dict --
+            # but minimisation produces NO series at all, because its iterations have no timestep
+            # and a `time_ps` for them would be a fiction. Two runs on one system that differ
+            # only in whether they report CVs therefore minimise identically, and refusing the
+            # second one would make a reporting choice look like a different starting structure.
+            side.pop("collective_variables", None)
+        if mine != theirs:
+            differing = sorted(
+                key for key in set(mine) | set(theirs) if mine.get(key) != theirs.get(key))
+            raise ConfigError(
+                f"{resolved_path} already exists and describes a different minimisation.\n"
+                f"  Differing: {', '.join(differing)}\n"
+                f"  `min/` is SHARED by every run on this system -- the runs already beside it "
+                f"started from the structure this file produced, so replacing it would make them "
+                f"claim a starting point none of them minimised.\n"
+                f"  The seed is deliberately exempt and is not the problem here: two runs on one "
+                f"system are expected to differ in it, and the minimisation keeps its own.\n"
+                f"  Either generate from the configuration those runs used, or give this a "
+                f"different `<system>` root.")
+        # RECORDED EVEN THOUGH IT WAS NOT WRITTEN. A kept file is still a file this run depends
+        # on, and leaving it out of the Outputs section would make the shared minimisation
+        # invisible in the log of every run after the first.
+        note(resolved_path)
+        if run_config_path.is_file():
+            note(run_config_path)
+        log.field(f"{os.path.relpath(directory, run.root)}/resolved.config",
+                  "kept: already minimised, under its own seed")
+        return
+
+    text = ("# The configuration these scripts were generated from, fully resolved.\n"
+            "# Every default is written out, so this file alone reproduces the generation.\n"
+            + yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
+    resolved_path.write_text(text, encoding="utf-8")
+    note(resolved_path)
+    log.field(f"{os.path.relpath(directory, run.root)}/resolved.config", why)
+
+    # THE MINIMISATION'S OWN SEED. Written here so `md-run -i ../input/min.in -odir ../min`
+    # layers it exactly as a run layers its own, and the declaration beside the script therefore
+    # round-trips instead of refusing.
+    run_config_path.write_text(
+        "# The minimisation's own seed. `min/` is SHARED by every run on this system, and this\n"
+        "# is deliberately NOT any run's seed: minimisation draws no velocities and has no seeded\n"
+        "# stochastic element, so no run's sampling descends from it. Every run on this system may\n"
+        "# carry a different `dynamics.seed` in its own run.config without disturbing this one.\n"
+        + yaml.safe_dump({"dynamics": {"seed": seed}}, sort_keys=False), encoding="utf-8")
+    note(run_config_path)
+
+
+def _method_neutral(resolved: dict[str, Any]) -> dict[str, Any]:
+    """`resolved` with the method identity removed, for a directory fed by a SHARED input.
+
+    `protocol` is DEFAULTED rather than required, and `md-run` dispatches on the stage a named
+    input asks for -- so a preparation stage resolves and runs identically without it. Both
+    `min/` and `eq/` hold scripts driven by `input/*.in`, which carry no protocol, so both need
+    the same projection or the stored document and the input can never agree.
+    """
+    neutral = dict(resolved)
+    neutral["protocol"] = MD_SCHEMA.fields["protocol"].default
+    for block in ("rest2", "reservoir", "ais", "ais_source", "umbrella"):
+        if block in neutral:
+            neutral[block] = _schema_defaults(block)
+    return neutral
+
+
+def _script_directories(plan: list[dict[str, Any]], *, run, dataset,
+                        resolved: dict[str, Any]) -> list[tuple[Path, dict[str, Any], str, bool]]:
+    """Each directory that receives a generated script, with the document its scripts must read.
+
+    TWO DIRECTORIES ARE NOT THE RUN ROOT, and they need different documents for different
+    reasons.
+
+    `<system>/min/` is SHARED by every run on this system, so it cannot hold a per-run document.
+    It gets the METHOD-NEUTRAL one -- the same projection `input/min.in` is written from, with no
+    protocol and no method block -- which makes it identical whichever method generates it first,
+    and makes the `min.in` <-> `min/resolved.config` round trip hold by construction rather than
+    by coincidence. Minimisation draws no velocities and has no seeded stochastic element, so
+    there is nothing per-run in it to lose.
+
+    `<run>/eq/` is per run, so it gets the run's own document -- THE SAME BYTES as
+    `<run>/resolved.config`. That is a second copy inside one run, stated plainly rather than
+    left to be discovered: it is not a second authority, because both are written here from one
+    resolved document in one pass and the stage fingerprint binds whichever one a stage actually
+    read. Equilibration is per run precisely because it draws Maxwell velocities from this run's
+    seed, which is what makes two repeats diverge.
+    """
+    from ..layout import eq_stage_key
+
+    directories: list[tuple[Path, dict[str, Any], str]] = []
+    names = [stage["name"] for stage in plan]
+    if "min" in names:
+        directories.append(
+            (dataset.min, _method_neutral(resolved),
+             "SHARED by every run on this system, so it carries no method identity: "
+             "minimisation is the same physics whichever method follows it.", True))
+    if any(name.startswith("eq_") for name in names):
+        directories.append(
+            (run.eq, _method_neutral(resolved),
+             "METHOD-NEUTRAL, exactly as `min/` is, because the stages here read the SHARED "
+             "`input/eq_<k>.in` -- which carries no protocol, so that one file can serve every "
+             "method. A per-run document here recorded `protocol: REST2` while the input it is "
+             "compared against resolves to the default, and every preparation stage of a ladder "
+             "refused with `protocol: was 'REST2', now 'cMD'`. The two can never agree, so the "
+             "stored document matches the input rather than the run. Which method the run IS "
+             "stays recorded at the run root and in build-md.log.", False))
+    return directories
+
+
+def _schema_defaults(block: str) -> dict[str, Any]:
+    """Every field of one schema section at its default, for the method-neutral projection.
+
+    `Schema.sections` and `Section.fields` are both dicts keyed by name, so the defaults come
+    from the schema itself rather than from a hand-written list that would silently go stale the
+    next time a method gains a field.
+    """
+    return {name: field.default for name, field in MD_SCHEMA.sections[block].fields.items()}
+
+
+def _place_definitions(directory: Path, copies: list[tuple[str, bytes]], *,
+                       overwrite: bool = False, note=None) -> None:
+    """Put every content-addressed definition copy beside a declaration that names it.
+
+    A `resolved.config` names its CV and umbrella definitions by BARE NAME, and the runtime
+    resolves that name beside the declaration it read -- `resolved_config_beside(script)` for a
+    generated script, `-odir` or the input's directory for `md-run`. A directory holding a
+    declaration but not the definition is therefore a declaration that cannot be resolved, which
+    is what `input/` was: it named `cv.<digest>.yaml` and held none, so the public command could
+    not load the definition from anywhere and the read-only continuation boundary returned early
+    instead of refusing.
+
+    IDEMPOTENT AND IDENTITY-CHECKED, like `input/` itself. The name carries the digest, so an
+    existing copy of the same name must be the same bytes; if it is not, the digest is not what
+    it claims and the difference is reported rather than overwritten.
+
+    `--overwrite` REPLACES IT, as it does every other file in the shared tree. Refusing even then
+    would make this the one writer in `build_scripts` that `--overwrite` cannot get past, so a
+    single corrupt copy would block regenerating the run for good -- and a name whose bytes do not
+    hash to it is exactly the damage `--overwrite` exists to clear.
+    """
+    if not copies:
+        return
+    directory.mkdir(parents=True, exist_ok=True)
+    for name, payload in copies:
+        path = directory / name
+        if path.is_file():
+            if path.read_bytes() != payload and not overwrite:
+                raise ConfigError(
+                    f"{path} already exists and holds different bytes than the definition this "
+                    f"configuration resolves to.\n"
+                    f"  The name is content-addressed, so two different definitions cannot "
+                    f"honestly share it: one of the two digests does not describe its file.\n"
+                    f"  Pass --overwrite to replace it.")
+            if path.read_bytes() == payload:
+                continue
+        path.write_bytes(payload)
+        if note is not None:
+            note(path)
+
+
+def _write_shared_input(path: Path, text: str, *, overwrite: bool) -> None:
+    """Write one shared `input/*.in`, or refuse one that exists and says something different.
+
+    THE SHARING IS A CLAIM, so it is enforced rather than assumed. `input/` sits at the dataset
+    root and every repeat of a method on one system reads the same files -- which is exactly why
+    a second run generated from an edited configuration must not quietly replace what run 1
+    actually read. An identical file is kept (generation is then idempotent); a different one is
+    refused by name, because the alternative is that run 1's inputs describe run 2.
+
+    If two methods on one system genuinely need different equilibration, they are not comparable
+    and belong under a different `<system>` -- a refusal, not a subdirectory.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        existing = path.read_text(encoding="utf-8")
+        if existing == text:
+            return
+        if not overwrite:
+            raise ConfigError(
+                f"{path} already exists and is not what this configuration resolves to.\n"
+                f"  `input/` is shared by every run on this system: the runs already beside it "
+                f"read THIS file, so replacing it would make their inputs describe a different "
+                f"experiment than the one they ran.\n"
+                f"  Either generate from the configuration those runs used, or -- if this really "
+                f"is a different protocol -- give it a different `<system>` root. "
+                f"Pass --overwrite only if no run beside it has output yet.")
+    path.write_text(text, encoding="utf-8")
+
+
+def _group_file_text(*, protocol: str, states: int, segment: int, segments: int,
+                     taus: list[float], targets: dict[str, dict[str, Any]],
+                     run, dataset, solute_yaml: Path | None) -> str:
+    """One group file per segment: one line per STATE, each naming its own rung Hamiltonian.
+
+    `-s` IS PER LINE NOW, and that is the architecture change. Scaling used to happen at run time
+    from one shared `built.xml` with tau derived from `--group-index`; each rung is serialised to
+    `remd<n>/build_state<n>.xml` at build time instead, so the Hamiltonian a state ran under is a
+    file that can be read rather than a derivation that has to be trusted. The executor's group
+    parser was changed to match: `system` left `HOMOGENEOUS_GROUP_FIELDS`, and a stronger check
+    took its place -- line *i* must name rung *i*, and no two lines may name one file.
+
+    Paths are relative to THIS FILE, which is how the parser reads them and how everyone who
+    writes one by hand expects them to read.
+
+    `-c` appears on the FIRST segment only. A later segment takes its physical state -- positions,
+    velocities, box, the state-to-walker map, the RNG streams -- from the parent segment's
+    checkpoint through `--extend-from`, and naming a coordinate file as well would give it two
+    starting states that nothing downstream reconciles.
+    """
+    last = [stage for stage in targets.values()][-1] if targets else None
+    start = last["restart_rel"] if last else None
+    lines = [f"# {protocol}: {states} states, tau {taus[0]} to {taus[-1]}.",
+             f"# Segment {segment} of {segments}; this segment's outputs are the `_prod{segment}` "
+             f"set.",
+             "# One group per line, INPUTS only -- run-level outputs go on the executor call,",
+             "# because they describe the coordinated run rather than one replica.",
+             "# Paths are relative to THIS FILE, which is how they are read back.",
+             "#",
+             "# -s is this state's own pre-scaled rung, written by `build-md` and recorded in",
+             "# build_states.log beside it. It is NOT scaled again at run time: doing so would",
+             "# take solute-solute to (1-tau)^4 and produce entirely plausible numbers.",
+             ""]
+    for index in range(states):
+        # `-i` IS THE PROTOCOL MODULE, not the Amber-like input.
+        #
+        # `remd.executor.run_grouped` does `load_grouped_protocol(groups[0]["input"])`, which
+        # imports that path as PYTHON and expects one `protocol` object: a group file's `-i` names
+        # the module that describes the ladder, and the executor is its only reader. This wrote
+        # `../input/REST2.in` instead, so every grouped launch through `run.sh` died with
+        #
+        #   RuntimeError: .../input/REST2.in could not be loaded as a Python file
+        #
+        # after the eq chain had completed and the run directory looked like a started run. The
+        # runtime's own group-file writer (`remd.generated._group_file_text`, used when no
+        # `--groupfile` is supplied) has always written `_protocol.py`; the two writers disagreed
+        # and only the build-time one was wrong.
+        #
+        # `build-md` cannot write `_protocol.py` -- it is content-addressed from the resolved
+        # ladder and published by `replica_main` into `-odir` before the executor is called -- but
+        # naming it here is still correct: the executor reads the group file at RUN time, by which
+        # point the file is beside it. `--check` never reached this, because a preflight does not
+        # load the protocol module.
+        parts = [f"-i {os.path.relpath(run.root / '_protocol.py', run.root)}",
+                 f"-p {os.path.relpath(dataset.built('pdb'), run.root)}",
+                 f"-s {os.path.relpath(run.state_system(index), run.root)}"]
+        if segment == 1 and start:
+            parts.append(f"-c {start}")
+        if solute_yaml is not None:
+            parts.append(f"--solute {os.path.relpath(solute_yaml, run.root)}")
+        parts.append(f"--group-index {index}")
+        lines.append(" ".join(parts))
+    return "\n".join(lines) + "\n"
+
+
 def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str,
-            resolved: dict[str, Any]) -> str:
+            resolved: dict[str, Any], targets: dict[str, dict[str, Any]],
+            segments: int = 1) -> str:
     """The runnable form of this protocol, driven by `md-openmm md-run`.
 
     It calls the installed command rather than `python min.py` because that is the interface a
@@ -1164,8 +1596,10 @@ def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str,
              'set -euo pipefail',
              '',
              'HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
-             'TOPOLOGY="${1:-${HERE}/../built.pdb}"',
-             'SYSTEM="${2:-${HERE}/../built.xml}"',
+             '# The dataset root is one level up: build/, min/ and input/ are SHARED by every run',
+             '# on this system, and this run reads them rather than carrying its own copies.',
+             'TOPOLOGY="${1:-${HERE}/../build/built.pdb}"',
+             'SYSTEM="${2:-${HERE}/../build/built.xml}"',
              '# Captured before the shifts below consume the positional arguments.',
              'SOURCE="${3:-}"',
              '# Consume the two positional arguments if they were given, so that a path this',
@@ -1216,34 +1650,55 @@ def _run_sh(plan: list[dict[str, Any]], *, all_in_one: bool, protocol: str,
     else:
         previous = None
         for stage in plan:
-            name = stage["name"]
-            # Amber semantics: -s is the serialised System, -x the trajectory, -o the readable
-            # output and -log the provenance record. Two files, two readers.
-            call = [f'md-openmm md-run -i {name}.in \\',
+            target = targets[stage["name"]]
+            # NO -r, -o, -log or -chk. md-run names all four inside -odir itself, so passing them
+            # here would restate four paths per stage that the layout already decides -- and they
+            # are taken verbatim against the working directory when given, which is how a stage
+            # comes to write its restart next to run.sh instead of into its own directory.
+            #
+            # NO -x either: the stage names its own coordinate streams and there are two of them.
+            # One -x cannot say both `solute_prod1.nc` and `whole_prod1.nc`, and naming only the
+            # solute one would silently reinstate the single-trajectory behaviour this replaces.
+            call = [f'md-openmm md-run -i {target["input_rel"]} \\',
                     '  -p "${TOPOLOGY}" -s "${SYSTEM}" \\',
-                    # NO -x: the stage names its own coordinate streams now, and there
-                    # are two of them. One -x cannot say both `solute_prod1.nc` and
-                    # `whole_prod1.nc`, and naming only the solute one here would have
-                    # silently reinstated the single-trajectory behaviour this replaces.
-                    f'  -r {name}.xml -chk {name}.chk \\',
-                    f'  -o {name}.out -log {name}.log "$@"']
+                    f'  -odir {target["odir_rel"]} "$@"']
             if previous:
-                call.insert(2, f'  -c {previous}.xml \\')
-            lines += [f'echo "== {name} =="'] + call + ['']
-            previous = name
+                call.insert(2, f'  -c {previous} \\')
+            lines += [f'echo "== {target["key"]} =="'] + call + ['']
+            previous = target["restart_rel"]
         if protocol in ("REST2", "rREST2"):
             lines += ['# One rank per thermodynamic state. Any other world size is refused rather',
                       '# than silently reinterpreted: a ladder run in fewer processes than it has',
                       '# states is a different schedule, not a smaller one.',
                       '#',
-                      '# Anything left in "$@" is passed on: --resume to finish an interrupted',
-                      '# run, --cpu for an explicit CPU run.',
-                      f'echo "== {protocol} =="',
-                      f'mpirun -n {states} md-openmm md-run -ng {states} -i {protocol}.in \\',
-                      '  -p "${TOPOLOGY}" -s "${SYSTEM}" \\',
-                      f'  -c {previous}.xml -x {protocol}.nc -r restart.json \\',
-                      f'  -o {protocol}.out -log {protocol}.log "$@"',
+                      '# EVERY SEGMENT SHARES ONE INPUT and has its own group file. The segment is',
+                      '# a runtime fact, not an input fact: `stages.number_of_segments` divides the',
+                      '# production total, and each segment writes the `_prod<x>` set of outputs.',
+                      '#',
+                      '# Anything left in "$@" is passed on: --cpu for an explicit CPU run.',
                       '']
+            records = os.path.relpath(Path("remd_records"), ".")
+            for segment in range(1, int(segments) + 1):
+                call = [f'mpirun -n {states} md-openmm md-run -ng {states} \\',
+                        f'  -i {os.path.relpath(Path("..") / "input" / f"{protocol}.in", ".")} \\',
+                        '  -p "${TOPOLOGY}" \\',
+                        f'  --groupfile remd_groupfile.{segment} \\',
+                        '  -odir . \\',
+                        f'  -o {records}/{protocol}_prod{segment}.out \\',
+                        f'  -log {records}/{protocol}_prod{segment}.log \\',
+                        f'  -r {records}/restart_prod{segment}.json']
+                if segment > 1:
+                    # The physical state comes from the parent segment's checkpoint, not from a
+                    # coordinate file: positions, velocities, box, the state-to-walker map and
+                    # every RNG stream have to arrive together or the ladder resumes as a
+                    # different experiment that still exchanges perfectly.
+                    call.append(f'  --extend-from {records}/restart_prod{segment - 1}.json')
+                call[-1] = call[-1] + ' "$@"'
+                call = [line if line.endswith('\\') or line.endswith('"$@"') else line + ' \\'
+                        for line in call]
+                lines += [f'echo "== {protocol} prod{segment} =="'] + call + ['']
+            # NO -s on the executor call. Each rung is its own pre-scaled Hamiltonian and the
+            # group file names it per line; one -s here would be one System for six states.
     lines += ['echo "run.sh: all stages reported completion"']
     return "\n".join(lines) + "\n"
 
@@ -1294,15 +1749,57 @@ raise SystemExit(run_generated_remd(__file__, protocol="{protocol}"))
 
 def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool = False,
                   overwrite: bool = False, echo: bool = True) -> dict[str, Any]:
-    """Generate the run scripts. Returns the machine record written beside them."""
+    """Generate one run. `out_dir` is the RUN directory; returns the record written in it.
+
+    THE RUN DIRECTORY IS `<system>/<method>-run<N>/`, and what it does NOT contain is the point:
+    `build/`, `min/` and `input/` are its siblings, shared by every run on this system, because
+    every run starts from the same built System, the same minimised coordinates and the same
+    instructions. Only what is genuinely per-run is written here -- this run's equilibration, its
+    per-state rungs and output, its records, and `run.config`, which holds the seed and nothing
+    else.
+    """
+    from ..layout import DatasetLayout, RunLayout
+
     resolved = resolve_md_config(config_path)
-    out_dir = Path(out_dir)
-    if out_dir.exists() and any(out_dir.iterdir()) and not overwrite:
+    run_root = Path(out_dir)
+    # REFUSED IF IT EXISTS AT ALL, not merely if it is non-empty. A run directory is an identity:
+    # `REST2-run1` names one experiment, and generating a second one into it would leave two sets
+    # of settings over one set of paths with nothing saying which run the outputs belong to. An
+    # empty directory of the right name is the ambiguous case rather than the safe one -- it is
+    # what a half-cleaned failed attempt leaves behind -- so it is refused too. `next_run_index`
+    # never reuses a gap for the same reason.
+    if run_root.exists() and not overwrite:
         raise ConfigError(
-            f"{out_dir} exists and is not empty. Pass --overwrite to regenerate into it. "
-            f"Regenerating over a directory that already holds run output would leave scripts "
-            f"and results that were produced by different settings side by side.")
-    out_dir.mkdir(parents=True, exist_ok=True)
+            f"{run_root} already exists.\n"
+            f"  A run directory is an identity: this name refers to one experiment, and "
+            f"generating into it again would put two sets of settings over one set of paths.\n"
+            f"  Use the next index -- `{run_root.parent.name}/<method>-run<N+1>` -- or pass "
+            f"--overwrite if this run has no output worth keeping.")
+    dataset = DatasetLayout(run_root.parent)
+    run = RunLayout(run_root, dataset=dataset, protocol=resolved["protocol"])
+
+    # CHECKED BEFORE ANYTHING IS WRITTEN, and that ordering is the point rather than a detail.
+    # A ladder's rungs are scaled and serialised here now, so `build/built.{xml,pdb}` is a
+    # precondition of generating one at all -- and `input/` is SHARED, so a generation that is
+    # going to refuse must not have put a file there first. It did: the refusal arrived after
+    # `input/min.in` had already been written, which is the same defect as a `--check` that
+    # creates its output directory.
+    if resolved["protocol"] in ("REST2", "rREST2"):
+        missing = [path for path in (dataset.built("xml"), dataset.built("pdb"))
+                   if not path.is_file()]
+        if missing:
+            raise ConfigError(
+                "a ladder's rungs are scaled and serialised at BUILD time now, so build-md needs "
+                "the built system that every run on this dataset shares:\n"
+                + "".join(f"  missing: {path}\n" for path in missing)
+                + f"  Run `md-openmm build-top` into {dataset.build}/ first. (The scaling used to "
+                  f"happen at run time from one shared built.xml, which is why this used to "
+                  f"generate without it.)")
+
+    run_root.mkdir(parents=True, exist_ok=True)
+    # Kept as `out_dir` below: the cv/umbrella copies, the build log and the generated helpers all
+    # belong to this run and stay at its root.
+    out_dir = run.root
 
     # -- the collective-variable definition, resolved and copied in -----------------------------
     #
@@ -1316,6 +1813,22 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
     # somewhere else survives none of that. Worse, it survives it SILENTLY when the path happens
     # to exist on the target machine and holds a different file. The copy is named by its digest
     # so a definition that changed cannot quietly replace one a previous run used.
+    # EVERY DECLARATION TRAVELS WITH THE DEFINITION IT NAMES, and that is why the copies are
+    # collected rather than written once.
+    #
+    # `resolved.config` records the copy by BARE NAME so the directory stays movable, and the
+    # name resolves beside whichever declaration a reader started from. The layout then put
+    # declarations in four places -- the run root, the SHARED `input/`, `min/` and `eq/` -- while
+    # the bytes existed in exactly one of them. So `input/cMD.in` named `cv.<digest>.yaml` and
+    # `input/` held no such file: `md-openmm md-run -i ../input/cMD.in` could not resolve its own
+    # definition from any directory, and `md_tools.run.continuation` -- which has to LOAD the
+    # definition to know what the invocation intends to continue -- got None and returned early.
+    # The read-only boundary then silently did nothing, and a refused continuation wrote
+    # `resolved.config`, `<stage>.out` and `<stage>.log` into the tree it was declining to touch.
+    #
+    # The name is content-addressed, so sharing one is safe by construction: a definition that
+    # changed gets a different name and cannot quietly replace the one a previous run read.
+    definition_copies: list[tuple[str, bytes]] = []
     cv_provenance = None
     cv_block = resolved.get("collective_variables") or {}
     if cv_block.get("file"):
@@ -1329,6 +1842,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
         definition = load_cv_definition(source)
         copied = out_dir / f"cv.{definition.digest[:12]}.yaml"
         copied.write_bytes(source.read_bytes())
+        definition_copies.append((copied.name, copied.read_bytes()))
         # Only `file` changes in the resolved configuration -- it is a SETTINGS document, and its
         # schema rightly refuses keys that are not settings. Where the definition came from and
         # what it hashed to are provenance of the BUILD, and are recorded in the build record
@@ -1359,6 +1873,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
         digest = definition_digest(source)
         copied = out_dir / f"umbrella.{digest[:12]}.yaml"
         copied.write_bytes(source.read_bytes())
+        definition_copies.append((copied.name, copied.read_bytes()))
         resolved["umbrella"] = dict(umbrella_block, file=copied.name)
         umbrella_provenance = {
             "source_path": str(source),
@@ -1395,15 +1910,33 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
             detail = f"{stage['steps']} steps, {stage['ensemble']}"
         log.field(stage["name"], detail)
 
+    targets = _stage_targets(plan, run=run, dataset=dataset)
+    segments = int(resolved["stages"]["number_of_segments"])
+
     written: list[str] = []
+    where: dict[str, Path] = {}
+
+    def note(path: Path) -> str:
+        """Record a written file by its path RELATIVE TO THE RUN, so the log shows where it went.
+
+        A shared input reads as `../input/REST2.in` and a per-run file as `eq/eq_1.py`, which is
+        the distinction the layout exists to make. A bare basename would print them the same.
+        """
+        label = os.path.relpath(path, run.root)
+        written.append(label)
+        where[label] = path
+        return label
+
     if all_in_one:
-        (out_dir / "md.py").write_text(_ALL_IN_ONE, encoding="utf-8")
-        written.append("md.py")
+        path = out_dir / "md.py"
+        path.write_text(_ALL_IN_ONE, encoding="utf-8")
+        note(path)
     else:
         for index, stage in enumerate(plan):
-            path = out_dir / f"{stage['name']}.py"
+            path = targets[stage["name"]]["script"]
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(_stage_script(stage, first=index == 0), encoding="utf-8")
-            written.append(path.name)
+            note(path)
 
     if protocol == "AIS":
         # No `run` dict is embedded any more: the AIS script reads `resolved.config` beside it,
@@ -1413,7 +1946,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
             paths=resolved["ais"]["number_of_paths"],
             tau_start=resolved["ais"]["tau_start"], tau_end=resolved["ais"]["tau_end"]),
             encoding="utf-8")
-        written.append(path.name)
+        note(path)
         observations = (resolved["ais"]["switching_steps"]
                         // resolved["ais"]["observation_interval_steps"] + 1)
         log.heading("AIS")
@@ -1447,7 +1980,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
         path = out_dir / f"{protocol}.py"
         path.write_text(_REPLICA_SCRIPT.format(protocol=protocol,
                                                states=ladder["n_states"]), encoding="utf-8")
-        written.append(path.name)
+        note(path)
         log.heading(protocol)
         log.field("states", ladder["n_states"])
         log.field("tau ladder", f"0.0 .. {ladder['tau_max']} (linear)")
@@ -1489,42 +2022,185 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
     # The Amber-like inputs, beside the Python entry points. Two shapes over ONE resolved run:
     # `python min.py` and `md-openmm md-run -i min.in` reach the same function with the same
     # settings, and the round-trip is asserted rather than asserted-in-a-comment.
+    # THE INPUTS ARE SHARED, so they are written to the dataset's `input/` rather than into this
+    # run -- and an existing one that differs is refused rather than replaced, because the runs
+    # already beside it read that file. `min.in` and `eq_<k>.in` are shared across METHODS as well
+    # as repeats: if two methods on one system need different equilibration they are not
+    # comparable and belong under a different `<system>`.
     if protocol == "AIS":
-        (out_dir / "AIS.in").write_text(
+        # AIS reads neither `min.in` nor `eq_*.in`: a switching campaign starts from a source
+        # ensemble that already exists, so it has no preparation chain of its own.
+        _write_shared_input(
+            dataset.stage_input("AIS"),
             in_file_text(resolved, heading=f"AIS: {resolved['ais']['number_of_paths']} switching "
-                                           f"paths"), encoding="utf-8")
-        written.append("AIS.in")
-    elif protocol in ("REST2", "rREST2"):
-        for stage in plan:
-            name = f"{stage['name']}.in"
-            (out_dir / name).write_text(
-                in_file_text(resolved, stage=stage["name"],
-                             heading=f"{protocol} preparation: {stage['name']}"), encoding="utf-8")
-            written.append(name)
-        (out_dir / f"{protocol}.in").write_text(
-            in_file_text(resolved, heading=f"{protocol}: "
-                                           f"{resolved['rest2']['number_of_replicas']} states"),
-            encoding="utf-8")
-        written.append(f"{protocol}.in")
+                                           f"paths"), overwrite=overwrite)
+        note(dataset.stage_input("AIS"))
     else:
         for stage in plan:
-            name = f"{stage['name']}.in"
-            (out_dir / name).write_text(
-                in_file_text(resolved, stage=stage["name"],
-                             heading=f"{protocol}: {stage['name']}"), encoding="utf-8")
-            written.append(name)
+            target = targets[stage["name"]]
+            # ONLY THE PREPARATION STAGES ARE WRITTEN IN THE SHARED FORM, and getting this wrong
+            # is not cosmetic: applying it to every stage stripped `protocol` and `umbrella_file`
+            # from the cMD and umbrella PRODUCTION inputs, which is the one input that has to
+            # carry them -- it is what says which method the run is.
+            #
+            # `min` and `eq_<k>` are shared across methods and drop method identity; a production
+            # input is the method, is named for it, and keeps everything.
+            preparation = stage["name"] == "min" or stage["name"].startswith("eq_")
+            # `stage=` is the STAGE name and the heading carries the LAYOUT name: the first
+            # decides the physics the runtime resolves, the second is what the file is called.
+            # The ensemble is stated because it can no longer live in the filename. A preparation
+            # heading names no protocol either -- the heading is part of the bytes, so a protocol
+            # in the comment alone would make `min.in` method-specific again.
+            heading = (f"{target['key']}  [{stage['name']}, {stage['ensemble']}]" if preparation
+                       else f"{protocol}: {target['key']}  [{stage['ensemble']}]")
+            _write_shared_input(
+                target["input"],
+                in_file_text(resolved, stage=stage["name"], preparation=preparation,
+                             heading=heading),
+                overwrite=overwrite)
+            note(target["input"])
+        if protocol in ("REST2", "rREST2"):
+            _write_shared_input(
+                dataset.stage_input(protocol),
+                in_file_text(resolved,
+                             heading=f"{protocol}: "
+                                     f"{resolved['rest2']['number_of_replicas']} states, "
+                                     f"{segments} segment(s)"), overwrite=overwrite)
+            note(dataset.stage_input(protocol))
+
+    # THE DEFINITIONS THE SHARED INPUTS NAME, beside those inputs. `input/*.in` and
+    # `input/`-resolved declarations record `cv_file` by bare name; without the copy here the
+    # shared input named a file its own directory did not contain, and `md-run -i ../input/...`
+    # could not resolve it at all. Content-addressed, so every run on this system shares one.
+    _place_definitions(dataset.input, definition_copies, overwrite=overwrite, note=note)
+
+    # -- the rungs, serialised, and one group file per segment ----------------------------------
+    #
+    # SCALING HAPPENS HERE NOW, not at run time. Each rung is written to
+    # `remd<n>/build_state<n>.xml` with `build_states.log` recording which factors were applied to
+    # which terms and which torsions were left alone, so the Hamiltonian a state ran under is
+    # readable rather than re-derivable. The group file names one rung per line.
+    rung_record = None
+    if protocol in ("REST2", "rREST2"):
+        from ..remd.generated import tau_ladder
+        from .rungs import RungWriteError, format_scaling_report, write_rung_systems
+
+        system_path, topology_path = dataset.built("xml"), dataset.built("pdb")
+        missing = [path for path in (system_path, topology_path) if not path.is_file()]
+        if missing:
+            raise ConfigError(
+                "a ladder's rungs are scaled and serialised at BUILD time now, so build-md needs "
+                "the built system that every run on this dataset shares:\n"
+                + "".join(f"  missing: {path}\n" for path in missing)
+                + f"  Run `md-openmm build-top` into {dataset.build}/ first. (The scaling used to "
+                  f"happen at run time from one shared built.xml, which is why this used to "
+                  f"generate without it.)")
+        taus = tau_ladder(int(resolved["rest2"]["number_of_replicas"]),
+                          float(resolved["rest2"]["tau_max"]))
+        try:
+            rung_record = write_rung_systems(run, system_path=system_path,
+                                             topology_path=topology_path, taus=taus,
+                                             overwrite=overwrite)
+        except RungWriteError as failure:
+            raise ConfigError(str(failure)) from None
+        for state in rung_record["states"]:
+            note(run.state_system(int(state["state"])))
+        note(run.root / "build_states.log")
+
+        # `solute.yaml` is named on every group line when it exists beside the built system. It is
+        # the resolved scaling selection, and a ladder that derived its own would be a second
+        # answer to "what is the solute" -- two answers waiting to disagree, invisibly.
+        solute_yaml = dataset.build / "solute.yaml"
+        for segment in range(1, segments + 1):
+            path = run.root / f"remd_groupfile.{segment}"
+            path.write_text(_group_file_text(
+                protocol=protocol, states=len(taus), segment=segment, segments=segments,
+                taus=taus, targets=targets, run=run, dataset=dataset,
+                solute_yaml=solute_yaml if solute_yaml.is_file() else None), encoding="utf-8")
+            note(path)
+        # The directories a segment writes into, made now so a refusal about them happens here
+        # rather than three hours into a queue.
+        for directory in (run.records, run.rank):
+            directory.mkdir(parents=True, exist_ok=True)
 
     run_sh = out_dir / "run.sh"
     run_sh.write_text(_run_sh(plan, all_in_one=all_in_one, protocol=protocol,
-                                      resolved=resolved), encoding="utf-8")
+                              resolved=resolved, targets=targets, segments=segments),
+                      encoding="utf-8")
     run_sh.chmod(run_sh.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    written.append("run.sh")
+    note(run_sh)
 
     (out_dir / "resolved.config").write_text(
         "# The configuration these scripts were generated from, fully resolved.\n"
         "# Every default is written out, so this file alone reproduces the generation.\n"
         + yaml.safe_dump(resolved, sort_keys=False, default_flow_style=False), encoding="utf-8")
-    written.append("resolved.config")
+    note(out_dir / "resolved.config")
+
+    # EVERY DIRECTORY HOLDING A GENERATED SCRIPT CARRIES THE DECLARATION THOSE SCRIPTS READ.
+    #
+    # `resolved_config_beside` is `Path(script).parent / "resolved.config"`, strictly and
+    # deliberately: a generated directory must run correctly from anywhere, and looking anywhere
+    # else -- the working directory, or a walk up the tree -- is how a run silently picks up
+    # another project's configuration. The layout puts scripts in two directories that are not
+    # the run root, so both need the file or the script cannot say what it was generated for.
+    for directory, document, why, shared in _script_directories(plan, run=run, dataset=dataset,
+                                                                resolved=resolved):
+        if directory == out_dir:
+            continue
+        # BESIDE THE DECLARATION, in `min/` and `eq/` alike. Both hold generated scripts that
+        # read the `resolved.config` written here, and that document names its definitions by
+        # bare name -- so a stage in `eq/` resolving `cv.<digest>.yaml` beside its own
+        # declaration found nothing, and the definition lived only at the run root.
+        _place_definitions(directory, definition_copies, overwrite=overwrite, note=note)
+        if shared:
+            # `min/` HAS ITS OWN SEED, and that is the decision rather than a workaround.
+            #
+            # The seed is per run everywhere else, so a shared directory holding one run's seed
+            # would stamp run 1's value into a file run 2 reads -- and `md-run`, resolving
+            # `input/min.in` with `-odir ../min`, found no `run.config` there, resolved the seed
+            # to the schema default and refused every documented example with
+            # `dynamics.seed: was 20260908, now 1`.
+            #
+            # So the minimisation gets its own `run.config`. Its seed is then explicit, belongs to
+            # the minimisation rather than to whichever run happened to generate it first, and is
+            # allowed to differ from every run on the system: minimisation draws no velocities and
+            # has no seeded stochastic element, so nothing about a run's sampling descends from it.
+            _write_min_directory(directory, document, resolved=resolved, why=why,
+                                 overwrite=overwrite, log=log, note=note, run=run)
+            continue
+        # BYTE-IDENTICAL to the run root's when the document is the run's own, which is why the
+        # header is the same two lines rather than a per-directory note: a reader comparing
+        # `<run>/resolved.config` with `<run>/eq/resolved.config` must see one document, not two
+        # that happen to agree. What the directory is FOR belongs in the build log, not in a
+        # comment that makes the copies differ.
+        text = ("# The configuration these scripts were generated from, fully resolved.\n"
+                "# Every default is written out, so this file alone reproduces the generation.\n"
+                + yaml.safe_dump(document, sort_keys=False, default_flow_style=False))
+        log.field(f"{os.path.relpath(directory, run.root)}/resolved.config", why)
+
+        # AND THE SEED BESIDE IT. `md-run` layers `run.config` from `-odir`, so a stage run into
+        # `eq/` resolves its shared `../input/eq_<k>.in` against `eq/run.config`. Without one the
+        # seed fell back to the schema default and every equilibration stage refused with
+        # `eq/resolved.config describes a different run: dynamics.seed: was <run>, now 1` -- the
+        # same failure `min/` had, for the same reason. A directory that holds generated scripts
+        # needs the declaration AND the per-run value it was resolved with, or the two disagree.
+        # CREATED FIRST. `--all-in-one` emits a single `md.py` and no per-stage scripts, so
+        # nothing has made `eq/` by the time this runs -- and the write failed with a bare
+        # FileNotFoundError AFTER the log had been written, leaving a half-generated run
+        # directory behind. Every other directory here is created before it is written into.
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "run.config").write_text(
+            "# The seed this run's equilibration was resolved with. Identical to the run root's:\n"
+            "# equilibration draws Maxwell velocities from this run's seed, which is what makes\n"
+            "# two repeats of one method diverge.\n"
+            + yaml.safe_dump({"dynamics": {"seed": resolved["dynamics"]["seed"]}},
+                             sort_keys=False), encoding="utf-8")
+        note(directory / "run.config")
+        # Shared directories go through the byte-identity gate, exactly as `input/` does: `min/`
+        # is read by every run on this system, so a second run generated from a different
+        # configuration must not quietly replace what the first one minimised under.
+        _write_shared_input(directory / "resolved.config", text, overwrite=overwrite)
+        note(directory / "resolved.config")
 
     # THE PER-RUN DECLARATION, and it is what closes the round trip. The generated `.in` files
     # deliberately do NOT carry `random_seed`: `input/` is shared by every repeat of a method on
@@ -1545,11 +2221,16 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
         "# two runs sharing an input and a seed would be bit-identical rather than repeats.\n"
         + yaml.safe_dump({"dynamics": {"seed": resolved["dynamics"]["seed"]}}, sort_keys=False),
         encoding="utf-8")
-    written.append("run.config")
+    note(out_dir / "run.config")
+
+    if rung_record is not None:
+        log.heading("Rung Systems")
+        for line in format_scaling_report(rung_record).splitlines():
+            log(f"  {line}" if line else "")
 
     log.heading("Outputs")
     for name in written:
-        log.field(name, out_dir / name)
+        log.field(name, where[name])
     log.update(protocol=protocol, solvent=resolved["solvent"],
                all_in_one=bool(all_in_one), resolved_config=resolved,
                stages=[{k: v for k, v in s.items()} for s in plan],

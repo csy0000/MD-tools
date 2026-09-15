@@ -88,7 +88,13 @@ def test_the_documented_defaults_are_what_the_parser_applies():
     args = build_parser().parse_args(["build-top", "-i", "x.pdb"])
     assert (args.out_system, args.out_pdb, args.out_log) == ("./built.xml", "./built.pdb",
                                                              "./built.log")
-    assert build_parser().parse_args(["build-md"]).out_dir == "./md_script/"
+    # `build-md` has NO default output directory any more. `-odir` names the RUN
+    # (`-odir REST2-run1`), and `./md_script/` said nothing about which run it was -- a
+    # default that silently reused one directory for every run on a system.
+    import pytest as _pytest
+
+    with _pytest.raises(SystemExit):
+        build_parser().parse_args(["build-md"])
 
 
 def test_version_reports_the_distribution(md_openmm):

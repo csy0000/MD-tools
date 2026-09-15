@@ -198,8 +198,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="Generate small, readable run scripts that import the installed md_tools "
                     "runtime. The generated scripts contain no absolute path and no reference to "
                     "a source checkout.")
-    md.add_argument("-odir", "--out-dir", default="./md_script/", metavar="DIR",
-                    help="directory to write the scripts into (default: ./md_script/)")
+    md.add_argument("-odir", "--out-dir", required=True, metavar="DIR",
+                    help="THE RUN DIRECTORY, named `<method>-run<N>` beside the dataset's "
+                         "build/, min/ and input/ -- for example `-odir REST2-run1`. It must not "
+                         "already exist: a second generation into a run that has output would "
+                         "leave scripts and results produced by different settings side by side. "
+                         "There is no default, because the old `./md_script/` put a run's scripts "
+                         "in a directory that said nothing about which run it was")
     md.add_argument("--config", default=None, metavar="PATH",
                     help="protocol configuration (YAML syntax, .config suffix); the default is "
                          "explicit-solvent cMD at `timestep_fs: auto` -- resolved from the masses "

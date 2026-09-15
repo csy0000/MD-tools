@@ -79,8 +79,8 @@ def project(tmp_path_factory):
     root = tmp_path_factory.mktemp("ladder-progress")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     assert subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800).returncode == 0
     (root / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
     (root / "REST2.config").write_text(yaml.safe_dump({
@@ -99,15 +99,15 @@ def project(tmp_path_factory):
         "dynamics": {"seed": 20260907},
     }), encoding="utf-8")
     assert subprocess.run(
-        CLI + ["build-md", "-odir", "./REST2", "--config", str(root / "REST2.config")],
+        CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=900).returncode == 0
 
     import openmm
     from openmm import XmlSerializer, unit
     from openmm.app import PDBFile
 
-    pdb = PDBFile(str(root / "built.pdb"))
-    system = XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(root / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
     context = openmm.Context(system, openmm.VerletIntegrator(1.0 * unit.femtosecond),
                              openmm.Platform.getPlatformByName("Reference"))
     context.setPositions(pdb.positions)
@@ -127,11 +127,11 @@ def _run(project: Path, destination: Path, *extra, environment=None, expect=0):
     base["MD_TOOLS_CONFIG"] = str(user)
     base["OPENMM_CPU_THREADS"] = "1"
     done = subprocess.run(
-        [sys.executable, str(project / "REST2" / "REST2.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+        [sys.executable, str(project / "REST2-run1" / "REST2.py"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-c", str(project / "initial_state.xml"),
          "-odir", str(destination), "--cpu", *extra],
-        cwd=project / "REST2", capture_output=True, text=True, timeout=1800,
+        cwd=project / "REST2-run1", capture_output=True, text=True, timeout=1800,
         env={**base, **(environment or {})})
     if expect is not None:
         assert (done.returncode == 0) == (expect == 0), \

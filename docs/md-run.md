@@ -477,14 +477,25 @@ nearly zero. Switching is at **fixed volume**; a barostat in the prepared System
 ## What `build-md` generates
 
 ```text
-md_script/
-  min.py  eq_nvt_posres.py  …      compact Python entry points, one import and one call
-  min.in  eq_nvt_posres.in  …      the Amber-like inputs, one per stage
-  REST2.in                         the ladder, or AIS.in for switching paths
-  run.sh                           drives `md-openmm md-run`
-  resolved.config                  authoritative
-  build-md.log                     the generation record
+<system>/                          THE DATASET ROOT -- one system and every run on it
+  build/   built.xml built.pdb     from build-top, shared by every run
+  min/     min.py resolved.config run.config    the SHARED minimisation
+  input/   min.in eq_1.in eq_2.in eq_3.in       shared: an input is not per-repeat
+           REST2.in cMD.in AIS.in               one production input per method
+  <method>-run<N>/                 ONE RUN, named by `-odir`; must not already exist
+    eq/      eq_1.py eq_2.py eq_3.py resolved.config run.config
+    remd<n>/ build_state<n>.xml    the rung Hamiltonian, pre-scaled at BUILD time
+    remd_groupfile.<x>             one per segment, naming one rung per line
+    REST2.py                       the ladder entry point, or AIS.py / cMD.py
+    run.sh                         drives `md-openmm md-run`
+    resolved.config                authoritative for this run
+    run.config                     the seed -- the only per-run declaration
+    build_states.log               which factors scaled which terms
+    remd_records/  rank/  bundles/
 ```
+
+`min/` and `eq/` hold METHOD-NEUTRAL declarations, because the scripts in them read the shared
+`input/*.in`, which carry no protocol. See `docs/run-layout.md`.
 
 `run.sh` calls the installed command rather than `python <stage>.py`, because that is the interface
 a person types by hand, and a script using a different one would be a second way to run the same

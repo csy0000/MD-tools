@@ -122,8 +122,8 @@ def _environment(root: Path, **extra):
 def _build_top(root: Path):
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     assert subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800).returncode == 0
     (root / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
 
@@ -181,7 +181,7 @@ def cmd_project(tmp_path_factory):
         "dynamics": {"seed": 20260905},
     }), encoding="utf-8")
     assert subprocess.run(
-        CLI + ["build-md", "-odir", "./cMD", "--config", str(root / "cMD.config"),
+        CLI + ["build-md", "-odir", "./cMD-run1", "--config", str(root / "cMD.config"),
                "--all-in-one"],
         cwd=root, capture_output=True, text=True, timeout=900).returncode == 0
     return root
@@ -189,10 +189,10 @@ def cmd_project(tmp_path_factory):
 
 def _run_cmd(root: Path, destination: Path, environment=None):
     return subprocess.run(
-        [sys.executable, str(root / "cMD" / "md.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+        [sys.executable, str(root / "cMD-run1" / "md.py"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-odir", str(destination), "--cpu"],
-        cwd=root / "cMD", capture_output=True, text=True, timeout=1800,
+        cwd=root / "cMD-run1", capture_output=True, text=True, timeout=1800,
         env=_environment(root, **(environment or {})))
 
 
@@ -253,23 +253,23 @@ def ais_project(tmp_path_factory):
         "dynamics": {"seed": 20260905},
     }), encoding="utf-8")
     assert subprocess.run(
-        CLI + ["build-md", "-odir", "./AIS", "--config", str(root / "AIS.config")],
+        CLI + ["build-md", "-odir", "./AIS-run1", "--config", str(root / "AIS.config")],
         cwd=root, capture_output=True, text=True, timeout=900).returncode == 0
 
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
     return root
 
 
 def _run_ais(root: Path, destination: Path, *extra, environment=None):
     return subprocess.run(
-        [sys.executable, str(root / "AIS" / "AIS.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+        [sys.executable, str(root / "AIS-run1" / "AIS.py"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-source-traj", str(root / "source.dcd"),
          "-odir", str(destination), "--cpu", *extra],
-        cwd=root / "AIS", capture_output=True, text=True, timeout=1800,
+        cwd=root / "AIS-run1", capture_output=True, text=True, timeout=1800,
         env=_environment(root, **(environment or {})))
 
 
@@ -372,15 +372,15 @@ def ladder_project(tmp_path_factory):
         "dynamics": {"seed": 20260905},
     }), encoding="utf-8")
     assert subprocess.run(
-        CLI + ["build-md", "-odir", "./REST2", "--config", str(root / "REST2.config")],
+        CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=900).returncode == 0
 
     import openmm
     from openmm import XmlSerializer, unit
     from openmm.app import PDBFile
 
-    pdb = PDBFile(str(root / "built.pdb"))
-    system = XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(root / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
     context = openmm.Context(system, openmm.VerletIntegrator(1.0 * unit.femtosecond),
                              openmm.Platform.getPlatformByName("Reference"))
     context.setPositions(pdb.positions)
@@ -392,11 +392,11 @@ def ladder_project(tmp_path_factory):
 
 def _run_ladder(root: Path, destination: Path, *extra, environment=None):
     return subprocess.run(
-        [sys.executable, str(root / "REST2" / "REST2.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+        [sys.executable, str(root / "REST2-run1" / "REST2.py"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-c", str(root / "initial_state.xml"),
          "-odir", str(destination), "--cpu", *extra],
-        cwd=root / "REST2", capture_output=True, text=True, timeout=1800,
+        cwd=root / "REST2-run1", capture_output=True, text=True, timeout=1800,
         env=_environment(root, **(environment or {})))
 
 
@@ -478,7 +478,7 @@ def test_md_run_refuses_a_malformed_record_without_touching_the_tree(cmd_project
         _cv_reporting_checkpoints(destination),
         lambda cost: cost["cumulative"].__setitem__("cv_observations", "9"))
 
-    generated = cmd_project / "cMD"
+    generated = cmd_project / "input"
     inputs = sorted(generated.glob("*.in"))
     assert inputs, f"no .in file in {generated}"
     stage_input = next((p for p in inputs if p.stem == "cMD"), inputs[-1])
@@ -486,8 +486,8 @@ def test_md_run_refuses_a_malformed_record_without_touching_the_tree(cmd_project
     before = _tree(destination)
     refused = subprocess.run(
         [sys.executable, "-m", "md_tools.cli.md_openmm", "md-run",
-         "-i", str(stage_input), "-p", str(cmd_project / "built.pdb"),
-         "-s", str(cmd_project / "built.xml"), "-odir", str(destination), "--cpu"],
+         "-i", str(stage_input), "-p", str(cmd_project / "build" / "built.pdb"),
+         "-s", str(cmd_project / "build" / "built.xml"), "-odir", str(destination), "--cpu"],
         cwd=generated, capture_output=True, text=True, timeout=1800,
         env=_environment(cmd_project))
     assert refused.returncode != 0, refused.stdout[-3000:]

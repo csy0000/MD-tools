@@ -88,10 +88,24 @@ def md_run_parser() -> argparse.ArgumentParser:
                         help="the run input: &cntrl / &remd / &AIS sections (Amber's -i mdin)")
     parser.add_argument("-p", "--topology", required=True, metavar="PDB",
                         help="topology and reference coordinates, built.pdb (Amber's -p prmtop)")
-    parser.add_argument("-s", "--system", dest="system", required=True, metavar="XML",
+    # NOT `required=True`, and the reason is a ladder rather than a convenience.
+    #
+    # EXACTLY ONE of `-s` and `-groupfile` is given, and that is checked below by name. A REST2 or
+    # rREST2 ladder's rungs are scaled and serialised at BUILD time -- `remd<n>/build_state<n>.xml`
+    # -- so each line of the group file names its own pre-scaled System and there is no single
+    # System for the launch to carry. One `-s` there would be one Hamiltonian claimed for every
+    # rung, which is the error the per-rung files exist to prevent.
+    #
+    # `required=True` made that launch impossible through this command: argparse refused it before
+    # the runtime's own grouped exemption (`remd.executor.resolve`) could be reached, so
+    # `run.sh` -- the documented way to run a ladder -- died on every rank with
+    # "the following arguments are required: -s/--system". It went unseen because the only grouped
+    # end-to-end test invokes `remd.executor` directly and never passes through here.
+    parser.add_argument("-s", "--system", dest="system", default=None, metavar="XML",
                         help="serialised OpenMM System, built.xml. Amber has no counterpart: its "
                              "prmtop carries the topology AND the parameters, and here they are "
-                             "two files. Required")
+                             "two files. Required for a stage or an AIS run; for a ladder pass "
+                             "-groupfile instead, whose lines name each rung's own System")
     parser.add_argument("-c", "--coordinates", default=None, metavar="XML",
                         help="starting state: the final state of the previous stage "
                              "(Amber's -c inpcrd/restrt). Omit for the first stage")
@@ -224,14 +238,30 @@ def _carry_cv_definition(run_input, out_dir):
     destination = _Path(out_dir) / named.name
     if destination.is_file():
         return
-    source = _Path(run_input.path).parent / named
-    if source.is_file():
-        destination.write_bytes(source.read_bytes())
+    # BESIDE THE INPUT, OR IN THE RUN THE INPUT BELONGS TO. `input/` is shared by every run on
+    # the system and holds no definition copy; `build-md` puts it in the run directory. The
+    # input's own directory stays first because that is where it sits for a run generated before
+    # the layout split, when the two were one place.
+    for directory in (_Path(run_input.path).parent,
+                      _Path(run_input.path).parent.parent / _Path(out_dir).name,
+                      _Path(out_dir)):
+        source = directory / named
+        if source.is_file():
+            destination.write_bytes(source.read_bytes())
+            return
 
 
 def _forward(args, *, names) -> list[str]:
     """The subset of this command line the delegated runner accepts, in its own spelling."""
-    argv: list[str] = ["-p", args.topology, "-s", args.system]
+    argv: list[str] = ["-p", args.topology]
+    # `-s` ONLY WHEN THERE IS ONE.
+    #
+    # A grouped ladder launch has no single System: each group line names its own pre-scaled rung.
+    # Splicing it unconditionally put the literal `None` on the delegated runner's command line,
+    # which is a path that cannot exist -- so the refusal a person saw would have been about a
+    # file called "None" rather than about anything they typed.
+    if args.system:
+        argv += ["-s", str(args.system)]
     optional = {
         "trajectory": ("-x", args.trajectory),
         "restart": ("-r", args.restart),
@@ -268,11 +298,15 @@ def _check_file_roles(args) -> None:
     documentation taught people to type and it must not now be read as "write the trajectory to
     built.xml", which would destroy the System. The others are the same mistake mirrored.
     """
-    system = Path(args.system)
-    if system.suffix.lower() in (".dcd", ".nc", ".netcdf", ".mdcrd"):
-        raise SystemExit(
-            f"-s {args.system} looks like a trajectory. `-s` is the serialised OpenMM System "
-            f"(built.xml); `-x` is the output trajectory, as in Amber.")
+    # `-s` is absent on a grouped ladder launch, where each group line names its own rung. There
+    # is then no single System to check the ROLE of; the group file's own lines are validated by
+    # `remd.executor`, which is where they are read.
+    if args.system:
+        system = Path(args.system)
+        if system.suffix.lower() in (".dcd", ".nc", ".netcdf", ".mdcrd"):
+            raise SystemExit(
+                f"-s {args.system} looks like a trajectory. `-s` is the serialised OpenMM System "
+                f"(built.xml); `-x` is the output trajectory, as in Amber.")
 
     if args.trajectory:
         trajectory = Path(args.trajectory)
@@ -294,6 +328,34 @@ def _check_file_roles(args) -> None:
         from ..openmm.trajectory import check_trajectory_declaration
 
         check_trajectory_declaration(args.source_traj, what="-source-traj")
+
+    # EXACTLY ONE OF `-s` AND `-groupfile`, refused BY NAME rather than by argparse.
+    #
+    # They are two ways of saying which Hamiltonian each replica integrates, and they cannot both
+    # be right. `-s` is ONE serialised System for the whole launch, which is what a stage, an AIS
+    # campaign and a homogeneous ladder have. A group file names one System PER LINE, which is
+    # what a REST2/rREST2 ladder has now that the rungs are scaled and serialised at build time
+    # (`remd<n>/build_state<n>.xml`): there is no single System for `-s` to carry, and supplying
+    # one would claim a single Hamiltonian for every rung -- the precise error the per-rung files
+    # exist to prevent.
+    #
+    # Neither is refused too, because that is the case argparse used to catch: without it a
+    # launch would reach the runtime with nothing saying what to integrate.
+    if args.system and args.groupfile:
+        raise SystemExit(
+            f"-s {args.system} and -groupfile {args.groupfile} were both given, and they are two "
+            f"answers to one question: which System each replica integrates.\n"
+            f"  A group file names one System per line -- for a ladder, each rung's own "
+            f"pre-scaled Hamiltonian -- so a single `-s` beside it would claim one Hamiltonian "
+            f"for every rung.\n"
+            f"  Pass -groupfile for a ladder whose rungs differ, or -s for a single System, "
+            f"never both.")
+    if not args.system and not args.groupfile:
+        raise SystemExit(
+            "neither -s nor -groupfile was given, so nothing says which System to integrate.\n"
+            "  Pass -s built.xml for a stage, an AIS campaign or a homogeneous ladder; pass "
+            "-groupfile for a REST2/rREST2 ladder, whose lines name each rung's own pre-scaled "
+            "System.")
 
     # `-o` and `-log` are two artefacts for two readers. One file cannot be both, so an actual
     # collision is refused -- and ONLY a collision: different paths are the normal case.
@@ -406,9 +468,18 @@ def md_run_main(argv: list[str] | None = None) -> int:
     from .continuation import ContinuationError, validate_public_entry
 
     try:
+        # `-odir` FIRST, and the input's directory only as a fallback. The definition copy is
+        # per RUN -- `build-md` writes it into the run directory and `md-run` writes its own
+        # beside the `resolved.config` it creates -- while `input/` is SHARED by every run on the
+        # system and holds no copy at all. Resolving against the input's parent therefore found
+        # nothing, `_definition_from` returned None, and this whole boundary returned early: a
+        # refused continuation then wrote `resolved.config`, `<stage>.out` and `<stage>.log` into
+        # a tree it was declining to touch. Before the layout split the two were one directory,
+        # which is why the single rule held.
         validate_public_entry(run_input.resolved, args.out_dir, protocol=protocol,
                               stage=run_input.stage,
-                              config_directory=Path(run_input.path).parent,
+                              config_directory=Path(args.out_dir),
+                              fallback_directory=Path(run_input.path).parent,
                               overwrite=bool(args.overwrite))
     except ContinuationError as refusal:
         print(f"md-run: {refusal}", file=sys.stderr)
@@ -457,6 +528,8 @@ def _run_stages(args, resolved: dict[str, Any], stage: str | None, config_path: 
     previous = args.coordinates
     for entry in chosen:
         name = entry["name"]
+        # The name this stage's artefacts are FILED under. See the flags below.
+        key = str(entry.get("file_key") or name)
         # Explicit output names win when this command runs ONE stage. When the input names no
         # stage it runs the whole chain, and a single -x/-r/-log could only describe one of them,
         # so each stage is named after itself -- exactly as the generated split scripts are.
@@ -468,11 +541,20 @@ def _run_stages(args, resolved: dict[str, Any], stage: str | None, config_path: 
             # Defaulting this to `<stage>.dcd` here silently overrode both and reinstated the
             # single whole-system trajectory the new names exist to separate.
             trajectory=args.trajectory if single and args.trajectory else None,
-            restart=args.restart if single and args.restart else str(out_dir / f"{name}.xml"),
-            log=args.log if single and args.log else str(out_dir / f"{name}.log"),
+            # THE FILING KEY, not the stage name -- and these are passed EXPLICITLY, so they
+            # override `stage_main`'s own defaults rather than agreeing with them. That is what
+            # made this the site that mattered: `stage_main` names its artefacts from the key,
+            # but every `md-run` invocation handed it `eq_nvt_posres.xml` computed here, so the
+            # stage wrote the stage-named file while `run.sh` chained `-c eq/eq_1.xml`. No cMD or
+            # REST2 chain could complete through `run.sh`, which is the documented way to run one.
+            #
+            # `stage_plan` stamps `file_key`; `min` and `cMD` resolve to their own names, so only
+            # the equilibration stages move.
+            restart=args.restart if single and args.restart else str(out_dir / f"{key}.xml"),
+            log=args.log if single and args.log else str(out_dir / f"{key}.log"),
             checkpoint=args.checkpoint if single and args.checkpoint
-                       else str(out_dir / f"{name}.chk"),
-            output=args.output if single and args.output else str(out_dir / f"{name}.out"),
+                       else str(out_dir / f"{key}.chk"),
+            output=args.output if single and args.output else str(out_dir / f"{key}.out"),
             out_dir=args.out_dir, device=args.device,
             cpu=args.cpu, check=args.check,
             # Carried explicitly. This namespace is built fresh rather than passed through, so a

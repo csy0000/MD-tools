@@ -45,8 +45,8 @@ def project(tmp_path_factory):
     root = tmp_path_factory.mktemp("cmd-cv")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
 
@@ -62,7 +62,7 @@ def project(tmp_path_factory):
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./cMD", "--config", str(root / "cMD.config"),
+        CLI + ["build-md", "-odir", "./cMD-run1", "--config", str(root / "cMD.config"),
                "--all-in-one"],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
@@ -79,10 +79,10 @@ def _run(project: Path, destination: Path, *extra, environment=None):
     base["MD_TOOLS_CONFIG"] = str(user)
     base.update(environment or {})
     return subprocess.run(
-        [sys.executable, str(project / "cMD" / "md.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+        [sys.executable, str(project / "cMD-run1" / "md.py"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-odir", str(destination), "--cpu", *extra],
-        cwd=project / "cMD", capture_output=True, text=True, timeout=1800, env=base)
+        cwd=project / "cMD-run1", capture_output=True, text=True, timeout=1800, env=base)
 
 
 def _series(destination: Path):
@@ -143,7 +143,7 @@ def test_every_reported_value_matches_an_independent_calculation(completed, proj
     path, _header, rows = _series(completed)
     trajectory = sorted(completed.rglob("*.dcd"))
     assert trajectory, "no trajectory to check the alignment against"
-    frames = mdtraj.load(str(trajectory[0]), top=str(project / "built.pdb"))
+    frames = mdtraj.load(str(trajectory[0]), top=str(project / "build" / "built.pdb"))
 
     checked = 0
     for row in rows:
@@ -190,12 +190,13 @@ def _generate_without_cv(project: Path, tmp_path: Path) -> Path:
     import shutil
 
     off = tmp_path / "project-off"
-    shutil.copytree(project, off, ignore=shutil.ignore_patterns("cMD", "*.config"))
+    shutil.copytree(project, off,
+                    ignore=shutil.ignore_patterns("cMD-run1", "input", "min", "*.config"))
     configuration = yaml.safe_load((project / "cMD.config").read_text(encoding="utf-8"))
     configuration["collective_variables"] = {"file": None, "interval_steps": 0}
     (off / "cMD.config").write_text(yaml.safe_dump(configuration), encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-md", "-odir", "./cMD", "--config", str(off / "cMD.config"),
+        CLI + ["build-md", "-odir", "./cMD-run1", "--config", str(off / "cMD.config"),
                "--all-in-one"],
         cwd=off, capture_output=True, text=True, timeout=600)
     assert built.returncode == 0, built.stdout + built.stderr
@@ -264,9 +265,9 @@ def test_enabling_cvs_changes_no_force_and_no_energy(project, tmp_path):
 
     off = _generate_without_cv(project, tmp_path)
     with_cv = XmlSerializer.deserialize(
-        (project / "built.xml").read_text(encoding="utf-8"))
+        (project / "build" / "built.xml").read_text(encoding="utf-8"))
     without_cv = XmlSerializer.deserialize(
-        (off / "built.xml").read_text(encoding="utf-8"))
+        (project / "build" / "built.xml").read_text(encoding="utf-8"))
 
     assert (XmlSerializer.serialize(with_cv)
             == XmlSerializer.serialize(without_cv)), "the serialised System differs"
@@ -278,7 +279,7 @@ def test_enabling_cvs_changes_no_force_and_no_energy(project, tmp_path):
             == [without_cv.getForce(i).getForceGroup()
                 for i in range(without_cv.getNumForces())]), "the force groups differ"
 
-    pdb = PDBFile(str(project / "built.pdb"))
+    pdb = PDBFile(str(project / "build" / "built.pdb"))
     energies = []
     for system in (with_cv, without_cv):
         context = Context(system, VerletIntegrator(1.0 * unit.femtosecond),
@@ -301,19 +302,19 @@ def test_the_definition_is_copied_in_content_addressed_and_the_tree_is_movable(p
     import hashlib
     import shutil
 
-    copies = sorted((project / "cMD").glob("cv.*.yaml"))
+    copies = sorted((project / "cMD-run1").glob("cv.*.yaml"))
     assert len(copies) == 1, f"expected one content-addressed definition, got {copies}"
     digest = hashlib.sha256((project / "cv.yaml").read_bytes()).hexdigest()
     assert copies[0].name == f"cv.{digest[:12]}.yaml", copies[0].name
     assert copies[0].read_bytes() == (project / "cv.yaml").read_bytes()
 
-    resolved = yaml.safe_load((project / "cMD" / "resolved.config").read_text(encoding="utf-8"))
+    resolved = yaml.safe_load((project / "cMD-run1" / "resolved.config").read_text(encoding="utf-8"))
     assert resolved["collective_variables"]["file"] == copies[0].name, (
         "resolved.config still points outside the generated directory")
 
     # The provenance is recorded, in the build record where the rest of it lives.
-    record = json.loads((project / "cMD" / "build-md.log.json").read_text(encoding="utf-8")) \
-        if (project / "cMD" / "build-md.log.json").is_file() else None
+    record = json.loads((project / "cMD-run1" / "build-md.log.json").read_text(encoding="utf-8")) \
+        if (project / "cMD-run1" / "build-md.log.json").is_file() else None
     if record is not None:
         facts = record.get("collective_variable_definition") or {}
         assert facts.get("source_sha256") == digest
@@ -322,9 +323,9 @@ def test_the_definition_is_copied_in_content_addressed_and_the_tree_is_movable(p
     # And the whole point: move the tree somewhere the original cv.yaml is not, and run it.
     moved = tmp_path / "elsewhere"
     moved.mkdir()
-    shutil.copytree(project / "cMD", moved / "cMD")
+    shutil.copytree(project / "cMD-run1", moved / "cMD-run1")
     for name in ("built.pdb", "built.xml"):
-        shutil.copy(project / name, moved / name)
+        shutil.copy(project / "build" / name, moved / name)
     user = moved / "user.config"
     user.write_text(yaml.safe_dump(
         {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
@@ -335,10 +336,10 @@ def test_the_definition_is_copied_in_content_addressed_and_the_tree_is_movable(p
     base["MD_TOOLS_CONFIG"] = str(user)
     destination = moved / "run"
     done = subprocess.run(
-        [sys.executable, str(moved / "cMD" / "md.py"),
+        [sys.executable, str(moved / "cMD-run1" / "md.py"),
          "-p", str(moved / "built.pdb"), "-s", str(moved / "built.xml"),
          "-odir", str(destination), "--cpu"],
-        cwd=moved / "cMD", capture_output=True, text=True, timeout=1800, env=base)
+        cwd=moved / "cMD-run1", capture_output=True, text=True, timeout=1800, env=base)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
     assert sorted(destination.rglob("*.cv.csv")), (
         "the moved tree produced no CV series, so it was not self-contained")

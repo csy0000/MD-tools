@@ -85,8 +85,8 @@ shared by construction rather than by two projects happening to agree.
 ## Minimal sequence
 
 ```bash
-md-openmm build-md -odir ./md_script/ --config example.config
-cd md_script && ./run.sh
+md-openmm build-md -odir ./rREST2-run1 --config example.config
+cd rREST2-run1 && ./run.sh
 ```
 
 ## Generated files

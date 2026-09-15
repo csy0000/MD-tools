@@ -64,12 +64,42 @@ def test_dash_s_is_the_serialised_system_and_dash_x_is_the_trajectory():
 
 
 def test_the_system_is_mandatory_and_the_trajectory_is_optional():
-    from md_tools.run.main import md_run_parser
+    """`-s` or `-groupfile`, exactly one. The trajectory stays optional.
+
+    MIGRATED. `-s` used to be `required=True` in the parser, and this asserted that argparse
+    refused its absence. That made a grouped REST2/rREST2 launch impossible through `md-run`: a
+    ladder's rungs are scaled and serialised at build time, so each line of the group file names
+    its OWN pre-scaled System and there is no single `-s` for the launch to carry. argparse
+    refused before the runtime's grouped exemption could be reached, and `run.sh` -- the
+    documented way to run a ladder -- died on every rank.
+
+    So the rule is now "exactly one of the two", enforced by name in the flag-role checks rather
+    than by argparse. The mandatory half is still asserted, and more precisely than before: a
+    launch naming NEITHER is refused, and one naming BOTH is refused too, because they are two
+    answers to one question -- which System each replica integrates.
+    """
+    from md_tools.run.main import _check_file_roles, md_run_parser
 
     args = md_run_parser().parse_args(["-i", "min.in", "-p", "built.pdb", "-s", "built.xml"])
     assert args.trajectory is None, "a stage supplies its own default trajectory name"
-    with pytest.raises(SystemExit):
-        md_run_parser().parse_args(["-i", "min.in", "-p", "built.pdb"])
+
+    # A ladder: no `-s`, and the parser must let it through to the rule below.
+    grouped = md_run_parser().parse_args(
+        ["-i", "REST2.in", "-p", "built.pdb", "-groupfile", "remd.group", "-ng", "3"])
+    assert grouped.system is None and grouped.groupfile == "remd.group"
+    _check_file_roles(grouped)          # accepted: the group file says what to integrate
+
+    # Neither: still refused, now by name.
+    with pytest.raises(SystemExit) as neither:
+        _check_file_roles(md_run_parser().parse_args(["-i", "min.in", "-p", "built.pdb"]))
+    assert "-groupfile" in str(neither.value) and "-s" in str(neither.value), str(neither.value)
+
+    # Both: refused, because one `-s` beside a group file claims one Hamiltonian for every rung.
+    with pytest.raises(SystemExit) as both:
+        _check_file_roles(md_run_parser().parse_args(
+            ["-i", "REST2.in", "-p", "built.pdb", "-s", "built.xml",
+             "-groupfile", "remd.group"]))
+    assert "both" in str(both.value).lower(), str(both.value)
 
 
 def test_a_system_passed_as_the_trajectory_is_refused_by_name():

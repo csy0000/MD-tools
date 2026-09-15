@@ -80,8 +80,8 @@ def _engine_ladder_and_bundle(root, *, equilibration_steps, per_tau=False):
 
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     assert subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800).returncode == 0
 
     # Per-tau: two per-rung stages (restrained, then free), and a real minimisation, since the
@@ -102,24 +102,35 @@ def _engine_ladder_and_bundle(root, *, equilibration_steps, per_tau=False):
         f"exchange_interval_steps: {INTERVAL}, number_of_exchanges: {EXCHANGES}, "
         "state_trajectory: true, rem_log: true, neighbour_acceptance_report: true}\n",
         encoding="utf-8")
-    assert subprocess.run(CLI + ["build-md", "-odir", "./run", "--config",
+    assert subprocess.run(CLI + ["build-md", "-odir", "./run-run1", "--config",
                                  str(root / "REST2.config")],
                           cwd=root, capture_output=True, text=True, timeout=600).returncode == 0
 
-    run = root / "run"
+    run = root / "run-run1"
     # The tau = 0 chain: minimisation alone under per-tau equilibration (implicit solvent), the
     # restrained NVT stage otherwise. Either way its end state is `eq.xml`, the ladder's `-c`.
+    # THE PREPARATION STAGE WRITES INTO ITS OWN `-odir`, never the run root.
+    #
+    # `-odir .` made `md-run` compare the shared input against the RUN's `resolved.config`, which
+    # says `protocol: REST2` -- while `min.in` and `eq_1.in` deliberately carry no protocol at
+    # all, so they resolve to the schema default and the comparison refused with
+    # `protocol: was 'REST2', now 'cMD'`. That is the cost of method-neutral preparation inputs,
+    # and the answer is the one `run.sh` uses: minimisation into `../min`, equilibration into
+    # `eq/`, each beside its own declaration. The explicit names move with it so the ladder's
+    # `-c` still finds this state.
+    stage_odir, start = ("../min", "../min/eq.xml") if per_tau else ("eq", "eq/eq.xml")
     equilibration = subprocess.run(
-        CLI + ["md-run", "-i", "min.in" if per_tau else "eq_nvt_posres.in",
-               "-p", "../built.pdb", "-s", "../built.xml",
-               "-r", "eq.xml", "-chk", "eq.chk", "-o", "eq.out", "-log", "eq.log",
-               "-odir", ".", "--cpu"],
+        CLI + ["md-run", "-i", "../input/min.in" if per_tau else "../input/eq_1.in",
+               "-p", "../build/built.pdb", "-s", "../build/built.xml",
+               "-r", f"{stage_odir}/eq.xml", "-chk", f"{stage_odir}/eq.chk",
+               "-o", f"{stage_odir}/eq.out", "-log", f"{stage_odir}/eq.log",
+               "-odir", stage_odir, "--cpu"],
         cwd=run, capture_output=True, text=True, timeout=1800, env=ONE_THREAD)
     assert equilibration.returncode == 0, equilibration.stdout[-3000:] + equilibration.stderr[-3000:]
 
     done = subprocess.run(
-        ["mpirun", "-n", str(RUNGS), *CLI, "md-run", "-ng", str(RUNGS), "-i", "REST2.in",
-         "-p", "../built.pdb", "-s", "../built.xml", "-c", "eq.xml", "-x", "REST2.nc",
+        ["mpirun", "-n", str(RUNGS), *CLI, "md-run", "-ng", str(RUNGS), "-i", "../input/REST2.in",
+         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-c", start, "-x", "REST2.nc",
          "-r", "restart.json", "-o", "REST2.out", "-log", "REST2.log", "--cpu"],
         cwd=run, capture_output=True, text=True, timeout=3600, env=ONE_THREAD)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
@@ -265,12 +276,17 @@ def test_input_holds_what_the_user_supplied_each_one_proven(ladder):
     assert recorded["build_top_config"]["file"] == "input/build-top.config"
     assert "resolves to the build-top record" in recorded["build_top_config"]["verified"]
     names = {p.name for p in inputs.iterdir()}
-    assert {"eq_nvt_posres.in", "REST2.in", "built.xml", "built.pdb", "build_system.py",
+    # `eq_1.in`, not `eq_nvt_posres.in`: the bundle keeps the name of the SHARED file the stage
+    # read, so it records which input was read rather than which stage read it.
+    assert {"eq_1.in", "REST2.in", "built.xml", "built.pdb", "build_system.py",
             "build_settings.json", "structure.leap"} <= names
-    assert (inputs / "REST2.in").read_bytes() == (run / "REST2.in").read_bytes()
+    assert (inputs / "REST2.in").read_bytes() == (root / "input" / "REST2.in").read_bytes()
     readme = (inputs / "README.md").read_text(encoding="utf-8")
     assert (f"mpirun -n {RUNGS} md-openmm md-run -ng {RUNGS} -i input/REST2.in "
-            "-p input/built.pdb -s input/built.xml -c eq.xml") in readme
+            "-p input/built.pdb -s input/built.xml -c ") in readme
+    # The starting state is quoted as the run recorded it -- a layout path now, since a
+    # preparation stage writes into `../min` under per-tau equilibration and into `eq/` otherwise.
+    assert ("-c ../min/eq.xml" in readme) or ("-c eq/eq.xml" in readme), readme
     assert str(root) not in readme
 
 

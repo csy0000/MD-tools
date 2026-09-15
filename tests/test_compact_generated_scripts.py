@@ -38,7 +38,7 @@ CONFIGS = {
 def _generate(tmp_path: Path, protocol: str, *extra: str, into: str | None = None) -> Path:
     config = tmp_path / f"{protocol}.config"
     config.write_text(yaml.safe_dump(CONFIGS[protocol], sort_keys=False), encoding="utf-8")
-    out = tmp_path / (into or protocol)
+    out = tmp_path / (into or f"{protocol}-run1")
     done = subprocess.run(
         [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", str(out),
          "--config", str(config), *extra],
@@ -48,15 +48,45 @@ def _generate(tmp_path: Path, protocol: str, *extra: str, into: str | None = Non
 
 
 def _scripts(directory: Path):
-    return [p for p in sorted(directory.glob("*.py"))]
+    """Every generated script of this run, wherever the layout puts it.
+
+    RECURSIVE, and for a reason this file cares about: the equilibration entry points are in
+    `<run>/eq/` now, and a top-level `glob("*.py")` would silently check nothing but the
+    production script -- so "no generated script defines a class" would pass by not looking at
+    the scripts most likely to.
+    """
+    return [p for p in sorted(directory.rglob("*.py"))]
 
 
 @pytest.fixture(scope="module")
 def generated(tmp_path_factory):
+    """A run of every protocol, EACH IN ITS OWN DATASET ROOT.
+
+    ONE ROOT PER PROTOCOL, deliberately. `build/`, `min/` and `input/` are shared by every run on
+    one system, and that sharing is enforced by byte-identity -- so two protocols can share a root
+    only when they were asked to do the same preparation. These `CONFIGS` were not: `cMD` sets
+    `production_steps: 10` and the others take the default, so their `min.in` differ by a stage
+    length and the second generation into one root is refused. That refusal is correct, and it is
+    not what this module is about: the subject here is the SHAPE of a generated script, so each
+    protocol gets its own system rather than the configs being bent to agree.
+    """
+    from .conftest import make_dataset_root
+
     work = tmp_path_factory.mktemp("compact")
-    directories = {name: _generate(work, name) for name in CONFIGS}
-    directories["all_in_one"] = _generate(work, "cMD", "--all-in-one",
-                                          into="cMD_all_in_one")
+    directories = {}
+    for name in CONFIGS:
+        root = work / f"system_{name}"
+        root.mkdir()
+        make_dataset_root(root)
+        directories[name] = _generate(root, name)
+    all_in_one_root = work / "system_all_in_one"
+    all_in_one_root.mkdir()
+    make_dataset_root(all_in_one_root)
+    directories["all_in_one"] = _generate(all_in_one_root, "cMD", "--all-in-one",
+                                          into="cMD_all_in_one-run1")
+    # The shared minimisation script belongs to the DATASET rather than to any one run, so it is
+    # checked as its own entry instead of being missed by every run-scoped assertion.
+    directories["shared_min"] = work / "system_cMD" / "min"
     return directories
 
 
@@ -169,10 +199,15 @@ def test_a_moved_directory_still_runs(generated, tmp_path):
     """
     import shutil
 
+    # THE WHOLE DATASET, not the run alone. The script exercised here is the SHARED minimisation
+    # at `<system>/min/min.py`, which sits beside its own `resolved.config` -- a different
+    # document from the run's, which makes "found from `__file__`" a stronger claim than it was
+    # when every script sat in one directory: locating by working directory would now find the
+    # wrong document rather than merely the right one by luck.
     moved = tmp_path / "somewhere" / "else"
     moved.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(generated["cMD"], moved)
-    done = subprocess.run([sys.executable, str(moved / "min.py"), "--help"],
+    shutil.copytree(generated["cMD"].parent, moved)
+    done = subprocess.run([sys.executable, str(moved / "min" / "min.py"), "--help"],
                           capture_output=True, text=True, timeout=300, cwd=str(tmp_path))
     # `--help` reaches argparse inside the runtime, which means resolved.config was found and
     # resolved from the script's own location rather than from the working directory.
@@ -187,14 +222,17 @@ def test_editing_resolved_config_is_refused_by_the_strict_resolver(generated, tm
     """It is validated at EXECUTION, not only at generation."""
     import shutil
 
+    # The whole dataset, and the edit goes into the declaration the script under test actually
+    # reads: `min/resolved.config`, beside `min/min.py`. Editing the run's copy would leave this
+    # script reading a valid document and the test passing for the wrong reason.
     work = tmp_path / "edited"
-    shutil.copytree(generated["cMD"], work)
-    config = work / "resolved.config"
+    shutil.copytree(generated["cMD"].parent, work)
+    config = work / "min" / "resolved.config"
     document = yaml.safe_load(config.read_text(encoding="utf-8"))
     document["stages"]["producton_steps"] = 10            # deliberate typo
     config.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
 
     done = subprocess.run([sys.executable, "min.py", "--help"],
-                          cwd=work, capture_output=True, text=True, timeout=300)
+                          cwd=work / "min", capture_output=True, text=True, timeout=300)
     assert done.returncode != 0
     assert "producton_steps" in (done.stdout + done.stderr)

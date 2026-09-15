@@ -200,7 +200,7 @@ in the five commands needs it — building and running work without it.
 
 ```text
 md-openmm build-top         a structure       -> built.xml + built.pdb + built.log
-md-openmm build-md          a protocol config -> run scripts, .in files and run.sh in ./md_script/
+md-openmm build-md          a protocol config -> a <method>-run<N>/ run beside build/, min/ and input/
 md-openmm md-run            an Amber-like .in -> a stage, a ladder, or AIS switching paths
 md-openmm data-register     a finished tree   -> a verified dataset under $MD_DATA
 md-openmm export-reference  a finished run    -> a bundle that runs on OpenMM alone
@@ -232,15 +232,15 @@ carries the code that built its rungs (`ladder/hamiltonian.py`, copied byte for 
 md-openmm build-top -i ALA.pdb -os built.xml -op built.pdb -log built.log
 
 # 2. generate the workflow
-md-openmm build-md -odir ./md_script/ --config configs/md/cMD.config
+md-openmm build-md -odir ./cMD-run1 --config configs/md/cMD.config
 
 # 3. run it
-cd md_script && ./run.sh
+cd cMD-run1 && ./run.sh
 #   or one stage at a time, the Amber-like way:
-md-openmm md-run -i min.in -p ../built.pdb -s ../built.xml \
-    -o min.out -x min.dcd -r min.xml -log min.log
+md-openmm md-run -i ../input/min.in -p ../build/built.pdb -s ../build/built.xml \
+    -odir ../min
 #   or as ordinary Python -- the same run, reaching the same installed code:
-python min.py -p ../built.pdb -s ../built.xml -o min.out -x min.dcd -r min.xml -log min.log
+python ../min/min.py -p ../build/built.pdb -s ../build/built.xml -odir ../min
 
 # 4. register the result
 md-openmm data-register -idata ./data/ALA-cMD \

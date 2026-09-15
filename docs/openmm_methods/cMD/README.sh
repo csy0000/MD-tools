@@ -77,10 +77,11 @@ cd "${OUT}"
 # -----------------------------------------------------------------------------
 echo "== 1. build-top =="
 if [[ -n "${QUICK}" ]]; then
-  md-openmm build-top -i "${STRUCTURE}" -os built.xml -op built.pdb -log built.log \
-      --config sys.config
+  md-openmm build-top -i "${STRUCTURE}" -os build/built.xml -op build/built.pdb \
+      -log build/built.log --config sys.config
 else
-  md-openmm build-top -i "${STRUCTURE}" -os built.xml -op built.pdb -log built.log
+  md-openmm build-top -i "${STRUCTURE}" -os build/built.xml -op build/built.pdb \
+      -log build/built.log
 fi
 
 # -----------------------------------------------------------------------------
@@ -91,11 +92,11 @@ fi
 # there, because a configuration claiming HMR is a request and the System is the
 # fact.
 #
-# Into ./md_script/ :  run.sh, one .in and one .py per stage, and
-# resolved.config -- which is AUTHORITATIVE and is what the run reads.
+# Into ./cMD-run1/ :  run.sh and the per-stage entry points, with the shared
+# inputs in ../input/ and resolved.config -- AUTHORITATIVE, what the run reads.
 # -----------------------------------------------------------------------------
 echo "== 2. build-md =="
-md-openmm build-md -odir ./md_script --config md.config
+md-openmm build-md -odir ./cMD-run1 --config md.config
 
 # -----------------------------------------------------------------------------
 # 3. RUN IT.
@@ -106,15 +107,15 @@ md-openmm build-md -odir ./md_script --config md.config
 #
 # One stage at a time instead, if you prefer -- the same run, same installed code:
 #
-#   md-openmm md-run -i min.in -p ../built.pdb -s ../built.xml \
-#       -o min.out -r min.xml -log min.log
-#   python min.py    -p ../built.pdb -s ../built.xml \
-#       -o min.out -r min.xml -log min.log
+#   md-openmm md-run -i ../input/min.in -p ../build/built.pdb \
+#       -s ../build/built.xml -odir ../min
+#   python ../min/min.py -p ../build/built.pdb -s ../build/built.xml \
+#       -odir ../min
 # -----------------------------------------------------------------------------
 echo "== 3. run.sh =="
-cd md_script
+cd cMD-run1
 # shellcheck disable=SC2086
-./run.sh ../built.pdb ../built.xml ${PLATFORM}
+./run.sh ../build/built.pdb ../build/built.xml ${PLATFORM}
 
 # -----------------------------------------------------------------------------
 # WHAT YOU GET, per stage: <stage>.dcd, .xml (the state the next stage takes),

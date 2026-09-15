@@ -344,16 +344,21 @@ def scripts(tmp_path_factory):
         return subprocess.run([sys.executable, "-m", "md_tools.cli.md_openmm", *args],
                               cwd=work, capture_output=True, text=True, timeout=1800)
 
+    # INTO `build/`, which is where a run now reads its System from: `build/`, `min/` and
+    # `input/` sit at the dataset root and are shared by every run on this system. This fixture
+    # keeps its real `build-top` -- and its tleap dependency -- deliberately: its subject is what
+    # a user's own built System does, so a hand-parameterised stand-in would not stand for it.
+    (work / "build").mkdir(exist_ok=True)
     (work / "build.config").write_text("solvent:\n  model: GBn2\n")
     built = run("build-top", "-i", str(REPO / "tests" / "data" / "ALA.pdb"),
-                "-os", "built.xml", "-op", "built.pdb", "-log", "built.log",
+                "-os", "build/built.xml", "-op", "build/built.pdb", "-log", "build/built.log",
                 "--config", "build.config")
     assert built.returncode == 0, built.stdout + built.stderr
     (work / "cMD.config").write_text(
         "protocol: cMD\nsolvent: implicit\n"
         "stages:\n  minimization_iterations: 10\n  restrained_nvt_steps: 20\n"
         "  restrained_npt_steps: 20\n  unrestrained_npt_steps: 20\n  production_steps: 20\n")
-    generated = run("build-md", "-odir", "./md_script/", "--config", "cMD.config")
+    generated = run("build-md", "-odir", "./cMD-run1", "--config", "cMD.config")
     assert generated.returncode == 0, generated.stdout + generated.stderr
     return work
 
@@ -367,11 +372,16 @@ def test_each_generated_script_names_its_stage_and_reads_the_resolved_plan(scrip
     """
     from md_tools.build.md import resolve_md_config, stage_plan
 
-    directory = scripts / "md_script"
+    directory = scripts / "cMD-run1"
     plan = {entry["name"]: entry for entry in
             stage_plan(resolve_md_config(directory / "resolved.config"))}
-    for name in ("min", "eq_nvt_posres", "cMD"):
-        text = (directory / f"{name}.py").read_text()
+    # STAGE NAME vs LAYOUT PATH. The script still names the stage it runs -- that is the property
+    # under test -- but it is filed by position: minimisation is shared at `<system>/min/min.py`
+    # and the first equilibration is `<run>/eq/eq_1.py`.
+    for name, where in (("min", scripts / "min" / "min.py"),
+                        ("eq_nvt_posres", directory / "eq" / "eq_1.py"),
+                        ("cMD", directory / "cMD.py")):
+        text = where.read_text()
         assert f'run_generated_stage(__file__, "{name}")' in text
         assert "STAGE = {" not in text, "the script embeds a second declaration again"
         stage = plan[name]
@@ -382,9 +392,9 @@ def test_each_generated_script_names_its_stage_and_reads_the_resolved_plan(scrip
 
 def test_a_missing_parent_refuses_before_any_context_is_created(scripts):
     """The chain is sequential; a stage whose parent has not run must not start integrating."""
-    work = scripts / "md_script"
+    work = scripts / "cMD-run1"
     result = subprocess.run(
-        [sys.executable, "cMD.py", "-p", "../built.pdb", "-s", "../built.xml",
+        [sys.executable, "cMD.py", "-p", "../build/built.pdb", "-s", "../build/built.xml",
          "-c", "eq_nvt_free.xml", "-log", "refusal.log"],
         cwd=work, capture_output=True, text=True, timeout=600)
     assert result.returncode != 0
@@ -407,10 +417,10 @@ def test_a_standalone_stage_with_a_missing_parent_is_refused_even_under_check(sc
 
     It also wrote `pending.log` while doing it, which `--check` may no longer do at all.
     """
-    work = scripts / "md_script"
+    work = scripts / "cMD-run1"
     before = sorted(p.name for p in work.iterdir())
     result = subprocess.run(
-        [sys.executable, "cMD.py", "-p", "../built.pdb", "-s", "../built.xml",
+        [sys.executable, "cMD.py", "-p", "../build/built.pdb", "-s", "../build/built.xml",
          "-c", "eq_nvt_free.xml", "-log", "pending.log", "--check"],
         cwd=work, capture_output=True, text=True, timeout=600)
     assert result.returncode != 0, result.stdout + result.stderr
@@ -439,14 +449,19 @@ def test_a_large_timestep_without_hmr_is_refused_before_integrating(scripts):
     # correctly, and therefore uselessly for this test. What is asserted is the refusal of an
     # explicit large value.
     #
-    # Into a copy of the directory, because editing `resolved.config` in place would invalidate
-    # the checkpoints the sibling tests share through this module-scoped fixture -- which is
-    # itself the fingerprint rule working.
-    work = scripts / "md_script_fast"
+    # Into a copy of the WHOLE DATASET, because editing `resolved.config` in place would
+    # invalidate the checkpoints the sibling tests share through this module-scoped fixture --
+    # which is itself the fingerprint rule working.
+    #
+    # The whole dataset rather than the run directory alone: the stage this runs is the SHARED
+    # minimisation at `<system>/min/min.py`, and it reads `../build/built.xml`. Copying only the
+    # run would leave both outside the copy, so the edited `resolved.config` would not be the one
+    # in force -- and the test would fail on a missing file instead of on the masses.
+    work = scripts.parent / "scripts_fast"
     if work.exists():
         shutil.rmtree(work)
-    shutil.copytree(scripts / "md_script", work)
-    config = work / "resolved.config"
+    shutil.copytree(scripts, work)
+    config = work / "cMD-run1" / "resolved.config"
     document = yaml.safe_load(config.read_text(encoding="utf-8"))
     document.setdefault("dynamics", {})["timestep_fs"] = 4.0
     config.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
@@ -454,13 +469,17 @@ def test_a_large_timestep_without_hmr_is_refused_before_integrating(scripts):
         # `--cpu` because the subject is the MASSES, not the accelerator. The preflight resolves
         # the platform before it opens the System, so on a machine with no GPU the CUDA refusal
         # arrived first and this test failed without ever reaching the check it is named for.
+        #
+        # The production stage, not minimisation: `min/` is shared by every run on the system, so
+        # its `resolved.config` is not this run's. `cMD.py` reads the document edited above.
         result = subprocess.run(
-            [sys.executable, "min.py", "-p", "../built.pdb", "-s", "../built.xml",
-             "-log", "fast.log", "--cpu"], cwd=work, capture_output=True, text=True, timeout=600)
+            [sys.executable, "cMD.py", "-p", "../build/built.pdb", "-s", "../build/built.xml",
+             "-log", "fast.log", "--cpu"], cwd=work / "cMD-run1",
+            capture_output=True, text=True, timeout=600)
         combined = result.stdout + result.stderr
         assert result.returncode != 0, combined
         assert "hydrogen mass repartitioning was NOT applied" in combined, combined[-800:]
-        assert not (work / "min.dcd").exists()
+        assert not (work / "cMD-run1" / "cMD.dcd").exists()
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -473,7 +492,7 @@ def _resolved_stage(scripts, name):
     """
     from md_tools.build.md import resolve_md_config, stage_plan
 
-    plan = stage_plan(resolve_md_config(scripts / "md_script" / "resolved.config"))
+    plan = stage_plan(resolve_md_config(scripts / "cMD-run1" / "resolved.config"))
     return next(entry for entry in plan if entry["name"] == name)
 
 

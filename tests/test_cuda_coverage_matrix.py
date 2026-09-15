@@ -515,10 +515,12 @@ def built(tmp_path_factory):
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
     root = tmp_path_factory.mktemp("cuda-matrix")
+    (root / "build").mkdir(exist_ok=True)
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml",
+               "-op", "build/built.pdb", "-log", "build/built.log",
+               "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert done.returncode == 0, done.stdout + done.stderr
     return root
@@ -558,7 +560,7 @@ def test_cuda_precision_lane(precision, built, hardware, tmp_path):
 
     done = subprocess.run(
         [sys.executable, str(work / "project" / "cMD.py"),
-         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"), "-odir", str(work)],
+         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"), "-odir", str(work)],
         cwd=work, capture_output=True, text=True, timeout=1800,
         env=_environment(work, **_machine(precision=precision)))
     assert done.returncode == 0, done.stdout + done.stderr
@@ -602,7 +604,7 @@ def test_hmr_timestep_lane(built, hardware, tmp_path):
     destination = work / "refused"
     refused = subprocess.run(
         [sys.executable, str(work / "fast" / "cMD.py"),
-         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"), "-odir", str(destination)],
+         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"), "-odir", str(destination)],
         cwd=work, capture_output=True, text=True, timeout=900,
         env=_environment(work, **_machine()))
     assert refused.returncode != 0, refused.stdout + refused.stderr
@@ -665,7 +667,7 @@ def test_explicit_device_placement_lane(built, hardware, tmp_path):
 
     done = subprocess.run(
         [sys.executable, str(work / "project" / "cMD.py"),
-         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
          "-odir", str(work / "run"), "--device", str(wanted)],
         cwd=work, capture_output=True, text=True, timeout=1800,
         env=_environment(work, **_machine()))
@@ -696,7 +698,7 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
 
     import mdtraj
 
-    frames = mdtraj.load(str(built / "built.pdb"))
+    frames = mdtraj.load(str(built / "build" / "built.pdb"))
     mdtraj.join([frames] * 12).save_dcd(str(work / "source.dcd"))
 
     (work / "AIS.config").write_text(yaml.safe_dump({
@@ -715,7 +717,7 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
 
     done = subprocess.run(
         [sys.executable, str(work / "project" / "AIS.py"),
-         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
          "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run")],
         cwd=work, capture_output=True, text=True, timeout=1800,
         env=_environment(work, **_machine()))
@@ -808,7 +810,7 @@ def test_ais_reads_a_netcdf_source_on_cuda(built, hardware, tmp_path):
 
     import mdtraj
 
-    frames = mdtraj.load(str(built / "built.pdb"))
+    frames = mdtraj.load(str(built / "build" / "built.pdb"))
     mdtraj.join([frames] * 12).save_netcdf(str(work / "source.nc"))
 
     (work / "AIS.config").write_text(yaml.safe_dump({
@@ -826,7 +828,7 @@ def test_ais_reads_a_netcdf_source_on_cuda(built, hardware, tmp_path):
 
     done = subprocess.run(
         [sys.executable, str(work / "project" / "AIS.py"),
-         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
          "-source-traj", str(work / "source.nc"), "-odir", str(work / "run")],
         cwd=work, capture_output=True, text=True, timeout=1800,
         env=_environment(work, **_machine()))
@@ -868,7 +870,7 @@ def test_there_is_no_automatic_cpu_fallback_on_this_machine(built, hardware, tmp
     destination = work / "run"
     done = subprocess.run(
         [sys.executable, str(work / "project" / "cMD.py"),
-         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"), "-odir", str(destination)],
+         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"), "-odir", str(destination)],
         cwd=work, capture_output=True, text=True, timeout=900,
         env=_environment(work, MD_TOOLS_FORCE_NO_CUDA="1", **_machine()))
     assert done.returncode != 0, done.stdout + done.stderr
@@ -893,13 +895,15 @@ def built_explicit(tmp_path_factory):
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
     root = tmp_path_factory.mktemp("cuda-matrix-explicit")
+    (root / "build").mkdir(exist_ok=True)
     # `TIP3P` in the spelling the schema accepts, and the default padding: unknown keys and
     # unknown values are both refused rather than ignored, which is what made this fixture fail
     # loudly instead of quietly building something else.
     (root / "sys.config").write_text("solvent:\n  model: TIP3P\n", encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml",
+               "-op", "build/built.pdb", "-log", "build/built.log",
+               "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=3600)
     if done.returncode != 0:
         pytest.fail("could not build an explicit-solvent system, so the explicit CUDA lanes "
@@ -925,7 +929,7 @@ def test_explicit_solvent_npt_lane(built_explicit, hardware, tmp_path):
 
     done = subprocess.run(
         [sys.executable, str(work / "project" / "cMD.py"),
-         "-p", str(built_explicit / "built.pdb"), "-s", str(built_explicit / "built.xml"),
+         "-p", str(built_explicit / "build" / "built.pdb"), "-s", str(built_explicit / "build" / "built.xml"),
          "-odir", str(work / "run")],
         cwd=work, capture_output=True, text=True, timeout=3600,
         env=_environment(work, **_machine()))
@@ -975,17 +979,33 @@ def _equilibrate(project: Path, topology: Path, system: Path, work: Path, run: P
     previous = None
     for stage in plan:
         name = stage["name"]
-        script = project / f"{name}.py"
-        if not script.is_file():
-            continue
-        argv = [sys.executable, str(script), "-p", str(topology), "-s", str(system),
+        # WHERE THE SCRIPT ACTUALLY IS, under the split layout: `min/` belongs to the SYSTEM,
+        # `eq/` to the run, and the production stage sits at the run root.
+        #
+        # This looked only at the run root and `continue`d when the file was absent. After the
+        # layout split that silently skipped minimisation AND every equilibration stage, then
+        # failed on "the chain produced no starting state" -- a missing script now names itself
+        # instead of being passed over, because skipping the whole chain is not a smaller version
+        # of running it.
+        # BY THE FILING KEY, which is what the scripts are named: `eq_nvt_posres` is generated as
+        # `eq/eq_1.py`. The stage name decides the physics, the key decides the filename, and
+        # `stage_plan` stamps the key onto every plan entry so both sides read it from one place.
+        key = str(stage.get("file_key") or name)
+        candidates = (project / f"{key}.py", project / "eq" / f"{key}.py",
+                      project.parent / "min" / f"{key}.py")
+        script_path = next((path for path in candidates if path.is_file()), None)
+        assert script_path is not None, (
+            f"{name} (filed as {key}): no generated script in "
+            + ", ".join(str(c) for c in candidates))
+        argv = [sys.executable, str(script_path), "-p", str(topology), "-s", str(system),
                 "-odir", str(run)]
         if previous is not None:
             argv += ["-c", str(previous)]
         done = subprocess.run(argv, cwd=work, capture_output=True, text=True, timeout=3600,
                               env=_environment(work, **_machine()))
         assert done.returncode == 0, f"{name}:\n{done.stdout}{done.stderr}"
-        previous = run / f"{name}.xml"
+        # The restart is filed under the key too, which is what the next stage's `-c` must name.
+        previous = run / f"{key}.xml"
     assert previous is not None and previous.is_file(), "the chain produced no starting state"
     return previous
 
@@ -997,8 +1017,14 @@ def test_explicit_solvent_rest2_lane(built_explicit, hardware, tmp_path):
     it is the one where a NonbondedForce exception or a reciprocal-space term scaling wrongly
     would show up as an acceptance ratio nobody questions.
     """
+    import shutil
+
     work = tmp_path / "rest2-explicit"
     work.mkdir()
+    # A LADDER IS GENERATED FROM THE BUILT SYSTEM. The rungs are scaled and serialised at build
+    # time now, so `build-md` reads `<system>/build/built.xml` -- and `-odir work/project` makes
+    # `work` the system root. Without this the generation refused before writing anything.
+    shutil.copytree(built_explicit / "build", work / "build")
     (work / "REST2.config").write_text(yaml.safe_dump({
         "protocol": "REST2", "solvent": "explicit",
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 10,
@@ -1013,11 +1039,11 @@ def test_explicit_solvent_rest2_lane(built_explicit, hardware, tmp_path):
                                capture_output=True, text=True, timeout=600)
     assert generated.returncode == 0, generated.stdout + generated.stderr
 
-    start = _equilibrate(work / "project", built_explicit / "built.pdb",
-                         built_explicit / "built.xml", work, work / "run")
+    start = _equilibrate(work / "project", built_explicit / "build" / "built.pdb",
+                         built_explicit / "build" / "built.xml", work, work / "run")
     done = subprocess.run(
         [sys.executable, str(work / "project" / "REST2.py"),
-         "-p", str(built_explicit / "built.pdb"), "-s", str(built_explicit / "built.xml"),
+         "-p", str(built_explicit / "build" / "built.pdb"), "-s", str(built_explicit / "build" / "built.xml"),
          "-c", str(start), "-odir", str(work / "run")],
         cwd=work, capture_output=True, text=True, timeout=3600,
         env=_environment(work, **_machine()))
@@ -1051,6 +1077,9 @@ def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_
 
     work = tmp_path / f"ladder-{states}"
     work.mkdir()
+    # The ladder's rungs are scaled from the built System at BUILD time, so the system root that
+    # holds this run has to carry it.
+    shutil.copytree(built / "build", work / "build")
     (work / "REST2.config").write_text(yaml.safe_dump({
         "protocol": "REST2", "solvent": "implicit",
         "stages": {"minimization_iterations": 2, "restrained_nvt_steps": 5,
@@ -1064,11 +1093,11 @@ def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_
                                capture_output=True, text=True, timeout=600)
     assert generated.returncode == 0, generated.stdout + generated.stderr
 
-    start = _equilibrate(work / "project", built / "built.pdb", built / "built.xml",
+    start = _equilibrate(work / "project", built / "build" / "built.pdb", built / "build" / "built.xml",
                          work, work / "run")
     done = subprocess.run(
         ["mpirun", "-n", str(states), sys.executable, str(work / "project" / "REST2.py"),
-         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
          "-c", str(start), "-odir", str(work / "run"), "-ng", str(states)],
         cwd=work, capture_output=True, text=True, timeout=3600,
         env=_environment(work, **_machine()))
@@ -1117,7 +1146,7 @@ def test_a_genuinely_absent_cuda_device_is_refused_without_any_seam(built, hardw
     destination = work / "run"
     done = subprocess.run(
         [sys.executable, str(work / "project" / "cMD.py"),
-         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"), "-odir", str(destination)],
+         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"), "-odir", str(destination)],
         cwd=work, capture_output=True, text=True, timeout=900,
         env=_environment(work, CUDA_VISIBLE_DEVICES="", **_machine()))
     message = done.stdout + done.stderr
@@ -1148,6 +1177,8 @@ def test_a_genuinely_unimportable_mpi4py_stops_a_plural_launch(built, hardware, 
 
     work = tmp_path / "brokenmpi"
     (work / "shadow" / "mpi4py").mkdir(parents=True)
+    # As above: generating the ladder needs the built System beside the run.
+    shutil.copytree(built / "build", work / "build")
     (work / "shadow" / "mpi4py" / "__init__.py").write_text(
         'raise ImportError("libmpi.so.40: cannot open shared object file: '
         'No such file or directory")\n', encoding="utf-8")
@@ -1171,7 +1202,7 @@ def test_a_genuinely_unimportable_mpi4py_stops_a_plural_launch(built, hardware, 
     destination = work / "run"
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(work / "project" / "REST2.py"),
-         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
          "-odir", str(destination)],
         cwd=work, capture_output=True, text=True, timeout=900, env=environment)
     message = done.stdout + done.stderr
@@ -1218,7 +1249,7 @@ def test_multi_rank_rrest2_with_a_real_reservoir(built, hardware, tmp_path):
                           capture_output=True, text=True, timeout=600).returncode == 0
 
     hot_run = work / "hotrun"
-    _equilibrate_chain(work / "hot", built / "built.pdb", built / "built.xml", work, hot_run,
+    _equilibrate_chain(work / "hot", built / "build" / "built.pdb", built / "build" / "built.xml", work, hot_run,
                        last="cMD")
     phase_space = sorted(hot_run.glob("*phase*"))
     assert phase_space, f"no phase-space file: {sorted(p.name for p in hot_run.iterdir())}"
@@ -1241,11 +1272,11 @@ def test_multi_rank_rrest2_with_a_real_reservoir(built, hardware, tmp_path):
                           capture_output=True, text=True, timeout=600).returncode == 0
 
     run = work / "run"
-    start = _equilibrate(work / "project", built / "built.pdb", built / "built.xml", work, run,
+    start = _equilibrate(work / "project", built / "build" / "built.pdb", built / "build" / "built.xml", work, run,
                          script="rREST2.py")
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(work / "project" / "rREST2.py"),
-         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
          "-c", str(start), "-odir", str(run), "-ng", "2"],
         cwd=work, capture_output=True, text=True, timeout=3600,
         env=_environment(work, **_machine()))
@@ -1274,7 +1305,7 @@ def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):
 
     import mdtraj
 
-    frames = mdtraj.load(str(built_explicit / "built.pdb"))
+    frames = mdtraj.load(str(built_explicit / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(work / "source.dcd"))
 
     (work / "AIS.config").write_text(yaml.safe_dump({
@@ -1292,7 +1323,7 @@ def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):
 
     done = subprocess.run(
         [sys.executable, str(work / "project" / "AIS.py"),
-         "-p", str(built_explicit / "built.pdb"), "-s", str(built_explicit / "built.xml"),
+         "-p", str(built_explicit / "build" / "built.pdb"), "-s", str(built_explicit / "build" / "built.xml"),
          "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run")],
         cwd=work, capture_output=True, text=True, timeout=3600,
         env=_environment(work, **_machine()))
@@ -1358,7 +1389,7 @@ def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_expli
 
         import mdtraj
 
-        frames = mdtraj.load(str(root / "built.pdb"))
+        frames = mdtraj.load(str(root / "build" / "built.pdb"))
         mdtraj.join([frames] * 8).save_dcd(str(work / "source.dcd"))
         (work / "AIS.config").write_text(yaml.safe_dump({
             "protocol": "AIS", "solvent": solvent,
@@ -1374,7 +1405,7 @@ def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_expli
                               capture_output=True, text=True, timeout=600).returncode == 0
         done = subprocess.run(
             [sys.executable, str(work / "project" / "AIS.py"),
-             "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+             "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
              "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run")],
             cwd=work, capture_output=True, text=True, timeout=3600,
             env=_environment(work, **_machine()))
@@ -1422,7 +1453,7 @@ def test_hs_rows_match_recomputation_on_cuda(solvent, built, built_explicit, har
 
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 6).save_dcd(str(work / "source.dcd"))
 
     # Five distinct cadences again, so frame-aligned and unaligned rows both occur on CUDA.
@@ -1440,7 +1471,7 @@ def test_hs_rows_match_recomputation_on_cuda(solvent, built, built_explicit, har
 
     done = subprocess.run(
         [sys.executable, str(work / "project" / "AIS.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run")],
         cwd=work, capture_output=True, text=True, timeout=3600,
         env=_environment(work, **_machine()))
@@ -1504,7 +1535,7 @@ def test_a_hundred_paths_under_real_mpi_produce_exactly_their_own_files(built, h
 
     import mdtraj
 
-    frames = mdtraj.load(str(built / "built.pdb"))
+    frames = mdtraj.load(str(built / "build" / "built.pdb"))
     mdtraj.join([frames] * 128).save_dcd(str(work / "source.dcd"))
 
     (work / "AIS.config").write_text(yaml.safe_dump({
@@ -1521,7 +1552,7 @@ def test_a_hundred_paths_under_real_mpi_produce_exactly_their_own_files(built, h
 
     done = subprocess.run(
         ["mpirun", "-n", "4", sys.executable, str(work / "project" / "AIS.py"),
-         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
          "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run"), "-ng", "4"],
         cwd=work, capture_output=True, text=True, timeout=7200,
         env=_environment(work, **_machine()))
@@ -1573,14 +1604,14 @@ def test_the_generated_wrapper_and_md_run_agree_for_a_stage(built, hardware, tmp
     environment = _environment(work, **_machine())
     wrapper = subprocess.run(
         [sys.executable, str(work / "project" / "cMD.py"),
-         "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
          "-odir", str(work / "wrapper")],
         cwd=work, capture_output=True, text=True, timeout=1800, env=environment)
     assert wrapper.returncode == 0, wrapper.stdout[-3000:] + wrapper.stderr[-3000:]
 
     through_md_run = subprocess.run(
-        CLI + ["md-run", "-i", str(work / "project" / "cMD.in"),
-               "-p", str(built / "built.pdb"), "-s", str(built / "built.xml"),
+        CLI + ["md-run", "-i", str(work / "input" / "cMD.in"),
+               "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
                "-odir", str(work / "mdrun")],
         cwd=work, capture_output=True, text=True, timeout=1800, env=environment)
     assert through_md_run.returncode == 0, (
@@ -1608,7 +1639,7 @@ def test_the_generated_wrapper_and_md_run_agree_for_a_stage(built, hardware, tmp
     # The SOLUTE topology, because the stream being compared is the solute one. A 22-atom
     # trajectory cannot be opened against the 1796-atom built.pdb, and mdtraj says so rather
     # than silently mismatching.
-    solute_top = str(built / "built.pdb")   # `-x cMD.dcd` writes the WHOLE system, as it always did
+    solute_top = str(built / "build" / "built.pdb")   # `-x cMD.dcd` writes the WHOLE system, as it always did
     left = mdtraj.load(str(work / "wrapper" / "solute_prod1.nc"), top=solute_top)
     right = mdtraj.load(str(work / "mdrun" / "solute_prod1.nc"), top=solute_top)
     assert left.n_frames == right.n_frames > 0, (left.n_frames, right.n_frames)

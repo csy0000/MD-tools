@@ -69,8 +69,8 @@ def finished(tmp_path_factory):
     root = tmp_path_factory.mktemp("walkers")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
     (root / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
@@ -87,7 +87,7 @@ def finished(tmp_path_factory):
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./REST2", "--config", str(root / "REST2.config")],
+        CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=900)
     assert done.returncode == 0, done.stdout + done.stderr
 
@@ -95,8 +95,8 @@ def finished(tmp_path_factory):
     from openmm import XmlSerializer, unit
     from openmm.app import PDBFile
 
-    pdb = PDBFile(str(root / "built.pdb"))
-    system = XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(root / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
     context = openmm.Context(system, openmm.VerletIntegrator(1.0 * unit.femtosecond),
                              openmm.Platform.getPlatformByName("Reference"))
     context.setPositions(pdb.positions)
@@ -111,12 +111,12 @@ def finished(tmp_path_factory):
     user.write_text(yaml.safe_dump(
         {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
     base["MD_TOOLS_CONFIG"] = str(user)
-    run = root / "run"
+    run = root / "run-run1"
     ran = subprocess.run(
-        [sys.executable, str(root / "REST2" / "REST2.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+        [sys.executable, str(root / "REST2-run1" / "REST2.py"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-c", str(root / "initial_state.xml"), "-odir", str(run), "--cpu"],
-        cwd=root / "REST2", capture_output=True, text=True, timeout=1800, env=base)
+        cwd=root / "REST2-run1", capture_output=True, text=True, timeout=1800, env=base)
     assert ran.returncode == 0, ran.stdout[-4000:] + ran.stderr[-4000:]
     return root, run
 
@@ -250,11 +250,11 @@ def test_an_invalid_ladder_is_refused_an_extension_before_outputs_appear(finishe
     base["MD_TOOLS_CONFIG"] = str(root / "user.config")
     extension = tmp_path / "extended"
     done = subprocess.run(
-        [sys.executable, str(root / "REST2" / "REST2.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+        [sys.executable, str(root / "REST2-run1" / "REST2.py"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-c", str(root / "initial_state.xml"), "-odir", str(extension), "--cpu",
          "--extend", "2", "--extend-from", str(destination)],
-        cwd=root / "REST2", capture_output=True, text=True, timeout=1800, env=base)
+        cwd=root / "REST2-run1", capture_output=True, text=True, timeout=1800, env=base)
     assert done.returncode != 0, done.stdout[-3000:]
     # The refusal itself is written to the run's own log, which is where a reader looking at a
     # failed extension goes; the launcher only points at it.

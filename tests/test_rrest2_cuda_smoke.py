@@ -45,8 +45,8 @@ def ladder(tmp_path_factory):
         pytest.skip("no ALA fixture")
 
     (work / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
-    build = _cli(work, "build-top", "-i", str(ala), "-os", "built.xml", "-op", "built.pdb",
-                 "-log", "built.log", "--config", str(work / "sys.config"))
+    build = _cli(work, "build-top", "-i", str(ala), "-os", "build/built.xml", "-op", "build/built.pdb",
+                 "-log", "build/built.log", "--config", str(work / "sys.config"))
     assert build.returncode == 0, build.stdout + build.stderr
 
     # The reservoir: a fixed-tau run AT THE LADDER'S TOP RUNG, streaming complete phase space.
@@ -64,17 +64,28 @@ def ladder(tmp_path_factory):
         "reporting": {"crd_printout_solute": 20, "info_printout": 100,
                       "checkpoint_printout": 200},
     }, sort_keys=False), encoding="utf-8")
-    assert _cli(work, "build-md", "-odir", "./hot", "--config", str(work / "hot.config"),
+    assert _cli(work, "build-md", "-odir", "./hot-run1", "--config", str(work / "hot.config"),
                 timeout=600).returncode == 0
-    hot = subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml"],
-                         cwd=work / "hot", capture_output=True, text=True, timeout=3600)
+    hot = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml"],
+                         cwd=work / "hot-run1", capture_output=True, text=True, timeout=3600)
     assert hot.returncode == 0, hot.stdout[-3000:] + hot.stderr[-3000:]
 
-    phase_space = sorted((work / "hot").glob("*phase*"))
-    assert phase_space, f"no phase-space file: {sorted(p.name for p in (work / 'hot').iterdir())}"
+    phase_space = sorted((work / "hot-run1").glob("*phase*"))
+    assert phase_space, (
+        f"no phase-space file: {sorted(p.name for p in (work / 'hot-run1').iterdir())}")
     reservoir = phase_space[0]
 
-    (work / "rrest2.config").write_text(yaml.safe_dump({
+    # A SYSTEM ROOT OF ITS OWN FOR THE LADDER. The reservoir source runs at `tau = TAU_MAX` and
+    # the ladder at the default `tau = 0`, so the two resolve the SHARED `input/eq_*.in`
+    # differently -- and `input/` is shared by every run on a system, so the second generation
+    # was refused by name. They are deliberately different experiments; the reservoir reaches the
+    # ladder by absolute path, which is what makes separate roots free here.
+    import shutil
+
+    ladder_root = work / "ladder"
+    shutil.copytree(work / "build", ladder_root / "build")
+
+    (ladder_root / "rrest2.config").write_text(yaml.safe_dump({
         "protocol": "rREST2", "solvent": "implicit",
         "dynamics": {"seed": 13},
         "stages": {"minimization_iterations": 25, "restrained_nvt_steps": 50,
@@ -87,14 +98,15 @@ def ladder(tmp_path_factory):
         "reservoir": {"enabled": True, "path": str(reservoir),
                       "refresh_interval_exchanges": 1, "velocities": "inherit"},
     }, sort_keys=False), encoding="utf-8")
-    generated = _cli(work, "build-md", "-odir", "./rrest2",
-                     "--config", str(work / "rrest2.config"), timeout=600)
+    generated = _cli(ladder_root, "build-md", "-odir", "./rrest2-run1",
+                     "--config", str(ladder_root / "rrest2.config"), timeout=600)
     assert generated.returncode == 0, generated.stdout + generated.stderr
 
-    ran = subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml"],
-                         cwd=work / "rrest2", capture_output=True, text=True, timeout=7200)
+    ran = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml"],
+                         cwd=ladder_root / "rrest2-run1", capture_output=True, text=True,
+                         timeout=7200)
     assert ran.returncode == 0, ran.stdout[-4000:] + ran.stderr[-4000:]
-    return work / "rrest2", reservoir, ran.stdout
+    return ladder_root / "rrest2-run1", reservoir, ran.stdout
 
 
 def test_the_reservoir_declaration_describes_the_file_it_was_given(ladder):
@@ -126,9 +138,9 @@ def test_a_reservoir_refresh_installs_the_recorded_momentum(ladder):
 def test_the_run_records_where_its_reservoir_samples_came_from(ladder):
     """Velocity provenance: the seed and the policy are in the record, not only in the config."""
     directory, _, output = ladder
-    record = read_record(directory / "rREST2.log")
+    record = read_record(directory / "remd_records" / "rREST2_prod1.log")
     assert record["status"] == "completed", record.get("status")
-    text = (directory / "rREST2.log").read_text(encoding="utf-8")
+    text = (directory / "remd_records" / "rREST2_prod1.log").read_text(encoding="utf-8")
     assert "reservoir" in text.lower(), "the run record never mentions the reservoir it drew from"
 
 
@@ -138,7 +150,10 @@ def test_the_ladder_ran_on_cuda_and_wrote_one_trajectory_per_state(ladder):
     # The ladder is one process per state, so the platform is a per-RANK fact and the driver
     # reports it per rank rather than folding one name into the run record.
     # `-o rREST2.out` is where a stage's output goes; run.sh's own stdout carries the summary.
-    report = (directory / "rREST2.out").read_text(encoding="utf-8")
+    # PER SEGMENT, in `remd_records/`: `run.sh` names the ladder's output
+    # `-o remd_records/rREST2_prod<N>.out`, so an extension writes a `_prod2` set beside the
+    # first rather than over it. There is no `rREST2.out` at the run root to read.
+    report = (directory / "remd_records" / "rREST2_prod1.out").read_text(encoding="utf-8")
     lines = [line for line in report.splitlines() if line.lstrip().startswith("# platform")]
     assert lines, f"the driver reported no platform:\n{report[-2000:]}"
     assert all("CUDA" in line for line in lines), lines

@@ -60,8 +60,8 @@ def finished(tmp_path_factory):
     root = tmp_path_factory.mktemp("reference")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     assert subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800).returncode == 0
 
     (root / "cMD.config").write_text(
@@ -71,14 +71,24 @@ def finished(tmp_path_factory):
         f" unrestrained_npt_steps: 0, production_steps: {PRODUCTION_STEPS}}}\n"
         "reporting: {crd_printout_solute: 100, info_printout: 100, checkpoint_printout: 1000}\n",
         encoding="utf-8")
-    assert subprocess.run(CLI + ["build-md", "-odir", "./run", "--config", str(root / "cMD.config")],
+    assert subprocess.run(CLI + ["build-md", "-odir", "./run-run1", "--config", str(root / "cMD.config")],
                           cwd=root, capture_output=True, text=True, timeout=600).returncode == 0
 
-    run = root / "run"
-    for stage, parent in (("eq_nvt_posres", None), ("cMD", "eq_nvt_posres.xml")):
-        argv = CLI + ["md-run", "-i", f"{stage}.in", "-p", "../built.pdb", "-s", "../built.xml",
-                      "-r", f"{stage}.xml", "-chk", f"{stage}.chk",
-                      "-o", f"{stage}.out", "-log", f"{stage}.log", "-odir", ".", "--cpu"]
+    run = root / "run-run1"
+    # THE INPUT IS SHARED and the stage is FILED BY POSITION: `eq_nvt_posres` reads
+    # `../input/eq_1.in` and writes into `eq/`, while the production stage stays at the run root.
+    # `-r`, `-o` and `-log` are left off deliberately -- md-run names them inside `-odir`, and a
+    # value given explicitly resolves against the working directory instead.
+    #
+    # THE PARENT IS THE RESTART THE STAGE IS FILED UNDER. A stage filed as `eq_1` writes
+    # `eq/eq_1.xml`, which is what `run.sh` chains and what docs/run-layout.md specifies. The
+    # runtime used to name it from the STAGE instead, so the two disagreed and no chain driven by
+    # `run.sh` could complete.
+    for stage, source, odir, parent in (
+            ("eq_nvt_posres", "../input/eq_1.in", "eq", None),
+            ("cMD", "../input/cMD.in", ".", "eq/eq_1.xml")):
+        argv = CLI + ["md-run", "-i", source, "-p", "../build/built.pdb",
+                      "-s", "../build/built.xml", "-odir", odir, "--cpu"]
         if parent:
             argv += ["-c", parent]
         done = subprocess.run(argv, cwd=run, capture_output=True, text=True, timeout=1800,
@@ -100,24 +110,30 @@ def test_input_holds_what_the_user_supplied_each_one_proven(finished):
     inputs = bundle / "input"
     assert sorted(p.name for p in inputs.iterdir()) == [
         "ALA.pdb", "README.md", "build-md.config", "build-top.config", "build_settings.json",
-        "build_system.py", "built.pdb", "built.xml", "cMD.in", "eq_nvt_posres.in",
+        "build_system.py", "built.pdb", "built.xml", "cMD.in", "eq_1.in",
         "structure.leap"]
     assert (inputs / "ALA.pdb").read_bytes() == ALA.read_bytes()
     assert (inputs / "build-top.config").read_bytes() == (root / "sys.config").read_bytes()
     assert (inputs / "build-md.config").read_bytes() == (run / "resolved.config").read_bytes()
     for name in ("built.xml", "built.pdb"):
-        assert (inputs / name).read_bytes() == (root / name).read_bytes()
-    for name in ("cMD.in", "eq_nvt_posres.in"):
-        assert (inputs / name).read_bytes() == (run / name).read_bytes()
+        assert (inputs / name).read_bytes() == (root / "build" / name).read_bytes()
+    # The stage inputs are SHARED, at the dataset root, and filed by position: the bundle keeps
+    # the stage's own name while `input/` holds `eq_1.in`.
+    for bundled, shared in (("cMD.in", "cMD.in"), ("eq_1.in", "eq_1.in")):
+        assert (inputs / bundled).read_bytes() == (root / "input" / shared).read_bytes()
     recorded = json.loads((bundle / "provenance.json").read_text(encoding="utf-8"))["inputs"]
     assert recorded["structure"]["sha256"] == hashlib.sha256(ALA.read_bytes()).hexdigest()
     assert "resolves to the build-top record" in recorded["build_top_config"]["verified"]
+    # THE LAYOUT NAMES, because the records name the shared file the stage read: the
+    # equilibration stage ran `-i ../input/eq_1.in`. The bundle therefore no longer says which
+    # STAGE read an input, only which input was read -- a real change in what it records about
+    # itself, noted in docs/run-layout.md.
     assert [entry["file"] for entry in recorded["stage_inputs"]] == [
-        "input/eq_nvt_posres.in", "input/cMD.in"], "the stage inputs, in the order they ran"
+        "input/eq_1.in", "input/cMD.in"], "the stage inputs, in the order they ran"
     assert recorded["structure_origin"]["sequence"] == ["ACE", "ALA", "NME"]
     readme = (inputs / "README.md").read_text(encoding="utf-8")
     assert "md-openmm build-top -i input/ALA.pdb --config input/build-top.config" in readme
-    assert ("md-openmm md-run -i input/eq_nvt_posres.in -p input/built.pdb -s input/built.xml"
+    assert ("md-openmm md-run -i input/eq_1.in -p input/built.pdb -s input/built.xml"
             in readme)
     assert "md-openmm md-run -i input/cMD.in -p input/built.pdb -s input/built.xml" in readme
     assert "python input/build_system.py --out rebuilt" in readme
@@ -181,11 +197,11 @@ def test_a_configuration_edited_after_the_build_is_not_passed_off_as_the_one_use
     # The build ran with absolute paths, so the copied record still names the fixture's own
     # `sys.config`. Point it at the copy's, then change the copy's: same name, same place the
     # record says, different content -- and the shared fixture is never touched.
-    log = copy / "built.log"
+    log = copy / "build" / "built.log"
     log.write_text(log.read_text(encoding="utf-8").replace(str(finished[0]), str(copy)),
                    encoding="utf-8")
     (copy / "sys.config").write_text("solvent:\n  model: OBC2\n", encoding="utf-8")
-    manifest = export_reference(copy / "run", tmp_path / "bundle")
+    manifest = export_reference(copy / "run-run1", tmp_path / "bundle")
     inputs = tmp_path / "bundle" / "input"
     assert not (inputs / "build-top.config").exists()
     assert (inputs / "build-top.resolved.yaml").is_file()
@@ -197,7 +213,7 @@ def test_a_structure_that_is_not_the_one_recorded_refuses_before_writing(finishe
     from md_tools.reference import export_reference
 
     copy = _copy_of_the_run(finished, tmp_path)
-    log = copy / "built.log"
+    log = copy / "build" / "built.log"
     text = log.read_text(encoding="utf-8")
     import hashlib
 
@@ -206,7 +222,7 @@ def test_a_structure_that_is_not_the_one_recorded_refuses_before_writing(finishe
     log.write_text(text.replace(real, "0" * 64), encoding="utf-8")
     target = tmp_path / "bundle"
     with pytest.raises(FileNotFoundError, match="the structure build-top read"):
-        export_reference(copy / "run", target)
+        export_reference(copy / "run-run1", target)
     assert not target.exists(), "a refused export wrote files"
 
 
@@ -219,7 +235,7 @@ def test_the_bundle_holds_the_system_the_stage_integrated_not_the_one_it_was_bui
     """
     root, run, bundle, _manifest = finished
     exported = (bundle / "system.xml").read_text(encoding="utf-8")
-    assert exported != (root / "built.xml").read_text(encoding="utf-8"), \
+    assert exported != (root / "build" / "built.xml").read_text(encoding="utf-8"), \
         "the bundle carries the BUILD System; at tau > 0 that is not what was integrated"
 
     from md_tools.run.preflight import _prepare_stage, load_inputs
@@ -227,7 +243,7 @@ def test_the_bundle_holds_the_system_the_stage_integrated_not_the_one_it_was_bui
     from openmm import XmlSerializer
 
     block = read_record(run / "cMD.log")["stage"]
-    loaded = load_inputs(root / "built.pdb", root / "built.xml")
+    loaded = load_inputs(root / "build" / "built.pdb", root / "build" / "built.xml")
     prepared = _prepare_stage(loaded, stage=block, name=block["name"], where="test")
     assert exported == XmlSerializer.serialize(prepared["prepared_system"])
 
@@ -243,7 +259,7 @@ def test_the_bundle_starts_from_the_state_the_stage_continued_from(finished):
     _root, run, bundle, _manifest = finished
     assert (bundle / "start.xml").is_file(), "the bundle has no starting state"
     assert hashlib.sha256((bundle / "start.xml").read_bytes()).hexdigest() == \
-        hashlib.sha256((run / "eq_nvt_posres.xml").read_bytes()).hexdigest()
+        hashlib.sha256((run / "eq" / "eq_1.xml").read_bytes()).hexdigest()
 
 
 def test_the_exported_seed_is_the_one_the_integrator_actually_used(finished):
@@ -324,7 +340,7 @@ def test_an_auto_timestep_exports_at_the_timestep_the_stage_integrated(finished,
     from md_tools.reference import export_reference
 
     copy = _copy_of_the_run(finished, tmp_path)
-    log = copy / "run" / "cMD.log"
+    log = copy / "run-run1" / "cMD.log"
     text = log.read_text(encoding="utf-8")
     assert "timestep_fs: 2.0" in text, "the fixture no longer records an explicit timestep"
     # Only the STAGE block's value becomes `auto`; `timestep.timestep_fs` keeps the resolved 2.0,
@@ -334,7 +350,7 @@ def test_an_auto_timestep_exports_at_the_timestep_the_stage_integrated(finished,
     log.write_text(text, encoding="utf-8")
 
     out = tmp_path / "auto-bundle"
-    manifest = export_reference(copy / "run", out)
+    manifest = export_reference(copy / "run-run1", out)
     assert manifest["settings"]["timestep_fs"] == 2.0
     settings = json.loads((out / "settings.json").read_text(encoding="utf-8"))
     assert settings["timestep_fs"] == 2.0, "the bundle carries the request instead of the answer"
@@ -353,14 +369,14 @@ def test_a_record_whose_timestep_cannot_be_established_writes_nothing(finished, 
     from md_tools.reference import export_reference
 
     copy = _copy_of_the_run(finished, tmp_path)
-    log = copy / "run" / "cMD.log"
+    log = copy / "run-run1" / "cMD.log"
     text = log.read_text(encoding="utf-8")
     # Both the stage request and the resolved block, so nothing is left to fall back to.
     log.write_text(text.replace("timestep_fs: 2.0", "timestep_fs: auto"), encoding="utf-8")
 
     out = tmp_path / "bundle-that-must-not-appear"
     with pytest.raises(ValueError, match="cannot be established"):
-        export_reference(copy / "run", out)
+        export_reference(copy / "run-run1", out)
     assert not out.exists(), "a refused export left a partial bundle behind"
 
 

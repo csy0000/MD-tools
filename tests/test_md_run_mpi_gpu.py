@@ -56,9 +56,10 @@ def built(tmp_path_factory):
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
     work = tmp_path_factory.mktemp("md-run-mpi")
+    (work / "build").mkdir(exist_ok=True)
     (work / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
-    done = _cli(work, "build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-                "-log", "built.log", "--config", str(work / "sys.config"))
+    done = _cli(work, "build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+                "-log", "build/built.log", "--config", str(work / "sys.config"))
     assert done.returncode == 0, done.stdout + done.stderr
     return work
 
@@ -78,12 +79,12 @@ def ladder(built):
                   "exchange_interval_steps": 50, "number_of_exchanges": 4},
         "reporting": {"crd_printout_solute": 25, "info_printout": 50,
                       "checkpoint_printout": 50}}, sort_keys=False), encoding="utf-8")
-    assert _cli(built, "build-md", "-odir", "./rest2", "--config", str(config)).returncode == 0
+    assert _cli(built, "build-md", "-odir", "./rest2-run1", "--config", str(config)).returncode == 0
 
-    out = built / "rest2"
+    out = built / "rest2-run1"
     previous = None
     for stage in ("min", "eq_nvt_posres", "eq_nvt_posres_2", "eq_nvt_free"):
-        argv = ["-i", f"{stage}.in", "-p", "../built.pdb", "-s", "../built.xml",
+        argv = ["-i", f"../input/{stage}.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                 "-r", f"{stage}.xml", "-log", f"{stage}.log"]
         if previous:
             argv += ["-c", f"{previous}.xml"]
@@ -91,7 +92,7 @@ def ladder(built):
         assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
         previous = stage
 
-    done = _md_run(out, "-ng", "2", "-i", "REST2.in", "-p", "../built.pdb", "-s", "../built.xml",
+    done = _md_run(out, "-ng", "2", "-i", "../input/REST2.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                    "-c", f"{previous}.xml", "-log", "REST2.log", ranks=2)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return out
@@ -130,8 +131,8 @@ def test_each_rank_kept_its_own_record_and_ran_on_cuda(ladder):
 
 def test_a_world_that_is_not_the_state_count_is_refused_before_integrating(ladder):
     _require_mpi()
-    done = _md_run(ladder, "-ng", "3", "-i", "REST2.in", "-p", "../built.pdb",
-                   "-s", "../built.xml", "-log", "refused.log", ranks=3)
+    done = _md_run(ladder, "-ng", "3", "-i", "../input/REST2.in", "-p", "../build/built.pdb",
+                   "-s", "../build/built.xml", "-log", "refused.log", ranks=3)
     assert done.returncode != 0
     message = done.stdout + done.stderr
     # All four numbers, so the reader knows which one is the odd one out.
@@ -150,9 +151,10 @@ def _ais_project(built: Path, name: str, paths: int) -> Path:
         "dynamics": {"seed": 5},
         "ais": {"number_of_paths": paths, "tau_start": 0.5, "tau_end": 0.0,
                 "switching_steps": 10, "observation_interval_steps": 5},
-        "ais_source": {"trajectory": "../source/whole_prod1.nc"}}, sort_keys=False), encoding="utf-8")
-    assert _cli(built, "build-md", "-odir", f"./{name}", "--config", str(config)).returncode == 0
-    return built / name
+        "ais_source": {"trajectory": "../source-run1/whole_prod1.nc"}}, sort_keys=False),
+        encoding="utf-8")
+    assert _cli(built, "build-md", "-odir", f"./{name}-run1", "--config", str(config)).returncode == 0
+    return built / f"{name}-run1"
 
 
 @pytest.fixture(scope="module")
@@ -171,19 +173,20 @@ def source(built):
         "reporting": {"crd_printout_solute": 10, "crd_printout_whole": 10,
                       "info_printout": 100,
                       "checkpoint_printout": 1000}}, sort_keys=False), encoding="utf-8")
-    assert _cli(built, "build-md", "-odir", "./source", "--config", str(config)).returncode == 0
-    done = subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml"],
-                          cwd=built / "source", capture_output=True, text=True, timeout=3600)
+    assert _cli(built, "build-md", "-odir", "./source-run1", "--config", str(config)).returncode == 0
+    done = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml"],
+                          cwd=built / "source-run1", capture_output=True, text=True, timeout=3600)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
-    return built / "source" / "whole_prod1.nc"
+    return built / "source-run1" / "whole_prod1.nc"
 
 
 @pytest.fixture(scope="module")
 def hundred(built, source):
     _require_mpi()
     out = _ais_project(built, "ais100", 100)
-    done = _md_run(out, "-ng", "4", "-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
-                   "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-log", "AIS.log", ranks=4)
+    done = _md_run(out, "-ng", "4", "-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
+                   "-source-traj", "../source-run1/whole_prod1.nc", "-odir", ".", "-log", "AIS.log",
+                   ranks=4)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return out
 
@@ -200,7 +203,7 @@ def test_every_path_trajectory_holds_its_endpoints(hundred):
 
     for path_id in (0, 42, 99):
         trajectory = mdtraj.load(str(hundred / f"AIS_traj{path_id:04d}.nc"),
-                                 top=str(hundred.parent / "built.pdb"))
+                                 top=str(hundred.parent / "build" / "built.pdb"))
         assert trajectory.n_frames == 3, (path_id, trajectory.n_frames)
         rows = list(csv.DictReader((hundred / f"path_{path_id:04d}" / "observations.csv").open()))
         assert [int(r["protocol_step"]) for r in rows] == [0, 5, 10], rows
@@ -247,8 +250,8 @@ def test_path_identity_does_not_depend_on_the_worker_count(built, source):
     tables = {}
     for ranks in (1, 3):
         out = _ais_project(built, f"ais_n{ranks}", 12)
-        done = _md_run(out, "-ng", str(ranks), "-i", "AIS.in", "-p", "../built.pdb",
-                       "-s", "../built.xml", "-source-traj", "../source/whole_prod1.nc",
+        done = _md_run(out, "-ng", str(ranks), "-i", "../input/AIS.in", "-p", "../build/built.pdb",
+                       "-s", "../build/built.xml", "-source-traj", "../source/whole_prod1.nc",
                        "-odir", ".", "-log", "AIS.log", ranks=ranks)
         assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
         tables[ranks] = {r["path_index"]: r
@@ -272,7 +275,7 @@ def test_a_rerun_does_not_touch_a_path_that_already_completed(built, source):
     no-op, and that is what is asserted here; `--overwrite` gets its own test below.
     """
     out = _ais_project(built, "ais_restart", 4)
-    argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
+    argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
             "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
 
@@ -298,7 +301,7 @@ def test_overwrite_starts_the_ais_directory_over(built, source):
     adopted.
     """
     out = _ais_project(built, "ais_overwrite", 4)
-    argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
+    argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
             "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
     assert len(sorted(out.glob("AIS_traj*.nc"))) == 4
@@ -348,9 +351,9 @@ def stage_project(built):
                    "production_steps": 100},
         "reporting": {"crd_printout_solute": 20, "info_printout": 50,
                       "checkpoint_printout": 100}}, sort_keys=False), encoding="utf-8")
-    assert _cli(built, "build-md", "-odir", "./dcd", "--config", str(config)).returncode == 0
+    assert _cli(built, "build-md", "-odir", "./dcd-run1", "--config", str(config)).returncode == 0
     out = built / "dcd"
-    done = _md_run(out, "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
+    done = _md_run(out, "-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                    "-x", "custom.dcd", "-r", "cMD.xml", "-o", "cMD.out", "-log", "cMD.log")
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
     return out
@@ -368,7 +371,7 @@ def test_a_conventional_stage_writes_a_genuine_dcd_and_refuses_a_netcdf_name(bui
     # Genuine, by two independent checks: our own byte sniffer and a reader that knows nothing
     # about this project.
     assert detect_trajectory_format(out / "custom.dcd") == "dcd"
-    trajectory = mdtraj.load(str(out / "custom.dcd"), top=str(built / "built.pdb"))
+    trajectory = mdtraj.load(str(out / "custom.dcd"), top=str(built / "build" / "built.pdb"))
     assert trajectory.n_frames == 5, trajectory.n_frames
 
     # `.nc` IS NOW ACCEPTED, and this is the change that made it honest: the stage writes AMBER
@@ -377,15 +380,15 @@ def test_a_conventional_stage_writes_a_genuine_dcd_and_refuses_a_netcdf_name(bui
     # In a directory of its OWN, not `out`: the stage there has a committed checkpoint at its
     # full step count, so a second invocation correctly resumes to completion with no dynamics
     # and writes no trajectory at all. Reusing it tests the resume path, not the format.
-    assert _cli(built, "build-md", "-odir", "./nc", "--config", str(config)).returncode == 0
+    assert _cli(built, "build-md", "-odir", "./nc-run1", "--config", str(config)).returncode == 0
     nc_out = built / "nc"
-    accepted = _md_run(nc_out, "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
+    accepted = _md_run(nc_out, "-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                        "-x", "cMD.nc", "-r", "cMD.xml", "-o", "cMD.out", "-log", "cMD.log")
     assert accepted.returncode == 0, accepted.stdout[-3000:] + accepted.stderr[-3000:]
     assert detect_trajectory_format(nc_out / "cMD.nc") == "netcdf"
-    assert mdtraj.load(str(nc_out / "cMD.nc"), top=str(built / "built.pdb")).n_frames == 5
+    assert mdtraj.load(str(nc_out / "cMD.nc"), top=str(built / "build" / "built.pdb")).n_frames == 5
 
-    refused = _md_run(out, "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
+    refused = _md_run(out, "-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                       "-x", "cMD.xtc", "-r", "third.xml", "-o", "third.out", "-log", "third.log")
     assert refused.returncode != 0
     assert "DCD" in refused.stderr, refused.stderr
@@ -421,13 +424,13 @@ def test_ais_reads_a_genuine_netcdf_source_and_writes_genuine_netcdf(hundred, bu
 
     from md_tools.openmm.trajectory import detect_trajectory_format
 
-    assert detect_trajectory_format(built / "source" / "whole_prod1.nc") == "netcdf"
+    assert detect_trajectory_format(built / "source-run1" / "whole_prod1.nc") == "netcdf"
     assert read_record(hundred / "AIS.log")["source"]["format"] == "netcdf"
 
     for path_id in (0, 99):
         published = hundred / f"AIS_traj{path_id:04d}.nc"
         assert detect_trajectory_format(published) == "netcdf"
-        trajectory = mdtraj.load(str(published), top=str(built / "built.pdb"))
+        trajectory = mdtraj.load(str(published), top=str(built / "build" / "built.pdb"))
         assert trajectory.n_frames == 3, (path_id, trajectory.n_frames)
 
 
@@ -442,7 +445,7 @@ def test_a_source_whose_suffix_and_contents_disagree_is_refused(built, source, t
     mislabelled = built / "mislabelled.dcd"
     mislabelled.write_bytes(source.read_bytes())
     out = _ais_project(built, "ais_mislabelled", 2)
-    done = _md_run(out, "-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
+    done = _md_run(out, "-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                    "-source-traj", "../mislabelled.dcd", "-odir", ".",
                    "-o", "AIS.out", "-log", "AIS.log")
     assert done.returncode != 0
@@ -463,7 +466,7 @@ def _cadence_project(built: Path, name: str) -> Path:
         "ais_source": {"trajectory": "../source/whole_prod1.nc"},
         "reporting": {"crd_printout_solute": 200, "info_printout": 500,
                       "checkpoint_printout": 200}}, sort_keys=False), encoding="utf-8")
-    assert _cli(built, "build-md", "-odir", f"./{name}", "--config", str(config)).returncode == 0
+    assert _cli(built, "build-md", "-odir", f"./{name}-run1", "--config", str(config)).returncode == 0
     return built / name
 
 
@@ -477,14 +480,14 @@ def test_each_ais_cadence_controls_its_own_stream(built, source):
     import mdtraj
 
     out = _cadence_project(built, "cadences")
-    done = _md_run(out, "-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
+    done = _md_run(out, "-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                    "-source-traj", "../source/whole_prod1.nc", "-odir", ".",
                    "-o", "AIS.out", "-log", "AIS.log")
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
 
     observations = list(csv.DictReader((out / "path_0000" / "observations.csv").open()))
     states = list(csv.DictReader((out / "path_0000" / "system.csv").open()))
-    frames = mdtraj.load(str(out / "AIS_traj0000.nc"), top=str(built / "built.pdb"))
+    frames = mdtraj.load(str(out / "AIS_traj0000.nc"), top=str(built / "build" / "built.pdb"))
 
     assert [int(r["protocol_step"]) for r in observations] == list(range(0, 1001, 100))
     assert [int(r["protocol_step"]) for r in states] == [0, 500, 1000]
@@ -517,7 +520,7 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
     from md_tools.openmm.checkpoint import FAULT_ENVIRONMENT
 
     out = _cadence_project(built, "resume")
-    argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
+    argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
             "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
 
     crashed = subprocess.run(["md-openmm", "md-run", *argv], cwd=out, capture_output=True,
@@ -548,7 +551,7 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
         observations = list(csv.DictReader((directory / "observations.csv").open()))
         states = list(csv.DictReader((directory / "system.csv").open()))
         frames = mdtraj.load(str(out / f"AIS_traj{path_id:04d}.nc"),
-                             top=str(built / "built.pdb"))
+                             top=str(built / "build" / "built.pdb"))
 
         steps = [int(r["protocol_step"]) for r in observations]
         assert steps == list(range(0, 1001, 100)), (path_id, steps)
@@ -581,7 +584,7 @@ def test_a_completed_path_is_not_touched_by_a_resume(built, source):
     reasons, which is the wrong signal in the wrong place.
     """
     out = _cadence_project(built, "untouched")
-    argv = ("-i", "AIS.in", "-p", "../built.pdb", "-s", "../built.xml",
+    argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
             "-source-traj", "../source/whole_prod1.nc", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
 
@@ -614,7 +617,7 @@ def test_the_machine_configuration_decides_the_platform_and_cpu_overrides_it(bui
     # Each run gets its OWN checkpoint. An OpenMM checkpoint is binary and platform-specific, so
     # sharing one between a CUDA run and a CPU run is not a thing that can work -- and the
     # refusal for trying is asserted separately below.
-    argv = ("-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml")
+    argv = ("-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml")
 
     # 1. no user configuration at all -> built-in default, CUDA.
     #
@@ -673,12 +676,12 @@ def test_a_multi_rank_launch_without_mpi4py_fails_before_any_output(built, tmp_p
     _require_mpi()
     # `ladder`, requested above, is what builds this directory. Reaching for it on the strength
     # of another test having run first is what made this fail under pytest-xdist.
-    out = built / "rest2"
+    out = built / "rest2-run1"
     destination = tmp_path / "nothing"
     environment = dict(os.environ, MD_TOOLS_FORCE_NO_MPI4PY="1")
     done = subprocess.run(
-        ["mpirun", "-n", "2", "md-openmm", "md-run", "-ng", "2", "-i", "REST2.in",
-         "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
+        ["mpirun", "-n", "2", "md-openmm", "md-run", "-ng", "2", "-i", "../input/REST2.in",
+         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination),
          "-o", str(destination / "x.out"), "-log", str(destination / "x.log")],
         cwd=out, capture_output=True, text=True, timeout=600, env=environment)
     assert done.returncode != 0
@@ -694,7 +697,7 @@ def test_a_serial_run_needs_no_mpi4py(built, tmp_path, stage_project):
     out = stage_project
     environment = dict(os.environ, MD_TOOLS_FORCE_NO_MPI4PY="1")
     done = subprocess.run(
-        ["md-openmm", "md-run", "-i", "cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
+        ["md-openmm", "md-run", "-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
          "-x", "serial.dcd", "-r", "serial.xml", "-o", "serial.out", "-log", "serial.log"],
         cwd=out, capture_output=True, text=True, timeout=1800, env=environment)
     assert done.returncode == 0, done.stdout[-2000:] + done.stderr[-2000:]

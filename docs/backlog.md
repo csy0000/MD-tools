@@ -421,6 +421,32 @@ already name its commit. `docs/campaigns/test-systems-2026-09/run_tests.py` pass
 
 ---
 
+## 12. `--all-in-one` writes every stage's artefacts flat in the run root
+
+Found 2026-09-15, probing the all-in-one chain after the equilibration filing keys were fixed. The
+chain itself is correct -- five stages, `status: completed` each, keys right (`eq_1.xml`, `min.xml`,
+`cMD.*`, `mdout.csv`) -- but `run_generated_workflow` uses ONE `base` for every stage instead of
+each stage's own `-odir`, so the artefacts land beside `md.py`:
+
+```text
+cMD-run1/  eq_1.xml eq_1.log eq_1.checkpoints/  min.xml min.log  cMD.xml  mdout_eq_1.csv
+           eq/                                   <- holds only resolved.config + run.config
+```
+
+The split layout puts equilibration artefacts in `<run>/eq/` and the minimisation in the SHARED
+`<system>/min/`, which is what `run.sh` does. So a split run and an all-in-one run of the same
+configuration produce the same filenames in different places, and only the split one is where the
+layout says to look. `build-md --all-in-one` does create `eq/` (every script-bearing directory
+carries its own declaration), which makes the empty directory beside the flat files misleading in
+its own right.
+
+NOT FIXED, deliberately: it is pre-existing, unrelated to the naming work that exposed it, and
+changing where a runtime writes is a behavioural change for anyone already using `--all-in-one`.
+`--check` was suspected of leaving the stray `eq/` behind and was cleared by measurement: a
+`--check` into a fresh `-odir` creates nothing, as the contract requires.
+
+---
+
 ## Cross-references
 
 - `docs/release-notes/20260907-cv-validation-final-evidence.md` — the evidence behind the

@@ -76,7 +76,7 @@ def _md_openmm(cwd, *args, timeout=1800):
 def _run_sh(directory, *extra, timeout=3600, expect_success=True):
     """`./run.sh ../built.pdb ../built.xml`, the generated driver for a whole protocol."""
     done = subprocess.run(
-        ["bash", "run.sh", "../built.pdb", "../built.xml", *extra],
+        ["bash", "run.sh", "../build/built.pdb", "../build/built.xml", *extra],
         cwd=directory, capture_output=True, text=True, timeout=timeout)
     if expect_success:
         assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
@@ -106,16 +106,42 @@ def built(tmp_path_factory):
         "constraints": {"type": "HBonds"},      # X-H lengths fixed, which is what permits 2 fs
         "hydrogen_mass_repartitioning": {"enabled": False},
     }), encoding="utf-8")
-    _md_openmm(work, "build-top", "-i", ALA, "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", "sys.config")
-    assert (work / "built.xml").is_file() and (work / "built.pdb").is_file()
+    _md_openmm(work, "build-top", "-i", ALA, "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", "sys.config")
+    assert (work / "build" / "built.xml").is_file() and (work / "build" / "built.pdb").is_file()
     return work
+
+
+@pytest.fixture(scope="module")
+def system(built, tmp_path_factory):
+    """A SYSTEM ROOT PER EXAMPLE, each sharing the one built system.
+
+    `build/`, `min/` and `input/` belong to the SYSTEM and are shared by every run on it -- and
+    the sharing is enforced, not assumed: `input/min.in` is refused if a second configuration
+    resolves it differently, because the runs already beside it read that file.
+
+    The examples below are deliberately DIFFERENT EXPERIMENTS, not repeats of one. Example 1
+    minimises for 25 iterations and reports every 20 steps; example 3 minimises for 10; example 4
+    runs at `tau = 0.5`. Generated into one root, the second one to arrive refused with
+
+        input/min.in already exists and is not what this configuration resolves to.
+
+    which is the layout being right about them. They are not comparable runs of one system, so
+    each gets a system root of its own -- exactly the advice the refusal gives. `build/` is copied
+    rather than rebuilt: the physics is identical and `build-top` is the slow part.
+    """
+    def make(name):
+        root = tmp_path_factory.mktemp(f"example-{name}")
+        shutil.copytree(built / "build", root / "build")
+        return root
+
+    return make
 
 
 # --- example 1: cMD ------------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def cmd_run(built):
+def cmd_run(system):
     """EXAMPLE 1's output, produced by a FIXTURE rather than by another test.
 
     `test_example_1b` used to require that `test_example_1` had already run, and said so by
@@ -126,6 +152,7 @@ def cmd_run(built):
     A fixture states the dependency instead of assuming it: any worker that needs this output
     builds it.
     """
+    built = system("cmd")
     (built / "cMD.config").write_text(yaml.safe_dump({
         "protocol": "cMD",
         "solvent": "implicit",
@@ -137,23 +164,38 @@ def cmd_run(built):
                    "production_steps": 100},
         "reporting": {"crd_printout_solute": 20, "info_printout": 50, "checkpoint_printout": 50},
     }), encoding="utf-8")
-    _md_openmm(built, "build-md", "-odir", "./cMD", "--config", "cMD.config")
-    _run_sh(built / "cMD", "--cpu")
-    return built / "cMD"
+    _md_openmm(built, "build-md", "-odir", "./cMD-run1", "--config", "cMD.config")
+    _run_sh(built / "cMD-run1", "--cpu")
+    return built / "cMD-run1"
 
 
-def test_example_1_plain_md_from_a_structure_to_a_trajectory(built, cmd_run):
+def test_example_1_plain_md_from_a_structure_to_a_trajectory(cmd_run):
     """The simplest complete run: minimise, equilibrate, produce.
 
-        md-openmm build-md -odir ./cMD --config cMD.config
-        cd cMD && ./run.sh ../built.pdb ../built.xml
+        md-openmm build-md -odir ./cMD-run1 --config cMD.config
+        cd cMD-run1 && ./run.sh ../build/built.pdb ../build/built.xml
 
     `build-md` writes one `.in` per stage, one thin `.py` entry point per stage, `run.sh` which
     calls them in order, and `resolved.config`. Each stage hands its final state to the next
     through `-c`, which `run.sh` wires up for you.
+
+    WHAT IS WHERE, because it is no longer all one directory. The SYSTEM owns `build/`, `min/`
+    and `input/`; the RUN owns its `eq/`, its output and its records. So the `.in` files are
+    shared at `../input/`, the minimisation is the shared `../min/`, and what is in the run
+    directory is what belongs to this run alone.
     """
+    root = cmd_run.parent
     generated = {p.name for p in cmd_run.iterdir()}
-    assert {"run.sh", "resolved.config", "min.in", "cMD.in", "min.py", "cMD.py"} <= generated
+    assert {"run.sh", "resolved.config", "run.config", "cMD.py"} <= generated, generated
+
+    # The inputs are SHARED, so they are beside the system, not inside the run.
+    shared = {p.name for p in (root / "input").iterdir()}
+    assert {"min.in", "eq_1.in", "cMD.in"} <= shared, shared
+    # The minimisation is shared too; the equilibration is this run's own.
+    assert (root / "min" / "min.py").is_file()
+    # The SCRIPTS are filed `eq_<k>.py`; only the restarts they write are stage-named. The two
+    # spellings are deliberate and are not interchangeable.
+    assert (cmd_run / "eq" / "eq_1.py").is_file()
 
     # What you get: a trajectory, a final state to continue from, a human-readable output and a
     # machine-readable provenance record, per stage.
@@ -162,7 +204,7 @@ def test_example_1_plain_md_from_a_structure_to_a_trajectory(built, cmd_run):
     assert "completed" in (cmd_run / "cMD.out").read_text(encoding="utf-8")
 
 
-def test_example_1b_the_same_run_one_stage_at_a_time(built, cmd_run):
+def test_example_1b_the_same_run_one_stage_at_a_time(cmd_run):
     """`run.sh` is a convenience, not a second interface. Any stage can be run directly.
 
     These three are the SAME run reaching the same installed code:
@@ -172,7 +214,7 @@ def test_example_1b_the_same_run_one_stage_at_a_time(built, cmd_run):
         python min.py    -p ../built.pdb -s ../built.xml -o min.out ...
     """
     directory = cmd_run
-    _md_openmm(directory, "md-run", "-i", "min.in", "-p", "../built.pdb", "-s", "../built.xml",
+    _md_openmm(directory, "md-run", "-i", "../input/min.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                "-o", "min_again.out", "-x", "min_again.dcd", "-r", "min_again.xml",
                "-log", "min_again.log", "--cpu", "-odir", "./again")
     assert (directory / "again" / "min_again.out").is_file() or \
@@ -182,15 +224,16 @@ def test_example_1b_the_same_run_one_stage_at_a_time(built, cmd_run):
 # --- example 2: REST2 ----------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def rest2_run(built):
+def rest2_run(system):
     """EXAMPLE 2's output, as a fixture. Same reason as `cmd_run`: a test must not depend on
     another test having run, because under `-n 24` it may not have run HERE."""
     if shutil.which("mpirun") is None:
         pytest.skip("no mpirun on PATH")
+    built = system("rest2")
     _write_rest2_config(built)
-    _md_openmm(built, "build-md", "-odir", "./REST2", "--config", "REST2.config")
-    _run_sh(built / "REST2", "--cpu", timeout=7200)
-    return built / "REST2"
+    _md_openmm(built, "build-md", "-odir", "./REST2-run1", "--config", "REST2.config")
+    _run_sh(built / "REST2-run1", "--cpu", timeout=7200)
+    return built / "REST2-run1"
 
 
 def _write_rest2_config(built):
@@ -213,7 +256,7 @@ def _write_rest2_config(built):
     }), encoding="utf-8")
 
 
-def test_example_2_a_rest2_ladder_under_a_launcher(built, rest2_run):
+def test_example_2_a_rest2_ladder_under_a_launcher(rest2_run):
     """Replica exchange: N states of one system, differing only in Hamiltonian.
 
         mpirun -n 3 md-openmm md-run -ng 3 -i REST2.in -p ../built.pdb -s ../built.xml ...
@@ -237,13 +280,17 @@ def test_example_2_a_rest2_ladder_under_a_launcher(built, rest2_run):
     run_sh = (rest2_run / "run.sh").read_text(encoding="utf-8")
     assert "mpirun -n 3" in run_sh and "-ng 3" in run_sh
 
-    out = (rest2_run / "REST2.out").read_text(encoding="utf-8")
+    # THE LADDER'S OUTPUT IS PER SEGMENT, in `remd_records/`. `run.sh` names it
+    # `-o remd_records/REST2_prod<N>.out`, because a ladder that is extended in place writes a
+    # `_prod2` set beside the first rather than over it -- so there is no `REST2.out` at the run
+    # root for this to read, and there was not one to read here.
+    out = (rest2_run / "remd_records" / "REST2_prod1.out").read_text(encoding="utf-8")
     assert "run_status: completed" in out
     # One trajectory per fixed thermodynamic STATE -- never per walker, never tau-named.
     for state in range(3):
-        assert (built / "REST2" / f"whole_state{state}_prod1.nc").is_file()
+        assert (rest2_run / f"whole_state{state}_prod1.nc").is_file()
     # An Amber-style exchange history, and the per-pair acceptance report.
-    assert (built / "REST2" / "rem.log").is_file()
+    assert (rest2_run / "rem.log").is_file()
     assert "acceptance" in out.lower()
 
 
@@ -272,7 +319,7 @@ def _interrupt_when(directory, condition, *, what, until_output=None, timeout=90
     import time
 
     process = subprocess.Popen(
-        ["bash", "run.sh", "../built.pdb", "../built.xml", "--cpu"],
+        ["bash", "run.sh", "../build/built.pdb", "../build/built.xml", "--cpu"],
         cwd=directory, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         start_new_session=True)
     group = os.getpgid(process.pid)
@@ -323,7 +370,7 @@ def _interrupt_when(directory, condition, *, what, until_output=None, timeout=90
             process.communicate()
 
 
-def test_example_3_an_interrupted_cmd_chain_resumes_by_rerunning_the_same_command(built):
+def test_example_3_an_interrupted_cmd_chain_resumes_by_rerunning_the_same_command(system):
     """READ THIS BEFORE RUNNING A LONG cMD CHAIN ON A SCHEDULER.
 
     An interrupted cMD chain continues by RE-RUNNING THE SAME COMMAND. Each stage that already
@@ -344,6 +391,7 @@ def test_example_3_an_interrupted_cmd_chain_resumes_by_rerunning_the_same_comman
     of a committed checkpoint, which is a fact about the directory, not a claim on the command
     line. **A ladder is different** -- it takes `--resume` properly (example 3b).
     """
+    built = system("interrupt")
     directory = built / "interrupted"
     (built / "interrupt.config").write_text(yaml.safe_dump({
         "protocol": "cMD", "solvent": "implicit",
@@ -396,7 +444,7 @@ def test_example_3_an_interrupted_cmd_chain_resumes_by_rerunning_the_same_comman
     assert "--resume is not a cMD flag" in resumed.stdout + resumed.stderr
 
 
-def test_example_3b_resuming_a_ladder_is_a_different_command(built, rest2_run):
+def test_example_3b_resuming_a_ladder_is_a_different_command(rest2_run):
     """A ladder takes `--resume`, but NOT through `run.sh`.
 
         # this does NOT work -- run.sh forwards its arguments to every stage, and the
@@ -404,8 +452,8 @@ def test_example_3b_resuming_a_ladder_is_a_different_command(built, rest2_run):
         ./run.sh ../built.pdb ../built.xml --resume
 
         # this is how you resume a ladder: the launcher line, directly.
-        mpirun -n 3 md-openmm md-run -ng 3 -i REST2.in \
-            -p ../built.pdb -s ../built.xml -c eq_nvt_free.xml \
+        mpirun -n 3 md-openmm md-run -ng 3 -i ../input/REST2.in \
+            -p ../build/built.pdb -s ../build/built.xml -c eq/eq_3.xml \
             -x REST2.nc -r restart.json -o REST2.out -log REST2.log --resume
 
     It continues to the ORIGINAL budget and does not extend it. Run against a ladder that already
@@ -421,8 +469,9 @@ def test_example_3b_resuming_a_ladder_is_a_different_command(built, rest2_run):
     # The right way.
     before = (directory / "whole_state0_prod1.nc").stat().st_mtime_ns
     done = subprocess.run(
-        ["mpirun", "-n", "3", *CLI, "md-run", "-ng", "3", "-i", "REST2.in",
-         "-p", "../built.pdb", "-s", "../built.xml", "-c", "eq_nvt_free.xml",
+        # `../input/REST2.in`: the input is SHARED at the dataset root, not inside the run.
+        ["mpirun", "-n", "3", *CLI, "md-run", "-ng", "3", "-i", "../input/REST2.in",
+         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-c", "eq/eq_3.xml",
          "-x", "REST2.nc", "-r", "restart.json", "-o", "REST2.out", "-log", "REST2.log",
          "--cpu", "--resume"],
         cwd=directory, capture_output=True, text=True, timeout=3600)
@@ -433,7 +482,7 @@ def test_example_3b_resuming_a_ladder_is_a_different_command(built, rest2_run):
 
 # --- example 4: AIS ------------------------------------------------------------------------------
 
-def test_example_4_switching_paths_from_a_fixed_tau_ensemble(built):
+def test_example_4_switching_paths_from_a_fixed_tau_ensemble(system):
     """AIS: many short non-equilibrium paths, each starting from a frame of a FIXED-TAU cMD run.
 
     AIS is `protocol: AIS` in a `build-md` configuration, not a separate command. It needs a
@@ -451,6 +500,7 @@ def test_example_4_switching_paths_from_a_fixed_tau_ensemble(built):
     has to do what it always should have: run its own short cMD AT tau = 0.5 and anneal from
     that. The extra build is the point of the example, not overhead around it.
     """
+    built = system("ais")
     hot_config = built / "hot.config"
     hot_config.write_text(yaml.safe_dump({
         "protocol": "cMD",
@@ -466,10 +516,10 @@ def test_example_4_switching_paths_from_a_fixed_tau_ensemble(built):
         "reporting": {"crd_printout_solute": 10, "crd_printout_whole": 10,
                       "info_printout": 50, "checkpoint_printout": 100},
     }), encoding="utf-8")
-    _md_openmm(built, "build-md", "-odir", "./hot", "--config", "hot.config")
-    _run_sh(built / "hot", "--cpu")
-    source = built / "hot" / "whole_prod1.nc"
-    assert source.is_file(), sorted(p.name for p in (built / "hot").iterdir())
+    _md_openmm(built, "build-md", "-odir", "./hot-run1", "--config", "hot.config")
+    _run_sh(built / "hot-run1", "--cpu")
+    source = built / "hot-run1" / "whole_prod1.nc"
+    assert source.is_file(), sorted(p.name for p in (built / "hot-run1").iterdir())
 
     (built / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS",
@@ -485,14 +535,15 @@ def test_example_4_switching_paths_from_a_fixed_tau_ensemble(built):
                 "tau_start": 0.5, "tau_end": 0.0},
         "ais_source": {"trajectory": str(source)},
     }), encoding="utf-8")
-    _md_openmm(built, "build-md", "-odir", "./AIS", "--config", "AIS.config")
+    _md_openmm(built, "build-md", "-odir", "./AIS-run1", "--config", "AIS.config")
 
-    _md_openmm(built / "AIS", "md-run", "-i", "AIS.in",
-               "-p", "../built.pdb", "-s", "../built.xml",
+    # `../input/AIS.in`: the input is SHARED at the dataset root, not inside the run.
+    _md_openmm(built / "AIS-run1", "md-run", "-i", "../input/AIS.in",
+               "-p", "../build/built.pdb", "-s", "../build/built.xml",
                "-source-traj", str(source), "-odir", "./out", "-log", "AIS.log", "--cpu",
                timeout=3600)
 
-    out = built / "AIS" / "out"
+    out = built / "AIS-run1" / "out"
     # One directory per path, each with the work rows and the record that says it finished.
     assert (out / "path_0000" / "completed.json").is_file()
     # The work table rank 0 assembles from the per-path records on disk.
@@ -531,21 +582,21 @@ def test_example_5_a_cyclic_peptide_built_from_smiles(tmp_path):
         "constraints": {"type": "HBonds"},
         "hydrogen_mass_repartitioning": {"enabled": False},
     }), encoding="utf-8")
-    _md_openmm(tmp_path, "build-top", "-i", "cyc.smi", "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", "sys.config", timeout=3600)
+    _md_openmm(tmp_path, "build-top", "-i", "cyc.smi", "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", "sys.config", timeout=3600)
 
     # The build states what it actually assigned, including which atoms were corrected.
-    log = (tmp_path / "built.log").read_text(encoding="utf-8")
+    log = (tmp_path / "build" / "built.log").read_text(encoding="utf-8")
     assert "peptide_like_mbondi3" in log
     assert "molecular_map_digest" in log
     # `built.sdf` is retained beside the System: bond orders are not recoverable from a topology,
     # and the omega classifier needs them for a ladder over this solute.
-    assert (tmp_path / "built.sdf").is_file()
+    assert (tmp_path / "build" / "built.sdf").is_file()
 
     # The map is reusable, and it is what you would define collective variables from.
     from md_tools.openmm.peptide_map import map_from_sdf
 
-    mapped = map_from_sdf(tmp_path / "built.sdf")
+    mapped = map_from_sdf(tmp_path / "build" / "built.sdf")
     assert sorted(mapped.sequence) == ["ARG", "ASP", "GLY"]
     assert len(mapped.torsions()) == 9          # phi, psi, omega for each of three residues
     assert len(mapped.carboxylate_oxygens) == 2
@@ -591,6 +642,9 @@ def test_the_cmd_method_page_script_actually_runs(tmp_path):
     solvent chain of a few thousand steps so this finishes in about a minute; everything else --
     the commands, the generated files, the order -- is what the page documents.
     """
+    # `openmm_methods/cMD/` is a DOCS METHOD PAGE, not a run directory: it takes no `-run1`
+    # suffix. A bulk rewrite gave it one, and since the test skips when the file is absent, both
+    # of these stopped running instead of failing -- a silent pass is worse than a red test.
     script = REPO / "docs" / "openmm_methods" / "cMD" / "README.sh"
     if not script.is_file():
         pytest.skip(f"{script} is not present")
@@ -601,13 +655,18 @@ def test_the_cmd_method_page_script_actually_runs(tmp_path):
         cwd=script.parent, capture_output=True, text=True, timeout=3600)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
 
-    produced = tmp_path / "run" / "md_script"
+    # `cMD-run1/`, not the retired `md_script/`: the run directory is `<method>-run<N>` and the
+    # system's `build/`, `min/` and `input/` are its siblings.
+    produced = tmp_path / "run" / "cMD-run1"
     assert (produced / "solute_prod1.nc").is_file()
     assert "completed" in (produced / "cMD.out").read_text(encoding="utf-8")
 
 
 def test_the_method_page_script_refuses_to_delete_an_existing_directory(tmp_path):
     """It must never clear a path it was handed -- it stops and says so instead."""
+    # `openmm_methods/cMD/` is a DOCS METHOD PAGE, not a run directory: it takes no `-run1`
+    # suffix. A bulk rewrite gave it one, and since the test skips when the file is absent, both
+    # of these stopped running instead of failing -- a silent pass is worse than a red test.
     script = REPO / "docs" / "openmm_methods" / "cMD" / "README.sh"
     if not script.is_file():
         pytest.skip(f"{script} is not present")

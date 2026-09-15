@@ -106,10 +106,16 @@ def workspace(tmp_path_factory):
         pytest.skip("no ALA fixture")
     root = tmp_path_factory.mktemp("direct")
 
+    # THE DATASET ROOT. `build/`, `min/` and `input/` are shared by every run on this system, and
+    # a ladder's rungs are scaled from `build/built.xml` at build time, so the System has to be
+    # there before any run is generated. Real `build-top` -- and its tleap dependency -- is kept:
+    # these tests launch generated scripts against this System, so it must be one a user would
+    # actually have.
+    (root / "build").mkdir(exist_ok=True)
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
 
@@ -141,8 +147,8 @@ def workspace(tmp_path_factory):
         _config(root, f"{name}.config", document)
         extra = ["--all-in-one"] if name == "allinone" else []
         done = subprocess.run(
-            CLI + ["build-md", "-odir", f"./{name}", "--config", str(root / f"{name}.config"),
-                   *extra],
+            CLI + ["build-md", "-odir", f"./{name}-run1",
+                   "--config", str(root / f"{name}.config"), *extra],
             cwd=root, capture_output=True, text=True, timeout=600)
         assert done.returncode == 0, f"{name}: {done.stdout}{done.stderr}"
 
@@ -155,7 +161,7 @@ def workspace(tmp_path_factory):
     # format check and cannot be opened tests the format check and nothing else.
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
 
     # A GENUINE PHASE-SPACE RESERVOIR, for exactly the reason the DCD above is genuine.
@@ -173,7 +179,7 @@ def workspace(tmp_path_factory):
     # The identity has to be the TOP RUNG's, because that is the distribution a refresh would
     # draw from and the preflight now checks it. Built through the same helpers the ladder uses:
     # restating it by hand would only prove the fixture and the checker agree about a dictionary.
-    loaded = load_inputs(str(root / "built.pdb"), str(root / "built.xml"))
+    loaded = load_inputs(str(root / "build" / "built.pdb"), str(root / "build" / "built.xml"))
     document = solute_document(loaded.pdb.topology, loaded.system, route=None)
     span = document.get("solute_atom_range")
     if span and document.get("solute_atom_indices_are_contiguous", False):
@@ -201,20 +207,30 @@ def workspace(tmp_path_factory):
 
 
 #: Which script each mode is launched through, and the flags it needs beyond -p/-s.
+#: mode -> (the generated entry point, relative to the dataset root; extra flags it requires)
+#:
+#: `split` names the SHARED minimisation script. Minimisation draws no velocities and has no
+#: seeded stochastic element, so every run on one system minimises to the same structure and the
+#: script lives at `<system>/min/min.py` rather than in any one run. The others are per run.
 ENTRY = {
-    "split": ("split/min.py", []),
-    "allinone": ("allinone/md.py", []),
-    "REST2": ("REST2/REST2.py", []),
-    "rREST2": ("rREST2/rREST2.py", []),
-    "AIS": ("AIS/AIS.py", ["-source-traj", "../source.dcd"]),
+    "split": ("min/min.py", []),
+    "allinone": ("allinone-run1/md.py", []),
+    "REST2": ("REST2-run1/REST2.py", []),
+    "rREST2": ("rREST2-run1/rREST2.py", []),
+    "AIS": ("AIS-run1/AIS.py", ["-source-traj", "../source.dcd"]),
 }
 MODES = sorted(ENTRY)
 
 
 def _launch(workspace, mode, destination: Path, *extra, environment=None):
+    """Run a generated entry point from its own directory, as a person would.
+
+    `-p` and `-s` reach the dataset's shared `build/` -- one level up from a run, and from the
+    shared `min/` -- which is what every generated `run.sh` types too.
+    """
     script, needed = ENTRY[mode]
     argv = [sys.executable, str(workspace / script),
-            "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
+            "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination),
             *needed, *extra]
     return _run(argv, cwd=workspace / Path(script).parent, environment=environment)
 
@@ -278,7 +294,8 @@ def test_a_missing_input_stops_a_generated_script_before_any_output(mode, flag, 
     destination = tmp_path / "never"
     script, needed = ENTRY[mode]
     argv = [sys.executable, str(workspace / script),
-            "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination), *needed]
+            "-p", "../build/built.pdb", "-s", "../build/built.xml",
+            "-odir", str(destination), *needed]
     argv[argv.index(flag) + 1] = missing
     done = _run(argv, cwd=workspace / Path(script).parent)
     _refused(done, fragment="does not exist")
@@ -301,7 +318,8 @@ def test_a_topology_and_system_that_describe_different_particle_counts_are_refus
     destination = tmp_path / "never"
     script, needed = ENTRY[mode]
     done = _run([sys.executable, str(workspace / script),
-                 "-p", str(stub), "-s", "../built.xml", "-odir", str(destination), *needed,
+                 "-p", str(stub), "-s", "../build/built.xml", "-odir", str(destination),
+                 *needed,
                  *PROTOCOL_ONLY],
                 cwd=workspace / Path(script).parent)
     _refused(done, fragment="particle")
@@ -312,20 +330,22 @@ def test_an_ais_source_that_is_not_a_trajectory_is_refused_before_output(workspa
     mislabelled = tmp_path / "source.dcd"
     mislabelled.write_bytes(b"this is not a trajectory at all" + b"\x00" * 100)
     destination = tmp_path / "never"
-    done = _run([sys.executable, str(workspace / "AIS/AIS.py"),
-                 "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
+    done = _run([sys.executable, str(workspace / ENTRY["AIS"][0]),
+                 "-p", "../build/built.pdb", "-s", "../build/built.xml",
+                 "-odir", str(destination),
                  "-source-traj", str(mislabelled), *PROTOCOL_ONLY],
-                cwd=workspace / "AIS")
+                cwd=workspace / Path(ENTRY["AIS"][0]).parent)
     _refused(done, fragment="neither a DCD nor a NetCDF")
     assert _snapshot(destination) is None
 
 
 def test_a_missing_ais_source_is_refused_before_output(workspace, tmp_path):
     destination = tmp_path / "never"
-    done = _run([sys.executable, str(workspace / "AIS/AIS.py"),
-                 "-p", "../built.pdb", "-s", "../built.xml", "-odir", str(destination),
+    done = _run([sys.executable, str(workspace / ENTRY["AIS"][0]),
+                 "-p", "../build/built.pdb", "-s", "../build/built.xml",
+                 "-odir", str(destination),
                  "-source-traj", str(tmp_path / "absent.dcd")],
-                cwd=workspace / "AIS")
+                cwd=workspace / Path(ENTRY["AIS"][0]).parent)
     _refused(done, fragment="does not exist")
     assert _snapshot(destination) is None
 
@@ -350,7 +370,7 @@ def test_two_output_flags_that_resolve_to_one_file_are_refused(mode, workspace, 
 def test_an_output_that_would_overwrite_an_input_is_refused(mode, workspace, tmp_path):
     """Writing the log over `built.xml` destroys the System the run needs to read."""
     destination = tmp_path / "never"
-    done = _launch(workspace, mode, destination, "-log", "../built.xml")
+    done = _launch(workspace, mode, destination, "-log", "../build/built.xml")
     _refused(done, fragment="input")
     assert _snapshot(destination) is None
 

@@ -125,7 +125,10 @@ def test_build_md_accepts_the_field_and_reports_it(tmp_path):
         "reporting": {"crd_printout_solute": EXCHANGE_STEPS, "info_printout": EXCHANGE_STEPS,
                       "checkpoint_printout": EXCHANGE_STEPS},
     }), encoding="utf-8")
-    done = subprocess.run(CLI + ["build-md", "-odir", "./REST2", "--config", str(config)],
+    from .conftest import make_dataset_root
+
+    make_dataset_root(tmp_path)
+    done = subprocess.run(CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(config)],
                           cwd=tmp_path, capture_output=True, text=True, timeout=900)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
 
@@ -136,7 +139,7 @@ def test_build_md_accepts_the_field_and_reports_it(tmp_path):
     import yaml as _yaml
 
     resolved = _yaml.safe_load(
-        (tmp_path / "REST2" / "resolved.config").read_text(encoding="utf-8"))
+        (tmp_path / "REST2-run1" / "resolved.config").read_text(encoding="utf-8"))
     assert resolved["rest2"]["equilibration_steps"] == EQUILIBRATION_STEPS
 
     from md_tools.remd.generated import ladder_from_resolved, protocol_file_text

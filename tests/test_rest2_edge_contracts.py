@@ -508,7 +508,7 @@ def test_the_generated_cmd_launcher_passes_no_continuation_flag(tmp_path):
     config.write_text("protocol: cMD\nsolvent: implicit\n"
                       "dynamics:\n  tau: 0.5\n"
                       "stages:\n  production_steps: 1000\n", encoding="utf-8")
-    out = tmp_path / "md_script"
+    out = tmp_path / "cMD-run1"
     build_scripts(config_path=config, out_dir=out, echo=False)
 
     run_sh = (out / "run.sh").read_text()

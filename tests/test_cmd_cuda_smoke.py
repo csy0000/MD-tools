@@ -37,6 +37,7 @@ REPORTING = {"crd_printout_solute": 20, "info_printout": 100, "checkpoint_printo
 def built(tmp_path_factory):
     """One implicit peptide system, built once and shared by both layouts."""
     work = tmp_path_factory.mktemp("cmd-cuda")
+    (work / "build").mkdir(exist_ok=True)
     ala = REPO / "tests" / "data" / "ALA.pdb"
     if not ala.is_file():
         pytest.skip("no ALA fixture")
@@ -44,7 +45,7 @@ def built(tmp_path_factory):
     (work / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     build = subprocess.run(
         [sys.executable, "-m", "md_tools.cli.md_openmm", "build-top", "-i", str(ala),
-         "-os", "built.xml", "-op", "built.pdb", "-log", "built.log",
+         "-os", "build/built.xml", "-op", "build/built.pdb", "-log", "build/built.log",
          "--config", str(work / "sys.config")],
         cwd=work, capture_output=True, text=True, timeout=1800)
     assert build.returncode == 0, build.stdout + build.stderr
@@ -60,15 +61,15 @@ def _generate(work: Path, out: str, *extra: str) -> Path:
          "dynamics": {"seed": 7},
          "stages": STAGES, "reporting": REPORTING}, sort_keys=False), encoding="utf-8")
     result = subprocess.run(
-        [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", f"./{out}",
+        [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", f"./{out}-run1",
          "--config", str(config), *extra],
         cwd=work, capture_output=True, text=True, timeout=600)
     assert result.returncode == 0, result.stdout + result.stderr
-    return work / out
+    return work / f"{out}-run1"
 
 
 def _run(directory: Path):
-    return subprocess.run(["bash", "run.sh", "../built.pdb", "../built.xml"],
+    return subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml"],
                           cwd=directory, capture_output=True, text=True, timeout=3600)
 
 

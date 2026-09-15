@@ -78,8 +78,8 @@ def _environment(root: Path):
 def _build(root: Path):
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
     (root / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
@@ -88,10 +88,10 @@ def _build(root: Path):
 def _generate(root: Path, name: str, document: dict, *extra):
     (root / f"{name}.config").write_text(yaml.safe_dump(document), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", f"./{name}", "--config", str(root / f"{name}.config"), *extra],
+        CLI + ["build-md", "-odir", f"./{name}-run1", "--config", str(root / f"{name}.config"), *extra],
         cwd=root, capture_output=True, text=True, timeout=900)
     assert done.returncode == 0, done.stdout + done.stderr
-    return root / name
+    return root / f"{name}-run1"
 
 
 def _initial_state(root: Path):
@@ -99,8 +99,8 @@ def _initial_state(root: Path):
     from openmm import XmlSerializer, unit
     from openmm.app import PDBFile
 
-    pdb = PDBFile(str(root / "built.pdb"))
-    system = XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(root / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
     integrator = openmm.VerletIntegrator(1.0 * unit.femtosecond)
     # On CUDA, like everything else in this file. A serialised State is platform-independent, so
     # the Reference platform would do -- but a file whose entire purpose is CUDA evidence should
@@ -136,6 +136,7 @@ def cmd_project(tmp_path_factory):
         pytest.skip("no ALA fixture")
     _require_cuda()
     root = tmp_path_factory.mktemp("cuda-cv-cmd")
+    (root / "build").mkdir(exist_ok=True)
     _build(root)
     return root
 
@@ -156,7 +157,7 @@ def _cmd_config(root: Path, *, tau=0.0, phase_space=0):
 def _run_cmd(root, scripts, destination, *, environment=None, expect=0):
     done = subprocess.run(
         [sys.executable, str(scripts / "md.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-odir", str(destination)],
         cwd=scripts, capture_output=True, text=True, timeout=2400,
         env={**_environment(root), **(environment or {})})
@@ -259,7 +260,7 @@ def _ladder_config(root: Path, *, reservoir=False, states=3):
 def _run_ladder(root, scripts, destination, name, *extra, environment=None, expect=0):
     done = subprocess.run(
         [sys.executable, str(scripts / f"{name}.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-c", str(root / "initial_state.xml"), "-odir", str(destination), *extra],
         cwd=scripts, capture_output=True, text=True, timeout=2400,
         env={**_environment(root), **(environment or {})})
@@ -275,6 +276,7 @@ def ladder_project(tmp_path_factory):
         pytest.skip("no ALA fixture")
     _require_cuda()
     root = tmp_path_factory.mktemp("cuda-cv-ladder")
+    (root / "build").mkdir(exist_ok=True)
     _build(root)
     _initial_state(root)
     return root
@@ -358,10 +360,11 @@ def ais_project(tmp_path_factory):
         pytest.skip("no ALA fixture")
     _require_cuda()
     root = tmp_path_factory.mktemp("cuda-cv-ais")
+    (root / "build").mkdir(exist_ok=True)
     _build(root)
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
     _generate(root, "AIS", {
         "protocol": "AIS", "solvent": "implicit",
@@ -379,10 +382,10 @@ def ais_project(tmp_path_factory):
 
 def _run_ais(root, destination, *extra, environment=None, expect=0):
     done = subprocess.run(
-        [sys.executable, str(root / "AIS" / "AIS.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+        [sys.executable, str(root / "AIS-run1" / "AIS.py"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-source-traj", str(root / "source.dcd"), "-odir", str(destination), *extra],
-        cwd=root / "AIS", capture_output=True, text=True, timeout=2400,
+        cwd=root / "AIS-run1", capture_output=True, text=True, timeout=2400,
         env={**_environment(root), **(environment or {})})
     if expect is not None:
         assert (done.returncode == 0) == (expect == 0), \

@@ -320,7 +320,9 @@ Do not change these without a failing test that demonstrates a defect.
   function on a device with the feature ENABLED. It once cited a `--cpu` file for the AIS CV
   path, which is worse than an empty cell: a gap invites work, a false entry closes the question.
 * **Every CV series has a sidecar, and each shape is named in one place.** A stage's is
-  `<stage>.cv.json` beside `<stage>.cv.csv` (`md_tools.cv.reporter.SIDECAR_SUFFIX`); a ladder's is
+  `<key>.cv.json` beside `<key>.cv.csv` (`md_tools.cv.reporter.SIDECAR_SUFFIX`), where `<key>` is
+  the name the stage is FILED under -- `eq_1`, not `eq_nvt_posres`, so the series sits beside the
+  `eq_1.xml`, `solute_eq_1.nc` and `mdout_eq_1.csv` a reader has to pair it with; a ladder's is
   `cv_state<i>.json` beside `cv_state<i>.csv` (`md_tools.remd.cv_states`). Neither is the input
   `cv.yaml`, and neither is the content-addressed copy in the generated directory. The inventory
   once named a `.cv.yaml` that never existed, so the real sidecar was governed by no collision or

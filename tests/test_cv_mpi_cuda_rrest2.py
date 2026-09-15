@@ -114,7 +114,7 @@ def project(request, tmp_path_factory):
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./rREST2", "--config", str(root / "rREST2.config")],
+        CLI + ["build-md", "-odir", "./rREST2-run1", "--config", str(root / "rREST2.config")],
         cwd=root, capture_output=True, text=True, timeout=900)
     assert done.returncode == 0, done.stdout + done.stderr
 
@@ -122,8 +122,8 @@ def project(request, tmp_path_factory):
     from openmm import XmlSerializer, unit
     from openmm.app import PDBFile
 
-    pdb = PDBFile(str(root / "built.pdb"))
-    system = XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(root / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
     context = openmm.Context(system, openmm.VerletIntegrator(1.0 * unit.femtosecond),
                              openmm.Platform.getPlatformByName("CUDA"))
     context.setPositions(pdb.positions)
@@ -149,11 +149,11 @@ def _launch(project: Path, destination: Path, *extra, ranks=STATES, environment=
     """No `--cpu`. If CUDA is unavailable the run must fail rather than quietly use the CPU."""
     done = subprocess.run(
         ["mpirun", "-n", str(ranks), sys.executable,
-         str(project / "rREST2" / "rREST2.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+         str(project / "rREST2-run1" / "rREST2.py"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-c", str(project / "initial_state.xml"),
          "-ng", str(ranks), "-odir", str(destination), *extra],
-        cwd=project / "rREST2", capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
+        cwd=project / "rREST2-run1", capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(project, **(environment or {})))
     if expect is not None:
         assert (done.returncode == 0) == (expect == 0), \
@@ -270,7 +270,7 @@ def test_unaffected_states_still_name_the_correct_post_exchange_frame(completed,
     checked = 0
     for state_index in range(STATES):
         frames = mdtraj.load(str(completed / f"whole_state{state_index}_prod1.nc"),
-                             top=str(project / "built.pdb"))
+                             top=str(project / "build" / "built.pdb"))
         for row in _rows(completed / f"cv_state{state_index}.csv"):
             named = row["trajectory_frame_index"]
             if named == "":

@@ -161,38 +161,77 @@ def test_a_semantic_error_is_reported_against_the_file_that_was_written():
 
 @pytest.mark.parametrize("protocol", ["cMD", "REST2", "rREST2", "AIS"])
 def test_every_generated_input_resolves_to_the_resolved_config_beside_it(protocol, tmp_path):
-    out = tmp_path / "md_script"
+    """The round trip, now across the split between a SHARED input and a PER-RUN resolution.
+
+    `resolved.config` is per run and the `.in` files are shared, so "beside it" is no longer
+    literal. What must still hold is that the method's own input resolves to exactly the document
+    the run recorded -- the seed included, which is why `run.config` is layered in the same way
+    `md-run` layers it.
+
+    THE PREPARATION INPUTS ARE DELIBERATELY EXCLUDED, and that is the consequence of making
+    `min.in` and `eq_<k>.in` serve every method: they carry no `protocol` and no method block, so
+    they resolve to a document with `protocol: cMD` and this protocol's ladder settings at their
+    defaults. Asserting equality for them would be asserting that a shared file is not shared.
+    """
+    from .conftest import make_dataset_root
+
+    make_dataset_root(tmp_path)
+    out = tmp_path / f"{protocol}-run1"
     done = subprocess.run(CLI + ["build-md", "-odir", str(out),
                                  "--config", str(REPO / "configs" / "md" / f"{protocol}.config")],
                           capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
 
     resolved = yaml.safe_load((out / "resolved.config").read_text(encoding="utf-8"))
-    inputs = sorted(out.glob("*.in"))
-    assert inputs, f"{protocol} generated no .in files"
-    for path in inputs:
-        assert parse_run_input(path).resolved == resolved, path.name
+    method_input = tmp_path / "input" / f"{protocol}.in"
+    assert method_input.is_file(), f"{protocol} generated no input/{protocol}.in"
+    assert parse_run_input(method_input,
+                           run_config=out / "run.config").resolved == resolved, method_input.name
+
+    # And every preparation input must at least PARSE and name the stage it is filed as.
+    for path in sorted((tmp_path / "input").glob("eq_*.in")):
+        assert parse_run_input(path).stage is not None, path.name
 
 
 def test_an_input_names_the_stage_the_script_of_the_same_name_runs(tmp_path):
-    out = tmp_path / "md_script"
+    out = tmp_path / "cMD-run1"
     subprocess.run(CLI + ["build-md", "-odir", str(out),
                           "--config", str(REPO / "configs" / "md" / "cMD.config")],
                    capture_output=True, text=True, timeout=600, check=True)
-    for path in out.glob("*.in"):
+    # THE SCRIPT IS NO LONGER BESIDE THE INPUT, and that is the layout rather than a slip: the
+    # input is shared at `<system>/input/`, while the script that runs it is filed where its
+    # OUTPUT goes -- minimisation shared at `<system>/min/`, equilibration in `<run>/eq/`, and
+    # production at the run root. The property still under test is that the stage an input names
+    # is the stage the script of that name runs.
+    where = {"min": tmp_path / "min" / "min.py",
+             "eq_1": out / "eq" / "eq_1.py",
+             "eq_2": out / "eq" / "eq_2.py",
+             "eq_3": out / "eq" / "eq_3.py",
+             "cMD": out / "cMD.py"}
+    seen = set()
+    for path in (tmp_path / "input").glob("*.in"):
         if path.stem in ("AIS", "REST2", "rREST2"):
             continue
-        assert parse_run_input(path).stage == path.stem
-        assert (out / f"{path.stem}.py").is_file(), f"no script beside {path.name}"
+        stage = parse_run_input(path).stage
+        assert stage is not None, path.name
+        script = where[path.stem]
+        assert script.is_file(), f"no script for {path.name} at {script}"
+        assert f'run_generated_stage(__file__, "{stage}")' in script.read_text(encoding="utf-8")
+        seen.add(path.stem)
+    assert seen == set(where), sorted(seen)
 
 
 def test_run_sh_drives_the_installed_command_rather_than_a_second_interface(tmp_path):
-    out = tmp_path / "md_script"
+    from .conftest import make_dataset_root
+
+    make_dataset_root(tmp_path)
+    out = tmp_path / "REST2-run1"
     subprocess.run(CLI + ["build-md", "-odir", str(out),
                           "--config", str(REPO / "configs" / "md" / "REST2.config")],
                    capture_output=True, text=True, timeout=600, check=True)
     text = (out / "run.sh").read_text(encoding="utf-8")
-    assert "md-openmm md-run -i min.in" in text, text
+    # The input is SHARED, so run.sh reaches up to the dataset root for it.
+    assert "md-openmm md-run -i ../input/min.in" in text, text
     # SUPERSEDED: this asserted `-x "${SYSTEM}"`, from the brief period when `-x` named the
     # serialised System on this surface. It follows Amber now -- `-s` is the System, `-x` the
     # trajectory -- and getting the two the wrong way round would write a trajectory over
@@ -207,11 +246,22 @@ def test_run_sh_drives_the_installed_command_rather_than_a_second_interface(tmp_
     # names them itself. The ladder line legitimately keeps `-x REST2.nc`, which is
     # the exchange record rather than a trajectory, so the check is specific.
     assert not re.search(r"-x \S+\.dcd", text), text
-    # Two files, two readers.
-    assert "-o min.out" in text and "-log min.log" in text, text
+    # TWO FILES, TWO READERS -- named by md-run inside `-odir` now rather than restated here.
+    # `-r`, `-o`, `-log` and `-chk` are taken verbatim against the working directory when they
+    # are given, so spelling them in run.sh is how a stage came to write its restart next to
+    # run.sh instead of into its own directory. The stage says WHERE it writes, once.
+    assert "-odir ../min" in text, text
+    assert "-odir eq" in text, text
+    assert "-o min.out" not in text, text
     # One rank per state, and -ng stating the same number, spelled out rather than computed at
     # run time -- the ladder's size is a property of the configuration, not of the machine.
-    assert "mpirun -n 4 md-openmm md-run -ng 4 -i REST2.in" in text, text
+    assert "mpirun -n 4 md-openmm md-run -ng 4" in text, text
+    assert "-i ../input/REST2.in" in text, text
+    # Each segment has its own group file, and every rung is named there rather than by one -s.
+    assert "--groupfile remd_groupfile.1" in text, text
+    # The ladder's readable and provenance records, per segment, in the records directory.
+    assert "-o remd_records/REST2_prod1.out" in text, text
+    assert "-log remd_records/REST2_prod1.log" in text, text
     assert "/data3" not in text and str(tmp_path) not in text, "a machine path leaked into run.sh"
 
 
@@ -251,7 +301,7 @@ def test_a_configuration_cannot_state_a_platform_at_all(tmp_path):
 
     config = tmp_path / "cuda.config"
     config.write_text("protocol: cMD\ndynamics:\n  platform: CUDA\n", encoding="utf-8")
-    done = subprocess.run(CLI + ["build-md", "-odir", str(tmp_path / "md_script"),
+    done = subprocess.run(CLI + ["build-md", "-odir", str(tmp_path / "cMD-run1"),
                                  "--config", str(config)],
                           capture_output=True, text=True, timeout=600)
     assert done.returncode == 2, done.stdout + done.stderr

@@ -760,8 +760,18 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     # by segment now, so a second in-place segment cannot overwrite the first one's output, log,
     # restart state or checkpoint. See `stage_artifact_name`.
     segment = int(stage.get("segment") or 1)
-    log_path = Path(args.log) if args.log else base / stage_artifact_name(name, "log", segment)
-    out_path = Path(args.output) if args.output else base / stage_artifact_name(name, "out", segment)
+    # THE NAME A STAGE IS FILED UNDER, which is not always the name it runs under.
+    #
+    # `eq_nvt_posres` is filed as `eq_1`: the ensemble moved out of the filename so that a
+    # renamed stage (NVT under implicit solvent, where the explicit chain has NPT) cannot make a
+    # filename claim something false. `stage_plan` stamps the key, so the layout that writes
+    # `run.sh` and the runtime that writes the files cannot disagree -- they did, and `run.sh`
+    # chained `-c eq/eq_1.xml` against a stage that wrote `eq/eq_nvt_posres.xml`.
+    #
+    # Falls back to the stage name, which is what `min` and `cMD` resolve to anyway.
+    key = str(stage.get("file_key") or name)
+    log_path = Path(args.log) if args.log else base / stage_artifact_name(key, "log", segment)
+    out_path = Path(args.output) if args.output else base / stage_artifact_name(key, "out", segment)
     # The `-o` / `-log` collision is checked by the shared preflight below, together with every
     # other output pair and with the inputs. A second comparison here was a second policy: it
     # compared only those two, missed `-x`, `-r` and `-chk`, and fired first -- so the message a
@@ -786,8 +796,11 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     # only one you keep, while the file still claims to be production.
     #
     # `<N>` is the segment, which advances when a run is extended in place.
+    # PRODUCTION is decided by the stage NAME -- `cMD` and `umbrella` are what production IS --
+    # while the stem every other stage uses is its FILING KEY, so the streams sit beside the
+    # restart and log of the same stage rather than under a second spelling of it.
     production = str(stage.get("name") or "") in ("cMD", "umbrella")
-    stem = f"prod{segment}" if production else str(stage.get("name") or "stage")
+    stem = f"prod{segment}" if production else (key or "stage")
     # BESIDE THE LOG, not beside `base`.
     #
     # `md-run` forwards each stage its explicit `-log`/`-o`/`-r` paths but NOT `-odir`, so `base`
@@ -807,14 +820,15 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     # single `mdout.csv` shared by every stage in a chain is not one table with five sections: the
     # second stage finds an output it did not write, and the run refuses before it starts.
     from ._stages import info_csv_name
-    info_path = outputs / info_csv_name(str(stage.get("name") or "stage"), segment)
+    info_path = outputs / info_csv_name(key or "stage", segment)
     from ._stages import energy_components_name
-    components_path = outputs / energy_components_name(
-        str(stage.get("name") or "stage"), segment)
+    components_path = outputs / energy_components_name(key or "stage", segment)
     restart_path = (Path(args.restart) if args.restart
-                    else base / stage_artifact_name(name, "xml", segment))
+                    else base / stage_artifact_name(key, "xml", segment))
+    # The checkpoint TREE follows this name (`<chk stem>.checkpoints`), so it moves with the key
+    # rather than needing a rule of its own.
     chk_path = (Path(args.checkpoint) if args.checkpoint
-                else base / stage_artifact_name(name, "chk", segment))
+                else base / stage_artifact_name(key, "chk", segment))
 
     for path, what in ((topology_path, "-p topology"), (system_path, "-s system")):
         if not path.is_file():
@@ -1789,22 +1803,30 @@ def _trajectory_holds_frames(path: Path) -> bool:
 
 
 def cv_csv_path(trajectory: Path, stage: dict[str, Any] | None = None) -> Path:
-    """Where a stage's collective-variable series lives: `<stage>.cv.csv` beside the trajectory.
+    """Where a stage's collective-variable series lives: `<key>.cv.csv`, beside the trajectory.
 
-    Derived from the trajectory name so the whole stage's outputs share one stem, and returned
-    unconditionally: whether the file is WRITTEN is decided by the schedule, but where it would
-    be is a property of the stage and the inventory needs it either way.
+    Returned unconditionally: whether the file is WRITTEN is decided by the schedule, but where it
+    would be is a property of the stage and the inventory needs it either way.
     """
     trajectory = Path(trajectory)
-    # NAMED FOR THE STAGE, not for the trajectory file.
+    # NAMED FOR THE STAGE, not for the trajectory file -- and for the name the stage is FILED
+    # under, not the one it runs under.
     #
     # It used to be `<trajectory stem>.cv.csv`, which was the same thing while a stage had one
     # trajectory called `<stage>.dcd`. A stage now has TWO -- `solute_prod1.nc` and
     # `whole_prod1.nc` -- so deriving from the trajectory would put the series at
     # `solute_prod1.cv.csv` and make its name depend on which of the two happened to be passed in.
     # The collective variables belong to the stage, not to one of its streams.
-    if stage and stage.get("name"):
-        return trajectory.parent / f"{stage['name']}.cv.csv"
+    #
+    # THE FILING KEY, as every other artefact of the stage now uses.
+    #
+    # A stage filed as `eq_1` writes `eq_1.xml`, `solute_eq_1.nc` and `mdout_eq_1.csv`, so a
+    # series called `eq_nvt_posres.cv.csv` was the one stage-named file left in a keyed
+    # directory -- and the CV series is exactly the file a reader has to pair with the trajectory
+    # and the state table beside it. `min` and `cMD` are unaffected: their key IS their name.
+    if stage and (stage.get("file_key") or stage.get("name")):
+        key = stage.get("file_key") or stage["name"]
+        return trajectory.parent / f"{key}.cv.csv"
     return trajectory.with_suffix(".cv.csv")
 
 
@@ -2109,20 +2131,25 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
     # The prepared plans are kept and handed to `stage_main`, so nothing is validated twice and
     # nothing is re-resolved between planning and running.
     prepared_plans: dict[str, Any] = {}
-    previous_name = None
+    previous_name = previous_key = None
     try:
         for position, entry in enumerate(plan):
             entry_name = entry["name"]
-            parent = None if position == 0 else base / f"{previous_name}.xml"
+            # THE FILING KEY, and it must be the same one the run loop below uses: this pass
+            # VALIDATES the paths that pass will write, so naming them differently here would
+            # check one set of files and then produce another -- a preflight that agrees with
+            # nothing. `previous_key` chains the parent for the same reason.
+            entry_key = str(entry.get("file_key") or entry_name)
+            parent = None if position == 0 else base / f"{previous_key}.xml"
             prepared_plans[entry_name] = preflight_stage(
                 topology=args.topology, system=args.system,
                 coordinates=str(parent) if parent is not None else args.continue_from,
-                trajectory=base / f"{entry_name}.dcd",
-                restart=base / f"{entry_name}.xml",
-                checkpoint=base / f"{entry_name}.chk",
+                trajectory=base / f"{entry_key}.dcd",
+                restart=base / f"{entry_key}.xml",
+                checkpoint=base / f"{entry_key}.chk",
                 output=(args.output if position == 0 and args.output
-                        else base / f"{entry_name}.out"),
-                log=(args.log if position == 0 and args.log else base / f"{entry_name}.log"),
+                        else base / f"{entry_key}.out"),
+                log=(args.log if position == 0 and args.log else base / f"{entry_key}.log"),
                 cpu=bool(args.cpu),
                 device=int(args.device) if args.device is not None else None,
                 protocol=f"stage {entry_name} of the {len(plan)}-stage workflow",
@@ -2136,6 +2163,7 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
                 number_of_groups=args.number_of_groups, groupfile=args.groupfile,
                 source_trajectory=args.source_trajectory)
             previous_name = entry_name
+            previous_key = entry_key
     except PreflightError as refusal:
         print(f"{Path(script).name}: {refusal}", file=sys.stderr)
         return 2
@@ -2148,10 +2176,15 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
     previous = previous_name = None
     for stage in plan:
         name = stage["name"]
+        # THE FILING KEY, as in `md-run` and `stage_main`. These are passed explicitly, so they
+        # override the runtime's own defaults -- which is why naming them from the stage here made
+        # the all-in-one chain write `eq_nvt_posres.xml` and then look for the next stage's parent
+        # under a spelling nothing had written. Three surfaces, one set of filenames.
+        key = str(stage.get("file_key") or name)
         stage_argv = ["-p", args.topology, "-s", args.system,
-                      "-log", str(base / f"{name}.log"), "-x", str(base / f"{name}.dcd"),
-                      "-o", str(base / f"{name}.out"),
-                      "-r", str(base / f"{name}.xml"), "-chk", str(base / f"{name}.chk")]
+                      "-log", str(base / f"{key}.log"), "-x", str(base / f"{key}.dcd"),
+                      "-o", str(base / f"{key}.out"),
+                      "-r", str(base / f"{key}.xml"), "-chk", str(base / f"{key}.chk")]
         pending = None
         if previous is not None:
             stage_argv += ["-c", previous]
@@ -2184,7 +2217,7 @@ def run_generated_workflow(script: str | Path, argv: list[str] | None = None) ->
             print(f"{Path(script).name}: stage {name} failed with exit code {code}",
                   file=sys.stderr)
             return code
-        previous = str(base / f"{name}.xml")
+        previous = str(base / f"{key}.xml")
         previous_name = name
     return 0
 

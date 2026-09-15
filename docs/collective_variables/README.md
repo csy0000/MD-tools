@@ -116,7 +116,7 @@ readable without the topology or the definition that produced it.
 
 | protocol | file | leading columns |
 |---|---|---|
-| cMD | `<stage>.cv.csv` + `<stage>.cv.json` | `step,time_ps,trajectory_frame_index` |
+| cMD | `<key>.cv.csv` + `<key>.cv.json` (the stage's FILING key: `eq_1`, `min`, `cMD`) | `step,time_ps,trajectory_frame_index` |
 | REST2 / rREST2 | `cv_state<N>.csv` + `cv_state<N>.json` | `step,time_ps,exchange_attempt,state_index,tau,walker_index,exchange_phase,trajectory_frame_index` |
 | AIS | `path_NNNN/cv.csv` | `path_index,source_frame_index,protocol_step,time_ps,tau,observation_index,coordinate_frame_index` |
 | AIS | `AIS_cv.csv` | the aggregate, same columns |
@@ -384,7 +384,7 @@ not conflated:
 | file | what it is |
 |---|---|
 | `cv.yaml` | the **input** definition a person writes |
-| `cv.<digest>.yaml` | the content-addressed **copy** in the generated directory, which makes the tree movable |
+| `cv.<digest>.yaml` | the content-addressed **copy**, written beside every declaration that names it — the run root, the shared `input/`, `min/` and `eq/` — which makes each directory movable and resolvable on its own |
 | `<name>.cv.json` | the **output** sidecar saying how to read the CSV beside it |
 
 Every one of them is named in exactly one place in the code. The inventory once named

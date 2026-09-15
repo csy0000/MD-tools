@@ -42,8 +42,8 @@ def project(tmp_path_factory):
     root = tmp_path_factory.mktemp("cv-parity")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
 
@@ -58,7 +58,7 @@ def project(tmp_path_factory):
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./cMD", "--config", str(root / "cMD.config"),
+        CLI + ["build-md", "-odir", "./cMD-run1", "--config", str(root / "cMD.config"),
                "--all-in-one"],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
@@ -86,10 +86,10 @@ def test_the_generated_script_and_md_run_produce_the_same_cv_series(project, tmp
     """THE parity claim, on the CV section specifically."""
     direct = tmp_path / "direct"
     done = subprocess.run(
-        [sys.executable, str(project / "cMD" / "md.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+        [sys.executable, str(project / "cMD-run1" / "md.py"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-odir", str(direct), "--cpu"],
-        cwd=project / "cMD", capture_output=True, text=True, timeout=1800,
+        cwd=project / "cMD-run1", capture_output=True, text=True, timeout=1800,
         env=_environment(project))
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
 
@@ -98,13 +98,13 @@ def test_the_generated_script_and_md_run_produce_the_same_cv_series(project, tmp
     # The PRODUCTION stage specifically. `sorted(...)[-1]` picked `min.in`, whose zero-step
     # minimisation correctly writes no CV series -- so the comparison was between a dynamics run
     # and a minimisation, and the "missing" series was the contract working.
-    production = project / "cMD" / "cMD.in"
-    assert production.is_file(), sorted(p.name for p in (project / "cMD").glob("*.in"))
+    production = project / "input" / "cMD.in"
+    assert production.is_file(), sorted(p.name for p in (project / "input").glob("*.in"))
     chain = subprocess.run(
         CLI + ["md-run", "-i", str(production),
-               "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+               "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
                "-odir", str(surfaced), "--cpu"],
-        cwd=project / "cMD", capture_output=True, text=True, timeout=1800,
+        cwd=project / "cMD-run1", capture_output=True, text=True, timeout=1800,
         env=_environment(project))
     if chain.returncode != 0:
         pytest.skip(f"md-run declined this input directly: "
@@ -132,11 +132,11 @@ def test_the_resolved_config_round_trips_the_cv_section(project, tmp_path):
     from md_tools.build.md import resolve_md_config
     from md_tools.run.inputs import parse_run_input
 
-    resolved = resolve_md_config(project / "cMD" / "resolved.config")
+    resolved = resolve_md_config(project / "cMD-run1" / "resolved.config")
     assert resolved["collective_variables"]["interval_steps"] == 5
     assert str(resolved["collective_variables"]["file"]).endswith(".yaml")
 
-    inputs = sorted((project / "cMD").glob("*.in"))
+    inputs = sorted((project / "input").glob("*.in"))
     text = "\n".join(path.read_text(encoding="utf-8") for path in inputs)
     assert "cv_interval_steps" in text, (
         "the .in language does not express the CV cadence, so a generated input silently drops it")

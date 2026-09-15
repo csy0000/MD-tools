@@ -61,8 +61,8 @@ def project(tmp_path_factory):
     root = tmp_path_factory.mktemp("remd-align")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
 
@@ -90,7 +90,7 @@ def project(tmp_path_factory):
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./REST2", "--config", str(root / "REST2.config")],
+        CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
 
@@ -98,8 +98,8 @@ def project(tmp_path_factory):
     from openmm import XmlSerializer, unit
     from openmm.app import PDBFile
 
-    pdb = PDBFile(str(root / "built.pdb"))
-    system = XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(root / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
     integrator = openmm.VerletIntegrator(1.0 * unit.femtosecond)
     context = openmm.Context(system, integrator, openmm.Platform.getPlatformByName("Reference"))
     context.setPositions(pdb.positions)
@@ -119,11 +119,11 @@ def _run(project: Path, destination: Path, *extra, environment=None, expect=0):
     base["MD_TOOLS_CONFIG"] = str(user)
     base.update(environment or {})
     done = subprocess.run(
-        [sys.executable, str(project / "REST2" / "REST2.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+        [sys.executable, str(project / "REST2-run1" / "REST2.py"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-c", str(project / "initial_state.xml"),
          "-odir", str(destination), "--cpu", *extra],
-        cwd=project / "REST2", capture_output=True, text=True, timeout=1800, env=base)
+        cwd=project / "REST2-run1", capture_output=True, text=True, timeout=1800, env=base)
     if expect is not None:
         assert (done.returncode == 0) == (expect == 0), \
             done.stdout[-4000:] + done.stderr[-4000:]
@@ -154,7 +154,7 @@ def test_every_named_frame_holds_the_configuration_the_row_was_measured_on(compl
     for index in range(STATES):
         rows = _rows(completed / f"cv_state{index}.csv")
         frames = mdtraj.load(str(completed / f"whole_state{index}_prod1.nc"),
-                             top=str(project / "built.pdb"))
+                             top=str(project / "build" / "built.pdb"))
         for row in rows:
             named = row["trajectory_frame_index"]
             if named == "":

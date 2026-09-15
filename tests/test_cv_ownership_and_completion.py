@@ -47,8 +47,8 @@ collective_variables:
 def _build(root: Path):
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
     (root / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
@@ -70,10 +70,13 @@ def _cmd_config(root: Path, *, cv: bool):
 def _generate(root: Path, name: str, document: dict, *extra):
     (root / f"{name}.config").write_text(yaml.safe_dump(document), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", f"./{name}", "--config", str(root / f"{name}.config"), *extra],
+        CLI + ["build-md", "-odir", f"./{name}-run1", "--config", str(root / f"{name}.config"),
+               *extra],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
-    return root / name
+    # The RUN directory, which is what `-odir` just created. Returning `root / name` pointed at a
+    # directory that no longer exists, so every caller died on `cwd` before reaching its subject.
+    return root / f"{name}-run1"
 
 
 def _environment(root: Path):
@@ -99,7 +102,7 @@ def root(tmp_path_factory):
 def _run_cmd(root: Path, script_dir: Path, destination: Path, *extra, expect=0):
     done = subprocess.run(
         [sys.executable, str(script_dir / "md.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-odir", str(destination), "--cpu", *extra],
         cwd=script_dir, capture_output=True, text=True, timeout=1800, env=_environment(root))
     if expect is not None:
@@ -182,8 +185,26 @@ def test_a_cv_disabled_overwrite_leaves_no_stale_cv_output(root, tmp_path):
     _run_cmd(root, enabled, destination)
     assert sorted(destination.rglob("*.cv.csv")), "the first run wrote no CV series"
 
-    disabled = _generate(root, "cvD_off", _cmd_config(root, cv=False), "--all-in-one")
-    _run_cmd(root, disabled, destination, "--overwrite")
+    # A SEPARATE DATASET ROOT for the CV-disabled run, not `--overwrite` on this one.
+    #
+    # `eq_*.in` carry the cadence, so a CV-on and a CV-off run have different shared inputs and
+    # the second is refused. `--overwrite` looks like the remedy the refusal names, and it is not:
+    # it rewrites `input/eq_*.in` to the CV-disabled form, and the four CV-ENABLED generations
+    # later in this module then refuse against THAT. Within one root the collision simply moves,
+    # whichever order the generations run in.
+    #
+    # The two runs are the same experiment in every respect except what they observe -- reporting
+    # adds no Force, and the System, force inventory and single-point energy are asserted
+    # identical with it on and off -- so making them comparable on ONE system means making the
+    # cadence a per-run value beside the seed. That widens `RUN_CONFIG_ALLOWED`, which is a
+    # deliberate one-key schema, so it is recorded in docs/run-layout.md as open rather than
+    # decided here.
+    off_root = root.parent / "cv-ownership-off"
+    if not (off_root / "build" / "built.xml").is_file():
+        off_root.mkdir(exist_ok=True)
+        _build(off_root)
+    disabled = _generate(off_root, "cvD_off", _cmd_config(off_root, cv=False), "--all-in-one")
+    _run_cmd(off_root, disabled, destination, "--overwrite")
 
     left = sorted(destination.rglob("*.cv.csv")) + sorted(destination.rglob("*.cv.json"))
     assert not left, f"a CV-disabled run left stale collective-variable output: {left}"

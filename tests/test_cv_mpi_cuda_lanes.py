@@ -82,10 +82,11 @@ def project(tmp_path_factory):
         pytest.skip("no ALA fixture")
     _require_mpi_and_cuda()
     root = tmp_path_factory.mktemp("cv-mpi-cuda")
+    (root / "build").mkdir(exist_ok=True)
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
     (root / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
@@ -103,7 +104,7 @@ def project(tmp_path_factory):
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./REST2", "--config", str(root / "REST2.config")],
+        CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=900)
     assert done.returncode == 0, done.stdout + done.stderr
 
@@ -111,8 +112,8 @@ def project(tmp_path_factory):
     from openmm import XmlSerializer, unit
     from openmm.app import PDBFile
 
-    pdb = PDBFile(str(root / "built.pdb"))
-    system = XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(root / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
     integrator = openmm.VerletIntegrator(1.0 * unit.femtosecond)
     context = openmm.Context(system, integrator, openmm.Platform.getPlatformByName("CUDA"))
     context.setPositions(pdb.positions)
@@ -126,11 +127,11 @@ def _launch(project: Path, destination: Path, *extra, ranks=STATES, environment=
             expect=0):
     done = subprocess.run(
         ["mpirun", "-n", str(ranks), sys.executable,
-         str(project / "REST2" / "REST2.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+         str(project / "REST2-run1" / "REST2.py"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-c", str(project / "initial_state.xml"),
          "-ng", str(ranks), "-odir", str(destination), *extra],
-        cwd=project / "REST2", capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
+        cwd=project / "REST2-run1", capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(project, **(environment or {})))
     if expect is not None:
         assert (done.returncode == 0) == (expect == 0), \

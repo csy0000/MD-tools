@@ -90,8 +90,8 @@ that one implementation.
 
 ```bash
 md-openmm build-top -i ALA.pdb -os built.xml -op built.pdb -log built.log
-md-openmm build-md  -odir ./md_script/ --config example.config
-cd md_script && ./run.sh
+md-openmm build-md  -odir ./REST2-run1 --config example.config
+cd REST2-run1 && ./run.sh
 ```
 
 The ladder itself, driven directly:
@@ -182,7 +182,7 @@ by scaling, which is not how a restraint is applied, so `export-reference` refus
 ## Generated files
 
 ```text
-md_script/
+REST2-run1/
 ├── resolved.config      the single resolved declaration
 ├── min.py … eq_npt_free.py   the equilibration chain the ladder starts from
 ├── REST2.py             the compact ladder entry point

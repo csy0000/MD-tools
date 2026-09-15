@@ -58,8 +58,8 @@ System and no stage claims NPT. The implicit stages are *renamed* (`eq_nvt_posre
 
 ```bash
 md-openmm build-top -i ALA.pdb -os built.xml -op built.pdb -log built.log
-md-openmm build-md  -odir ./md_script/ --config example.config
-cd md_script && ./run.sh
+md-openmm build-md  -odir ./cMD-run1 --config example.config
+cd cMD-run1 && ./run.sh
 ```
 
 `run.sh` runs the chain in order. To drive one stage yourself:
@@ -75,7 +75,7 @@ md-openmm md-run -i min.in -p ../built.pdb -s ../built.xml \
 ## Generated files
 
 ```text
-md_script/
+cMD-run1/
 ├── resolved.config     the single resolved declaration of this workflow
 ├── build-md.log        what was resolved, and from which defaults
 ├── min.py              five compact entry points, one per stage

@@ -309,9 +309,15 @@ def _locate(run_dir: Path, entry: dict[str, Any]) -> Path | None:
     name = Path(entry["path"]).name
     wanted = entry["sha256"]
     for directory in (run_dir, *run_dir.parents[:3]):
-        candidate = directory / name
-        if candidate.is_file() and _digest(candidate) == wanted:
-            return candidate
+        # `build/` TOO, and not only the ancestor itself. The built System and topology live in
+        # `<dataset>/build/` now -- a CHILD of an ancestor, never an ancestor -- so testing only
+        # `directory / name` could not find the topology of any run built under this layout, and
+        # `export-reference` refused every one of them. The digest still decides: this widens
+        # where to look, not what counts as a match, so two campaigns each holding a `built.pdb`
+        # are still told apart by content rather than by position.
+        for candidate in (directory / name, directory / "build" / name):
+            if candidate.is_file() and _digest(candidate) == wanted:
+                return candidate
     return None
 
 
@@ -347,7 +353,15 @@ def _stage_inputs(run_dir: Path) -> list[tuple[Path, list[str]]]:
     from ..build.record import RecordError, read_record
 
     found = []
-    for log in sorted(Path(run_dir).glob("*.log")):
+    # RECURSIVE, because a stage's record is no longer always at the run root. Equilibration
+    # writes into `<run>/eq/`, so a root-only glob saw `cMD.log` and never `eq/eq_nvt_posres.log`
+    # -- and the bundle then recorded ONE stage where two ran, silently omitting the input the
+    # production stage continued from. For a bundle whose purpose is to reproduce a run, an input
+    # missing without complaint is worse than a refusal.
+    #
+    # Order is unaffected: the entries are sorted by each record's own `started_utc` below, not
+    # by filename or walk order.
+    for log in sorted(Path(run_dir).rglob("*.log")):
         try:
             record = read_record(log)
         except (RecordError, OSError):
@@ -357,12 +371,24 @@ def _stage_inputs(run_dir: Path) -> list[tuple[Path, list[str]]]:
         command = list(record.get("command") or [])
         if "-i" not in command or command.index("-i") + 1 >= len(command):
             continue
-        path = Path(run_dir) / Path(command[command.index("-i") + 1]).name
-        if not path.is_file():
+        # THE RECORDED `-i`, RESOLVED AGAINST THE RUN DIRECTORY -- then the bare name beside the
+        # records as before.
+        #
+        # `input/` is SHARED by every run on a system now, so a stage records `-i
+        # ../input/eq_1.in` and the run directory holds no `.in` at all. Stripping to the
+        # basename and looking only here refused every run built under that layout: the file the
+        # record names does exist, one directory up. The basename attempt stays second because
+        # that is where it sits for a run generated before the split, when the input and the
+        # records shared one directory.
+        recorded = Path(command[command.index("-i") + 1])
+        candidates = [Path(run_dir) / recorded] if not recorded.is_absolute() else [recorded]
+        candidates.append(Path(run_dir) / recorded.name)
+        path = next((option.resolve() for option in candidates if option.is_file()), None)
+        if path is None:
             raise FileNotFoundError(
-                f"{log.name} ran from {path.name}, which is not in {run_dir}. input/ holds the "
-                f"stage inputs the run actually read, and this one cannot be shown. Nothing has "
-                f"been written.")
+                f"{log.name} ran from {recorded}, which is neither at {candidates[0]} nor beside "
+                f"the records in {run_dir}. The stage input the run actually read cannot be "
+                f"shown. Nothing has been written.")
         found.append((str(record.get("started_utc") or ""), path, command))
     # A ladder's ranks can each record the same command; one input is one entry.
     ordered, seen = [], set()
@@ -825,12 +851,23 @@ def export_reference(run_dir: Path, out_dir: Path, *, stage: str = "cMD") -> dic
     start_source = None
     parent = _continue_from(record)
     if parent:
-        start_source = run_dir / Path(parent).name
-        if not start_source.is_file():
+        # THE RECORDED `-c`, RESOLVED AGAINST THE RUN DIRECTORY -- then the bare name beside the
+        # records, as before. This is the same correction `_stage_inputs` and `_locate` needed,
+        # in the third place that held it: equilibration writes into `<run>/eq/` now, so a stage
+        # that recorded `-c eq/eq_nvt_posres.xml` has its parent one directory DOWN, and
+        # stripping to the basename looked for it at the run root and refused every run built
+        # under this layout. The basename attempt stays as the fallback because that is where it
+        # sits for a run generated before the split, when every stage wrote to one directory.
+        recorded = Path(parent)
+        options = [run_dir / recorded] if not recorded.is_absolute() else [recorded]
+        options.append(run_dir / recorded.name)
+        start_source = next((option for option in options if option.is_file()), None)
+        if start_source is None:
             raise FileNotFoundError(
-                f"{run_dir} continued from {parent!r}, which is not there now. The bundle would "
-                f"otherwise start from the built coordinates -- an unequilibrated structure -- "
-                f"and present the result as a reproduction of this run.")
+                f"{run_dir} continued from {parent!r}, which is neither at {options[0]} nor "
+                f"beside the records in {run_dir}. The bundle would otherwise start from the "
+                f"built coordinates -- an unequilibrated structure -- and present the result as "
+                f"a reproduction of this run.")
     start_name = "start.xml" if start_source is not None else ""
 
     settings = _stage_settings(block, prepared, timestep_fs=timestep_fs)

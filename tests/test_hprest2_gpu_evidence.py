@@ -113,9 +113,10 @@ def built(tmp_path_factory):
     if shutil.which("mpirun") is None:
         pytest.skip("no mpirun on PATH; a ladder needs one rank per rung")
     work = tmp_path_factory.mktemp("hprest2-gpu")
+    (work / "build").mkdir(exist_ok=True)
     (work / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
-    done = _cli(work, "build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-                "-log", "built.log", "--config", "sys.config")
+    done = _cli(work, "build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+                "-log", "build/built.log", "--config", "sys.config")
     assert done.returncode == 0, done.stdout[-2000:] + done.stderr[-2000:]
     shutil.copy2(REPO / "configs" / "md" / "cv.yaml", work / "cv.yaml")
     (work / "umbrella.yaml").write_text(
@@ -146,12 +147,30 @@ def _ladder_config(*, exchanges=EXCHANGES, restrained=False, cv=False) -> str:
 
 
 def _build_and_equilibrate(built: Path, name: str, config: str) -> Path:
-    (built / f"{name}.config").write_text(config, encoding="utf-8")
-    done = _cli(built, "build-md", "-odir", f"./{name}", "--config", f"{name}.config")
+    """One SYSTEM ROOT PER VARIANT, sharing the one built System.
+
+    `input/` is shared by every run on a system and the sharing is enforced: `input/eq_1.in` is
+    refused if a second configuration resolves it differently. The `restrained` variant adds
+    `collective_variables` and `umbrella` to the very same equilibration stage as `baseline`, so
+    the two resolve that shared input differently and the second generation was refused with
+
+        build-md: input/eq_1.in already exists and is not what this configuration resolves to.
+
+    They are different experiments over one system, not repeats of one, so each gets its own root
+    -- which is what the refusal advises. The definitions are copied in because the configuration
+    names them by bare name, resolved beside the configuration file.
+    """
+    root = built / f"system-{name}"
+    shutil.copytree(built / "build", root / "build")
+    for helper in ("cv.yaml", "umbrella.yaml"):
+        shutil.copy2(built / helper, root / helper)
+
+    (root / f"{name}.config").write_text(config, encoding="utf-8")
+    done = _cli(root, "build-md", "-odir", f"./{name}-run1", "--config", f"{name}.config")
     assert done.returncode == 0, done.stdout[-2000:] + done.stderr[-2000:]
-    run = built / name
-    done = _cli(run, "md-run", "-i", "eq_nvt_posres.in", "-p", "../built.pdb", "-s",
-                "../built.xml", "-r", "eq.xml", "-chk", "eq.chk", "-o", "eq.out", "-log",
+    run = root / f"{name}-run1"
+    done = _cli(run, "md-run", "-i", "../input/eq_1.in", "-p", "../build/built.pdb", "-s",
+                "../build/built.xml", "-r", "eq.xml", "-chk", "eq.chk", "-o", "eq.out", "-log",
                 "eq.log", "-odir", ".")
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
     return run
@@ -172,13 +191,13 @@ def _generated(work: Path, *extra: str, timeout: int = 3600):
     argparse before any of the behaviour under test ran.
     """
     return subprocess.run(["mpirun", "-n", str(RUNGS), sys.executable, "REST2.py",
-                           "-p", "../built.pdb", "-s", "../built.xml", "-ng", str(RUNGS), *extra],
+                           "-p", "../build/built.pdb", "-s", "../build/built.xml", "-ng", str(RUNGS), *extra],
                           cwd=str(work), capture_output=True, text=True, timeout=timeout)
 
 
 def _run_ladder(run: Path, *extra: str, timeout: int = 3600):
-    return _cli(run, "md-run", "-ng", str(RUNGS), "-i", "REST2.in", "-p", "../built.pdb",
-                "-s", "../built.xml", "-x", "REST2.nc", "-r", "restart.json", "-o", "REST2.out",
+    return _cli(run, "md-run", "-ng", str(RUNGS), "-i", "../input/REST2.in", "-p", "../build/built.pdb",
+                "-s", "../build/built.xml", "-x", "REST2.nc", "-r", "restart.json", "-o", "REST2.out",
                 "-log", "REST2.log", *extra, launch=["mpirun", "-n", str(RUNGS)], timeout=timeout)
 
 
@@ -386,8 +405,8 @@ def test_a_restrained_ladder_runs_and_its_bias_cancels_from_the_exchange(built):
     started_at = deviations(start_values)
 
     # The identity, on configurations this ladder actually visited.
-    system = XmlSerializer.deserialize((built / "built.xml").read_text(encoding="utf-8"))
-    pdb = PDBFile(str(built / "built.pdb"))
+    system = XmlSerializer.deserialize((built / "build" / "built.xml").read_text(encoding="utf-8"))
+    pdb = PDBFile(str(built / "build" / "built.pdb"))
     solute = list(range(system.getNumParticles()))
     taus = [float(state["tau"]) for state in manifest["states"]][:2]
     records = restraints.get("restraints") or []
