@@ -2,9 +2,11 @@
 
 A REST2 ladder has N fixed thermodynamic states. A walker moves between them when an exchange is
 accepted, so the trajectory of a STATE is not the trajectory of a walker: after an accepted swap,
-the next frame written to `remd2.nc` comes from whichever configuration now occupies state 2.
+the next frame written to `whole_state2_prod1.nc` comes from whichever configuration now occupies
+state 2.
 
-The filename carries the state INDEX and never tau. `remd2.nc` means state 2; what tau that state
+The filename carries the state INDEX and never tau. `whole_state2_prod1.nc` means state 2; what
+tau that state
 holds belongs in validated metadata, where it can be checked, and not in a filename that anyone
 can rename. Nothing here sorts trajectories lexicographically or parses a number back out of a
 path -- the index is passed in.

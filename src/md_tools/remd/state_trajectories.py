@@ -116,7 +116,7 @@ class StateTrajectorySet:
 
         This is where a fixed-state trajectory differs from a walker trajectory: after an accepted
         exchange the configuration in state 2 is a different walker's, and it is that one which is
-        written to `remd2.nc`.
+        written to `whole_state2_prod1.nc`.
         """
         if len(state_to_walker) != self.n_states:
             raise StateTrajectoryError(

@@ -135,7 +135,8 @@ correctly afterwards. An identical one is left alone, so rerunning a command is 
 
 **`--overwrite` governs the COMPLETE output inventory**, not `resolved.config` alone. That was the
 old behaviour and it meant every other file — the reports, the trajectories, the phase-space
-stream, the state tables, the restarts, the per-state `remdN.nc`, the generated helpers — was
+stream, the state tables, the restarts, the per-state `whole_state<i>_prod<N>.nc`, the generated
+helpers — was
 replaced silently whether it was asked for or not. The preflight now names every artefact a run
 will create, before any of it exists, and refuses a `-odir` that already holds a run unless one of
 three things is true:

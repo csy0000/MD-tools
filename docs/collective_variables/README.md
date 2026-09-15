@@ -148,7 +148,8 @@ state-to-walker mapping in a fresh run.
 
 ### What `trajectory_frame_index` means in a ladder
 
-**A row that names frame `k` was evaluated on exactly `remdN.nc[k]`.** That is the whole meaning
+**A row that names frame `k` was evaluated on exactly `whole_state<i>_prod<N>.nc[k]`** -- that
+state's own trajectory, named by `state_trajectory_name`. That is the whole meaning
 of the column, and it is why the field is often empty at a step where a frame *was* written.
 
 The state trajectory frame is written from the **post-exchange** occupant; the CV row describes
