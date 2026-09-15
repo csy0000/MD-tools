@@ -148,6 +148,70 @@ def _render_applicability() -> list[str]:
     return lines
 
 
+#: What a run WRITES. Not a setting, so it is not derivable from the schema -- but it belongs in
+#: the manual for the same reason the keys do: it existed as a hand-maintained block in four
+#: separate config files, which is four copies of one explanation.
+_OUTPUTS = """
+## What a run writes
+
+Nothing in this section is a setting. It is what the files you get MEAN, because a reader should
+not have to run something to find out.
+
+### The `.out` census
+
+Every stage's `.out` opens with what it actually ran, read off the **serialised System** rather
+than off the configuration that asked for it. That distinction is the point: a configuration
+asking for a 1.0 nm cutoff and a System carrying 0.8 nm are different runs, and only one of them
+integrates.
+
+| section | what it reports |
+|---|---|
+| `System` | atoms, residues by name, net charge, degrees of freedom, box and volume |
+| `Method` | nonbonded treatment and cutoff, Ewald tolerance, dispersion correction, switching, 1-4 exception count, constraints, barostat present, force inventory |
+| `Selections` | the solute atom count, and which omega bonds are left unscaled |
+
+The same facts enter the `.log` as structured fields, because prose is not a database. A box is
+reported only when the System is genuinely **periodic**: an OpenMM System defaults to a 2 nm cube,
+so an implicit run would otherwise print an invented box and an 8 nm³ volume in the same voice as
+the measurement above it.
+
+### The per-term energy decomposition
+
+`energy_components_<stage>.csv` carries the potential energy term by term beside `mdout*.csv` --
+except the production stage itself, which is `energy_components.csv` on its first segment and
+`energy_components_prod<N>.csv` on later ones. `md_tools.md._stages.energy_components_name` is the
+one authority, and only `cMD` and `umbrella` count as production stage names.
+
+Where the System has usable force groups -- the implicit route, through ParmEd -- they are read
+directly. Where it does not, which is every explicit-solvent System built through OpenMM's
+`ForceField.createSystem`, a group-separated **copy** is probed instead: `built.xml`, the run's own
+Context and every digest taken from them stay untouched, because a force group is part of the
+serialised System and regrouping the integrated one would change `system_sha256` and invalidate
+every checkpoint fingerprint in flight.
+
+`EELEC` from `VDWAALS`, and the 1-4 terms from either, are **not** reachable that way -- every 1-4
+pair is an exception inside the single `NonbondedForce`, which evaluates charge and dispersion in
+one kernel -- so that split lives in post-hoc `md_tools.openmm.decomposition`.
+
+### Fluctuations over a single sample
+
+An rms fluctuation over one report reads `n/a (single sample)` rather than `0`. Over one sample
+`sqrt(<x^2> - <x>^2)` is exactly zero, which reads as "this did not move" when it means "there was
+nothing to compare it against" -- and a stage shorter than `info_printout` produces exactly one
+row, so this is the ordinary case rather than the corner one.
+
+### A ladder additionally writes
+
+The Hamiltonian it integrated, so the ladder is checkable from its own output rather than from the
+configuration that requested it: the tau ladder, the scaling laws applied and the terms left
+unscaled, the solute region and its excluded omega bonds, `system_sha256`, that velocities are
+never rescaled on a swap (one beta across the ladder), and a TIMINGS block with elapsed time,
+per-replica and aggregate throughput, and cost per step.
+
+Per-state and per-segment filenames are documented in `docs/run-layout.md`.
+"""
+
+
 def render() -> str:
     """The whole manual, as Markdown. `docs/md-configuration.md` is exactly this."""
     lines = [
@@ -173,6 +237,8 @@ def render() -> str:
                             command="md-openmm build-top")
     lines += _render_schema(MD_SCHEMA, heading="`build-md`: protocol, stages and reporting",
                             command="md-openmm build-md")
+    lines += _OUTPUTS.strip("\n").split("\n")
+    lines.append("")
     text = "\n".join(lines)
     while "\n\n\n" in text:
         text = text.replace("\n\n\n", "\n\n")

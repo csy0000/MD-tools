@@ -39,18 +39,78 @@ def test_each_documented_example_resolves_and_selects_its_protocol(protocol):
     assert resolved["protocol"] == protocol
 
 
+#: The least a document may state and still resolve, per protocol. Anything absent here is a
+#: default, which is what makes "the canonical example states nothing else" checkable.
+_REQUIRED = {
+    "cMD": "",
+    "REST2": "",
+    "rREST2": "reservoir:\n  enabled: true\n  path: reservoir.nc\n",
+    "AIS": "ais_source:\n  trajectory: source.nc\n",
+    "umbrella": ("umbrella:\n  file: windows.yaml\n"
+                 "collective_variables:\n  file: cv.yaml\n  interval_steps: 1000\n"),
+}
+
+
+def _bare_document(tmp_path, protocol):
+    """A document stating ONLY `protocol` plus whatever the resolver refuses to do without."""
+    path = tmp_path / f"bare-{protocol}.config"
+    path.write_text(f"protocol: {protocol}\n" + _REQUIRED[protocol], encoding="utf-8")
+    return path
+
+
 @pytest.mark.parametrize("protocol", PROTOCOLS)
-def test_a_documented_example_is_not_a_copy_of_the_comprehensive_one(protocol):
+def test_a_documented_example_is_not_a_copy_of_the_shipped_one(protocol, tmp_path):
     """Two files with the same content are one file and a maintenance burden.
 
-    The root example is the reference for every key; the documented one is a task-sized starting
-    point. If they ever become identical, one of them has lost its reason to exist.
+    THE DISTINCTION IS PURPOSE, NOT SIZE. It used to be asserted as "the documented one is
+    smaller", which worked only while `configs/md/*.config` carried every key's documentation
+    inline and ran to 18-20 KB. That documentation now lives once, generated, in
+    `docs/md-configuration.md`, so both files are short and a byte count no longer distinguishes
+    them -- AIS's quick-start is in fact the larger of the two.
+
+    What separates them is what they are FOR, and that is directly checkable:
+
+      * `configs/md/<protocol>.config` is canonical -- it resolves to the model's own defaults,
+        so it shows what the package does when you ask for the least;
+      * `docs/openmm_methods/<protocol>/example.config` is task-shaped -- it sets small step
+        counts so a run finishes while you watch, and therefore does NOT resolve to the defaults.
+
+    A file that satisfied both descriptions would be one of them wearing the other's name.
     """
-    documented = (METHODS / protocol / "example.config").read_text(encoding="utf-8")
-    comprehensive = (DOCS.parent / "configs" / "md" / f"{protocol}.config").read_text(encoding="utf-8")
-    assert documented != comprehensive
-    assert len(documented) < len(comprehensive), (
-        "the documented example is no longer the smaller of the two")
+    from md_tools.build.md import resolve_md_config
+
+    documented_path = METHODS / protocol / "example.config"
+    shipped_path = DOCS.parent / "configs" / "md" / f"{protocol}.config"
+    assert documented_path.read_text(encoding="utf-8") != shipped_path.read_text(encoding="utf-8")
+
+    # THE BASELINE IS PER PROTOCOL, and that is not a detail. `resolve_md_config(None)` resolves
+    # as cMD, and some reporting defaults depend on the protocol -- a bare AIS document resolves
+    # `reporting.info_printout` to 500 where cMD gives 10000. Comparing AIS against cMD's
+    # defaults therefore reports the canonical AIS example as non-canonical, which is a bug in
+    # the test rather than in the file.
+    defaults = resolve_md_config(_bare_document(tmp_path, protocol))
+    shipped = resolve_md_config(shipped_path)
+    documented = resolve_md_config(documented_path)
+
+    KEYS = (("stages", "production_steps"),
+            ("reporting", "crd_printout_solute"),
+            ("reporting", "info_printout"))
+
+    # The shipped one states nothing beyond what its protocol requires, so every length and
+    # cadence it leaves out must land on that protocol's own default.
+    for section, key in KEYS:
+        assert shipped[section][key] == defaults[section][key], (
+            f"configs/md/{protocol}.config resolves {section}.{key} to "
+            f"{shipped[section][key]} where a bare {protocol} document gives "
+            f"{defaults[section][key]}, so it is no longer the canonical example")
+
+    # The task-shaped one differs somewhere, or it has no reason to exist beside the other.
+    differs = any(documented[section][key] != defaults[section][key]
+                  for section, key in KEYS + (("stages", "minimization_iterations"),))
+    assert differs, (
+        f"docs/openmm_methods/{protocol}/example.config resolves to the same values as a bare "
+        f"{protocol} document, which makes it a second copy of configs/md/{protocol}.config "
+        f"rather than a task-shaped starting point")
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)

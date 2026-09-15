@@ -230,12 +230,48 @@ def test_a_duplicate_key_in_a_protocol_configuration_is_refused():
 
 # --- 6. the configuration and documentation defects -------------------------------------------------
 
-def test_the_cmd_example_has_exactly_one_dynamics_key():
-    """It carried an uncommented prose line `dynamics: minimisation, ...` above the real block."""
-    text = (REPO / "configs" / "md" / "cMD.config").read_text(encoding="utf-8")
-    document = yaml.safe_load(text)
-    assert isinstance(document.get("dynamics"), dict), document.get("dynamics")
-    assert sum(1 for line in text.splitlines() if line.startswith("dynamics:")) == 1
+def test_no_shipped_config_has_a_section_key_that_parses_as_a_scalar():
+    """MIGRATED from `test_the_cmd_example_has_exactly_one_dynamics_key`.
+
+    THE DEFECT. `cMD.config` carried an uncommented prose line -- `dynamics: minimisation, ...` --
+    above the real `dynamics:` block. YAML read the first one, so `dynamics` parsed as a STRING,
+    the second occurrence was a duplicate key, and the resolver saw a scalar where a mapping
+    belongs.
+
+    WHY IT IS MIGRATED RATHER THAN DELETED. The original asserted that cMD's `dynamics` is a dict,
+    which requires the file to STATE a dynamics block. The shipped configs are now minimal
+    canonical examples -- cMD states only `protocol` and `solvent`, because everything else
+    resolves to the model's own defaults -- so that assertion demands a key the file has no reason
+    to carry, and the failure it produced was about the file being minimal, not about the defect.
+
+    The defect class is not specific to `dynamics`, nor to cMD: any prose line above any block, in
+    any of the five shipped files, does the same thing. So the check is now that shape -- for every
+    shipped config, a key the schema declares as a Section either is absent or parses as a mapping,
+    and no top-level key appears twice. That catches the original bug and every sibling of it.
+    """
+    from md_tools.build.md import MD_SCHEMA
+
+    sections = set(MD_SCHEMA.sections)
+    for name in ("cMD", "REST2", "rREST2", "AIS", "umbrella"):
+        path = REPO / "configs" / "md" / f"{name}.config"
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        document = yaml.safe_load(text) or {}
+
+        for key, value in document.items():
+            if key in sections:
+                assert isinstance(value, dict), (
+                    f"configs/md/{name}.config: `{key}` is a schema Section but parsed as "
+                    f"{type(value).__name__} ({value!r}) -- an uncommented prose line above the "
+                    f"block will do this")
+
+        stated = [line.split(":", 1)[0] for line in text.splitlines()
+                  if line and not line[0].isspace() and not line.startswith("#") and ":" in line]
+        duplicates = sorted({k for k in stated if stated.count(k) > 1})
+        assert not duplicates, (
+            f"configs/md/{name}.config states {duplicates} more than once at the top level; "
+            f"YAML keeps one of them and the other is silently lost")
 
 
 def test_the_scientific_defaults_page_points_at_the_bibliography_that_exists():
