@@ -181,6 +181,44 @@ class DatasetLayout:
     def run(self, method: str, index: int) -> "RunLayout":
         return RunLayout(self.root / f"{method}-run{int(index)}", dataset=self)
 
+    def existing_runs(self, method: str) -> list[int]:
+        """Every `<method>-run<N>` index already present, ascending.
+
+        A suffix that is not a number is IGNORED rather than refused: a directory someone named
+        `REST2-run-old` is not this tool's business, and failing the scan over it would make an
+        unrelated directory block every new run.
+        """
+        import re
+
+        if not self.root.is_dir():
+            return []
+        pattern = re.compile(rf"^{re.escape(method)}-run(\d+)$")
+        found = []
+        for path in self.root.iterdir():
+            if not path.is_dir():
+                continue
+            matched = pattern.match(path.name)
+            if matched:
+                found.append(int(matched.group(1)))
+        return sorted(found)
+
+    def next_run_index(self, method: str) -> int:
+        """The index a new run of `method` takes: one past the highest that exists.
+
+        GAPS ARE NOT REUSED, and that is the point rather than an oversight. With `run1` and
+        `run3` present the answer is 4, never 2. A gap means a run was moved, archived or
+        registered elsewhere -- `data-register` takes the source away and leaves a symlink -- and
+        handing its number to a new run would make two different experiments share an identity
+        that a manifest somewhere already refers to. Counting the directories present would do
+        exactly that.
+        """
+        existing = self.existing_runs(method)
+        return (existing[-1] + 1) if existing else 1
+
+    def next_run(self, method: str) -> "RunLayout":
+        """The layout for the next run of `method`. Creates nothing."""
+        return self.run(method, self.next_run_index(method))
+
 
 class RunLayout:
     """One run: its own equilibration, its per-state output, and its ladder records."""
