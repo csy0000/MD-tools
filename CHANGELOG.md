@@ -93,7 +93,10 @@ post-hoc analysis, where nothing integrates.
 energy of the configuration state *i*'s Context is already holding — `_gather_configurations` read
 it out of that very Context — so installing it again to measure it was a round trip to the device
 for a number in hand. It is now read directly, through the same `reduced_potential` conversion, so
-the value is identical rather than close, and read before any cross energy so it is measured on the
+the value is the same arithmetic rather than an approximation -- verified to 5e-11 reduced units at
+double precision; at mixed precision neither path is bitwise stable, and the old save/restore round
+trip perturbed the Context by ~100x the read-to-read noise floor, so the reuse disturbs the run LESS
+than evaluating did -- and read before any cross energy so it is measured on the
 Context as propagation left it. This is the value Amber takes for free as
 `my_ene_temp%energy_1`, paying one force call only for the cross term it calls "my pot ene with
 THEIR coordinates".

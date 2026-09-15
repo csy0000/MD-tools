@@ -262,7 +262,7 @@ New suites:
 | file | tests | what it pins |
 |---|---|---|
 | `test_stage_output_sections.py` | 11 | census arithmetic, DOF, periodicity, method summary, single-sample guard |
-| `test_exchange_entry_reuse.py` | 24 | diagonal reuse is bit-identical; `required_entries` matches what the sweep reads |
+| `test_exchange_entry_reuse.py` | 24 | diagonal reuse is the same arithmetic (exact, on a synthetic engine); `required_entries` matches what the sweep reads |
 | `test_exchange_record_honesty.py` | 4 | `u_evaluated` derived, matrix stays dense |
 | `test_energy_decomposition.py` | 6 | terms sum to the total; System unmutated |
 
@@ -493,6 +493,29 @@ startup, so treat these as indicative. A switching benchmark is the outstanding 
 `AIS.md`.
 
 ---
+
+## What the reuse actually costs in precision
+
+Measured on CUDA, physical GPU 1, the tau-scaled System, same Context and same instant:
+
+| precision | noise floor (same read twice) | reuse vs evaluate |
+|---|---|---|
+| double | **0.000e+00** | **2-5e-11** |
+| mixed  | 1.0e-05 - 3.4e-05 | 1.0e-04 - 7.0e-04 |
+
+At double precision the two paths agree to 5e-11 reduced units, which is float64 rounding in the
+`reduced_potential` arithmetic: the two computations ARE the same computation. At mixed precision --
+what runs actually use -- neither side is bitwise stable: reading the same energy five times without
+touching anything spreads by 3.4e-05, and re-installing the IDENTICAL configuration (which is what
+the old path did, via save -> install -> restore) moves the energy by 3.5e-03, about a hundred times
+the noise floor. The reuse difference sits below the perturbation the old path introduced, so the
+reuse is not merely equivalent to it -- it avoids a disturbance the old path was causing.
+
+This also explains why a ladder is not reproducible run to run: two identical runs gave different
+equilibrated states (`eq_npt_free.xml` digests `647905a2...` and `d1454b50...`), because
+mixed-precision CUDA is not bitwise deterministic and MD amplifies a 1e-5 difference exponentially.
+Not a defect, but it means "the whole chain is reproducible" in `REST2.config` means same SEEDS, not
+same bytes.
 
 ## Two judgement calls for you
 

@@ -235,8 +235,15 @@ class ReplicaEngine:
         epsilons and does not follow a parameter offset). This method evaluates directly because
         it must serve every case, not because reconstruction is unsound.
 
-        The context's own configuration is restored afterwards, so evaluating a cross energy never
-        disturbs the run.
+        The context's own configuration is restored afterwards. That restoration is EXACT at double
+        precision and approximate at mixed: measured on CUDA with the tau-scaled System, installing
+        the identical configuration and reading the energy again moves it by ~3.5e-03 kJ/mol, about
+        a hundred times the 3.4e-05 spread of reading the same energy twice without touching
+        anything. So a cross energy perturbs the run slightly rather than not at all, and the
+        sentence that used to stand here -- "never disturbs the run" -- was true only of exact
+        arithmetic. It is small, it is why the diagonal is now taken from the Context instead of
+        being re-installed (`driver.py::_reduced_potential_matrix`), and it is one reason a ladder
+        is not reproducible run to run at mixed precision.
         """
         saved = self.get_configuration(state_index)
         try:

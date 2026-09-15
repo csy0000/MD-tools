@@ -108,7 +108,17 @@ def test_the_diagonal_is_read_from_the_context_and_never_installed(state_to_walk
 
 @pytest.mark.parametrize("state_to_walker", [[0, 1], [1, 0], [2, 0, 1]])
 def test_the_reused_diagonal_is_bit_identical_to_evaluating_it(state_to_walker):
-    """THE CHECK THAT MATTERS. A cheaper number that differs is not the same experiment."""
+    """THE CHECK THAT MATTERS. A cheaper number that differs is not the same experiment.
+
+    WHAT THIS DOES AND DOES NOT COVER. The recording engine here returns exact values, so this
+    pins the ARITHMETIC: the reused entry is the same computation as the evaluated one, not an
+    approximation of it. On a device it is measured separately -- CUDA double precision agrees to
+    5e-11 reduced units, while at mixed precision neither path is bitwise stable (reading one
+    energy twice spreads by 3e-5, and the old save/install/restore round trip moved it by 3e-3,
+    about a hundred times that). So "bit-identical" is a statement about this arithmetic, not a
+    promise about a mixed-precision device, and the reuse in fact perturbs the Context LESS than
+    evaluating did.
+    """
     n = len(state_to_walker)
     energies = [[-100.0 - 10 * i - w for w in range(n)] for i in range(n)]
     configurations = _configurations(n)
