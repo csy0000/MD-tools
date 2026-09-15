@@ -13,7 +13,7 @@ Read the tree, correct what is wrong, and the implementation follows the correct
 
 ```text
 <system>/                     THE DATASET ROOT. One dataset is a system and every run on it.
-  system/                     the built system: shared by every method and every repeat
+  build/                     the built system: shared by every method and every repeat
   min/                        the minimised structure: shared for the same reason
   input/                      every .in: shared, because an input is not per-repeat
   REST2-run1/                 one run
@@ -31,29 +31,34 @@ Read the tree, correct what is wrong, and the implementation follows the correct
 
 **What is shared and what is not follows from the physics, not from tidiness.**
 
-`system/`, `min/` and `input/` are shared because every run on this system starts from the same
+`build/`, `min/` and `input/` are shared because every run on this system starts from the same
 built System, the same minimised coordinates and the same instructions. Minimisation draws no
 velocities and has no seeded stochastic element, so two runs minimising the same System produce
 the same structure, and a second copy could only drift from the first. `eq/` is per-run because
 equilibration draws Maxwell velocities from that run's own seed: two repeats are *supposed* to
 diverge there, and that divergence is the point of a repeat.
 
-### `system/` — at the dataset root
+### `build/` — at the dataset root
 
 ```text
-system/  system.xml          the serialised OpenMM System            (today: built.xml)
-         system.pdb          the topology                            (today: built.pdb)
-         system.solute.pdb   the solute alone                        (today: built.solute.pdb)
-         build-top.config    what produced them
-         build-top.log       the provenance record                   (today: built.log)
-         build-top.out       the human-readable report
-         solute.yaml         the resolved scaling selection
+build/  built.xml           the serialised OpenMM System
+        built.pdb           the topology
+        built.solute.pdb    the solute alone
+        build-top.config    what produced them
+        built.log           the provenance record
+        build-top.out       the human-readable report
+        solute.yaml         the resolved scaling selection
 ```
+
+**The names are `build-top`'s own.** `-os` defaults to `built.xml`, `-op` to `built.pdb` and
+`-log` to `built.log`, so the layout does not rename the tool's output -- an earlier draft called
+them `system.{xml,pdb}`, which invented a second name for a file that already had one.
 
 This is the existing convention made explicit rather than a new one, and the reference run proves
 it: its group file names `-p ../../../build/built.pdb -s ../../../build/built.xml`, i.e. a
-directory OUTSIDE the run, already shared between that run and its siblings. `system/` is that
-`build/` directory, one level up instead of three, inside the dataset instead of beside it.
+directory OUTSIDE the run, already shared between that run and its siblings. The layout keeps that
+directory and moves it inside the dataset -- one level up from a run instead of three, so the same
+relative reference becomes `../build/built.xml`.
 
 ### `min/` — at the dataset root
 
@@ -209,7 +214,7 @@ belongs to no single one of them.
 
 Reproducibility, with or without MD-tools installed: the exported reference bundle
 (`engine.py`, `core.py`, `rung_equilibration.py`, `verify_rungs.py`) and its manifest. It keeps
-its **own copy** of what it needs from `system/` and `min/`, because standing alone is its job.
+its **own copy** of what it needs from `build/` and `min/`, because standing alone is its job.
 
 ---
 
@@ -217,7 +222,7 @@ its **own copy** of what it needs from `system/` and `min/`, because standing al
 
 | today | target |
 |---|---|
-| `build/built.xml`, `built.pdb`, `built.solute.pdb`, `built.log` | `<system>/system/system.{xml,pdb}`, `system.solute.pdb`, `build-top.log` |
+| `build/` beside the run (three levels up from `md_script/`) | `<system>/build/` — same names, one level up from a run |
 | `min.{xml,out,log}`, `min.checkpoints/` (per run) | `<system>/min/` — shared |
 | `min.in`, `eq_*.in`, `REST2.in` (run root) | `<system>/input/` — shared |
 | `resolved.config` (run root) | `<run>/resolved.config` — stays per run |
@@ -239,9 +244,9 @@ its **own copy** of what it needs from `system/` and `min/`, because standing al
 
 ## 3. Registration
 
-**A `<method>-run<N>/` is registered only after the `system/`, `min/` and `input/` it was run
+**A `<method>-run<N>/` is registered only after the `build/`, `min/` and `input/` it was run
 against validate as the same construct.** Not by path and not by directory name: each run records
-the sha256 of `system/system.xml`, `min/min.xml` and every `.in` it read, in its own `.log` and
+the sha256 of `build/built.xml`, `min/min.xml` and every `.in` it read, in its own `.log` and
 restart record, and registration recomputes them and compares. A run whose digests do not match
 is refused rather than filed beside them, because "these runs are on the same system, from the
 same structure, under the same instructions" is the claim every comparison between them rests on.
@@ -270,7 +275,8 @@ The migration:
 2. **checks by digest that the shared files really are shared** before hoisting one copy.
    `REST2.in`, `resolved.config`, `solute.yaml`, `_protocol.py`, `REST2.py` are byte-identical in
    all five. `REST2.group` is NOT — the `-c` path differs — so it is per segment.
-3. **copies `build/` into `system/`.** It sits beside the run rather than inside it, which is why
+3. **copies the sibling `build/` into the dataset root.** It sits beside the run rather than
+   inside it, which is why
    the first draft of this document wrongly concluded it did not exist.
 4. **moves only production artefacts**, leaving each `chunk0N/md_script/` intact beside the new
    layout. Nothing is lost and the step is reversible.
@@ -290,7 +296,7 @@ second `--apply`, sources intact at 251 files.
 
 ## 5. Consequences to accept before implementing
 
-* **A run directory is not self-contained**, by design. It reads `../system/`, `../min/` and
+* **A run directory is not self-contained**, by design. It reads `../build/`, `../min/` and
   `../input/`. A run moved out of its dataset is incomplete, and detectably so: the digests it
   recorded will not resolve.
 * **One `.in` stops mapping to one stage**, so `test_method_example_inputs.py`'s production-stage
@@ -311,7 +317,7 @@ second `--apply`, sources intact at 251 files.
    per-state names.
 2. `number_of_segments` reaching the runtime. The field exists and validates; nothing reads it.
 3. Config layering: shared `input/*.in` plus a narrow per-run `run.config`.
-4. `system/`, `min/` and `input/` hoisted, with the digests a run records.
+4. `build/`, `min/` and `input/` hoisted, with the digests a run records.
 5. The per-run reorganisation, one directory at a time, with the suite green between each.
 6. `validate.py` and the manifest, including the implicit directory prefix.
 7. Serialising `system_state<n>.xml` per rung, which is new behaviour rather than a move.
