@@ -11,24 +11,31 @@ Read the tree, correct what is wrong, and the implementation follows the correct
 ## 1. The target
 
 ```text
-<system>/REST2-run1/
-  system/     the built system, and what produced it
-  input/      every Amber-like .in file for the run
-  min/        minimisation
-  eq/         equilibration
-  remd0/      state 0's outputs          (one directory per thermodynamic STATE)
-  remd1/
-  ...
-  rank/       per-PROCESS reports
-  bundles/    reproducibility, with or without MD-tools
-  <root>      the ladder's own records
+<system>/                     THE DATASET ROOT. One dataset is a system and every run on it.
+  system/                     the built system: shared by every method and every repeat
+  min/                        the minimised structure: shared for the same reason
+  REST2-run1/                 one run
+    input/                    every .in for this run
+    eq/                       this run's equilibration
+    remd0/  remd1/  ...       one directory per thermodynamic STATE
+    rank/                     per-PROCESS reports
+    bundles/                  reproducibility, with or without MD-tools
+    <run root>                the ladder's own records
+  REST2-run2/
+  cMD-run1/
+  AIS-run1/
 ```
 
-### `system/`
+**What is shared and what is not follows from the physics, not from tidiness.**
 
-The system every method and every repeat of it shares. Contents match the parent directory's
-copies, so `REST2-run1/system/` and `REST2-run2/system/` are the same bytes when they simulate
-the same thing — and a digest comparison says so rather than a directory name promising it.
+`system/` and `min/` are shared because every run on this system starts from the same built
+System and the same minimised coordinates. Minimisation draws no velocities and has no seeded
+stochastic element, so two runs minimising the same System produce the same structure — and a
+second copy of it could only ever drift from the first. `eq/` is per-run because equilibration
+draws Maxwell velocities from that run's own seed: two repeats are *supposed* to diverge there,
+and that divergence is the point of a repeat.
+
+### `system/` — at the dataset root
 
 ```text
 system/  system.xml          the serialised OpenMM System            (today: built.xml)
@@ -39,41 +46,54 @@ system/  system.xml          the serialised OpenMM System            (today: bui
          solute.yaml         the resolved scaling selection
 ```
 
-### `input/`
+This is the existing convention made explicit rather than a new one. Every generated script
+already reaches outside its own directory for the System — `md-openmm md-run -i min.in
+-p ../built.pdb -s ../built.xml`, and `run.sh` is documented as "run from the built system in the
+parent directory". One copy at the dataset root is where those relative paths were always
+pointing.
 
-Every `.in`, in one place, so "what was this run asked to do" is one directory rather than a
-pattern across five.
+### `min/` — at the dataset root
 
 ```text
-input/  min.in
-        eq_1.in  eq_2.in  eq_3.in
-        rest2.in
-        resolved.config     AUTHORITATIVE, and one per run
+min/  min.xml            the minimised coordinates: what every run's eq_1 starts from
+      min.config         the resolved declaration that produced them
+      min.out  min.log   human-readable, and the provenance record
+      min.checkpoints/
 ```
 
-**Five segments share one `rest2.in`.** The runtime loops it, so a segment is not a stage and one
-`.in` no longer corresponds to one stage — which is a change to a currently tested contract
+A run's first equilibration stage installs `../min/min.xml`. Nothing in a run writes here.
+
+### `input/`
+
+Every `.in` for this run, in one place, so "what was this run asked to do" is one directory
+rather than a pattern across five.
+
+```text
+input/  min.in                  the minimisation this run was built against
+        eq_1.in  eq_2.in  eq_3.in
+        rest2.in
+        resolved.config         AUTHORITATIVE, and one per run
+```
+
+**Every segment shares one `rest2.in`.** The runtime loops it, so a segment is not a stage and one
+`.in` no longer corresponds to one stage — a change to a currently tested contract
 (`test_method_example_inputs.py` asserts `example.in` matches what `build-md` generates for the
 production stage). The segment number is a runtime fact, not an input fact.
 
-### `min/` and `eq/`
+### `eq/` — per run
 
 ```text
-min/  min.xml  min.config  min.out  min.log
-      min.checkpoints/
-eq/   eq_1.{xml,config,nc,out,log}
-      eq_2.{xml,config,nc,out,log}
-      eq_3.{xml,config,nc,out,log}
-      eq_1.checkpoints/  eq_2.checkpoints/  eq_3.checkpoints/
+eq/  eq_1.{xml,config,nc,out,log}   eq_1.checkpoints/
+     eq_2.{xml,config,nc,out,log}   eq_2.checkpoints/
+     eq_3.{xml,config,nc,out,log}   eq_3.checkpoints/
 ```
 
-**The stage renaming loses the ensemble from the filename**, and that is deliberate here but has
-a consequence worth stating. Today the three stages are `eq_nvt_posres`, `eq_npt_posres`,
-`eq_npt_free`, and implicit solvent *renames* them (`eq_nvt_posres_2`, `eq_nvt_free`) precisely so
-nobody reads a pressure-coupled name on a boxless run — an invariant with its own tests. Under
-`eq_1/eq_2/eq_3` that distinction cannot live in the name, so it moves into each stage's `.out`
-header and `.config`, which state the ensemble explicitly. The invariant survives; the evidence
-for it changes location.
+**The renaming loses the ensemble from the filename**, and that has a consequence worth stating.
+Today the stages are `eq_nvt_posres`, `eq_npt_posres`, `eq_npt_free`, and implicit solvent
+*renames* them (`eq_nvt_posres_2`, `eq_nvt_free`) precisely so a pressure-coupled name never
+appears on a boxless run — an invariant with its own tests. Under `eq_1/eq_2/eq_3` that cannot
+live in the name, so it moves into each stage's `.out` header and `.config`, which state the
+ensemble explicitly. The invariant survives; the evidence for it changes location.
 
 ### `remd<n>/` — one directory per thermodynamic state
 
@@ -115,7 +135,8 @@ state and belongs to no single one of them.
 ### `bundles/`
 
 Reproducibility, with or without MD-tools installed: the exported reference bundle
-(`engine.py`, `core.py`, `rung_equilibration.py`, `verify_rungs.py`) and its manifest.
+(`engine.py`, `core.py`, `rung_equilibration.py`, `verify_rungs.py`) and its manifest. It keeps
+its **own copy** of what it needs from `system/` and `min/`, because standing alone is its job.
 
 ### The run root
 
@@ -133,23 +154,41 @@ REST2_checkpoint.nc    configurations, mapping, RNG states, rule state, iteratio
 
 ---
 
-## 2. What moves, from today
+## 2. Registration
+
+**A `<method>-run<N>/` is registered only after the `system/` and `min/` it was run against
+validate as the same construct.** Not by path and not by directory name: each run records the
+sha256 of `system/system.xml` and `min/min.xml` in its own `.log` and restart record, and
+registration recomputes both and compares. A run whose digests do not match the dataset's
+`system/` and `min/` is refused rather than filed beside them, because "these runs are on the same
+system" is the claim every comparison between them rests on.
+
+This is what makes sharing safe. One copy cannot drift from itself, and a run that was somehow
+produced against a different System is detectable instead of silently comparable.
+
+**The dataset root is `<system>/`**, so one dataset is the system, its minimised structure, and
+every run on it — which is the natural scientific unit. "ALA-explicit-HMR with its three REST2
+repeats" is one thing, not four. `dataset.yaml` sits there, and every path in it stays relative to
+it, as the contract already requires.
+
+## 3. What moves, from today
 
 | today | target |
 |---|---|
-| `built.xml`, `built.pdb`, `built.solute.pdb` | `system/system.{xml,pdb}`, `system/system.solute.pdb` |
-| `min.in`, `eq_*.in`, `REST2.in` (run root) | `input/` |
-| `resolved.config` (run root) | `input/resolved.config` |
-| `eq_nvt_posres.*`, `eq_npt_posres.*`, `eq_npt_free.*` | `eq/eq_1.*`, `eq/eq_2.*`, `eq/eq_3.*` |
-| `whole_state<n>_prod<x>.nc` (run root) | `remd<n>/remd_state<n>_prod<x>.nc` |
-| `solute_state<n>_prod<x>.nc` (run root) | `remd<n>/solute_state<n>_prod<x>.nc` |
-| `cv_state<n>.csv` / `.json` | `remd<n>/cv_state<n>_prod<x>.dat` / `.json` |
-| `restart.json` (per-state blocks) | `remd<n>/restart_state<n>_prod<x>.json` |
-| `restart.json` (ladder-wide facts) | `REST2.restart.json` at the root |
-| `REST2.out.rank<r>`, `REST2.log.rank<r>` | `rank/` |
-| *(nothing)* | `remd<n>/system_state<n>.xml` |
+| `built.xml`, `built.pdb`, `built.solute.pdb` | `<system>/system/system.{xml,pdb}`, `system.solute.pdb` |
+| `min.{xml,out,log}`, `min.checkpoints/` (per run) | `<system>/min/` — shared |
+| `min.in`, `eq_*.in`, `REST2.in` (run root) | `<run>/input/` |
+| `resolved.config` (run root) | `<run>/input/resolved.config` |
+| `eq_nvt_posres.*`, `eq_npt_posres.*`, `eq_npt_free.*` | `<run>/eq/eq_1.*`, `eq_2.*`, `eq_3.*` |
+| `whole_state<n>_prod<x>.nc` (run root) | `<run>/remd<n>/remd_state<n>_prod<x>.nc` |
+| `solute_state<n>_prod<x>.nc` (run root) | `<run>/remd<n>/solute_state<n>_prod<x>.nc` |
+| `cv_state<n>.csv` / `.json` | `<run>/remd<n>/cv_state<n>_prod<x>.dat` / `.json` |
+| `restart.json` (per-state blocks) | `<run>/remd<n>/restart_state<n>_prod<x>.json` |
+| `restart.json` (ladder-wide facts) | `<run>/REST2.restart.json` |
+| `REST2.out.rank<r>`, `REST2.log.rank<r>` | `<run>/rank/` |
+| *(nothing)* | `<run>/remd<n>/system_state<n>.xml` |
 
-## 3. Migrating the finished reference runs
+## 4. Migrating the finished reference runs
 
 `hpREST2/data/reference/ALA-explicit-HMR/REST2-run1/` is five `chunk0N/md_script/` directories,
 each a **complete independent run** — its own `build-md.log`, `min.in`, `eq_*` stages,
@@ -158,19 +197,25 @@ restart, and every one of them wrote `_prod1`.
 
 The migration therefore:
 
-1. **assigns segment numbers from the chunk chain** — `chunk01` → `prod1`, … `chunk05` → `prod5`
-   — taken from the extension lineage in each chunk's manifest, not from the directory name, so a
+1. **assigns segment numbers from the chunk chain** — `chunk01` → `prod1`, … `chunk05` → `prod5` —
+   taken from the extension lineage in each chunk's manifest, not from the directory name, so a
    renamed directory cannot silently renumber a trajectory;
-2. **moves only production artefacts** into `REST2-run1/remd<n>/`, leaving each
+2. **hoists one `system/` and one `min/`** to `ALA-explicit-HMR/`, after verifying every chunk
+   used the same ones by digest. If they differ, that is a finding and the migration stops rather
+   than picking one;
+3. **moves only production artefacts** into `REST2-run1/remd<n>/`, leaving each
    `chunk0N/md_script/` intact beside the new layout. Nothing is lost and the step is reversible;
-3. **dry-runs first**, printing every planned move; **verifies sha256** after copying; and
+4. **dry-runs first**, printing every planned move; **verifies sha256** after copying; and
    **removes a source only after** its copy verifies — and only when explicitly told to.
 
 A 921 MB copy of `REST2-run1` is already in `data/reference/` (gitignored, 251 files, checksums
 spot-verified) to develop this against. The originals in `hpREST2` have not been touched.
 
-## 4. Consequences to accept before implementing
+## 5. Consequences to accept before implementing
 
+* **A run directory is not self-contained**, by design. It reads `../system/` and `../min/`, and
+  those relative paths are what the generated scripts already use. A run moved out of its dataset
+  is incomplete, and detectably so: the digests it recorded will not resolve.
 * **One `.in` stops mapping to one stage.** `test_method_example_inputs.py` asserts the shipped
   `example.in` matches what `build-md` generates for the production stage; with segments looping
   one input, "the production stage" is no longer a single generated file.
@@ -179,18 +224,21 @@ spot-verified) to develop this against. The originals in `hpREST2` have not been
   Per-state entries therefore need an implicit `remd<index>/` prefix resolved from the entry's own
   `index` field — which keeps that no-traversal guard intact rather than weakening it.
 * **Existing datasets stop validating in place.** Migration is the answer rather than a
-  compatibility shim, so `data-register` and the contract's path rules need to accept the new
-  shape, and every registered REST2 dataset needs migrating before it validates again.
+  compatibility shim, so `data-register` and the contract's path rules need the new shape, and
+  every registered REST2 dataset needs migrating before it validates again.
 * **The extension-segment vocabulary collides.** `driver.py` already says "segment" for an
   *extension* — a new output directory chained to a parent — which is a different thing from
   `number_of_segments` inside one run. Both cannot keep the word.
 
-## 5. Implementation order
+## 6. Implementation order
 
-1. A path authority: one module that returns every path above from `(run_root, state, segment)`.
-   Partly done — `md_tools.remd.amber_trajectory` has the per-state names.
+1. A path authority: one module that returns every path above from
+   `(dataset_root, run, state, segment)`. Partly done — `md_tools.remd.amber_trajectory` has the
+   per-state names.
 2. `number_of_segments` reaching the runtime. The field exists and validates; nothing reads it.
-3. The directory reorganisation, one directory at a time, with the suite green between each.
-4. `validate.py` and the manifest, including the implicit `remd<index>/` prefix.
-5. The migration tool, dry-run first.
-6. `data-register` and the data contract.
+3. `system/` and `min/` hoisted to the dataset root, with the digests a run records.
+4. The per-run reorganisation, one directory at a time, with the suite green between each.
+5. `validate.py` and the manifest, including the implicit `remd<index>/` prefix.
+6. The registration gate: a run registers only when `system/` and `min/` verify.
+7. The migration tool, dry-run first.
+8. `data-register` and the data contract.
