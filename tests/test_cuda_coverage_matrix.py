@@ -60,6 +60,22 @@ CUDA_SITES = {
         # on the CPU platform and is not CUDA evidence for it. It was cited here anyway, which is
         # worse than an empty cell -- a gap invites work, a false entry closes the question.
         "test_cv_cuda_lanes.py::test_ais_cv_and_decomposition_on_cuda_fresh_and_resumed"),
+    "md/stage.py::_EnergyDecompositionProbe.energies": (
+        "the explicit-solvent half of the energy decomposition. Where a System carries no usable "
+        "force groups -- which is every System built through `ForceField.createSystem`, i.e. all "
+        "explicit solvent -- this creates a SECOND Context, on `live.getPlatform()`, over a "
+        "group-separated COPY of the System, pushes the live positions and box into it, and asks "
+        "for one energy per group. On CUDA that is a second resident System, a host-to-device "
+        "copy of the positions at every report, and one restricted energy evaluation per group. "
+        "It belongs here and not among the reporters that only read a State handed to them: like "
+        "`_EnergyComponentsReporter.report` it asks the device for numbers the run would not "
+        "otherwise compute. The production Context is untouched -- that is the whole point of the "
+        "copy -- but the device work is real",
+        # The probe engages only on a System with one force group, so an IMPLICIT lane never
+        # reaches it: ParmEd's grouping means the plain reporter path is used instead. The
+        # explicit lanes are the ones that exercise it.
+        "test_cuda_coverage_matrix.py::test_explicit_solvent_npt_lane, "
+        "test_explicit_solvent_rest2_lane, test_ais_on_explicit_solvent"),
     "md/stage.py::_EnergyComponentsReporter.report": (
         "one `context.getState(getEnergy=True, groups={g})` per force group per report, which on "
         "CUDA is a device synchronise and an energy evaluation restricted to that group. It is a "
@@ -181,6 +197,39 @@ CUDA_SITES = {
 #: Functions that construct a Context but never on CUDA, with the reason. Each is a deliberate,
 #: named exemption rather than an omission -- and the reason is checkable by reading the callsite.
 NON_CUDA_CONTEXT_SITES = {
+    "md/stage.py::_EnergyDecompositionProbe.__init__":
+        "deserialises a COPY of the System and assigns each force its own group, so the probe can "
+        "ask for them separately later. `XmlSerializer` round trip and `setForceGroup` only -- no "
+        "Context exists yet, and the run's own System is deliberately never touched, because a "
+        "force group is part of the serialised System and regrouping the integrated one would "
+        "change `system_sha256` and invalidate every checkpoint fingerprint in flight. The device "
+        "work is in `energies`, which is classified as a CUDA site.",
+    "md/stage.py::_system_census":
+        "counts atoms and residues, sums the per-particle charges off the NonbondedForce, derives "
+        "the degree-of-freedom count from 3N less constraints less the CM remover, and reads the "
+        "default box vectors -- all off the SERIALISED System, on the host. It constructs nothing "
+        "and asks no device for anything; `getParticleParameters` is a System accessor, not a "
+        "Context one.",
+    "md/stage.py::_method_summary":
+        "reads the nonbonded method, cutoff, Ewald tolerance, PME grid, switching, exception "
+        "count, constraint count and force inventory off the SERIALISED System. Host-side "
+        "accessors on a System object; no Context and no platform are involved. It is read off "
+        "the System rather than the configuration precisely so the `.out` describes what will "
+        "integrate rather than what was requested.",
+    "openmm/decomposition.py::decomposition_systems":
+        "builds the per-term System COPIES whose single-point energies are the Amber-style terms, "
+        "by zeroing charges or epsilons and removing forces. `XmlSerializer` round trips and "
+        "System mutation only -- no Context is created here, and none of these Systems is ever "
+        "integrated.",
+    "openmm/decomposition.py::decompose.energy":
+        "creates a Context per term to read one single-point energy, and defaults to "
+        "`platform_name='CPU'`. This is POST-HOC analysis: the module exists because the 1-4 and "
+        "electrostatic/Lennard-Jones splits need forces duplicated, which must never happen to a "
+        "System something integrates. A caller may pass `platform_name='CUDA'`, but no test does, "
+        "and its only test is PLATFORM_POLICY_EXEMPTION-marked CPU arithmetic -- so filing it as "
+        "CUDA-covered would be the same false entry the AIS CV path once carried: a gap invites "
+        "work, a false entry closes the question. If a CUDA post-hoc lane is ever added, this "
+        "moves to CUDA_SITES and cites it.",
     "md/completion.py::verify_completed_stage":
         "deserialises the final State FROM XML ON DISK to re-read its particle count. The same "
         "getPositions spelling as a live Context, but the object is a file's contents -- the "
