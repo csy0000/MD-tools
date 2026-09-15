@@ -1,8 +1,9 @@
 # The run directory layout
 
-**Status: proposed. Nothing below is implemented yet.** This is the target for 0.5.3's data
-structure work, written down before the refactor because it moves essentially every path in
-`md_tools.remd` and `md_tools.md`, and a refactor toward the wrong target is expensive to undo.
+**Status: proposed for the code; already realised for one migrated reference run.** The code still
+writes the old flat layout. `data/reference/ALA-explicit-HMR/` has been reorganised to this shape
+by `data/reference/migrate_run1.py`, which is how the errors in the first two drafts of this
+document were found.
 
 Read the tree, correct what is wrong, and the implementation follows the corrected version.
 
@@ -20,9 +21,9 @@ Read the tree, correct what is wrong, and the implementation follows the correct
     resolved.config           authoritative, written per run from input/ + run.config
     eq/                       this run's equilibration
     remd0/  remd1/  ...       one directory per thermodynamic STATE
+    remd_records/             the ladder's own records, one set per segment
     rank/                     per-PROCESS reports
     bundles/                  reproducibility, with or without MD-tools
-    <run root>                the ladder's own records
   REST2-run2/
   cMD-run1/
   AIS-run1/
@@ -30,12 +31,12 @@ Read the tree, correct what is wrong, and the implementation follows the correct
 
 **What is shared and what is not follows from the physics, not from tidiness.**
 
-`system/` and `min/` are shared because every run on this system starts from the same built
-System and the same minimised coordinates. Minimisation draws no velocities and has no seeded
-stochastic element, so two runs minimising the same System produce the same structure — and a
-second copy of it could only ever drift from the first. `eq/` is per-run because equilibration
-draws Maxwell velocities from that run's own seed: two repeats are *supposed* to diverge there,
-and that divergence is the point of a repeat.
+`system/`, `min/` and `input/` are shared because every run on this system starts from the same
+built System, the same minimised coordinates and the same instructions. Minimisation draws no
+velocities and has no seeded stochastic element, so two runs minimising the same System produce
+the same structure, and a second copy could only drift from the first. `eq/` is per-run because
+equilibration draws Maxwell velocities from that run's own seed: two repeats are *supposed* to
+diverge there, and that divergence is the point of a repeat.
 
 ### `system/` — at the dataset root
 
@@ -44,53 +45,53 @@ system/  system.xml          the serialised OpenMM System            (today: bui
          system.pdb          the topology                            (today: built.pdb)
          system.solute.pdb   the solute alone                        (today: built.solute.pdb)
          build-top.config    what produced them
-         build-top.log       the provenance record
+         build-top.log       the provenance record                   (today: built.log)
+         build-top.out       the human-readable report
          solute.yaml         the resolved scaling selection
 ```
 
-This is the existing convention made explicit rather than a new one. Every generated script
-already reaches outside its own directory for the System — `md-openmm md-run -i min.in
--p ../built.pdb -s ../built.xml`, and `run.sh` is documented as "run from the built system in the
-parent directory". One copy at the dataset root is where those relative paths were always
-pointing.
+This is the existing convention made explicit rather than a new one, and the reference run proves
+it: its group file names `-p ../../../build/built.pdb -s ../../../build/built.xml`, i.e. a
+directory OUTSIDE the run, already shared between that run and its siblings. `system/` is that
+`build/` directory, one level up instead of three, inside the dataset instead of beside it.
 
 ### `min/` — at the dataset root
 
 ```text
 min/  min.xml            the minimised coordinates: what every run's eq_1 starts from
-      min.config         the resolved declaration that produced them
       min.out  min.log   human-readable, and the provenance record
       min.checkpoints/
 ```
 
 A run's first equilibration stage installs `../min/min.xml`. Nothing in a run writes here.
 
+`min.config` is listed in neither this block nor the source data: a minimisation's resolved
+declaration lives in the shared `resolved.config`, and inventing a per-stage copy would be a
+second authority.
+
 ### `input/` — at the dataset root
 
 Every `.in`, shared. An input says what a method was *asked* to do, and two repeats of one method
-on one system are asked to do the same thing — so a second copy could only drift from the first,
-exactly as with `system/` and `min/`.
+on one system are asked the same thing — so a second copy could only drift from the first.
 
 ```text
-input/  min.in                  the minimisation, shared with min/
+input/  min.in
         eq_1.in  eq_2.in  eq_3.in
         REST2.in  cMD.in  AIS.in       one production input per method
 ```
 
-`min.in` and `eq_*.in` are shared across methods as well as across repeats. **That sharing is a
-claim, and it is enforced rather than assumed**: a run registers only if the inputs it resolved
-against are byte-identical to these (§2). If two methods on one system would need different
-equilibration, they are not comparable and belong under a different `<system>` — which is a
-refusal, not a subdirectory.
+`min.in` and `eq_*.in` are shared across methods as well as repeats. **That sharing is a claim,
+and it is enforced rather than assumed**: a run registers only if the inputs it resolved against
+are byte-identical to these (§3). If two methods on one system would need different
+equilibration, they are not comparable and belong under a different `<system>` — a refusal, not a
+subdirectory.
 
 AIS reads neither `min.in` nor `eq_*.in`: a switching campaign starts from a source ensemble that
-already exists, so it has no minimisation or equilibration chain of its own. The files being
-present and unused by one method is not a problem; the files differing between methods would be.
+already exists, so it has no minimisation or equilibration chain of its own.
 
 **Every segment shares one `<method>.in`.** The runtime loops it, so a segment is not a stage and
 one `.in` no longer corresponds to one stage — a change to a currently tested contract
-(`test_method_example_inputs.py` asserts `example.in` matches what `build-md` generates for the
-production stage). The segment number is a runtime fact, not an input fact.
+(`test_method_example_inputs.py`). The segment number is a runtime fact, not an input fact.
 
 ### `run.config` — the only thing that is per-run
 
@@ -102,36 +103,35 @@ production stage). The segment number is a runtime fact, not an input fact.
 **The seed is the whole reason two repeats differ.** `derive_seed(base, *purpose)` hashes the base
 seed with each stage and replica name, so every stream in a run descends from that one number:
 two runs sharing an identical input and an identical seed would be bit-identical, not repeats.
+The migrated reference run carries `dynamics.seed: 700501` here.
 
 It is a file rather than a command-line flag (`md-run` has no seed override today, and adding one
 would leave the seed living only in a shell history until `resolved.config` was written — a re-run
 typed without it would silently repeat run 1), and rather than a number parsed out of the
-directory name (`REST2-run2` → 2), which would make a filename load-bearing data. The same
-objection already keeps tau out of a trajectory filename.
+directory name, which would make a filename load-bearing data.
 
-`resolved.config` stays per-run and authoritative, as it is today: it is what the run actually
-read, merged from the shared input and this run's seed.
-
-**This needs layering, which does not exist yet.** `resolve_md_config` takes one path. A shared
-input plus a per-run override is a second document, and the strict resolver will need to accept
-both while keeping unknown keys refused and `run.config` narrow — an override file that can set
-anything is a second configuration authority, which is the thing `md_tools.build.md` exists to
-prevent.
+**This needs config layering, which does not exist yet.** `resolve_md_config` takes one path, and
+`run.config` must be restricted to the seed rather than able to set anything: an override that can
+set everything is a second configuration authority.
 
 ### `eq/` — per run
 
 ```text
-eq/  eq_1.{xml,config,nc,out,log}   eq_1.checkpoints/
-     eq_2.{xml,config,nc,out,log}   eq_2.checkpoints/
-     eq_3.{xml,config,nc,out,log}   eq_3.checkpoints/
+eq/  eq_1.{xml,out,log}  eq_1.whole.nc  eq_1.solute.nc
+     eq_1.energy_components.csv  eq_1.mdout.csv  eq_1.py  eq_1.checkpoints/
+     eq_2.*  eq_3.*
 ```
 
-**The renaming loses the ensemble from the filename**, and that has a consequence worth stating.
-Today the stages are `eq_nvt_posres`, `eq_npt_posres`, `eq_npt_free`, and implicit solvent
-*renames* them (`eq_nvt_posres_2`, `eq_nvt_free`) precisely so a pressure-coupled name never
-appears on a boxless run — an invariant with its own tests. Under `eq_1/eq_2/eq_3` that cannot
-live in the name, so it moves into each stage's `.out` header and `.config`, which state the
-ensemble explicitly. The invariant survives; the evidence for it changes location.
+**Two trajectory streams per stage**, as the reference data has: a single `eq_N.nc` cannot hold
+both the whole-system and the solute stream.
+
+**The renaming loses the ensemble from the filename.** Today the stages are `eq_nvt_posres`,
+`eq_npt_posres`, `eq_npt_free`, and implicit solvent *renames* them (`eq_nvt_posres_2`,
+`eq_nvt_free`) precisely so a pressure-coupled name never appears on a boxless run — an invariant
+with its own tests. Under `eq_1/eq_2/eq_3` that cannot live in the name, so it moves into each
+stage's `.out` header and the resolved configuration, which state the ensemble explicitly. The
+invariant survives; the evidence for it changes location. Stage order comes from `build-md.log`:
+`eq_nvt_posres` → 1, `eq_npt_posres` → 2, `eq_npt_free` → 3.
 
 ### `remd<n>/` — one directory per thermodynamic state
 
@@ -143,32 +143,67 @@ remd<n>/  system_state<n>.xml                   the rung Hamiltonian, serialised
           cv_state<n>_prod<x>.json              its sidecar
           restart_state<n>_prod<x>.xml          final positions/velocities/box
           restart_state<n>_prod<x>.json         this state's record for this segment
-          remd_state<n>_prod<x>.out             human-readable
-          remd_state<n>_prod<x>.log             machine-readable provenance
 ```
 
 **The index is the STATE's, never the walker's.** After an accepted exchange the configuration in
 `remd2/` is a different walker's, and that is the point: MD-tools writes the state-sorted thing
 directly, which is why Amber needs `remdtrajtemp` and GROMACS ships `demux.pl` and we do not.
 
-**Two trajectory streams, not one.** They have independent cadences, the whole-system one is off
-by default, and rREST2's reservoir is drawn from the solute one — so they cannot be merged.
+**Grouped by state rather than by segment**, so `remd0/*.nc` concatenates one state across every
+segment in order — which is the common analysis operation. The segment is a suffix because these
+files are indexed by state *and* segment; the records in `remd_records/` are indexed by segment
+alone, which is why they are grouped the other way.
 
-**`system_state<n>.xml` is new.** The preflight already builds every rung (`rung_systems`); this
-writes it down. It carries no segment: the Hamiltonian does not change between segments, so a
-segment in that name would be a lie.
+**`system_state<n>.xml` is new**, and cannot be backfilled. The preflight builds every rung
+(`rung_systems`) and never serialises one; no `XmlSerializer.serialize` call for a rung exists in
+`md_tools/remd/`. Writing one for the migrated run would mean re-scaling `built.xml` to each tau
+*now* and asserting the result matches a run from September. Migrated runs therefore legitimately
+lack it, and the migration records its absence rather than synthesising it.
+
+### `remd_records/` — the ladder's own records, per segment
+
+```text
+remd_records/  ledger_prod<x>.nc            the exchange ledger  (today: REST2.nc)
+               ledger_prod<x>.solute.nc
+               checkpoint_prod<x>.nc        configurations, mapping, RNG states, rule state
+               rem_prod<x>.log              Amber-format, cpptraj-readable as type Hamiltonian
+               exchange_prod<x>.csv         the flat per-(exchange, state) view
+               restart_prod<x>.json         this segment's completion manifest
+               runstate_prod<x>.json        initialized -> running -> completed/interrupted/failed
+               REST2_prod<x>.out            the ladder's human-readable report
+               REST2_prod<x>.log            its provenance record
+               REST2_prod<x>.group          the group file (per segment: the -c path differs)
+```
+
+One directory for every segment, with the segment kept in each filename — these records are
+indexed by segment only, so a `prod<x>/` directory per segment would scatter one subject across
+five places for no gain.
+
+**`ledger_prod<x>.nc` is NOT a trajectory, and its old name said it was.** It carries no
+coordinates and no `Conventions` attribute, so `cpptraj` will not read it. Its variables are the
+exchange history: `u`, `u_evaluated`, `proposed` and `accepted`, each `(exchange, state, state)`
+— 10000×6×6 in the reference run — plus `state_to_walker` at `(exchange, state)`, the tau ladder,
+and the frame bookkeeping. `restart.json` calls it authoritative because the run's whole history
+is reconstructable from it.
+
+It stays NetCDF rather than becoming `.csv` or `.dat` because four of its variables are 3-D: a
+flat table cannot hold a 10000×6×6 array without exploding to 360,000 rows or inventing a column
+encoding. `exchange_prod<x>.csv` beside it already IS the flat view —
+`exchange,step,time_ps,state,tau,walker,reduced_potential,potential_energy_kj_per_mol,`
+`proposed_with_next,accepted_with_next`, one row per (exchange, state), carrying the
+neighbour-pair subset. NetCDF for the full matrix, CSV for the flat view.
 
 ### `rank/`
 
 ```text
-rank/  rest2.out.rank<r>
-       rest2.log.rank<r>
+rank/  REST2_prod<x>.out.rank<r>
+       REST2_prod<x>.log.rank<r>
 ```
 
 **Not under `remd<n>/`, and this is correctness rather than tidiness.** A rank is a process and a
-state is a thermodynamic state; they are not in bijection. The reference ladder being migrated ran
-**6 states on 5 ranks**, so `REST2.out.rank01` is the report of a process that owned more than one
-state and belongs to no single one of them.
+state is a thermodynamic state; they are not in bijection. The reference ladder ran **6 states on
+5 ranks**, so `REST2.out.rank01` is the report of a process that owned more than one state and
+belongs to no single one of them.
 
 ### `bundles/`
 
@@ -176,117 +211,110 @@ Reproducibility, with or without MD-tools installed: the exported reference bund
 (`engine.py`, `core.py`, `rung_equilibration.py`, `verify_rungs.py`) and its manifest. It keeps
 its **own copy** of what it needs from `system/` and `min/`, because standing alone is its job.
 
-### The run root
-
-Ladder-wide facts, which no per-state file can hold — an exchange happens *between* states.
-
-```text
-rem.log                Amber-format, cpptraj-readable as type Hamiltonian
-exchange.csv           every attempt, its energies and its outcome
-REST2.restart.json     run_status, exchange statistics, mapping integrity, scientific identity,
-                       schedule, versions, execution  (renamed from restart.json)
-REST2.runstate.json    initialized -> running -> completed/interrupted/failed
-REST2.out  REST2.log   the ladder's own reports
-REST2_checkpoint.nc    configurations, mapping, RNG states, rule state, iteration, budget
-```
-
 ---
 
-## 2. Registration
+## 2. What moves, from today
+
+| today | target |
+|---|---|
+| `build/built.xml`, `built.pdb`, `built.solute.pdb`, `built.log` | `<system>/system/system.{xml,pdb}`, `system.solute.pdb`, `build-top.log` |
+| `min.{xml,out,log}`, `min.checkpoints/` (per run) | `<system>/min/` — shared |
+| `min.in`, `eq_*.in`, `REST2.in` (run root) | `<system>/input/` — shared |
+| `resolved.config` (run root) | `<run>/resolved.config` — stays per run |
+| `REST2.config` (the per-run declaration) | `<run>/run.config` |
+| `eq_nvt_posres.*`, `eq_npt_posres.*`, `eq_npt_free.*` | `<run>/eq/eq_1.*`, `eq_2.*`, `eq_3.*` |
+| `whole_state<n>_prod<x>.nc` | `<run>/remd<n>/remd_state<n>_prod<x>.nc` |
+| `solute_state<n>_prod<x>.nc` | `<run>/remd<n>/solute_state<n>_prod<x>.nc` |
+| `cv_state<n>.csv` / `.json` | `<run>/remd<n>/cv_state<n>_prod<x>.dat` / `.json` |
+| `REST2.nc`, `REST2.solute.nc` | `<run>/remd_records/ledger_prod<x>.nc`, `.solute.nc` |
+| `REST2_checkpoint.nc` | `<run>/remd_records/checkpoint_prod<x>.nc` |
+| `rem.log`, `exchange.csv` | `<run>/remd_records/rem_prod<x>.log`, `exchange_prod<x>.csv` |
+| `restart.json` (ladder-wide) | `<run>/remd_records/restart_prod<x>.json` |
+| `restart.json` (per-state blocks) | `<run>/remd<n>/restart_state<n>_prod<x>.json` |
+| `REST2.runstate.json` | `<run>/remd_records/runstate_prod<x>.json` |
+| `REST2.out`, `REST2.log`, `REST2.group` | `<run>/remd_records/REST2_prod<x>.{out,log,group}` |
+| `REST2.out.rank<r>`, `REST2.log.rank<r>` | `<run>/rank/` |
+| *(nothing)* | `<run>/remd<n>/system_state<n>.xml` — new, not backfillable |
+| *(nothing)* | `<run>/run.config` — the seed |
+
+## 3. Registration
 
 **A `<method>-run<N>/` is registered only after the `system/`, `min/` and `input/` it was run
 against validate as the same construct.** Not by path and not by directory name: each run records
 the sha256 of `system/system.xml`, `min/min.xml` and every `.in` it read, in its own `.log` and
 restart record, and registration recomputes them and compares. A run whose digests do not match
-the dataset's is refused rather than filed beside them, because "these runs are on the same
-system, from the same structure, under the same instructions" is the claim every comparison
-between them rests on.
+is refused rather than filed beside them, because "these runs are on the same system, from the
+same structure, under the same instructions" is the claim every comparison between them rests on.
 
 The seed is deliberately outside that check: `run.config` is *expected* to differ per run, and it
 is the only thing that may.
 
-This is what makes sharing safe. One copy cannot drift from itself, and a run that was somehow
-produced against a different System is detectable instead of silently comparable.
-
 **The dataset root is `<system>/`**, so one dataset is the system, its minimised structure, and
-every run on it — which is the natural scientific unit. "ALA-explicit-HMR with its three REST2
-repeats" is one thing, not four. `dataset.yaml` sits there, and every path in it stays relative to
-it, as the contract already requires.
-
-## 3. What moves, from today
-
-| today | target |
-|---|---|
-| `built.xml`, `built.pdb`, `built.solute.pdb` | `<system>/system/system.{xml,pdb}`, `system.solute.pdb` |
-| `min.{xml,out,log}`, `min.checkpoints/` (per run) | `<system>/min/` — shared |
-| `min.in`, `eq_*.in`, `REST2.in` (run root) | `<system>/input/` — shared |
-| `resolved.config` (run root) | `<run>/resolved.config` — stays per run |
-| *(nothing)* | `<run>/run.config` — the seed, the only per-run declaration |
-| `eq_nvt_posres.*`, `eq_npt_posres.*`, `eq_npt_free.*` | `<run>/eq/eq_1.*`, `eq_2.*`, `eq_3.*` |
-| `whole_state<n>_prod<x>.nc` (run root) | `<run>/remd<n>/remd_state<n>_prod<x>.nc` |
-| `solute_state<n>_prod<x>.nc` (run root) | `<run>/remd<n>/solute_state<n>_prod<x>.nc` |
-| `cv_state<n>.csv` / `.json` | `<run>/remd<n>/cv_state<n>_prod<x>.dat` / `.json` |
-| `restart.json` (per-state blocks) | `<run>/remd<n>/restart_state<n>_prod<x>.json` |
-| `restart.json` (ladder-wide facts) | `<run>/REST2.restart.json` |
-| `REST2.out.rank<r>`, `REST2.log.rank<r>` | `<run>/rank/` |
-| *(nothing)* | `<run>/remd<n>/system_state<n>.xml` |
+every run on it — the natural scientific unit. `dataset.yaml` sits there, and every path in it
+stays relative to it, as the contract already requires.
 
 ## 4. Migrating the finished reference runs
 
-`hpREST2/data/reference/ALA-explicit-HMR/REST2-run1/` is five `chunk0N/md_script/` directories,
-each a **complete independent run** — its own `build-md.log`, `min.in`, `eq_*` stages,
-`resolved.config`. They are not five segments inside one run; they are five runs chained by
-restart, and every one of them wrote `_prod1`.
+`REST2-run1/` was five `chunk0N/md_script/` directories. **All five are complete segments**: each
+reports `run_status: completed` with 10,000 committed exchanges, at cumulative steps 25M, 50M,
+75M, 100M and 125M. What distinguishes `chunk01` is that it carries the ONE-TIME SETUP — `min.*`,
+`eq_*`, `build-md.log`, `run.sh`, the checkpoint trees — because 02–05 are continuations that
+correctly did not re-minimise or re-equilibrate. Nothing is missing from any of them.
 
-The migration therefore:
+Every chunk wrote its per-state trajectories as `_prod1`, which is the defect being corrected.
 
-1. **assigns segment numbers from the chunk chain** — `chunk01` → `prod1`, … `chunk05` → `prod5` —
-   taken from the extension lineage in each chunk's manifest, not from the directory name, so a
-   renamed directory cannot silently renumber a trajectory;
-2. **hoists one `system/` and one `min/`** to `ALA-explicit-HMR/`, after verifying every chunk
-   used the same ones by digest. If they differ, that is a finding and the migration stops rather
-   than picking one;
-3. **moves only production artefacts** into `REST2-run1/remd<n>/`, leaving each
-   `chunk0N/md_script/` intact beside the new layout. Nothing is lost and the step is reversible;
-4. **dry-runs first**, printing every planned move; **verifies sha256** after copying; and
+The migration:
+
+1. **assigns segment numbers from the chain, verified not assumed** — `chunk01` has no `extends`;
+   02→01, 03→02, 04→03, 05→04 by parent path and parent checkpoint sha256. So `chunk0N` → `prodN`.
+2. **checks by digest that the shared files really are shared** before hoisting one copy.
+   `REST2.in`, `resolved.config`, `solute.yaml`, `_protocol.py`, `REST2.py` are byte-identical in
+   all five. `REST2.group` is NOT — the `-c` path differs — so it is per segment.
+3. **copies `build/` into `system/`.** It sits beside the run rather than inside it, which is why
+   the first draft of this document wrongly concluded it did not exist.
+4. **moves only production artefacts**, leaving each `chunk0N/md_script/` intact beside the new
+   layout. Nothing is lost and the step is reversible.
+5. **dry-runs first**, printing every planned move; **verifies sha256** after copying; and
    **removes a source only after** its copy verifies — and only when explicitly told to.
+6. **records what does not exist rather than synthesising it.** Absent from the source and
+   therefore from the migrated tree: `system_state<n>.xml`, per-state restart records, CV series,
+   per-state `.out`/`.log`, `bundles/`. `restart.json`'s `states` entries carry only `index`,
+   `trajectory`, `tau` and `effective_temperature_k`, and the per-state digests inside `extends`
+   describe the PARENT segment's outputs — deriving this segment's per-state record from them
+   would be fabrication.
+7. **refuses `run.sh`.** Every path in it is relative to `chunk01/md_script`, so a copy at the run
+   root would be an executable resolving to the wrong place.
 
-A 921 MB copy of `REST2-run1` is already in `data/reference/` (gitignored, 251 files, checksums
-spot-verified) to develop this against. The originals in `hpREST2` have not been touched.
+First pass: 219 files, 964,582,362 bytes, every destination sha256-verified, idempotent on a
+second `--apply`, sources intact at 251 files.
 
 ## 5. Consequences to accept before implementing
 
-* **A run directory is not self-contained**, by design. It reads `../system/` and `../min/`, and
-  those relative paths are what the generated scripts already use. A run moved out of its dataset
-  is incomplete, and detectably so: the digests it recorded will not resolve.
-* **One `.in` stops mapping to one stage.** `test_method_example_inputs.py` asserts the shipped
-  `example.in` matches what `build-md` generates for the production stage; with segments looping
-  one input, "the production stage" is no longer a single generated file.
-* **`--overwrite`'s inventory, the completion manifest and `validate.py` all index by bare
-  filename.** `validate.py:65` refuses any manifest entry containing a path separator, on purpose.
-  Per-state entries therefore need an implicit `remd<index>/` prefix resolved from the entry's own
-  `index` field — which keeps that no-traversal guard intact rather than weakening it.
+* **A run directory is not self-contained**, by design. It reads `../system/`, `../min/` and
+  `../input/`. A run moved out of its dataset is incomplete, and detectably so: the digests it
+  recorded will not resolve.
+* **One `.in` stops mapping to one stage**, so `test_method_example_inputs.py`'s production-stage
+  assertion needs rethinking.
+* **`validate.py:65` refuses any manifest entry containing a path separator**, on purpose. Entries
+  therefore need an implicit `remd<index>/` or `remd_records/` prefix resolved from the entry's own
+  fields, which keeps that no-traversal guard intact rather than weakening it.
 * **Existing datasets stop validating in place.** Migration is the answer rather than a
-  compatibility shim, so `data-register` and the contract's path rules need the new shape, and
-  every registered REST2 dataset needs migrating before it validates again.
+  compatibility shim.
 * **The extension-segment vocabulary collides.** `driver.py` already says "segment" for an
   *extension* — a new output directory chained to a parent — which is a different thing from
-  `number_of_segments` inside one run. Both cannot keep the word.
+  `stages.number_of_segments` inside one run. Both cannot keep the word.
 
 ## 6. Implementation order
 
-1. A path authority: one module that returns every path above from
+1. A path authority: one module returning every path above from
    `(dataset_root, run, state, segment)`. Partly done — `md_tools.remd.amber_trajectory` has the
    per-state names.
 2. `number_of_segments` reaching the runtime. The field exists and validates; nothing reads it.
-3. Config layering: a shared `input/*.in` plus a narrow per-run `run.config`, resolving to the
-   per-run `resolved.config`. `resolve_md_config` takes one path today, and `run.config` must be
-   restricted to the seed rather than able to set anything — an override that can set everything
-   is a second configuration authority.
-4. `system/`, `min/` and `input/` hoisted to the dataset root, with the digests a run records.
+3. Config layering: shared `input/*.in` plus a narrow per-run `run.config`.
+4. `system/`, `min/` and `input/` hoisted, with the digests a run records.
 5. The per-run reorganisation, one directory at a time, with the suite green between each.
-6. `validate.py` and the manifest, including the implicit `remd<index>/` prefix.
-7. The registration gate: a run registers only when `system/`, `min/` and every `.in` it read
-   verify by digest. The seed in `run.config` is deliberately exempt.
-8. The migration tool, dry-run first.
-9. `data-register` and the data contract.
+6. `validate.py` and the manifest, including the implicit directory prefix.
+7. Serialising `system_state<n>.xml` per rung, which is new behaviour rather than a move.
+8. The registration gate.
+9. The migration tool updated to this layout, dry-run first.
+10. `data-register` and the data contract.
