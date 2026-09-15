@@ -7,6 +7,46 @@
 ! `resolved.config` beside this file is AUTHORITATIVE: md-run resolves this input
 ! and writes the result there, and that resolved document is what the run reads.
 ! This file resolves to exactly that document -- editing it changes the run.
+!
+! WHAT A RUN WRITES. Every stage's `.out` opens with what it actually ran, read off the
+! SERIALISED System rather than off this file -- a configuration asking for a 1.0 nm cutoff and a
+! System carrying 0.8 nm are different runs, and only one of them integrates:
+!
+!     System       atoms, residues by name, net charge, degrees of freedom, box and volume
+!     Method       nonbonded treatment and cutoff, Ewald tolerance, dispersion correction,
+!                  switching, 1-4 exception count, constraints, barostat present, force inventory
+!     Selections   the solute atom count, and which omega bonds are left unscaled
+!
+! The same facts go into the `.log` as structured fields, because prose is not a database. A box
+! is reported only when the System is actually periodic: an OpenMM System defaults to a 2 nm cube,
+! so an implicit run would otherwise print an invented box in the same voice as a measurement.
+!
+! `energy_components_<stage>.csv` carries the potential energy term by term, beside `mdout*.csv`.
+! Where the System has usable force groups -- the implicit route, via ParmEd -- they are read
+! directly. Where it does not, which is every explicit-solvent System built through
+! `ForceField.createSystem`, a group-separated COPY is probed instead: `built.xml`, the run's own
+! Context and every digest taken from them are untouched. `EELEC` from `VDWAALS`, and the 1-4
+! terms from either, are NOT reachable that way -- the 1-4 pairs are exceptions inside the single
+! NonbondedForce -- so that split lives in post-hoc `md_tools.openmm.decomposition`.
+!
+! An rms fluctuation over a single report reads `n/a (single sample)`, not 0: over one sample
+! sqrt(<x^2> - <x>^2) is exactly zero, which reads as "this did not move" when it means "there was
+! nothing to compare it against".
+!
+! A LADDER'S `.out` NAMES THE HAMILTONIAN IT INTEGRATED. The grouped summary prints the tau
+! ladder, the scaling laws in force, which terms were left unscaled, the solute region with its
+! omega-bond exclusions, and the rung's `system_sha256` -- then a TIMINGS block with elapsed time,
+! ns/day per replica and aggregate, and ms/step. A rung here IS a serialised System, so it can be
+! named and digested; Amber prints an equivalent REAF block but cannot name the resulting
+! Hamiltonian, because `gti_add_re` is an index into a table and the scaled potential exists only
+! inside the running binary.
+!
+! Per-state output is `solute_state<i>_prod<N>.nc`, plus `whole_state<i>_prod<N>.nc` when a
+! whole-system cadence is set, and `cv_state<i>.csv` with a `cv_state<i>.json` sidecar when
+! collective variables are enabled. The index is the STATE's, never the walker's.
+!
+! `--resume` continues an interrupted ladder from its committed checkpoint. An interrupted run
+! writes no completion manifest by design, and needs none to be resumed.
 
 &cntrl
   !
