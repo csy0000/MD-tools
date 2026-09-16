@@ -789,13 +789,19 @@ def validate_generated_chain(*, topology, system, stages: list[dict[str, Any]],
     and the paths the chain writes.
     """
     check_input_files(p=topology, s=system)
-    loaded = load_inputs(topology, system)
+    loaded_by_system = {str(system): load_inputs(topology, system)}
 
     prepared_plans: dict[str, Any] = {}
     previous_name = previous_restart = None
     for entry in stages:
         name = str(entry["name"])
         stage_where = f"{where}: stage {name}"
+        # A hot stage names its own System -- the saved scaled state -- and is checked against it.
+        stage_system = entry.get("system") or system
+        if str(stage_system) not in loaded_by_system:
+            check_input_files(p=topology, s=stage_system)
+            loaded_by_system[str(stage_system)] = load_inputs(topology, stage_system)
+        loaded = loaded_by_system[str(stage_system)]
 
         # THE PARENT, STATED RATHER THAN INFERRED FROM ITS ABSENCE. At generation time every
         # stage after the first is missing its parent BY CONSTRUCTION -- nothing has run -- which
@@ -824,7 +830,7 @@ def validate_generated_chain(*, topology, system, stages: list[dict[str, Any]],
             checkpoint=entry.get("checkpoint"))
         # An output of this stage may not be one of the shared inputs every stage reads.
         check_output_collisions(outputs=inventory.roles,
-                                inputs={"p": topology, "s": system})
+                                inputs={"p": topology, "s": stage_system})
         prepared_plans[name] = SimpleNamespace(inventory=inventory)
         previous_name, previous_restart = name, entry.get("restart")
 
@@ -841,15 +847,13 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
     """Build the System a stage will actually integrate, and refuse here if it cannot be built.
 
     Everything below used to run AFTER the `.out` and the `.log` were open: the solute selection,
-    the unscaled-torsion classification, `build_scaled_system` with its force audit, the implicit/NPT and
-    fixed-tau/NPT checks, the restraint, and the barostat. Each is a refusal that arrived attached
+    the saved-state check, the force audit, the implicit/NPT and fixed-tau/NPT checks, the restraint, and the barostat. Each is a refusal that arrived attached
     to a directory that reads as a run that started -- and `build_scaled_system` in particular
     refuses a System carrying a force the convention cannot place, which is not a rare case on a
     hand-built System.
     """
     from ..md._stages import add_barostat, add_positional_restraint, count_barostats, derive_seed
     from ..md.stage import solute_atom_indices
-    from ..openmm.system import UnclassifiedTorsionError, unscaled_torsions
 
     system = loaded.system
     implicit = loaded.implicit
@@ -863,38 +867,58 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
             f"{where} declares ensemble {stage['ensemble']}, but the System is not periodic. "
             f"Implicit solvent has no volume to control, so there is no NPT here.")
 
-    # SCALE FIRST, on the bare System, then restrain, then add the barostat. The scaler audits
-    # every force and refuses one it cannot classify; the restraint and the barostat are stage
-    # machinery rather than terms of the molecular Hamiltonian, so neither may be scaled. Scaling
-    # last would scale them, and a fixed-tau walker would then build a different System from the
-    # ladder rung it is supposed to match.
-    if tau > 0.0:
-        if stage.get("ensemble") != "NVT":
-            raise PreflightError(
-                f"{where} runs at tau={tau} but declares ensemble {stage.get('ensemble')}. A "
-                f"scaled run samples the fixed-volume ensemble of the ladder rung it sits at; a "
-                f"barostat would sample a different distribution.")
-        # The SDF `build-top` retained beside the System, when there is one. This read
-        # `route="peptide", ligand_sdf=None`, so a fixed-tau ligand stage was classified by
-        # residue name against a solute that has none, and refused -- while `build/rungs.py`,
-        # scaling the same Hamiltonian, passed the real route and succeeded.
-        try:
-            unscaled = unscaled_torsions(loaded.pdb.topology, solute,
-                                     ligand_sdf=_ligand_sdf_beside(loaded.system_path))
-        except UnclassifiedTorsionError as refusal:
-            raise PreflightError(f"{where} at tau={tau}: {refusal}") from None
-        excluded = [tuple(int(a) for a in bond)
-                    for bond in unscaled["unscaled_central_bonds"]]
-        _audit, system = check_scaling_plan(loaded, solute_indices=solute,
-                                            excluded_bonds=excluded, tau=tau,
-                                            where=f"{where} fixed-tau scaling")
-    else:
-        from ..rest2.scaler import clone_system
+    # A STAGE NEVER SCALES. `dynamics.tau` is a CLAIM about the System it was given, checked
+    # against the record `build-top --rest2-scaler` wrote beside it (user, 2026-09-16). Scaling in
+    # memory here made the same Hamiltonian a second way, saved it nowhere, and could not tell a
+    # System that was already scaled from one that was not: a saved state given with tau > 0 was
+    # scaled AGAIN, to (1-tau)^4, and one given with tau = 0 ran NPT on a scaled Hamiltonian.
+    # Minimisation claims nothing: it minimises the file it is given, and `min/` is shared.
+    from ..rest2.scaler import clone_system
+    from ..rest2.states import ScaledStateError, scaled_state_identity
 
-        # A copy, so a plan never hands the runtime the object `LoadedInputs` holds: the restraint
-        # and the barostat below mutate it in place, and two plans built from one `LoadedInputs`
-        # would otherwise accumulate each other's machinery.
-        system = clone_system(system)
+    unscaled_impropers = True
+    if name != "min":
+        try:
+            identity = scaled_state_identity(loaded.system_path)
+        except ScaledStateError as refusal:
+            raise PreflightError(f"{where}: {refusal}") from None
+        if identity is not None:
+            if abs(float(identity["tau"]) - tau) > 1e-9:
+                raise PreflightError(
+                    f"{where} claims tau = {tau}, but -s {Path(loaded.system_path).name} is state "
+                    f"{identity['state']} of {identity['record']} at tau = {identity['tau']}. A "
+                    f"stage scales nothing: the tau it declares must be the tau of the System it "
+                    f"is given, or its ensemble and its records describe a different Hamiltonian "
+                    f"from the one it integrates.")
+            from ..rest2.states import load_scaler_record
+
+            section = load_scaler_record(identity["record"])["unscaled_torsions"]
+            excluded = [tuple(int(a) for a in bond)
+                        for bond in section.get("unscaled_central_bonds", [])]
+            unscaled_impropers = bool(section.get("unscaled_impropers", True))
+        elif tau > 0.0:
+            raise PreflightError(
+                f"{where} claims tau = {tau}, but -s {Path(loaded.system_path).name} is not a "
+                f"saved scaled state (no scaler.yaml beside it names it). A stage no longer "
+                f"scales in memory. Build the state with `md-openmm build-top --rest2-scaler` and "
+                f"pass that file as -s, e.g. build/cMD/system_state0.xml.")
+    if tau > 0.0 and name != "min" and stage.get("ensemble") != "NVT":
+        raise PreflightError(
+            f"{where} runs at tau={tau} but declares ensemble {stage.get('ensemble')}. A "
+            f"scaled run samples the fixed-volume ensemble of the ladder rung it sits at; a "
+            f"barostat would sample a different distribution.")
+    # The force audit still runs: a System carrying a force the convention cannot place is refused
+    # here, before any output, whether or not it is scaled.
+    from ..rest2.scaler import UnclassifiedForceError, audit_force_classes
+
+    try:
+        audit_force_classes(system, where=where)
+    except UnclassifiedForceError as unknown:
+        raise PreflightError(str(unknown)) from None
+    # A copy, so a plan never hands the runtime the object `LoadedInputs` holds: the restraint
+    # and the barostat below mutate it in place, and two plans built from one `LoadedInputs`
+    # would otherwise accumulate each other's machinery.
+    system = clone_system(system)
 
     hamiltonian_identity = None
     if stage.get("phase_space_interval_steps"):
@@ -905,7 +929,8 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
         # a CustomExternalForce the ladder rung a reservoir refreshes does not have.
         hamiltonian_identity = identity_record(
             system, tau=tau, temperature_k=float(stage["temperature_K"]),
-            ensemble=stage.get("ensemble"), solute_indices=solute, excluded_bonds=excluded)
+            ensemble=stage.get("ensemble"), solute_indices=solute, excluded_bonds=excluded,
+            unscaled_impropers=unscaled_impropers)
 
     add_positional_restraint(system, loaded.pdb.positions, solute)
     if not implicit:

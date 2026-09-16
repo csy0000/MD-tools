@@ -905,7 +905,10 @@ def _stage_plan_entries(resolved: dict[str, Any]) -> list[dict[str, Any]]:
         # a minimisation and equilibration chain would run those BEFORE its own input existed, and
         # would quietly suggest the source is something this run produces.
         return plan
-    plan.append({**common, "name": "min", "ensemble": "NVT",
+    # `tau: 0.0` for minimisation, whatever the run's tau: `min/` and `input/min.in` are SHARED by
+    # every method on the system, and a stage scales nothing -- minimisation minimises the unscaled
+    # built System it is given (user, 2026-09-16).
+    plan.append({**common, "tau": 0.0, "name": "min", "ensemble": "NVT",
                  "minimization_iterations": stages["minimization_iterations"], "steps": 0,
                  "restraint_kcal_per_mol_A2": dyn["restraint_kcal_per_mol_A2"],
                  "trajectory_interval_steps": 0, "state_interval_steps": 0,
@@ -1642,8 +1645,24 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
             '']
     else:
         previous = None
+        hot = any(float(stage.get("tau") or 0.0) > 0.0 for stage in plan)
+        if hot:
+            state = f"build/{resolved['protocol']}/system_state0.xml"
+            lines += [
+                "# The hot stages integrate the SAVED scaled state; a stage scales nothing and",
+                "# checks its tau against the scaler.yaml beside that file. Minimisation uses the",
+                "# unscaled built System. Build the state with",
+                "#   md-openmm build-top --rest2-scaler ... (method: "
+                f"{resolved['protocol']}, tau {resolved['dynamics']['tau']})",
+                f'SCALED_SYSTEM="${{HERE}}/../{state}"',
+                'if [[ ! -f "${SCALED_SYSTEM}" ]]; then',
+                '  echo "run.sh: no scaled state at ${SCALED_SYSTEM}" >&2; exit 2',
+                'fi',
+                '']
         for stage in plan:
             target = targets[stage["name"]]
+            system_var = ('"${SCALED_SYSTEM}"' if float(stage.get("tau") or 0.0) > 0.0
+                          else '"${SYSTEM}"')
             # NO -r, -o, -log or -chk. md-run names all four inside -odir itself, so passing them
             # here would restate four paths per stage that the layout already decides -- and they
             # are taken verbatim against the working directory when given, which is how a stage
@@ -1653,7 +1672,7 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
             # One -x cannot say both `solute_prod1.nc` and `whole_prod1.nc`, and naming only the
             # solute one would silently reinstate the single-trajectory behaviour this replaces.
             call = [f'md-openmm md-run -i {target["input_rel"]} \\',
-                    '  -p "${TOPOLOGY}" -s "${SYSTEM}" \\',
+                    f'  -p "${{TOPOLOGY}}" -s {system_var} \\',
                     f'  -odir {target["odir_rel"]} "$@"']
             if previous:
                 call.insert(2, f'  -c {previous} \\')
@@ -1837,12 +1856,32 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
     chain_targets = _stage_targets(chain_plan, run=run, dataset=dataset)
     from ..run.preflight import PreflightError, validate_generated_chain
 
+    # THE SAVED STATE a hot stage integrates, required before anything is written. A stage
+    # scales nothing (user, 2026-09-16): with tau > 0 it runs on build/<protocol>/system_state0.xml,
+    # which `build-top --rest2-scaler` writes, and checks its tau against the record beside it.
+    hot_state = None
+    if any(float(stage.get("tau") or 0.0) > 0.0 for stage in chain_plan):
+        from ..rest2.states import state_system_name
+
+        hot_state = dataset.build / resolved["protocol"] / state_system_name(0)
+        if not hot_state.is_file():
+            raise ConfigError(
+                f"this {resolved['protocol']} run declares dynamics.tau = "
+                f"{resolved['dynamics']['tau']}, so its hot stages integrate a SAVED scaled state, "
+                f"and there is none at {hot_state}. A stage no longer scales in memory. Build it "
+                f"first:\n  md-openmm build-top --rest2-scaler -s {dataset.built('xml')} "
+                f"-p {dataset.built('pdb')} --config <scaler.config with method: "
+                f"{resolved['protocol']}, n_states: 1, tau_min = tau_max = "
+                f"{resolved['dynamics']['tau']}>\n(expected build/{resolved['protocol']}/"
+                f"{state_system_name(0)})")
+
     chain = []
     for stage in chain_plan:
         target = chain_targets[stage["name"]]
         odir, key = target["odir"], target["key"]
         chain.append({
             "name": stage["name"], "stage": stage,
+            "system": hot_state if float(stage.get("tau") or 0.0) > 0.0 else None,
             "timestep_fs": stage.get("timestep_fs"), "ensemble": stage.get("ensemble"),
             "tau": stage.get("tau"),
             "output": odir / f"{key}.out", "log": odir / f"{key}.log",

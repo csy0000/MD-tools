@@ -1068,7 +1068,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     try:
         pdb = PDBFile(str(topology_path))
         # CONSUMED, not rebuilt. The preflight deserialised the pair, compared the counts,
-        # selected the solute, classified the unscaled torsions, scaled the System for a fixed tau,
+        # selected the solute, checked a hot stage's -s against its saved-state record,
         # restrained it and added the barostat -- all before this function created anything.
         system = checked.prepared_system
         implicit = checked.implicit
@@ -1154,9 +1154,8 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                                "unscaled_central_bonds": [[int(a), int(b)] for a, b in excluded],
                                "unscaled_impropers": tau > 0.0})
         if tau > 0.0:
-            log.field("tau", f"{tau}  (fixed REST2 scaling; amide omega, aromatic ring, double "
-                             f"bond and improper torsions left unscaled, {len(excluded)} central "
-                             f"bond(s))")
+            log.field("tau", f"{tau}  (the saved scaled state -s was checked against; nothing "
+                             f"scaled here. {len(excluded)} unscaled central bond(s) recorded)")
 
         # The MOLECULAR Hamiltonian, fingerprinted HERE, before any stage machinery is added.
         # The restraint (always present, at zero strength when unrestrained) and the barostat are

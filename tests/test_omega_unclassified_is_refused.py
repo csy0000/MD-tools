@@ -112,6 +112,10 @@ def test_a_classifiable_solute_passes_through_unchanged(tmp_path):
 # --- every surface that scales ---------------------------------------------------------------------
 
 def test_a_fixed_tau_stage_is_refused_before_anything_is_written(unclassifiable):
+    """MIGRATED (step 3): a stage no longer scales, so an unclassifiable residue cannot reach the
+    stage's scaling at all -- the hot stage is refused for lacking a saved state, and the
+    unclassified refusal happens where the state is built (`test_rest2_scaler.py::
+    test_an_unclassifiable_residue_is_refused_before_the_directory_exists`)."""
     from md_tools.run.preflight import PreflightError, _prepare_stage
 
     loaded = _loaded(unclassifiable)
@@ -119,7 +123,7 @@ def test_a_fixed_tau_stage_is_refused_before_anything_is_written(unclassifiable)
              "pressure_bar": 1.0}
     with pytest.raises(PreflightError) as refused:
         _prepare_stage(loaded, stage=stage, name="prod", where="prod")
-    assert "XAA" in str(refused.value)
+    assert "build-top --rest2-scaler" in str(refused.value)
 
 
 def test_a_tau_zero_stage_is_not_refused(unclassifiable):
