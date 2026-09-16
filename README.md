@@ -36,7 +36,7 @@ simulations, not to express the method.
 ## Install
 
 ```bash
-micromamba create -y -p ~/software/md-stack/envs/openmm-env -f environment-ci.yml
+micromamba create -y -p ~/software/md-stack/envs/openmm-env -f environment.yml
 micromamba activate ~/software/md-stack/envs/openmm-env
 pip install --no-deps .
 ```

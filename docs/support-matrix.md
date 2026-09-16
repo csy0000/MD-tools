@@ -9,8 +9,8 @@ runs no dynamics; the CUDA lane is separate local evidence.
 
 | | version | status |
 |---|---|---|
-| Python | 3.12 | pinned by `environment-ci.yml`; gated by `ci`; locally verified on 3.12.13 |
-| OpenMM | 8.6.0 | pinned by `environment-ci.yml`; gated by `ci`; acceptance run on the conda-forge **release** package `openmm 8.6.0 py312hdfcc665_0`, which reports `openmm.version.version` as `8.6.0.dev-c6173db` — the release identity comes from the package, not that string |
+| Python | 3.12 | pinned by `environment.yml`; gated by `ci`; locally verified on 3.12.13 |
+| OpenMM | 8.6.0 | pinned by `environment.yml`; gated by `ci`; acceptance run on the conda-forge **release** package `openmm 8.6.0 py312hdfcc665_0`, which reports `openmm.version.version` as `8.6.0.dev-c6173db` — the release identity comes from the package, not that string |
 | MDTraj | 1.11.1 locally | reads the AIS source DCD and its box vectors; installed and import-checked |
 | OpenFF toolkit | 0.19.0 locally | installed from the conda environment; unpinned in the solve |
 | openmmforcefields | 0.16.0 locally | as above |
@@ -23,7 +23,7 @@ runs no dynamics; the CUDA lane is separate local evidence.
 | Timestep | `auto`, or an explicit value | `auto` resolves from the masses in the built System: 2 fs ordinary, 4 fs repartitioned. Above 3 fs without HMR is refused before integrating |
 | OpenMM force fields | `amber14-all.xml` + `amber14/tip3p.xml` (default), `amber19-all.xml` + `amber19/opc.xml` | loaded and asserted by a non-GPU test, including the Na+/Cl- templates |
 | OS | ubuntu-latest (CI), Linux x86-64 (local) | no other OS is claimed |
-| Accelerator (CI) | **CPU only** | the runners have no GPU; `environment-ci.yml` omits the CUDA pin |
+| Accelerator (CI) | **CPU only** | the runners have no GPU. `environment.yml` carries the CUDA pin and CI installs it anyway, where it is inert: with no driver OpenMM offers Reference and CPU only, and no CI test claims CUDA evidence |
 | Accelerator (runs) | **CUDA by default** | generated scripts refuse a silent CPU fallback; locally verified on RTX A5000 + RTX 3080 |
 
 No second Python or OpenMM version is listed, because none has been run. Adding one means adding it

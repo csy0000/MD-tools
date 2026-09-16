@@ -44,11 +44,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: create the documented CPU environment
+      - name: create the documented environment
+        # ONE environment file, and it carries `cuda-version` and MPI. On this runner the CUDA
+        # stack is INERT -- there is no driver, so OpenMM offers Reference and CPU only -- and
+        # nothing in this job claims CUDA evidence: the GPU lane is separate, local, and named in
+        # the release notes. It costs a larger solve and buys one description of the environment
+        # instead of two that drifted apart, which is how the test lane below came to be passing
+        # `--dist` to a pytest with no xdist installed.
+        #
+        # `mpi4py` being present changes nothing here either: the tests that prove a plural launch
+        # without working MPI refuses and writes nothing FORCE its absence rather than relying on
+        # this environment to lack it.
         uses: mamba-org/setup-micromamba@v2
         with:
-          environment-file: environment-ci.yml
-          environment-name: openmm-env-ci
+          environment-file: environment.yml
+          environment-name: openmm-env
           cache-environment: true
           cache-downloads: true
 

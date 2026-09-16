@@ -1,0 +1,132 @@
+# The environment MD-tools is developed, tested and run against. ONE file, for every machine.
+#
+#   micromamba create -f environment.yml
+#   micromamba activate openmm-env
+#   pip install --no-deps dist/md_tools-*.whl
+#
+# THERE USED TO BE TWO, AND THAT IS WORTH KNOWING BEFORE SPLITTING THEM AGAIN. `environment-ci.yml`
+# described a CPU-only, single-rank variant for the CI runners, and this file was that list plus
+# `cuda-version`, `mpi4py` and `openmpi`; five tests existed for no purpose except to stop the two
+# drifting apart. They were merged on 2026-09-16.
+#
+# CI installs the CUDA and MPI stacks it cannot use on a driverless runner. That costs a larger
+# solve and buys one description of "the environment MD-tools is tested against" instead of two
+# that disagreed -- and they did disagree: `pyproject.toml` has always set
+# `addopts = "--dist loadgroup"` while both files listed a bare `pytest`, so CI's test lane exited
+# 4 with `unrecognized arguments: --dist` before collecting anything.
+#
+# Nothing was lost by merging. No test claims CUDA evidence on a runner with no driver -- the GPU
+# lane is separate, local, and named in the release notes -- and the tests that prove a plural
+# launch without working MPI refuses and writes nothing FORCE its absence
+# (`MD_TOOLS_FORCE_NO_MPI4PY`, a shadowed module that raises on import) rather than relying on the
+# environment to lack it.
+#
+# WHY THE CUDA PIN EXISTS, and why it is 13.0 rather than "the newest".
+#
+# OpenMM compiles its kernels at run time: nvrtc emits PTX, and the DRIVER assembles that PTX for
+# the device. PTX is BACKWARD compatible and NOT forward compatible -- a driver assembles PTX from
+# its own CUDA version or older, and refuses anything newer with
+#
+#     Error loading CUDA module: CUDA_ERROR_UNSUPPORTED_PTX_VERSION (222)
+#
+# CUDA's minor-version-compatibility rule, which is what makes a 13.3 runtime legal against a 13.0
+# driver, explicitly EXEMPTS the PTX JIT. So a solve that pairs cuda-nvrtc 13.3 with a driver at
+# CUDA 13.0 is legal, installs cleanly, and cannot compile a kernel. Measured on this project's
+# own machine: driver 580.173.02 (CUDA 13.0) with cuda-nvrtc 13.3.33 fails exactly as above.
+#
+# THE FAILURE IS INTERMITTENT-LOOKING, WHICH IS THE DANGEROUS PART. OpenMM caches compiled
+# kernels, so anything already compiled keeps working. A full campaign can run to completion while
+# a Context built minutes later fails -- because the second one used a force combination whose
+# kernel was not in the cache. It reads as flaky hardware. To see it deliberately:
+#
+#     OPENMM_CACHE_DIR=$(mktemp -d) python -c "import openmm as mm; \
+#         s=mm.System(); s.addParticle(1.0); \
+#         mm.Context(s, mm.VerletIntegrator(0.001), mm.Platform.getPlatformByName('CUDA'))"
+#
+# 13.0 IS THE CONSERVATIVE PIN, NOT A LOCAL WORKAROUND. Because PTX is backward compatible, a
+# 13.0 runtime works on every driver at CUDA 13.0 or newer; a 13.3 runtime works only on 13.3+.
+# Pinning the OLDEST supported minor is therefore correct on the most machines, and costs nothing
+# a simulation can measure -- nvrtc emits the kernels, it does not run them.
+#
+# Raise this pin only together with a stated minimum driver, and check `nvidia-smi` (the "CUDA
+# Version" it reports is the newest the driver can assemble) on the machines that must keep working.
+#
+# ACTIVATE THE ENVIRONMENT BEFORE RUNNING ANYTHING. AM1-BCC goes through AmberTools' `sqm`, which
+# the OpenFF toolkit discovers by looking on PATH. In a bare shell it is not found even though it
+# is installed, AmberToolsToolkitWrapper is silently absent from the registry, and AM1-BCC becomes
+# unavailable under its own name.
+#
+# Everything here has a caller in src/. Nothing is included because it might be useful later:
+# an unused dependency is one more thing that can fail to solve.
+#
+# NOT A LOCK FILE. Primary packages only; transitive dependencies and build strings are free.
+
+name: openmm-env
+
+channels:
+  - conda-forge
+  - nodefaults                # conda-forge only, no channel mixing
+
+dependencies:
+  - python=3.12
+
+  # --- the CUDA pin, whose reasoning is in the header above --------------------------------------
+  - cuda-version=13.0
+
+  # --- what the five commands import -------------------------------------------------------------
+  - openmm=8.6.0              # the simulations themselves
+    #
+    # THE `.dev` IN THE VERSION STRING IS COSMETIC. A build from this package reports
+    #
+    #     >>> openmm.version.version
+    #     '8.6.0.dev-c6173db'
+    #
+    # which reads like a development snapshot and is not one. OpenMM generates version.py at
+    # build time and appends `.dev-<githash>` unless the build sets the release flag, which the
+    # conda-forge recipe does not. The code is the 8.6.0 RELEASE: its `git_revision`,
+    # c6173db6e8edd705eb59172bd21e9ce69c572405, is exactly the commit the upstream 8.6.0 tag
+    # points at (released 2026-08-19). conda-forge lists 8.6.0beta, 8.6.0rc1 and 8.6.0 as
+    # separate versions; this pin takes the plain one.
+    #
+    # Verify rather than trusting either string:
+    #
+    #     python -c "import openmm.version as v; print(v.version, v.git_revision)"
+    #
+    # and compare git_revision with the tag. Do NOT conclude from `.dev` that the environment
+    # drifted onto a snapshot, and do not "fix" it by building from source -- that yields the
+    # identical code with a tidier string.
+  - pyyaml                    # every configuration file read or written
+  - numpy                     # box geometry in solvation.py and system.py
+  - openff-toolkit            # Molecule, GLOBAL_TOOLKIT_REGISTRY -- ligand parameterisation
+  - openff-nagl-models        # the optional `am1bcc_nagl` charge method
+  - openmmforcefields         # SMIRNOFFTemplateGenerator
+  - ambertools                # sqm/antechamber for AM1-BCC, tleap for implicit peptide topologies
+  - parmed                    # prmtop/rst7 <-> OpenMM
+  - rdkit                     # SMILES -> 3D conformer
+  - mdtraj                    # reads the AIS source DCD and its box vectors
+
+  # --- the REST2 engine ---------------------------------------------------------------------------
+  # REST2 runs on openmmtools.multistate.ReplicaExchangeSampler. The version is EXACT because
+  # the ladder subclasses private methods of it and refuses any other version.
+  - openmmtools=0.26.0
+  - netcdf4                   # the multistate NetCDF storage a REST2 run writes and restarts from
+
+  # --- multi-rank: REST2, rREST2 and AIS under a launcher -----------------------------------------
+  # Their absence would not be a silent downgrade. A launch of more than one rank without a working
+  # mpi4py is a FATAL preflight error before any output exists: N uncoordinated ranks would each run
+  # a whole simulation over one set of output paths, and the result would look complete. Serial runs
+  # are unaffected -- world size 1 coordinates with nobody and imports nothing.
+  - mpi4py
+  - openmpi
+
+  # --- packaging and test toolchain ---------------------------------------------------------------
+  - pip
+  - setuptools>=64
+  - python-build              # `python -m build` -> the wheel a consuming repository installs
+  - pytest
+  # NOT OPTIONAL, and not merely a speed-up. `pyproject.toml` sets `addopts = "--dist loadgroup"`,
+  # so every `pytest` invocation passes `--dist` -- and without this plugin pytest does not know the
+  # flag, exits 4 with `unrecognized arguments: --dist`, and collects nothing. `loadgroup` is what
+  # the suite needs rather than plain `load`: a module-scoped fixture that builds a System or runs a
+  # ladder would otherwise be built once per worker that draws one of its tests.
+  - pytest-xdist

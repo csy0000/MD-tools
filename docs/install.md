@@ -19,7 +19,7 @@ libnvrtc.so    ->  <env>/lib/libnvrtc.so                  the TOOLKIT, from cond
 ```
 
 Both are loaded by OpenMM's CUDA plugin, from two different places. No conda package can install
-the first: `environment-ci.yml` cannot rebuild a driver, and a machine without one has no CUDA no
+the first: `environment.yml` cannot rebuild a driver, and a machine without one has no CUDA no
 matter what the environment contains.
 
 Check what you have:
@@ -50,18 +50,22 @@ export MAMBA_ROOT_PREFIX=$PWD
 ## 2. The environment
 
 ```bash
-micromamba create -y -p ~/software/md-stack/envs/openmm-env -f environment-ci.yml
+micromamba create -y -p ~/software/md-stack/envs/openmm-env -f environment.yml
 ```
 
 That installs Python 3.12, OpenMM 8.6, OpenFF, AmberTools, ParmEd, RDKit, MDTraj, OpenMMTools and
-NetCDF4 — everything the five commands import.
+NetCDF4 — everything the five commands import — plus `mpi4py` and `openmpi` for multi-rank REST2,
+rREST2 and AIS, and a `cuda-version` pin.
 
-**It is deliberately CPU-only and single-rank.** `environment-ci.yml` is what CI validates
-against, and CI has no GPU and no second device to bind a rank to. For real work add both:
+**One file, for every machine.** There used to be a second, CPU-only one for CI; they were merged
+because two descriptions of "the environment MD-tools is tested against" drifted apart. CI
+installs the CUDA stack and cannot use it — the runners have no driver — which costs a larger
+solve and nothing else, since no test there claims CUDA evidence.
 
-```bash
-micromamba install -y -p ~/software/md-stack/envs/openmm-env -c conda-forge mpi4py openmpi
-```
+**The `cuda-version` pin is not a preference.** OpenMM compiles kernels at run time and the driver
+assembles the PTX, which is backward-compatible only, so a newer CUDA runtime against an older
+driver installs cleanly and then fails every kernel it must compile. The file's header explains
+how to reproduce that deliberately; raise the pin only alongside a stated minimum driver.
 
 CUDA needs nothing extra on a machine with a working NVIDIA driver — conda-forge's OpenMM carries
 the CUDA platform and finds the driver at run time. Verify rather than assume:
