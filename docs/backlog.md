@@ -12,7 +12,10 @@ if one turns out to affect a result it stops being backlog and becomes a defect.
 **Where it stands.** Entries 1, 2, 5, 7, 8, 9 and 10 are fixed, each with the test that would fail
 if it came back. Entry 3 is reclassified: it described deliberate behaviour, which does not belong
 in a list of debt. Entry 4 is neither fixed nor accepted but UNDIAGNOSED, and cannot be closed by
-work. Entry 6 is open in code and avoided in practice.
+work. Entry 6 is open in code and avoided in practice. Entries 13, 14 and 15 are the **0.5.4 scope**,
+deferred by decision on 2026-09-16 rather than by oversight: the omega exclusion for a `peptide` or
+`peptide-like` solute, the `.in` file's undocumented divergences from Amber's input conventions, and
+rebuilding AIS as a transformation between two topologies.
 
 **Three of these entries described code that had already moved on** — 8 said a flag was dropped
 that was being forwarded, 9 described a reader whose sidecar nothing wrote, 1 said an aggregate
@@ -444,6 +447,88 @@ NOT FIXED, deliberately: it is pre-existing, unrelated to the naming work that e
 changing where a runtime writes is a behavioural change for anyone already using `--all-in-one`.
 `--check` was suspected of leaving the stray `eq/` behind and was cleared by measurement: a
 `--check` into a fresh `-odir` creates nothing, as the contract requires.
+
+---
+
+## 13. The omega exclusion is not enforced, and `peptide-like` fits neither classifier route
+
+DEFERRED TO 0.5.4 by decision, 2026-09-16. The user's reading, held across three deferrals, is that
+**the implementation is there and is not functioning** — the work is to enforce it, not to write it.
+
+`md_tools.openmm.system.classify_omega_bonds` returns `omega_unscaled_bonds`,
+`omega_proline_like_scaled_bonds` and `omega_unclassified_candidates`, and its own docstring states
+the rule: "**A non-empty unclassified list must block production**" — a candidate was found that
+neither rule could name, and guessing would silently change the Hamiltonian. **Nothing consumes
+`omega_unclassified_candidates`.** Three callers take only the unscaled bonds:
+`run/preflight.py`, `reference/rest2_export.py` and `rest2/selection.py` (grep the symbol; the line
+numbers drift).
+
+The case that matters is a solute whose `solute.kind` is `peptide` or `peptide-like`
+(`build/top.py:48`, enum `("peptide", "peptide-like", "ligand")`). The classifier has exactly two
+routes and `peptide-like` matches neither cleanly:
+
+| route | evidence | fails on |
+|---|---|---|
+| `peptide` (default) | the amide nitrogen's residue name, against `PROTEIN_RESIDUES` and `proline_like_residues` | a whole-molecule solute with no residue evidence — every candidate falls to `unknown` |
+| `ligand` | RDKit SMARTS `[CX3](=[OX1])[NX3]` over the retained SDF | needs `ligand_sdf` to be passed |
+
+`kind: peptide-like` is built through the **whole-molecule ligand route** with a peptide-chemistry
+map applied over the result — it exists for head-to-tail cyclic peptides — so it is precisely the
+shape that has no residue evidence while not obviously being asked to use the SDF route. That is a
+hypothesis with a clear test, not a diagnosis.
+
+**Cost if real:** a ladder that exempts no omega scales ordinary amide omegas like any other solute
+torsion, breaking the REST2 invariant. The run completes and the acceptance ratios look plausible,
+so nothing surfaces it. **Rule out first:** a `tau = 0` run legitimately logs `omega bonds unscaled:
+not applicable at tau = 0`, which can mask the real path.
+
+---
+
+## 14. The `.in` file's divergences from Amber's input conventions are not written down
+
+DEFERRED TO 0.5.4 by decision, 2026-09-16. Not a defect — an undocumented boundary.
+
+The surface is Amber-*like* on purpose: `docs/md-run.md` opens by promising that someone who has run
+`pmemd -i mdin -p prmtop -c inpcrd -o mdout -r restrt` can read every command without a manual, and
+the flag table maps each flag to its Amber counterpart. Some divergences are already stated and
+reasoned — `-s` has no Amber counterpart and deliberately avoids `-x`; `mdout.csv` is the analogue
+of Amber's `mden` rather than of `mdout`; the decomposition is by force group, not by Amber energy
+term; there is no `ntwe` because one `info_printout` drives all three energy files.
+
+What has NOT been done is a term-by-term audit of the `&cntrl` / `&remd` / `&AIS` sections against
+Amber's own namelist variables, saying for each one whether it is matched, renamed, deliberately
+absent, or means something different here. Without that, a user arriving from Amber cannot tell a
+deliberate divergence from an omission, and neither can the next person to extend the parser. The
+deliverable is a documented mapping, plus a refusal for any Amber variable we accept-and-ignore —
+`CLAUDE.md` already requires that every accepted flag does its job or is refused.
+
+---
+
+## 15. AIS should become an Amber-style transformation between two topologies
+
+DEFERRED TO 0.5.4 or later by decision, 2026-09-16. A design change, not a fix.
+
+The user's direction: "in the future I want to just use the amber-like transformation between two
+topologies." Today AIS switches ONE topology along `tau`, which is the only public persisted
+coordinate; the proposal is Amber's alchemical construction, a V0/V1 topology pair with the
+transformation defined between them.
+
+This touches three `CLAUDE.md` scientific invariants at once — `tau` as the sole persisted
+coordinate, the three-term identity
+`U = U_non_scaled + sqrt(lambda)*U_sqrt_scaled + lambda*U_lin_scaled`, and the work convention
+`dW_j = U(tau_{j+1}, x_j) - U(tau_j, x_j)` — so it is not an increment on the present
+implementation.
+
+`docs/amber-like-fix/AIS.md` is the prior analysis and opens "**Nothing in this document is
+implemented.**" Read it for what it establishes, not as the plan: Amber §27.8 Jarzynski is AIS's
+real counterpart and has been in sander for years; our work convention (a finite potential
+difference at frozen coordinates) diverges from Amber's `(dU/dlambda)*dlambda` and is better
+conditioned; Amber is ~23% faster per step because its lambda change is a constant-block copy while
+ours re-uploads parameters. Its own proposal — a parameter-offset fast path — is a SPEED change to
+the current single-topology design and is a different piece of work from this entry. One unresolved
+question there belongs to this one: the default schedule runs `tau` **downhill** (0.5 → 0.0) while
+Amber's lambda conventionally runs 0 → 1, and direction fixes which ensemble the Jarzynski average
+is taken over.
 
 ---
 

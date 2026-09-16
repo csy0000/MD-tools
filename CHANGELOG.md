@@ -224,10 +224,19 @@ rendered from the schemas (`md_tools.build.manual`), with the shipped `configs/`
 examples. The README gained an end-to-end REST2 walkthrough, and `md-openmm --help` teaches the
 layout.
 
-**Still open in 0.5.3.** The omega check is present but not firing: four sites carry it, and the
-remaining work is to find why it does not fire and then make "zero ordinary amides in a topology
-that has amide candidates" a refusal. Deferred deliberately to **0.5.4**. Two smaller items are
-filed rather than changed — `--all-in-one` writes its artefacts flat in the run root while the
+**Deferred to 0.5.4, by decision.** Three items are known and deliberately not addressed here.
+*The omega exclusion*, where the case that matters is a solute whose `kind` is `peptide` or
+`peptide-like`: `classify_omega_bonds` offers a residue-aware `peptide` route and a bond-order
+`ligand` route, while `peptide-like` is built through the whole-molecule ligand route and fits
+neither cleanly. Its own docstring already states the rule to enforce — "a non-empty unclassified
+list must block production" — and nothing consumes `omega_unclassified_candidates`. *The `.in`
+file's consistency with Amber's own input conventions*, which has not been audited term by term;
+the surface is Amber-*like* by design, and which divergences are deliberate is not written down.
+*The AIS implementation*, unchanged here and analysed but explicitly unimplemented in
+`docs/amber-like-fix/AIS.md`; the intended direction is an Amber-style alchemical transformation
+between two topologies rather than the present single-topology tau scaling, which is a design
+change rather than a fix. `docs/backlog.md` entries 13–15. Two smaller items are filed rather than
+changed — `--all-in-one` writes its artefacts flat in the run root while the
 declarations sit in `eq/` (`docs/backlog.md` entry 12), and two runs on one system that differ only
 in CV reporting cannot share a root, because the cadence lives in `eq_*.in`.
 
