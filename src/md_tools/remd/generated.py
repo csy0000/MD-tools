@@ -32,12 +32,18 @@ from typing import Any
 
 
 
-def tau_ladder(n_states: int, tau_max: float) -> list[float]:
-    """A linear ladder from 0 to tau_max inclusive. State 0 is always the unscaled Hamiltonian."""
+def tau_ladder(n_states: int, tau_max: float, *, tau_min: float = 0.0) -> list[float]:
+    """A linear ladder from tau_min (default 0) to tau_max inclusive.
+
+    With the default, state 0 is the unscaled Hamiltonian and every value is exactly what this
+    function returned before `tau_min` existed: `0.0 + i*step` is `i*step` in floating point, so
+    no recorded ladder moves by a digit. A ladder from `tau_min > 0` has NO physical state, which
+    `build-top --rest2-scaler` records and says in words.
+    """
     if n_states < 2:
         raise SystemExit(f"a ladder needs at least 2 states, not {n_states}")
-    step = float(tau_max) / (n_states - 1)
-    return [round(index * step, 6) for index in range(n_states)]
+    step = (float(tau_max) - float(tau_min)) / (n_states - 1)
+    return [round(float(tau_min) + index * step, 6) for index in range(n_states)]
 
 
 def write_solute_document(topology_path: Path, system_path: Path, out: Path, *,
