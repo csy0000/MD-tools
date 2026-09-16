@@ -219,7 +219,7 @@ not exist fails the suite instead of silently exempting nothing.
 Records written by 0.5.3 (`solute.yaml` `rest2.omega_excluded_bonds`, `restart.json`,
 `build_states.log`) are still READ under their old keys, so existing runs resume and register.
 
-### Open
+### Decided (user, 2026-09-16)
 
-1. Impropers: ALL solute impropers, or only those centred on an atom of an unscaled class?
-2. ARG guanidinium as "double bonds": included, or aromatic/true double bonds only?
+1. Impropers: **all** solute impropers stay unscaled.
+2. ARG guanidinium (NE–CZ, CZ–NH1, CZ–NH2) **counts** as double bonds.
