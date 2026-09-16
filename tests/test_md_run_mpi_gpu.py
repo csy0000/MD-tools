@@ -424,8 +424,16 @@ def test_a_conventional_stage_writes_a_genuine_dcd_and_refuses_a_netcdf_name(bui
     # In a directory of its OWN, not `out`: the stage there has a committed checkpoint at its
     # full step count, so a second invocation correctly resumes to completion with no dynamics
     # and writes no trajectory at all. Reusing it tests the resume path, not the format.
-    assert _cli(built, "build-md", "-odir", "./nc-run1", "--config", str(config)).returncode == 0
-    nc_out = built / "nc-run1"
+    # A SYSTEM ROOT OF ITS OWN, like every other campaign in this module. `built/input/` already
+    # holds the ladder's, the source's and the AIS campaigns' shared inputs, and `dcd.config`
+    # resolves `input/eq_*.in` differently from all of them -- so generating here was refused the
+    # moment any of those fixtures had run. That is why this test passed alone and failed in the
+    # module: an ordering dependency, not a wrong path.
+    nc_root = built / "system-nc"
+    shutil.copytree(built / "build", nc_root / "build")
+    assert _cli(nc_root, "build-md", "-odir", "./nc-run1",
+                "--config", str(config)).returncode == 0
+    nc_out = nc_root / "nc-run1"
     accepted = _md_run(nc_out, "-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                        "-x", "cMD.nc", "-r", "cMD.xml", "-o", "cMD.out", "-log", "cMD.log")
     assert accepted.returncode == 0, accepted.stdout[-3000:] + accepted.stderr[-3000:]
