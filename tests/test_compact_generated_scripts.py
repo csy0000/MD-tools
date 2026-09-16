@@ -77,7 +77,10 @@ def generated(tmp_path_factory):
     for name in CONFIGS:
         root = work / f"system_{name}"
         root.mkdir()
-        make_dataset_root(root)
+        # Every entry in CONFIGS is explicit-solvent, so the shared System has to be periodic:
+        # generation validates the chain against it, and an NPT equilibration on a boxless
+        # System is refused.
+        make_dataset_root(root, solvent="explicit")
         directories[name] = _generate(root, name)
     # The shared minimisation script belongs to the DATASET rather than to any one run, so it is
     # checked as its own entry instead of being missed by every run-scoped assertion.

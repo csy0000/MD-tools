@@ -504,6 +504,9 @@ def test_the_generated_cmd_launcher_passes_no_continuation_flag(tmp_path):
     """
     from md_tools.build.md import build_scripts
 
+    from .conftest import make_dataset_root
+
+    make_dataset_root(tmp_path)
     config = tmp_path / "hot.config"
     config.write_text("protocol: cMD\nsolvent: implicit\n"
                       "dynamics:\n  tau: 0.5\n"

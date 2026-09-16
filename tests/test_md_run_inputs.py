@@ -175,7 +175,7 @@ def test_every_generated_input_resolves_to_the_resolved_config_beside_it(protoco
     """
     from .conftest import make_dataset_root
 
-    make_dataset_root(tmp_path)
+    make_dataset_root(tmp_path, solvent="explicit")
     out = tmp_path / f"{protocol}-run1"
     done = subprocess.run(CLI + ["build-md", "-odir", str(out),
                                  "--config", str(REPO / "configs" / "md" / f"{protocol}.config")],
@@ -194,6 +194,9 @@ def test_every_generated_input_resolves_to_the_resolved_config_beside_it(protoco
 
 
 def test_an_input_names_the_stage_the_script_of_the_same_name_runs(tmp_path):
+    from .conftest import make_dataset_root
+
+    make_dataset_root(tmp_path, solvent="explicit")
     out = tmp_path / "cMD-run1"
     subprocess.run(CLI + ["build-md", "-odir", str(out),
                           "--config", str(REPO / "configs" / "md" / "cMD.config")],
@@ -224,7 +227,7 @@ def test_an_input_names_the_stage_the_script_of_the_same_name_runs(tmp_path):
 def test_run_sh_drives_the_installed_command_rather_than_a_second_interface(tmp_path):
     from .conftest import make_dataset_root
 
-    make_dataset_root(tmp_path)
+    make_dataset_root(tmp_path, solvent="explicit")
     out = tmp_path / "REST2-run1"
     subprocess.run(CLI + ["build-md", "-odir", str(out),
                           "--config", str(REPO / "configs" / "md" / "REST2.config")],

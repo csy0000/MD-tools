@@ -69,7 +69,7 @@ def _build_md(root, document, odir="REST2-run1"):
     """
     from .conftest import make_dataset_root
 
-    make_dataset_root(root)
+    make_dataset_root(root, solvent=str(document.get("solvent") or "implicit"))
     path = root / f"{odir}.config"
     path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     done = subprocess.run(CLI + ["build-md", "-odir", odir, "--config", str(path)], cwd=root,
@@ -307,8 +307,17 @@ BEFORE = {
 }
 #: What this layout ADDED, pinned separately: these are new behaviour rather than a move, so they
 #: have no "before" to be compared against and belong outside the table above. Every one of them
-#: is solvent-independent -- the rungs because an md configuration's `solvent` key does not change
-#: the built System, `min/run.config` because it holds one number.
+#: is genuinely solvent-independent: the group file names rungs rather than describing them, and
+#: the two `run.config` files hold one number each.
+#:
+#: THE RUNG SYSTEMS ARE NOT, and used to be listed here as though they were. They are serialised
+#: FROM the built System, so they are solvent-dependent by construction; they only ever matched
+#: one set of digests because the fixture handed the explicit and implicit cases the same boxless
+#: stand-in. `build-md` now validates the chain against the System, which refuses an explicit
+#: project on a boxless one, so the two cases build against different Systems and serialise
+#: different rungs. They are pinned per solvent in `RUNGS` below. The implicit digests there are
+#: unchanged from when they lived here, which is what says this move is a correction to the
+#: table rather than a change in what the generator produces.
 NEW_IN_THIS_LAYOUT = {
     # One group file per segment, naming one rung per line. New behaviour with the rungs.
     # REFRESHED: `-i` on every group line is `_protocol.py`, not `../input/REST2.in`.
@@ -331,14 +340,33 @@ NEW_IN_THIS_LAYOUT = {
     # refuses against `eq/resolved.config`. Same bytes whichever solvent, since it holds one number.
     "REST2-run1/eq/run.config":
         "09847c0816635b3e559e754923710c189bb044551c0b9fae61af85120821f30b",
-    "REST2-run1/remd0/build_state0.xml":
-        "b4e773404dafae2dd0c51152e0819d376e98a0500a8db1938d846b906d670689",
-    "REST2-run1/remd1/build_state1.xml":
-        "c158fe1947f2503b3e025bd4b070c9a5fd5b81706ab6b9a9fe6ca48158d6b55f",
-    "REST2-run1/remd2/build_state2.xml":
-        "e7bfc43a5f858e2389417eb1ec0fcb965dd872934665422ee146c3f65355fdb8",
-    "REST2-run1/remd3/build_state3.xml":
-        "c18ff9d18240b31d85f694736ffc23f85d20b1b164e5bb5c050488f3d6ac5184",
+}
+#: The four rung Systems, per solvent. See the note above for why these cannot be shared.
+#:
+#: These are the ONLY files in this comparison whose bytes depend on the built System, which is
+#: what makes them a useful pair: everything else in the table is identical across both cases, so
+#: a difference appearing anywhere but here would be this setting changing something it must not.
+RUNGS = {
+    "implicit": {
+        "REST2-run1/remd0/build_state0.xml":
+            "b4e773404dafae2dd0c51152e0819d376e98a0500a8db1938d846b906d670689",
+        "REST2-run1/remd1/build_state1.xml":
+            "c158fe1947f2503b3e025bd4b070c9a5fd5b81706ab6b9a9fe6ca48158d6b55f",
+        "REST2-run1/remd2/build_state2.xml":
+            "e7bfc43a5f858e2389417eb1ec0fcb965dd872934665422ee146c3f65355fdb8",
+        "REST2-run1/remd3/build_state3.xml":
+            "c18ff9d18240b31d85f694736ffc23f85d20b1b164e5bb5c050488f3d6ac5184",
+    },
+    "explicit": {
+        "REST2-run1/remd0/build_state0.xml":
+            "b78ffb12fa2135b6cc4ebe99a679738cb88dbe2d9d6c59bd577c371fb8a2bc75",
+        "REST2-run1/remd1/build_state1.xml":
+            "63ab34b728c01f735e05d7d00e9cace74dac39e2cd7a988f91d2c06fcdc47e4a",
+        "REST2-run1/remd2/build_state2.xml":
+            "b3a59f8df3f054311494f5d2d5fc71aabed8e8ca4aec8b5a2951df6066b9c2cf",
+        "REST2-run1/remd3/build_state3.xml":
+            "899b882ce9ddc2bcbe5b4e9208482c3b39ee002860ed5945efd27e91bab1dba5",
+    },
 }
 #: The `_protocol.py` a default four-state ladder materialises at 2 fs, before this setting.
 PROTOCOL_HELPER_BEFORE = "806d23669d38b89fa27af10b37250f5ee72e598ad124e71ec62723fa37a0bc91"
@@ -355,9 +383,10 @@ def test_off_leaves_every_generated_file_as_it_was(tmp_path, solvent):
                   if name.startswith("build/") or name.endswith(".config")
                   and "/" not in name}
     generated -= {"REST2-run1/build-md.log", "REST2-run1/build_states.log"}
-    assert generated == set(BEFORE[solvent]) | set(NEW_IN_THIS_LAYOUT), sorted(generated)
+    assert generated == (set(BEFORE[solvent]) | set(NEW_IN_THIS_LAYOUT)
+                         | set(RUNGS[solvent])), sorted(generated)
 
-    for name, digest in {**BEFORE[solvent], **NEW_IN_THIS_LAYOUT}.items():
+    for name, digest in {**BEFORE[solvent], **NEW_IN_THIS_LAYOUT, **RUNGS[solvent]}.items():
         text = (root / name).read_text(encoding="utf-8")
         # The `.in` files and `resolved.config` gain exactly one line when the setting exists but
         # is off. The preparation inputs are the exception: they carry no `&remd` at all now, so

@@ -661,6 +661,13 @@ def _generate(tmp_path, config: dict, odir="cMD-run1"):
     import subprocess
     import sys
 
+    from .conftest import make_dataset_root
+
+    # THE SYSTEM MUST MATCH THE DOCUMENT. `build-md` validates the whole chain against the built
+    # System when it generates it, so an explicit project needs a periodic one and an implicit
+    # project a boxless one. Taken from the document being generated rather than fixed here, so
+    # a new case cannot silently generate against the wrong System.
+    make_dataset_root(tmp_path, solvent=str(config.get("solvent") or "implicit"))
     path = tmp_path / "p.config"
     path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     result = subprocess.run(

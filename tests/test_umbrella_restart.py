@@ -57,9 +57,14 @@ def project(tmp_path_factory):
     root = tmp_path_factory.mktemp("umbrella-restart")
 
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
+    # INTO `build/`, which is where the dataset layout keeps the System every run on it shares.
+    # `build-md` validates the chain it generates against that System now, so a `built.xml` at
+    # the root is a System nothing can find.
+    (root / "build").mkdir(exist_ok=True)
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA_PDB), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA_PDB), "-os", "build/built.xml",
+               "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800, env=_environment())
     assert built.returncode == 0, built.stdout + built.stderr
 
@@ -120,7 +125,8 @@ def _platform_flags():
 def _run(project_root: Path, work: Path, *, extra_env=None, extra=()):
     return subprocess.run(
         [sys.executable, str(project_root / "project" / "umbrella.py"),
-         "-p", str(project_root / "built.pdb"), "-s", str(project_root / "built.xml"),
+         "-p", str(project_root / "build" / "built.pdb"),
+         "-s", str(project_root / "build" / "built.xml"),
          "-odir", str(work), *_platform_flags(), *extra],
         cwd=work, capture_output=True, text=True, timeout=1800,
         env=_environment(work, extra_env))

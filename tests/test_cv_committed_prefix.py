@@ -377,9 +377,12 @@ def test_the_final_committed_generation_carries_the_cv_prefix_and_cost(tmp_path)
     root = tmp_path / "project"
     root.mkdir()
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
+    # INTO `build/`: the System belongs to the DATASET, and `build-md` validates the chain it
+    # generates against it.
+    (root / "build").mkdir(exist_ok=True)
     assert subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800).returncode == 0
     (root / "cv.yaml").write_text(
         "schema_version: 1\ncollective_variables:\n"
@@ -408,8 +411,11 @@ def test_the_final_committed_generation_carries_the_cv_prefix_and_cost(tmp_path)
 
     destination = tmp_path / "final"
     done = subprocess.run(
-        [sys.executable, str(root / "cMD" / "md.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+        # THE PRODUCTION STAGE, which is the one that reports collective variables. This used to
+        # run the retired `--all-in-one` md.py for the whole chain; with every equilibration
+        # length set to 0 above, production is the only stage carrying a CV stream either way.
+        [sys.executable, str(root / "cMD" / "cMD.py"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-odir", str(destination), "--cpu"],
         cwd=root / "cMD", capture_output=True, text=True, timeout=1800, env=base)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]

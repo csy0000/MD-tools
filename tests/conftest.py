@@ -134,6 +134,12 @@ def make_dataset_root(root: Path, *, solvent: str = "implicit") -> Path:
         # fixture and none of the tests using this inspect the solvent. What they need is a
         # System that is periodic and barostattable, which this is. Everything in the docstring
         # above about what this helper may not stand for applies here with more force.
+        #
+        # SO DO NOT INTEGRATE IT. An empty periodic box under a barostat collapses immediately --
+        # "the periodic box size has decreased to less than twice the nonbonded cutoff" -- so a
+        # test that actually RUNS an explicit stage needs either real solvation or, where the
+        # solvent is beside the point, the implicit System below. This is for generation-time
+        # assertions: which files exist, what run.sh types, whether an `.in` round-trips.
         pdb.topology.setPeriodicBoxVectors(_ANGSTROM_BOX)
         forcefield = app.ForceField("amber14-all.xml", "amber14/tip3pfb.xml")
         system = forcefield.createSystem(pdb.topology, nonbondedMethod=app.PME,

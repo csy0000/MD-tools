@@ -74,7 +74,7 @@ def test_the_example_input_matches_what_build_md_generates(method, tmp_path):
     # A dataset root, because a ladder's rungs are scaled from `build/built.xml` at BUILD time
     # now. The inputs this test compares are generated text and do not depend on which System
     # produced them -- see `make_dataset_root` on what that fixture may and may not stand for.
-    make_dataset_root(tmp_path)
+    make_dataset_root(tmp_path, solvent="explicit")
     out = tmp_path / f"{method}-run1"
     done = subprocess.run(
         [sys.executable, "-c",

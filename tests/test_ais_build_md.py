@@ -28,6 +28,12 @@ REPO = Path(__file__).resolve().parents[1]
 
 def _build_md(work: Path, config: dict, *extra: str):
     """Run the REAL command, the way the documentation tells a user to."""
+    from .conftest import make_dataset_root
+
+    # `build-md` validates the chain it generates against the dataset's built System, so one has
+    # to exist. AIS's own plan is empty -- a switching campaign has no preparation chain -- but
+    # the System is still what the protocol's own refusals are read from.
+    make_dataset_root(work, solvent=str(config.get("solvent") or "implicit"))
     path = work / "AIS.config"
     path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     return subprocess.run(

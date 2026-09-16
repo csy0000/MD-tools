@@ -153,7 +153,7 @@ def generated(tmp_path_factory):
     root = tmp_path_factory.mktemp("wrappers")
     # A ladder's rungs are scaled from `build/built.xml` at BUILD time now, so the dataset's
     # shared System has to exist before any run is generated.
-    make_dataset_root(root)
+    make_dataset_root(root, solvent="explicit")
     for protocol in ("REST2", "AIS"):
         configuration = root / f"{protocol}.config"
         document = {"protocol": protocol, "solvent": "explicit"}
@@ -293,8 +293,19 @@ def test_an_environment_variable_pointing_at_a_missing_file_is_a_broken_referenc
 @pytest.fixture
 def project(tmp_path):
     """A generated cMD project, and an output directory that must stay absent."""
+    from .conftest import make_dataset_root
+
+    # IMPLICIT, because these cases INTEGRATE when they are not refused, and that makes this the
+    # one fixture here whose System has to be physically viable rather than merely well shaped.
+    # The explicit stand-in is a box with no water in it: a barostat collapses it on the first
+    # step with "the periodic box size has decreased to less than twice the nonbonded cutoff",
+    # which would end every case in this table with a non-zero exit for a reason that has nothing
+    # to do with the refusal under test -- and a refusal test that passes because the run crashed
+    # is testing the crash. GBn2 has no box and no barostat, so a case that is NOT refused runs.
+    # The solvent is irrelevant to every assertion below; only the refusals are the subject.
+    make_dataset_root(tmp_path, solvent="implicit")
     configuration = tmp_path / "cMD.config"
-    configuration.write_text(yaml.safe_dump({"protocol": "cMD", "solvent": "explicit"}),
+    configuration.write_text(yaml.safe_dump({"protocol": "cMD", "solvent": "implicit"}),
                              encoding="utf-8")
     done = subprocess.run(CLI + ["build-md", "-odir", str(tmp_path / "cMD-run1"),
                                  "--config", str(configuration)],
@@ -307,7 +318,17 @@ def project(tmp_path):
     ("an invalid machine configuration", [], "invalid-config"),
     ("a missing topology", ["-p", "absent.pdb"], None),
     ("colliding output paths", ["-o", "same.txt", "-log", "./same.txt"], None),
-    ("a trajectory named .nc", ["-x", "run.nc"], None),
+    # `.xtc`, NOT `.nc`. This case named `.nc` for as long as a stage wrote through OpenMM's DCD
+    # reporter, which had no honest way to produce NetCDF. The stage writes through mdtraj's
+    # NetCDF writer now -- genuine AMBER NetCDF, and the only format carrying an atom subset, so
+    # `.nc` is the DEFAULT name a stage chooses for itself and `check_trajectory_suffix` accepts
+    # it deliberately. The case survived only because this fixture built no System until now, so
+    # every row here was refused for a missing `-p` before its own flag was ever reached; with a
+    # real System, `-x run.nc` is accepted, honoured, and writes the trajectory it names.
+    #
+    # The guard it was written for is unchanged -- a name claiming a format the stage cannot
+    # produce -- so the case is repointed at one that still claims it.
+    ("a trajectory named .xtc", ["-x", "run.xtc"], None),
 ])
 def test_a_preflight_failure_creates_no_output_at_all(case, extra, environment, project,
                                                       tmp_path):
