@@ -624,6 +624,13 @@ evidence. Concretely, and each verified rather than asserted:
   produced by nothing. Decide which module owns per-state filenames before the site publishes
   either spelling.
 
+  **`bundles/` is the same pattern.** `layout.py` declares `BUNDLES = "bundles"` with a
+  `bundles()` accessor (`:247`), `run-layout.md` gives it a section of its own, and **nothing in
+  `src/` calls that accessor** — a freshly generated REST2 run has no such directory, confirmed by
+  generating one. It was copied from `run-layout.md` into the REST2 method page during this pass
+  and removed again. Either `export-reference` should write there, or the slot should stop being
+  documented as part of the layout.
+
 **Direction, decided by the user on 2026-09-16:** MkDocs Material published to GitHub Pages (the
 repository is public), carrying the user-facing pages only; history, campaigns, integration notes,
 `amber-like-fix`, `claudecode-instructions` and the dated release evidence stay in the repository

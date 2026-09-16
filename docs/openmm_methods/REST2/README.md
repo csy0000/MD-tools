@@ -218,7 +218,6 @@ ALA/                          the dataset root -- this is what you register
     ├── cv_state<i>.csv       the CV series, one per STATE, with its cv_state<i>.json sidecar
     ├── remd_groupfile.1      one line per state, naming that state's rung
     ├── rank/                 per-PROCESS reports
-    ├── bundles/              reproducibility exports
     └── solute.yaml  _protocol.py    written by rank 0, verified by every rank
 ```
 

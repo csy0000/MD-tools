@@ -246,7 +246,7 @@ jobs:
         working-directory: ${{ runner.temp }}/outside
         run: |
           python - <<'PY'
-          import ast, py_compile, subprocess, yaml
+          import ast, os, py_compile, shutil, subprocess, yaml
           from pathlib import Path
 
           SHORT = {"stages": {"minimization_iterations": 10, "restrained_nvt_steps": 10,
@@ -258,31 +258,84 @@ jobs:
                    # rather than ignoring them.
                    "reporting": {"crd_printout_solute": 10, "crd_printout_whole": 10,
                                  "info_printout": 10, "checkpoint_printout": 10}}
+          # A BUILT SYSTEM FIRST, because 0.5.3 moved rung scaling to build time: `build-md` for a
+          # ladder deserialises `../build/built.xml`, scales it to every rung and serialises the
+          # result, so REST2 and rREST2 cannot be generated from an empty directory any more. Two
+          # Systems are enough -- one explicit, one implicit -- and they are built with the REAL
+          # `build-top` rather than a hand-parameterised stand-in, because this step is the one
+          # that claims the shipped commands work together. ALA is small: ~2.5 s each, tleap
+          # included.
+          structure = Path(os.environ["GITHUB_WORKSPACE"]) / "tests" / "data" / "ALA.pdb"
+          systems = {
+              "explicit": {"solvent": {"model": "TIP3P", "padding_nm": 0.6, "cutoff_nm": 0.6}},
+              "implicit": {"solvent": {"model": "GBn2"}},
+          }
+          for label, document in systems.items():
+              config = Path(f"sys-{label}.config")
+              config.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+              built = Path(f"sys-{label}")
+              done = subprocess.run(
+                  ["md-openmm", "build-top", "-i", str(structure), "--config", str(config),
+                   "-os", str(built / "built.xml"), "-op", str(built / "built.pdb"),
+                   "-log", str(built / "built.log")],
+                  capture_output=True, text=True)
+              assert done.returncode == 0, f"build-top {label}: {done.stdout}{done.stderr}"
+              print(f"built the {label} System")
+
           cases = [
-              ("cMD-explicit", {"protocol": "cMD", "solvent": "explicit", **SHORT}, [],
-               {"min.py", "eq_nvt_posres.py", "eq_npt_posres.py", "eq_npt_free.py", "cMD.py", "run.sh"}),
-              ("cMD-implicit", {"protocol": "cMD", "solvent": "implicit", **SHORT}, [],
-               {"min.py", "eq_nvt_posres.py", "eq_nvt_posres_2.py", "eq_nvt_free.py", "cMD.py", "run.sh"}),
-              ("cMD-all-in-one", {"protocol": "cMD", "solvent": "explicit", **SHORT}, ["--all-in-one"],
-               {"md.py", "run.sh"}),
-              ("REST2", {"protocol": "REST2", "solvent": "explicit", **SHORT,
+              # THE 0.5.3 LAYOUT, and the second time this step has been left behind by a rename.
+              # It used to expect `min.py` and three `eq_<ensemble>.py` flat in the run directory.
+              # They are not there any more and it is not a bug: `min/` and `input/` are SHARED by
+              # every run on a system and are written as SIBLINGS of the run directory, while
+              # equilibration is filed by position inside `eq/` (`eq_1.py`, `eq_2.py`, `eq_3.py`)
+              # so that a renamed stage cannot make a filename claim something false. The run
+              # directory holds the production entry point and the declarations, and nothing else.
+              #
+              # The implicit case no longer differs here either: the ensemble left the filename,
+              # so `eq_nvt_posres_2.py` / `eq_nvt_free.py` have the same names as the explicit
+              # ones and the difference is recorded in each stage's `.out` and resolved config.
+              #
+              # Each entry names the System it needs, because an explicit and an implicit run are
+              # not the same system and must not share one.
+              ("cMD-explicit", "explicit", {"protocol": "cMD", "solvent": "explicit", **SHORT}, [],
+               {"cMD.py", "run.sh", "resolved.config", "run.config", "build-md.log", "eq"}),
+              ("cMD-implicit", "implicit", {"protocol": "cMD", "solvent": "implicit", **SHORT}, [],
+               {"cMD.py", "run.sh", "resolved.config", "run.config", "build-md.log", "eq"}),
+              ("cMD-all-in-one", "explicit", {"protocol": "cMD", "solvent": "explicit", **SHORT},
+               ["--all-in-one"], {"md.py", "run.sh", "resolved.config", "build-md.log"}),
+              ("REST2", "explicit", {"protocol": "REST2", "solvent": "explicit", **SHORT,
                          "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 10,
-                                   "number_of_exchanges": 2}}, [], {"REST2.py", "run.sh"}),
-              ("rREST2", {"protocol": "rREST2", "solvent": "explicit", **SHORT,
+                                   "number_of_exchanges": 2}}, [],
+               {"REST2.py", "run.sh", "resolved.config", "eq", "remd0", "remd1",
+                "remd_groupfile.1", "remd_records", "rank", "build_states.log"}),
+              ("rREST2", "explicit", {"protocol": "rREST2", "solvent": "explicit", **SHORT,
                           "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 10,
                                     "number_of_exchanges": 2},
                           "reservoir": {"enabled": True, "path": "./reservoir"}}, [],
-               {"rREST2.py", "run.sh"}),
-              ("AIS", {"protocol": "AIS", "solvent": "explicit",
+               {"rREST2.py", "run.sh", "resolved.config", "eq", "remd0", "remd1",
+                "remd_groupfile.1", "remd_records", "rank", "build_states.log"}),
+              ("AIS", "explicit", {"protocol": "AIS", "solvent": "explicit",
                        "ais": {"number_of_paths": 2, "switching_steps": 20,
                                "observation_interval_steps": 10},
                        "ais_source": {"trajectory": "../source.dcd"}}, [],
-               {"AIS.py", "run.sh"}),
+               {"AIS.py", "run.sh", "resolved.config", "build-md.log"}),
           ]
-          for name, document, extra, expected in cases:
+          for name, system, document, extra, expected in cases:
               config = Path(f"{name}.config")
               config.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
-              out = Path(name)
+              # ONE DATASET ROOT PER CASE, because `build-md` writes more than `-odir`. The
+              # shared `input/` and `min/` are SIBLINGS of the run directory, and they belong to
+              # the system rather than the run -- so six protocols generated into one parent are
+              # six runs claiming one `input/min.in`, and the second is refused by name because an
+              # explicit and an implicit system do not resolve the same inputs. That refusal is
+              # correct and is the layout working; generating them flat was the mistake.
+              root = Path(name)
+              (root / "build").mkdir(parents=True, exist_ok=True)
+              for artefact in ("built.xml", "built.pdb", "built.solute.pdb", "built.log"):
+                  source = Path(f"sys-{system}") / artefact
+                  if source.is_file():
+                      shutil.copy2(source, root / "build" / artefact)
+              out = root / f"{name}-run1"
               result = subprocess.run(
                   ["md-openmm", "build-md", "-odir", str(out), "--config", str(config), *extra],
                   capture_output=True, text=True)
@@ -290,7 +343,10 @@ jobs:
               written = {p.name for p in out.iterdir()}
               assert expected <= written, f"{name}: expected {expected}, got {sorted(written)}"
               assert (out / "resolved.config").is_file(), f"{name}: no resolved.config"
-              for script in out.glob("*.py"):
+              # rglob, not glob: the equilibration entry points moved into `eq/` with the 0.5.3
+              # layout, and a top-level glob stopped seeing them -- so the compile-and-compactness
+              # checks below silently covered one script per protocol instead of all of them.
+              for script in out.rglob("*.py"):
                   py_compile.compile(str(script), doraise=True)
                   text = script.read_text(encoding="utf-8")
                   assert "/home/" not in text and "/runner/" not in text, f"{name}: absolute path"
@@ -309,7 +365,10 @@ jobs:
                       assert forbidden not in body, f"{name}/{script.name} contains {forbidden}"
               print(f"{name}: {len(written)} files, all compile, compact, no absolute path")
 
-          ais = {p.name for p in Path("AIS").iterdir()}
+          ais = {p.name for p in (Path("AIS") / "AIS-run1").iterdir()}
+          # AIS consumes an ensemble that already exists, so it generates no chain of its own.
+          # Checked on the RUN directory: the dataset root beside it legitimately carries the
+          # `build/` this step put there.
           assert not any(n.startswith(("min", "eq_")) for n in ais), ais
           print("AIS carries no equilibration chain")
           PY
