@@ -99,7 +99,7 @@ def test_every_rung_is_built_not_only_the_top_one():
     systems, audit = build_rung_systems(_small_system(), [0, 1], taus)
     assert len(systems) == len(taus)
     # The audit is the COMPLETE one, carrying what the single-tau path never produced.
-    assert "omega_exclusion" in audit and "rest2_implementation" in audit
+    assert "unscaled_torsions" in audit and "rest2_implementation" in audit
 
 
 def test_a_pressure_makes_the_whole_plan_refuse():

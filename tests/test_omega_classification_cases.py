@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from md_tools.openmm.system import classify_omega_bonds
+from md_tools.openmm.system import classify_unscaled_torsions
 
 app = pytest.importorskip("openmm.app")
 elem = pytest.importorskip("openmm.app.element")
@@ -54,6 +54,17 @@ class _Builder:
         return self.atoms[label].index
 
 
+
+def _amide_unscaled(result):
+    """The unscaled AMIDE bonds only. Since REST2 convention v3 `unscaled_central_bonds` also holds
+    aromatic ring and double bonds (tests/test_unscaled_torsions.py); this file is about amides."""
+    return [tuple(c["bond"]) for c in result["amide_detail"]["unscaled"]]
+
+
+def _amide_unclassified(result):
+    """Unclassified AMIDE candidates only: v3 also lists a whole residue lacking bond orders."""
+    return [c for c in result["unclassified"] if c.get("bond") is not None]
+
 def _amide(builder, carbon, oxygen, nitrogen, hydrogen=None):
     """A planar amide: C=O, C-N, and optionally N-H."""
     builder.bond((carbon, oxygen), (carbon, nitrogen))
@@ -63,7 +74,7 @@ def _amide(builder, carbon, oxygen, nitrogen, hydrogen=None):
 
 
 def _classify(builder, **kwargs):
-    return classify_omega_bonds(builder.topology, builder.solute(), **kwargs)
+    return classify_unscaled_torsions(builder.topology, builder.solute(), **kwargs)
 
 
 # --- 1. ACE-ALA-NME: the ordinary case ----------------------------------------------------------
@@ -85,10 +96,10 @@ def test_ace_ala_nme_leaves_both_backbone_omegas_unscaled():
     """Two ordinary amides, neither proline-like. Both must be protected."""
     b = _capped_alanine()
     result = _classify(b)
-    assert len(result["omega_unscaled_bonds"]) == 2
-    assert result["omega_proline_like_scaled_bonds"] == []
-    assert result["omega_unclassified_candidates"] == []
-    assert set(result["omega_unscaled_bonds"]) == {
+    assert len(_amide_unscaled(result)) == 2
+    assert result["proline_like_scaled_bonds"] == []
+    assert _amide_unclassified(result) == []
+    assert set(_amide_unscaled(result)) == {
         (b.index("ACE_C"), b.index("ALA_N")), (b.index("ALA_C"), b.index("NME_N"))}
 
 
@@ -98,11 +109,11 @@ def test_the_capped_case_names_the_residue_aware_evidence():
     per candidate now, so it names the residue set instead -- see
     `test_omega_evidence_by_residue.py`."""
     result = _classify(_capped_alanine())
-    assert "residue-aware" in result["omega_detection_method"]
-    assert "PROTEIN_RESIDUES" in result["omega_detection_method"]
-    assert "PRO" in result["omega_detection_method"]
+    assert "residue-aware" in result["detection_method"]
+    assert "PROTEIN_RESIDUES" in result["detection_method"]
+    assert "PRO" in result["detection_method"]
     # A pure peptide opens no SDF, so the method must not claim one was consulted.
-    assert "SMARTS" not in result["omega_detection_method"]
+    assert "SMARTS" not in result["detection_method"]
 
 
 # --- 2. X-PRO: the exception ---------------------------------------------------------------------
@@ -131,17 +142,17 @@ def test_an_x_pro_bond_stays_eligible_for_scaling():
     the exclusion exists to protect. It is scaled like any other eligible torsion."""
     b = _alanyl_proline()
     result = _classify(b)
-    assert (b.index("ALA_C"), b.index("PRO_N")) in result["omega_proline_like_scaled_bonds"]
-    assert (b.index("ALA_C"), b.index("PRO_N")) not in result["omega_unscaled_bonds"]
+    assert (b.index("ALA_C"), b.index("PRO_N")) in result["proline_like_scaled_bonds"]
+    assert (b.index("ALA_C"), b.index("PRO_N")) not in _amide_unscaled(result)
 
 
 def test_the_other_omegas_of_a_proline_containing_chain_are_still_protected():
     """Only the X-PRO bond is the exception; its neighbours are ordinary amides."""
     b = _alanyl_proline()
     result = _classify(b)
-    assert set(result["omega_unscaled_bonds"]) == {
+    assert set(_amide_unscaled(result)) == {
         (b.index("ACE_C"), b.index("ALA_N")), (b.index("PRO_C"), b.index("NME_N"))}
-    assert result["omega_unclassified_candidates"] == []
+    assert _amide_unclassified(result) == []
 
 
 def test_proline_like_is_configurable_and_hydroxyproline_can_be_declared():
@@ -152,12 +163,12 @@ def test_proline_like_is_configurable_and_hydroxyproline_can_be_declared():
         if residue.name == "PRO":
             residue.name = "HYP"
     blocked = _classify(b)
-    assert len(blocked["omega_unclassified_candidates"]) == 1
+    assert len(_amide_unclassified(blocked)) == 1
 
     declared = _classify(b, proline_like_residues=("PRO", "HYP"))
-    assert declared["omega_unclassified_candidates"] == []
+    assert _amide_unclassified(declared) == []
     assert (b.index("ALA_C"), b.index("HYP_N" if "HYP_N" in b.atoms else "PRO_N")
-            ) in declared["omega_proline_like_scaled_bonds"]
+            ) in declared["proline_like_scaled_bonds"]
 
 
 # --- 3. N-methyl amide ---------------------------------------------------------------------------
@@ -177,14 +188,14 @@ def test_an_n_methylated_amide_is_an_ordinary_amide():
     # MAL is not a known protein residue, so the peptide route refuses rather than assuming.
     blocked = _classify(b)
     assert any(c["bond"] == (b.index("ACE_C"), b.index("N"))
-               for c in blocked["omega_unclassified_candidates"])
+               for c in _amide_unclassified(blocked))
 
     # Told it is an ordinary residue -- not proline-like -- it is excluded from scaling.
     result = _classify(b, proline_like_residues=())
-    unresolved = {c["bond"] for c in result["omega_unclassified_candidates"]}
-    assert (b.index("ACE_C"), b.index("N")) not in result["omega_proline_like_scaled_bonds"]
+    unresolved = {c["bond"] for c in _amide_unclassified(result)}
+    assert (b.index("ACE_C"), b.index("N")) not in result["proline_like_scaled_bonds"]
     assert (b.index("ACE_C"), b.index("N")) in (
-        set(result["omega_unscaled_bonds"]) | unresolved)
+        set(_amide_unscaled(result)) | unresolved)
 
 
 # --- 4 and 5. the ligand route: an amide, and a macrocyclic amide ---------------------------------
@@ -193,13 +204,13 @@ def test_a_ligand_amide_is_matched_by_bond_order_and_not_by_residue_name():
     """A SMILES-built solute is one UNL residue with no residue evidence at all, so the ligand
     route reads bond orders from the retained SDF instead."""
     rdkit = pytest.importorskip("rdkit.Chem")
-    from md_tools.openmm.system import _ligand_ring_nitrogens     # noqa: PLC2701
+    from md_tools.openmm.system import _sdf_bond_evidence     # noqa: PLC2701
 
     molecule = rdkit.AddHs(rdkit.MolFromSmiles("CC(=O)NC"))
     assert molecule is not None
     matches = molecule.GetSubstructMatches(rdkit.MolFromSmarts("[CX3](=[OX1])[NX3]"))
     assert matches, "the ordinary-amide SMARTS must match N-methylacetamide"
-    assert callable(_ligand_ring_nitrogens)
+    assert callable(_sdf_bond_evidence)
 
 
 def test_a_macrocyclic_amide_nitrogen_is_not_treated_as_proline_like():
@@ -243,7 +254,7 @@ def test_an_unrecognised_modified_residue_blocks_rather_than_being_guessed():
         if residue.name == "ALA":
             residue.name = "XYZ"
     result = _classify(b)
-    assert result["omega_unclassified_candidates"], "an unknown residue must not pass silently"
+    assert _amide_unclassified(result), "an unknown residue must not pass silently"
 
 
 def test_the_blocking_candidate_carries_evidence_a_reader_can_act_on():
@@ -253,7 +264,7 @@ def test_the_blocking_candidate_carries_evidence_a_reader_can_act_on():
     for residue in b.topology.residues():
         if residue.name == "ALA":
             residue.name = "XYZ"
-    candidate = _classify(b)["omega_unclassified_candidates"][0]
+    candidate = _amide_unclassified(_classify(b))[0]
     assert candidate["nitrogen_residue"] == "XYZ"
     assert candidate["carbon_residue"] in ("ACE", "XYZ")
     assert "XYZ" in candidate["ambiguous"]
@@ -272,8 +283,8 @@ def test_a_declared_modified_residue_stops_blocking():
         if residue.name == "ALA":
             residue.name = "XYZ"
     result = _classify(b, proline_like_residues=("PRO", "XYZ"))
-    assert result["omega_unclassified_candidates"] == []
-    assert len(result["omega_proline_like_scaled_bonds"]) == 1
+    assert _amide_unclassified(result) == []
+    assert len(result["proline_like_scaled_bonds"]) == 1
 
 
 # --- what is NOT an amide ------------------------------------------------------------------------
@@ -285,6 +296,6 @@ def test_a_urea_is_not_taken_for_a_peptide_bond():
     b.residue("URE", {"C": "C", "O": "O", "N1": "N", "H1": "H", "N2": "N", "H2": "H"})
     b.bond(("C", "O"), ("C", "N1"), ("C", "N2"), ("N1", "H1"), ("N2", "H2"))
     result = _classify(b)
-    assert result["omega_unscaled_bonds"] == []
-    assert result["omega_unclassified_candidates"], "a urea must be reported, not silently scaled"
-    assert "urea-like" in result["omega_unclassified_candidates"][0]["ambiguous"]
+    assert _amide_unscaled(result) == []
+    assert _amide_unclassified(result), "a urea must be reported, not silently scaled"
+    assert "urea-like" in _amide_unclassified(result)[0]["ambiguous"]

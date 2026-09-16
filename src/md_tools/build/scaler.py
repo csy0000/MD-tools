@@ -9,8 +9,8 @@ reads a built System and writes, beside it,
     build/<method>/scaler.log            the same, for a person
 
 Nothing is rebuilt: no force field is loaded and no charge is computed. The scaling is
-`remd.protocol.build_rung_systems`, the function every ladder has always integrated, and the omega
-decision is `openmm.system.omega_exclusions`, the one enforcing entry point. This module adds
+`remd.protocol.build_rung_systems`, the function every ladder has always integrated, and which
+torsions stay unscaled is `openmm.system.unscaled_torsions`, the one enforcing entry point. This module adds
 where the evidence comes from (§5 of docs/amber-like-fix/REST2-scaler.md), the record, and the
 directory transaction; it decides nothing about the Hamiltonian those two functions do not already
 decide. `md_tools.rest2.states` is the reading half.
@@ -26,8 +26,11 @@ from typing import Any, Mapping
 
 from .strict import ConfigError, Field, Schema, Section
 
-#: The methods a scaled-state directory is named after. A fixed-tau hot run is `cMD`.
-METHODS = ("REST2", "cMD")
+#: The methods a scaled-state directory is named after. REST2 is a ladder; cMD is a fixed-tau hot
+#: run; AIS is the scaled end state V0 a switch starts from (user, 2026-09-16). cMD and AIS hold ONE
+#: state each.
+METHODS = ("REST2", "cMD", "AIS")
+SINGLE_STATE_METHODS = ("cMD", "AIS")
 
 
 def _check_schedule(resolved: dict[str, Any]) -> None:
@@ -41,10 +44,10 @@ def _check_schedule(resolved: dict[str, Any]) -> None:
         raise ConfigError(
             f"schedule: {n} states need tau_min < tau_max, got tau_min = {low} and tau_max = "
             f"{high}; equal endpoints would write {n} copies of one Hamiltonian.")
-    if resolved["method"] == "cMD" and n != 1:
+    if resolved["method"] in SINGLE_STATE_METHODS and n != 1:
         raise ConfigError(
-            f"method cMD integrates ONE fixed-tau Hamiltonian, but the schedule has {n} states. "
-            f"Use n_states: 1 with tau_min == tau_max, or method: REST2 for a ladder.")
+            f"method {resolved['method']} uses ONE fixed-tau Hamiltonian, but the schedule has {n} "
+            f"states. Use n_states: 1 with tau_min == tau_max, or method: REST2 for a ladder.")
 
 
 def _check_residue_settings(resolved: dict[str, Any]) -> None:
@@ -67,10 +70,12 @@ SCALER_SCHEMA = Schema(
     fields=[
         Field("method", str, enum=METHODS,
               doc="Which method these states are for; also the output directory "
-                  "build/<method>/. REST2 is a ladder; cMD is one fixed-tau hot state."),
-        Field("omega_exclusion", bool, default=True,
-              doc="Leave ordinary amide omega torsions unscaled. false scales every solute "
-                  "torsion, including ordinary amide omegas, and classifies nothing."),
+                  "build/<method>/. REST2 is a ladder; cMD is one fixed-tau hot state; AIS is the "
+                  "one scaled end state V0 a switch starts from."),
+        Field("unscaled_torsions", bool, default=True,
+              doc="Leave these torsions unscaled at every tau: ordinary amide omega, aromatic ring "
+                  "bonds, other double bonds, and every improper. false scales every solute "
+                  "torsion and classifies nothing."),
         Field("sdf_filelist", dict, default=None, nullable=True,
               doc="Residue NAME -> SDF describing it, relative to this file. A non-standard "
                   "residue not listed is looked for as <NAME>.sdf beside the System, then as "
@@ -113,7 +118,7 @@ def schedule_taus(schedule: Mapping[str, Any]) -> list[float]:
 def resolve_residue_sdfs(topology, solute, *, system_dir, config_dir,
                          sdf_filelist: Mapping[str, str] | None,
                          proline_like_residues) -> dict[str, Path]:
-    """`{residue name: SDF}` for every non-standard residue that holds an amide nitrogen.
+    """`{residue name: SDF}` for every non-standard residue whose unscaled torsions need bond orders.
 
     Looked for in order: `sdf_filelist[name]` (relative to the configuration), `<name>.sdf` beside
     the System, and `built.sdf` beside the System ONLY when the solute has exactly one non-standard
@@ -121,9 +126,10 @@ def resolve_residue_sdfs(topology, solute, *, system_dir, config_dir,
     refused with every path looked for: "the first residue" is an ordering accident, and handing
     one residue another's SDF classifies against the wrong molecule.
 
-    A residue with no amide nitrogen needs no SDF, and a declared proline-like name needs none.
+    A residue with no bond a torsion can run across needs no SDF, and a declared proline-like name
+    needs none.
     """
-    from ..openmm.system import PROTEIN_RESIDUES, _amide_candidates
+    from ..openmm.system import PROTEIN_RESIDUES, residues_needing_bond_orders
 
     solute = {int(i) for i in solute}
     system_dir, config_dir = Path(system_dir), Path(config_dir)
@@ -142,8 +148,7 @@ def resolve_residue_sdfs(topology, solute, *, system_dir, config_dir,
             f"topology (those are {sorted(non_standard) or 'none'}). A map naming a residue that is "
             f"not there describes a different system.")
 
-    needed = sorted({cand["nitrogen_residue"].upper() for cand in _amide_candidates(topology, solute)
-                     if cand["nitrogen_residue"].upper() in non_standard})
+    needed = sorted(residues_needing_bond_orders(topology, solute, proline_like_residues))
     found: dict[str, Path] = {}
     missing: list[str] = []
     for name in sorted(set(needed) | set(listed)):
@@ -169,8 +174,8 @@ def resolve_residue_sdfs(topology, solute, *, system_dir, config_dir,
             missing.append(f"  {spelled[name]}: looked for {', '.join(looked)}{why}")
     if missing:
         raise ConfigError(
-            "these residues hold an amide nitrogen whose omega can only be classified from bond "
-            "orders, and no SDF was found for them:\n" + "\n".join(missing) + "\n"
+            "these residues' aromatic, double and amide bonds -- and so which of their torsions stay "
+            "unscaled -- can only be read from bond orders, and no SDF was found for them:\n" + "\n".join(missing) + "\n"
             "Put <NAME>.sdf beside the System, or map each name in sdf_filelist.")
     return found
 
@@ -218,7 +223,8 @@ UNSCALED_RGB = (1.0, 0.0, 0.0)
 
 
 def depict_unscaled_torsions(topology, solute, residue_sdfs: Mapping[str, Path],
-                             unscaled_bonds, out_dir, *, omega_exclusion: bool = True,
+                             unscaled_bonds, out_dir, *, enabled: bool = True,
+                             improper_centres=(),
                              size: tuple[int, int] = (600, 450)) -> dict[str, dict[str, Any]]:
     """`<RESNAME>-unscaled.png` per small-molecule residue: its unscaled torsions' bonds in RED.
 
@@ -274,11 +280,17 @@ def depict_unscaled_torsions(topology, solute, residue_sdfs: Mapping[str, Path],
             atom = heavy.GetAtomWithIdx(index)
             atom.SetProp("atomNote", str(atom.GetIntProp("topology_index")))
 
-        if not omega_exclusion:
-            caption = f"{residue.name}: omega exclusion OFF -- no torsion is left unscaled"
-        elif mine:
+        centres = sorted(where[a] for a in improper_centres if a in members and a in where)
+        red_atoms |= set(centres)
+        for index in centres:
+            atom = heavy.GetAtomWithIdx(index)
+            atom.SetProp("atomNote", str(atom.GetIntProp("topology_index")))
+        if not enabled:
+            caption = f"{residue.name}: unscaled torsions OFF -- every torsion is scaled"
+        elif mine or centres:
             caption = (f"{residue.name}: red = unscaled torsions across bond(s) "
-                       + ", ".join(f"{a}-{b}" for a, b in mine))
+                       + (", ".join(f"{a}-{b}" for a, b in mine) or "none")
+                       + f"; {len(centres)} improper centre(s)")
         else:
             caption = f"{residue.name}: no torsion left unscaled"
 
@@ -296,6 +308,7 @@ def depict_unscaled_torsions(topology, solute, residue_sdfs: Mapping[str, Path],
         target = out_dir / f"{residue.name}-unscaled.png"
         target.write_bytes(drawer.GetDrawingText())
         drawn[name] = {"file": target.name, "unscaled_bonds": [list(b) for b in mine],
+                       "improper_centres": sorted(a for a in improper_centres if a in members),
                        "caption": caption}
     return drawn
 
@@ -305,6 +318,28 @@ def depict_unscaled_torsions(topology, solute, residue_sdfs: Mapping[str, Path],
 def _plain(value):
     """Tuples to lists, and nothing YAML cannot write: the record is read back and compared."""
     return json.loads(json.dumps(value))
+
+
+def _improper_centres(system, torsion_indices) -> list[int]:
+    """The central atom of each listed improper: the one atom bonded to the other three."""
+    from openmm import PeriodicTorsionForce
+
+    from ..rest2.hamiltonian import system_bond_graph
+
+    bonds = system_bond_graph(system)
+    wanted = set(int(i) for i in torsion_indices)
+    centres = set()
+    for index in range(system.getNumForces()):
+        force = system.getForce(index)
+        if not isinstance(force, PeriodicTorsionForce):
+            continue
+        for torsion in wanted:
+            atoms = [int(a) for a in force.getTorsionParameters(torsion)[:4]]
+            for atom in atoms:
+                if all(frozenset((atom, other)) in bonds for other in atoms if other != atom):
+                    centres.add(atom)
+        break
+    return sorted(centres)
 
 
 def _sha256(path: Path) -> str:
@@ -329,7 +364,7 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
     from openmm import XmlSerializer
 
     from ..md.stage import solute_atom_indices
-    from ..openmm.system import UnclassifiedOmegaError, omega_exclusions
+    from ..openmm.system import UnclassifiedTorsionError, unscaled_torsions
     from ..remd.protocol import build_rung_systems
     from ..rest2 import REST2_IMPLEMENTATION, scaling_for_tau, torsion_exclusion_report
     from ..rest2.states import (RECORD_FORMAT, RECORD_NAME, ScaledStateError,
@@ -372,31 +407,38 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
     taus = schedule_taus(config["schedule"])
     state0_is_physical = taus[0] == 0.0
 
+    enabled = config["unscaled_torsions"]
     residue_sdfs: dict[str, Path] = {}
-    if config["omega_exclusion"]:
+    if enabled:
         residue_sdfs = resolve_residue_sdfs(
             topology, solute, system_dir=parent, config_dir=config_path.parent,
             sdf_filelist=config["sdf_filelist"],
             proline_like_residues=config["proline_like_residues"])
         try:
-            omega = omega_exclusions(topology, solute, residue_sdfs=residue_sdfs,
-                                     proline_like_residues=config["proline_like_residues"],
-                                     max_proline_ring_size=config["max_proline_ring_size"])
-        except UnclassifiedOmegaError as refusal:
+            unscaled = unscaled_torsions(topology, solute, residue_sdfs=residue_sdfs,
+                                         proline_like_residues=config["proline_like_residues"],
+                                         max_proline_ring_size=config["max_proline_ring_size"])
+        except UnclassifiedTorsionError as refusal:
             raise ConfigError(f"{method} states for {topology_path.name}: {refusal}") from None
     else:
-        omega = {"omega_unscaled_bonds": [], "omega_proline_like_scaled_bonds": [],
-                 "omega_detection_method": "disabled (omega_exclusion: false): every solute "
-                                           "torsion is scaled, including ordinary amide omegas",
-                 "omega_detail": {"unscaled": [], "proline_like_scaled": []}}
-    excluded = [tuple(int(a) for a in bond) for bond in omega["omega_unscaled_bonds"]]
+        unscaled = {"unscaled_central_bonds": [], "central_bonds": [],
+                    "proline_like_scaled_bonds": [], "unscaled_impropers": False,
+                    "detection_method": "disabled (unscaled_torsions: false): every solute "
+                                        "torsion is scaled, impropers and ordinary amide omegas "
+                                        "included",
+                    "amide_detail": {"unscaled": [], "proline_like_scaled": []}}
+    excluded = [tuple(int(a) for a in bond) for bond in unscaled["unscaled_central_bonds"]]
+    impropers = bool(unscaled["unscaled_impropers"])
 
     try:
         systems, audit = build_rung_systems(loaded.system, solute, tuple(taus),
-                                            excluded_bonds=excluded)
+                                            excluded_bonds=excluded, unscaled_impropers=impropers)
     except Exception as broken:
         raise ConfigError(f"the scaled Systems could not be constructed: "
                           f"{type(broken).__name__}: {broken}") from None
+    report = torsion_exclusion_report(loaded.system, solute, excluded, impropers)
+    counts = {kind: sum(1 for e in unscaled["central_bonds"] if e["class"] == kind)
+              for kind in ("amide_omega", "aromatic_ring", "double_bond")}
 
     record: dict[str, Any] = {
         "format": RECORD_FORMAT,
@@ -409,18 +451,26 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
         "config": {"file": config_path.name, "sha256": _sha256(config_path)},
         "solute": {"n_atoms": len(solute),
                    "atom_range": [min(solute), max(solute)] if solute else None},
-        "omega": {
-            "exclusion": config["omega_exclusion"],
-            "method": omega["omega_detection_method"],
-            "unscaled_bonds": [list(bond) for bond in omega["omega_unscaled_bonds"]],
+        "unscaled_torsions": {
+            "enabled": enabled,
+            "classes": ["amide_omega", "aromatic_ring", "double_bond", "improper"] if enabled
+                       else [],
+            "method": unscaled["detection_method"],
+            "central_bonds": unscaled["central_bonds"],
+            "counts": dict(counts, improper_terms=report["n_unscaled_impropers"]),
+            "unscaled_central_bonds": [list(bond) for bond in unscaled["unscaled_central_bonds"]],
+            "unscaled_impropers": impropers,
             "proline_like_scaled_bonds": [list(bond)
-                                          for bond in omega["omega_proline_like_scaled_bonds"]],
-            "decisions": omega.get("omega_detail"),
+                                          for bond in unscaled["proline_like_scaled_bonds"]],
+            "amide_decisions": unscaled.get("amide_detail"),
             "residue_sdfs": {name: {"file": os.path.relpath(path, parent), "sha256": _sha256(path)}
                              for name, path in sorted(residue_sdfs.items())},
             "proline_like_residues": config["proline_like_residues"],
             "max_proline_ring_size": config["max_proline_ring_size"],
-            "excluded_torsions": torsion_exclusion_report(loaded.system, solute, excluded),
+            "torsion_terms": report,
+            "n_unscaled_solute_torsion_terms": (report["n_excluded_torsions"]
+                                                + report["n_unscaled_impropers"]),
+            "n_scaled_solute_torsion_terms": report["n_scaled_solute_torsions"],
         },
         "convention": dict(REST2_IMPLEMENTATION),
         "forces": {bucket: entries for bucket, entries in audit.items()
@@ -428,7 +478,7 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
         "md_tools": {"version": __version__, "commit": source_commit()},
     }
     if check:
-        record["omega"]["depictions"] = {}
+        record["unscaled_torsions"]["depictions"] = {}
         record["states"] = [{"state": i, "file": state_system_name(i), "tau": tau}
                             for i, tau in enumerate(taus)]
         return _plain(record)
@@ -449,9 +499,10 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
         sdf_filelist=config["sdf_filelist"],
         proline_like_residues=config["proline_like_residues"])
     pictures.update(residue_sdfs)
-    depictions = depict_unscaled_torsions(topology, solute, pictures, excluded, staging,
-                                          omega_exclusion=config["omega_exclusion"])
-    record["omega"]["depictions"] = {
+    depictions = depict_unscaled_torsions(
+        topology, solute, pictures, excluded, staging, enabled=enabled,
+        improper_centres=_improper_centres(loaded.system, report["unscaled_improper_indices"]))
+    record["unscaled_torsions"]["depictions"] = {
         name: dict(facts, sha256=_sha256(staging / facts["file"]))
         for name, facts in sorted(depictions.items())}
     record = _plain(record)
@@ -476,16 +527,22 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
         log(f"  state 0 is at tau = {taus[0]}: it is NOT the physical Hamiltonian. REST2 recovers "
             f"the physical ensemble only from an unscaled state, so no state here samples it.")
     log.field("solute", f"{len(solute)} atom(s)")
-    log.field("omega exclusion", "on" if config["omega_exclusion"] else
-              "OFF -- every solute torsion scaled, including ordinary amide omegas")
-    log.field("omega unscaled", f"{len(record['omega']['unscaled_bonds'])} bond(s), "
-                                f"{record['omega']['excluded_torsions']['n_excluded_torsions']} "
-                                f"torsion(s) protected")
-    log.field("omega proline-like", f"{len(record['omega']['proline_like_scaled_bonds'])} bond(s), "
-                                    f"scaled")
-    for name, facts in record["omega"]["residue_sdfs"].items():
+    section = record["unscaled_torsions"]
+    if enabled:
+        log.field("unscaled torsions",
+                  f"amide omega {counts['amide_omega']} bond(s), aromatic ring "
+                  f"{counts['aromatic_ring']} bond(s), double bond {counts['double_bond']} "
+                  f"bond(s), impropers {report['n_unscaled_impropers']} term(s)")
+        log.field("", f"{section['n_unscaled_solute_torsion_terms']} torsion term(s) unscaled, "
+                      f"{section['n_scaled_solute_torsion_terms']} scaled")
+        log.field("proline-like amides", f"{len(section['proline_like_scaled_bonds'])} bond(s), "
+                                         f"scaled")
+    else:
+        log.field("unscaled torsions", "OFF -- every solute torsion scaled, impropers and "
+                                       "ordinary amide omegas included")
+    for name, facts in section["residue_sdfs"].items():
         log.field(f"SDF for {name}", facts["file"])
-    for name, facts in record["omega"]["depictions"].items():
+    for name, facts in section["depictions"].items():
         log.field(f"picture of {name}", f"{facts['file']}  ({facts['caption']})")
     log.heading("States")
     for state in record["states"]:

@@ -867,7 +867,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             timestep_fs=stage.get("timestep_fs"),
             ensemble=stage.get("ensemble"), tau=float(stage.get("tau") or 0.0),
             # The WHOLE stage, so the plan can build the System this run will integrate: the
-            # fixed-tau scaling with its force audit, the omega classification, the restraint and
+            # fixed-tau scaling with its force audit, the torsion classification, the restraint and
             # the barostat. Every refusal those produce then happens before the first file exists
             # rather than after both reports are open.
             stage=dict(stage, name=name))
@@ -1068,7 +1068,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     try:
         pdb = PDBFile(str(topology_path))
         # CONSUMED, not rebuilt. The preflight deserialised the pair, compared the counts,
-        # selected the solute, classified the omega bonds, scaled the System for a fixed tau,
+        # selected the solute, classified the unscaled torsions, scaled the System for a fixed tau,
         # restrained it and added the barostat -- all before this function created anything.
         system = checked.prepared_system
         implicit = checked.implicit
@@ -1143,18 +1143,20 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             writer.field("solute", f"{len(solute)} atom(s) (restraint and REST2 region)")
             # EMPTY IS NOT THE SAME AS NONE FOUND. At tau = 0 nothing is scaled, so there is
             # nothing to exempt and the list is legitimately empty -- while the same system on a
-            # REST2 ladder excludes two amide omegas. Saying "0: none" invites the reader to
-            # conclude the classifier found no omega bonds, which is a different claim.
-            writer.field("omega bonds unscaled",
+            # REST2 ladder leaves two amide omegas unscaled. Saying "0: none" invites the reader
+            # to conclude the classifier found no such bonds, which is a different claim.
+            writer.field("unscaled central bonds",
                          (f"{len(excluded)}: " + ", ".join(f"{a}-{b}" for a, b in excluded))
                          if excluded else
                          "not applicable at tau = 0 (nothing is scaled, so nothing is exempted)"
                          if tau == 0.0 else "0 (none classified)")
         log.update(selections={"n_solute_atoms": len(solute),
-                               "omega_excluded_bonds": [[int(a), int(b)] for a, b in excluded]})
+                               "unscaled_central_bonds": [[int(a), int(b)] for a, b in excluded],
+                               "unscaled_impropers": tau > 0.0})
         if tau > 0.0:
-            log.field("tau", f"{tau}  (fixed REST2 scaling; ordinary amide omega left unscaled, "
-                             f"{len(excluded)} bond(s) excluded)")
+            log.field("tau", f"{tau}  (fixed REST2 scaling; amide omega, aromatic ring, double "
+                             f"bond and improper torsions left unscaled, {len(excluded)} central "
+                             f"bond(s))")
 
         # The MOLECULAR Hamiltonian, fingerprinted HERE, before any stage machinery is added.
         # The restraint (always present, at zero strength when unrestrained) and the barostat are
@@ -1529,7 +1531,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                 # The reservoir consumer compares this fingerprint against the ladder rung it is
                 # about to refresh, and a probability-one transfer is only justified when they
                 # agree. It is the real identity record -- over the canonical serialised System,
-                # the solute selection and the omega exclusions -- taken before stage machinery.
+                # the solute selection and the unscaled torsions -- taken before stage machinery.
                 simulation.reporters.append(PhaseSpaceReporter(
                     str(whole_path.with_suffix(".phase_space.nc")),
                     int(stage["phase_space_interval_steps"]),

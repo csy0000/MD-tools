@@ -2296,7 +2296,6 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
 
     from .schedule import switching_schedule
     from ..openmm.timestep import resolve_timestep_fs
-    from ..openmm.system import classify_omega_bonds
     from ..md._stages import derive_seed
     from ..rest2 import TauSwitcher
     from ..md.stage import solute_atom_indices
@@ -2467,7 +2466,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         # CONSUMED, not re-derived. Every one of these was computed by `preflight_ais` before
         # `-odir` existed: the pair was deserialised once, the timestep resolved against the
         # masses in THAT System, the schedule built, the barostat refused, the solute and the
-        # omega bonds classified and the Force layout audited. Recomputing any of it here would
+        # unscaled torsions classified and the Force layout audited. Recomputing any of it here would
         # be a second implementation of a policy that already ran, and the one that decides what
         # happens would be this one -- the one nothing refused on.
         pdb, base = checked.loaded.pdb, checked.loaded.system
@@ -2503,7 +2502,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                   "disabled (checkpoint_printout = 0): an interrupted path restarts from its "
                   "source frame")
         log.field("observation 0", "the source configuration, before any work")
-        log.field("omega bonds", f"{len(excluded)} left unscaled")
+        log.field("unscaled central bonds", f"{len(excluded)}, plus every improper")
         log.field("ensemble", "fixed volume; no barostat")
 
         # --- the source ensemble -----------------------------------------------------------

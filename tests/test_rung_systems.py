@@ -130,7 +130,7 @@ def test_the_written_rung_is_the_system_the_runtime_would_have_built(written):
     from openmm import XmlSerializer
 
     from md_tools.md.stage import solute_atom_indices
-    from md_tools.openmm.system import classify_omega_bonds
+    from md_tools.openmm.system import classify_unscaled_torsions
     from md_tools.remd.protocol import build_rung_systems
     from openmm.app import PDBFile
 
@@ -138,8 +138,8 @@ def test_the_written_rung_is_the_system_the_runtime_would_have_built(written):
     base = XmlSerializer.deserialize((BUILT / "built.xml").read_text(encoding="utf-8"))
     pdb = PDBFile(str(BUILT / "built.pdb"))
     solute = solute_atom_indices(pdb.topology)
-    omega = classify_omega_bonds(pdb.topology, solute)
-    excluded = [tuple(int(a) for a in b) for b in omega.get("omega_unscaled_bonds", [])]
+    omega = classify_unscaled_torsions(pdb.topology, solute)
+    excluded = [tuple(int(a) for a in b) for b in omega.get("unscaled_central_bonds", [])]
     expected, _audit = build_rung_systems(base, solute, tuple(taus), excluded_bonds=excluded)
 
     for index, reference in enumerate(expected):
@@ -188,7 +188,7 @@ def test_the_tau_ladder_is_taken_not_recomputed(written):
 def test_the_omega_exclusion_is_recorded_as_the_torsions_it_protected(written):
     """A stored atom pair needs a force field to mean anything; the torsions are the result."""
     _run, _taus, record = written
-    omega = record["omega_exclusion"]
+    omega = record["unscaled_torsions"]
     assert "detector_version" in omega
     assert "excluded_central_bonds" in omega
     assert "excluded_torsion_indices" in omega
@@ -202,7 +202,7 @@ def test_the_convention_is_recorded_so_the_scaling_is_readable(written):
     convention = record["convention"]
     assert convention["solute_solute_nonbonded_scale"] == "(1-tau)^2"
     assert convention["solute_environment_nonbonded_scale"] == "1-tau"
-    assert convention["ordinary_amide_omega"] == "unscaled"
+    assert "ordinary amide omega" in convention["unscaled_torsions"]
 
 
 @pytestmark_reference
@@ -247,7 +247,7 @@ def test_the_prose_report_states_the_factors_a_reader_needs(written):
 
     _run, taus, record = written
     text = format_scaling_report(record)
-    assert "rest2-no-bond-angle-omega" in text
+    assert "rest2-unscaled-torsions" in text
     assert "(1-tau)^2" in text
     assert "omega exclusion" in text
     for tau in taus:

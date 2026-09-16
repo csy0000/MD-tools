@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import pytest
 
-from md_tools.openmm.system import classify_omega_bonds
+from md_tools.openmm.system import classify_unscaled_torsions
 
 app = pytest.importorskip("openmm.app")
 elem = pytest.importorskip("openmm.app.element")
@@ -47,6 +47,17 @@ PARACETAMOL = "CC(=O)Nc1ccc(O)cc1"
 
 _SYMBOLS = {"C": elem.carbon, "N": elem.nitrogen, "O": elem.oxygen, "H": elem.hydrogen}
 
+
+
+def _amide(result):
+    """The unscaled AMIDE bonds only. Since REST2 convention v3 `unscaled_central_bonds` also holds
+    aromatic ring and double bonds (tests/test_unscaled_torsions.py); this file is about amides."""
+    return [tuple(c["bond"]) for c in result["amide_detail"]["unscaled"]]
+
+
+def _amide_unclassified(result):
+    """Unclassified AMIDE candidates only: v3 also lists a whole residue lacking bond orders."""
+    return [c for c in result["unclassified"] if c.get("bond") is not None]
 
 def _molecule(smiles):
     rdkit = pytest.importorskip("rdkit.Chem")
@@ -126,18 +137,18 @@ def _protein_plus_ligand(smiles, residue_name, directory):
 def test_a_ligand_residue_is_classified_from_the_sdf_without_being_told_a_route(tmp_path):
     """THE REPRODUCTION, reduced to a unit test. Nobody passes a route; the residue name decides."""
     topology, solute, sdf = _ligand_only(PARACETAMOL, "UNL", tmp_path)
-    result = classify_omega_bonds(topology, solute, ligand_sdf=sdf)
+    result = classify_unscaled_torsions(topology, solute, ligand_sdf=sdf)
 
-    assert result["omega_unclassified_candidates"] == [], (
+    assert _amide_unclassified(result) == [], (
         "paracetamol's amide has an SDF to be read from; refusing it is the defect")
-    assert len(result["omega_unscaled_bonds"]) == 1, result["omega_unscaled_bonds"]
-    assert result["omega_proline_like_scaled_bonds"] == []
+    assert len(_amide(result)) == 1, _amide(result)
+    assert result["proline_like_scaled_bonds"] == []
 
 
 def test_the_method_records_which_evidence_each_decision_used(tmp_path):
     """The record must say SDF, not 'peptide/residue-aware', or the audit trail is wrong."""
     topology, solute, sdf = _ligand_only(PARACETAMOL, "UNL", tmp_path)
-    method = classify_omega_bonds(topology, solute, ligand_sdf=sdf)["omega_detection_method"]
+    method = classify_unscaled_torsions(topology, solute, ligand_sdf=sdf)["detection_method"]
     assert "SMARTS" in method or "SDF" in method, method
 
 
@@ -150,14 +161,14 @@ def test_a_non_standard_residue_without_an_sdf_refuses_rather_than_guessing(tmp_
     error the unclassified list exists to prevent.
     """
     topology, solute, _sdf = _ligand_only(PARACETAMOL, "UNL", tmp_path)
-    result = classify_omega_bonds(topology, solute)          # deliberately no SDF
+    result = classify_unscaled_torsions(topology, solute)          # deliberately no SDF
 
-    assert result["omega_unclassified_candidates"], "no evidence must mean no decision"
+    assert _amide_unclassified(result), "no evidence must mean no decision"
 
 
 def test_the_refusal_names_the_missing_sdf_so_a_reader_can_act(tmp_path):
     topology, solute, _sdf = _ligand_only(PARACETAMOL, "UNL", tmp_path)
-    candidate = classify_omega_bonds(topology, solute)["omega_unclassified_candidates"][0]
+    candidate = _amide_unclassified(classify_unscaled_torsions(topology, solute))[0]
     evidence = candidate["ambiguous"].lower()
     assert "sdf" in evidence, candidate["ambiguous"]
     assert "unl" in evidence or "residue" in evidence, candidate["ambiguous"]
@@ -169,11 +180,11 @@ def test_a_declared_proline_like_name_is_honoured_before_any_sdf_is_read(tmp_pat
     """`rest2.proline_like_residues` is the human answer to the block, and it must still win --
     including when an SDF exists that would have said something else."""
     topology, solute, sdf = _ligand_only(PARACETAMOL, "UNL", tmp_path)
-    result = classify_omega_bonds(topology, solute, ligand_sdf=sdf,
+    result = classify_unscaled_torsions(topology, solute, ligand_sdf=sdf,
                                   proline_like_residues=("PRO", "UNL"))
-    assert result["omega_unclassified_candidates"] == []
-    assert len(result["omega_proline_like_scaled_bonds"]) == 1
-    assert result["omega_unscaled_bonds"] == []
+    assert _amide_unclassified(result) == []
+    assert len(result["proline_like_scaled_bonds"]) == 1
+    assert _amide(result) == []
 
 
 # --- 4. the mixed system, which is why the decision is per candidate -----------------------------
@@ -186,11 +197,11 @@ def test_a_mixed_system_reads_residues_for_the_protein_and_the_sdf_for_the_ligan
     """
     topology, solute, sdf, named, ligand_indices = _protein_plus_ligand(
         PARACETAMOL, "UNL", tmp_path)
-    result = classify_omega_bonds(topology, solute, ligand_sdf=sdf)
+    result = classify_unscaled_torsions(topology, solute, ligand_sdf=sdf)
 
-    assert result["omega_unclassified_candidates"] == [], (
+    assert _amide_unclassified(result) == [], (
         "every amide here has evidence available: two residue-named, one in the SDF")
-    bonds = {tuple(sorted(pair)) for pair in result["omega_unscaled_bonds"]}
+    bonds = {tuple(sorted(pair)) for pair in _amide(result)}
     protein = {tuple(sorted((named["ACE_C"].index, named["ALA_N"].index))),
                tuple(sorted((named["ALA_C"].index, named["NME_N"].index)))}
     assert protein <= bonds, "the protein's two backbone omegas must still be protected"
@@ -202,10 +213,10 @@ def test_a_mixed_system_still_refuses_the_ligand_when_no_sdf_describes_it(tmp_pa
     """The protein half is decidable and the ligand half is not, so the run must stop."""
     topology, solute, _sdf, named, _ligand = _protein_plus_ligand(
         PARACETAMOL, "UNL", tmp_path)
-    result = classify_omega_bonds(topology, solute)
+    result = classify_unscaled_torsions(topology, solute)
 
-    assert result["omega_unclassified_candidates"], "the ligand amide has no evidence"
-    bonds = {tuple(sorted(pair)) for pair in result["omega_unscaled_bonds"]}
+    assert _amide_unclassified(result), "the ligand amide has no evidence"
+    bonds = {tuple(sorted(pair)) for pair in _amide(result)}
     assert tuple(sorted((named["ACE_C"].index, named["ALA_N"].index))) in bonds, (
         "the protein's omegas are decidable from residue names and must still be decided")
 
@@ -217,7 +228,7 @@ def test_route_is_no_longer_an_argument(tmp_path):
     and four of its six call sites answered it wrongly."""
     import inspect
 
-    parameters = inspect.signature(classify_omega_bonds).parameters
+    parameters = inspect.signature(classify_unscaled_torsions).parameters
     assert "route" not in parameters, (
         "`route` is retired; the evidence is chosen per candidate from the residue name")
     assert "ligand_sdf" in parameters

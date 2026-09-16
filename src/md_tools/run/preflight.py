@@ -841,7 +841,7 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
     """Build the System a stage will actually integrate, and refuse here if it cannot be built.
 
     Everything below used to run AFTER the `.out` and the `.log` were open: the solute selection,
-    the omega classification, `build_scaled_system` with its force audit, the implicit/NPT and
+    the unscaled-torsion classification, `build_scaled_system` with its force audit, the implicit/NPT and
     fixed-tau/NPT checks, the restraint, and the barostat. Each is a refusal that arrived attached
     to a directory that reads as a run that started -- and `build_scaled_system` in particular
     refuses a System carrying a force the convention cannot place, which is not a rare case on a
@@ -849,7 +849,7 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
     """
     from ..md._stages import add_barostat, add_positional_restraint, count_barostats, derive_seed
     from ..md.stage import solute_atom_indices
-    from ..openmm.system import UnclassifiedOmegaError, omega_exclusions
+    from ..openmm.system import UnclassifiedTorsionError, unscaled_torsions
 
     system = loaded.system
     implicit = loaded.implicit
@@ -879,12 +879,12 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
         # residue name against a solute that has none, and refused -- while `build/rungs.py`,
         # scaling the same Hamiltonian, passed the real route and succeeded.
         try:
-            omega = omega_exclusions(loaded.pdb.topology, solute,
+            unscaled = unscaled_torsions(loaded.pdb.topology, solute,
                                      ligand_sdf=_ligand_sdf_beside(loaded.system_path))
-        except UnclassifiedOmegaError as refusal:
+        except UnclassifiedTorsionError as refusal:
             raise PreflightError(f"{where} at tau={tau}: {refusal}") from None
         excluded = [tuple(int(a) for a in bond)
-                    for bond in omega.get("omega_unscaled_bonds", [])]
+                    for bond in unscaled["unscaled_central_bonds"]]
         _audit, system = check_scaling_plan(loaded, solute_indices=solute,
                                             excluded_bonds=excluded, tau=tau,
                                             where=f"{where} fixed-tau scaling")
@@ -1193,10 +1193,11 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
         check_ensemble(loaded, ensemble=ensemble, tau=tau, where=protocol)
     solute_record = None
     if loaded is not None and solute_indices is None and route is not None:
-        # Derived here rather than by the writer that used to do it. The omega classification
+        # Derived here rather than by the writer that used to do it. The torsion classification
         # carries its own refusal -- an amide that is neither ordinary nor proline-like -- and it
         # used to fire from inside `write_solute_document`, after `-odir` and both logs existed.
         from ..remd.generated import solute_document
+        from ..openmm.builders import unscaled_bonds_of_solute_document
 
         # THE SDF BESIDE THE SYSTEM, and the route that follows from it.
         #
@@ -1224,10 +1225,10 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
         else:
             solute_indices = list(range(int(solute_record["n_solute_atoms"])))
         excluded_bonds = [tuple(int(a) for a in pair) for pair in
-                          (solute_record.get("rest2") or {}).get("omega_excluded_bonds", [])]
+                          unscaled_bonds_of_solute_document(solute_record)]
 
     if solute_indices is not None:
-        # The force classification, the omega handling and the scaled-System construction, all
+        # The force classification, the unscaled-torsion handling and the scaled-System construction, all
         # before `solute.yaml`, `_protocol.py` or a group file exists. An unclassifiable force
         # used to be found once the run tree was already on disk.
         audit, scaled = check_scaling_plan(loaded, solute_indices=solute_indices,
@@ -1784,7 +1785,7 @@ def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting
     from ..ais.run import _source_atom_count, choose_frames
     from ..ais.schedule import switching_schedule
     from ..md.stage import solute_atom_indices
-    from ..openmm.system import UnclassifiedOmegaError, omega_exclusions
+    from ..openmm.system import UnclassifiedTorsionError, unscaled_torsions
 
     where = "AIS"
     timestep = _resolve_timestep(loaded, dynamics["timestep_fs"], where=where)
@@ -1831,12 +1832,12 @@ def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting
 
     solute = solute_atom_indices(loaded.pdb.topology)
     try:
-        omega = omega_exclusions(loaded.pdb.topology, solute,
+        omega = unscaled_torsions(loaded.pdb.topology, solute,
                                  ligand_sdf=_ligand_sdf_beside(loaded.system_path))
-    except UnclassifiedOmegaError as refusal:
+    except UnclassifiedTorsionError as refusal:
         raise PreflightError(f"{where}: {refusal}") from None
     excluded = tuple(tuple(int(a) for a in bond)
-                     for bond in omega.get("omega_unscaled_bonds", []))
+                     for bond in omega["unscaled_central_bonds"])
     audit, _scaled = check_scaling_plan(loaded, solute_indices=solute, excluded_bonds=excluded,
                                         tau=float(ais["tau_start"]), where="AIS tau switching")
     from ..rest2.scaler import TauSwitcher

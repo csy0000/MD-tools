@@ -167,14 +167,14 @@ def recompute_at_frame(root: Path, run: Path, *, path_id: int, frame_index: int,
 
     from md_tools.ais.decomposition import BASIS_PROBE_AMPLITUDES, Components
     from md_tools.md.stage import solute_atom_indices
-    from md_tools.openmm.system import classify_omega_bonds
+    from md_tools.openmm.system import classify_unscaled_torsions
     from md_tools.rest2.scaler import TauSwitcher
 
     pdb = PDBFile(str(root / "built.pdb"))
     base = XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8"))
     solute = solute_atom_indices(pdb.topology)
-    omega = classify_omega_bonds(pdb.topology, solute)
-    excluded = [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
+    omega = classify_unscaled_torsions(pdb.topology, solute)
+    excluded = [tuple(int(a) for a in bond) for bond in omega.get("unscaled_central_bonds", [])]
 
     switcher = TauSwitcher(base, solute, excluded)
     system = switcher.prepared_system(tau)

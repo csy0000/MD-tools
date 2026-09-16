@@ -1,4 +1,4 @@
-"""One SDF PER RESIDUE NAME: `classify_omega_bonds(..., residue_sdfs={name: path})`.
+"""One SDF PER RESIDUE NAME: `classify_unscaled_torsions(..., residue_sdfs={name: path})`.
 
 `ligand_sdf` maps ONE SDF onto every non-standard solute residue at once. That is right for what
 `build-top` builds from a `.smi`/`.sdf` -- one molecule, one residue -- and wrong as soon as a solute
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from md_tools.openmm.system import classify_omega_bonds
+from md_tools.openmm.system import classify_unscaled_torsions
 
 app = pytest.importorskip("openmm.app")
 elem = pytest.importorskip("openmm.app.element")
@@ -29,6 +29,17 @@ ACETYLPYRROLIDINE = "CC(=O)N1CCCC1"
 
 _SYMBOLS = {"C": elem.carbon, "N": elem.nitrogen, "O": elem.oxygen, "H": elem.hydrogen}
 
+
+
+def _amide(result):
+    """The unscaled AMIDE bonds only. Since REST2 convention v3 `unscaled_central_bonds` also holds
+    aromatic ring and double bonds (tests/test_unscaled_torsions.py); this file is about amides."""
+    return [tuple(c["bond"]) for c in result["amide_detail"]["unscaled"]]
+
+
+def _amide_unclassified(result):
+    """Unclassified AMIDE candidates only: v3 also lists a whole residue lacking bond orders."""
+    return [c for c in result["unclassified"] if c.get("bond") is not None]
 
 def _molecule(smiles):
     rdkit = pytest.importorskip("rdkit.Chem")
@@ -68,11 +79,11 @@ def _within(bonds, atoms):
 def test_each_residue_is_read_from_its_own_sdf(tmp_path):
     topology, solute, sdfs, (mo1, mo2) = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
-    result = classify_omega_bonds(topology, solute, residue_sdfs=sdfs)
+    result = classify_unscaled_torsions(topology, solute, residue_sdfs=sdfs)
 
-    assert result["omega_unclassified_candidates"] == []
-    assert len(_within(result["omega_unscaled_bonds"], mo1)) == 1, "paracetamol: ordinary"
-    assert len(_within(result["omega_proline_like_scaled_bonds"], mo2)) == 1, (
+    assert _amide_unclassified(result) == []
+    assert len(_within(_amide(result), mo1)) == 1, "paracetamol: ordinary"
+    assert len(_within(result["proline_like_scaled_bonds"], mo2)) == 1, (
         "acetylpyrrolidine: ring-locked nitrogen, proline-like")
 
 
@@ -80,19 +91,19 @@ def test_the_whole_set_mapping_cannot_do_this(tmp_path):
     """Why the map exists: one SDF over two different residues fails, for both of them."""
     topology, solute, sdfs, _ = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
-    result = classify_omega_bonds(topology, solute, ligand_sdf=sdfs["MO1"])
-    assert len(result["omega_unclassified_candidates"]) == 2
+    result = classify_unscaled_torsions(topology, solute, ligand_sdf=sdfs["MO1"])
+    assert len(_amide_unclassified(result)) == 2
 
 
 def test_a_residue_missing_from_the_map_is_unclassified_by_name(tmp_path):
     topology, solute, sdfs, (mo1, mo2) = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
-    result = classify_omega_bonds(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]})
+    result = classify_unscaled_torsions(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]})
 
-    unknown = result["omega_unclassified_candidates"]
+    unknown = _amide_unclassified(result)
     assert len(unknown) == 1 and unknown[0]["nitrogen_residue"] == "MO2"
     assert "MO2" in unknown[0]["ambiguous"] and "SDF" in unknown[0]["ambiguous"]
-    assert len(_within(result["omega_unscaled_bonds"], mo1)) == 1, (
+    assert len(_within(_amide(result), mo1)) == 1, (
         "the residue that HAS an SDF is still decided")
 
 
@@ -100,10 +111,10 @@ def test_swapped_sdfs_are_refused_not_believed(tmp_path):
     topology, solute, sdfs, _ = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
     swapped = {"MO1": sdfs["MO2"], "MO2": sdfs["MO1"]}
-    result = classify_omega_bonds(topology, solute, residue_sdfs=swapped)
+    result = classify_unscaled_torsions(topology, solute, residue_sdfs=swapped)
 
-    assert len(result["omega_unclassified_candidates"]) == 2
-    assert all("mismatch" in c["ambiguous"] for c in result["omega_unclassified_candidates"])
+    assert len(_amide_unclassified(result)) == 2
+    assert all("mismatch" in c["ambiguous"] for c in _amide_unclassified(result))
 
 
 def test_every_instance_of_a_residue_is_mapped_separately(tmp_path):
@@ -111,44 +122,44 @@ def test_every_instance_of_a_residue_is_mapped_separately(tmp_path):
     would fail on atom count."""
     topology, solute, sdfs, (first, second) = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO1", PARACETAMOL)])
-    result = classify_omega_bonds(topology, solute, residue_sdfs=sdfs)
+    result = classify_unscaled_torsions(topology, solute, residue_sdfs=sdfs)
 
-    assert result["omega_unclassified_candidates"] == []
-    assert len(_within(result["omega_unscaled_bonds"], first)) == 1
-    assert len(_within(result["omega_unscaled_bonds"], second)) == 1
+    assert _amide_unclassified(result) == []
+    assert len(_within(_amide(result), first)) == 1
+    assert len(_within(_amide(result), second)) == 1
 
 
 def test_a_declared_proline_like_name_needs_no_sdf(tmp_path):
     topology, solute, sdfs, (mo1, mo2) = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
-    result = classify_omega_bonds(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]},
+    result = classify_unscaled_torsions(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]},
                                   proline_like_residues=("PRO", "MO2"))
-    assert result["omega_unclassified_candidates"] == []
-    assert len(_within(result["omega_proline_like_scaled_bonds"], mo2)) == 1
+    assert _amide_unclassified(result) == []
+    assert len(_within(result["proline_like_scaled_bonds"], mo2)) == 1
 
 
 def test_the_method_names_which_sdf_described_which_residue(tmp_path):
     topology, solute, sdfs, _ = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
-    method = classify_omega_bonds(topology, solute, residue_sdfs=sdfs)["omega_detection_method"]
+    method = classify_unscaled_torsions(topology, solute, residue_sdfs=sdfs)["detection_method"]
     assert "MO1.sdf" in method and "MO2.sdf" in method, method
 
 
 def test_both_kinds_of_evidence_at_once_is_a_caller_error(tmp_path):
     topology, solute, sdfs, _ = _system(tmp_path, [("MO1", PARACETAMOL)])
     with pytest.raises(ValueError, match="residue_sdfs"):
-        classify_omega_bonds(topology, solute, ligand_sdf=sdfs["MO1"], residue_sdfs=sdfs)
+        classify_unscaled_torsions(topology, solute, ligand_sdf=sdfs["MO1"], residue_sdfs=sdfs)
 
 
 def test_the_enforcing_entry_point_takes_the_same_evidence(tmp_path):
-    from md_tools.openmm.system import UnclassifiedOmegaError, omega_exclusions
+    from md_tools.openmm.system import UnclassifiedTorsionError, unscaled_torsions
 
     topology, solute, sdfs, _ = _system(
         tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
-    decided = omega_exclusions(topology, solute, residue_sdfs=sdfs)
-    assert decided["omega_unclassified_candidates"] == []
-    with pytest.raises(UnclassifiedOmegaError, match="MO2"):
-        omega_exclusions(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]})
+    decided = unscaled_torsions(topology, solute, residue_sdfs=sdfs)
+    assert _amide_unclassified(decided) == []
+    with pytest.raises(UnclassifiedTorsionError, match="MO2"):
+        unscaled_torsions(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]})
     # and the proline-like declaration reaches the classifier through it
-    omega_exclusions(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]},
+    unscaled_torsions(topology, solute, residue_sdfs={"MO1": sdfs["MO1"]},
                      proline_like_residues=("PRO", "MO2"))

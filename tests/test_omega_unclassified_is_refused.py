@@ -1,6 +1,6 @@
 """An amide omega nobody could classify is REFUSED by every surface that scales torsions.
 
-`classify_omega_bonds` has always said "a non-empty unclassified list must block production", and
+`classify_unscaled_torsions` has always said "a non-empty unclassified list must block production", and
 until this file only ONE of its production consumers acted on it: the ladder preflight, through
 `remd.generated.solute_document`. Every other surface took `omega_unscaled_bonds` and ignored the
 rest -- so a candidate the classifier could not name was simply left out of the exclusions and
@@ -15,7 +15,7 @@ SCALED, like any other solute torsion:
     DICT as if it were an atom pair and died on `int('bond')`.
 
 The run completes, the acceptance ratios look plausible, and the ordinary-amide invariant is
-broken with nothing saying so. That is the defect. `omega_exclusions` is now the one enforcing
+broken with nothing saying so. That is the defect. `unscaled_torsions` is now the one enforcing
 entry point, and the last test here keeps it that way.
 
 THE FIXTURE. `conftest.make_dataset_root`'s ACE-ALA-NME with its alanine renamed `XAA`, and no
@@ -73,11 +73,11 @@ def _loaded(directory):
 
 def test_the_enforcing_entry_point_refuses_and_names_the_candidate(unclassifiable):
     from md_tools.md.stage import solute_atom_indices
-    from md_tools.openmm.system import UnclassifiedOmegaError, omega_exclusions
+    from md_tools.openmm.system import UnclassifiedTorsionError, unscaled_torsions
 
     loaded = _loaded(unclassifiable)
-    with pytest.raises(UnclassifiedOmegaError) as refused:
-        omega_exclusions(loaded.pdb.topology, solute_atom_indices(loaded.pdb.topology))
+    with pytest.raises(UnclassifiedTorsionError) as refused:
+        unscaled_torsions(loaded.pdb.topology, solute_atom_indices(loaded.pdb.topology))
     message = str(refused.value)
     assert "XAA" in message, message
     assert "SDF" in message, message
@@ -90,23 +90,23 @@ def test_the_refusal_does_not_offer_a_setting_nobody_can_set(unclassifiable):
     rebuilds `rest2` from DEFAULTS and copies nothing into it. Naming it as the remedy sends a
     reader to write a key that `build-top.config` refuses as unknown."""
     from md_tools.md.stage import solute_atom_indices
-    from md_tools.openmm.system import UnclassifiedOmegaError, omega_exclusions
+    from md_tools.openmm.system import UnclassifiedTorsionError, unscaled_torsions
 
     loaded = _loaded(unclassifiable)
-    with pytest.raises(UnclassifiedOmegaError) as refused:
-        omega_exclusions(loaded.pdb.topology, solute_atom_indices(loaded.pdb.topology))
+    with pytest.raises(UnclassifiedTorsionError) as refused:
+        unscaled_torsions(loaded.pdb.topology, solute_atom_indices(loaded.pdb.topology))
     assert "proline_like_residues" not in str(refused.value), str(refused.value)
 
 
 def test_a_classifiable_solute_passes_through_unchanged(tmp_path):
     from md_tools.md.stage import solute_atom_indices
-    from md_tools.openmm.system import classify_omega_bonds, omega_exclusions
+    from md_tools.openmm.system import classify_unscaled_torsions, unscaled_torsions
 
     loaded = _loaded(_classifiable(tmp_path / "ALA"))
     solute = solute_atom_indices(loaded.pdb.topology)
-    enforced = omega_exclusions(loaded.pdb.topology, solute)
-    assert enforced == classify_omega_bonds(loaded.pdb.topology, solute)
-    assert len(enforced["omega_unscaled_bonds"]) == 2
+    enforced = unscaled_torsions(loaded.pdb.topology, solute)
+    assert enforced == classify_unscaled_torsions(loaded.pdb.topology, solute)
+    assert len(enforced["unscaled_central_bonds"]) == 2
 
 
 # --- every surface that scales ---------------------------------------------------------------------
@@ -202,7 +202,7 @@ def test_a_group_files_solute_yaml_with_unresolved_candidates_is_refused(tmp_pat
 #: the classifier found, unclassified candidates included, for a System that may only ever run at
 #: tau = 0. Neither decides what a scaler excludes.
 _RECORDING_SITES = {
-    "src/md_tools/openmm/system.py",        # `build_system`'s record, and `omega_exclusions`
+    "src/md_tools/openmm/system.py",        # `build_system`'s record, and `unscaled_torsions`
     "src/md_tools/openmm/implicit.py",      # the implicit build record
 }
 
@@ -218,11 +218,11 @@ def test_no_scaling_surface_calls_the_classifier_directly():
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                    and node.func.id == "classify_omega_bonds"):
+                    and node.func.id == "classify_unscaled_torsions"):
                 offenders.append(f"{relative}:{node.lineno}")
     assert not offenders, (
-        "call `omega_exclusions`, which refuses unclassified candidates, instead of "
-        f"`classify_omega_bonds`: {offenders}")
+        "call `unscaled_torsions`, which refuses unclassified candidates, instead of "
+        f"`classify_unscaled_torsions`: {offenders}")
 
 
 # --- the case that was actually broken, end to end -----------------------------------------------
@@ -247,7 +247,7 @@ def test_build_md_rungs_of_a_peptide_like_solute_exclude_its_omegas(tmp_path):
 
     from md_tools.build.md import build_scripts
     from md_tools.md.stage import solute_atom_indices
-    from md_tools.openmm.system import omega_exclusions
+    from md_tools.openmm.system import unscaled_torsions
 
     dataset = tmp_path / "CYC"
     build = dataset / "build"
@@ -265,16 +265,17 @@ def test_build_md_rungs_of_a_peptide_like_solute_exclude_its_omegas(tmp_path):
     assert (build / "built.sdf").is_file(), "an explicit peptide-like build must retain its SDF"
 
     topology = PDBFile(str(build / "built.pdb")).topology
-    expected = {tuple(sorted(b)) for b in omega_exclusions(
-        topology, solute_atom_indices(topology),
-        ligand_sdf=build / "built.sdf")["omega_unscaled_bonds"]}
-    assert len(expected) == 3, expected
+    classified = unscaled_torsions(topology, solute_atom_indices(topology),
+                                   ligand_sdf=build / "built.sdf")
+    expected = {tuple(sorted(b)) for b in classified["unscaled_central_bonds"]}
+    amides = [c for c in classified["central_bonds"] if c["class"] == "amide_omega"]
+    assert len(amides) == 3, amides
 
     config = tmp_path / "REST2.config"
     config.write_text("protocol: REST2\n", encoding="utf-8")
     build_scripts(config_path=config, out_dir=dataset / "REST2-run1", echo=False)
 
     record = json.loads((dataset / "REST2-run1" / "build_states.log").read_text(encoding="utf-8"))
-    written = {tuple(sorted(b)) for b in record["omega_exclusion"]["excluded_central_bonds"]}
+    written = {tuple(sorted(b)) for b in record["unscaled_torsions"]["excluded_central_bonds"]}
     assert written == expected, (written, expected)
-    assert record["omega_exclusion"]["n_excluded_torsions"] > 0
+    assert record["unscaled_torsions"]["n_excluded_torsions"] > 0

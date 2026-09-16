@@ -89,7 +89,7 @@ HOW THE RUNGS WERE BUILT
     system_rung0.xml is the unscaled System; every other rung is that System with the solute
     scaled at its tau. `ladder/hamiltonian.py` is the code that did it, and `python
     verify_rungs.py` rebuilds each rung from rung 0 with it and checks the result is identical.
-    provenance.json's `derivation` block holds the solute atoms and the omega bonds it needs.
+    provenance.json's `derivation` block holds the solute atoms and the unscaled bonds it needs.
 """
 import argparse
 import json
@@ -417,7 +417,7 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
 
     from ..build.record import source_commit
     from ..md.stage import solute_atom_indices
-    from ..openmm.system import omega_exclusions
+    from ..openmm.system import unscaled_torsions
     from ..remd.protocol import build_rung_systems
     from ..run.preflight import load_inputs
 
@@ -482,10 +482,10 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
     # used: the SDF beside the System, when `build-top` retained one.
     from ..run.preflight import _ligand_sdf_beside
 
-    # ENFORCED: `UnclassifiedOmegaError` is a ValueError, raised before `out_dir` exists.
-    omega = omega_exclusions(loaded.pdb.topology, solute,
+    # ENFORCED: `UnclassifiedTorsionError` is a ValueError, raised before `out_dir` exists.
+    unscaled = unscaled_torsions(loaded.pdb.topology, solute,
                              ligand_sdf=_ligand_sdf_beside(found["system"]))
-    excluded = [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
+    excluded = [tuple(int(a) for a in bond) for bond in unscaled["unscaled_central_bonds"]]
     systems, audit = build_rung_systems(loaded.system, list(solute), tuple(taus),
                                         excluded_bonds=excluded, pressure_bar=None)
     if len(systems) != len(taus):

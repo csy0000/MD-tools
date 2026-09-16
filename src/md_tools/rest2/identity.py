@@ -12,7 +12,7 @@ WHY TAU AND TEMPERATURE ARE NOT ENOUGH
         Two protonation states agree on all five.
         A different constraint set, hydrogen-mass repartitioning, cutoff, PME tolerance, switching
         function or dispersion correction agrees on all five.
-        A different solute selection or omega-exclusion set produces a different SCALED system at
+        A different solute selection or unscaled-torsion set produces a different SCALED system at
         the same tau.
 
     So the identity is taken from the serialized OpenMM System itself -- the object that actually
@@ -31,8 +31,9 @@ import hashlib
 import re
 
 #: Bumped when the canonicalisation changes, because a fingerprint is only comparable to one
-#: produced the same way.
-FINGERPRINT_FORMAT = "md-tools-hamiltonian-identity/v1"
+#: produced the same way. v2: the selection records unscaled central bonds of every class and
+#: whether impropers are unscaled (REST2 convention v3), where v1 recorded omega bonds only.
+FINGERPRINT_FORMAT = "md-tools-hamiltonian-identity/v2"
 
 #: Attributes stripped before hashing: they describe the file, not the physics.
 _VOLATILE = (
@@ -112,7 +113,7 @@ def force_summary(system):
 
 
 def identity_record(system, *, tau, temperature_k, ensemble, solute_indices=(),
-                    excluded_bonds=(), extra=None):
+                    excluded_bonds=(), unscaled_impropers=True, extra=None):
     """Everything a consumer needs to decide "is this the same Hamiltonian I am about to run".
 
     `solute_indices` and `excluded_bonds` are included because they determine the SCALED system:
@@ -121,14 +122,16 @@ def identity_record(system, *, tau, temperature_k, ensemble, solute_indices=(),
     """
     selection = hashlib.sha256(
         repr(({"solute": [int(i) for i in solute_indices],
-               "omega_excluded_bonds": sorted([int(a), int(b)] for a, b in excluded_bonds)}
+               "unscaled_central_bonds": sorted([int(a), int(b)] for a, b in excluded_bonds),
+               "unscaled_impropers": bool(unscaled_impropers)}
               )).encode("utf-8")).hexdigest()
     record = {
         "format": FINGERPRINT_FORMAT,
         "system_sha256": system_fingerprint(system),
         "selection_sha256": selection,
         "n_solute_atoms": len(list(solute_indices)),
-        "n_omega_excluded_bonds": len(list(excluded_bonds)),
+        "n_unscaled_central_bonds": len(list(excluded_bonds)),
+        "unscaled_impropers": bool(unscaled_impropers),
         # `None` means "the unscaled reference the ladder is built from", which is a different
         # claim from "the rung at tau = 0.0" and is recorded as a different value.
         "tau": None if tau is None else float(tau),
@@ -165,7 +168,7 @@ def require_same_hamiltonian(recorded, current, *, what="reservoir"):
 
     differences = []
     for key in ("system_sha256", "selection_sha256", "tau", "temperature_k", "ensemble",
-                "n_solute_atoms", "n_omega_excluded_bonds"):
+                "n_solute_atoms", "n_unscaled_central_bonds", "unscaled_impropers"):
         if recorded.get(key) != current.get(key):
             differences.append((key, recorded.get(key), current.get(key)))
     if not differences:
@@ -181,7 +184,7 @@ def require_same_hamiltonian(recorded, current, *, what="reservoir"):
         elif key == "selection_sha256":
             lines.append(
                 f"    {key}: {str(was)[:16]}... vs {str(now)[:16]}...  -- a different solute "
-                f"selection or omega-exclusion set produces a different SCALED system at every "
+                f"selection or unscaled-torsion set produces a different SCALED system at every "
                 f"tau above zero")
         else:
             lines.append(f"    {key}: was {was!r}, now {now!r}")

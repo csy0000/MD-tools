@@ -8,7 +8,7 @@ Hamiltonians if the selection differed, and nothing in a trajectory records that
 So the selection is written to `solute.yaml` beside the run, with the digest of the topology it
 was derived against, and it is *validated* rather than trusted when supplied.
 
-**Exclusions are stored as central bonds, not as torsion indices.** A peptide omega is not one
+**Exclusions are stored as central bonds, not as torsion indices.** An unscaled bond is not one
 term: several torsions share the same C–N bond, and a force field may enumerate them differently
 from one build to the next. Naming the bond excludes every torsion across it, which is the
 physical statement — "this rotation keeps its barrier" — rather than an accident of enumeration.
@@ -70,34 +70,39 @@ class ScalingSelection:
         per candidate from the residue name, and only reaches for bond orders when a residue
         cannot answer. Without it, a non-standard residue is refused rather than guessed.
         """
-        from ..openmm.system import UnclassifiedOmegaError, omega_exclusions
+        from ..openmm.system import UnclassifiedTorsionError, unscaled_torsions
 
         atoms = tuple(sorted({int(i) for i in solute_atoms}))
         try:
-            classified = omega_exclusions(topology, atoms, ligand_sdf=ligand_sdf)
-        except UnclassifiedOmegaError as refusal:
+            classified = unscaled_torsions(topology, atoms, ligand_sdf=ligand_sdf)
+        except UnclassifiedTorsionError as refusal:
             raise SelectionError(str(refusal)) from None
 
-        # ONLY `omega_unscaled_bonds`. A proline-like peptide bond stays eligible for ordinary
+        # ONLY the unscaled central bonds. A proline-like peptide bond stays eligible for ordinary
         # scaling -- its nitrogen carries no amide hydrogen, so the cis/trans argument that
         # protects an ordinary omega does not apply. An unclassified candidate never reaches
-        # here: `omega_exclusions` refused it above. Both decisions are recorded below so the
+        # here: `unscaled_torsions` refused it above. Both decisions are recorded below so the
         # file says what was decided rather than only what was excluded.
         bonds = tuple(sorted({tuple(sorted(int(i) for i in pair))
-                              for pair in classified["omega_unscaled_bonds"]}))
+                              for pair in classified["unscaled_central_bonds"]}))
         labels = []
-        for entry in (classified.get("omega_detail") or {}).get("unscaled", []):
+        reasons = {"amide_omega": "ordinary amide omega: left unscaled so a hot rung cannot "
+                                  "isomerise it",
+                   "aromatic_ring": "aromatic ring bond: left unscaled so a hot rung cannot "
+                                    "pucker the ring",
+                   "double_bond": "double bond: left unscaled so a hot rung cannot twist it"}
+        for entry in classified.get("central_bonds") or []:
             labels.append({
-                "bond": [int(entry["carbon"]), int(entry["nitrogen"])],
-                "residues": f"{entry.get('carbon_residue')}-{entry.get('nitrogen_residue')}",
-                "reason": "ordinary amide omega: left unscaled so a hot rung cannot isomerise it",
+                "bond": [int(i) for i in entry["bond"]],
+                "residues": f"{entry.get('residue')}{entry.get('residue_index')}",
+                "reason": reasons[entry["class"]],
             })
-        for pair in classified.get("omega_proline_like_scaled_bonds") or []:
+        for pair in classified.get("proline_like_scaled_bonds") or []:
             labels.append({"bond": [int(i) for i in pair], "residues": None,
                            "reason": "proline-like: SCALED, no amide hydrogen to protect"})
         return cls(solute_atoms=atoms, excluded_bonds=bonds,
                    topology_sha256=topology_digest(topology),
-                   labels=tuple(labels), detection=str(classified["omega_detection_method"]))
+                   labels=tuple(labels), detection=str(classified["detection_method"]))
 
     # -- persisting -----------------------------------------------------------------------------
 

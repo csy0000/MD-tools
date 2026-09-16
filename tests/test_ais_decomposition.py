@@ -74,6 +74,11 @@ def _mixed_system(*, with_cmap=True, with_torsions=True, with_exceptions=True):
     angles = openmm.HarmonicAngleForce()
     angles.addAngle(0, 1, 2, 1.9, 400.0)
     system.addForce(angles)
+    # The chain the torsions run along, as constraints: every torsion must be explained by the
+    # System's bonds (a proper chain or an improper centre) or scaling refuses, and constraints
+    # add no energy, so no energy group this file measures moves.
+    for a, b in ((1, 2), (2, 3), (3, 4)):
+        system.addConstraint(a, b, 0.15)
 
     if with_torsions:
         torsions = openmm.PeriodicTorsionForce()
@@ -247,8 +252,8 @@ def test_solute_cmap_is_quadratic():
     assert abs(with_cmap.sqrt_scaled - without.sqrt_scaled) < TOLERANCE
 
 
-def test_an_excluded_omega_torsion_moves_from_the_quadratic_group_to_the_unscaled_one():
-    """The omega exclusion is not cosmetic: it changes which group the torsion's energy is in.
+def test_an_unscaled_central_bond_moves_its_torsion_from_the_quadratic_group_to_the_unscaled_one():
+    """The exclusion is not cosmetic: it changes which group the torsion's energy is in.
 
     Excluding the central bond 1-2 leaves the wholly-solute torsion unscaled, so its energy must
     leave the quadratic group and appear in the unscaled one -- with the TOTAL at tau = 0
@@ -258,7 +263,7 @@ def test_an_excluded_omega_torsion_moves_from_the_quadratic_group_to_the_unscale
     excluded = _Probe(_mixed_system(), SOLUTE, excluded_bonds=((1, 2),)).components()
 
     moved = scaled.lin_scaled - excluded.lin_scaled
-    assert moved > 1e-3, "excluding the omega bond did not remove the torsion from the quadratic"
+    assert moved > 1e-3, "excluding the central bond did not remove the torsion from the quadratic"
     assert abs((excluded.non_scaled - scaled.non_scaled) - moved) < TOLERANCE, (
         "the excluded torsion's energy did not reappear in the unscaled group")
     assert abs(excluded.total_at(0.0) - scaled.total_at(0.0)) < TOLERANCE, (

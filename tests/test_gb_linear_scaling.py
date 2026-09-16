@@ -79,8 +79,9 @@ def _group_energies(system, positions):
 
 # --- the identity ------------------------------------------------------------------------------
 
-def test_the_identity_is_version_two_and_names_the_gb_rule():
-    assert scaling.REST2_IMPLEMENTATION["version"] == 2
+def test_the_identity_names_the_gb_rule():
+    # v2 introduced the (1-tau) GB rule; v3 (unscaled torsions) keeps it.
+    assert scaling.REST2_IMPLEMENTATION["version"] == 3
     assert scaling.REST2_IMPLEMENTATION["generalized_born_scale"] == "1-tau"
     assert scaling.REST2_IMPLEMENTATION["solute_solute_nonbonded_scale"] == "(1-tau)^2"
 
@@ -93,7 +94,7 @@ def test_version_one_is_refused_for_continuation():
             {"name": "rest2-no-bond-angle-omega", "version": 1}, what="the parent run")
 
 
-def test_version_two_is_accepted_and_absent_identity_is_not_invented():
+def test_the_current_version_is_accepted_and_absent_identity_is_not_invented():
     scaling.require_compatible_implementation(dict(scaling.REST2_IMPLEMENTATION))
     scaling.require_compatible_implementation({})        # nothing recorded -> nothing to refuse
     scaling.require_compatible_implementation(None)

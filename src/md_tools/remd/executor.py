@@ -818,12 +818,17 @@ def _print_grouped_summary(record, protocol):
             print(f"#   scaling               solute-solute "
                   f"{implementation.get('solute_solute_nonbonded_scale')}, "
                   f"solute-environment {implementation.get('solute_environment_nonbonded_scale')}")
+            torsions = implementation.get("unscaled_torsions")
             print(f"#   left unscaled         bonds {implementation.get('bonds')}, "
-                  f"angles {implementation.get('angles')}, ordinary amide omega "
-                  f"{implementation.get('ordinary_amide_omega')}")
+                  f"angles {implementation.get('angles')}, "
+                  + (f"torsions: {', '.join(torsions)}" if torsions is not None else
+                     f"ordinary amide omega {implementation.get('ordinary_amide_omega')}"))
         if hamiltonian:
             print(f"#   solute region         {hamiltonian.get('n_solute_atoms')} atom(s), "
-                  f"{hamiltonian.get('n_omega_excluded_bonds')} omega bond(s) excluded")
+                  + (f"{hamiltonian.get('n_unscaled_central_bonds')} unscaled central bond(s), "
+                     f"impropers {'unscaled' if hamiltonian.get('unscaled_impropers') else 'scaled'}"
+                     if 'n_unscaled_central_bonds' in hamiltonian else
+                     f"{hamiltonian.get('n_omega_excluded_bonds')} omega bond(s) excluded"))
             digest = hamiltonian.get("system_sha256")
             if digest:
                 print(f"#   system sha256         {digest}")
@@ -867,22 +872,27 @@ def _print_grouped_summary(record, protocol):
 
 
 def _excluded_bonds_from_solute_document(document, *, source) -> list[tuple[int, ...]]:
-    """The omega exclusions a `solute.yaml` records -- refused if it also records unresolved ones.
+    """The unscaled central bonds a `solute.yaml` records -- refused if it also records unresolved
+    items.
 
-    `omega_ambiguous_candidates` is the classifier's unclassified list as the document stored it.
-    Taking `omega_excluded_bonds` and ignoring it would scale those torsions, which is the defect
-    `openmm.system.omega_exclusions` exists to refuse; a document is not an exemption from it.
+    The document's unclassified list (`unclassified`, or 0.5.3's `omega_ambiguous_candidates`) is
+    the classifier's as the document stored it. Taking the unscaled bonds and ignoring it would scale
+    those torsions, which is the defect `openmm.system.unscaled_torsions` exists to refuse; a
+    document is not an exemption from it.
     """
-    rest2 = document.get("rest2") or {}
-    unresolved = rest2.get("omega_ambiguous_candidates") or []
+    from ..openmm.builders import (unclassified_of_solute_document,
+                                   unscaled_bonds_of_solute_document)
+
+    unresolved = unclassified_of_solute_document(document)
     if unresolved:
-        shown = "; ".join(f"bond {c.get('bond')} ({c.get('nitrogen_residue')} N): "
-                          f"{c.get('evidence')}" for c in unresolved[:5])
+        shown = "; ".join(f"{'bond ' + str(c.get('bond')) if c.get('bond') else 'residue'} "
+                          f"({c.get('nitrogen_residue')}): {c.get('evidence')}"
+                          for c in unresolved[:5])
         raise RuntimeError(
-            f"{source} records {len(unresolved)} amide omega candidate(s) that could not be "
-            f"classified as ordinary or proline-like, so which torsions this ladder may scale is "
-            f"undecided. Refusing rather than scaling them: {shown}")
-    return [tuple(int(a) for a in pair) for pair in rest2.get("omega_excluded_bonds", [])]
+            f"{source} records {len(unresolved)} item(s) whose torsions could not be classified, "
+            f"so which torsions this ladder may scale is undecided. Refusing rather than scaling "
+            f"them: {shown}")
+    return unscaled_bonds_of_solute_document(document)
 
 
 def _preflight_from_groups(files, arguments, groups):

@@ -68,7 +68,7 @@ def test_a_minimal_configuration_resolves_to_the_documented_defaults():
     assert resolved["method"] == "REST2"
     assert resolved["schedule"] == {"kind": "linear", "n_states": 4,
                                     "tau_min": 0.0, "tau_max": 0.5}
-    assert resolved["omega_exclusion"] is True
+    assert resolved["unscaled_torsions"] is True
     assert resolved["sdf_filelist"] is None
     assert resolved["proline_like_residues"] == ["PRO"]
     assert resolved["max_proline_ring_size"] == 7
@@ -82,6 +82,7 @@ def test_a_minimal_configuration_resolves_to_the_documented_defaults():
     ("method: REST2\nschedule:\n  n_states: 1\n  tau_min: 0.0\n  tau_max: 0.5\n", "tau_min"),
     ("method: REST2\nschedule:\n  n_states: 4\n  tau_min: 0.5\n  tau_max: 0.5\n", "tau_min"),
     ("method: cMD\nschedule:\n  n_states: 2\n  tau_min: 0.0\n  tau_max: 0.5\n", "cMD"),
+    ("method: AIS\nschedule:\n  n_states: 3\n  tau_min: 0.0\n  tau_max: 0.5\n", "AIS"),
     ("method: REST2\nschedule:\n  tau_max: 1.0\n", "maximum"),
     ("method: REST2\nsdf_filelist: [MO1.sdf]\n", "sdf_filelist"),
 ])
@@ -119,7 +120,7 @@ def test_the_states_are_exactly_what_a_ladder_integrates(tmp_path):
     from openmm.app import PDBFile
 
     from md_tools.md.stage import solute_atom_indices
-    from md_tools.openmm.system import omega_exclusions
+    from md_tools.openmm.system import unscaled_torsions
     from md_tools.remd.protocol import build_rung_systems
 
     build = _dataset(tmp_path / "ALA")
@@ -133,7 +134,7 @@ def test_the_states_are_exactly_what_a_ladder_integrates(tmp_path):
     base = XmlSerializer.deserialize((build / "built.xml").read_text(encoding="utf-8"))
     topology = PDBFile(str(build / "built.pdb")).topology
     solute = solute_atom_indices(topology)
-    excluded = [tuple(b) for b in omega_exclusions(topology, solute)["omega_unscaled_bonds"]]
+    excluded = [tuple(b) for b in unscaled_torsions(topology, solute)["unscaled_central_bonds"]]
     expected, _audit = build_rung_systems(base, solute, (0.0, 0.166667, 0.333333, 0.5),
                                           excluded_bonds=excluded)
     for index, system in enumerate(expected):
@@ -145,8 +146,11 @@ def test_the_states_are_exactly_what_a_ladder_integrates(tmp_path):
     assert [s["tau"] for s in on_disk["states"]] == [0.0, 0.166667, 0.333333, 0.5]
     assert on_disk["method"] == "REST2"
     assert on_disk["state0_is_physical"] is True
-    assert len(on_disk["omega"]["unscaled_bonds"]) == 2
-    assert on_disk["omega"]["excluded_torsions"]["n_excluded_torsions"] > 0
+    section = on_disk["unscaled_torsions"]
+    assert len(section["unscaled_central_bonds"]) == 2, "ACE-ALA-NME: two amides, no ring"
+    assert section["counts"]["amide_omega"] == 2
+    assert section["torsion_terms"]["n_excluded_torsions"] > 0
+    assert section["counts"]["improper_terms"] == section["torsion_terms"]["n_unscaled_impropers"] > 0
 
 
 def test_a_hot_cmd_state_is_one_file_at_its_tau(tmp_path):
@@ -158,6 +162,16 @@ def test_a_hot_cmd_state_is_one_file_at_its_tau(tmp_path):
     assert record["state0_is_physical"] is False
 
 
+def test_an_ais_end_state_is_one_file_in_its_own_directory(tmp_path):
+    from md_tools.rest2.states import scaled_state_identity
+
+    build = _dataset(tmp_path / "ALA")
+    _scale(build, _config(build, "method: AIS\nschedule:\n  n_states: 1\n"
+                                 "  tau_min: 0.5\n  tau_max: 0.5\n"))
+    identity = scaled_state_identity(build / "AIS" / "system_state0.xml")
+    assert identity["method"] == "AIS" and identity["tau"] == 0.5
+
+
 def test_a_ladder_that_starts_scaled_says_so_in_words(tmp_path):
     build = _dataset(tmp_path / "ALA")
     record = _scale(build, _config(build, "method: REST2\nschedule:\n  n_states: 3\n"
@@ -167,7 +181,7 @@ def test_a_ladder_that_starts_scaled_says_so_in_words(tmp_path):
     assert "NOT the physical Hamiltonian" in log
 
 
-def test_an_unclassifiable_omega_is_refused_before_the_directory_exists(tmp_path):
+def test_an_unclassifiable_residue_is_refused_before_the_directory_exists(tmp_path):
     from md_tools.build.strict import ConfigError
 
     build = _dataset(tmp_path / "XAA", rename_alanine="XAA")
@@ -176,12 +190,14 @@ def test_an_unclassifiable_omega_is_refused_before_the_directory_exists(tmp_path
     assert not (build / "REST2").exists()
 
 
-def test_omega_exclusion_false_classifies_nothing_and_says_so(tmp_path):
+def test_unscaled_torsions_false_classifies_nothing_and_says_so(tmp_path):
     build = _dataset(tmp_path / "XAA", rename_alanine="XAA")
-    record = _scale(build, _config(build, "method: REST2\nomega_exclusion: false\n"))
-    assert record["omega"]["exclusion"] is False
-    assert record["omega"]["unscaled_bonds"] == []
-    assert "including ordinary amide omegas" in record["omega"]["method"]
+    record = _scale(build, _config(build, "method: REST2\nunscaled_torsions: false\n"))
+    section = record["unscaled_torsions"]
+    assert section["enabled"] is False and section["unscaled_impropers"] is False
+    assert section["unscaled_central_bonds"] == []
+    assert section["torsion_terms"]["n_unscaled_impropers"] == 0
+    assert "impropers and ordinary amide omegas included" in section["method"]
 
 
 def test_check_creates_nothing(tmp_path):
@@ -355,10 +371,10 @@ def _red_pixels(path):
 
 
 def _unscaled_bonds(topology, solute, sdfs):
-    from md_tools.openmm.system import omega_exclusions
+    from md_tools.openmm.system import unscaled_torsions
 
-    return [tuple(b) for b in omega_exclusions(topology, solute,
-                                               residue_sdfs=sdfs)["omega_unscaled_bonds"]]
+    return [tuple(b) for b in unscaled_torsions(topology, solute,
+                                               residue_sdfs=sdfs)["unscaled_central_bonds"]]
 
 
 def test_each_small_molecule_gets_a_picture_with_its_unscaled_bond_in_red(tmp_path):
@@ -376,7 +392,7 @@ def test_each_small_molecule_gets_a_picture_with_its_unscaled_bond_in_red(tmp_pa
     assert drawn["MO1"]["file"] == "MO1-unscaled.png"
     for name in ("MO1", "MO2"):
         assert (out / f"{name}-unscaled.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
-    assert len(drawn["MO1"]["unscaled_bonds"]) == 1, "paracetamol's ordinary amide"
+    assert len(drawn["MO1"]["unscaled_bonds"]) == 7, "paracetamol's amide and six ring bonds"
     assert drawn["MO2"]["unscaled_bonds"] == [], "acetylpyrrolidine's amide is proline-like: scaled"
     assert _red_pixels(out / "MO1-unscaled.png") > 50, "the unscaled bond must be drawn red"
     assert _red_pixels(out / "MO2-unscaled.png") == 0, (
@@ -390,17 +406,17 @@ def test_the_caption_names_the_bonds_by_the_records_indices(tmp_path):
     sdfs = {"MO1": tmp_path / "MO1.sdf"}
     bonds = _unscaled_bonds(topology, solute, sdfs)
     drawn = depict_unscaled_torsions(topology, solute, sdfs, bonds, tmp_path)
-    (a, b), = bonds
-    assert drawn["MO1"]["unscaled_bonds"] == [[a, b]]
-    assert f"{a}-{b}" in drawn["MO1"]["caption"]
+    assert drawn["MO1"]["unscaled_bonds"] == sorted([list(b) for b in bonds])
+    for a, b in bonds:
+        assert f"{a}-{b}" in drawn["MO1"]["caption"]
 
 
-def test_omega_exclusion_off_draws_nothing_red_and_says_why(tmp_path):
+def test_unscaled_torsions_off_draws_nothing_red_and_says_why(tmp_path):
     from md_tools.build.scaler import depict_unscaled_torsions
 
     topology, solute = _ligands(tmp_path, [("MO1", PARACETAMOL)])
     drawn = depict_unscaled_torsions(topology, solute, {"MO1": tmp_path / "MO1.sdf"}, [],
-                                     tmp_path, omega_exclusion=False)
+                                     tmp_path, enabled=False)
     assert "OFF" in drawn["MO1"]["caption"]
     assert _red_pixels(tmp_path / "MO1-unscaled.png") == 0
 
@@ -419,7 +435,7 @@ def test_an_sdf_that_is_not_this_residue_is_not_drawn(tmp_path):
 def test_a_peptide_gets_no_picture(tmp_path):
     build = _dataset(tmp_path / "ALA")
     record = _scale(build, _config(build, "method: REST2\n"))
-    assert record["omega"]["depictions"] == {}
+    assert record["unscaled_torsions"]["depictions"] == {}
     assert not list((build / "REST2").glob("*.png"))
 
 
@@ -440,7 +456,7 @@ def test_a_built_small_molecule_gets_its_picture_listed_in_the_record(tmp_path):
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
 
     record = _scale(build, _config(build, "method: REST2\n"))
-    (name, facts), = record["omega"]["depictions"].items()
+    (name, facts), = record["unscaled_torsions"]["depictions"].items()
     png = build / "REST2" / facts["file"]
     assert png.name == f"{name}-unscaled.png"
     from md_tools.build.record import sha256_file

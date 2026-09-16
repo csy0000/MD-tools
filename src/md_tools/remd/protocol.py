@@ -355,7 +355,7 @@ def apply_ladder_restraints(system, restraints):
 
 
 def build_rung_systems(base_system, solute_indices, taus, *, excluded_bonds=(),
-                       pressure_bar=None, restraints=()):
+                       pressure_bar=None, restraints=(), unscaled_impropers=True):
     """One scaled System per tau rung, plus the complete force audit. THE one implementation.
 
     Called from two places, deliberately: `Protocol.build_systems` (the driver's route) and the
@@ -378,7 +378,8 @@ def build_rung_systems(base_system, solute_indices, taus, *, excluded_bonds=(),
             "and carry the pV work; that is deliberately not implemented rather than "
             "approximated.")
     systems = [build_scaled_system(base_system, solute_indices, tau,
-                                   excluded_bonds=excluded_bonds)
+                                   excluded_bonds=excluded_bonds,
+                                   unscaled_impropers=unscaled_impropers)
                for tau in taus]
     if restraints:
         # The same bias on every rung, added after scaling; see `apply_ladder_restraints`.
@@ -390,10 +391,10 @@ def build_rung_systems(base_system, solute_indices, taus, *, excluded_bonds=(),
             "cancels_from_exchange": ("identical on every rung, so W(x) enters u_i and u_j alike "
                                       "and cancels from log alpha exactly"),
         }
-    # What the omega exclusion actually did, in terms of the torsions it protected, recorded
+    # What the unscaled-torsion rule actually did, in terms of the torsions it protected, recorded
     # against the SAME System the ladder was built from. A stored pair of atom indices needs
     # a force field to mean anything; this says which torsion terms it left alone.
-    audit["omega_exclusion"] = torsion_exclusion_report(
-        base_system, solute_indices, excluded_bonds)
+    audit["unscaled_torsions"] = torsion_exclusion_report(
+        base_system, solute_indices, excluded_bonds, unscaled_impropers)
     audit["rest2_implementation"] = dict(REST2_IMPLEMENTATION)
     return systems, audit

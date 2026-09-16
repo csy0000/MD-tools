@@ -350,12 +350,19 @@ RUNGS = {
     "implicit": {
         "REST2-run1/remd0/build_state0.xml":
             "b4e773404dafae2dd0c51152e0819d376e98a0500a8db1938d846b906d670689",
+        # REFRESHED for REST2 convention v3 (unscaled torsions), rungs 1-3. Not pasted: the old
+        # digests were reproduced exactly from 6cc67c8 and the new Systems compared with them
+        # parameter by parameter. Every force but PeriodicTorsionForce is identical, and exactly
+        # TWO torsion terms differ per rung -- the amide-nitrogen impropers (4-8-6-7,
+        # 14-18-16-17), now unscaled. The other two impropers (1-6-4-5, 8-16-14-15) were already
+        # unscaled under v2 by accident: their middle atoms are the excluded amide C-N pair, and
+        # v2 looked only at the middle pair. Rung 0 is tau = 0 and unchanged.
         "REST2-run1/remd1/build_state1.xml":
-            "c158fe1947f2503b3e025bd4b070c9a5fd5b81706ab6b9a9fe6ca48158d6b55f",
+            "29ca65acaa28039806c6a38d0e026d7a1ae94aa64eafce5b508c29920ff07ea6",
         "REST2-run1/remd2/build_state2.xml":
-            "e7bfc43a5f858e2389417eb1ec0fcb965dd872934665422ee146c3f65355fdb8",
+            "d04b378c1be0856e615d81531acd7e95ac8464f5d20b633fb16e3a5389a37354",
         "REST2-run1/remd3/build_state3.xml":
-            "c18ff9d18240b31d85f694736ffc23f85d20b1b164e5bb5c050488f3d6ac5184",
+            "eb63d25f48053a489fe2484d8c72850aa86a33e667b25c8315a0c2adf7759c10",
     },
     "explicit": {
         "REST2-run1/remd0/build_state0.xml":
@@ -369,7 +376,10 @@ RUNGS = {
     },
 }
 #: The `_protocol.py` a default four-state ladder materialises at 2 fs, before this setting.
-PROTOCOL_HELPER_BEFORE = "806d23669d38b89fa27af10b37250f5ee72e598ad124e71ec62723fa37a0bc91"
+#: REFRESHED for convention v3: diffed against 6cc67c8's text, the only change is the docstring
+#: line "omega left unscaled" becoming "amide omega, aromatic ring, double bond and improper
+#: torsions left unscaled".
+PROTOCOL_HELPER_BEFORE = "e764ac0f085c49108b6fef9c6daa8580b662078bacc6d93e0255a742cbe86041"
 
 
 @pytest.mark.parametrize("solvent", ["explicit", "implicit"])
@@ -736,7 +746,7 @@ def test_a_rungs_end_state_is_what_the_documented_procedure_gives(implicit_ladde
     root, run, _stdout = implicit_ladder
     solute = yaml.safe_load((run / "solute.yaml").read_text(encoding="utf-8"))
     atoms = list(range(int(solute["n_solute_atoms"])))
-    excluded = [tuple(bond) for bond in solute["rest2"]["omega_excluded_bonds"]]
+    excluded = [tuple(bond) for bond in solute["rest2"]["unscaled_central_bonds"]]
     record = json.loads((run / "per_tau_equilibration.json").read_text(encoding="utf-8"))
     rung = 2
     tau = record["states"][rung]["tau"]

@@ -213,8 +213,9 @@ def test_the_scaling_invariants_hold_over_the_corrected_system(trees, tau):
     from openmm import CustomGBForce, NonbondedForce, PeriodicTorsionForce
 
     from md_tools.openmm.peptide_map import map_from_sdf
-    from md_tools.openmm.system import classify_omega_bonds
-    from md_tools.rest2.scaler import build_scaled_system, scaling_for_tau
+    from md_tools.openmm.system import classify_unscaled_torsions
+    from md_tools.rest2.scaler import (build_scaled_system, is_improper, scaling_for_tau,
+                                       system_bond_graph)
 
     system = _system(trees["like"])
     solute = list(range(system.getNumParticles()))
@@ -228,13 +229,16 @@ def test_the_scaling_invariants_hold_over_the_corrected_system(trees, tau):
     # one non-standard residue, so the classifier reaches for the SDF's bond orders on the
     # strength of the residue name alone and lands on exactly the bonds `route="ligand"` used to
     # force. If that stops being true, the exclusion set and the peptide map below disagree.
-    classified = classify_omega_bonds(topology, solute, ligand_sdf=sdf)
+    classified = classify_unscaled_torsions(topology, solute, ligand_sdf=sdf)
     excluded = [tuple(sorted(int(a) for a in pair))
-                for pair in classified["omega_unscaled_bonds"]]
-    # The classifier and the map must name the same bonds; a disagreement would mean the
-    # exclusion and the chemistry describe different molecules.
-    assert {frozenset(p) for p in excluded} == {frozenset(link) for link in mapped.links}
-    assert not classified["omega_unclassified_candidates"]
+                for pair in classified["unscaled_central_bonds"]]
+    amides = {frozenset(c["bond"]) for c in classified["amide_detail"]["unscaled"]}
+    # The classifier's AMIDES and the map must name the same bonds; a disagreement would mean the
+    # exclusion and the chemistry describe different molecules. (Since convention v3 the unscaled
+    # central bonds also hold ring and double bonds, which the peptide map does not describe.)
+    assert amides == {frozenset(link) for link in mapped.links}
+    assert amides <= {frozenset(p) for p in excluded}
+    assert not classified["unclassified"]
 
     solute_solute, _solute_environment = scaling_for_tau(tau)
     scaled = build_scaled_system(system, solute, tau, excluded_bonds=excluded)
@@ -246,6 +250,7 @@ def test_the_scaling_invariants_hold_over_the_corrected_system(trees, tau):
     base_t, scaled_t = only(system, PeriodicTorsionForce), only(scaled, PeriodicTorsionForce)
     assert base_t.getNumTorsions() == scaled_t.getNumTorsions()
     excluded_sets = {frozenset(p) for p in excluded}
+    bonds = system_bond_graph(system)
     omega_terms = scaled_terms = 0
     for index in range(base_t.getNumTorsions()):
         i, j, k, l, periodicity, phase, magnitude = base_t.getTorsionParameters(index)
@@ -255,9 +260,9 @@ def test_the_scaling_invariants_hold_over_the_corrected_system(trees, tau):
         assert phase == phase2
         before = magnitude.value_in_unit(magnitude.unit)
         after = magnitude2.value_in_unit(magnitude2.unit)
-        if frozenset((j, k)) in excluded_sets:
+        if frozenset((j, k)) in excluded_sets or is_improper((i, j, k, l), bonds):
             omega_terms += 1
-            assert after == pytest.approx(before, rel=REL), "an omega torsion was scaled"
+            assert after == pytest.approx(before, rel=REL), "an unscaled torsion was scaled"
         else:
             scaled_terms += 1
             assert after == pytest.approx(before * solute_solute, rel=REL)

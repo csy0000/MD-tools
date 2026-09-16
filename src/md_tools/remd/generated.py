@@ -13,8 +13,8 @@ installed distribution, and the executor is called as a function.
 Three things have to be prepared before the executor runs, and all three are derived from the
 built system rather than carried in configuration that could go stale:
 
-  solute.yaml    which atoms are solute, and which amide omega bonds must NOT be scaled. Derived
-                 with the same `classify_omega_bonds` the builder uses, so the ladder scales
+  solute.yaml    which atoms are solute, and which central bonds' torsions must NOT be scaled.
+                 Derived with the same `unscaled_torsions` the builder uses, so the ladder scales
                  exactly what the build recorded.
   _protocol.py   one REST2Protocol describing the ladder.
   ladder.group   one group line per state, inputs only.
@@ -57,14 +57,13 @@ def write_solute_document(topology_path: Path, system_path: Path, out: Path, *,
 # directory was on `sys.path`, `remd/statistics.py` shadowed the standard library's
 # `statistics` for anything that imported it.
 
-    Derived, never configured. The omega classification decides which torsions keep their physical
+    Derived, never configured. The unscaled-torsion classification decides which torsions keep their physical
     barrier at the hot rungs; a stale hand-written list would change the Hamiltonian silently.
     """
     from openmm import XmlSerializer
     from openmm.app import PDBFile
 
     from ..openmm.yaml_io import write_yaml
-    from ..openmm.system import classify_omega_bonds
     from ..openmm.builders import _solute_document
     from ..md.stage import solute_atom_indices
 
@@ -85,7 +84,7 @@ def solute_document(topology, system, *, route: str = "peptide",
     writer above calls it too, so there is one derivation and the file always holds what was
     validated.
     """
-    from ..openmm.system import UnclassifiedOmegaError, omega_exclusions
+    from ..openmm.system import UnclassifiedTorsionError, unscaled_torsions
     from ..openmm.builders import _solute_document
     from ..md.stage import solute_atom_indices
 
@@ -93,10 +92,10 @@ def solute_document(topology, system, *, route: str = "peptide",
     # The SDF, for a residue with no residue evidence. This was a hard-coded `None`, which left a
     # SMILES-built solute's single `UNL`/custom residue with nothing to be classified from.
     try:
-        omega = omega_exclusions(topology, indices, ligand_sdf=ligand_sdf)
-    except UnclassifiedOmegaError as refusal:
+        unscaled = unscaled_torsions(topology, indices, ligand_sdf=ligand_sdf)
+    except UnclassifiedTorsionError as refusal:
         raise SystemExit(str(refusal)) from None
-    return _solute_document(topology, indices, omega, route=route, system=system)
+    return _solute_document(topology, indices, unscaled, route=route, system=system)
 
 
 PROTOCOL_TEMPLATE = '''#!/usr/bin/env python
@@ -107,7 +106,8 @@ temperature and differs only by Hamiltonian: this is Hamiltonian scaling, not te
 and an exchange never rescales velocities.
 
     tau ladder : {ladder}
-    (1-tau)^2 on solute-solute terms, (1-tau) on solute-environment terms, omega left unscaled
+    (1-tau)^2 on solute-solute terms, (1-tau) on solute-environment terms; amide omega,
+    aromatic ring, double bond and improper torsions left unscaled
 """
 from md_tools.remd import REST2Protocol
 
@@ -353,7 +353,7 @@ def replica_parser(description: str = "one coordinated replica-exchange ladder")
                         help="run every replica on the OpenMM CPU platform, overriding "
                              "machine.openmm.platform for this invocation")
     parser.add_argument("--route", default="peptide", choices=("peptide", "ligand"),
-                        help="how the omega classifier reads the solute")
+                        help="how the unscaled-torsion classifier reads the solute")
     parser.add_argument("--device", default=None, metavar="N",
                         help="CUDA device index for THIS rank. An execution placement, never a "
                              "platform choice. Under MPI the device is normally chosen by "

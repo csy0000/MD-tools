@@ -28,7 +28,7 @@ from typing import Any, Iterable, Sequence
 
 from .identity import (HamiltonianMismatch, canonical_system_xml, force_summary, identity_record,
                        require_same_hamiltonian, system_fingerprint)
-from .scaler import (OMEGA_DETECTOR_VERSION, REST2_IMPLEMENTATION, TauSwitcher,
+from .scaler import (UNSCALED_TORSION_DETECTOR_VERSION, REST2_IMPLEMENTATION, TauSwitcher,
                      UnclassifiedForceError,
                      audit_force_classes, build_scaled_system, clone_system, linear_tau_ladder,
                      require_compatible_implementation, scaling_for_tau, torsion_exclusion_report)
@@ -42,7 +42,7 @@ __all__ = [
     "TauSwitcher", "build_scaled_system", "scaling_for_tau", "linear_tau_ladder",
     "audit_force_classes", "UnclassifiedForceError", "torsion_exclusion_report",
     "clone_system", "REST2_IMPLEMENTATION", "require_compatible_implementation",
-    "OMEGA_DETECTOR_VERSION",
+    "UNSCALED_TORSION_DETECTOR_VERSION",
     "identity_record", "system_fingerprint", "canonical_system_xml", "force_summary",
     "require_same_hamiltonian", "HamiltonianMismatch",
 ]

@@ -13,7 +13,10 @@ The convention, in tau (`a = 1 - tau`):
 
     (1 - tau)^2   solute-solute nonbonded and 1-4, eligible solute torsions, solute CMAP
     (1 - tau)     solute-environment nonbonded, the whole generalised-Born energy
-    unscaled      bonds, angles, ordinary amide omega torsions
+    unscaled      bonds, angles, and the UNSCALED TORSIONS: every proper torsion across an unscaled
+                  central bond (ordinary amide omega, aromatic ring bond, other double bond --
+                  which bonds those are is decided by `md_tools.openmm.system.unscaled_torsions`),
+                  and every solute improper
 
 Charges scale by (1 - tau) and epsilons by (1 - tau)^2, which gives exactly that split through the
 Lorentz-Berthelot combining rule without a custom force.
@@ -29,8 +32,8 @@ from openmm import CMAPTorsionForce, CustomGBForce, NonbondedForce, PeriodicTors
 #: state coordinate. There is deliberately no second variable: a derived quantity that is also
 #: stored is a second thing to keep consistent, and the one that drifts is never the one you check.
 REST2_IMPLEMENTATION = {
-    "name": "rest2-no-bond-angle-omega",
-    "version": 2,
+    "name": "rest2-unscaled-torsions",
+    "version": 3,
     "state_coordinate": "tau",
     "solute_solute_nonbonded_scale": "(1-tau)^2",
     "solute_environment_nonbonded_scale": "1-tau",
@@ -38,7 +41,11 @@ REST2_IMPLEMENTATION = {
     "eligible_solute_torsion_scale": "(1-tau)^2",
     "bonds": "unscaled",
     "angles": "unscaled",
-    "ordinary_amide_omega": "unscaled",
+    # v2 left only the ordinary amide omega unscaled. v3 is the user's decision of 2026-09-16: a hot
+    # state that lets a ring pucker, a double bond twist or a planar centre pyramidalise samples
+    # geometries the physical state never visits, exactly as an isomerising amide does.
+    "unscaled_torsions": ["ordinary amide omega", "aromatic ring bonds", "other double bonds",
+                          "impropers"],
 }
 
 
@@ -111,20 +118,94 @@ def _scale_nonbonded(force, solute, solute_solute, solute_environment, targets=N
                                          sigma, epsilon * solute_environment)
 
 
-def _scale_torsions(force, solute, solute_solute, excluded_bonds):
+def system_bond_graph(system):
+    """Every bonded pair in the System: `HarmonicBondForce` terms plus constraints, as frozensets.
+
+    Constraints are included because a constrained bond (HBonds) is typically absent from the bond
+    force. Water's H-H constraint joins two hydrogens that are not chemically bonded; that cannot
+    matter here, because only wholly-solute torsions are ever scaled and water is never solute.
+    """
+    from openmm import HarmonicBondForce
+
+    bonds = set()
+    for index in range(system.getNumForces()):
+        force = system.getForce(index)
+        if isinstance(force, HarmonicBondForce):
+            for term in range(force.getNumBonds()):
+                a, b, _length, _k = force.getBondParameters(term)
+                bonds.add(frozenset((int(a), int(b))))
+    for term in range(system.getNumConstraints()):
+        a, b, _distance = system.getConstraintParameters(term)
+        bonds.add(frozenset((int(a), int(b))))
+    return bonds
+
+
+def torsion_kind(atoms, bonds):
+    """"proper", "improper", or None when the bond graph says neither.
+
+    Proper: the bonded chain i-j-k-l. Improper: one of the four atoms is bonded to the other
+    three. Decided from the bond graph, never from atom order -- Amber writes an improper's central
+    atom third, SMIRNOFF second, and a rule keyed on position would get one of them wrong.
+
+    None is not "improper by default". A System whose bond force is incomplete would otherwise make
+    every proper torsion look improper and leave it unscaled with nothing saying so.
+    """
+    i, j, k, l = (int(a) for a in atoms)
+    if (frozenset((i, j)) in bonds and frozenset((j, k)) in bonds
+            and frozenset((k, l)) in bonds):
+        return "proper"
+    quartet = (i, j, k, l)
+    for centre in quartet:
+        others = [a for a in quartet if a != centre]
+        if len(others) == 3 and all(frozenset((centre, other)) in bonds for other in others):
+            return "improper"
+    return None
+
+
+def is_improper(atoms, bonds):
+    """An improper torsion: one atom bonded to the other three. See `torsion_kind`."""
+    return torsion_kind(atoms, bonds) == "improper"
+
+
+def torsion_is_scaled(atoms, solute, unscaled_bonds, bonds, unscaled_impropers=True):
+    """THE rule for one PeriodicTorsionForce term. Every scaler and every report asks this.
+
+    Scaled iff all four atoms are solute, its central bond is not an unscaled central bond, and --
+    under `unscaled_impropers` -- it is not an improper.
+    """
+    i, j, k, l = (int(a) for a in atoms)
+    if not (i in solute and j in solute and k in solute and l in solute):
+        return False
+    if frozenset((j, k)) in unscaled_bonds:
+        return False
+    if unscaled_impropers:
+        kind = torsion_kind((i, j, k, l), bonds)
+        if kind is None:
+            raise ValueError(
+                f"torsion {i}-{j}-{k}-{l} is neither a bonded chain nor centred on one atom "
+                f"bonded to the other three, according to the System's bonds and constraints. "
+                f"Whether it is an improper -- and so whether it stays unscaled -- cannot be "
+                f"decided; refusing rather than guessing. Is a bond force missing?")
+        if kind == "improper":
+            return False
+    return True
+
+
+def _scale_torsions(force, solute, solute_solute, excluded_bonds, bonds, unscaled_impropers=True):
     for index in range(force.getNumTorsions()):
         i, j, k, l, periodicity, phase, k_value = force.getTorsionParameters(index)
-        if all(a in solute for a in (i, j, k, l)) and frozenset((int(j), int(k))) not in excluded_bonds:
+        if torsion_is_scaled((i, j, k, l), solute, excluded_bonds, bonds, unscaled_impropers):
             force.setTorsionParameters(index, i, j, k, l, periodicity, phase,
                                        k_value * solute_solute)
 
 
-#: Bumped when the omega classification RULES change, not when their inputs do. A record carrying
-#: this version says which algorithm decided what, so a stored exclusion can be re-derived.
-OMEGA_DETECTOR_VERSION = 1
+#: Bumped when the unscaled-torsion classification RULES change, not when their inputs do. A record
+#: carrying this version says which algorithm decided what, so a stored exclusion can be re-derived.
+#: 1: ordinary amide omega. 2: plus aromatic ring bonds, other double bonds and impropers.
+UNSCALED_TORSION_DETECTOR_VERSION = 2
 
 
-def torsion_exclusion_report(system, solute, excluded_bonds):
+def torsion_exclusion_report(system, solute, excluded_bonds, unscaled_impropers=True):
     """Which PeriodicTorsionForce torsions each excluded central bond actually protects.
 
     The stored exclusion is a pair of ATOM indices, but what it does is leave a set of TORSION
@@ -139,7 +220,9 @@ def torsion_exclusion_report(system, solute, excluded_bonds):
     """
     excluded = {frozenset((int(a), int(b))) for a, b in excluded_bonds}
     solute = set(int(i) for i in solute)
+    bonds = system_bond_graph(system)
     report = {tuple(sorted(bond)): [] for bond in excluded}
+    impropers = []
     scaled = 0
     for index in range(system.getNumForces()):
         force = system.getForce(index)
@@ -152,14 +235,20 @@ def torsion_exclusion_report(system, solute, excluded_bonds):
             central = frozenset((int(j), int(k)))
             if central in excluded:
                 report[tuple(sorted(central))].append(int(torsion))
+            elif not torsion_is_scaled((i, j, k, l), solute, excluded, bonds,
+                                       unscaled_impropers):
+                impropers.append(int(torsion))
             else:
                 scaled += 1
     return {
-        "detector_version": OMEGA_DETECTOR_VERSION,
+        "detector_version": UNSCALED_TORSION_DETECTOR_VERSION,
         "excluded_central_bonds": [list(bond) for bond in sorted(report)],
         "excluded_torsion_indices": {f"{a}-{b}": indices for (a, b), indices in sorted(
             report.items())},
         "n_excluded_torsions": sum(len(v) for v in report.values()),
+        "unscaled_impropers": bool(unscaled_impropers),
+        "unscaled_improper_indices": impropers,
+        "n_unscaled_impropers": len(impropers),
         "n_scaled_solute_torsions": scaled,
     }
 
@@ -351,7 +440,7 @@ def audit_force_classes(system, where="tau scaling"):
 
 
 def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=(),
-                        prepare_for_switching=False):
+                        prepare_for_switching=False, unscaled_impropers=True):
     """A copy of `base_system` with the solute Hamiltonian scaled for this rung.
 
     `prepare_for_switching` matters only at tau = 0, where s = 1 and the scaling arithmetic is a
@@ -371,12 +460,13 @@ def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=(),
         return system                              # the cold replica is the unmodified system
     solute = set(int(i) for i in solute_indices)
     excluded = {frozenset((int(a), int(b))) for a, b in excluded_bonds}
+    bonds = system_bond_graph(system)
     for index in range(system.getNumForces()):
         force = system.getForce(index)
         if isinstance(force, NonbondedForce):
             _scale_nonbonded(force, solute, solute_solute, solute_environment)
         elif isinstance(force, PeriodicTorsionForce):
-            _scale_torsions(force, solute, solute_solute, excluded)
+            _scale_torsions(force, solute, solute_solute, excluded, bonds, unscaled_impropers)
         elif isinstance(force, CMAPTorsionForce):
             _scale_cmap(force, solute, solute_solute)
         elif isinstance(force, CustomGBForce):

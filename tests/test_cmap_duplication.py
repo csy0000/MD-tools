@@ -150,12 +150,21 @@ def test_repeated_switching_neither_accumulates_copies_nor_compounds_scaling():
             f"tau={tau} must be applied to the unscaled energies, not composed on the previous")
 
 
-# --- the omega exclusion, recorded as torsions rather than only as a bond -----------------------
+# --- unscaled central bonds, recorded as torsions rather than only as a bond -----------------------
 
 def _torsion_system(torsions, n_atoms=8):
+    """Every torsion is given its bonded chain: a torsion the bonds do not explain is refused."""
     system = openmm.System()
     for _ in range(n_atoms):
         system.addParticle(12.0)
+    bonds = openmm.HarmonicBondForce()
+    seen = set()
+    for (i, j, k, l) in torsions:
+        for a, b in ((i, j), (j, k), (k, l)):
+            if a != b and frozenset((a, b)) not in seen:
+                seen.add(frozenset((a, b)))
+                bonds.addBond(a, b, 0.15, 1000.0)
+    system.addForce(bonds)
     force = openmm.PeriodicTorsionForce()
     for (i, j, k, l) in torsions:
         force.addTorsion(i, j, k, l, 1, 0.0, 10.0)
@@ -169,7 +178,7 @@ def test_the_report_names_every_torsion_an_excluded_bond_protects():
     system = _torsion_system([(0, 1, 2, 3), (1, 2, 3, 4), (2, 1, 2, 5), (0, 1, 6, 7)])
     report = scaling.torsion_exclusion_report(system, range(6), [(1, 2)])
 
-    assert report["detector_version"] == scaling.OMEGA_DETECTOR_VERSION
+    assert report["detector_version"] == scaling.UNSCALED_TORSION_DETECTOR_VERSION
     assert report["excluded_central_bonds"] == [[1, 2]]
     assert report["excluded_torsion_indices"] == {"1-2": [0, 2]}, (
         "both torsions about the excluded central bond, not just the first"
@@ -184,7 +193,8 @@ def test_the_report_uses_the_same_predicate_as_the_scaling():
     system = _torsion_system([(0, 1, 2, 3), (1, 2, 3, 4)])
     report = scaling.torsion_exclusion_report(system, range(6), [(1, 2)])
     scaled = scaling.build_scaled_system(system, range(6), 0.5, excluded_bonds=[(1, 2)])
-    force = [scaled.getForce(i) for i in range(scaled.getNumForces())][0]
+    force = next(scaled.getForce(i) for i in range(scaled.getNumForces())
+                 if isinstance(scaled.getForce(i), openmm.PeriodicTorsionForce))
 
     protected = report["excluded_torsion_indices"]["1-2"]
     for index in range(force.getNumTorsions()):

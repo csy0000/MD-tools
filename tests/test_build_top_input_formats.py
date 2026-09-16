@@ -211,7 +211,7 @@ def test_every_ligand_build_writes_built_sdf_beside_the_system(solvent, suffix, 
     explicit route and into `staging/structure` on the implicit one, while `build/top.py` copied
     `built.sdf` out of the latter -- so an explicit-solvent ligand build emitted no `built.sdf` at
     all. Nothing caught it because every assertion about that file ran under GBn2. Without it,
-    `classify_omega_bonds`'s ligand route has nothing to perceive amides from, `map_from_sdf` has
+    `classify_unscaled_torsions`'s ligand route has nothing to perceive amides from, `map_from_sdf` has
     no input, and `preflight._ligand_sdf_beside` finds nothing beside the System.
     """
     structure = _input(tmp_path, suffix)

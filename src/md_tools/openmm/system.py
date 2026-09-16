@@ -570,6 +570,36 @@ PROTEIN_RESIDUES = frozenset({
     "ACE", "NME", "NHE", "NMA",
 })
 
+_BENZENE = (("CG", "CD1"), ("CD1", "CE1"), ("CE1", "CZ"), ("CZ", "CE2"), ("CE2", "CD2"),
+            ("CD2", "CG"))
+_IMIDAZOLE = (("CG", "ND1"), ("ND1", "CE1"), ("CE1", "NE2"), ("NE2", "CD2"), ("CD2", "CG"))
+
+#: Which bonds of a standard protein residue carry UNSCALED torsions, by class, by atom name.
+#:
+#: A topology has no bond orders and OpenMM's `residues.xml` records none, so for a protein this is
+#: the evidence: the aromatic rings of PHE, TYR, TRP and HIS (every protonation name), and ARG's
+#: guanidinium, whose partial double bonds the user decided count as double bonds (2026-09-16).
+#: The backbone amide is not here -- `_amide_candidates` finds it structurally, with the
+#: proline-like exception. Every pair is checked against `residues.xml` by a test, so an atom name
+#: typed wrong fails the suite instead of exempting nothing.
+PROTEIN_UNSCALED_BONDS = {
+    "PHE": {"aromatic_ring": _BENZENE},
+    "TYR": {"aromatic_ring": _BENZENE},
+    "TRP": {"aromatic_ring": (("CG", "CD1"), ("CD1", "NE1"), ("NE1", "CE2"), ("CE2", "CD2"),
+                              ("CD2", "CG"), ("CD2", "CE3"), ("CE3", "CZ3"), ("CZ3", "CH2"),
+                              ("CH2", "CZ2"), ("CZ2", "CE2"))},
+    "HIS": {"aromatic_ring": _IMIDAZOLE},
+    "HID": {"aromatic_ring": _IMIDAZOLE},
+    "HIE": {"aromatic_ring": _IMIDAZOLE},
+    "HIP": {"aromatic_ring": _IMIDAZOLE},
+    "ARG": {"double_bond": (("NE", "CZ"), ("CZ", "NH1"), ("CZ", "NH2"))},
+}
+
+#: The classes of central bond whose torsions stay unscaled, in the order they are decided and
+#: reported. Impropers are the fourth class and have no central bond.
+UNSCALED_BOND_CLASSES = ("amide_omega", "aromatic_ring", "double_bond")
+
+
 
 def resolve_route(cfg: dict, topology=None, *, input_route: Optional[str] = None) -> str:
     """Decide the force-field route: ``peptide`` (ff19SB) or ``ligand`` (SMIRNOFF/Sage).
@@ -873,12 +903,28 @@ def _amide_candidates(topology, solute: set[int]) -> list[dict]:
     return out
 
 
-def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
-                         ligand_sdf: Optional[Path] = None,
-                         residue_sdfs: Optional[dict] = None,
-                         proline_like_residues: Iterable[str] = ("PRO",),
-                         max_proline_ring_size: int = 7) -> dict:
-    """Split the solute's amide C-N bonds into REST2-unscaled, proline-like-scaled, unclassified.
+def classify_unscaled_torsions(topology, solute_atoms: Iterable[int], *,
+                               ligand_sdf: Optional[Path] = None,
+                               residue_sdfs: Optional[dict] = None,
+                               proline_like_residues: Iterable[str] = ("PRO",),
+                               max_proline_ring_size: int = 7,
+                               unscaled_impropers: bool = True) -> dict:
+    """Which of the solute's torsions REST2 leaves unscaled, with the evidence for each.
+
+    Four classes (the user's decision of 2026-09-16; docs/amber-like-fix/REST2-scaler.md §10):
+
+    * **ordinary amide omega** -- decided per amide candidate, below, with the proline-like
+      exception;
+    * **aromatic ring bonds** and **other double bonds** -- a protein residue from
+      `PROTEIN_UNSCALED_BONDS`, anything else from the SDF's bond orders. Only a bond whose two atoms
+      both have another neighbour is listed: a terminal C=O has no torsion across it;
+    * **impropers** -- no central bond, so not listed here; `unscaled_impropers` is carried through
+      to the scaler, which finds them from the System's bond graph.
+
+    A non-standard residue with a possible central bond and NO bond-order evidence is unclassified
+    as a whole: its ring and double bonds cannot be named from a topology, amide or not.
+
+    THE AMIDE RULE, unchanged from the omega classifier this replaces:
 
     REST2 here is *omega-selective*: an ORDINARY amide omega torsion is left unscaled, because the
     REMD ladder leaves it unscaled and a hot rung that isomerises cis/trans samples states the
@@ -923,10 +969,10 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
     N-methylated amides are ordinary amides under both routes: an N-methyl nitrogen is neither
     proline-like nor ring-locked, and those bonds isomerise readily, so they must stay unscaled.
 
-    Returns a dict with ``omega_unscaled_bonds``, ``omega_proline_like_scaled_bonds``,
-    ``omega_unclassified_candidates`` and ``omega_detection_method``.  **A non-empty unclassified
-    list must block production** -- it means a candidate was found that neither rule could name, and
-    guessing would silently change the Hamiltonian.
+    Returns ``unscaled_central_bonds`` (every class), ``central_bonds`` (each with its class,
+    residue and evidence), ``proline_like_scaled_bonds``, ``unclassified``, ``unscaled_impropers``,
+    ``detection_method``, ``detector_version`` and ``amide_detail``. **A non-empty unclassified list
+    must block production**; `unscaled_torsions` is the entry point that enforces it.
     """
     if ligand_sdf is not None and residue_sdfs is not None:
         raise ValueError(
@@ -958,13 +1004,14 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
     ring_info, mapping_error = None, None
     if non_standard and ligand_sdf is not None and per_name is None:
         try:
-            ring_info = _ligand_ring_nitrogens(ligand_sdf, topology, non_standard,
-                                               max_proline_ring_size,
-                                               describes=sorted(non_standard_names))
+            ring_info = _sdf_bond_evidence(ligand_sdf, topology, non_standard,
+                                           max_proline_ring_size,
+                                           describes=sorted(non_standard_names))
         except ValueError as refusal:
             mapping_error = str(refusal)
 
-    method = ("omega evidence chosen per candidate: residue-aware against PROTEIN_RESIDUES, "
+    method = ("unscaled torsions: amide omega evidence chosen per candidate: residue-aware "
+              "against PROTEIN_RESIDUES, "
               f"proline-like names {sorted(pro_names)} applied to the residue containing the "
               "amide NITROGEN")
     if non_standard:
@@ -986,7 +1033,7 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
             residue = next(r for r in topology.residues() if r.index == residue_index)
             atoms = {a.index for a in residue.atoms() if a.index in solute}
             try:
-                instance_info[residue_index] = (_ligand_ring_nitrogens(
+                instance_info[residue_index] = (_sdf_bond_evidence(
                     per_name[name], topology, atoms, max_proline_ring_size,
                     describes=[f"{residue.name}{residue_index}"]), None)
             except ValueError as refusal:
@@ -1048,60 +1095,183 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
                                 ring_sizes=info["ring_sizes"].get(cand["nitrogen"], [])))
         else:
             unscaled.append(cand)
+
+    # --- aromatic ring bonds and other double bonds ------------------------------------------
+    neighbours: dict[int, set] = {}
+    for bond in topology.bonds():
+        neighbours.setdefault(bond.atom1.index, set()).add(bond.atom2.index)
+        neighbours.setdefault(bond.atom2.index, set()).add(bond.atom1.index)
+
+    def _central(a: int, b: int) -> bool:
+        """A torsion can run across a-b only if both ends have another neighbour."""
+        return len(neighbours.get(a, ())) >= 2 and len(neighbours.get(b, ())) >= 2
+
+    amide_bonds = {tuple(sorted(c["bond"])) for c in unscaled + proline}
+    central: list[dict] = [{"bond": sorted(c["bond"]), "class": "amide_omega",
+                            "residue": c["nitrogen_residue"],
+                            "residue_index": c["nitrogen_residue_index"],
+                            "evidence": ("residue name" if c["nitrogen_residue"].upper()
+                                         in PROTEIN_RESIDUES else "SDF bond orders")}
+                           for c in unscaled]
+    seen = {tuple(entry["bond"]) for entry in central} | amide_bonds
+
+    def _add(a: int, b: int, kind: str, residue, evidence: str) -> None:
+        pair = tuple(sorted((int(a), int(b))))
+        if pair in seen or not _central(*pair):
+            return
+        seen.add(pair)
+        central.append({"bond": list(pair), "class": kind, "residue": residue.name,
+                        "residue_index": int(residue.index), "evidence": evidence})
+
+    for residue in topology.residues():
+        in_solute = [a for a in residue.atoms() if a.index in solute]
+        if not in_solute:
+            continue
+        # By NAME only for the protein table, where names are unique within a residue. A small
+        # molecule's atoms are often named after their element, so keying them by name would
+        # collapse every carbon into one.
+        atoms = {a.name: a.index for a in in_solute}
+        name = residue.name.upper()
+        if name in PROTEIN_UNSCALED_BONDS:
+            for kind, pairs in PROTEIN_UNSCALED_BONDS[name].items():
+                for x, y in pairs:
+                    if x in atoms and y in atoms:
+                        _add(atoms[x], atoms[y], kind, residue, "PROTEIN_UNSCALED_BONDS")
+            continue
+        if name in PROTEIN_RESIDUES or name in pro_names:
+            continue
+        members = {a.index for a in in_solute}
+        possible = any(other in members and _central(index, other)
+                       for index in members for other in neighbours.get(index, ()))
+        if not possible:
+            continue
+        if per_name is not None:
+            if name not in per_name:
+                info, error = None, (f"no SDF was given for it (residues with an SDF: "
+                                     f"{sorted(per_name) or 'none'})")
+            else:
+                info, error = _instance(residue.index, name)
+        elif ligand_sdf is None:
+            info, error = None, "no SDF was supplied"
+        else:
+            info, error = ring_info, mapping_error
+        if info is None:
+            unknown.append({
+                "bond": None, "carbon": None, "nitrogen": None,
+                "carbon_residue": residue.name, "nitrogen_residue": residue.name,
+                "carbon_residue_index": int(residue.index),
+                "nitrogen_residue_index": int(residue.index),
+                "residue": residue.name, "residue_index": int(residue.index),
+                "ambiguous": (
+                    f"residue '{residue.name}' (index {residue.index}) is not a known protein "
+                    f"residue, so which of its bonds are aromatic or double -- and so which "
+                    f"torsions stay unscaled -- can only be read from bond orders, and {error}. "
+                    f"`build-top` writes `built.sdf` beside the System for a .smi or .sdf input; "
+                    f"supply the SDF for this residue.")})
+            continue
+        evidence = "SDF bond orders"
+        for a, b in sorted(info["aromatic_bonds"]):
+            if a in members and b in members:
+                _add(a, b, "aromatic_ring", residue, evidence)
+        for a, b in sorted(info["double_bonds"]):
+            if a in members and b in members:
+                _add(a, b, "double_bond", residue, evidence)
+
+    central.sort(key=lambda e: (UNSCALED_BOND_CLASSES.index(e["class"]), e["bond"]))
+    method += ("; aromatic ring and double bonds from PROTEIN_UNSCALED_BONDS for protein residues "
+               "and from SDF bond orders otherwise; impropers "
+               + ("unscaled" if unscaled_impropers else "scaled"))
     return {
-        "omega_unscaled_bonds": [c["bond"] for c in unscaled],
-        "omega_proline_like_scaled_bonds": [c["bond"] for c in proline],
-        "omega_unclassified_candidates": unknown,
-        "omega_detection_method": method,
-        "omega_detail": {"unscaled": unscaled, "proline_like_scaled": proline},
+        "unscaled_central_bonds": sorted(tuple(e["bond"]) for e in central),
+        "central_bonds": central,
+        "proline_like_scaled_bonds": [c["bond"] for c in proline],
+        "unclassified": unknown,
+        "unscaled_impropers": bool(unscaled_impropers),
+        "detection_method": method,
+        "detector_version": 2,
+        "amide_detail": {"unscaled": unscaled, "proline_like_scaled": proline},
     }
 
 
-class UnclassifiedOmegaError(ValueError):
-    """An amide candidate neither rule could name, on a surface that is about to scale torsions."""
+def residues_needing_bond_orders(topology, solute_atoms: Iterable[int],
+                                 proline_like_residues: Iterable[str] = ("PRO",)) -> set[str]:
+    """Upper-cased names of non-standard solute residues whose unscaled torsions need bond orders.
 
-
-def omega_exclusions(topology, solute_atoms: Iterable[int], *,
-                     ligand_sdf: Optional[Path] = None,
-                     residue_sdfs: Optional[dict] = None,
-                     proline_like_residues: Iterable[str] = ("PRO",),
-                     max_proline_ring_size: int = 7) -> dict:
-    """:func:`classify_omega_bonds`, ENFORCED: the one entry point for anything that scales.
-
-    The classifier reports what it could not decide and leaves acting on it to the caller. Six
-    callers took ``omega_unscaled_bonds`` and only one of them read the unclassified list, so a
-    candidate nobody could name was left out of the exclusions and SCALED like any other solute
-    torsion -- the run completes, the acceptance ratios look plausible, and the ordinary-amide
-    invariant is broken with nothing saying so. A build record may still call the classifier
-    directly, because recording a candidate is not scaling it; every scaling surface calls this.
-
-    Returns the classification unchanged when every candidate was decided.
+    A residue needs them when it is neither a known protein residue nor a declared proline-like
+    name, and holds at least one bond across which a torsion can run (both atoms have another
+    neighbour): its aromatic ring and double bonds cannot be named from a topology. The same test
+    `classify_unscaled_torsions` applies, so a caller looking for SDFs asks for exactly the ones the
+    classifier will need.
     """
-    omega = classify_omega_bonds(topology, solute_atoms, ligand_sdf=ligand_sdf,
-                                 residue_sdfs=residue_sdfs,
-                                 proline_like_residues=proline_like_residues,
-                                 max_proline_ring_size=max_proline_ring_size)
-    unknown = omega["omega_unclassified_candidates"]
-    if not unknown:
-        return omega
+    solute = {int(i) for i in solute_atoms}
+    pro = {str(x).upper() for x in proline_like_residues}
+    neighbours: dict[int, set] = {}
+    for bond in topology.bonds():
+        neighbours.setdefault(bond.atom1.index, set()).add(bond.atom2.index)
+        neighbours.setdefault(bond.atom2.index, set()).add(bond.atom1.index)
+    names = set()
+    for residue in topology.residues():
+        name = residue.name.upper()
+        if name in PROTEIN_RESIDUES or name in pro:
+            continue
+        members = {a.index for a in residue.atoms() if a.index in solute}
+        if any(other in members and len(neighbours.get(index, ())) >= 2
+               and len(neighbours.get(other, ())) >= 2
+               for index in members for other in neighbours.get(index, ())):
+            names.add(name)
+    return names
+
+
+class UnclassifiedTorsionError(ValueError):
+    """Something whose torsions may or may not stay unscaled could not be classified."""
+
+
+def unscaled_torsions(topology, solute_atoms: Iterable[int], *,
+                      ligand_sdf: Optional[Path] = None,
+                      residue_sdfs: Optional[dict] = None,
+                      proline_like_residues: Iterable[str] = ("PRO",),
+                      max_proline_ring_size: int = 7,
+                      unscaled_impropers: bool = True,
+                      enforce: bool = True) -> dict:
+    """:func:`classify_unscaled_torsions`, ENFORCED: the one entry point for anything that scales.
+
+    The classifier reports what it could not decide and leaves acting on it to the caller. In 0.5.3
+    six callers took the unscaled bonds and only one read the unclassified list, so an amide nobody
+    could name was scaled like any other solute torsion, with nothing saying so. A build record may
+    still call the classifier directly, because recording is not scaling; every scaling surface
+    calls this. ``enforce=False`` returns the classification without raising, for a caller that
+    reports the refusal itself.
+    """
+    result = classify_unscaled_torsions(
+        topology, solute_atoms, ligand_sdf=ligand_sdf, residue_sdfs=residue_sdfs,
+        proline_like_residues=proline_like_residues, max_proline_ring_size=max_proline_ring_size,
+        unscaled_impropers=unscaled_impropers)
+    unknown = result["unclassified"]
+    if not unknown or not enforce:
+        return result
     shown = unknown[:5]
-    lines = [f"  bond {c['bond'][0]}-{c['bond'][1]}: "
-             f"{c.get('carbon_residue')}{c.get('carbon_residue_index')} C -> "
-             f"{c.get('nitrogen_residue')}{c.get('nitrogen_residue_index')} N: {c['ambiguous']}"
-             for c in shown]
+    lines = []
+    for c in shown:
+        if c.get("bond") is None:
+            lines.append(f"  residue {c['residue']}{c['residue_index']}: {c['ambiguous']}")
+        else:
+            lines.append(f"  bond {c['bond'][0]}-{c['bond'][1]}: "
+                         f"{c.get('carbon_residue')}{c.get('carbon_residue_index')} C -> "
+                         f"{c.get('nitrogen_residue')}{c.get('nitrogen_residue_index')} N: "
+                         f"{c['ambiguous']}")
     if len(unknown) > len(shown):
         lines.append(f"  ... and {len(unknown) - len(shown)} more")
-    raise UnclassifiedOmegaError(
-        f"{len(unknown)} amide omega candidate(s) could not be classified as ordinary (left "
-        f"unscaled) or proline-like (scaled). Scaling one that is ordinary lets a hot state "
-        f"isomerise a peptide bond the reference never does; exempting one that is not changes "
-        f"the Hamiltonian the other way. Neither is guessed, so nothing is scaled:\n"
-        + "\n".join(lines))
+    raise UnclassifiedTorsionError(
+        f"{len(unknown)} item(s) could not be classified, so which torsions stay unscaled is "
+        f"undecided. Scaling a torsion that should stay unscaled lets a hot state leave a planar "
+        f"geometry the physical state never leaves; exempting one that should not changes the "
+        f"Hamiltonian the other way. Neither is guessed, so nothing is scaled:\n" + "\n".join(lines))
 
 
-def _ligand_ring_nitrogens(ligand_sdf, topology, atoms_to_map: set[int], max_ring: int,
-                           *, describes: Optional[list] = None) -> dict:
-    """RDKit amide perception on the retained SDF, mapped onto OpenMM indices.
+def _sdf_bond_evidence(ligand_sdf, topology, atoms_to_map: set[int], max_ring: int,
+                       *, describes: Optional[list] = None) -> dict:
+    """RDKit perception on an SDF, mapped onto OpenMM indices: amides, ring nitrogens, aromatic and
+    double bonds.
 
     *atoms_to_map* is the set of topology indices the SDF is expected to describe -- the solute's
     NON-STANDARD residues, not the whole solute.  On a mixed protein+ligand system the SDF covers
@@ -1157,6 +1327,13 @@ def _ligand_ring_nitrogens(ligand_sdf, topology, atoms_to_map: set[int], max_rin
         )
 
     amide = Chem.MolFromSmarts("[CX3](=[OX1])[NX3]")
+    aromatic_bonds, double_bonds = set(), set()
+    for bond in mol.GetBonds():
+        pair = tuple(sorted((index_of[bond.GetBeginAtomIdx()], index_of[bond.GetEndAtomIdx()])))
+        if bond.GetIsAromatic():
+            aromatic_bonds.add(pair)
+        elif bond.GetBondType() == Chem.BondType.DOUBLE:
+            double_bonds.add(pair)
     amide_bonds, small_ring_n, ring_sizes = set(), set(), {}
     ri = mol.GetRingInfo()
     for c_i, _o_i, n_i in mol.GetSubstructMatches(amide):
@@ -1167,7 +1344,8 @@ def _ligand_ring_nitrogens(ligand_sdf, topology, atoms_to_map: set[int], max_rin
             if min(sizes) <= max_ring:
                 small_ring_n.add(index_of[n_i])
     return {"amide_bonds": amide_bonds, "small_ring_nitrogens": small_ring_n,
-            "ring_sizes": ring_sizes}
+            "ring_sizes": ring_sizes, "aromatic_bonds": aromatic_bonds,
+            "double_bonds": double_bonds}
 
 
 def omega_central_bonds(topology, solute_atoms: Iterable[int]) -> list[tuple[int, int]]:
@@ -1175,7 +1353,7 @@ def omega_central_bonds(topology, solute_atoms: Iterable[int]) -> list[tuple[int
 
     Kept so pre-2026-08-14 bundles can be re-derived.  It treats an X-PRO peptide bond as an
     ordinary omega and excludes it from scaling, which
-    :func:`classify_omega_bonds` deliberately does not.  New code must use that function.
+    :func:`classify_unscaled_torsions` deliberately does not.  New code must use that function.
     """
     solute = {int(i) for i in solute_atoms}
     return sorted({c["bond"] for c in _amide_candidates(topology, solute) if not c["ambiguous"]})
@@ -1418,21 +1596,21 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
         hmr = repartition_hydrogen_mass(system, pdb.topology, target_h_mass, scope)
 
     rcfg = cfg["rest2"]
-    if rcfg["omega_exclusion"]:
-        omega_info = classify_omega_bonds(
+    if rcfg["unscaled_torsions"]:
+        unscaled_info = classify_unscaled_torsions(
             pdb.topology, range(n_solute_atoms), ligand_sdf=ligand_sdf,
             proline_like_residues=rcfg["proline_like_residues"],
             max_proline_ring_size=int(rcfg["max_proline_ring_size"]),
         )
     else:
-        omega_info = {
-            "omega_unscaled_bonds": [], "omega_proline_like_scaled_bonds": [],
-            "omega_unclassified_candidates": [],
-            "omega_detection_method": "disabled (rest2.omega_exclusion = false): every torsion "
-                                      "is scaled, including ordinary amide omegas",
-            "omega_detail": {"unscaled": [], "proline_like_scaled": []},
+        unscaled_info = {
+            "unscaled_central_bonds": [], "central_bonds": [], "proline_like_scaled_bonds": [],
+            "unclassified": [], "unscaled_impropers": False,
+            "detection_method": "disabled (rest2.unscaled_torsions = false): every solute "
+                                "torsion is scaled, impropers and ordinary amide omegas included",
+            "detector_version": 2,
+            "amide_detail": {"unscaled": [], "proline_like_scaled": []},
         }
-    omega = [tuple(b) for b in omega_info["omega_unscaled_bonds"]]
 
     (out_dir / "system.xml").write_text(XmlSerializer.serialize(system), encoding="utf-8")
     info = {
@@ -1445,10 +1623,9 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
         "rigid_water": bool(bcfg["rigid_water"]),
         "nonbonded": nb_info,
         "hmr": hmr,
-        "omega_central_bonds": omega,          # back-compat alias for omega_unscaled_bonds
-        **{k: omega_info[k] for k in
-           ("omega_unscaled_bonds", "omega_proline_like_scaled_bonds",
-            "omega_unclassified_candidates", "omega_detection_method", "omega_detail")},
+        "unscaled_torsions": {k: unscaled_info[k] for k in
+                              ("unscaled_central_bonds", "central_bonds", "proline_like_scaled_bonds", "unclassified",
+         "unscaled_impropers", "detection_method", "detector_version", "amide_detail")},
         "forcefield": ff_info,
         "degrees_of_freedom": (
             3 * system.getNumParticles() - system.getNumConstraints()

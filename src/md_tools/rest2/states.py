@@ -54,7 +54,7 @@ def load_scaler_record(path: str | Path) -> dict[str, Any]:
         raise ScaledStateError(
             f"{path} is not a {RECORD_FORMAT} record (format: {found!r}). Rebuild the states with "
             f"`md-openmm build-top --rest2-scaler`.")
-    missing = [key for key in ("method", "schedule", "states", "source", "omega")
+    missing = [key for key in ("method", "schedule", "states", "source", "unscaled_torsions")
                if key not in record]
     if missing or not isinstance(record["states"], list) or not record["states"]:
         absent = missing or ["states"]

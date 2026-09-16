@@ -85,7 +85,7 @@ def _top_rung(project: Path, tau_max: float = 0.5):
     else:
         indices = list(range(int(document["n_solute_atoms"])))
     excluded = [tuple(int(a) for a in pair)
-                for pair in (document.get("rest2") or {}).get("omega_excluded_bonds", [])]
+                for pair in (document.get("rest2") or {}).get("unscaled_central_bonds", [])]
     _audit, scaled = check_scaling_plan(loaded, solute_indices=indices, excluded_bonds=excluded,
                                         tau=tau_max, where="fixture")
     return scaled, indices, excluded

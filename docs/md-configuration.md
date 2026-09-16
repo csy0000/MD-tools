@@ -318,7 +318,7 @@ Steps between collective-variable observations. Independent of the trajectory an
 
 ### `rest2`
 
-The REST2 ladder. Ignored when protocol is cMD. The Hamiltonian scaling itself -- bonds and angles unscaled, ordinary amide omega unscaled, eligible solute torsions and CMAP by (1-tau)^2, solute-solute nonbonded and 1-4 by (1-tau)^2, solute-environment by (1-tau), GB by (1-tau) -- is a property of the validated implementation and is not configurable here.
+The REST2 ladder. Ignored when protocol is cMD. The Hamiltonian scaling itself -- bonds and angles unscaled, amide omega, aromatic ring, double bond and improper torsions unscaled, eligible solute torsions and CMAP by (1-tau)^2, solute-solute nonbonded and 1-4 by (1-tau)^2, solute-environment by (1-tau), GB by (1-tau) -- is a property of the validated implementation and is not configurable here.
 
 #### `rest2.number_of_replicas`
 

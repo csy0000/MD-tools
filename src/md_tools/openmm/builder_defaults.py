@@ -64,7 +64,7 @@ DEFAULTS = {'run': {'name': None, 'root': None, 'seed': 20260814},
                   'hydrogen_mass_amu': None,
                   'hmr_scope': 'none',
                   'remove_cm_motion': True},
- 'rest2': {'omega_exclusion': True,
+ 'rest2': {'unscaled_torsions': True,
            'proline_like_residues': ['PRO'],
            'max_proline_ring_size': 7,
            'ladder': {'s_cold': 1.0, 's_hot': 0.25, 'n_rungs': 6, 'interp': 'sqrt'}}}

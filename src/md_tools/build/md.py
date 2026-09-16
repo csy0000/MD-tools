@@ -217,7 +217,8 @@ MD_SCHEMA = Schema(
                   doc="Report acceptance for each neighbouring pair. A single averaged acceptance "
                       "hides a ladder with one impassable gap."),
         ], doc="The REST2 ladder. Ignored when protocol is cMD. The Hamiltonian scaling itself -- "
-               "bonds and angles unscaled, ordinary amide omega unscaled, eligible solute torsions "
+               "bonds and angles unscaled, amide omega, aromatic ring, double bond and improper "
+               "torsions unscaled, eligible solute torsions "
                "and CMAP by (1-tau)^2, solute-solute nonbonded and 1-4 by (1-tau)^2, "
                "solute-environment by (1-tau), GB by (1-tau) -- is a property of the validated "
                "implementation and is not configurable here."),
@@ -1793,24 +1794,25 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
             + f"  Run `md-openmm build-top` into {dataset.build}/ first.")
 
     if resolved["protocol"] in ("REST2", "rREST2"):
-        # THE OMEGA CLASSIFICATION, also before anything is written, with the SAME evidence the
+        # THE UNSCALED-TORSION CLASSIFICATION, also before anything is written, with the SAME evidence the
         # run-time preflight uses: the `built.sdf` that `build-top` retains beside `built.xml`.
         # The rung writer below was called without it, so every amide of a `peptide-like` or
         # `ligand` solute arrived unclassified, was left out of the exclusions, and was SCALED in
         # the rung files a grouped ladder integrates -- while `build_states.log` still said
-        # "ordinary_amide_omega: unscaled". It enforces the same refusal itself; this is here so
+        # "ordinary_amide_omega: unscaled" (0.5.3). It enforces the same refusal itself; this is
+        # here so
         # the refusal arrives before `input/` and the run directory exist.
         from openmm.app import PDBFile
 
         from ..md.stage import solute_atom_indices
-        from ..openmm.system import UnclassifiedOmegaError, omega_exclusions
+        from ..openmm.system import UnclassifiedTorsionError, unscaled_torsions
         from ..run.preflight import _ligand_sdf_beside
 
         topology = PDBFile(str(dataset.built("pdb"))).topology
         try:
-            omega_exclusions(topology, solute_atom_indices(topology),
+            unscaled_torsions(topology, solute_atom_indices(topology),
                              ligand_sdf=_ligand_sdf_beside(dataset.built("xml")))
-        except UnclassifiedOmegaError as refusal:
+        except UnclassifiedTorsionError as refusal:
             raise ConfigError(f"{resolved['protocol']} rungs for {dataset.built('pdb')}: "
                               f"{refusal}") from None
 

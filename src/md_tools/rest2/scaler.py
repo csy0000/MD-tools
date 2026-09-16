@@ -36,7 +36,11 @@ from .hamiltonian import (  # noqa: F401
     clone_system,
     _scale_nonbonded,
     _scale_torsions,
-    OMEGA_DETECTOR_VERSION,
+    UNSCALED_TORSION_DETECTOR_VERSION,
+    system_bond_graph,
+    is_improper,
+    torsion_kind,
+    torsion_is_scaled,
     torsion_exclusion_report,
     cmap_map_roles,
     shared_cmap_originals,
@@ -63,6 +67,12 @@ HISTORICAL_REST2_IMPLEMENTATIONS = {
         "v1 scaled the complete generalised-Born energy by (1-tau)^2. v2 scales it by (1-tau), "
         "which is a different Hamiltonian: a v1 trajectory and a v2 trajectory do not sample the "
         "same implicit-solvent ensemble, so one cannot continue the other."),
+    ("rest2-no-bond-angle-omega", 2): (
+        "v2 left only the ordinary amide omega unscaled and scaled aromatic ring torsions, other "
+        "double-bond torsions and every solute improper by (1-tau)^2. rest2-unscaled-torsions v3 "
+        "leaves all of those unscaled, which is a different Hamiltonian at every tau > 0: a v2 "
+        "ladder and a v3 ladder do not sample the same hot ensembles, so one cannot continue the "
+        "other."),
 }
 
 
@@ -219,6 +229,7 @@ def reparameterise_for_global_switching(system, solute_indices, excluded_bonds=(
     """
     solute = {int(i) for i in solute_indices}
     excluded = {frozenset((int(a), int(b))) for a, b in excluded_bonds}
+    bonds = system_bond_graph(system)
 
     torsion_replacement = None
     for index in range(system.getNumForces()):
@@ -266,8 +277,7 @@ def reparameterise_for_global_switching(system, solute_indices, excluded_bonds=(
             unscaled.setForceGroup(force.getForceGroup())
             for torsion in range(force.getNumTorsions()):
                 i, j, k, l, periodicity, phase, height = force.getTorsionParameters(torsion)
-                if (all(int(a) in solute for a in (i, j, k, l))
-                        and frozenset((int(j), int(k))) not in excluded):
+                if torsion_is_scaled((i, j, k, l), solute, excluded, bonds):
                     scaled.addTorsion(i, j, k, l, [
                         float(periodicity), phase.value_in_unit(unit.radian),
                         height.value_in_unit(unit.kilojoule_per_mole)])
@@ -506,7 +516,8 @@ class TauSwitcher:
                 force.updateParametersInContext(context)
             elif isinstance(force, PeriodicTorsionForce):
                 _restore_torsions(force, reference)
-                _scale_torsions(force, self.solute, solute_solute, self.excluded)
+                _scale_torsions(force, self.solute, solute_solute, self.excluded,
+                                system_bond_graph(self.base))
                 force.updateParametersInContext(context)
             elif isinstance(force, CMAPTorsionForce):
                 duplicates = self._cmap_duplicates.get(index, {})

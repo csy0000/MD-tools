@@ -578,17 +578,17 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
         app.PDBFile.writeFile(pdb_file.topology, pdb_file.positions, handle, keepIds=True)
 
     # The same build record the explicit path writes, so everything downstream -- the bundle
-    # manifest, the REST2 bridge, omega exclusion -- reads one shape. `geometry` is null rather
+    # manifest, the REST2 bridge, the unscaled torsions -- reads one shape. `geometry` is null rather
     # than absent: "this System has no periodic box" is a fact worth recording, and a missing key
     # would be indistinguishable from a record that forgot to write it.
-    from .system import classify_omega_bonds, omega_central_bonds
+    from .system import classify_unscaled_torsions, omega_central_bonds
 
     topology = app.PDBFile(str(staging / "topology.pdb")).topology
     solute = list(range(system.getNumParticles()))
     # The ligand route needs the SDF: bond orders are not recoverable from a topology, and amide
     # detection depends on them. It is written by the same step that built the conformer.
     ligand_sdf = amber.get("ligand_sdf")
-    omega_info = classify_omega_bonds(
+    unscaled_info = classify_unscaled_torsions(
         topology, solute, ligand_sdf=(Path(ligand_sdf) if ligand_sdf else None))
     build_record = {
         "suffix": "system",
@@ -610,11 +610,12 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
         "hmr": info["hmr"],
         "constraints": str((cfg.get("system_build") or {}).get("constraints", "HBonds")),
         "rigid_water": False,
+        # The deprecated structural detector's list, kept under its historical name for bundles
+        # that predate the classifier. What REST2 actually leaves unscaled is the next key.
         "omega_central_bonds": omega_central_bonds(topology, solute),
-        **{k: omega_info[k] for k in
-           ("omega_unscaled_bonds", "omega_proline_like_scaled_bonds",
-            "omega_unclassified_candidates", "omega_detection_method", "omega_detail")
-           if k in omega_info},
+        "unscaled_torsions": {k: unscaled_info[k] for k in
+                              ("unscaled_central_bonds", "central_bonds", "proline_like_scaled_bonds", "unclassified",
+         "unscaled_impropers", "detection_method", "detector_version", "amide_detail")},
         "degrees_of_freedom": (3 * system.getNumParticles() - system.getNumConstraints() - 3),
         "implicit": info,
     }

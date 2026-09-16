@@ -106,7 +106,7 @@ def make_dataset_root(root: Path, *, solvent: str = "implicit") -> Path:
     keep their tleap dependency deliberately.
 
     It is nonetheless a genuine exercise of the rung path: ALA.pdb is ACE-ALA-NME, so
-    `classify_omega_bonds` finds two ordinary amide omega and protects the torsions around them
+    `classify_unscaled_torsions` finds two ordinary amide omega and protects the torsions around them
     rather than finding nothing to do.
     """
     from openmm import XmlSerializer, app

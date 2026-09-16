@@ -173,11 +173,11 @@ def _solute_indices(project):
 def _excluded_bonds(project):
     from openmm.app import PDBFile
 
-    from md_tools.openmm.system import classify_omega_bonds
+    from md_tools.openmm.system import classify_unscaled_torsions
 
     topology = PDBFile(str(Path(project) / "built.pdb")).topology
-    omega = classify_omega_bonds(topology, _solute_indices(project))
-    return [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
+    omega = classify_unscaled_torsions(topology, _solute_indices(project))
+    return [tuple(int(a) for a in bond) for bond in omega.get("unscaled_central_bonds", [])]
 
 
 @pytest.mark.slow

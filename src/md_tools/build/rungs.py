@@ -61,7 +61,7 @@ def write_rung_systems(run_layout, *, system_path, topology_path, taus,
     from openmm.app import PDBFile
 
     from ..md.stage import solute_atom_indices
-    from ..openmm.system import UnclassifiedOmegaError, omega_exclusions
+    from ..openmm.system import UnclassifiedTorsionError, unscaled_torsions
     from ..remd.protocol import build_rung_systems
     from ..rest2 import REST2_IMPLEMENTATION, scaling_for_tau, torsion_exclusion_report
 
@@ -73,7 +73,7 @@ def write_rung_systems(run_layout, *, system_path, topology_path, taus,
     base = XmlSerializer.deserialize(system_path.read_text(encoding="utf-8"))
     pdb = PDBFile(str(topology_path))
 
-    # EXACTLY the sequence the preflight uses (`preflight.py` solute -> omega -> scale), so the
+    # EXACTLY the sequence the preflight uses (`preflight.py` solute -> unscaled torsions -> scale), so the
     # rung written here is the rung that would have been built at run time. A second derivation
     # of "what is the solute" is two answers waiting to disagree, and the disagreement would be
     # invisible: both produce a plausible ladder and only the numbers differ.
@@ -83,12 +83,12 @@ def write_rung_systems(run_layout, *, system_path, topology_path, taus,
     # how the preflight and this writer came to disagree about the same ladder.
     #
     # ENFORCED, and this is the site where it matters most: these files ARE what a grouped ladder
-    # integrates. A candidate left out of `omega_unscaled_bonds` used to be scaled here silently.
+    # integrates. A candidate left out of the unscaled bonds used to be scaled here silently.
     try:
-        omega = omega_exclusions(pdb.topology, solute, ligand_sdf=ligand_sdf)
-    except UnclassifiedOmegaError as refusal:
+        unscaled = unscaled_torsions(pdb.topology, solute, ligand_sdf=ligand_sdf)
+    except UnclassifiedTorsionError as refusal:
         raise RungWriteError(str(refusal)) from None
-    excluded = [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
+    excluded = [tuple(int(a) for a in bond) for bond in unscaled["unscaled_central_bonds"]]
 
     systems, audit = build_rung_systems(base, solute, tuple(taus), excluded_bonds=excluded)
     if len(systems) != len(taus):
@@ -141,7 +141,7 @@ def write_rung_systems(run_layout, *, system_path, topology_path, taus,
         # The exclusion recorded as the TORSIONS it protected, not as bare atom pairs: a stored
         # pair needs a force field to mean anything, and re-deriving the mapping to check it uses
         # assumptions that may not match the ones used here.
-        "omega_exclusion": torsion_exclusion_report(base, solute, excluded),
+        "unscaled_torsions": torsion_exclusion_report(base, solute, excluded),
         "ladder": {"n_states": len(taus), "taus": taus,
                    "source": "remd.generated.tau_ladder (taken, not recomputed)"},
         "states": states,
@@ -162,12 +162,14 @@ def format_scaling_report(record: dict[str, Any]) -> str:
     lines.append(f"  solute-solute         {convention['solute_solute_nonbonded_scale']}")
     lines.append(f"  solute-environment    {convention['solute_environment_nonbonded_scale']}")
     lines.append(f"  eligible torsions     {convention['eligible_solute_torsion_scale']}")
-    lines.append(f"  left unscaled         bonds, angles, ordinary amide omega")
+    lines.append(f"  left unscaled         bonds, angles, amide omega, aromatic ring, double bond, "
+                 f"improper torsions")
     lines.append(f"  solute                {record['solute']['n_atoms']} atom(s)")
-    omega = record["omega_exclusion"]
-    lines.append(f"  omega exclusion       {omega['n_excluded_torsions']} torsion(s) protected "
-                 f"across {len(omega['excluded_central_bonds'])} bond(s); "
-                 f"{omega['n_scaled_solute_torsions']} solute torsion(s) scaled")
+    unscaled = record["unscaled_torsions"]
+    lines.append(f"  unscaled torsions     {unscaled['n_excluded_torsions']} term(s) across "
+                 f"{len(unscaled['excluded_central_bonds'])} bond(s), "
+                 f"{unscaled['n_unscaled_impropers']} improper(s); "
+                 f"{unscaled['n_scaled_solute_torsions']} solute torsion(s) scaled")
     lines.append("")
     lines.append("  state    tau    (1-tau)^2      1-tau   file")
     for state in record["states"]:
