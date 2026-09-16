@@ -875,6 +875,7 @@ def _amide_candidates(topology, solute: set[int]) -> list[dict]:
 
 def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
                          ligand_sdf: Optional[Path] = None,
+                         residue_sdfs: Optional[dict] = None,
                          proline_like_residues: Iterable[str] = ("PRO",),
                          max_proline_ring_size: int = 7) -> dict:
     """Split the solute's amide C-N bonds into REST2-unscaled, proline-like-scaled, unclassified.
@@ -910,6 +911,15 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
     single answer is right for both.  The SDF is mapped onto the NON-STANDARD residues only, which
     is what it actually describes.
 
+    WHERE THE BOND ORDERS COME FROM -- two forms, never both:
+
+    * ``ligand_sdf``: ONE SDF describing every non-standard solute residue together.  What
+      `build-top` writes for a `.smi`/`.sdf` input, where the molecule is one residue.
+    * ``residue_sdfs``: ``{residue name: SDF}``, each SDF mapped onto EACH INSTANCE of its residue
+      separately.  What a solute with several different non-standard residues needs, since no one
+      SDF describes them all.  A non-standard residue absent from the map has no evidence and its
+      candidates are unclassified, by name.
+
     N-methylated amides are ordinary amides under both routes: an N-methyl nitrogen is neither
     proline-like nor ring-locked, and those bonds isomerise readily, so they must stay unscaled.
 
@@ -918,9 +928,16 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
     list must block production** -- it means a candidate was found that neither rule could name, and
     guessing would silently change the Hamiltonian.
     """
+    if ligand_sdf is not None and residue_sdfs is not None:
+        raise ValueError(
+            "pass ligand_sdf (one SDF for every non-standard residue) OR residue_sdfs (one SDF per "
+            "residue name), not both: two sources of bond orders for one residue would have to "
+            "agree, and nothing here would check that they do")
     solute = {int(i) for i in solute_atoms}
     candidates = _amide_candidates(topology, solute)
     pro_names = {str(x).upper() for x in proline_like_residues}
+    per_name = ({str(k).upper(): Path(v) for k, v in residue_sdfs.items()}
+                if residue_sdfs is not None else None)
 
     # WHAT AN SDF WOULD HAVE TO DESCRIBE: every solute atom whose residue name is neither a known
     # protein residue nor a declared proline-like one.  Taken from the TOPOLOGY rather than from
@@ -939,7 +956,7 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
 
     # Mapped ONCE, and only when something actually needs it.  A pure peptide never opens a file.
     ring_info, mapping_error = None, None
-    if non_standard and ligand_sdf is not None:
+    if non_standard and ligand_sdf is not None and per_name is None:
         try:
             ring_info = _ligand_ring_nitrogens(ligand_sdf, topology, non_standard,
                                                max_proline_ring_size,
@@ -951,11 +968,30 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
               f"proline-like names {sorted(pro_names)} applied to the residue containing the "
               "amide NITROGEN")
     if non_standard:
-        source = (f"SDF {Path(ligand_sdf).name}" if ligand_sdf is not None
-                  else "no SDF supplied (refused)")
+        if per_name is not None:
+            source = "per-residue SDFs " + (", ".join(
+                f"{name}={per_name[name].name}" for name in sorted(per_name)) or "(none)")
+        else:
+            source = (f"SDF {Path(ligand_sdf).name}" if ligand_sdf is not None
+                      else "no SDF supplied (refused)")
         method += (f"; residues {sorted(non_standard_names)} from RDKit SMARTS "
                    f"[CX3](=[OX1])[NX3] over {source}, proline-like = amide N in a ring of "
                    f"<= {max_proline_ring_size} atoms")
+
+    # Per residue INSTANCE, when the evidence is per name: mapped lazily, once each.
+    instance_info: dict[int, tuple] = {}
+
+    def _instance(residue_index: int, name: str):
+        if residue_index not in instance_info:
+            residue = next(r for r in topology.residues() if r.index == residue_index)
+            atoms = {a.index for a in residue.atoms() if a.index in solute}
+            try:
+                instance_info[residue_index] = (_ligand_ring_nitrogens(
+                    per_name[name], topology, atoms, max_proline_ring_size,
+                    describes=[f"{residue.name}{residue_index}"]), None)
+            except ValueError as refusal:
+                instance_info[residue_index] = (None, str(refusal))
+        return instance_info[residue_index]
 
     unscaled, proline, unknown = [], [], []
     for cand in candidates:
@@ -974,26 +1010,42 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
         #    unrecognised residue is still never ASSUMED to be an ordinary amide: with no SDF there
         #    is no second opinion to take, and guessing would silently change the Hamiltonian of
         #    any protein carrying a modified residue.
-        if ligand_sdf is None:
+        if per_name is not None:
+            if residue_name not in per_name:
+                unknown.append(dict(cand, ambiguous=(
+                    f"nitrogen residue '{cand['nitrogen_residue']}' is not a known protein "
+                    f"residue, so this omega has to be read from bond orders -- and no SDF was "
+                    f"given for residue {cand['nitrogen_residue']}. Residues with an SDF: "
+                    f"{sorted(per_name) or 'none'}.")))
+                continue
+            info, error = _instance(cand["nitrogen_residue_index"], residue_name)
+            if info is None:
+                unknown.append(dict(cand, ambiguous=(
+                    f"nitrogen residue '{cand['nitrogen_residue']}' needs bond orders, and "
+                    f"{per_name[residue_name].name} could not be mapped onto it: {error}")))
+                continue
+        elif ligand_sdf is None:
             unknown.append(dict(cand, ambiguous=(
                 f"nitrogen residue '{cand['nitrogen_residue']}' is not a known protein residue, "
                 f"so this omega has to be read from the molecule's bond orders -- and no SDF was "
                 f"supplied. `build-top` retains one beside the System (`built.sdf`) for a .smi or "
                 f".sdf input and writes none for a peptide; supply that SDF beside the System.")))
             continue
-        if ring_info is None:
-            unknown.append(dict(cand, ambiguous=(
-                f"nitrogen residue '{cand['nitrogen_residue']}' needs bond orders, and the SDF "
-                f"could not be mapped onto residues {sorted(non_standard_names)}: "
-                f"{mapping_error}")))
-            continue
-        if cand["bond"] not in ring_info["amide_bonds"]:
+        else:
+            info = ring_info
+            if info is None:
+                unknown.append(dict(cand, ambiguous=(
+                    f"nitrogen residue '{cand['nitrogen_residue']}' needs bond orders, and the "
+                    f"SDF could not be mapped onto residues {sorted(non_standard_names)}: "
+                    f"{mapping_error}")))
+                continue
+        if cand["bond"] not in info["amide_bonds"]:
             unknown.append(dict(cand, ambiguous=(
                 "RDKit found no ordinary-amide match for this C-N bond in the SDF")))
             continue
-        if cand["nitrogen"] in ring_info["small_ring_nitrogens"]:
+        if cand["nitrogen"] in info["small_ring_nitrogens"]:
             proline.append(dict(cand,
-                                ring_sizes=ring_info["ring_sizes"].get(cand["nitrogen"], [])))
+                                ring_sizes=info["ring_sizes"].get(cand["nitrogen"], [])))
         else:
             unscaled.append(cand)
     return {
@@ -1010,7 +1062,10 @@ class UnclassifiedOmegaError(ValueError):
 
 
 def omega_exclusions(topology, solute_atoms: Iterable[int], *,
-                     ligand_sdf: Optional[Path] = None) -> dict:
+                     ligand_sdf: Optional[Path] = None,
+                     residue_sdfs: Optional[dict] = None,
+                     proline_like_residues: Iterable[str] = ("PRO",),
+                     max_proline_ring_size: int = 7) -> dict:
     """:func:`classify_omega_bonds`, ENFORCED: the one entry point for anything that scales.
 
     The classifier reports what it could not decide and leaves acting on it to the caller. Six
@@ -1022,7 +1077,10 @@ def omega_exclusions(topology, solute_atoms: Iterable[int], *,
 
     Returns the classification unchanged when every candidate was decided.
     """
-    omega = classify_omega_bonds(topology, solute_atoms, ligand_sdf=ligand_sdf)
+    omega = classify_omega_bonds(topology, solute_atoms, ligand_sdf=ligand_sdf,
+                                 residue_sdfs=residue_sdfs,
+                                 proline_like_residues=proline_like_residues,
+                                 max_proline_ring_size=max_proline_ring_size)
     unknown = omega["omega_unclassified_candidates"]
     if not unknown:
         return omega
