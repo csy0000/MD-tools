@@ -30,7 +30,14 @@ docs_dir: docs
 theme:
   name: material
   features:
-    - navigation.sections
+    # `indexes` lets a section's first entry BE that section's page, so "Methods" and "AIS" are
+    # landing pages rather than folders a reader has to click past. `expand` opens the tree so the
+    # nesting is visible at a glance instead of being discovered by clicking; `prune` keeps the
+    # rendered sidebar to the current subtree, which is what makes a deep tree usable rather than
+    # a wall.
+    - navigation.indexes
+    - navigation.expand
+    - navigation.prune
     - navigation.top
     - content.code.copy
     - toc.follow
@@ -86,32 +93,44 @@ markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
 
+# NESTED BY WHAT A READER IS DOING, not by where the file sits. The top level is the four
+# questions someone arrives with -- how do I install it, how do I run something, which method do I
+# want, and what justifies the defaults -- and each opens into the steps of that task. A section
+# whose first entry is a page (`navigation.indexes`) uses that page as its own landing, so
+# "Methods" is the method index rather than a bare folder that has to be clicked through.
 nav:
   - Home: index.md
   - Getting started:
       - Installing: install.md
       - Machine configuration: machine-configuration.md
   - Running a simulation:
-      - Building a system (build-top): build-top.md
-      - Running (md-run): md-run.md
-      - The run layout: run-layout.md
-      - Configuration reference: md-configuration.md
-      - Collective variables: collective_variables/README.md
-      - Data registration: data_register/README.md
+      - The commands:
+          - Building a system (build-top): build-top.md
+          - Running a stage or ladder (md-run): md-run.md
+      - What a run writes:
+          - The run layout: run-layout.md
+          - Collective variables: collective_variables/README.md
+      - Configuration:
+          - Every key, generated: md-configuration.md
   - Methods:
-      - Overview: openmm_methods/README.md
-      - cMD: openmm_methods/cMD/README.md
-      - REST2: openmm_methods/REST2/README.md
-      - rREST2: openmm_methods/rREST2/README.md
-      - AIS: openmm_methods/AIS/README.md
-      - AIS implementation: openmm_methods/AIS/AIS_implementation.md
-      - Umbrella sampling: openmm_methods/umbrella/README.md
+      - openmm_methods/README.md
+      - Equilibrium:
+          - cMD: openmm_methods/cMD/README.md
+          - Umbrella sampling: openmm_methods/umbrella/README.md
+      - Enhanced sampling:
+          - REST2: openmm_methods/REST2/README.md
+          - rREST2: openmm_methods/rREST2/README.md
+          - AIS:
+              - openmm_methods/AIS/README.md
+              - Implementation: openmm_methods/AIS/AIS_implementation.md
+  - Data:
+      - Registering a finished run: data_register/README.md
+      - The dataset contract: data-contract.md
   - Reference:
       - Scientific defaults: scientific-defaults.md
       - Support matrix: support-matrix.md
-      - The dataset contract: data-contract.md
-  - Releases:
-      - 0.5.3: release-notes/v0.5.3.md
-      - 0.5.2: release-notes/v0.5.2.md
-      - 0.5.1: release-notes/v0.5.1.md
-      - 0.5.0: release-notes/v0.5.0.md
+      - Releases:
+          - 0.5.3: release-notes/v0.5.3.md
+          - 0.5.2: release-notes/v0.5.2.md
+          - 0.5.1: release-notes/v0.5.1.md
+          - 0.5.0: release-notes/v0.5.0.md
