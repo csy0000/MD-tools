@@ -589,8 +589,7 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
     # detection depends on them. It is written by the same step that built the conformer.
     ligand_sdf = amber.get("ligand_sdf")
     omega_info = classify_omega_bonds(
-        topology, solute, route=("peptide" if route == "peptide" else "ligand"),
-        ligand_sdf=(Path(ligand_sdf) if ligand_sdf else None))
+        topology, solute, ligand_sdf=(Path(ligand_sdf) if ligand_sdf else None))
     build_record = {
         "suffix": "system",
         "route": route,

@@ -88,7 +88,7 @@ def solute_document(topology, system, *, route: str = "peptide",
     # unreachable from a ladder: it raises without one, and the peptide route refuses every
     # candidate of a SMILES-built solute because its single `UNL`/custom residue is not a known
     # protein residue. Between them a Sage-parameterised macrocycle could not be run at all.
-    omega = classify_omega_bonds(topology, indices, route=route, ligand_sdf=ligand_sdf)
+    omega = classify_omega_bonds(topology, indices, ligand_sdf=ligand_sdf)
     document = _solute_document(topology, indices, omega, route=route, system=system)
     ambiguous = (document.get("rest2") or {}).get("omega_ambiguous_candidates") or []
     if ambiguous:

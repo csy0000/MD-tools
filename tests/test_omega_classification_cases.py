@@ -92,10 +92,17 @@ def test_ace_ala_nme_leaves_both_backbone_omegas_unscaled():
         (b.index("ACE_C"), b.index("ALA_N")), (b.index("ALA_C"), b.index("NME_N"))}
 
 
-def test_the_capped_case_names_the_residue_aware_route():
+def test_the_capped_case_names_the_residue_aware_evidence():
+    """The method string must say WHICH evidence decided, and for a capped peptide that is the
+    residue name. It read `peptide/residue-aware` while a `route` argument existed; the choice is
+    per candidate now, so it names the residue set instead -- see
+    `test_omega_evidence_by_residue.py`."""
     result = _classify(_capped_alanine())
-    assert "peptide/residue-aware" in result["omega_detection_method"]
+    assert "residue-aware" in result["omega_detection_method"]
+    assert "PROTEIN_RESIDUES" in result["omega_detection_method"]
     assert "PRO" in result["omega_detection_method"]
+    # A pure peptide opens no SDF, so the method must not claim one was consulted.
+    assert "SMARTS" not in result["omega_detection_method"]
 
 
 # --- 2. X-PRO: the exception ---------------------------------------------------------------------

@@ -79,7 +79,10 @@ def write_rung_systems(run_layout, *, system_path, topology_path, taus,
     # of "what is the solute" is two answers waiting to disagree, and the disagreement would be
     # invisible: both produce a plausible ladder and only the numbers differ.
     solute = solute_atom_indices(pdb.topology)
-    omega = classify_omega_bonds(pdb.topology, solute, route=route, ligand_sdf=ligand_sdf)
+    # No `route`: the classifier decides per candidate from the residue holding the amide
+    # nitrogen, so the caller no longer has to know -- and can no longer get it wrong, which is
+    # how the preflight and this writer came to disagree about the same ladder.
+    omega = classify_omega_bonds(pdb.topology, solute, ligand_sdf=ligand_sdf)
     excluded = [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
 
     systems, audit = build_rung_systems(base, solute, tuple(taus), excluded_bonds=excluded)

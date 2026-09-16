@@ -478,7 +478,12 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
     # barostat: a ladder is NVT by contract and its rungs carry neither.
     loaded = load_inputs(found["topology"], found["system"])
     solute = solute_atom_indices(loaded.pdb.topology)
-    omega = classify_omega_bonds(loaded.pdb.topology, solute, route="peptide", ligand_sdf=None)
+    # A bundle must rebuild the rungs the run integrated, so it needs the same evidence the run
+    # used: the SDF beside the System, when `build-top` retained one.
+    from ..run.preflight import _ligand_sdf_beside
+
+    omega = classify_omega_bonds(loaded.pdb.topology, solute,
+                                 ligand_sdf=_ligand_sdf_beside(found["system"]))
     excluded = [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
     systems, audit = build_rung_systems(loaded.system, list(solute), tuple(taus),
                                         excluded_bonds=excluded, pressure_bar=None)

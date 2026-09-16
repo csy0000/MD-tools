@@ -176,8 +176,7 @@ def _excluded_bonds(project):
     from md_tools.openmm.system import classify_omega_bonds
 
     topology = PDBFile(str(Path(project) / "built.pdb")).topology
-    omega = classify_omega_bonds(topology, _solute_indices(project), route="peptide",
-                                 ligand_sdf=None)
+    omega = classify_omega_bonds(topology, _solute_indices(project))
     return [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
 
 

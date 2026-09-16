@@ -138,7 +138,7 @@ def test_the_written_rung_is_the_system_the_runtime_would_have_built(written):
     base = XmlSerializer.deserialize((BUILT / "built.xml").read_text(encoding="utf-8"))
     pdb = PDBFile(str(BUILT / "built.pdb"))
     solute = solute_atom_indices(pdb.topology)
-    omega = classify_omega_bonds(pdb.topology, solute, route="peptide", ligand_sdf=None)
+    omega = classify_omega_bonds(pdb.topology, solute)
     excluded = [tuple(int(a) for a in b) for b in omega.get("omega_unscaled_bonds", [])]
     expected, _audit = build_rung_systems(base, solute, tuple(taus), excluded_bonds=excluded)
 

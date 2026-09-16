@@ -61,12 +61,19 @@ class ScalingSelection:
     # -- deriving -------------------------------------------------------------------------------
 
     @classmethod
-    def derive(cls, topology, solute_atoms: Iterable[int]) -> "ScalingSelection":
-        """Use the validated classifier to decide the exclusions for this topology."""
+    def derive(cls, topology, solute_atoms: Iterable[int],
+               ligand_sdf=None) -> "ScalingSelection":
+        """Use the validated classifier to decide the exclusions for this topology.
+
+        *ligand_sdf* is the SDF `build-top` retains beside the System for a molecular input. It is
+        optional because a peptide has none and needs none: the classifier chooses its evidence
+        per candidate from the residue name, and only reaches for bond orders when a residue
+        cannot answer. Without it, a non-standard residue is refused rather than guessed.
+        """
         from ..openmm.system import classify_omega_bonds
 
         atoms = tuple(sorted({int(i) for i in solute_atoms}))
-        classified = classify_omega_bonds(topology, atoms)
+        classified = classify_omega_bonds(topology, atoms, ligand_sdf=ligand_sdf)
 
         # ONLY `omega_unscaled_bonds`. A proline-like peptide bond stays eligible for ordinary
         # scaling -- its nitrogen carries no amide hydrogen, so the cis/trans argument that

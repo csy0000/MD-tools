@@ -224,7 +224,11 @@ def test_the_scaling_invariants_hold_over_the_corrected_system(trees, tau):
     from openmm.app import PDBFile
 
     topology = PDBFile(str(trees["like"] / "built.pdb")).topology
-    classified = classify_omega_bonds(topology, solute, route="ligand", ligand_sdf=sdf)
+    # NO ROUTE. This is the end-to-end proof of the per-candidate rule: a peptide-like solute is
+    # one non-standard residue, so the classifier reaches for the SDF's bond orders on the
+    # strength of the residue name alone and lands on exactly the bonds `route="ligand"` used to
+    # force. If that stops being true, the exclusion set and the peptide map below disagree.
+    classified = classify_omega_bonds(topology, solute, ligand_sdf=sdf)
     excluded = [tuple(sorted(int(a) for a in pair))
                 for pair in classified["omega_unscaled_bonds"]]
     # The classifier and the map must name the same bonds; a disagreement would mean the

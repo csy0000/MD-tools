@@ -173,7 +173,7 @@ def recompute_at_frame(root: Path, run: Path, *, path_id: int, frame_index: int,
     pdb = PDBFile(str(root / "built.pdb"))
     base = XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8"))
     solute = solute_atom_indices(pdb.topology)
-    omega = classify_omega_bonds(pdb.topology, solute, route="peptide", ligand_sdf=None)
+    omega = classify_omega_bonds(pdb.topology, solute)
     excluded = [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
 
     switcher = TauSwitcher(base, solute, excluded)

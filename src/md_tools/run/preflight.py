@@ -803,7 +803,12 @@ def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,
                 f"{where} runs at tau={tau} but declares ensemble {stage.get('ensemble')}. A "
                 f"scaled run samples the fixed-volume ensemble of the ladder rung it sits at; a "
                 f"barostat would sample a different distribution.")
-        omega = classify_omega_bonds(loaded.pdb.topology, solute, route="peptide", ligand_sdf=None)
+        # The SDF `build-top` retained beside the System, when there is one. This read
+        # `route="peptide", ligand_sdf=None`, so a fixed-tau ligand stage was classified by
+        # residue name against a solute that has none, and refused -- while `build/rungs.py`,
+        # scaling the same Hamiltonian, passed the real route and succeeded.
+        omega = classify_omega_bonds(loaded.pdb.topology, solute,
+                                     ligand_sdf=_ligand_sdf_beside(loaded.system_path))
         excluded = [tuple(int(a) for a in bond)
                     for bond in omega.get("omega_unscaled_bonds", [])]
         _audit, system = check_scaling_plan(loaded, solute_indices=solute,
@@ -1751,7 +1756,8 @@ def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting
             raise PreflightError(f"{where}: {refusal}") from None
 
     solute = solute_atom_indices(loaded.pdb.topology)
-    omega = classify_omega_bonds(loaded.pdb.topology, solute, route="peptide", ligand_sdf=None)
+    omega = classify_omega_bonds(loaded.pdb.topology, solute,
+                                 ligand_sdf=_ligand_sdf_beside(loaded.system_path))
     excluded = tuple(tuple(int(a) for a in bond)
                      for bond in omega.get("omega_unscaled_bonds", []))
     audit, _scaled = check_scaling_plan(loaded, solute_indices=solute, excluded_bonds=excluded,

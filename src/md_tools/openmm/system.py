@@ -873,7 +873,7 @@ def _amide_candidates(topology, solute: set[int]) -> list[dict]:
     return out
 
 
-def classify_omega_bonds(topology, solute_atoms: Iterable[int], *, route: str = "peptide",
+def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
                          ligand_sdf: Optional[Path] = None,
                          proline_like_residues: Iterable[str] = ("PRO",),
                          max_proline_ring_size: int = 7) -> dict:
@@ -885,18 +885,30 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *, route: str = 
     normal scaling: its nitrogen is locked into a small ring, so the torsion is not the near-planar
     two-state coordinate the exclusion exists to protect.
 
-    Two routes, both auditable:
+    WHICH EVIDENCE IS USED IS DECIDED PER CANDIDATE, from the residue holding the amide nitrogen.
+    There is no ``route`` argument: there was, and four of its six call sites passed
+    ``route="peptide"`` unconditionally while two threaded the real one, so the rung WRITER and the
+    rung VALIDATOR disagreed about the same ladder and the refusing half ran.  A REST2 ladder over
+    paracetamol -- one ``UNL`` residue, its SDF one directory away -- was refused on CUDA because
+    the peptide route could not name a residue it was never meant to read.
 
-    * ``peptide`` -- residue-aware.  Proline-like character is read from the residue containing the
-      amide NITROGEN, against a configurable name set (``PRO`` by default).  An X-PRO peptide bond
-      is therefore *not* excluded.
-    * ``ligand`` -- bond-order aware, from the retained SDF, because a SMILES-built solute is one
-      ``UNL`` residue and has no residue evidence at all.  Ordinary amides are matched with
-      ``[CX3](=[OX1])[NX3]``; proline-like nitrogens with ``[NX3;R]`` restricted to rings of at most
-      *max_proline_ring_size* atoms.  **The ring-size bound is what makes this correct for
-      macrocycles**: every backbone nitrogen of a cyclic peptide is "in a ring", but a 15-30
-      membered macrocycle does not constrain the amide the way a pyrrolidine does, so an unbounded
-      ``;R`` test would wrongly free every macrocyclic omega for scaling.
+    1. **A declared proline-like name wins outright**, before any file is opened.  That is what
+       ``rest2.proline_like_residues`` is for: the human answer to a block.
+    2. **A known protein residue is read from the residue**, against ``PROTEIN_RESIDUES``.  An
+       X-PRO peptide bond is therefore *not* excluded.
+    3. **Anything else is read from the SDF's bond orders.**  Ordinary amides are matched with
+       ``[CX3](=[OX1])[NX3]``; proline-like nitrogens with a ring of at most
+       *max_proline_ring_size* atoms.  **The ring-size bound is what makes this correct for
+       macrocycles**: every backbone nitrogen of a cyclic peptide is "in a ring", but a 15-30
+       membered macrocycle does not constrain the amide the way a pyrrolidine does, so an unbounded
+       ``;R`` test would wrongly free every macrocyclic omega for scaling.
+    4. **With no SDF, it refuses.**  A protein carrying a modified residue has no SDF at all, and
+       "it looks like an amide" is precisely the guess that would silently change its Hamiltonian.
+
+    The rule is per candidate rather than per run because a mixed protein+ligand solute has both
+    kinds at once: the backbone omegas have residue evidence and the ligand's has none, and no
+    single answer is right for both.  The SDF is mapped onto the NON-STANDARD residues only, which
+    is what it actually describes.
 
     N-methylated amides are ordinary amides under both routes: an N-methyl nitrogen is neither
     proline-like nor ring-locked, and those bonds isomerise readily, so they must stay unscaled.
@@ -910,41 +922,81 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *, route: str = 
     candidates = _amide_candidates(topology, solute)
     pro_names = {str(x).upper() for x in proline_like_residues}
 
+    # WHAT AN SDF WOULD HAVE TO DESCRIBE: every solute atom whose residue name is neither a known
+    # protein residue nor a declared proline-like one.  Taken from the TOPOLOGY rather than from
+    # the candidates, so a non-standard residue that contributes no amide still counts as part of
+    # what the SDF must match -- otherwise a two-residue ligand whose amide sits in one half would
+    # be mapped against a fraction of itself and fail the bond-graph check for the wrong reason.
+    non_standard: set[int] = set()
+    non_standard_names: set[str] = set()
+    for residue in topology.residues():
+        if residue.name.upper() in PROTEIN_RESIDUES or residue.name.upper() in pro_names:
+            continue
+        indices = {a.index for a in residue.atoms() if a.index in solute}
+        if indices:
+            non_standard |= indices
+            non_standard_names.add(residue.name)
+
+    # Mapped ONCE, and only when something actually needs it.  A pure peptide never opens a file.
+    ring_info, mapping_error = None, None
+    if non_standard and ligand_sdf is not None:
+        try:
+            ring_info = _ligand_ring_nitrogens(ligand_sdf, topology, non_standard,
+                                               max_proline_ring_size,
+                                               describes=sorted(non_standard_names))
+        except ValueError as refusal:
+            mapping_error = str(refusal)
+
+    method = ("omega evidence chosen per candidate: residue-aware against PROTEIN_RESIDUES, "
+              f"proline-like names {sorted(pro_names)} applied to the residue containing the "
+              "amide NITROGEN")
+    if non_standard:
+        source = (f"SDF {Path(ligand_sdf).name}" if ligand_sdf is not None
+                  else "no SDF supplied (refused)")
+        method += (f"; residues {sorted(non_standard_names)} from RDKit SMARTS "
+                   f"[CX3](=[OX1])[NX3] over {source}, proline-like = amide N in a ring of "
+                   f"<= {max_proline_ring_size} atoms")
+
     unscaled, proline, unknown = [], [], []
-    if route == "ligand":
-        ring_info = _ligand_ring_nitrogens(ligand_sdf, topology, solute, max_proline_ring_size)
-        method = (f"ligand/RDKit SMARTS [CX3](=[OX1])[NX3]; proline-like = amide N in a ring of "
-                  f"<= {max_proline_ring_size} atoms; SDF {Path(ligand_sdf).name}")
-        for cand in candidates:
-            if cand["ambiguous"]:
-                unknown.append(cand); continue
-            if cand["bond"] not in ring_info["amide_bonds"]:
-                cand = dict(cand, ambiguous="RDKit found no ordinary-amide match for this C-N bond")
-                unknown.append(cand); continue
-            if cand["nitrogen"] in ring_info["small_ring_nitrogens"]:
-                cand = dict(cand, ring_sizes=ring_info["ring_sizes"].get(cand["nitrogen"], []))
-                proline.append(cand)
-            else:
-                unscaled.append(cand)
-    else:
-        method = (f"peptide/residue-aware; proline-like residue names = {sorted(pro_names)} "
-                  "applied to the residue containing the amide NITROGEN")
-        for cand in candidates:
-            if cand["ambiguous"]:
-                unknown.append(cand); continue
-            if cand["nitrogen_residue"].upper() in pro_names:
-                proline.append(cand)
-            elif cand["nitrogen_residue"].upper() in PROTEIN_RESIDUES:
-                unscaled.append(cand)
-            else:
-                # An unrecognised residue is NOT assumed to be an ordinary amide.  HYP, and any
-                # other proline-like or non-standard residue, would otherwise be silently excluded
-                # from scaling on the strength of nothing but "it is a peptide bond".  Blocking
-                # forces the name into rest2.proline_like_residues, or into review.
-                unknown.append(dict(cand, ambiguous=(
-                    f"nitrogen residue '{cand['nitrogen_residue']}' is neither a known protein "
-                    "residue nor listed in rest2.proline_like_residues, so the peptide route "
-                    "cannot say whether this omega is ordinary or proline-like")))
+    for cand in candidates:
+        if cand["ambiguous"]:
+            unknown.append(cand); continue
+        residue_name = cand["nitrogen_residue"].upper()
+
+        # 1. The human answer to a previous block wins outright, before any file is opened.
+        if residue_name in pro_names:
+            proline.append(cand); continue
+        # 2. A known protein residue is decided from the residue, as it always was.
+        if residue_name in PROTEIN_RESIDUES:
+            unscaled.append(cand); continue
+
+        # 3. Otherwise the residue cannot answer, so the molecule's bond orders must.  An
+        #    unrecognised residue is still never ASSUMED to be an ordinary amide: with no SDF there
+        #    is no second opinion to take, and guessing would silently change the Hamiltonian of
+        #    any protein carrying a modified residue.
+        if ligand_sdf is None:
+            unknown.append(dict(cand, ambiguous=(
+                f"nitrogen residue '{cand['nitrogen_residue']}' is not a known protein residue, "
+                f"so this omega has to be read from the molecule's bond orders -- and no SDF was "
+                f"supplied. `build-top` retains one beside the System (`built.sdf`) for a .smi or "
+                f".sdf input and writes none for a peptide. Supply that SDF, or declare the "
+                f"residue in rest2.proline_like_residues.")))
+            continue
+        if ring_info is None:
+            unknown.append(dict(cand, ambiguous=(
+                f"nitrogen residue '{cand['nitrogen_residue']}' needs bond orders, and the SDF "
+                f"could not be mapped onto residues {sorted(non_standard_names)}: "
+                f"{mapping_error}")))
+            continue
+        if cand["bond"] not in ring_info["amide_bonds"]:
+            unknown.append(dict(cand, ambiguous=(
+                "RDKit found no ordinary-amide match for this C-N bond in the SDF")))
+            continue
+        if cand["nitrogen"] in ring_info["small_ring_nitrogens"]:
+            proline.append(dict(cand,
+                                ring_sizes=ring_info["ring_sizes"].get(cand["nitrogen"], [])))
+        else:
+            unscaled.append(cand)
     return {
         "omega_unscaled_bonds": [c["bond"] for c in unscaled],
         "omega_proline_like_scaled_bonds": [c["bond"] for c in proline],
@@ -954,61 +1006,73 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *, route: str = 
     }
 
 
-def _ligand_ring_nitrogens(ligand_sdf, topology, solute: set[int], max_ring: int) -> dict:
+def _ligand_ring_nitrogens(ligand_sdf, topology, atoms_to_map: set[int], max_ring: int,
+                           *, describes: Optional[list] = None) -> dict:
     """RDKit amide perception on the retained SDF, mapped onto OpenMM indices.
 
-    The mapping is ASSERTED, never assumed: element sequence and the full bond graph must agree
-    between the SDF and the solute part of the topology.  They coincide today because the SDF and
-    the PDB are written from the same RDKit molecule in the same atom order, but that is a property
-    of the pipeline, not a guarantee -- and a silent off-by-one here would scale the wrong torsions.
+    *atoms_to_map* is the set of topology indices the SDF is expected to describe -- the solute's
+    NON-STANDARD residues, not the whole solute.  On a mixed protein+ligand system the SDF covers
+    the ligand alone, so mapping it against every solute atom would fail on atom count and say
+    nothing useful about why.
+
+    The mapping is POSITIONAL and ASSERTED, never assumed: the SDF's atoms are paired with those
+    indices in ascending order, and element sequence and the full bond graph must then agree.  The
+    pairing is positional rather than an offset because the atoms need not be contiguous -- a
+    ligand that follows a protein in the topology starts partway through, and an offset would
+    silently shift every index.  They coincide today because the SDF and the PDB are written from
+    the same RDKit molecule in the same order, but that is a property of the pipeline rather than
+    a guarantee, and a silent off-by-one here would scale the wrong torsions.
     """
     from rdkit import Chem
 
+    what = f" (expected to describe {describes})" if describes else ""
     if ligand_sdf is None:
         raise ValueError(
-            "the ligand omega route needs the SDF written by simbox-setup.py (bond orders are "
-            "not recoverable from a topology), but none was supplied"
+            "bond orders are not recoverable from a topology, so this needs the SDF `build-top` "
+            "retains beside the System, but none was supplied"
         )
     mol = Chem.MolFromMolFile(str(ligand_sdf), removeHs=False)
     if mol is None:
         raise ValueError(f"RDKit could not read {ligand_sdf}")
 
-    atoms = [a for a in topology.atoms() if a.index in solute]
-    atoms.sort(key=lambda a: a.index)
+    atoms = sorted((a for a in topology.atoms() if a.index in atoms_to_map),
+                   key=lambda a: a.index)
     if mol.GetNumAtoms() != len(atoms):
         raise ValueError(
-            f"atom-count mismatch: SDF has {mol.GetNumAtoms()}, the topology's solute has "
-            f"{len(atoms)}.  The RDKit->OpenMM mapping cannot be established."
+            f"atom-count mismatch: SDF {Path(ligand_sdf).name} has {mol.GetNumAtoms()} atoms, the "
+            f"topology's non-standard residues{what} have {len(atoms)}.  The RDKit->OpenMM "
+            f"mapping cannot be established."
         )
-    offset = atoms[0].index
+    #: SDF atom i is topology atom `index_of[i]`.  Positional, so a non-contiguous block maps.
+    index_of = [a.index for a in atoms]
     for i, atom in enumerate(atoms):
         sym = mol.GetAtomWithIdx(i).GetSymbol()
         if atom.element is None or atom.element.symbol != sym:
             raise ValueError(
-                f"element mismatch at solute index {i}: SDF says {sym}, topology says "
-                f"{None if atom.element is None else atom.element.symbol}.  Refusing to guess a "
-                "mapping between the SDF and the topology."
+                f"element mismatch at position {i} (topology index {atom.index}): SDF says {sym}, "
+                f"topology says {None if atom.element is None else atom.element.symbol}.  "
+                f"Refusing to guess a mapping between the SDF and the topology."
             )
-    rd_bonds = {frozenset((b.GetBeginAtomIdx() + offset, b.GetEndAtomIdx() + offset))
+    rd_bonds = {frozenset((index_of[b.GetBeginAtomIdx()], index_of[b.GetEndAtomIdx()]))
                 for b in mol.GetBonds()}
     top_bonds = {frozenset((b.atom1.index, b.atom2.index)) for b in topology.bonds()
-                 if b.atom1.index in solute and b.atom2.index in solute}
+                 if b.atom1.index in atoms_to_map and b.atom2.index in atoms_to_map}
     if rd_bonds != top_bonds:
         raise ValueError(
-            f"bond-graph mismatch between the SDF and the topology "
-            f"({len(rd_bonds ^ top_bonds)} differing bonds).  Refusing to guess a mapping."
+            f"bond-graph mismatch between {Path(ligand_sdf).name} and the topology"
+            f"{what} ({len(rd_bonds ^ top_bonds)} differing bonds).  Refusing to guess a mapping."
         )
 
     amide = Chem.MolFromSmarts("[CX3](=[OX1])[NX3]")
     amide_bonds, small_ring_n, ring_sizes = set(), set(), {}
     ri = mol.GetRingInfo()
     for c_i, _o_i, n_i in mol.GetSubstructMatches(amide):
-        amide_bonds.add((c_i + offset, n_i + offset))
+        amide_bonds.add((index_of[c_i], index_of[n_i]))
         sizes = sorted(len(r) for r in ri.AtomRings() if n_i in r)
         if sizes:
-            ring_sizes[n_i + offset] = sizes
+            ring_sizes[index_of[n_i]] = sizes
             if min(sizes) <= max_ring:
-                small_ring_n.add(n_i + offset)
+                small_ring_n.add(index_of[n_i])
     return {"amide_bonds": amide_bonds, "small_ring_nitrogens": small_ring_n,
             "ring_sizes": ring_sizes}
 
@@ -1263,7 +1327,7 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
     rcfg = cfg["rest2"]
     if rcfg["omega_exclusion"]:
         omega_info = classify_omega_bonds(
-            pdb.topology, range(n_solute_atoms), route=route, ligand_sdf=ligand_sdf,
+            pdb.topology, range(n_solute_atoms), ligand_sdf=ligand_sdf,
             proline_like_residues=rcfg["proline_like_residues"],
             max_proline_ring_size=int(rcfg["max_proline_ring_size"]),
         )
