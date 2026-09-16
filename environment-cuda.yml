@@ -69,3 +69,4 @@ dependencies:
   - setuptools>=64
   - python-build
   - pytest
+  - pytest-xdist              # `addopts = "--dist loadgroup"`; see environment-ci.yml on why

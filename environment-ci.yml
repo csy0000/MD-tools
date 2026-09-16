@@ -95,3 +95,13 @@ dependencies:
   - setuptools>=64
   - python-build              # `python -m build` -> the wheel a consuming repository installs
   - pytest
+  # NOT OPTIONAL, and not merely a speed-up. `pyproject.toml` sets `addopts = "--dist loadgroup"`,
+  # so every `pytest` invocation passes `--dist` -- and without this plugin pytest does not know
+  # the flag, exits 4 with `unrecognized arguments: --dist`, and collects nothing. The non-GPU
+  # lane in `ci.yml` had been dying that way, invisibly, because the step before it failed first.
+  #
+  # `loadgroup` is what the suite needs rather than plain `load`: a module-scoped fixture that
+  # builds a System or runs a ladder would otherwise be built once per worker that draws one of
+  # its tests. It was in `pyproject.toml`'s `dev` extra and not here, so the two descriptions of
+  # "the environment MD-tools is tested against" disagreed.
+  - pytest-xdist
