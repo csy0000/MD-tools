@@ -526,12 +526,12 @@ _STEPS = {
     ("peptide", "explicit"): "hydrogens deleted and re-added at pH {ph} (seeded), the {shape} box "
                              "sized from the solute, {water} water and ions added (seeded), the "
                              "System created",
-    ("ligand", "explicit"): "the 3D structure made from the SMILES, charges assigned "
+    ("ligand", "explicit"): "{structure_step}, charges assigned "
                             "({charges}), the {shape} box sized, {water} water and ions added "
                             "(seeded), the System created",
     ("peptide", "implicit"): "tleap writes the Amber topology with {radii} radii, ParmEd creates "
                              "the {gb} System",
-    ("ligand", "implicit"): "the 3D structure made from the SMILES, charges assigned ({charges}), "
+    ("ligand", "implicit"): "{structure_step}, charges assigned ({charges}), "
                             "the {ligand} parameters written to Amber files through ParmEd, ParmEd "
                             "creates the {gb} System",
 }
@@ -560,6 +560,12 @@ def standalone_settings(record: dict[str, Any], structure: Path, system: Path,
         "kind": kind,
         "solvent": "implicit" if implicit else "explicit",
         "structure_file": structure.name,
+        # WHICH READER the rebuild must use for `structure_file`. `route` cannot answer it: both
+        # molecular-graph inputs are the `ligand` route, and handing an SDF to the SMILES reader
+        # parses its title line as a SMILES string. Defaulted from the file's own suffix when a
+        # record predates the field, so an older bundle keeps rebuilding the way it always did.
+        "input_format": str((record.get("interpretation") or {}).get("input_format")
+                            or structure.suffix.lstrip(".").lower() or "smi"),
         "builder": {key: cfg[key] for key in ("run", "structure", "protonation", "forcefield",
                                               "solvation", "system_build")},
         "implicit": ({"model": "GBn2", "radii": "mbondi3", "remove_cm_motion": True,
@@ -640,9 +646,15 @@ def _standalone_text(settings: dict[str, Any]) -> str:
     if settings.get("unsupported"):
         return f"Not available for this build: {settings['unsupported']}"
     b = settings["builder"]
+    # What the ligand routes say about their own first step depends on which input was given:
+    # claiming a structure was "made from the SMILES" when an SDF supplied it would misdescribe
+    # the bundle in the bundle's own README.
+    structure_step = ("the 3D structure taken from the supplied SDF, as given"
+                      if str(settings.get("input_format", "smi")).lower() == "sdf"
+                      else "the 3D structure made from the SMILES")
     steps = _STEPS[(settings["route"], settings["solvent"])].format(
         ph=b["protonation"]["ph"], shape=b["solvation"]["box_shape"],
-        water=str(b["solvation"]["water_model"]).upper(),
+        water=str(b["solvation"]["water_model"]).upper(), structure_step=structure_step,
         charges=b["forcefield"]["ligand_charge_method"], ligand=b["forcefield"]["ligand"],
         radii=(settings["implicit"] or {}).get("radii"), gb=(settings["implicit"] or {}).get("model"))
     caveat = ""

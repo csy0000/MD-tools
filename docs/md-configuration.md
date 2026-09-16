@@ -40,7 +40,7 @@ What the input is, and how it is parameterised.
 
 type: string · default: `peptide` · one of `peptide`, `peptide-like`, `ligand`
 
-What the solute IS, which decides how it is parameterised and what chemistry may be read from it. This is the authoritative classification. peptide       -- read -i as a peptide/protein PDB and parameterise it with the protein force field. Sage never touches it. ligand        -- read -i as a .smi and parameterise the whole molecule with the small-molecule force field. One residue, no peptide chemistry is claimed or read. peptide-like  -- the SAME whole-molecule route as `ligand`, with the same force field and the same charges, PLUS a validated peptide-chemistry map over the result. It exists for a head-to-tail cyclic peptide built from SMILES, whose residues are real amino acids but which a single-residue ligand representation cannot describe -- so residue-keyed corrections such as mbondi3's silently miss it. It never loads a protein force field and never replaces Sage's charges or bonded terms.
+What the solute IS, which decides how it is parameterised and what chemistry may be read from it. This is the authoritative classification. peptide       -- read -i as a peptide/protein PDB and parameterise it with the protein force field. Sage never touches it. ligand        -- read -i as a .smi or .sdf and parameterise the whole molecule with the small-molecule force field. One residue, no peptide chemistry is claimed or read. A .smi states the chemistry and the conformer is generated (ETKDGv3, then MMFF); a .sdf carries the coordinates too and they are used as given. peptide-like  -- the SAME whole-molecule route as `ligand`, with the same force field and the same charges, PLUS a validated peptide-chemistry map over the result. It exists for a head-to-tail cyclic peptide built from SMILES, whose residues are real amino acids but which a single-residue ligand representation cannot describe -- so residue-keyed corrections such as mbondi3's silently miss it. It never loads a protein force field and never replaces Sage's charges or bonded terms.
 
 #### `solute.peptide`
 
@@ -64,7 +64,7 @@ Partial-charge method for the small molecule. am1bcc is the validated default an
 
 type: string or null · default: `null`
 
-Three-character residue name for a molecule read from .smi. Left null, a deterministic name is assigned from the file and recorded, so the same .smi always produces the same residue identity.
+Three-character residue name for a molecule read from .smi or .sdf. Left null, a deterministic name is assigned from the file and recorded, so the same input always produces the same residue identity.
 
 ### `forcefield`
 

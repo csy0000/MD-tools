@@ -224,6 +224,31 @@ rendered from the schemas (`md_tools.build.manual`), with the shipped `configs/`
 examples. The README gained an end-to-end REST2 walkthrough, and `md-openmm --help` teaches the
 layout.
 
+**`build-top` takes a supplied 3D structure.** `-i` accepts a `.sdf` beside `.pdb` and `.smi`, for
+a `ligand` or `peptide-like` solute. The difference from the SMILES route is where the coordinates
+come from and nothing else: a `.smi` is embedded with ETKDGv3 and MMFF-minimised, while a `.sdf`
+is used **as given**, so a docked or crystallographic pose survives instead of being silently
+replaced by an MMFF minimum. `initial_structure_from_sdf` writes the same two files as
+`initial_structure` and returns the same keys, so every step after preparation is identical; there
+is no seed to record, and the input's sha256 takes its place in the provenance. Refused by name,
+before anything is created: a two-dimensional conformer, missing explicit hydrogens, more than one
+molecule record, and a file RDKit cannot open at all.
+
+**An explicit-solvent ligand build wrote no `built.sdf`, and reported success.** Found while
+adding the above. `initial_structure` was called with the staging root on the explicit route and
+with `staging/structure` on the implicit one, while `build-top` copies `built.sdf` out of the
+latter — so on the explicit route the file was written where nothing reads it and none was
+published. Bond orders are not recoverable from a topology and three consumers need them
+(`classify_omega_bonds`'s ligand route, `map_from_sdf`, `preflight._ligand_sdf_beside`), so an
+explicit-solvent ladder over such a solute had nothing to perceive amides from. It survived
+because every test asserting `built.sdf` ran under GBn2 while the suite's explicit ligand builds
+asserted radii and records instead — disjoint sets. This is a candidate cause of the omega item
+below on the explicit path. Also corrected: the kind × suffix rules ran *below* the output
+`mkdir`, so every refusal of them created the output directory first; they now run above it and a
+refused build leaves nothing behind. `tests/test_build_top_input_formats.py` pins the nine-cell
+matrix, the SDF refusals and `built.sdf` under both solvents, none of which had a test before.
+`docs/backlog.md` entry 16.
+
 **Deferred to 0.5.4, by decision.** Three items are known and deliberately not addressed here.
 *The omega exclusion*, where the case that matters is a solute whose `kind` is `peptide` or
 `peptide-like`: `classify_omega_bonds` offers a residue-aware `peptide` route and a bond-order

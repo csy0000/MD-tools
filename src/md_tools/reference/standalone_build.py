@@ -10,8 +10,10 @@ Every step below is one step of `build-top`, in its order, with its seeds:
 
     peptide, explicit   PDB -> hydrogens at pH (seeded) -> box -> water and ions (seeded) -> System
     ligand,  explicit   SMILES -> 3D (ETKDGv3 + MMFF, seeded) -> charges -> box -> solvent -> System
+                        or SDF -> coordinates as given -> charges -> box -> solvent -> System
     peptide, implicit   PDB -> tleap (mbondi3 radii) -> ParmEd GBn2 System
     ligand,  implicit   SMILES -> 3D -> charges -> OpenFF System -> Amber files -> ParmEd GBn2 System
+                        or SDF -> coordinates as given -> charges -> ... -> ParmEd GBn2 System
 
 The result is compared with the System and topology the run used. Exit 0 means the System is
 byte-identical and the topology identical apart from the date OpenMM writes into its first line.
@@ -93,6 +95,43 @@ def read_smiles(path: Path) -> str:
     if len(records) != 1:
         raise SystemExit(f"{path}: expected exactly one SMILES record, found {len(records)}")
     return records[0]
+
+
+def structure_from_sdf(path: Path, work: Path) -> tuple[Path, Path]:
+    """`(solute.sdf, solute.pdb)` from a supplied SDF, whose coordinates are used AS GIVEN.
+
+    The counterpart of `structure_from_smiles`, and deliberately the shorter one: build-top did
+    not embed or minimise this molecule either, so neither does the rebuild. It takes no
+    `builder`, unlike its counterpart, because none of the structure settings apply here -- there
+    is no seed, no ETKDG and no MMFF on this route to configure.
+    """
+    from rdkit import Chem
+
+    work.mkdir(parents=True, exist_ok=True)
+    records = list(Chem.SDMolSupplier(str(path), removeHs=False, sanitize=True))
+    if len(records) != 1 or records[0] is None:
+        raise SystemExit(f"{path}: expected exactly one readable molecule record")
+    mol = records[0]
+    if mol.GetNumConformers() == 0:
+        raise SystemExit(f"{path}: carries no conformer, so it supplies no coordinates")
+    Chem.AssignStereochemistryFrom3D(mol)
+    say("structure", f"{path.name}: coordinates used as given (no embedding, no minimisation)")
+    Chem.MolToMolFile(mol, str(work / "solute.sdf"))
+    Chem.MolToPDBFile(mol, str(work / "solute.pdb"))
+    return work / "solute.sdf", work / "solute.pdb"
+
+
+def solute_structure(settings: dict, work: Path) -> tuple[Path, Path]:
+    """The prepared solute, from whichever molecular-graph input build-top was given.
+
+    One place decides it, because the two readers are not interchangeable: handing an SDF to
+    `read_smiles` takes the molfile's title line as a SMILES string and builds some other
+    molecule, or nothing at all.
+    """
+    structure = HERE / settings["structure_file"]
+    if str(settings.get("input_format", "smi")).lower() == "sdf":
+        return structure_from_sdf(structure, work)
+    return structure_from_smiles(read_smiles(structure), work, settings["builder"])
 
 
 def structure_from_smiles(smiles: str, work: Path, builder: dict) -> tuple[Path, Path]:
@@ -401,8 +440,7 @@ def build_explicit(settings: dict, work: Path) -> tuple[object, Path]:
     structure = HERE / settings["structure_file"]
     ligand_sdf = None
     if settings["route"] == "ligand":
-        ligand_sdf, source = structure_from_smiles(read_smiles(structure), work / "structure",
-                                                   builder)
+        ligand_sdf, source = solute_structure(settings, work / "structure")
     else:
         source = work / "input.pdb"
         shutil.copy2(structure, source)
@@ -448,8 +486,7 @@ def ligand_amber_files(settings: dict, work: Path) -> tuple[Path, Path, Path]:
     from openmm import app
 
     builder = settings["builder"]
-    sdf, pdb_path = structure_from_smiles(read_smiles(HERE / settings["structure_file"]),
-                                          work / "structure", builder)
+    sdf, pdb_path = solute_structure(settings, work / "structure")
     forcefield_ = forcefield(builder, sdf, ligand_only=True)
     solute = app.PDBFile(str(pdb_path))
     bare = forcefield_.createSystem(solute.topology, nonbondedMethod=app.NoCutoff,

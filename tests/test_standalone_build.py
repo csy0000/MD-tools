@@ -35,6 +35,13 @@ CASES = {
     "peptide-explicit-hmr": ("ALA.pdb", "hydrogen_mass_repartitioning:\n  enabled: true\n"),
     "ligand-implicit": ("phenol.smi", "solute:\n  kind: ligand\nsolvent:\n  model: GBn2\n"),
     "ligand-explicit": ("phenol.smi", "solute:\n  kind: ligand\n"),
+    # THE SDF ROUTE, whose rebuild takes a different reader. `route` is `ligand` for this case and
+    # for the two above it, so the script cannot tell them apart from the route alone: handing an
+    # SDF to `read_smiles` parses the molfile's title line as a SMILES string and rebuilds some
+    # other molecule, or dies. `build_settings.json` carries `input_format` for exactly this.
+    # Byte-equality is EASIER here than on the SMILES route rather than harder, because neither
+    # side embeds or minimises -- both read the coordinates that are already in the file.
+    "ligand-sdf-implicit": ("phenol.sdf", "solute:\n  kind: ligand\nsolvent:\n  model: GBn2\n"),
 }
 
 BLOCKER = (
@@ -81,6 +88,16 @@ def _built(case: str, root: Path) -> Path:
     work.mkdir()
     if structure.endswith(".pdb"):
         shutil.copy2(ALA, work / structure)
+    elif structure.endswith(".sdf"):
+        # The same molecule as the `.smi` cases, supplied as coordinates instead of as a string.
+        # Seeded so the fixture itself is reproducible; build-top does not re-embed it.
+        from rdkit import Chem
+        from rdkit.Chem import AllChem
+
+        mol = Chem.AddHs(Chem.MolFromSmiles("Oc1ccccc1"))
+        AllChem.EmbedMolecule(mol, randomSeed=20260916)
+        AllChem.MMFFOptimizeMolecule(mol)
+        Chem.MolToMolFile(mol, str(work / structure))
     else:
         (work / structure).write_text("Oc1ccccc1 phenol\n", encoding="utf-8")
     (work / "sys.config").write_text(config, encoding="utf-8")

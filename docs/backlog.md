@@ -15,7 +15,10 @@ in a list of debt. Entry 4 is neither fixed nor accepted but UNDIAGNOSED, and ca
 work. Entry 6 is open in code and avoided in practice. Entries 13, 14 and 15 are the **0.5.4 scope**,
 deferred by decision on 2026-09-16 rather than by oversight: the omega exclusion for a `peptide` or
 `peptide-like` solute, the `.in` file's undocumented divergences from Amber's input conventions, and
-rebuilding AIS as a transformation between two topologies.
+rebuilding AIS as a transformation between two topologies. Entry 16 is **fixed in 0.5.3** — `.sdf`
+input, and the missing `built.sdf` on the explicit ligand route that adding it uncovered, which
+entry 13 should be re-checked against. Entries 17 and 18 are open and were filed the same day: the
+documentation reorganisation, and a `solute.residue_name` that is recorded but never applied.
 
 **Three of these entries described code that had already moved on** — 8 said a flag was dropped
 that was being forwarded, 9 described a reader whose sidecar nothing wrote, 1 said an aggregate
@@ -529,6 +532,108 @@ the current single-topology design and is a different piece of work from this en
 question there belongs to this one: the default schedule runs `tau` **downhill** (0.5 → 0.0) while
 Amber's lambda conventionally runs 0 → 1, and direction fixes which ensemble the Jarzynski average
 is taken over.
+
+---
+
+## 16. `build-top` accepted no supplied 3D structure for a small molecule — RESOLVED in 0.5.3
+
+> **RESOLVED 2026-09-16.** `-i` now takes a `.sdf` beside `.pdb` and `.smi`. The entry is kept
+> because of what closing it uncovered, which was not the feature.
+
+A ligand or peptide-like solute could only be built from a SMILES string, so its conformer was
+always *generated* — ETKDGv3, then MMFF94s over every embedding, lowest kept. For a molecule whose
+pose is the point — a docked ligand, a crystallographic conformer, the output of another pipeline —
+there was no way in that did not discard it.
+
+`.sdf` supplies the coordinates, and they are used **as given**: no embedding, no minimisation.
+That is the whole difference between the two molecular-graph routes, and it ends at one function.
+`initial_structure` (SMILES) and `initial_structure_from_sdf` (SDF) write the same two files —
+`solute.sdf` and `solute.pdb` — into the same place and return the same keys, so everything
+downstream is identical. There is no seed to record on the SDF route because nothing was sampled;
+the input file's sha256 is recorded in its place, and the log says
+`coordinates: supplied by the SDF, used as given`.
+
+**What it uncovered, which is the reason this entry exists.** `initial_structure` was called with
+the staging ROOT on the explicit route and with `staging/structure` on the implicit one, while
+`build/top.py` copies `built.sdf` out of the latter. So **an explicit-solvent ligand build emitted
+no `built.sdf` at all** — silently, with the build reporting completion. Bond orders are not
+recoverable from a topology, and three consumers need that file:
+`classify_omega_bonds`'s ligand route, `peptide_map.map_from_sdf`, and
+`preflight._ligand_sdf_beside`. An explicit-solvent REST2 ladder over such a solute therefore had
+nothing to perceive amides from.
+
+It survived because the assertions and the builds were disjoint sets: every test that asserted
+`built.sdf` ran under `GBn2`, and the suite's explicit ligand builds asserted radii and records
+instead. **This is a candidate cause of entry 13 on the explicit path** — a classifier with no SDF
+produces exactly the unclassified-candidate symptom described there — and entry 13 should be
+re-checked against an explicit build before its `peptide-like` hypothesis is pursued.
+
+Also corrected while here: the kind × suffix rules were checked *below* the output `mkdir`, so
+every refusal of them created the output directory first. They now run above it, with the
+SDF's shape, so a refused build leaves nothing behind. `tests/test_build_top_input_formats.py`
+pins the whole nine-cell matrix, the SDF refusals, and `built.sdf` under both solvents — none of
+which had any test before.
+
+---
+
+## 17. The documentation is not readable as documentation — OPEN, scoped
+
+Filed 2026-09-16. Not a defect: a usability and accuracy gap, with a decided direction.
+
+76 markdown files, ~19k lines, and the three journeys a user actually needs — set up an
+environment, configure a machine, run a simulation — are not separable from development
+evidence. Concretely, and each verified rather than asserted:
+
+* **Every copy-pasteable command in the method pages is one path short of working.**
+  `../built.pdb` / `../built.xml` appear in the cMD, REST2, rREST2, AIS and umbrella pages and in
+  `data_register/README.md`; the layout is `../build/built.pdb`. The generated-file trees in
+  `openmm_methods/cMD/README.md` and `openmm_methods/REST2/README.md` still show the pre-0.5.3
+  flat layout and contradict `run-layout.md`, which is the implemented authority.
+* **Three version claims disagree**: `README.md` says 0.5.2, `pyproject.toml` says 0.5.3,
+  `scientific-defaults.md` says `0.4.0.dev0`.
+* **Four cited paths do not exist**: `docs/journal/` (twice, in `support-matrix.md`),
+  `docs/examples/hmr-4fs.yaml`, `scripts/retrofit_fair_v030.py`.
+* **`support-matrix.md` describes a retired layout** — `build-top` writing `inputs/` and
+  `build-md` writing `MD/` — and its portability claim contradicts `run-layout.md` §5.
+* **`rREST2/README.md` contradicts itself about a default**: line 48 says the velocity policy is
+  `stored`/`inherit`; line 104 and the generated schema say `resample`.
+* **`umbrella` is a supported protocol** with a README and shipped configs, and appears in no
+  index and no protocol count.
+* **`md-configuration.md` and `run-layout.md` are linked from no index**, so the generated
+  configuration reference and the layout authority are findable only by someone who knows.
+
+**Direction, decided by the user on 2026-09-16:** MkDocs Material published to GitHub Pages (the
+repository is public), carrying the user-facing pages only; history, campaigns, integration notes,
+`amber-like-fix`, `claudecode-instructions` and the dated release evidence stay in the repository
+and off the site. `md-configuration.md` must be *built*, never hand-authored —
+`tests/test_configuration_manual.py` fails on an edit. The README shrinks to an overview that
+points at the site.
+
+**Do the truth pass first.** Five tests pin documentation paths or content, and
+`tests/test_documented_commands_run.py` extracts and *executes* every `md-run` command block from
+`README.md`, `CLAUDE.md`, `docs/md-run.md` and three method pages — so the stale commands are
+mechanically checkable. Publishing before fixing them would put broken commands on a website.
+
+Entry 14's Amber-namelist mapping is a user-facing page for the same reader, so the site's
+structure should leave it a place rather than be rearranged for it later.
+
+---
+
+## 18. `solute.residue_name` is resolved, recorded, and never applied — OPEN
+
+Filed 2026-09-16, found while adding `.sdf` input. Small, and not urgent.
+
+The schema promises "a deterministic name is assigned from the file and recorded, so the same
+input always produces the same residue identity", and `build/top.py` does compute it
+(`_assigned_residue_name`) and write it into `interpretation.residue_name`. **Nothing consumes
+it.** A grep for the symbol outside `build/top.py` finds only an unrelated test name;
+`reference/export.py` reads `interpretation.route` and nothing else from that dict. The residue in
+the built PDB is whatever RDKit's `MolToPDBFile` writes, which is `UNL`.
+
+So the recorded name describes nothing, and a user who sets `solute.residue_name: LIG` gets a
+System whose residue is still `UNL` while the record says `LIG`. Either apply it to the written
+topology or stop recording it as though it were applied; a value that is documented, accepted and
+inert is worse than one refused.
 
 ---
 
