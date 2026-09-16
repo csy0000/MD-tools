@@ -10,7 +10,7 @@ the protocol is parallel; moves a finished run into managed storage as a verifie
 dataset; and exports one as a bundle that runs on OpenMM alone, with nothing of this package in
 it.
 
-**Status:** `0.5.2`, tagged `openmm-v0.5.2`, on `dev` and `main`. Not on PyPI.
+**Status:** `0.5.3`, on `dev`. Not tagged, not on PyPI.
 
 `0.5.2` adds `export-reference`: a finished run becomes a directory someone can run in ten years
 with OpenMM and nothing of ours. cMD and REST2 today; umbrella and AIS are not done. A wheel also
@@ -410,7 +410,7 @@ duration is an integer step count. Smaller, task-sized examples live beside each
 | [Data registration](docs/data_register/README.md) | `--init`, canonical paths, the transaction, extensions |
 | [The dataset contract](docs/data-contract.md) | the schema-level authority for records |
 | [Support matrix](docs/support-matrix.md) | supported, experimental, and unsupported combinations |
-| [Release notes](docs/release-notes/v0.5.0.md) | what changed in this development cycle |
+| [Release notes](docs/release-notes/v0.5.3.md) | what changed in this development cycle |
 
 Working on the code: [`CLAUDE.md`](CLAUDE.md) holds the invariants that must not be broken.
 

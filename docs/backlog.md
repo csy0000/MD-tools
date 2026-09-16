@@ -601,6 +601,26 @@ evidence. Concretely, and each verified rather than asserted:
   index and no protocol count.
 * **`md-configuration.md` and `run-layout.md` are linked from no index**, so the generated
   configuration reference and the layout authority are findable only by someone who knows.
+* **`run-layout.md` is headed "Status: IMPLEMENTED" and is not a reliable authority.** Its §6 is
+  an implementation to-do list, and at least one filename in it contradicts the code: it gives the
+  ladder's CV series as `remd<n>/cv_state<n>_prod<x>.dat` + `.json`, while `md_tools.remd.cv_states`
+  — which `CLAUDE.md` names as the authority — writes `cv_state<i>.csv` with a `cv_state<i>.json`
+  sidecar, flat in the run's output directory and with no segment in the name. Eight CV integration
+  tests (`test_cv_cuda_lanes.py`, `test_cv_mpi_cuda_rrest2.py`, `test_cv_mpi_cuda_lanes.py`,
+  `test_cv_definition_change_refusal.py`) read the `.csv` form, so that is what is written. This
+  was found the hard way: the stale name was copied out of `run-layout.md` into the REST2 method
+  page during the 0.5.3 documentation pass and had to be corrected.
+
+  **The same disagreement exists inside the package.** `layout.py` exposes `state_cv()`,
+  `state_restart()` and `state_trajectory()`, and **none of the three has a caller in `src/`** —
+  only `tests/test_layout.py` and `tests/test_state_paths.py`, which pin the unwritten spelling
+  (`state_cv_name(0) == "cv_state0_prod1.dat"`). `state_system()`, beside them, IS used
+  (`build/rungs.py:92`, `build/md.py:1555,2127`). An unused accessor is not proof the file is
+  unwritten — the per-state trajectories it names are on disk in the reference run — but for the
+  CV series nothing writes the layout's name at all, and `restart_state<n>_prod<x>.*` appears in
+  no reference run either. This is entry 10's defect class: a name that is declared, tested, and
+  produced by nothing. Decide which module owns per-state filenames before the site publishes
+  either spelling.
 
 **Direction, decided by the user on 2026-09-16:** MkDocs Material published to GitHub Pages (the
 repository is public), carrying the user-facing pages only; history, campaigns, integration notes,

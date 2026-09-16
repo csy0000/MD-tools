@@ -45,9 +45,9 @@ not a phase-space reservoir and is refused as a source — there is no silent fa
 that are missing, wrongly shaped, non-finite or identically zero are a hard error when the source is
 opened.
 
-**Velocity policy.** `stored` (the default here, written as `velocities: inherit`) installs the
-recorded momentum unchanged, which is what the probability-one acceptance assumes. `maxwell`
-(`velocities: resample`) uses the source positions and box and deliberately redraws the momenta at
+**Velocity policy.** `velocities: inherit` installs the recorded momentum unchanged, which is what
+the probability-one acceptance assumes. `velocities: resample` — **the default** — uses the source
+positions and box and deliberately redraws the momenta at
 the one common temperature from a seed recorded per refresh, so any single draw is reproducible from
 the storage alone. Under MPI only the owning rank draws, and the array is shared, so one process and
 N ranks install identical momenta.

@@ -123,7 +123,7 @@ contents disagree is refused with both named.
 
 ```bash
 md-openmm build-md -odir ./AIS-run1 --config example.config
-cd AIS-run1 && ./run.sh ../built.pdb ../built.xml ../hot/whole_prod1.nc
+cd AIS-run1 && ./run.sh ../build/built.pdb ../build/built.xml ../hot-run1/whole_prod1.nc
 ```
 
 `run.sh` **requires** the source explicitly. There is no default for it: a wrong source is not a

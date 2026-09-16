@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Repository | MD-tools (`csy0000/MD-tools`), version 0.4.0.dev0 |
+| Repository | MD-tools (`csy0000/MD-tools`), version 0.5.3 |
 | Applies to | the defaults `md-openmm build-top` and `md-openmm build-md` apply |
 | Date | 2026-08-27 |
 | References | `docs/scientific-defaults.bib` |
@@ -477,9 +477,10 @@ steps**, not in time, so its physical meaning depends on the timestep:
 | 2 fs (default) | 0.05 ps |
 | 4 fs (HMR option) | 0.10 ps |
 
-Both numbers are recorded: every `resolved_stage.yaml` carries `barostat_frequency_steps` and
-`barostat_interval_ps`, and `MD/provenance.yaml` carries both plus the list of stages in which the
-barostat is active.
+The requested value is recorded in `resolved.config` as `dynamics.barostat_interval_steps`, and
+each stage's machine record carries what the built System actually received. (This paragraph named
+`resolved_stage.yaml` and `MD/provenance.yaml`, neither of which is written by anything — see
+`docs/backlog.md` entry 10.)
 
 **Not claimed:** that 25 steps is optimal. It is frequent enough that the volume equilibrates
 quickly and infrequent enough that the cost of the extra energy evaluations is small; it is not
@@ -694,8 +695,10 @@ constraints are required, because without them the stretch that HMR exists to sl
 fastest motion in the system. All three are verified against the built System and recorded.
 
 
-`docs/examples/hmr-4fs.yaml` gives the complete change: hydrogen mass 3.024 amu, timestep 4 fs,
-`constraints: HBonds`, `rigid_water: true`. Repartitioning moves mass from each heavy atom onto the
+The complete change is: hydrogen mass 3.024 amu, timestep 4 fs, `constraints: HBonds`,
+`rigid_water: true` — set `hydrogen_mass_repartitioning.enabled: true` in a `build-top`
+configuration and `dynamics.timestep_fs: 4` in the `build-md` one. (This named
+`docs/examples/hmr-4fs.yaml`, which does not exist; the values are stated here instead.) Repartitioning moves mass from each heavy atom onto the
 hydrogens bonded to it, lowering the hydrogen angle-bend frequencies and permitting a longer step
 [30]. Hopkins et al. showed that with a hydrogen mass around 3 amu, 4 fs integration is
 stable for biomolecular systems and reproduces equilibrium structural and thermodynamic properties
@@ -884,10 +887,10 @@ the construction artifacts that carry science under `preparation/`, and writes `
 whole directory. `build-md` records the parent system's hashes, the stage plan, every seed and
 `generated-files.sha256`.
 
-**0.3.x data is not retrofitted.** The defaults changed in 0.4; what 0.3.x ran did not. The
-retrospective tool `scripts/retrofit_fair_v030.py` reads only, preserves a recorded ff19SB/OPC
-identity exactly, and leaves a missing value as `unknown` rather than filling it from the current
-default. Two tests assert this directly.
+**0.3.x data is not retrofitted.** The defaults changed in 0.4; what 0.3.x ran did not. A
+recorded ff19SB/OPC identity is preserved exactly and a missing value is left as `unknown` rather
+than filled in from the current default. (This named a retrospective tool
+`scripts/retrofit_fair_v030.py`, which does not exist in this repository.)
 
 ---
 

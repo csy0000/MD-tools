@@ -77,7 +77,7 @@ project's own script, which is where the choice of centres and spacings belongs.
 for centre in -150 -120 -90 -60 -30; do
   sed "s/centre_deg: -60.0/centre_deg: ${centre}.0/" umbrella.yaml > w.yaml
   md-openmm build-md -odir ./w${centre} --config example.config
-  ( cd w${centre} && ./run.sh ../built.pdb ../built.xml )
+  ( cd w${centre} && ./run.sh ../build/built.pdb ../build/built.xml )
 done
 ```
 

@@ -17,8 +17,15 @@ is current is here.
 | [REST2](openmm_methods/REST2/README.md) | Hamiltonian replica exchange at one temperature |
 | [rREST2](openmm_methods/rREST2/README.md) | REST2 with a Boltzmann reservoir |
 | [AIS](openmm_methods/AIS/README.md) | non-equilibrium switching and work |
+| [umbrella](openmm_methods/umbrella/README.md) | biased sampling along a torsion, one window per run |
 
 Each method page carries a minimal, runnable `example.config` beside it.
+
+| page | |
+|---|---|
+| [Running](md-run.md) | `md-run`: the flags, the `.in` language, the platform policy, the MPI rules |
+| [Configuration reference](md-configuration.md) | every key of every configuration, generated from the schemas |
+| [The run layout](run-layout.md) | what `build-md` writes, and what is shared between runs |
 
 | page | |
 |---|---|
