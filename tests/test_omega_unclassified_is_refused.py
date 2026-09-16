@@ -18,10 +18,13 @@ The run completes, the acceptance ratios look plausible, and the ordinary-amide 
 broken with nothing saying so. That is the defect. `omega_exclusions` is now the one enforcing
 entry point, and the last test here keeps it that way.
 
-THE FIXTURE. The repository's ACE-ALA-NME reference with its alanine renamed `XAA`, and no SDF.
-The ACE->XAA omega then has no residue evidence and no bond-order evidence, which is exactly the
-state a modified residue -- or a whole-molecule solute whose SDF was not passed -- produces. The
-System is untouched: the classifier reads the topology only.
+THE FIXTURE. `conftest.make_dataset_root`'s ACE-ALA-NME with its alanine renamed `XAA`, and no
+SDF. The ACE->XAA omega then has no residue evidence and no bond-order evidence, which is exactly
+the state a modified residue -- or a whole-molecule solute whose SDF was not passed -- produces. The
+System is untouched: the classifier reads the topology only. It is built from `tests/data/`, NOT
+from the gitignored `data/reference/` this file first used: there, every test but one skipped on a
+clean checkout, which CI's `--error-on-skip` lane would have reported as a failure and a laxer lane
+as nothing at all.
 
 PLATFORM_POLICY_EXEMPTION: topology bookkeeping, System serialisation and preflight refusals. No
 Context is created and nothing is propagated.
@@ -33,27 +36,31 @@ from pathlib import Path
 
 import pytest
 
+from .conftest import make_dataset_root
+
 REPO = Path(__file__).resolve().parents[1]
-BUILT = REPO / "data" / "reference" / "ALA-explicit-HMR" / "build"
-
-pytestmark = pytest.mark.skipif(not (BUILT / "built.xml").is_file(),
-                                reason="the ALA reference build is not in this checkout")
 
 
-def _unclassifiable(directory: Path) -> Path:
-    """`built.{xml,pdb}` whose alanine is `XAA`, and deliberately no `built.sdf`."""
-    directory.mkdir(parents=True, exist_ok=True)
-    text = (BUILT / "built.pdb").read_text(encoding="utf-8")
-    renamed = text.replace(" ALA     2 ", " XAA     2 ")
-    assert renamed != text, "the reference PDB no longer has the residue this fixture renames"
-    (directory / "built.pdb").write_text(renamed, encoding="utf-8")
-    (directory / "built.xml").write_bytes((BUILT / "built.xml").read_bytes())
-    return directory
+def _classifiable(root: Path) -> Path:
+    """`build/` holding the ACE-ALA-NME System and PDB `make_dataset_root` builds (implicit)."""
+    return make_dataset_root(root) / "build"
+
+
+def _unclassifiable(root: Path) -> Path:
+    """The same `build/`, its alanine renamed `XAA` in the PDB, and deliberately no `built.sdf`."""
+    build = _classifiable(root)
+    lines = (build / "built.pdb").read_text(encoding="utf-8").splitlines(keepends=True)
+    renamed = [line[:17] + "XAA" + line[20:]
+               if line.startswith(("ATOM", "HETATM")) and line[17:20] == "ALA" else line
+               for line in lines]
+    assert renamed != lines, "the fixture PDB no longer has the residue this fixture renames"
+    (build / "built.pdb").write_text("".join(renamed), encoding="utf-8")
+    return build
 
 
 @pytest.fixture
 def unclassifiable(tmp_path):
-    return _unclassifiable(tmp_path / "build")
+    return _unclassifiable(tmp_path / "XAA")
 
 
 def _loaded(directory):
@@ -91,11 +98,11 @@ def test_the_refusal_does_not_offer_a_setting_nobody_can_set(unclassifiable):
     assert "proline_like_residues" not in str(refused.value), str(refused.value)
 
 
-def test_a_classifiable_solute_passes_through_unchanged():
+def test_a_classifiable_solute_passes_through_unchanged(tmp_path):
     from md_tools.md.stage import solute_atom_indices
     from md_tools.openmm.system import classify_omega_bonds, omega_exclusions
 
-    loaded = _loaded(BUILT)
+    loaded = _loaded(_classifiable(tmp_path / "ALA"))
     solute = solute_atom_indices(loaded.pdb.topology)
     enforced = omega_exclusions(loaded.pdb.topology, solute)
     assert enforced == classify_omega_bonds(loaded.pdb.topology, solute)
@@ -162,9 +169,10 @@ def test_build_md_refuses_a_ladder_before_the_run_directory_exists(tmp_path):
     from md_tools.build.md import ConfigError, build_scripts
 
     dataset = tmp_path / "XAA"
-    _unclassifiable(dataset / "build")
+    _unclassifiable(dataset)
     config = tmp_path / "REST2.config"
-    config.write_text("protocol: REST2\n", encoding="utf-8")
+    # Implicit, to match the stand-in System: `build-md` validates the whole chain against it.
+    config.write_text("protocol: REST2\nsolvent: implicit\n", encoding="utf-8")
     out = dataset / "REST2-run1"
     with pytest.raises(ConfigError) as refused:
         build_scripts(config_path=config, out_dir=out, echo=False)
