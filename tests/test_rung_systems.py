@@ -84,9 +84,20 @@ def test_a_file_named_like_a_run_is_not_counted(tmp_path):
 
 # -- the rungs themselves -----------------------------------------------------------------------
 
-pytestmark_reference = pytest.mark.skipif(
-    not (BUILT / "built.xml").is_file(),
-    reason="needs a built System; data/ is gitignored, so this runs where one was migrated")
+#: TWO MARKS, APPLIED TOGETHER, and they do different jobs. `reference_data` is what CI DESELECTS:
+#: `data/` is gitignored, so on a runner these can never run, and a skip there is indistinguishable
+#: from a test that quietly stopped working -- which is why `ci.yml` treats any skip in that lane
+#: as a failure. The `skipif` stays for a local checkout that simply has no migrated dataset.
+#: Locally, where one exists, they run for real.
+#:
+#: Composed as a decorator rather than nested: `pytest.mark.reference_data(pytest.mark.skipif(...))`
+#: applies the skipif as an ARGUMENT to the marker rather than as a second mark.
+def pytestmark_reference(test):
+    """Apply both marks to *test*."""
+    skip_without_data = pytest.mark.skipif(
+        not (BUILT / "built.xml").is_file(),
+        reason="needs a built System; data/ is gitignored, so this runs where one was migrated")
+    return pytest.mark.reference_data(skip_without_data(test))
 
 
 @pytest.fixture

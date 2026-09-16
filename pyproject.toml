@@ -92,6 +92,13 @@ markers = [
     # only evidence that the runtime works; a CPU-only machine cannot produce that evidence, so
     # they are DESELECTED there rather than quietly passing on the wrong platform.
     "gpu: needs a working CUDA platform (deselect with '-m \"not gpu\"')",
+    # Needs `data/`, which is gitignored: these read a MIGRATED reference dataset that exists on a
+    # machine where one was produced and can never exist on a clean checkout. They are DESELECTED
+    # in CI rather than skipped, because `ci.yml` treats a skip in the non-GPU lane as a failure --
+    # correctly, since a skip means a test that should have run did not. "Deselected" says the
+    # honest thing instead: its input is not in the repository. Locally, where `data/` exists, they
+    # run for real.
+    "reference_data: reads the migrated reference dataset under data/ (deselect with '-m \"not reference_data\"')",
     # Registered so `--strict-markers` stays usable; xdist provides the behaviour.
     "xdist_group: run this module's tests on ONE worker, so its module-scoped fixture is built once",
 ]

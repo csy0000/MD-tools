@@ -419,7 +419,14 @@ jobs:
 
       - name: the non-GPU test lane
         run: |
-          python -m pytest tests -m "not slow and not gpu" -q -rs --tb=short | tee pytest.log
+          # `reference_data` is DESELECTED, not skipped. Those tests read the migrated reference
+          # dataset under `data/`, which is gitignored and can never exist on a runner -- so the
+          # no-skip rule below was asserting something structurally impossible here, and the lane
+          # could not go green whatever the code did. Deselecting says the honest thing ("its
+          # input is not in the repository"); skipping would say "a test that should have run did
+          # not", which is what the rule exists to catch.
+          python -m pytest tests -m "not slow and not gpu and not reference_data" \
+            -q -rs --tb=short | tee pytest.log
           # A skip here is not neutral: it means a test that should have run did not, and a green
           # run would report coverage the job did not actually have.
           if grep -qE "^SKIPPED|[0-9]+ skipped" pytest.log; then

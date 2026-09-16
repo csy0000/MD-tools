@@ -208,6 +208,7 @@ def test_the_per_state_names_come_from_the_one_module_that_owns_them():
 REFERENCE = Path(__file__).resolve().parents[1] / "data" / "reference"
 
 
+@pytest.mark.reference_data
 @pytest.mark.skipif(not REFERENCE.is_dir(),
                     reason="the migrated reference dataset is not present (data/ is gitignored)")
 @pytest.mark.parametrize("system,states,ranks,segments", [
