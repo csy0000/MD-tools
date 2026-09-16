@@ -1,6 +1,10 @@
-# REST2 (0.5.4): Chinolin in explicit water, 10 ns per state
+# REST2: Chinolin in explicit water, 10 ns per state
 
-The same four-state ladder as [REST2 (0.5.4): paracetamol](paracetamol.md), for Chinolin (quinoline,
+!!! note "Requires md-tools 0.5.4 or later"
+    Earlier releases built REST2 states differently; their tutorials are
+    [archived](../archived/README.md).
+
+The same four-state ladder as [REST2: paracetamol](paracetamol.md), for Chinolin (quinoline,
 C₉H₇N). Read that page first; this one repeats only what differs. Run with md-tools **0.5.4**
 (commit `e1a84e1`) on four GPUs -- three RTX 3080 and one RTX A5000 -- with CUDA, mixed precision;
 every number is copied from that run.

@@ -1,12 +1,18 @@
 # cMD: Chinolin (quinoline) in explicit water
 
-!!! note "Requires md-tools 0.5.4 or later"
-    Earlier releases have their own tutorials, kept [archived](../archived/README.md).
+!!! warning "Archived: written for md-tools 0.5.3"
+    This page was run against 0.5.3 and is kept as a record of that release. 0.5.4 changed the
+    workflow it describes: REST2 states are built once, as files, by
+    `md-openmm build-top --rest2-scaler`; a stage or a ladder no longer scales anything at run
+    time, so a hot stage takes its saved state as `-s` and a ladder reads `-s` only from its group
+    file; and more torsions stay unscaled (aromatic rings, double bonds and impropers, not only the
+    amide omega). Commands here may be refused by 0.5.4. For 0.5.4 or later, use the
+    [current tutorials](../../../README.md).
 
 The same workflow as [cMD: paracetamol](paracetamol.md), for a second small molecule: Chinolin,
 C₉H₇N — quinoline in English. It is here to show that nothing in the steps is specific to one
-molecule: only the SMILES line changes. Run with md-tools **0.5.4**; every number is copied from
-that run (md-tools at commit `9cd2d39`; one NVIDIA RTX 3080, CUDA, mixed precision).
+molecule: only the SMILES line changes. Run with md-tools **0.5.3**; every number is copied from
+that run (one NVIDIA RTX 3080, CUDA, mixed precision).
 
 If you have not done the paracetamol tutorial, read it first; this page does not repeat its
 explanations.
@@ -98,7 +104,7 @@ cd cMD-run1
 run.sh: all stages reported completion
 ```
 
-The build took 12 s and the whole chain 33 s.
+The whole chain took 36 s.
 
 ## 4. Result
 
@@ -108,15 +114,11 @@ From `cMD-run1/cMD.out`:
 System
   residues                     600 (HOH 595, CL 2, NA 2, UNL 1)
 Averages
-  Temperature (K)              mean 300.463   rms fluctuation 5.99642
-  Density (g/mL)               mean 0.997524   rms fluctuation 0.00901354
-  Speed (ns/day)               mean 971.95   rms fluctuation 229.143
+  Temperature (K)              mean 298.616   rms fluctuation 5.13951
+  Density (g/mL)               mean 0.99185   rms fluctuation 0.00689213
+  Speed (ns/day)               mean 1245.2   rms fluctuation 312.025
 ```
 
 The outputs have the same names and meanings as in the paracetamol tutorial:
 `solute_prod1.nc` is the trajectory, `mdout.csv` the state table, `cMD.xml` the final state, and
 `cMD.log` the record completion is read from.
-
-## Next
-
-* the same molecule with enhanced sampling: [REST2: Chinolin](../REST2/chinolin.md)

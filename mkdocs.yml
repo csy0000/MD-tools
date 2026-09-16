@@ -110,9 +110,12 @@ nav:
           - Chinolin: tutorial/cMD/chinolin.md
       - REST2:
           - Paracetamol: tutorial/REST2/paracetamol.md
-      - 0.5.4:
-          - REST2 paracetamol: tutorial/0.5.4/REST2/paracetamol.md
-          - REST2 Chinolin: tutorial/0.5.4/REST2/chinolin.md
+          - Chinolin: tutorial/REST2/chinolin.md
+      - Archived:
+          - tutorial/archived/README.md
+          - 0.5.3 cMD paracetamol: tutorial/archived/0.5.3/cMD/paracetamol.md
+          - 0.5.3 cMD Chinolin: tutorial/archived/0.5.3/cMD/chinolin.md
+          - 0.5.3 REST2 paracetamol: tutorial/archived/0.5.3/REST2/paracetamol.md
   - Running a simulation:
       - The commands:
           - Building a system (build-top): build-top.md

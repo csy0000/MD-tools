@@ -1,25 +1,30 @@
 # cMD: paracetamol in explicit water
 
-!!! note "Requires md-tools 0.5.4 or later"
-    Earlier releases have their own tutorials, kept [archived](../archived/README.md).
+!!! warning "Archived: written for md-tools 0.5.3"
+    This page was run against 0.5.3 and is kept as a record of that release. 0.5.4 changed the
+    workflow it describes: REST2 states are built once, as files, by
+    `md-openmm build-top --rest2-scaler`; a stage or a ladder no longer scales anything at run
+    time, so a hot stage takes its saved state as `-s` and a ladder reads `-s` only from its group
+    file; and more torsions stay unscaled (aromatic rings, double bonds and impropers, not only the
+    amide omega). Commands here may be refused by 0.5.4. For 0.5.4 or later, use the
+    [current tutorials](../../../README.md).
 
 A complete conventional MD run of one small molecule, from a SMILES string to 200 ps of NPT
-production, with md-tools **0.5.4**. Every command below was run exactly as written, and every
-number on this page is copied from the files that run produced (md-tools at commit `9cd2d39`; one
-NVIDIA RTX 3080, CUDA, mixed precision).
+production, with md-tools **0.5.3**. Every command below was run exactly as written, and every
+number on this page is copied from the files that run produced (one NVIDIA RTX 3080, CUDA, mixed
+precision).
 
-It takes about two minutes: 1.5 min to build, most of it the partial-charge calculation, and
-33 s to run.
+It takes about two minutes, most of it the partial-charge calculation.
 
 ## What you need
 
-* md-tools 0.5.4 or later installed, with CUDA — see [Installing](../../install.md). Check it:
+* md-tools 0.5.3 installed, with CUDA — see [Installing](../../../../install.md). Check it:
 
   ```bash
-  md-openmm --version          # md-tools 0.5.4
+  md-openmm --version          # md-tools 0.5.3
   ```
 
-* a machine configuration — see [Machine configuration](../../machine-configuration.md). CUDA is
+* a machine configuration — see [Machine configuration](../../../../machine-configuration.md). CUDA is
   the default and is mandatory; nothing here falls back to the CPU.
 
 ## 1. The dataset root
@@ -48,7 +53,7 @@ solute:
 `kind: ligand` reads `-i` as a small molecule and parameterises it with the small-molecule force
 field. Everything else — Sage 2.2.1, AM1-BCC charges, TIP3P, a 1.5 nm dodecahedron, 0.15 M NaCl,
 HBonds constraints — is the documented default, and the build log lists each value with
-`(default)` beside it. See [Building a system](../../build-top.md).
+`(default)` beside it. See [Building a system](../../../../build-top.md).
 
 ## 2. Build the system
 
@@ -78,8 +83,8 @@ Summary
 
 `built.xml` (the serialised OpenMM System) and `built.pdb` (the matching coordinates) are a pair:
 the build refuses to write either if their atoms disagree. `built.sdf` keeps the molecule's bond
-orders, which a topology cannot carry. cMD does not need it; the REST2 scaler reads it to find this
-molecule's aromatic ring and amide bonds — see [REST2: paracetamol](../REST2/paracetamol.md).
+orders, which a topology cannot carry. cMD does not need it; a REST2 run of this molecule does —
+see [REST2: paracetamol](../REST2/paracetamol.md).
 
 ## 3. Generate the run
 
@@ -120,7 +125,7 @@ PARA/
 ```
 
 `input/` and `min/` belong to the system, not to this run. See
-[The run layout](../../run-layout.md).
+[The run layout](../../../../run-layout.md).
 
 ## 4. Run it
 
@@ -139,15 +144,13 @@ cd cMD-run1
 | `eq_3` | restraint released | NPT |
 | `cMD` | production | NPT |
 
-It finished in 33 s and ended with:
+It finished in 35 s and ended with:
 
 ```text
 run.sh: all stages reported completion
 ```
 
-Choose the device with `CUDA_VISIBLE_DEVICES`. This run used
-`CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1`: without `PCI_BUS_ID`, CUDA may number the
-cards differently from `nvidia-smi`. Run it
+Choose the device with `CUDA_VISIBLE_DEVICES` (this run used `CUDA_VISIBLE_DEVICES=1`). Run it
 again and every stage is skipped, because each already reports `status: completed` in its own
 machine record; an interrupted stage resumes from its last checkpoint.
 
@@ -182,9 +185,9 @@ Run
   ensemble                     NPT
   platform                     CUDA
 Averages
-  Temperature (K)              mean 301.359   rms fluctuation 7.79952
-  Density (g/mL)               mean 0.99633   rms fluctuation 0.0100682
-  Speed (ns/day)               mean 913.05   rms fluctuation 216.061
+  Temperature (K)              mean 300.743   rms fluctuation 7.13978
+  Density (g/mL)               mean 1.00088   rms fluctuation 0.0101666
+  Speed (ns/day)               mean 1225   rms fluctuation 297.767
 Summary
   cMD: 100000 steps completed, 200 ps
 status               completed
@@ -194,13 +197,13 @@ The temperature sits at the 300 K thermostat and the density at that of water, w
 correctly built and equilibrated box looks like. 200 ps samples nothing in particular; for a real
 study, raise `production_steps`.
 
-!!! note "The residue name"
+!!! note "The residue name in 0.5.3"
     `build-top` logs `residue name PAR (assigned deterministically)`, but the System and every
-    output name the molecule `UNL`: the assigned name is recorded and not applied. It
+    output name the molecule `UNL`. In 0.5.3 the assigned name is recorded and not applied. It
     changes nothing about the simulation.
 
 ## Next
 
 * the same molecule with enhanced sampling: [REST2: paracetamol](../REST2/paracetamol.md)
 * another small molecule, same steps: [cMD: Chinolin](chinolin.md)
-* register the finished directory as a dataset: [Registering a finished run](../../data_register/README.md)
+* register the finished directory as a dataset: [Registering a finished run](../../../../data_register/README.md)
