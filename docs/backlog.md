@@ -449,8 +449,13 @@ layout says to look. `build-md --all-in-one` does create `eq/` (every script-bea
 carries its own declaration), which makes the empty directory beside the flat files misleading in
 its own right.
 
-NOT FIXED, deliberately: it is pre-existing, unrelated to the naming work that exposed it, and
-changing where a runtime writes is a behavioural change for anyone already using `--all-in-one`.
+CLOSED 2026-09-16 by the retirement of `--all-in-one` in 0.5.4, which deleted
+`run_generated_workflow` and with it the single `base` this entry is about. There is now one shape
+of generated run, and its artefacts are filed by the layout that `run.sh` already followed.
+
+It was NOT fixed while the feature existed, deliberately: it was pre-existing, unrelated to the
+naming work that exposed it, and changing where a runtime writes would have been a behavioural
+change for anyone already using `--all-in-one`. Retiring the flag settled it without that cost.
 `--check` was suspected of leaving the stray `eq/` behind and was cleared by measurement: a
 `--check` into a fresh `-odir` creates nothing, as the contract requires.
 

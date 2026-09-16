@@ -130,6 +130,7 @@ nav:
       - Scientific defaults: scientific-defaults.md
       - Support matrix: support-matrix.md
       - Releases:
+          - 0.5.4: release-notes/v0.5.4.md
           - 0.5.3: release-notes/v0.5.3.md
           - 0.5.2: release-notes/v0.5.2.md
           - 0.5.1: release-notes/v0.5.1.md

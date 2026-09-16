@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.4 — unreleased
+
+**`--all-in-one` is retired, and its whole-chain preflight moved to generation.** The flag emitted
+one `md.py` running every stage in one process instead of one script per stage, under identical
+resolved settings, seeds, logs, checkpoints and restart semantics — so it bought a reader nothing
+while every generated-run behaviour had to be built twice, and the split form was the one that got
+tested. It was not a bundle that runs without MD-tools: its `md.py` imported `md_tools.md` like any
+other generated script, and `export-reference` remains the command that produces something runnable
+without this package. What it did carry alone was a preflight over the whole chain, and that is now
+`build-md`'s: a chain whose last stage is invalid is refused **before a script exists**, rather than
+after every earlier stage has run to completion. `md_tools.md.run_generated_workflow` is removed
+with it. Use `./run.sh`, which drives the same stages in order.
+
+**`build-md` requires the built System for every protocol.** A ladder already did, because its rungs
+are scaled at build time; now every protocol does, because every chain is validated against that
+System at generation. A cMD run used to generate in a bare directory and leave the masses behind a
+timestep, the box behind an ensemble and the forces the scaling convention must place to whichever
+stage first opened the System. A dataset root has one System and it must match the projects
+generated in it, so an explicit-solvent project on a boxless one is refused rather than discovered
+later. Run `build-top` into `build/` first.
+
+**The generation-time validator is device-free, deliberately.** It resolves no platform, places no
+device, opens no CUDA Context and consults no MPI world: generation happens on login nodes, in CI,
+and on different machines from the run, so a device answered there would describe the wrong
+computer. Those checks stay in the run-time preflight.
+
+**The retired-command guard is retired.** `sys-config`, `sys-gen`, `md-gen`, `setup` and
+`show-default` have been gone long enough that a test and a CI loop asserting they still fail were
+upkeep with nothing behind them. The rule that no second executable is installed is separate, still
+live, and still checked.
+
 ## 0.5.3 — 2026-09-16
 
 **An extension can run the group file an extension writes.** `--extend-from` takes the physical
