@@ -87,5 +87,5 @@ their protocol.
 
 Deletion is not evidence either. Removing the code that described the old architecture says nothing
 about whether the current simulations are correct; that question is answered only by the tests and
-the runs recorded in [the development history](history/README.md) and the
-[release notes](release-notes/v0.5.3.md).
+the runs recorded in the [release notes](release-notes/v0.5.3.md) and in the development journals
+kept under `docs/history/` in the repository.

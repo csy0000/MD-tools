@@ -1,0 +1,116 @@
+# The documentation site: https://csy0000.github.io/MD-tools/
+#
+# WHAT IS PUBLISHED, AND WHAT IS NOT. The site carries the three things a user needs -- set up an
+# environment, configure a machine, run a simulation -- plus the reference pages that justify the
+# defaults. Development evidence stays in the repository and off the site: history/, campaigns/,
+# integration/, amber-like-fix/, claudecode-instructions/, migration/, reports/, the backlog, and
+# the dated release-note evidence files. They are kept because the reasoning in them is worth
+# more than the deletion would be; they are not published because a reader cannot tell an
+# evidence note from an instruction.
+#
+# `docs/md-configuration.md` IS GENERATED (`md_tools.build.manual.render()`) and
+# `tests/test_configuration_manual.py` fails on a hand-edit. The site renders the committed file;
+# it must never be authored here.
+#
+# Build it the way CI does:
+#     pip install mkdocs-material mkdocs-exclude
+#     mkdocs build --strict
+
+site_name: MD-tools
+site_description: >-
+  OpenMM tools for building systems, generating MD workflows, running them on CUDA,
+  and registering the result as a verified dataset.
+site_url: https://csy0000.github.io/MD-tools/
+repo_url: https://github.com/csy0000/MD-tools
+repo_name: csy0000/MD-tools
+edit_uri: edit/dev/docs/
+
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: {icon: material/weather-night, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: {icon: material/weather-sunny, name: Light mode}
+
+plugins:
+  - search
+
+# KEPT IN THE REPOSITORY, KEPT OFF THE SITE. See the header for why. This is MkDocs' own
+# `exclude_docs` (1.5+), gitignore-style, rather than a third-party plugin: the core does the job,
+# and `mkdocs-exclude` is in any case broken against MkDocs 1.6.
+exclude_docs: |
+  backlog.md
+  promoting-a-method.md
+  # The docs/ directory's own index, for someone browsing the repository on GitHub. The site has
+  # `index.md` instead: a listing of this directory would only duplicate the navigation the theme
+  # already renders, and it links to pages that are deliberately unpublished.
+  #
+  # LEADING SLASH, and it is load-bearing. These patterns are gitignore-style, so a bare
+  # `README.md` matches EVERY README in the tree by basename -- which silently excluded the
+  # collective-variables, data-registration, method-index and all five method pages, turning
+  # eight nav entries into references to nothing. Anchored to the docs root, it matches one file.
+  /README.md
+  history/
+  campaigns/
+  integration/
+  amber-like-fix/
+  claudecode-instructions/
+  migration/
+  reports/
+  release-notes/2026*
+  release-notes/cuda-coverage-matrix.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  # REQUIRED BY THE `grid cards` BLOCK on the home page, and by any other Markdown nested inside
+  # raw HTML. Without it the content of `<div class="grid cards" markdown>` is emitted verbatim:
+  # the page shows literal asterisks and unclickable `[text](link.md)` syntax, and every link in
+  # the block stops being a link. `attr_list` alone does not do this.
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installing: install.md
+      - Machine configuration: machine-configuration.md
+  - Running a simulation:
+      - Running (md-run): md-run.md
+      - The run layout: run-layout.md
+      - Configuration reference: md-configuration.md
+      - Collective variables: collective_variables/README.md
+      - Data registration: data_register/README.md
+  - Methods:
+      - Overview: openmm_methods/README.md
+      - cMD: openmm_methods/cMD/README.md
+      - REST2: openmm_methods/REST2/README.md
+      - rREST2: openmm_methods/rREST2/README.md
+      - AIS: openmm_methods/AIS/README.md
+      - AIS implementation: openmm_methods/AIS/AIS_implementation.md
+      - Umbrella sampling: openmm_methods/umbrella/README.md
+  - Reference:
+      - Scientific defaults: scientific-defaults.md
+      - Support matrix: support-matrix.md
+      - The dataset contract: data-contract.md
+  - Releases:
+      - 0.5.3: release-notes/v0.5.3.md
+      - 0.5.2: release-notes/v0.5.2.md
+      - 0.5.1: release-notes/v0.5.1.md
+      - 0.5.0: release-notes/v0.5.0.md
