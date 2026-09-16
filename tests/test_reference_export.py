@@ -63,6 +63,10 @@ def finished(tmp_path_factory):
         CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
                "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800).returncode == 0
+    # A hot stage runs on its SAVED scaled state and scales nothing itself (step 3).
+    from .conftest import make_scaled_state
+
+    make_scaled_state(root, tau=0.5)
 
     (root / "cMD.config").write_text(
         "protocol: cMD\nsolvent: implicit\n"
@@ -88,7 +92,7 @@ def finished(tmp_path_factory):
             ("eq_nvt_posres", "../input/eq_1.in", "eq", None),
             ("cMD", "../input/cMD.in", ".", "eq/eq_1.xml")):
         argv = CLI + ["md-run", "-i", source, "-p", "../build/built.pdb",
-                      "-s", "../build/built.xml", "-odir", odir, "--cpu"]
+                      "-s", "../build/cMD/system_state0.xml", "-odir", odir, "--cpu"]
         if parent:
             argv += ["-c", parent]
         done = subprocess.run(argv, cwd=run, capture_output=True, text=True, timeout=1800,
@@ -108,10 +112,15 @@ def test_input_holds_what_the_user_supplied_each_one_proven(finished):
 
     root, run, bundle, _manifest = finished
     inputs = bundle / "input"
+    # A hot run: the stages ran on a SAVED SCALED STATE, so input/ carries it, the record of how it
+    # was made from built.xml, the configuration and code that made it, and the check.
     assert sorted(p.name for p in inputs.iterdir()) == [
         "ALA.pdb", "README.md", "build-md.config", "build-top.config", "build_settings.json",
         "build_system.py", "built.pdb", "built.xml", "cMD.in", "eq_1.in",
-        "structure.leap"]
+        "hamiltonian.py", "scaler.config", "scaler.yaml", "structure.leap",
+        "system_state0.xml", "verify_state.py"]
+    assert (inputs / "system_state0.xml").read_bytes() == \
+        (root / "build" / "cMD" / "system_state0.xml").read_bytes()
     assert (inputs / "ALA.pdb").read_bytes() == ALA.read_bytes()
     assert (inputs / "build-top.config").read_bytes() == (root / "sys.config").read_bytes()
     assert (inputs / "build-md.config").read_bytes() == (run / "resolved.config").read_bytes()
@@ -133,9 +142,12 @@ def test_input_holds_what_the_user_supplied_each_one_proven(finished):
     assert recorded["structure_origin"]["sequence"] == ["ACE", "ALA", "NME"]
     readme = (inputs / "README.md").read_text(encoding="utf-8")
     assert "md-openmm build-top -i input/ALA.pdb --config input/build-top.config" in readme
-    assert ("md-openmm md-run -i input/eq_1.in -p input/built.pdb -s input/built.xml"
+    assert ("md-openmm md-run -i input/eq_1.in -p input/built.pdb -s input/system_state0.xml"
             in readme)
-    assert "md-openmm md-run -i input/cMD.in -p input/built.pdb -s input/built.xml" in readme
+    assert ("md-openmm md-run -i input/cMD.in -p input/built.pdb -s input/system_state0.xml"
+            in readme)
+    assert "md-openmm build-top --rest2-scaler" in readme
+    assert "python input/verify_state.py" in readme
     assert "python input/build_system.py --out rebuilt" in readme
     assert "sequence `{ ACE ALA NME }`" in readme
     assert str(root) not in readme and sys.executable not in readme, \
@@ -152,6 +164,40 @@ def test_export_reference_works_from_inside_the_run_directory_with_a_dot(finishe
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
     for name in ("system.xml", "topology.pdb", "start.xml", "input/built.xml"):
         assert (tmp_path / "dot-bundle" / name).read_bytes() == (bundle / name).read_bytes(), name
+
+
+def test_the_scaled_state_re_derives_from_the_built_system_without_md_tools(finished, tmp_path):
+    """The link between built.xml and the state the stages ran on, checked with OpenMM alone."""
+    import shutil
+
+    _root, _run, bundle, _manifest = finished
+    copy = tmp_path / "bundle"
+    shutil.copytree(bundle, copy)
+    blocker = (
+        "import sys, runpy\n"
+        "class B:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name.split('.')[0] == 'md_tools':\n"
+        "            raise ImportError('bundle imported md_tools: ' + name)\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, B())\n"
+        "sys.argv = ['input/verify_state.py']\n"
+        "runpy.run_path('input/verify_state.py', run_name='__main__')\n")
+    (copy / "_blocked.py").write_text(blocker, encoding="utf-8")
+    ran = subprocess.run([sys.executable, "_blocked.py"], cwd=copy, capture_output=True,
+                         text=True, timeout=600, env={**ONE_THREAD, "PYTHONPATH": ""})
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    assert "identical" in ran.stdout
+
+    # and a state that is not what built.xml scales to is caught
+    import yaml
+
+    record = yaml.safe_load((copy / "input" / "scaler.yaml").read_text(encoding="utf-8"))
+    record["states"][0]["tau"] = 0.3
+    (copy / "input" / "scaler.yaml").write_text(yaml.safe_dump(record), encoding="utf-8")
+    wrong = subprocess.run([sys.executable, "_blocked.py"], cwd=copy, capture_output=True,
+                           text=True, timeout=600, env={**ONE_THREAD, "PYTHONPATH": ""})
+    assert wrong.returncode == 1 and "DIFFERS" in wrong.stdout, wrong.stdout + wrong.stderr
 
 
 def test_the_system_rebuilds_from_the_structure_without_md_tools(finished, tmp_path):
@@ -229,9 +275,9 @@ def test_a_structure_that_is_not_the_one_recorded_refuses_before_writing(finishe
 def test_the_bundle_holds_the_system_the_stage_integrated_not_the_one_it_was_built_from(finished):
     """At tau = 0.5 the build System is a DIFFERENT Hamiltonian, and exporting it is the bug.
 
-    Between `built.xml` and the Context the engine scales the solute, adds the positional
-    restraint force and, for explicit solvent, the barostat. A bundle carrying `built.xml` would
-    run happily and sample the unscaled ensemble.
+    Between `built.xml` and the Context stand the saved scaled state (the stage's `-s`), the
+    positional restraint force and, for explicit solvent, the barostat. A bundle carrying
+    `built.xml` would run happily and sample the unscaled ensemble.
     """
     root, run, bundle, _manifest = finished
     exported = (bundle / "system.xml").read_text(encoding="utf-8")
@@ -243,7 +289,7 @@ def test_the_bundle_holds_the_system_the_stage_integrated_not_the_one_it_was_bui
     from openmm import XmlSerializer
 
     block = read_record(run / "cMD.log")["stage"]
-    loaded = load_inputs(root / "build" / "built.pdb", root / "build" / "built.xml")
+    loaded = load_inputs(root / "build" / "built.pdb", root / "build" / "cMD" / "system_state0.xml")
     prepared = _prepare_stage(loaded, stage=block, name=block["name"], where="test")
     assert exported == XmlSerializer.serialize(prepared["prepared_system"])
 

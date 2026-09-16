@@ -111,6 +111,12 @@ def _generate(root: Path, name: str, document: dict, *extra):
         if source.is_file():
             shutil.copy2(source, system / helper)
 
+    tau = float((document.get("dynamics") or {}).get("tau") or 0.0)
+    if tau > 0.0 and document.get("protocol") == "cMD":
+        # A hot stage runs on its SAVED scaled state and scales nothing itself (step 3).
+        from .conftest import make_scaled_state
+
+        make_scaled_state(system, tau=tau)
     (system / f"{name}.config").write_text(yaml.safe_dump(document), encoding="utf-8")
     done = subprocess.run(
         CLI + ["build-md", "-odir", f"./{name}-run1",
@@ -185,11 +191,14 @@ def _run_cmd(scripts, destination, *, environment=None, expect=0):
     # fixture's root would read `build/` from a system this run was not generated
     # against, now that each variant has a root of its own.
     root = Path(scripts).parent
+    # A hot variant's production runs on its saved state; an unscaled one on the built System.
+    state = root / "build" / "cMD" / "system_state0.xml"
+    system = state if state.is_file() else root / "build" / "built.xml"
     done = subprocess.run(
         # The production stage, named for the protocol: the retired `--all-in-one` md.py ran the
         # whole chain, and every equilibration length in `_cmd_config` is 0.
         [sys.executable, str(scripts / "cMD.py"),
-         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(system),
          "-odir", str(destination)],
         cwd=scripts, capture_output=True, text=True, timeout=2400,
         env={**_environment(root), **(environment or {})})

@@ -60,6 +60,11 @@ def _project(root: Path, *, tau: float = 0.0, phase_space: int = 0) -> Path:
                "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
+    if tau > 0.0:
+        # A hot stage runs on its SAVED scaled state and scales nothing itself (step 3).
+        from .conftest import make_scaled_state
+
+        make_scaled_state(root, tau=tau)
 
     (root / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
     document = {
@@ -106,12 +111,15 @@ def _run(project: Path, destination: Path, *extra, environment=None, expect=0):
         {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
     base["MD_TOOLS_CONFIG"] = str(user)
     base.update(environment or {})
+    # A hot project's production runs on its saved state; an unscaled one on the built System.
+    state = project / "build" / "cMD" / "system_state0.xml"
+    system = state if state.is_file() else project / "build" / "built.xml"
     done = subprocess.run(
         # THE PRODUCTION STAGE. This ran the retired `--all-in-one` md.py; every equilibration
         # length in the document above is 0, so production is the only dynamics stage either way.
         [sys.executable, str(project / "cMD" / "cMD.py"),
          "-p", str(project / "build" / "built.pdb"),
-         "-s", str(project / "build" / "built.xml"),
+         "-s", str(system),
          "-odir", str(destination), "--cpu", *extra],
         cwd=project / "cMD", capture_output=True, text=True, timeout=1800, env=base)
     if expect is not None:

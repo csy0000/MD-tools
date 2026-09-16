@@ -516,6 +516,11 @@ def test_example_4_switching_paths_from_a_fixed_tau_ensemble(system):
         "reporting": {"crd_printout_solute": 10, "crd_printout_whole": 10,
                       "info_printout": 50, "checkpoint_printout": 100},
     }), encoding="utf-8")
+    # The hot stages run on a SAVED scaled state and scale nothing themselves (step 3), so the
+    # state is built first, as `md-openmm build-top --rest2-scaler` would.
+    from .conftest import make_scaled_state
+
+    make_scaled_state(built, tau=0.5)
     _md_openmm(built, "build-md", "-odir", "./hot-run1", "--config", "hot.config")
     _run_sh(built / "hot-run1", "--cpu")
     source = built / "hot-run1" / "whole_prod1.nc"

@@ -450,7 +450,10 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
                    "topology": topology_path.name, "topology_sha256": _sha256(topology_path)},
         "config": {"file": config_path.name, "sha256": _sha256(config_path)},
         "solute": {"n_atoms": len(solute),
-                   "atom_range": [min(solute), max(solute)] if solute else None},
+                   "atom_range": [min(solute), max(solute)] if solute else None,
+                   # The exact list, so a reference bundle can re-derive the state from the built
+                   # System with OpenMM alone rather than trusting a range to be contiguous.
+                   "atom_indices": [int(i) for i in solute]},
         "unscaled_torsions": {
             "enabled": enabled,
             "classes": ["amide_omega", "aromatic_ring", "double_bond", "improper"] if enabled

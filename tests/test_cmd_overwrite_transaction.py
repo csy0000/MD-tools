@@ -47,11 +47,18 @@ def project(tmp_path_factory):
         pytest.skip("no ALA fixture")
     root = tmp_path_factory.mktemp("cmd-overwrite")
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
+    # INTO `build/`: the System belongs to the DATASET, and `build-md` validates the chain it
+    # generates against it.
+    (root / "build").mkdir(exist_ok=True)
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
+    # The stage runs at tau 0.5 on a SAVED scaled state and scales nothing itself (step 3).
+    from .conftest import make_scaled_state
+
+    make_scaled_state(root, tau=0.5)
 
     (root / "cMD.config").write_text(yaml.safe_dump({
         "protocol": "cMD", "solvent": "implicit",
@@ -85,7 +92,8 @@ def _run_stage(project_root: Path, work: Path, *, environment=None, timeout=900,
     base.update(environment or {})
     return subprocess.run(
         [sys.executable, str(project_root / "project" / "cMD.py"),
-         "-p", str(project_root / "built.pdb"), "-s", str(project_root / "built.xml"),
+         "-p", str(project_root / "build" / "built.pdb"),
+         "-s", str(project_root / "build" / "cMD" / "system_state0.xml"),
          "-odir", str(work), *extra],
         cwd=work, capture_output=True, text=True, timeout=timeout, env=base)
 
@@ -140,7 +148,14 @@ def test_overwrite_removes_a_stream_the_new_run_does_not_write(project, complete
                    "production_steps": PRODUCTION_STEPS},
         "reporting": {"crd_printout_solute": FRAME_EVERY, "info_printout": FRAME_EVERY,
                       "checkpoint_printout": CHECKPOINT_EVERY}}), encoding="utf-8")
-    regenerated = completed.parent / "project-no-phase-space"
+    # A DATASET ROOT OF ITS OWN for the second configuration: `build-md` reads the System from
+    # `<root>/build/`, and the shared `input/min.in` of the first root is refused for a second
+    # configuration that resolves it differently. The build (System and saved state) is copied.
+    import shutil
+
+    other_root = completed.parent / "dataset-no-phase-space"
+    shutil.copytree(project / "build", other_root / "build")
+    regenerated = other_root / "project"
     done = subprocess.run(CLI + ["build-md", "-odir", str(regenerated),
                                  "--config", str(off_config)],
                           capture_output=True, text=True, timeout=600)
@@ -152,7 +167,8 @@ def test_overwrite_removes_a_stream_the_new_run_does_not_write(project, complete
     base.update(_user_config(completed))
     redone = subprocess.run(
         [sys.executable, str(regenerated / "cMD.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+         "-p", str(project / "build" / "built.pdb"),
+         "-s", str(project / "build" / "cMD" / "system_state0.xml"),
          "-odir", str(completed), "--overwrite"],
         cwd=completed, capture_output=True, text=True, timeout=900, env=base)
     assert redone.returncode == 0, redone.stdout + redone.stderr

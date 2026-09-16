@@ -48,6 +48,10 @@ def ladder(tmp_path_factory):
     build = _cli(work, "build-top", "-i", str(ala), "-os", "build/built.xml", "-op", "build/built.pdb",
                  "-log", "build/built.log", "--config", str(work / "sys.config"))
     assert build.returncode == 0, build.stdout + build.stderr
+    # The hot stages run on a SAVED scaled state and scale nothing themselves (step 3).
+    from .conftest import make_scaled_state
+
+    make_scaled_state(work, tau=TAU_MAX)
 
     # The reservoir: a fixed-tau run AT THE LADDER'S TOP RUNG, streaming complete phase space.
     # Anything else would be a sample of a different distribution.

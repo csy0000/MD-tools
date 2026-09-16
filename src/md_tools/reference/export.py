@@ -315,7 +315,13 @@ def _locate(run_dir: Path, entry: dict[str, Any]) -> Path | None:
         # `export-reference` refused every one of them. The digest still decides: this widens
         # where to look, not what counts as a match, so two campaigns each holding a `built.pdb`
         # are still told apart by content rather than by position.
-        for candidate in (directory / name, directory / "build" / name):
+        # And a SAVED SCALED STATE, `<dataset>/build/<method>/system_state<n>.xml`: a hot stage's
+        # `-s` since a stage stopped scaling in memory (docs/amber-like-fix/REST2-scaler.md, step
+        # 3). One level further down, and again the digest decides.
+        candidates = [directory / name, directory / "build" / name]
+        if (directory / "build").is_dir():
+            candidates += sorted((directory / "build").glob(f"*/{name}"))
+        for candidate in candidates:
             if candidate.is_file() and _digest(candidate) == wanted:
                 return candidate
     return None
@@ -517,10 +523,65 @@ stages before it are not part of this dataset.
 **4. With md-tools, from the structure.**
 
     md-openmm build-top -i input/{structure} {config_flag}-os build/built.xml -op build/built.pdb -log build/built.log
-    md-openmm build-md --config input/build-md.config -odir ./<method>-run1
-"""
+{scaler_command}    md-openmm build-md --config input/build-md.config -odir ./<method>-run1
+{scaled}"""
 
 STANDALONE_BUILD = Path(__file__).with_name("standalone_build.py")
+
+#: `md_tools/rest2/hamiltonian.py`, copied byte for byte into a hot run's `input/`: the code that
+#: turned `built.xml` into the saved scaled state the stage integrated. It imports only OpenMM.
+SCALING_SOURCE = Path(__file__).resolve().parents[1] / "rest2" / "hamiltonian.py"
+
+VERIFY_STATE = '''#!/usr/bin/env python
+"""Re-derive the saved scaled state from built.xml, and check it is the state this run integrated.
+
+Standalone. Needs OpenMM and PyYAML, not md-tools. `hamiltonian.py` beside this file is the code md-tools built the
+state with (`md-openmm build-top --rest2-scaler`), copied byte for byte, and `scaler.yaml` is the
+record it wrote: the tau, the solute atoms, the unscaled central bonds, and whether impropers stay
+unscaled. So this is the derivation that ran rather than a restatement of it.
+
+    python input/verify_state.py
+
+Both Systems are serialised by the RUNNING OpenMM before they are compared, so an OpenMM that
+formats its XML differently still compares like with like. Exits 0 when identical, 1 otherwise.
+"""
+import sys
+from pathlib import Path
+
+import yaml
+from openmm import XmlSerializer
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from hamiltonian import build_scaled_system    # noqa: E402
+
+
+def main():
+    record = yaml.safe_load((HERE / "scaler.yaml").read_text(encoding="utf-8"))
+    torsions = record["unscaled_torsions"]
+    solute = [int(i) for i in record["solute"]["atom_indices"]]
+    excluded = [tuple(int(a) for a in pair) for pair in torsions["unscaled_central_bonds"]]
+    base = XmlSerializer.deserialize((HERE / record["source"]["system"]).read_text(encoding="utf-8"))
+    status = 0
+    for state in record["states"]:
+        bundled = HERE / state["file"]
+        if not bundled.is_file():
+            continue
+        rebuilt = XmlSerializer.serialize(build_scaled_system(
+            base, solute, float(state["tau"]), excluded_bonds=excluded,
+            unscaled_impropers=bool(torsions["unscaled_impropers"])))
+        same = rebuilt == XmlSerializer.serialize(
+            XmlSerializer.deserialize(bundled.read_text(encoding="utf-8")))
+        print(f"{state['file']}  tau {float(state['tau']):g}  "
+              f"{'identical' if same else 'DIFFERS'} when rebuilt from {record['source']['system']}")
+        status = status or (0 if same else 1)
+    return status
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
 
 _STEPS = {
     ("peptide", "explicit"): "hydrogens deleted and re-added at pH {ph} (seeded), the {shape} box "
@@ -757,6 +818,56 @@ def write_user_inputs(plan: dict[str, Any], out_dir: Path) -> dict[str, Any]:
         rows.append(f"| `{source.name}` | the built {'System' if role == 'system' else 'topology'}"
                     f" every stage ran on (`-{'s' if role == 'system' else 'p'}`) |")
 
+    # THE SAVED SCALED STATE a hot stage integrated, with the record that says how it was made from
+    # the built System above, and the code that made it -- so the chain from the structure to the
+    # Hamiltonian that ran is proven end to end.
+    scaled = plan.get("scaled_state")
+    scaler_command = scaled_text = ""
+    if scaled is not None:
+        state, scaler_record = Path(scaled["state"]), Path(scaled["record"])
+        shutil.copy2(state, target / state.name)
+        shutil.copy2(scaler_record, target / "scaler.yaml")
+        shutil.copy2(SCALING_SOURCE, target / "hamiltonian.py")
+        (target / "verify_state.py").write_text(VERIFY_STATE, encoding="utf-8")
+        (target / "verify_state.py").chmod(0o755)
+        names["system"] = state.name
+        manifest["scaled_state"] = {
+            "file": f"input/{state.name}", "sha256": _digest(target / state.name),
+            "method": scaled["identity"]["method"], "state": scaled["identity"]["state"],
+            "tau": scaled["identity"]["tau"],
+            "verified": ("sha256 matches the run record's inputs.system and the scaler.yaml "
+                         "entry; scaler.yaml names input/" + Path(plan["build_system"]).name
+                         + " as its source by sha256")}
+        manifest["scaler_record"] = {"file": "input/scaler.yaml",
+                                     "sha256": _digest(target / "scaler.yaml")}
+        manifest["scaling_code"] = {
+            "file": "input/hamiltonian.py", "sha256": _digest(target / "hamiltonian.py"),
+            "copied_from": "md_tools/rest2/hamiltonian.py, byte for byte"}
+        rows += [f"| `{state.name}` | the saved scaled state every hot stage ran on (`-s`) |",
+                 "| `scaler.yaml` | how that state was made from the built System |",
+                 "| `hamiltonian.py` | the code that made it, byte for byte |",
+                 "| `verify_state.py` | re-derives the state from the built System with OpenMM "
+                 "alone |"]
+        config_name = "<scaler.config>"
+        if scaled.get("config") is not None:
+            shutil.copy2(scaled["config"], target / "scaler.config")
+            manifest["scaler_config"] = {
+                "file": "input/scaler.config", "sha256": _digest(target / "scaler.config"),
+                "verified": "sha256 matches the one scaler.yaml records"}
+            rows.append("| `scaler.config` | the configuration `build-top --rest2-scaler` read |")
+            config_name = "input/scaler.config"
+        else:
+            manifest["scaler_config"] = {"file": None, "verified": False,
+                                         "why": "the scaler.config whose sha256 scaler.yaml "
+                                                "records was not found"}
+        scaler_command = (f"    md-openmm build-top --rest2-scaler -s build/built.xml "
+                          f"-p build/built.pdb --config {config_name}\n")
+        scaled_text = ("\n## The scaled state\n\nThe hot stages ran on `" + state.name + "`, not on "
+                       "the built System: it is the built System with the solute scaled at tau = "
+                       f"{scaled['identity']['tau']:g}, written by `build-top --rest2-scaler`. "
+                       "Check it came from the built System here, with OpenMM alone:\n\n"
+                       "    python input/verify_state.py\n")
+
     # The Amber-like stage inputs, exactly as md-run read them.
     commands = []
     manifest["stage_inputs"] = []
@@ -766,12 +877,17 @@ def write_user_inputs(plan: dict[str, Any], out_dir: Path) -> dict[str, Any]:
             "file": f"input/{path.name}", "sha256": _digest(target / path.name),
             "verified": "copied from the run directory, where the stage record that read it lives"})
         rows.append(f"| `{path.name}` | the stage input `md-run -i` read |")
-        commands.append(_stage_command(command, names.get("system", "built.xml"),
-                                       names.get("topology", "built.pdb")))
+        # A hot stage ran on the scaled state; minimisation on the built System.
+        ran_on = names.get("system", "built.xml")
+        if scaled is not None and "-s" in command and command.index("-s") + 1 < len(command) \
+                and Path(command[command.index("-s") + 1]).name != Path(scaled["state"]).name:
+            ran_on = Path(plan["build_system"]).name
+        commands.append(_stage_command(command, ran_on, names.get("topology", "built.pdb")))
 
     # The build itself, as a script that needs openmm-env and not md-tools.
     settings = standalone_settings(plan["build_top_record"], structure,
-                                   target / names["system"], target / names["topology"])
+                                   target / Path(plan["build_system"]).name,
+                                   target / names["topology"])
     (target / "build_settings.json").write_text(json.dumps(settings, indent=2) + "\n",
                                                 encoding="utf-8")
     manifest["build_settings"] = {"file": "input/build_settings.json",
@@ -805,7 +921,8 @@ def write_user_inputs(plan: dict[str, Any], out_dir: Path) -> dict[str, Any]:
                             origin=_origin_text(structure, settings, leap),
                             standalone=_standalone_text(settings),
                             stage_commands="\n".join(commands) or
-                            "    (the records name no md-run stage inputs)"),
+                            "    (the records name no md-run stage inputs)",
+                            scaler_command=scaler_command, scaled=scaled_text),
         encoding="utf-8")
     return manifest
 
@@ -839,8 +956,42 @@ def export_reference(run_dir: Path, out_dir: Path, *, stage: str = "cMD") -> dic
                 f"`built.pdb` here; the file has to be found by digest.")
         found[role] = source
 
+    # A SAVED SCALED STATE is followed back to the built System it was made from: the build-top
+    # record proves built.xml, and scaler.yaml proves the state came from built.xml.
+    from ..rest2.states import ScaledStateError, load_scaler_record, scaled_state_identity
+
+    try:
+        identity = scaled_state_identity(found["system"])
+    except ScaledStateError as refusal:
+        raise ValueError(f"{refusal} Nothing has been written.") from None
+    build_system, scaled_plan = found["system"], None
+    if identity is not None:
+        record_path = Path(identity["record"])
+        scaler = load_scaler_record(record_path)
+        source = record_path.parent.parent / scaler["source"]["system"]
+        if not source.is_file() or _digest(source) != scaler["source"]["system_sha256"]:
+            raise FileNotFoundError(
+                f"{found['system'].name} was made from {scaler['source']['system']!r} (sha256 "
+                f"{scaler['source']['system_sha256'][:16]}...), which is not at {source} with "
+                f"that digest. The bundle could not prove the state came from the built System. "
+                f"Nothing has been written.")
+        if _digest(found["topology"]) != scaler["source"]["topology_sha256"]:
+            raise ValueError(
+                f"{found['system'].name} was scaled against a topology with a different sha256 "
+                f"from the one the stage ran with. Nothing has been written.")
+        wanted_config = (scaler.get("config") or {}).get("sha256")
+        config = next((path for path in (record_path.parent / scaler["config"]["file"],
+                                         record_path.parent.parent / scaler["config"]["file"],
+                                         record_path.parent.parent.parent / scaler["config"]["file"])
+                       if path.is_file() and _digest(path) == wanted_config), None)
+        build_system = source
+        scaled_plan = {"state": found["system"], "record": record_path, "identity": identity,
+                       "config": config}
+
     # Proven before the directory exists, like every other refusal here.
-    inputs_plan = user_inputs_plan(run_dir, found["system"], found["topology"])
+    inputs_plan = user_inputs_plan(run_dir, build_system, found["topology"])
+    if scaled_plan is not None:
+        inputs_plan["scaled_state"] = scaled_plan
 
     # -- everything that can REFUSE, before anything is written --------------------------------
     #
