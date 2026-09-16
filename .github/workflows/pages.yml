@@ -54,8 +54,13 @@ jobs:
         # page whose links 404.
         run: mkdocs build --strict
 
+      # NOT gated on `event_name == 'push'`, and that mattered: it was, and a
+      # `workflow_dispatch` then built the site and threw it away -- the deploy job below was
+      # SKIPPED, which reports as a dash rather than a failure, so the run went green having
+      # published nothing. A manual re-deploy is precisely what one wants after changing a Pages
+      # setting, which is when the gap was found.
       - name: upload the built site
-        if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+        if: github.ref == 'refs/heads/dev'
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
@@ -63,7 +68,9 @@ jobs:
   deploy:
     name: publish to GitHub Pages
     needs: build
-    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+    # Branch, not event: a pull request still builds and throws the result away (its ref is not
+    # `dev`), while a push and a manual dispatch both publish.
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     permissions:
       pages: write
