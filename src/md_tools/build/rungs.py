@@ -47,8 +47,7 @@ def _sha256(path: Path) -> str:
 
 
 def write_rung_systems(run_layout, *, system_path, topology_path, taus,
-                       route: str = "peptide", ligand_sdf=None,
-                       overwrite: bool = False) -> dict[str, Any]:
+                       ligand_sdf=None, overwrite: bool = False) -> dict[str, Any]:
     """Write one `build_state<n>.xml` per rung, plus the scaling record. Returns that record.
 
     `taus` is TAKEN, never recomputed. `remd.generated.tau_ladder` is the one implementation, and
@@ -62,7 +61,7 @@ def write_rung_systems(run_layout, *, system_path, topology_path, taus,
     from openmm.app import PDBFile
 
     from ..md.stage import solute_atom_indices
-    from ..openmm.system import classify_omega_bonds
+    from ..openmm.system import UnclassifiedOmegaError, omega_exclusions
     from ..remd.protocol import build_rung_systems
     from ..rest2 import REST2_IMPLEMENTATION, scaling_for_tau, torsion_exclusion_report
 
@@ -82,7 +81,13 @@ def write_rung_systems(run_layout, *, system_path, topology_path, taus,
     # No `route`: the classifier decides per candidate from the residue holding the amide
     # nitrogen, so the caller no longer has to know -- and can no longer get it wrong, which is
     # how the preflight and this writer came to disagree about the same ladder.
-    omega = classify_omega_bonds(pdb.topology, solute, ligand_sdf=ligand_sdf)
+    #
+    # ENFORCED, and this is the site where it matters most: these files ARE what a grouped ladder
+    # integrates. A candidate left out of `omega_unscaled_bonds` used to be scaled here silently.
+    try:
+        omega = omega_exclusions(pdb.topology, solute, ligand_sdf=ligand_sdf)
+    except UnclassifiedOmegaError as refusal:
+        raise RungWriteError(str(refusal)) from None
     excluded = [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
 
     systems, audit = build_rung_systems(base, solute, tuple(taus), excluded_bonds=excluded)

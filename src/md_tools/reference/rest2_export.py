@@ -417,7 +417,7 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
 
     from ..build.record import source_commit
     from ..md.stage import solute_atom_indices
-    from ..openmm.system import classify_omega_bonds
+    from ..openmm.system import omega_exclusions
     from ..remd.protocol import build_rung_systems
     from ..run.preflight import load_inputs
 
@@ -482,8 +482,9 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
     # used: the SDF beside the System, when `build-top` retained one.
     from ..run.preflight import _ligand_sdf_beside
 
-    omega = classify_omega_bonds(loaded.pdb.topology, solute,
-                                 ligand_sdf=_ligand_sdf_beside(found["system"]))
+    # ENFORCED: `UnclassifiedOmegaError` is a ValueError, raised before `out_dir` exists.
+    omega = omega_exclusions(loaded.pdb.topology, solute,
+                             ligand_sdf=_ligand_sdf_beside(found["system"]))
     excluded = [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
     systems, audit = build_rung_systems(loaded.system, list(solute), tuple(taus),
                                         excluded_bonds=excluded, pressure_bar=None)

@@ -717,9 +717,8 @@ def run_grouped(files, arguments, groups, *, prepared=None):
                 solute_indices = list(range(int(span[0]), int(span[1]) + 1))
             else:
                 solute_indices = list(range(count))
-            excluded_bonds = [tuple(int(a) for a in pair)
-                              for pair in (document.get("rest2") or {}).get(
-                                  "omega_excluded_bonds", [])]
+            excluded_bonds = _excluded_bonds_from_solute_document(
+                document, source=first["solute"])
         else:
             solute_indices = list(range(base_system.getNumParticles()))
 
@@ -865,6 +864,25 @@ def _print_grouped_summary(record, protocol):
         print(f"#   velocity policy      : "
               f"{record.get('reservoir', {}).get('velocity_policy')}")
     print("# ---------------------------------------------------------------------------")
+
+
+def _excluded_bonds_from_solute_document(document, *, source) -> list[tuple[int, ...]]:
+    """The omega exclusions a `solute.yaml` records -- refused if it also records unresolved ones.
+
+    `omega_ambiguous_candidates` is the classifier's unclassified list as the document stored it.
+    Taking `omega_excluded_bonds` and ignoring it would scale those torsions, which is the defect
+    `openmm.system.omega_exclusions` exists to refuse; a document is not an exemption from it.
+    """
+    rest2 = document.get("rest2") or {}
+    unresolved = rest2.get("omega_ambiguous_candidates") or []
+    if unresolved:
+        shown = "; ".join(f"bond {c.get('bond')} ({c.get('nitrogen_residue')} N): "
+                          f"{c.get('evidence')}" for c in unresolved[:5])
+        raise RuntimeError(
+            f"{source} records {len(unresolved)} amide omega candidate(s) that could not be "
+            f"classified as ordinary or proline-like, so which torsions this ladder may scale is "
+            f"undecided. Refusing rather than scaling them: {shown}")
+    return [tuple(int(a) for a in pair) for pair in rest2.get("omega_excluded_bonds", [])]
 
 
 def _preflight_from_groups(files, arguments, groups):

@@ -1815,6 +1815,26 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
                 + f"  Run `md-openmm build-top` into {dataset.build}/ first. (The scaling used to "
                   f"happen at run time from one shared built.xml, which is why this used to "
                   f"generate without it.)")
+        # THE OMEGA CLASSIFICATION, also before anything is written, with the SAME evidence the
+        # run-time preflight uses: the `built.sdf` that `build-top` retains beside `built.xml`.
+        # The rung writer below was called without it, so every amide of a `peptide-like` or
+        # `ligand` solute arrived unclassified, was left out of the exclusions, and was SCALED in
+        # the rung files a grouped ladder integrates -- while `build_states.log` still said
+        # "ordinary_amide_omega: unscaled". It enforces the same refusal itself; this is here so
+        # the refusal arrives before `input/` and the run directory exist.
+        from openmm.app import PDBFile
+
+        from ..md.stage import solute_atom_indices
+        from ..openmm.system import UnclassifiedOmegaError, omega_exclusions
+        from ..run.preflight import _ligand_sdf_beside
+
+        topology = PDBFile(str(dataset.built("pdb"))).topology
+        try:
+            omega_exclusions(topology, solute_atom_indices(topology),
+                             ligand_sdf=_ligand_sdf_beside(dataset.built("xml")))
+        except UnclassifiedOmegaError as refusal:
+            raise ConfigError(f"{resolved['protocol']} rungs for {dataset.built('pdb')}: "
+                              f"{refusal}") from None
 
     run_root.mkdir(parents=True, exist_ok=True)
     # Kept as `out_dir` below: the cv/umbrella copies, the build log and the generated helpers all
@@ -2104,6 +2124,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
     if protocol in ("REST2", "rREST2"):
         from ..remd.generated import tau_ladder
         from .rungs import RungWriteError, format_scaling_report, write_rung_systems
+        from ..run.preflight import _ligand_sdf_beside
 
         system_path, topology_path = dataset.built("xml"), dataset.built("pdb")
         missing = [path for path in (system_path, topology_path) if not path.is_file()]
@@ -2120,6 +2141,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path, all_in_one: bool =
         try:
             rung_record = write_rung_systems(run, system_path=system_path,
                                              topology_path=topology_path, taus=taus,
+                                             ligand_sdf=_ligand_sdf_beside(system_path),
                                              overwrite=overwrite)
         except RungWriteError as failure:
             raise ConfigError(str(failure)) from None

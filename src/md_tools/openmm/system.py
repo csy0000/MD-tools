@@ -979,8 +979,7 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
                 f"nitrogen residue '{cand['nitrogen_residue']}' is not a known protein residue, "
                 f"so this omega has to be read from the molecule's bond orders -- and no SDF was "
                 f"supplied. `build-top` retains one beside the System (`built.sdf`) for a .smi or "
-                f".sdf input and writes none for a peptide. Supply that SDF, or declare the "
-                f"residue in rest2.proline_like_residues.")))
+                f".sdf input and writes none for a peptide; supply that SDF beside the System.")))
             continue
         if ring_info is None:
             unknown.append(dict(cand, ambiguous=(
@@ -1004,6 +1003,42 @@ def classify_omega_bonds(topology, solute_atoms: Iterable[int], *,
         "omega_detection_method": method,
         "omega_detail": {"unscaled": unscaled, "proline_like_scaled": proline},
     }
+
+
+class UnclassifiedOmegaError(ValueError):
+    """An amide candidate neither rule could name, on a surface that is about to scale torsions."""
+
+
+def omega_exclusions(topology, solute_atoms: Iterable[int], *,
+                     ligand_sdf: Optional[Path] = None) -> dict:
+    """:func:`classify_omega_bonds`, ENFORCED: the one entry point for anything that scales.
+
+    The classifier reports what it could not decide and leaves acting on it to the caller. Six
+    callers took ``omega_unscaled_bonds`` and only one of them read the unclassified list, so a
+    candidate nobody could name was left out of the exclusions and SCALED like any other solute
+    torsion -- the run completes, the acceptance ratios look plausible, and the ordinary-amide
+    invariant is broken with nothing saying so. A build record may still call the classifier
+    directly, because recording a candidate is not scaling it; every scaling surface calls this.
+
+    Returns the classification unchanged when every candidate was decided.
+    """
+    omega = classify_omega_bonds(topology, solute_atoms, ligand_sdf=ligand_sdf)
+    unknown = omega["omega_unclassified_candidates"]
+    if not unknown:
+        return omega
+    shown = unknown[:5]
+    lines = [f"  bond {c['bond'][0]}-{c['bond'][1]}: "
+             f"{c.get('carbon_residue')}{c.get('carbon_residue_index')} C -> "
+             f"{c.get('nitrogen_residue')}{c.get('nitrogen_residue_index')} N: {c['ambiguous']}"
+             for c in shown]
+    if len(unknown) > len(shown):
+        lines.append(f"  ... and {len(unknown) - len(shown)} more")
+    raise UnclassifiedOmegaError(
+        f"{len(unknown)} amide omega candidate(s) could not be classified as ordinary (left "
+        f"unscaled) or proline-like (scaled). Scaling one that is ordinary lets a hot state "
+        f"isomerise a peptide bond the reference never does; exempting one that is not changes "
+        f"the Hamiltonian the other way. Neither is guessed, so nothing is scaled:\n"
+        + "\n".join(lines))
 
 
 def _ligand_ring_nitrogens(ligand_sdf, topology, atoms_to_map: set[int], max_ring: int,

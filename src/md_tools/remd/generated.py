@@ -79,24 +79,18 @@ def solute_document(topology, system, *, route: str = "peptide",
     writer above calls it too, so there is one derivation and the file always holds what was
     validated.
     """
-    from ..openmm.system import classify_omega_bonds
+    from ..openmm.system import UnclassifiedOmegaError, omega_exclusions
     from ..openmm.builders import _solute_document
     from ..md.stage import solute_atom_indices
 
     indices = solute_atom_indices(topology)
-    # The SDF, for the ligand route. This was a hard-coded `None`, which made the ligand route
-    # unreachable from a ladder: it raises without one, and the peptide route refuses every
-    # candidate of a SMILES-built solute because its single `UNL`/custom residue is not a known
-    # protein residue. Between them a Sage-parameterised macrocycle could not be run at all.
-    omega = classify_omega_bonds(topology, indices, ligand_sdf=ligand_sdf)
-    document = _solute_document(topology, indices, omega, route=route, system=system)
-    ambiguous = (document.get("rest2") or {}).get("omega_ambiguous_candidates") or []
-    if ambiguous:
-        raise SystemExit(
-            f"{len(ambiguous)} amide candidate(s) could not be classified as ordinary or "
-            f"proline-like. Guessing either way silently changes the Hamiltonian, so the ladder "
-            f"is refused rather than run. Candidates: {ambiguous[:3]}")
-    return document
+    # The SDF, for a residue with no residue evidence. This was a hard-coded `None`, which left a
+    # SMILES-built solute's single `UNL`/custom residue with nothing to be classified from.
+    try:
+        omega = omega_exclusions(topology, indices, ligand_sdf=ligand_sdf)
+    except UnclassifiedOmegaError as refusal:
+        raise SystemExit(str(refusal)) from None
+    return _solute_document(topology, indices, omega, route=route, system=system)
 
 
 PROTOCOL_TEMPLATE = '''#!/usr/bin/env python

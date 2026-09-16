@@ -133,9 +133,8 @@ def _omega_evidence(candidate: dict) -> dict:
 
     A bare list of unresolved atom pairs tells a reader that something blocked production and
     nothing about what to do next. What is needed is the bond, the residues on both ends, and the
-    sentence the classifier itself would have said -- so the answer is either "add this name to
-    rest2.proline_like_residues" or "this input is wrong", and neither requires re-deriving the
-    classification by hand.
+    sentence the classifier itself would have said -- so the answer ("supply the SDF", or "this
+    input is wrong") does not require re-deriving the classification by hand.
     """
     return {
         "bond": [int(a) for a in candidate["bond"]],

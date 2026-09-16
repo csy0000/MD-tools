@@ -257,7 +257,11 @@ def test_the_blocking_candidate_carries_evidence_a_reader_can_act_on():
     assert candidate["nitrogen_residue"] == "XYZ"
     assert candidate["carbon_residue"] in ("ACE", "XYZ")
     assert "XYZ" in candidate["ambiguous"]
-    assert "proline_like_residues" in candidate["ambiguous"]
+    # The ACTIONABLE remedy is the SDF. This asserted `proline_like_residues`, a key no user
+    # configuration can set (`_legacy_cfg` rebuilds `rest2` from DEFAULTS), so the message sent a
+    # reader to write a key `build-top.config` refuses as unknown.
+    assert "SDF" in candidate["ambiguous"]
+    assert "proline_like_residues" not in candidate["ambiguous"]
     assert candidate["nitrogen_residue_index"] is not None
 
 

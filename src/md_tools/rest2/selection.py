@@ -70,16 +70,19 @@ class ScalingSelection:
         per candidate from the residue name, and only reaches for bond orders when a residue
         cannot answer. Without it, a non-standard residue is refused rather than guessed.
         """
-        from ..openmm.system import classify_omega_bonds
+        from ..openmm.system import UnclassifiedOmegaError, omega_exclusions
 
         atoms = tuple(sorted({int(i) for i in solute_atoms}))
-        classified = classify_omega_bonds(topology, atoms, ligand_sdf=ligand_sdf)
+        try:
+            classified = omega_exclusions(topology, atoms, ligand_sdf=ligand_sdf)
+        except UnclassifiedOmegaError as refusal:
+            raise SelectionError(str(refusal)) from None
 
         # ONLY `omega_unscaled_bonds`. A proline-like peptide bond stays eligible for ordinary
         # scaling -- its nitrogen carries no amide hydrogen, so the cis/trans argument that
-        # protects an ordinary omega does not apply -- and an unclassified candidate is not
-        # silently protected either. Both are recorded below so the file says what was decided
-        # rather than only what was excluded.
+        # protects an ordinary omega does not apply. An unclassified candidate never reaches
+        # here: `omega_exclusions` refused it above. Both decisions are recorded below so the
+        # file says what was decided rather than only what was excluded.
         bonds = tuple(sorted({tuple(sorted(int(i) for i in pair))
                               for pair in classified["omega_unscaled_bonds"]}))
         labels = []
@@ -92,9 +95,6 @@ class ScalingSelection:
         for pair in classified.get("omega_proline_like_scaled_bonds") or []:
             labels.append({"bond": [int(i) for i in pair], "residues": None,
                            "reason": "proline-like: SCALED, no amide hydrogen to protect"})
-        for pair in classified.get("omega_unclassified_candidates") or []:
-            labels.append({"bond": [int(i) for i in pair], "residues": None,
-                           "reason": "unclassified candidate: scaled, and recorded as unresolved"})
         return cls(solute_atoms=atoms, excluded_bonds=bonds,
                    topology_sha256=topology_digest(topology),
                    labels=tuple(labels), detection=str(classified["omega_detection_method"]))

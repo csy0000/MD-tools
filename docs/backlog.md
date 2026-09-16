@@ -14,8 +14,9 @@ if it came back. Entry 3 is reclassified: it described deliberate behaviour, whi
 in a list of debt. Entry 4 is neither fixed nor accepted but UNDIAGNOSED, and cannot be closed by
 work. Entry 6 is open in code and avoided in practice. Entries 13, 14 and 15 are the **0.5.4 scope**,
 deferred by decision on 2026-09-16 rather than by oversight: the omega exclusion for a `peptide` or
-`peptide-like` solute, the `.in` file's undocumented divergences from Amber's input conventions, and
-rebuilding AIS as a transformation between two topologies. Entry 16 is **fixed in 0.5.3** — `.sdf`
+`peptide-like` solute (**resolved** — it was the enforcement, not the classifier), the `.in` file's
+undocumented divergences from Amber's input conventions, and rebuilding AIS as a transformation
+between two topologies. Entry 16 is **fixed in 0.5.3** — `.sdf`
 input, and the missing `built.sdf` on the explicit ligand route that adding it uncovered, which
 entry 13 should be re-checked against. Entries 17, 18 and 19 are open and were filed the same day: the
 documentation reorganisation, a `solute.residue_name` that is recorded but never applied, and a
@@ -456,6 +457,33 @@ changing where a runtime writes is a behavioural change for anyone already using
 ---
 
 ## 13. The omega exclusion is not enforced, and `peptide-like` fits neither classifier route
+
+> **RESOLVED for 0.5.4, 2026-09-16. The user's reading was right, and the `peptide-like` hypothesis
+> was not the cause.** `35d216c` had already retired `route` and chooses the evidence per
+> candidate, and an explicit `kind: peptide-like` build of cyclo(GDR) classifies all three omegas
+> as ordinary once the classifier is given its `built.sdf`. What did not fire was the ENFORCEMENT,
+> on two counts:
+>
+> * **`build-md` scaled the rungs without the SDF.** `write_rung_systems` was called with no
+>   `ligand_sdf`, so every amide of a `peptide-like` or `ligand` solute was unclassified, left out
+>   of `omega_unscaled_bonds`, and scaled in the `build_state<n>.xml` files a grouped ladder
+>   integrates. Measured on HEAD: `excluded_central_bonds: []`, `n_excluded_torsions: 0`, under a
+>   `build_states.log` header that said `ordinary_amide_omega: unscaled`.
+> * **Only one of six scaling surfaces read the unclassified list** — the ladder preflight's
+>   `solute_document`. The rung writer, the fixed-tau stage and AIS preflights and the REST2
+>   export scaled such candidates silently; `ScalingSelection.derive` crashed on `int('bond')`;
+>   the executor's `solute.yaml` fallback ignored `omega_ambiguous_candidates`.
+>
+> `openmm.system.omega_exclusions` is now the one enforcing entry point, every scaling surface
+> calls it, `build-md` refuses before `input/` or the run directory exists and passes the SDF
+> through `preflight._ligand_sdf_beside`, and a `tau = 0` stage is still not classified at all.
+> `tests/test_omega_unclassified_is_refused.py` covers each surface, an AST check forbids a
+> scaling surface from calling `classify_omega_bonds` directly, and a slow test builds the
+> macrocycle and asserts its rungs exclude exactly the three omegas. The refusal no longer offers
+> `rest2.proline_like_residues` as a remedy: no user configuration can set it (`_legacy_cfg`
+> rebuilds `rest2` from `DEFAULTS`), so it named a key `build-top.config` refuses.
+>
+> The text below is the entry as filed.
 
 DEFERRED TO 0.5.4 by decision, 2026-09-16. The user's reading, held across three deferrals, is that
 **the implementation is there and is not functioning** — the work is to enforce it, not to write it.
