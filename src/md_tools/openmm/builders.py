@@ -204,16 +204,22 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
     from openmm import XmlSerializer, app
 
     from .solvation import solvate
-    from .system import build_system, initial_structure
+    from .system import build_system
 
     ligand_sdf = None
     if route == "ligand":
-        prepared = initial_structure(_smiles_from(input_path), staging, cfg)
-        # `solute_pdb` / `solute_sdf` are the keys initial_structure actually returns; `pdb`/`sdf`
+        # ONE staging location for the prepared molecule, shared with the implicit route. This was
+        # bare `staging` here and `staging / "structure"` there, while `build/top.py` copies
+        # `built.sdf` out of the latter -- so an EXPLICIT ligand build wrote its SDF where nothing
+        # read it, emitted no `built.sdf` at all, and left every later consumer of that file (the
+        # omega classifier's ligand route, `map_from_sdf`, `preflight._ligand_sdf_beside`) with
+        # nothing to read. No test caught it because every `built.sdf` assertion ran under GBn2.
+        prepared = _prepare_molecule(input_path, staging / "structure", cfg)
+        # `solute_pdb` / `solute_sdf` are the keys the preparers actually return; `pdb`/`sdf`
         # never existed, so the SMILES route raised KeyError before reaching parameterisation.
         source = Path(prepared["solute_pdb"])
         ligand_sdf = Path(prepared["solute_sdf"])
-        log(f"ligand       : {prepared.get('canonical_smiles', '')[:60]}")
+        log(f"ligand       : {prepared.get('smiles', '')[:60]}")
     else:
         source = staging / "input.pdb"
         shutil.copy2(input_path, source)
@@ -221,7 +227,8 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
     from .system import protonate
 
     protonated = protonate(source, staging, cfg, ligand_sdf=ligand_sdf,
-                           input_route=("smiles" if route == "ligand" else "pdb"))
+                           input_route=(molecule_input_route(input_path) if route == "ligand"
+                                        else "pdb"))
     log(f"protonation  : pH {protonated.get('ph')}, "
         f"{protonated.get('n_hydrogens_before')} -> {protonated.get('n_hydrogens_after')} hydrogens")
 
@@ -277,11 +284,13 @@ def _build_implicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
 
     from .implicit import build_implicit_bundle_inputs
 
-    smiles = _smiles_from(input_path) if route == "ligand" else None
+    molecule_route = molecule_input_route(input_path) if route == "ligand" else None
+    smiles = _smiles_from(input_path) if molecule_route == "smiles" else None
+    sdf_input = input_path if molecule_route == "sdf" else None
     pdb_input = input_path if route == "peptide" else None
     built = build_implicit_bundle_inputs(
         route=("peptide" if route == "peptide" else "ligand"),
-        cfg=cfg, staging=staging, pdb=pdb_input, smiles=smiles,
+        cfg=cfg, staging=staging, pdb=pdb_input, smiles=smiles, sdf=sdf_input,
         implicit_model="GBn2", radii="mbondi3",
         # An explicit, recorded choice rather than a library default: including the ACE
         # surface-area term changes the energy by ~16 kJ/mol (~6 kT) on ACE-ALA-NME.
@@ -327,3 +336,27 @@ def _smiles_from(path: Path) -> str:
     if not text:
         raise ConfigError(f"{path} is empty; a non-peptide input must contain a SMILES string")
     return text.splitlines()[0].split()[0]
+
+
+def molecule_input_route(path: Path) -> str:
+    """`smiles` or `sdf` -- which molecular-graph input this is.
+
+    One spelling, derived in one place. The route travels into `protonate`, into `resolve_route`
+    and into the build record, and three independent suffix comparisons would be three chances to
+    disagree about the same file.
+    """
+    return "sdf" if Path(path).suffix.lower() == ".sdf" else "smiles"
+
+
+def _prepare_molecule(input_path: Path, out_dir: Path, cfg: dict) -> dict:
+    """The prepared solute, from whichever molecular-graph input was supplied.
+
+    Both preparers write the same two files into *out_dir* and return the same keys, so
+    everything downstream of here is identical for the two routes -- which is the point: the
+    difference between them is where the coordinates came from, and it ends at this function.
+    """
+    from .system import initial_structure, initial_structure_from_sdf
+
+    if molecule_input_route(input_path) == "sdf":
+        return initial_structure_from_sdf(input_path, out_dir, cfg)
+    return initial_structure(_smiles_from(input_path), out_dir, cfg)

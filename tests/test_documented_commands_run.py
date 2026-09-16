@@ -61,6 +61,17 @@ def test_the_documentation_uses_the_amber_flag_meanings_everywhere():
     This is the assertion that would have caught the whole `-x = built.xml` mistake at the moment
     it entered the documentation: every documented `-s` value looks like a System, and every
     documented `-x` value looks like a trajectory.
+
+    EXACTLY ONE OF `-s` AND `--groupfile`, and that is checked here rather than assumed. This test
+    used to read `parsed.system.endswith(".xml")` for every command, which encoded "every
+    documented invocation carries `-s`" -- true only while a ladder had no group file. A ladder's
+    rungs are each a pre-scaled System named on its own line of the group file, so there is no
+    single `-s` for the launch to carry and one would claim one Hamiltonian for every rung; the
+    runtime refuses whichever of the two was not asked for. The old form did not merely miss that
+    case, it CRASHED on it (`AttributeError` on `None`), and because this module is marked `slow`
+    no fast lane ran it -- so a correct, generated-by-`run.sh` ladder command sat in the README
+    failing this test unnoticed. Checking the exclusion also catches a command carrying BOTH,
+    which the previous assertion never could.
     """
     from md_tools.run.main import md_run_parser
 
@@ -69,7 +80,13 @@ def test_the_documentation_uses_the_amber_flag_meanings_everywhere():
         for argv in _md_run_commands(page.read_text(encoding="utf-8")):
             seen += 1
             parsed = md_run_parser().parse_args(argv)      # SystemExit here = a broken example
-            assert parsed.system.endswith(".xml"), (page.name, argv)
+            if parsed.groupfile:
+                assert parsed.system is None, (
+                    f"{page.name}: a ladder names its rungs in the group file, so it must not "
+                    f"also pass -s: {argv}")
+            else:
+                assert parsed.system is not None and parsed.system.endswith(".xml"), (
+                    page.name, argv)
             if parsed.trajectory:
                 assert Path(parsed.trajectory).suffix in (".dcd", ".nc"), (page.name, argv)
             if parsed.output and parsed.log:

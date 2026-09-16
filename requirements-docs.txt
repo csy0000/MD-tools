@@ -1,0 +1,22 @@
+# The documentation site, and nothing else. Deliberately NOT a `docs` extra in `pyproject.toml`:
+# building the site needs neither md-tools nor the scientific stack it depends on, and a `pip
+# install .[docs]` would drag OpenMM's dependency set into a job that only renders Markdown.
+#
+# Pinned, because an unpinned theme upgrade changes the rendered site without a commit to this
+# repository -- and the first sign of it would be a layout that moved on a page nobody edited.
+#
+# Two packages, not three. Excluding the development-evidence directories from the site uses
+# MkDocs' own `exclude_docs` (1.5+) rather than `mkdocs-exclude`, which is unmaintained against
+# MkDocs 1.6 and fails at import with `module 'mkdocs.config' has no attribute 'config_options'`.
+#
+# THESE ARE THE VERSIONS THE SITE WAS BUILT AND CHECKED WITH, read off the environment that ran
+# `mkdocs build --strict` clean -- not versions chosen from memory. `Markdown` and
+# `pymdown-extensions` are pinned alongside the two direct dependencies because the home page's
+# `grid cards` block needs `md_in_html` and the code blocks need `pymdownx.superfences`: an
+# unpinned upgrade of either changes how pages render with no commit to this repository, and the
+# first sign of it would be a layout that moved on a page nobody edited.
+mkdocs==1.6.1
+mkdocs-material==9.7.7
+Markdown==3.10.3
+pymdown-extensions==12.0.1
+

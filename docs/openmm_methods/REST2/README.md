@@ -89,7 +89,8 @@ that one implementation.
 ## Minimal sequence
 
 ```bash
-md-openmm build-top -i ALA.pdb -os built.xml -op built.pdb -log built.log
+md-openmm build-top -i ALA.pdb \
+    -os build/built.xml -op build/built.pdb -log build/built.log
 md-openmm build-md  -odir ./REST2-run1 --config example.config
 cd REST2-run1 && ./run.sh
 ```
@@ -97,19 +98,31 @@ cd REST2-run1 && ./run.sh
 The ladder itself, driven directly:
 
 ```bash
-python REST2.py -p ../built.pdb -s ../built.xml -c eq_npt_free.xml -log REST2.log
+python REST2.py -p ../build/built.pdb -ng 4 --groupfile remd_groupfile.1 -log REST2.log
 ```
 
 One process holds every state and lets OpenMM choose the device. Under MPI, one rank per state:
 
 ```bash
-mpiexec -n 4 python REST2.py -p ../built.pdb -s ../built.xml -c eq_npt_free.xml -log REST2.log
+mpiexec -n 4 python REST2.py -p ../build/built.pdb -ng 4 \
+    --groupfile remd_groupfile.1 -log REST2.log
 
 # or, the Amber-like way -- one rank per thermodynamic state, `-ng` checked against both the
 # configured replica count and the MPI world size:
-mpirun -n 4 md-openmm md-run -ng 4 -i REST2.in -p ../built.pdb -s ../built.xml \
-    -c eq_npt_free.xml -o REST2.out -x REST2.nc -r restart.json -log REST2.log
+mpirun -n 4 md-openmm md-run -ng 4 -i ../input/REST2.in -p ../build/built.pdb \
+    --groupfile remd_groupfile.1 -odir . \
+    -o remd_records/REST2_prod1.out -log remd_records/REST2_prod1.log \
+    -r remd_records/restart_prod1.json
 ```
+
+**A ladder takes `--groupfile`, not `-s`.** Each rung is its own pre-scaled System, named on its
+own line of the group file, so there is no single `-s` for the launch to carry — one would claim
+one Hamiltonian for every rung. Exactly one of the two is given, and the other is refused by name.
+
+**`--groupfile` always comes with `-ng`**, and the group file also carries each rung's own `-c`, so
+none is passed on the command line. `-ng` states how many groups the file is expected to hold: a
+truncated group file would otherwise run a shorter ladder silently. A run with no group file at all
+is refused — there is no second way to describe a coordinated run.
 
 A world size that is neither 1 nor exactly the number of states is refused.
 
@@ -181,19 +194,39 @@ by scaling, which is not how a restraint is applied, so `export-reference` refus
 
 ## Generated files
 
+`build/`, `min/` and `input/` belong to the SYSTEM and are shared by every run beside them; only
+`REST2-run1/` belongs to this run. See [the layout](../../run-layout.md).
+
 ```text
-REST2-run1/
-├── resolved.config      the single resolved declaration
-├── min.py … eq_npt_free.py   the equilibration chain the ladder starts from
-├── REST2.py             the compact ladder entry point
-└── run.sh
+ALA/                          the dataset root -- this is what you register
+├── build/                    built.xml  built.pdb  built.log
+├── min/                      the minimised structure, shared
+├── input/                    min.in  eq_1.in  eq_2.in  eq_3.in  REST2.in
+└── REST2-run1/
+    ├── resolved.config       authoritative      run.config   the seed
+    ├── REST2.py              the compact ladder entry point
+    ├── run.sh                build-md.log       build_states.log
+    ├── eq/                   this run's equilibration: eq_<k>.{py,xml,out,log}
+    │                         solute_eq_<k>.nc  mdout_eq_<k>.csv
+    ├── remd0/  remd1/ …      ONE DIRECTORY PER THERMODYNAMIC STATE
+    │                         build_state<n>.xml          that rung's pre-scaled Hamiltonian
+    │                         remd_state<n>_prod<x>.nc    whole-system trajectory, segment x
+    │                         solute_state<n>_prod<x>.nc  solute trajectory, segment x
+    ├── remd_records/         the ladder's own records, ONE SET PER SEGMENT:
+    │                         REST2_prod<x>.{out,log}  restart_prod<x>.json  rem_prod<x>.log
+    │                         exchange_prod<x>.csv  ledger_prod<x>.nc
+    ├── cv_state<i>.csv       the CV series, one per STATE, with its cv_state<i>.json sidecar
+    ├── remd_groupfile.1      one line per state, naming that state's rung
+    ├── rank/                 per-PROCESS reports
+    ├── bundles/              reproducibility exports
+    └── solute.yaml  _protocol.py    written by rank 0, verified by every rank
 ```
 
-Running produces `solute.yaml` (the resolved scaling selection), `solute_state<i>_prod<N>.nc` (one
-per state, and `whole_state<i>_prod<N>.nc` when a whole-system cadence is set), `rem.log`,
-`exchange.csv`, `REST2.nc` (the analysis file), `REST2.solute.nc`, `REST2_checkpoint.nc`,
-`REST2.out` and `REST2.log` (the machine record). With collective variables enabled it also writes
-`cv_state<i>.csv` and its `cv_state<i>.json` sidecar, one pair per state.
+**The index is the STATE's, never the walker's.** After an accepted exchange the configuration in
+`remd2/` belongs to a different walker, and that is the point: MD-tools writes the state-sorted
+file directly, which is why `cpptraj` needs `remdtrajtemp` and GROMACS ships `demux.pl` and this
+does not. Files are grouped by state so that `remd0/*.nc` concatenates one state across every
+segment in order; the per-segment records are grouped the other way, in `remd_records/`.
 
 ## Restart and continuation
 

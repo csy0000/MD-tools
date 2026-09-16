@@ -1,0 +1,76 @@
+name: docs
+
+# WHAT THIS JOB IS EVIDENCE FOR, AND WHAT IT IS NOT
+#
+# It builds the documentation site with `--strict`, which fails on a nav entry that names no file
+# and on a link that resolves to nothing. That is a check on the DOCUMENTATION'S INTERNAL
+# CONSISTENCY and nothing more: it does not run a command, integrate a step, or verify that a
+# documented flag still exists. The tests that execute documented commands are in the `ci`
+# workflow (`test_documented_commands_run.py`), and they are where a stale command is caught.
+#
+# Publishing happens only from `dev`. A pull request builds the site and throws it away, so a
+# broken page fails review rather than the live site.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - ".github/workflows/pages.yml"
+  push:
+    branches: [dev]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - ".github/workflows/pages.yml"
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: mkdocs build --strict
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install the documented toolchain
+        run: python -m pip install --quiet -r requirements-docs.txt
+
+      - name: build, strictly
+        # --strict turns a warning into a failure: a nav entry naming a file that does not exist,
+        # or a relative link that resolves to nothing, stops the build instead of publishing a
+        # page whose links 404.
+        run: mkdocs build --strict
+
+      - name: upload the built site
+        if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: publish to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

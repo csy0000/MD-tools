@@ -52,9 +52,11 @@ BUILD_SCHEMA = Schema(
                       "classification.\n"
                       "  peptide       -- read -i as a peptide/protein PDB and parameterise it "
                       "with the protein force field. Sage never touches it.\n"
-                      "  ligand        -- read -i as a .smi and parameterise the whole molecule "
-                      "with the small-molecule force field. One residue, no peptide chemistry "
-                      "is claimed or read.\n"
+                      "  ligand        -- read -i as a .smi or .sdf and parameterise the whole "
+                      "molecule with the small-molecule force field. One residue, no peptide "
+                      "chemistry is claimed or read. A .smi states the chemistry and the "
+                      "conformer is generated (ETKDGv3, then MMFF); a .sdf carries the "
+                      "coordinates too and they are used as given.\n"
                       "  peptide-like  -- the SAME whole-molecule route as `ligand`, with the "
                       "same force field and the same charges, PLUS a validated peptide-chemistry "
                       "map over the result. It exists for a head-to-tail cyclic peptide built "
@@ -85,9 +87,9 @@ BUILD_SCHEMA = Schema(
                   doc="Partial-charge method for the small molecule. am1bcc is the validated "
                       "default and runs on CPU; it is the slowest part of a ligand build."),
             Field("residue_name", str, default=None, nullable=True,
-                  doc="Three-character residue name for a molecule read from .smi. Left null, a "
-                      "deterministic name is assigned from the file and recorded, so the same "
-                      ".smi always produces the same residue identity."),
+                  doc="Three-character residue name for a molecule read from .smi or .sdf. Left "
+                      "null, a deterministic name is assigned from the file and recorded, so the "
+                      "same input always produces the same residue identity."),
         ], doc="What the input is, and how it is parameterised."),
         Section("forcefield", [
             Field("protein", str, default="ff14SB", enum=tuple(PROTEIN_FORCEFIELDS),
@@ -489,11 +491,38 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     if not input_path.is_file():
         raise ConfigError(f"-i {input_path}: no such file")
     suffix = input_path.suffix.lower()
-    if suffix not in (".pdb", ".smi"):
+    if suffix not in (".pdb", ".smi", ".sdf"):
         raise ConfigError(
-            f"-i {input_path}: expected a .pdb or .smi FILE. `-i` names a file so that the input "
-            f"is unambiguous and can be hashed into the record; an inline structure or SMILES "
-            f"string is not accepted.")
+            f"-i {input_path}: expected a .pdb, .smi or .sdf FILE. `-i` names a file so that the "
+            f"input is unambiguous and can be hashed into the record; an inline structure or "
+            f"SMILES string is not accepted.")
+
+    # RESOLVED FIRST, and once. Every check that can refuse runs before anything is created: the
+    # output parents below, and then the log. A refusal must leave nothing behind, because a
+    # `-odir` holding a `built.log` is indistinguishable from a build that was attempted and
+    # failed halfway.
+    resolved, stated, sys_resolved = _resolution(config_path)
+    kind = str(resolved["solute"]["kind"])
+    peptide = kind == "peptide"
+
+    # WHAT THE INPUT IS, AND WHETHER THIS KIND MAY BE BUILT FROM IT. Stated once, here; the
+    # "Input interpretation" section below reports what was decided rather than deciding it
+    # again. These used to be checked down there, so every refusal of them created the output
+    # directory first.
+    if peptide and suffix != ".pdb":
+        raise ConfigError(f"-i {input_path}: solute.kind is 'peptide', so the input must be "
+                          f"a .pdb file, not {suffix}")
+    if not peptide and suffix not in (".smi", ".sdf"):
+        raise ConfigError(f"-i {input_path}: solute.kind is {kind!r}, which is built from a "
+                          f"molecular graph, so the input must be a .smi or .sdf file, not "
+                          f"{suffix}")
+    # THE SDF'S SHAPE, here rather than only in the preparer, for the same reason. The same
+    # function runs again inside the preparer, for the paths that do not come through this
+    # command.
+    if suffix == ".sdf":
+        from ..openmm.system import read_single_sdf_molecule
+
+        read_single_sdf_molecule(input_path)
 
     existing = [p for p in (out_system, out_pdb) if p.exists()]
     if existing and not overwrite:
@@ -509,11 +538,8 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     for target in (out_system, out_pdb, out_log):
         target.parent.mkdir(parents=True, exist_ok=True)
 
-    resolved, stated, sys_resolved = _resolution(config_path)
     solvent = canonical_solvent(resolved["solvent"]["model"])
     implicit = is_implicit(solvent)
-    kind = str(resolved["solute"]["kind"])
-    peptide = kind == "peptide"
     # Two names for two different questions. `route` is how the System is BUILT and has exactly
     # two values, because there are exactly two parameterisation paths; `kind` is what the solute
     # IS and has three. `peptide-like` is a ligand build whose chemistry is then mapped.
@@ -539,23 +565,28 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     log.heading("Input interpretation")
     smiles = residue_name = None
     if peptide:
-        if suffix != ".pdb":
-            raise ConfigError(f"-i {input_path}: solute.kind is 'peptide', so the input must be "
-                              f"a .pdb file, not {suffix}")
         log.field("interpreted as", "peptide/protein PDB")
         log.field("small-molecule FF", "not used (peptide-only input)")
     else:
-        if suffix != ".smi":
-            raise ConfigError(f"-i {input_path}: solute.kind is {kind!r}, which is built from a "
-                              f"molecular graph, so the input must be a .smi file, not "
-                              f"{suffix}")
-        smiles, name_field = read_single_smiles(input_path)
+        # The two molecular-graph inputs differ in exactly one thing: where the coordinates come
+        # from. A `.smi` states the chemistry and the conformer is generated (ETKDGv3, then MMFF);
+        # a `.sdf` carries both, and is used as given. Everything after this branch is shared.
+        name_field = None
+        if suffix == ".smi":
+            smiles, name_field = read_single_smiles(input_path)
         residue_name = _assigned_residue_name(resolved["solute"]["residue_name"], name_field,
                                               input_path)
+        graph = "SMILES" if suffix == ".smi" else "SDF"
         log.field("interpreted as",
-                  "single-molecule SMILES" if kind == "ligand"
-                  else "single-molecule SMILES, mapped as a peptide-like solute")
-        log.field("smiles", smiles)
+                  f"single-molecule {graph}" if kind == "ligand"
+                  else f"single-molecule {graph}, mapped as a peptide-like solute")
+        if smiles is not None:
+            log.field("smiles", smiles)
+        else:
+            # Which build was free to choose its own conformer is the thing a reader comparing
+            # two of them needs to know, so it is a field rather than an absence.
+            log.field("coordinates", "supplied by the SDF, used as given "
+                                     "(no embedding, no minimisation)")
         log.field("residue name", f"{residue_name}   "
                                   f"({'stated' if resolved['solute']['residue_name'] else 'assigned deterministically'})")
         log.field("small-molecule FF", resolved["solute"]["ligand_forcefield"])

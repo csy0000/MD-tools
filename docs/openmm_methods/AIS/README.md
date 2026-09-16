@@ -123,7 +123,7 @@ contents disagree is refused with both named.
 
 ```bash
 md-openmm build-md -odir ./AIS-run1 --config example.config
-cd AIS-run1 && ./run.sh ../built.pdb ../built.xml ../hot/whole_prod1.nc
+cd AIS-run1 && ./run.sh ../build/built.pdb ../build/built.xml ../hot-run1/whole_prod1.nc
 ```
 
 `run.sh` **requires** the source explicitly. There is no default for it: a wrong source is not a
@@ -193,7 +193,8 @@ parameter-update grid and also divides `switching_steps`. See
 
 **`ais.work_measurement: components` only.** A `work` run has none of the columns below; see
 *What MD-tools implements* above for the two modes, and
-[the release note](../../release-notes/20260909-ais-work-measurement.md) for why `work` is the
+[the release note](https://github.com/csy0000/MD-tools/blob/dev/docs/release-notes/20260909-ais-work-measurement.md)
+for why `work` is the
 default.
 
 `U(τ, x) = U_non_scaled + √λ · U_sqrt_scaled + λ · U_lin_scaled`, with `λ = (1 − τ)²`. The three

@@ -57,43 +57,60 @@ System and no stage claims NPT. The implicit stages are *renamed* (`eq_nvt_posre
 ## Minimal sequence
 
 ```bash
-md-openmm build-top -i ALA.pdb -os built.xml -op built.pdb -log built.log
+md-openmm build-top -i ALA.pdb \
+    -os build/built.xml -op build/built.pdb -log build/built.log
 md-openmm build-md  -odir ./cMD-run1 --config example.config
 cd cMD-run1 && ./run.sh
 ```
 
-`run.sh` runs the chain in order. To drive one stage yourself:
+`run.sh` runs the chain in order. To drive one stage yourself — note that `min/` and `input/` sit
+at the dataset root and are shared by every run beside them:
 
 ```bash
-python min.py -p ../built.pdb -s ../built.xml -o min.out -r min.xml -log min.log
+python ../min/min.py -p ../build/built.pdb -s ../build/built.xml -odir ../min
 
 # or, the Amber-like way -- the same run, reaching the same installed code:
-md-openmm md-run -i min.in -p ../built.pdb -s ../built.xml \
-    -o min.out -r min.xml -log min.log
+md-openmm md-run -i ../input/min.in -p ../build/built.pdb -s ../build/built.xml \
+    -odir ../min
 ```
+
+Leave `-o`, `-r`, `-log` and `-chk` off: `md-run` names all four inside `-odir`, and a value given
+explicitly is taken against the working directory instead.
 
 ## Generated files
 
+`build/`, `min/` and `input/` belong to the SYSTEM and are shared by every run beside them; only
+`cMD-run1/` belongs to this run. See [the layout](../../run-layout.md) for why.
+
 ```text
-cMD-run1/
-├── resolved.config     the single resolved declaration of this workflow
-├── build-md.log        what was resolved, and from which defaults
-├── min.py              five compact entry points, one per stage
-├── eq_nvt_posres.py
-├── eq_npt_posres.py    (explicit)  /  eq_nvt_posres_2.py (implicit)
-├── eq_npt_free.py      (explicit)  /  eq_nvt_free.py     (implicit)
-├── cMD.py
-└── run.sh
+ALA/                          the dataset root -- this is what you register
+├── build/                    built.xml  built.pdb  built.solute.pdb  built.log
+├── min/                      min.py  min.xml  min.out  min.log  min.checkpoints/
+│                             resolved.config  run.config     <- one minimised structure, shared
+├── input/                    min.in  eq_1.in  eq_2.in  eq_3.in  cMD.in
+│                                                             <- what a method was asked to do
+└── cMD-run1/
+    ├── resolved.config       authoritative: input/ + run.config, resolved here
+    ├── run.config            the only per-run declaration: the seed
+    ├── build-md.log          what was resolved, and from which defaults
+    ├── cMD.py                the compact entry point
+    ├── eq/                   this run's equilibration: eq_1.{py,xml,out,log}, eq_1.checkpoints/
+    │                         solute_eq_1.nc  whole_eq_1.nc  mdout_eq_1.csv
+    └── run.sh
 ```
 
-`--all-in-one` emits a single `md.py` carrying the same chain instead of five scripts.
+`--all-in-one` emits a single `md.py` carrying the same chain instead of separate scripts.
 
-Running produces, per stage: `<stage>.log` (readable log **and** the machine record),
-`<stage>.xml` (final state), `<stage>.chk` + `.chk.json` (checkpoint and its fingerprint),
-`mdout.csv` (the state table: energy, temperature, volume, density) and the coordinate
-streams `solute_prod<N>.nc` and `whole_prod<N>.nc` -- the solute alone and every atom,
-each at its own interval. Equilibration stages write `solute_<stage>.nc` and
-`whole_<stage>.nc`, so no two stages share a filename.
+**A stage is filed by position, not by name.** `eq_nvt_posres` is renamed to an NVT spelling under
+implicit solvent or a scaled run — so a pressure-coupled name never appears on a boxless run — and
+it is filed as `eq_1`. Its input is `input/eq_1.in` and its restart is `eq/eq_1.xml`; the ensemble
+is stated in the stage's `.out` header and in `resolved.config` rather than in the filename.
+
+Running produces, per stage: `<key>.log` (readable log **and** the machine record), `<key>.xml`
+(final state), `<key>.checkpoints/`, `mdout_<key>.csv` (the state table: energy, temperature,
+volume, density) and the coordinate streams `solute_<key>.nc` and `whole_<key>.nc` -- the solute
+alone and every atom, each at its own interval. Production writes `solute_prod<N>.nc` and
+`whole_prod<N>.nc`, so no two stages share a filename.
 
 ## Restart and continuation
 

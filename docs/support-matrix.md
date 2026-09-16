@@ -33,10 +33,12 @@ to the workflow matrix and seeing it pass first.
 
 **Precise claims, in descending strength.**
 
-1. **A generated project moves.** `build-top` writes `inputs/` and `build-md` writes `MD/`, and `MD/`
-   addresses `inputs/` by a relative path. Moving the two together to another machine needs no
-   edit. The only absolute path written is the recorded interpreter in `run.sh`, which falls back
-   to whatever `python3` provides.
+1. **A dataset root moves as a whole.** `build-top` writes `build/`, and `build-md` writes a
+   `<method>-run<N>/` beside the shared `min/` and `input/`, addressing them by relative paths.
+   Moving the whole root to another machine needs no edit; moving a run directory *alone* does
+   not work, because `input/` and `min/` are shared siblings rather than copies — see
+   [the layout](run-layout.md). The only absolute path written is the recorded interpreter in
+   `run.sh`, which falls back to whatever `python3` provides.
 
 2. **The generated scripts do not depend on this package.** They import OpenMM, PyYAML and the two
    modules copied in beside them. A project keeps working after the checkout is deleted; a test
@@ -53,9 +55,9 @@ to the workflow matrix and seeing it pass first.
    announced on use and recorded in the run summary.
 
 5. **Rebuilding from the original structure may be scientifically consistent without being bitwise
-   identical.** Parameterisation depends on the toolkit versions recorded in each build record
-   in `machine.yaml` and by `build-top` in `inputs/provenance.yaml`. Reproducing a build exactly
-   requires reproducing that environment; moving the already-built `inputs/` does not.
+   identical.** Parameterisation depends on the toolkit versions recorded by `build-top` in the
+   machine record inside `build/built.log`. Reproducing a build exactly requires reproducing that
+   environment; moving the already-built `build/` does not.
 
 **Not claimed:** cross-machine bitwise reproducibility of dynamics, in any configuration.
 
@@ -73,7 +75,7 @@ The evidence for every default, classified by strength, is in
 | implicit, Sage small molecule | **experimental**, recorded as such in `forcefield.json` | §6 — mbondi3 reduces to mbondi2 for a one-residue ligand, and any element outside {H, C, N, O, S} gets GB-Neck2's unfitted fallback |
 | 2 fs, unmodified hydrogen masses | supported baseline | §11.1 |
 | 4 fs with HMR at 3.024 amu | supported for stability and equilibrium free energies; **not** for kinetics | §11.3 |
-| AIS switching along the REST2 tau path | implemented and tested against a static REST2 rung to 0 kJ/mol and 0 kJ/mol/nm; **no free-energy estimator, forward only, fixed volume, no pV work** | `docs/journal/2026-08-27_ais-method-and-release-gaps.md` |
+| AIS switching along the REST2 tau path | implemented and tested against a static REST2 rung to 0 kJ/mol and 0 kJ/mol/nm; **no free-energy estimator, forward only, fixed volume, no pV work** | [the AIS page](openmm_methods/AIS/README.md) |
 
 ## Scientific status, which portability does not address
 
@@ -85,4 +87,5 @@ their protocol.
 
 Deletion is not evidence either. Removing the code that described the old architecture says nothing
 about whether the current simulations are correct; that question is answered only by the tests and
-the runs recorded in `docs/journal/`.
+the runs recorded in the [release notes](release-notes/v0.5.3.md) and in the development journals
+kept under `docs/history/` in the repository.

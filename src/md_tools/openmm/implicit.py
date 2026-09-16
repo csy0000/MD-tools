@@ -517,6 +517,7 @@ def build_amber_topology_via_tleap(pdb_path: Path, out_dir: Path, *, radii: str 
 
 def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
                                  pdb: Optional[Path] = None, smiles: Optional[str] = None,
+                                 sdf: Optional[Path] = None,
                                  implicit_model: str = "GBn2", radii: str = "mbondi3",
                                  hydrogen_mass_amu: Optional[float] = None,
                                  hmr_scope: str = "none",
@@ -544,7 +545,7 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
                                                protein_forcefield=protein_ff)
         topology_source = amber["topology_pdb"]
     elif route == "ligand":
-        amber = _amber_files_for_ligand(cfg, staging, smiles=smiles)
+        amber = _amber_files_for_ligand(cfg, staging, smiles=smiles, sdf=sdf)
         topology_source = amber["topology_pdb"]
     else:
         raise ValueError(f"implicit preparation has no route {route!r}; expected peptide or ligand")
@@ -593,7 +594,10 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
     build_record = {
         "suffix": "system",
         "route": route,
-        "input_route": "pdb" if route == "peptide" else "smiles",
+        # What the molecule actually came from. This said "smiles" for every ligand build, which
+        # was true while that was the only molecular-graph input and became a false record the
+        # moment a second one existed.
+        "input_route": ("pdb" if route == "peptide" else ("sdf" if sdf is not None else "smiles")),
         "n_particles": system.getNumParticles(),
         "n_constraints": system.getNumConstraints(),
         "n_solute_atoms": system.getNumParticles(),
@@ -642,16 +646,21 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
     }
 
 
-def _amber_files_for_ligand(cfg: dict, staging: Path, *, smiles: Optional[str]) -> dict:
+def _amber_files_for_ligand(cfg: dict, staging: Path, *, smiles: Optional[str],
+                            sdf: Optional[Path] = None) -> dict:
     """OpenFF/Sage parameters, serialised to Amber files through ParmEd."""
     from openmm import app
 
-    from .system import build_forcefield, initial_structure
+    from .system import build_forcefield, initial_structure, initial_structure_from_sdf
 
-    if not smiles:
-        raise ValueError("the implicit ligand route needs a SMILES input")
-
-    structure = initial_structure(smiles, staging / "structure", cfg)
+    # Exactly one of the two molecular-graph inputs. Both write the same two files into
+    # `staging/structure`, and everything below this point is common to them.
+    if sdf is not None:
+        structure = initial_structure_from_sdf(sdf, staging / "structure", cfg)
+    elif smiles:
+        structure = initial_structure(smiles, staging / "structure", cfg)
+    else:
+        raise ValueError("the implicit ligand route needs a .smi or .sdf input")
     ligand_sdf = Path(structure["solute_sdf"])
     forcefield, ff_info = build_forcefield(cfg, ligand_sdf=ligand_sdf, route="ligand")
 

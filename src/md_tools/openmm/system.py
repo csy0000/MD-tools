@@ -117,6 +117,146 @@ def initial_structure(smiles: str, out_dir: Path, cfg: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------------------------
+# Step 1, the other way in -- initial structure from a SUPPLIED SDF (coordinates as given)
+# ---------------------------------------------------------------------------------------------
+def read_single_sdf_molecule(sdf_path: Path):
+    """The one molecule in *sdf_path*, or a `ConfigError` naming exactly what is wrong with it.
+
+    ONE implementation, called from two places, and that is deliberate. `build-top` calls it
+    beside the suffix check so that a malformed input refuses before any directory is created;
+    :func:`initial_structure_from_sdf` calls it again because the generated entry points and the
+    implicit route reach the preparer directly. A gate that lived only in the command would be a
+    safe outer surface over an unsafe runtime, which is worse than no gate: it makes the
+    unchecked path look tested.
+
+    Raises `ConfigError` rather than `ValueError`, because every one of these is a statement
+    about the file the user named on the command line -- the same class `-i`'s suffix and
+    existence checks raise, and the one the CLI maps to exit 2.
+    """
+    from rdkit import Chem
+
+    from ..build.strict import ConfigError
+
+    sdf_path = Path(sdf_path)
+
+    # `removeHs=False` is not a preference. RDKit strips explicit hydrogens by default, and the
+    # hydrogens in this file are the ones being parameterised -- a silently de-protonated solute
+    # would be given Sage's parameters for a different molecule while every log named this one.
+    # `sanitize=True` is what the parameterisation will do anyway: a record that cannot be
+    # sanitised here would fail later inside charge assignment, further from the file that caused
+    # it, and it arrives as `None` and is refused below.
+    #
+    # The `try` is for a different failure: RDKit raises on CONSTRUCTION for a file it cannot open
+    # at all -- an empty one included -- rather than yielding zero records, so "no records" and
+    # "no readable file" arrive by two routes and both must become a refusal that names `-i`.
+    try:
+        records = list(Chem.SDMolSupplier(str(sdf_path), removeHs=False, sanitize=True))
+    except OSError as exc:
+        raise ConfigError(
+            f"-i {sdf_path}: RDKit could not open this file as an SDF ({exc}). An empty file or "
+            f"one whose contents are not a molfile reaches here; check that it is the file you "
+            f"meant to pass.") from exc
+    if not records:
+        raise ConfigError(
+            f"-i {sdf_path}: contains no molecule record. Expected one molecule with 3D "
+            f"coordinates and explicit hydrogens.")
+    if len(records) > 1:
+        raise ConfigError(
+            f"-i {sdf_path}: contains {len(records)} molecule records; this phase builds exactly "
+            f"one System from one molecule. Split the file, or keep the record you mean to "
+            f"build.")
+    mol = records[0]
+    if mol is None:
+        raise ConfigError(
+            f"-i {sdf_path}: RDKit could not read this SDF. A molecule that fails sanitisation "
+            f"here would fail again inside the charge assignment, with a less useful message.")
+    if mol.GetNumConformers() == 0:
+        raise ConfigError(
+            f"-i {sdf_path}: carries no conformer, so it supplies no coordinates. An SDF input "
+            f"IS the structure; to have one generated instead, supply a .smi and the ETKDG/MMFF "
+            f"route will build it.")
+    if not mol.GetConformer().Is3D():
+        raise ConfigError(
+            f"-i {sdf_path}: its conformer is flagged two-dimensional. A flat molecule is not a "
+            f"starting structure -- solvating and integrating it would begin from a geometry no "
+            f"force field considers physical. Supply 3D coordinates, or a .smi to have them "
+            f"generated.")
+    if not any(atom.GetAtomicNum() == 1 for atom in mol.GetAtoms()):
+        raise ConfigError(
+            f"-i {sdf_path}: carries no explicit hydrogens. The small-molecule route "
+            f"parameterises the molecule exactly as given and adds none, so an "
+            f"implicit-hydrogen SDF would be built as the heavy-atom skeleton alone. Add "
+            f"hydrogens before supplying it.")
+    return mol
+
+
+def initial_structure_from_sdf(sdf_path: Path, out_dir: Path, cfg: dict) -> dict:
+    """Take over where :func:`initial_structure` finishes, from a molecule the caller supplies.
+
+    The SMILES route *generates* coordinates -- ETKDGv3 embeds, MMFF minimises every conformer,
+    the lowest in energy is kept -- and writes exactly two files that everything downstream
+    consumes: ``solute.sdf`` (bond orders and formal charges, which the OpenFF path needs) and
+    ``solute.pdb`` (what Modeller reads). An SDF already carries all three, so this route writes
+    those same two files and stops.
+
+    **It does not embed and it does not minimise.** The conformer in the file is the pose the
+    caller chose -- docked, crystallographic, or the output of some other pipeline -- and
+    replacing it with an MMFF minimum would be a different experiment reported under the same
+    name. `structure.etkdg` and `structure.mmff` are therefore not read here, and a configuration
+    that sets them has not been ignored: they describe a step this route does not take.
+
+    The provenance says so too. There is no seed and no conformer table, because nothing was
+    sampled; what makes this build reproducible is the identity of the input file, so its digest
+    is recorded in their place.
+    """
+    from rdkit import Chem
+
+    from ..build.record import sha256_file
+
+    out_dir = Path(out_dir)
+    sdf_path = Path(sdf_path)
+
+    mol = read_single_sdf_molecule(sdf_path)
+
+    # Only now. Everything above can refuse, and a refusal must not leave a directory behind.
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 3D is the authority for stereochemistry once coordinates exist: an SDF's parity flags and
+    # its geometry can disagree, and the geometry is what will be integrated.
+    Chem.AssignStereochemistryFrom3D(mol)
+
+    # Written through RDKit rather than copied, so that both input routes hand downstream code a
+    # file from ONE writer. A copied SDF would carry whatever dialect its producer used, and the
+    # first thing to disagree would be `map_from_sdf`, which re-reads this file for the peptide
+    # chemistry.
+    Chem.MolToMolFile(mol, str(out_dir / "solute.sdf"))
+    Chem.MolToPDBFile(mol, str(out_dir / "solute.pdb"))
+
+    info = {
+        # THE SAME KEY AS THE SMILES ROUTE, AND NOT THE SAME FACT. There it is the string the user
+        # supplied and the coordinates were built from; here the coordinates came first and this is
+        # read back off them by RDKit. The key is shared because callers log it as "which molecule
+        # is this" -- `builders._build_explicit` does -- and `smiles_origin` is what keeps the two
+        # meanings apart for anyone reading the file.
+        "smiles": Chem.MolToSmiles(mol),
+        "smiles_origin": "derived from the supplied coordinates, not a supplied string",
+        "coordinate_source": "supplied SDF, used as given (no embedding, no minimisation)",
+        "source_file": {"path": sdf_path.name, "sha256": sha256_file(sdf_path)},
+        "n_conformers_embedded": 0,
+        "mmff_variant": None,
+        "selected_conformer": None,
+        "all_conformers": [],
+        "n_unconverged": 0,
+        "solute_sdf": str(out_dir / "solute.sdf"),
+        "solute_pdb": str(out_dir / "solute.pdb"),
+    }
+    (out_dir / "initial_structure.json").write_text(
+        json.dumps(info, indent=2) + "\n", encoding="utf-8"
+    )
+    return info
+
+
+# ---------------------------------------------------------------------------------------------
 # Force field construction (shared by steps 2, 3, 4)
 # ---------------------------------------------------------------------------------------------
 #: Charge methods that route to OpenFF NAGL's graph model of AM1-BCC.  ``nagl`` is the older
@@ -453,7 +593,9 @@ def resolve_route(cfg: dict, topology=None, *, input_route: Optional[str] = None
         )
     declared = str(cfg["system"]["solute_kind"])
     inferred = None
-    if input_route == "smiles":
+    # Both molecular-graph inputs infer the same route: what makes a solute a ligand here is that
+    # it arrives as a graph with no residue evidence, not which file carried it.
+    if input_route in ("smiles", "sdf"):
         inferred = "ligand"
     elif topology is not None:
         names = {r.name.upper() for r in topology.residues()}
@@ -472,12 +614,13 @@ def resolve_route(cfg: dict, topology=None, *, input_route: Optional[str] = None
         return inferred
 
     if inferred is not None and declared != inferred:
-        if input_route == "smiles" and declared in ("peptide", "complex"):
+        if input_route in ("smiles", "sdf") and declared in ("peptide", "complex"):
             raise ValueError(
-                f"system.solute_kind='{declared}' contradicts --smiles input.  ff19SB matches by "
-                "residue template and an RDKit structure built from SMILES is a single 'UNL' "
-                "residue, so the peptide route cannot succeed here.  Supply a residue-named PDB "
-                "with --pdb for the ff19SB route, or set system.solute_kind to 'auto'/'ligand'."
+                f"system.solute_kind='{declared}' contradicts a {input_route} input.  ff19SB "
+                "matches by residue template and a molecule built from a molecular graph is a "
+                "single 'UNL' residue, so the peptide route cannot succeed here.  Supply a "
+                "residue-named PDB for the ff19SB route, or set system.solute_kind to "
+                "'auto'/'ligand'."
             )
         print(
             f"[route] system.solute_kind='{declared}' overrides the inferred '{inferred}'; "
