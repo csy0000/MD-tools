@@ -1233,6 +1233,11 @@ def test_multi_rank_rrest2_with_a_real_reservoir(built, hardware, tmp_path):
 
     work = tmp_path / "rrest2-mpi"
     work.mkdir()
+    # A ladder's rungs are scaled and serialised at BUILD time, so `build-md` reads
+    # `<system>/build/built.xml` -- and `-odir work/project` makes `work` the system root. The
+    # three other ladder lanes in this file copy it in; this one was missed and refused before
+    # writing anything.
+    shutil.copytree(built / "build", work / "build")
     tau_max = 0.5
 
     # The reservoir: a fixed-tau run AT THE LADDER'S TOP RUNG, streaming complete phase space.
@@ -1255,7 +1260,18 @@ def test_multi_rank_rrest2_with_a_real_reservoir(built, hardware, tmp_path):
     assert phase_space, f"no phase-space file: {sorted(p.name for p in hot_run.iterdir())}"
     reservoir = phase_space[0]
 
-    (work / "rrest2.config").write_text(yaml.safe_dump({
+    # A SYSTEM ROOT OF ITS OWN FOR THE LADDER.
+    #
+    # The reservoir source above runs at `tau = tau_max` and the ladder at the default `tau = 0`,
+    # so the two resolve the SHARED `input/eq_*.in` differently -- and `input/` belongs to the
+    # system, so the second generation was refused by name: "give it a different `<system>` root".
+    # They are deliberately different experiments over one built system, which is exactly what the
+    # refusal advises. The reservoir reaches the ladder by the absolute path it already carries,
+    # so splitting the roots costs nothing.
+    ladder_root = work / "ladder"
+    shutil.copytree(built / "build", ladder_root / "build")
+
+    (ladder_root / "rrest2.config").write_text(yaml.safe_dump({
         "protocol": "rREST2", "solvent": "implicit",
         "dynamics": {"seed": 13},
         "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 10,
@@ -1267,15 +1283,15 @@ def test_multi_rank_rrest2_with_a_real_reservoir(built, hardware, tmp_path):
         "reservoir": {"enabled": True, "path": str(reservoir),
                       "refresh_interval_exchanges": 1, "velocities": "inherit"}},
         sort_keys=False), encoding="utf-8")
-    assert subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
-                                 "--config", str(work / "rrest2.config")],
+    assert subprocess.run(CLI + ["build-md", "-odir", str(ladder_root / "project"),
+                                 "--config", str(ladder_root / "rrest2.config")],
                           capture_output=True, text=True, timeout=600).returncode == 0
 
     run = work / "run"
-    start = _equilibrate(work / "project", built / "build" / "built.pdb", built / "build" / "built.xml", work, run,
-                         script="rREST2.py")
+    start = _equilibrate(ladder_root / "project", built / "build" / "built.pdb",
+                         built / "build" / "built.xml", work, run, script="rREST2.py")
     done = subprocess.run(
-        ["mpirun", "-n", "2", sys.executable, str(work / "project" / "rREST2.py"),
+        ["mpirun", "-n", "2", sys.executable, str(ladder_root / "project" / "rREST2.py"),
          "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
          "-c", str(start), "-odir", str(run), "-ng", "2"],
         cwd=work, capture_output=True, text=True, timeout=3600,
@@ -1488,8 +1504,13 @@ def test_hs_rows_match_recomputation_on_cuda(solvent, built, built_explicit, har
 
     worst = 0.0
     for row in rows:
+        # `root / "build"`, because the HELPER reads `<root>/built.pdb` and `<root>/built.xml`
+        # flat -- `test_ais_hs_frame_alignment` builds its own trees that way and calls it four
+        # times with them, so the helper is right and must not move. The systems in THIS module
+        # live under `build/`, so the call site supplies that directory rather than the fixture
+        # root, which is what made this fail with `.../cuda-matrix0/built.pdb` not found.
         components, direct = recompute_at_frame(
-            root, work / "run", path_id=int(row["path_id"]),
+            root / "build", work / "run", path_id=int(row["path_id"]),
             frame_index=int(row["coordinate_frame_index"]), tau=float(row["tau"]))
         allowed = frame_roundtrip_tolerance(float(row["potential_direct_kj_mol"]))
         for group in ("non_scaled", "sqrt_scaled", "lin_scaled"):

@@ -186,7 +186,14 @@ def _build_and_equilibrate(built: Path, name: str, config: str) -> Path:
 #: The helpers an extension's own directory needs. `_protocol.py`, `solute.yaml` and the group
 #: file are written by rank 0 at run time -- the group file by `--extend-from` itself, which is the
 #: fix under test -- so only the entry point and the resolved declaration are copied.
-EXTENSION_FILES = ("REST2.py", "resolved.config", "REST2.in")
+#:
+#: NO `.in`. The generated `REST2.py` reads `resolved.config` beside itself and nothing else --
+#: `run_generated_remd(__file__, protocol="REST2")` is its whole body -- and `_generated` passes no
+#: `-i`. The Amber-like inputs belong to the SYSTEM and live in `<system>/input/`, so a run
+#: directory holds none to copy: this named `REST2.in` and every extension test died with
+#: `FileNotFoundError: .../baseline-run1/REST2.in`. An extension directory is a sibling of the run
+#: inside the same system root, so `../input/` still resolves from it if anything ever needs it.
+EXTENSION_FILES = ("REST2.py", "resolved.config")
 
 
 def _generated(work: Path, *extra: str, timeout: int = 3600):

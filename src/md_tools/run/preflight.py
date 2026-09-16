@@ -1057,13 +1057,41 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
     #
     # Its paths resolve against the GROUP FILE rather than the working directory, so
     # `remd0/build_state0.xml` is found wherever the launch was started from.
-    if not system and groupfile:
+    # AND THE STARTING STATE, for the same reason and from the same place.
+    #
+    # A GROUP FILE IS THE AMBER-STYLE DESCRIPTION OF THE LAUNCH (`-rem 3`, the only REMD type this
+    # build supports), and the per-replica INPUT commands live on its lines: `-i`, `-p`, `-s` and
+    # `-c` are validated there, not on the run-level command line, which carries only the outputs.
+    # `remd.executor.resolve` already exempts exactly those four when a group file is in force;
+    # this function did not, so `rest2.equilibration_per_tau` refused a perfectly well described
+    # launch with "equilibrates every rung FROM the ladder's starting state, and no -c was given"
+    # while every line of the group file named that state.
+    #
+    # Line 0 is representative BY CONSTRUCTION, not by assumption: `coordinates` is in
+    # `HOMOGENEOUS_GROUP_FIELDS`, so `_require_homogeneous_groups` refuses a file whose lines
+    # disagree about it before this point -- a ladder's rungs are N states of ONE system and share
+    # one starting configuration. `system` is read the same way, and is the one field deliberately
+    # NOT homogeneous: each rung is its own pre-scaled Hamiltonian, and the timestep is resolved
+    # from the MASSES, which scaling does not change (measured: identical mass signatures across
+    # three rungs). Skipping that check when `-s` is absent would drop the HMR refusal silently.
+    #
+    # Paths resolve against the GROUP FILE rather than the working directory, so
+    # `remd0/build_state0.xml` and `eq/eq_3.xml` are found wherever the launch was started from.
+    if groupfile and not (system and coordinates):
         from ..remd.executor import GroupFileError, parse_group_file
 
         try:
-            system = parse_group_file(groupfile)[0]["system"]
+            first = parse_group_file(groupfile)[0]
         except GroupFileError as refusal:
             raise PreflightError(f"{protocol}: {refusal}") from None
+        system = system or first.get("system")
+        # An EXTENSION legitimately has no `-c` on its lines -- it takes the physical state from
+        # the parent's checkpoint -- so a group file without one leaves this as it was, and the
+        # per-tau check below refuses it by name rather than being quietly satisfied.
+        if not coordinates and first.get("coordinates"):
+            coordinates = first["coordinates"]
+            inputs = dict(_continuation_inputs(coordinates, pending_parent, where=protocol),
+                          groupfile=groupfile)
     inventory = _ladder_inventory(protocol=protocol, replicas=int(replicas), output=output,
                                   log=log, trajectory=trajectory, restart=restart,
                                   checkpoint=checkpoint, groupfile=groupfile,

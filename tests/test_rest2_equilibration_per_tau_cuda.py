@@ -34,7 +34,11 @@ def test_per_tau_equilibration_under_mpi_on_cuda(tmp_path):
                           capture_output=True, text=True, timeout=3600)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
 
-    manifest = json.loads((run / "restart.json").read_text(encoding="utf-8"))
+    # PER SEGMENT, in `remd_records/`. `run.sh` names the ladder's manifest
+    # `-r remd_records/restart_prod<N>.json`, because a ladder extended in place writes a `_prod2`
+    # set beside the first rather than over it -- so there is no `restart.json` at the run root.
+    manifest = json.loads(
+        (run / "remd_records" / "restart_prod1.json").read_text(encoding="utf-8"))
     assert manifest["run_status"] == "completed"
     assert manifest["execution"]["platform"] == "CUDA", manifest["execution"]
     record = manifest["per_tau_equilibration"]

@@ -91,10 +91,13 @@ def ladder(built):
     # stage's FILING KEY, so a stage filed as `eq_1` writes `eq/eq_1.xml`; naming them explicitly
     # would resolve them against the working directory instead.
     previous = None
-    for key, source in (("min", "min"), ("eq_1", "eq_nvt_posres"),
-                        ("eq_2", "eq_nvt_posres_2"), ("eq_3", "eq_nvt_free")):
+    for key in ("min", "eq_1", "eq_2", "eq_3"):
         odir = "../min" if key == "min" else "eq"
-        argv = ["-i", f"../input/{source}.in", "-p", "../build/built.pdb",
+        # `-i` BY THE FILING KEY, not the stage name. The shared inputs are filed by position --
+        # `input/eq_1.in`, `eq_2.in`, `eq_3.in` -- because the ensemble moved out of the filename;
+        # `input/eq_nvt_posres.in` has never existed. The stage name still decides the physics, and
+        # md-run reads it from the input's own resolved declaration.
+        argv = ["-i", f"../input/{key}.in", "-p", "../build/built.pdb",
                 "-s", "../build/built.xml", "-odir", odir]
         if previous:
             argv += ["-c", previous]
@@ -119,12 +122,16 @@ def test_a_two_rank_ladder_writes_one_trajectory_per_state(ladder):
 
 def test_each_rank_kept_its_own_record_and_ran_on_cuda(ladder):
     """Two ranks, two records, two devices. A rank that lost its GPU has to be able to say so."""
-    # PER SEGMENT, in `remd_records/`: a ladder extended in place writes a `_prod2` set beside
-    # the first rather than over it, so there is no `REST2.out` at the run root.
-    records = ladder / "remd_records"
-    assert (records / "REST2_prod1.log").is_file() and (records / "REST2_prod1.log.rank01").is_file()
-    text = (records / "REST2_prod1.out").read_text(encoding="utf-8")
-    other = (records / "REST2_prod1.out.rank01").read_text(encoding="utf-8")
+    # AT THE RUN ROOT, because this fixture launches `md-run` DIRECTLY with `-log REST2.log`.
+    #
+    # A value given explicitly is taken verbatim, so it lands where it is named; it is `run.sh`
+    # that routes a ladder's records into `remd_records/REST2_prod<N>.*`, one set per segment. I
+    # repointed this at `remd_records/` on the strength of the `run.sh` layout and the run proved
+    # it wrong: `REST2.log`, `.log.rank01`, `.out` and `.out.rank01` sit here and `remd_records/`
+    # is empty. Both spellings are correct for their own caller.
+    assert (ladder / "REST2.log").is_file() and (ladder / "REST2.log.rank01").is_file()
+    text = (ladder / "REST2.out").read_text(encoding="utf-8")
+    other = (ladder / "REST2.out.rank01").read_text(encoding="utf-8")
     assert "platform           : CUDA" in text, text
     assert "platform           : CUDA" in other, other
     # Deterministic placement, recorded: not "a GPU" but WHICH one, and by what rule.
@@ -157,23 +164,40 @@ def test_a_world_that_is_not_the_state_count_is_refused_before_integrating(ladde
 
 # --- a hundred AIS paths ----------------------------------------------------------------------
 
-def _ais_project(built: Path, name: str, paths: int) -> Path:
-    config = built / f"{name}.config"
+def _ais_project(built: Path, name: str, paths: int, source: Path) -> Path:
+    """Generate one AIS campaign into a SYSTEM ROOT OF ITS OWN, and return its run directory.
+
+    `input/` belongs to the SYSTEM and is shared by every run on it, so a second configuration
+    that resolves it differently is refused -- "give it a different `<system>` root". Every
+    campaign here writes `input/AIS.in` with its own `number_of_paths`, and `source.config` differs
+    from `rest2.config` in every stage length, so generating them all into one root refused
+    whichever came second. They are different experiments over one built system, which is exactly
+    what the refusal advises.
+
+    The source trajectory is passed ABSOLUTE for the same reason: it lives in the root that
+    produced it, so `../source-run1/whole_prod1.nc` stops resolving once each campaign has a root
+    of its own.
+    """
+    root = built / f"system-{name}"
+    shutil.copytree(built / "build", root / "build")
+    config = root / f"{name}.config"
     config.write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit",
         "dynamics": {"seed": 5},
         "ais": {"number_of_paths": paths, "tau_start": 0.5, "tau_end": 0.0,
                 "switching_steps": 10, "observation_interval_steps": 5},
-        "ais_source": {"trajectory": "../source-run1/whole_prod1.nc"}}, sort_keys=False),
+        "ais_source": {"trajectory": str(source)}}, sort_keys=False),
         encoding="utf-8")
-    assert _cli(built, "build-md", "-odir", f"./{name}-run1", "--config", str(config)).returncode == 0
-    return built / f"{name}-run1"
+    assert _cli(root, "build-md", "-odir", f"./{name}-run1", "--config", str(config)).returncode == 0
+    return root / f"{name}-run1"
 
 
 @pytest.fixture(scope="module")
 def source(built):
     """A short fixed-tau run at tau = 0.5: the ensemble the paths anneal away from."""
-    config = built / "source.config"
+    root = built / "system-source"
+    shutil.copytree(built / "build", root / "build")
+    config = root / "source.config"
     config.write_text(yaml.safe_dump({
         "protocol": "cMD", "solvent": "implicit",
         "dynamics": {"tau": 0.5, "seed": 9},
@@ -186,19 +210,19 @@ def source(built):
         "reporting": {"crd_printout_solute": 10, "crd_printout_whole": 10,
                       "info_printout": 100,
                       "checkpoint_printout": 1000}}, sort_keys=False), encoding="utf-8")
-    assert _cli(built, "build-md", "-odir", "./source-run1", "--config", str(config)).returncode == 0
+    assert _cli(root, "build-md", "-odir", "./source-run1", "--config", str(config)).returncode == 0
     done = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml"],
-                          cwd=built / "source-run1", capture_output=True, text=True, timeout=3600)
+                          cwd=root / "source-run1", capture_output=True, text=True, timeout=3600)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
-    return built / "source-run1" / "whole_prod1.nc"
+    return root / "source-run1" / "whole_prod1.nc"
 
 
 @pytest.fixture(scope="module")
 def hundred(built, source):
     _require_mpi()
-    out = _ais_project(built, "ais100", 100)
+    out = _ais_project(built, "ais100", 100, source)
     done = _md_run(out, "-ng", "4", "-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-                   "-source-traj", "../source-run1/whole_prod1.nc", "-odir", ".", "-log", "AIS.log",
+                   "-source-traj", str(source), "-odir", ".", "-log", "AIS.log",
                    ranks=4)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return out
@@ -262,9 +286,9 @@ def test_path_identity_does_not_depend_on_the_worker_count(built, source):
     _require_mpi()
     tables = {}
     for ranks in (1, 3):
-        out = _ais_project(built, f"ais_n{ranks}", 12)
+        out = _ais_project(built, f"ais_n{ranks}", 12, source)
         done = _md_run(out, "-ng", str(ranks), "-i", "../input/AIS.in", "-p", "../build/built.pdb",
-                       "-s", "../build/built.xml", "-source-traj", "../source-run1/whole_prod1.nc",
+                       "-s", "../build/built.xml", "-source-traj", str(source),
                        "-odir", ".", "-log", "AIS.log", ranks=ranks)
         assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
         tables[ranks] = {r["path_index"]: r
@@ -287,9 +311,9 @@ def test_a_rerun_does_not_touch_a_path_that_already_completed(built, source):
     the next run adopted the old paths under a new identity. The plain rerun is what must be a
     no-op, and that is what is asserted here; `--overwrite` gets its own test below.
     """
-    out = _ais_project(built, "ais_restart", 4)
+    out = _ais_project(built, "ais_restart", 4, source)
     argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-            "-source-traj", "../source-run1/whole_prod1.nc", "-odir", ".", "-log", "AIS.log")
+            "-source-traj", str(source), "-odir", ".", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
 
     def fingerprint():
@@ -313,9 +337,9 @@ def test_overwrite_starts_the_ais_directory_over(built, source):
     experiments. What `--overwrite` has to mean is that nothing of the old run survives to be
     adopted.
     """
-    out = _ais_project(built, "ais_overwrite", 4)
+    out = _ais_project(built, "ais_overwrite", 4, source)
     argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-            "-source-traj", "../source-run1/whole_prod1.nc", "-odir", ".", "-log", "AIS.log")
+            "-source-traj", str(source), "-odir", ".", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
     assert len(sorted(out.glob("AIS_traj*.nc"))) == 4
 
@@ -364,8 +388,15 @@ def stage_project(built):
                    "production_steps": 100},
         "reporting": {"crd_printout_solute": 20, "info_printout": 50,
                       "checkpoint_printout": 100}}, sort_keys=False), encoding="utf-8")
-    assert _cli(built, "build-md", "-odir", "./dcd-run1", "--config", str(config)).returncode == 0
-    out = built / "dcd"
+    # A SYSTEM ROOT OF ITS OWN. `dcd.config` resolves the shared `input/eq_*.in` differently from
+    # `rest2.config` and `source.config`, so whichever generated second was refused with "give it a
+    # different `<system>` root". `build-md` takes the dataset root from `-odir`'s parent, so
+    # pointing `-odir` into a root of its own is enough; the config FILE stays where it is, because
+    # a reader below re-reads it by that path.
+    root = built / "system-dcd"
+    shutil.copytree(built / "build", root / "build")
+    assert _cli(root, "build-md", "-odir", "./dcd-run1", "--config", str(config)).returncode == 0
+    out = root / "dcd-run1"
     done = _md_run(out, "-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                    "-x", "custom.dcd", "-r", "cMD.xml", "-o", "cMD.out", "-log", "cMD.log")
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
@@ -394,7 +425,7 @@ def test_a_conventional_stage_writes_a_genuine_dcd_and_refuses_a_netcdf_name(bui
     # full step count, so a second invocation correctly resumes to completion with no dynamics
     # and writes no trajectory at all. Reusing it tests the resume path, not the format.
     assert _cli(built, "build-md", "-odir", "./nc-run1", "--config", str(config)).returncode == 0
-    nc_out = built / "nc"
+    nc_out = built / "nc-run1"
     accepted = _md_run(nc_out, "-i", "../input/cMD.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                        "-x", "cMD.nc", "-r", "cMD.xml", "-o", "cMD.out", "-log", "cMD.log")
     assert accepted.returncode == 0, accepted.stdout[-3000:] + accepted.stderr[-3000:]
@@ -424,7 +455,7 @@ def test_output_and_log_are_two_files_with_two_kinds_of_content(built, stage_pro
     assert "cMD.out" in record, "the record does not point at the readable output"
 
 
-def test_ais_reads_a_genuine_netcdf_source_and_writes_genuine_netcdf(hundred, built):
+def test_ais_reads_a_genuine_netcdf_source_and_writes_genuine_netcdf(hundred, built, source):
     """NetCDF in, NetCDF out, both verified from the bytes and by an independent reader.
 
     This used to read a DCD, because that was the only format a cMD stage produced. A stage now
@@ -437,7 +468,7 @@ def test_ais_reads_a_genuine_netcdf_source_and_writes_genuine_netcdf(hundred, bu
 
     from md_tools.openmm.trajectory import detect_trajectory_format
 
-    assert detect_trajectory_format(built / "source-run1" / "whole_prod1.nc") == "netcdf"
+    assert detect_trajectory_format(source) == "netcdf"
     assert read_record(hundred / "AIS.log")["source"]["format"] == "netcdf"
 
     for path_id in (0, 99):
@@ -457,7 +488,7 @@ def test_a_source_whose_suffix_and_contents_disagree_is_refused(built, source, t
     """
     mislabelled = built / "mislabelled.dcd"
     mislabelled.write_bytes(source.read_bytes())
-    out = _ais_project(built, "ais_mislabelled", 2)
+    out = _ais_project(built, "ais_mislabelled", 2, source)
     done = _md_run(out, "-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
                    "-source-traj", "../mislabelled.dcd", "-odir", ".",
                    "-o", "AIS.out", "-log", "AIS.log")
@@ -468,19 +499,25 @@ def test_a_source_whose_suffix_and_contents_disagree_is_refused(built, source, t
 
 # --- four cadences and an exact mid-path resume -----------------------------------------------
 
-def _cadence_project(built: Path, name: str) -> Path:
-    """Four DIFFERENT cadences, so each one's effect is distinguishable from the others'."""
-    config = built / f"{name}.config"
+def _cadence_project(built: Path, name: str, source: Path) -> Path:
+    """Four DIFFERENT cadences, so each one's effect is distinguishable from the others'.
+
+    Its own system root and an absolute source, for the reason `_ais_project` states: `input/`
+    is shared per system, and this campaign's `input/AIS.in` differs from every other one's.
+    """
+    root = built / f"system-{name}"
+    shutil.copytree(built / "build", root / "build")
+    config = root / f"{name}.config"
     config.write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit", "dynamics": {"seed": 5},
         "ais": {"number_of_paths": 2, "tau_start": 0.5, "tau_end": 0.0,
                 "switching_steps": 1000, "parameter_update_interval_steps": 1,
                 "observation_interval_steps": 100},
-        "ais_source": {"trajectory": "../source-run1/whole_prod1.nc"},
+        "ais_source": {"trajectory": str(source)},
         "reporting": {"crd_printout_solute": 200, "info_printout": 500,
                       "checkpoint_printout": 200}}, sort_keys=False), encoding="utf-8")
-    assert _cli(built, "build-md", "-odir", f"./{name}-run1", "--config", str(config)).returncode == 0
-    return built / name
+    assert _cli(root, "build-md", "-odir", f"./{name}-run1", "--config", str(config)).returncode == 0
+    return root / f"{name}-run1"
 
 
 def test_each_ais_cadence_controls_its_own_stream(built, source):
@@ -492,9 +529,9 @@ def test_each_ais_cadence_controls_its_own_stream(built, source):
     """
     import mdtraj
 
-    out = _cadence_project(built, "cadences")
+    out = _cadence_project(built, "cadences", source)
     done = _md_run(out, "-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-                   "-source-traj", "../source-run1/whole_prod1.nc", "-odir", ".",
+                   "-source-traj", str(source), "-odir", ".",
                    "-o", "AIS.out", "-log", "AIS.log")
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
 
@@ -532,9 +569,9 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
 
     from md_tools.openmm.checkpoint import FAULT_ENVIRONMENT
 
-    out = _cadence_project(built, "resume")
+    out = _cadence_project(built, "resume", source)
     argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-            "-source-traj", "../source-run1/whole_prod1.nc", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
+            "-source-traj", str(source), "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
 
     crashed = subprocess.run(["md-openmm", "md-run", *argv], cwd=out, capture_output=True,
                              text=True, timeout=1800,
@@ -596,9 +633,9 @@ def test_a_completed_path_is_not_touched_by_a_resume(built, source):
     test left behind. Depending on a neighbour's directory made this fail for that neighbour's
     reasons, which is the wrong signal in the wrong place.
     """
-    out = _cadence_project(built, "untouched")
+    out = _cadence_project(built, "untouched", source)
     argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
-            "-source-traj", "../source-run1/whole_prod1.nc", "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
+            "-source-traj", str(source), "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
 
     before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
