@@ -43,15 +43,6 @@ rejected attempt must not replace the prior run's authoritative account of itsel
 same reason completion is read from a machine record rather than from prose. Every `.in` that `build-md` writes resolves back to exactly the
 `resolved.config` beside it; that round-trip is a test, not a convention.
 
-These do not exist and must never be suggested: `sys-config`, `sys-gen`, `md-gen`, `setup`,
-`show-default`, `openmm-md`, `md-template`, `md-data-finish`, `md-data-register`.
-
-They may still be NAMED, in exactly two places: a test that asserts one is refused, and
-release or migration history that says it is retired. Both are how the guarantee is kept. Anywhere
-else — a docstring, a comment, a module name, an example — naming one as if it works is stale text,
-not an interface. An internal module may not be named after a retired executable either: the
-executor lives at `md_tools/remd/executor.py` because `openmm_md.py` read as the command.
-
 ## Configuration
 
 ```text
@@ -67,8 +58,7 @@ and nothing else. If you find a second function resolving an MD configuration, i
 ## The import API
 
 ```text
-md_tools.md      PositionalRestraint, ReportingConfig, run_stage,
-                 run_generated_stage, run_generated_workflow
+md_tools.md      PositionalRestraint, ReportingConfig, run_stage, run_generated_stage
 md_tools.rest2   REST2Scaler, ScalingSelection
 md_tools.remd    REMDRunner, NeighborExchangeRule, run_remd, run_generated_remd
 md_tools.remd.reservoir   ReservoirRefreshRule

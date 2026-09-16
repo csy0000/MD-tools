@@ -19,6 +19,3 @@ from __future__ import annotations
 
 #: Every subcommand `md-openmm` offers.
 PUBLIC_COMMANDS = ("build-top", "build-md", "md-run", "data-register", "export-reference")
-
-#: Spellings that existed once and must not come back. Not hidden, not deprecated: gone.
-RETIRED_COMMANDS = ("sys-config", "sys-gen", "md-gen", "setup", "show-default")

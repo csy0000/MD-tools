@@ -117,7 +117,7 @@ def test_the_cmd_inventory_names_the_sidecar_that_is_actually_written(root, tmp_
     """`.cv.json`, not `.cv.yaml`. The inventory named a file that never existed."""
     from md_tools.run.preflight import cv_sidecar_path
 
-    scripts = _generate(root, "cvA", _cmd_config(root, cv=True), "--all-in-one")
+    scripts = _generate(root, "cvA", _cmd_config(root, cv=True))
     destination = tmp_path / "run"
     _run_cmd(root, scripts, destination)
 
@@ -140,7 +140,7 @@ def test_the_cmd_inventory_names_the_sidecar_that_is_actually_written(root, tmp_
 
 
 def test_the_completion_record_names_the_sidecar_that_exists(root, tmp_path):
-    scripts = _generate(root, "cvB", _cmd_config(root, cv=True), "--all-in-one")
+    scripts = _generate(root, "cvB", _cmd_config(root, cv=True))
     destination = tmp_path / "run"
     _run_cmd(root, scripts, destination)
 
@@ -156,7 +156,7 @@ def test_the_completion_record_names_the_sidecar_that_exists(root, tmp_path):
 # --- overwrite: no stale CV artefact may survive ------------------------------------------------
 
 def test_overwrite_replaces_the_cv_series_and_its_sidecar(root, tmp_path):
-    scripts = _generate(root, "cvC", _cmd_config(root, cv=True), "--all-in-one")
+    scripts = _generate(root, "cvC", _cmd_config(root, cv=True))
     destination = tmp_path / "run"
     _run_cmd(root, scripts, destination)
 
@@ -180,7 +180,7 @@ def test_a_cv_disabled_overwrite_leaves_no_stale_cv_output(root, tmp_path):
     Otherwise the tree keeps a CSV and a sidecar describing a calculation the run no longer
     performs, and nothing in the directory says which run they belong to.
     """
-    enabled = _generate(root, "cvD_on", _cmd_config(root, cv=True), "--all-in-one")
+    enabled = _generate(root, "cvD_on", _cmd_config(root, cv=True))
     destination = tmp_path / "run"
     _run_cmd(root, enabled, destination)
     assert sorted(destination.rglob("*.cv.csv")), "the first run wrote no CV series"
@@ -203,7 +203,7 @@ def test_a_cv_disabled_overwrite_leaves_no_stale_cv_output(root, tmp_path):
     if not (off_root / "build" / "built.xml").is_file():
         off_root.mkdir(exist_ok=True)
         _build(off_root)
-    disabled = _generate(off_root, "cvD_off", _cmd_config(off_root, cv=False), "--all-in-one")
+    disabled = _generate(off_root, "cvD_off", _cmd_config(off_root, cv=False))
     _run_cmd(off_root, disabled, destination, "--overwrite")
 
     left = sorted(destination.rglob("*.cv.csv")) + sorted(destination.rglob("*.cv.json"))
@@ -217,7 +217,7 @@ def test_a_damaged_cv_series_is_not_accepted_as_a_completed_stage(root, tmp_path
     """A completed stage may not be skipped when its CV output no longer matches the record."""
     from md_tools.run.preflight import cv_sidecar_path
 
-    scripts = _generate(root, f"cvE_{damage}", _cmd_config(root, cv=True), "--all-in-one")
+    scripts = _generate(root, f"cvE_{damage}", _cmd_config(root, cv=True))
     destination = tmp_path / "run"
     _run_cmd(root, scripts, destination)
 

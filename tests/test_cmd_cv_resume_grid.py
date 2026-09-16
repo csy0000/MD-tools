@@ -73,8 +73,7 @@ def _project(root: Path, *, tau: float = 0.0, phase_space: int = 0) -> Path:
     }
     (root / "cMD.config").write_text(yaml.safe_dump(document), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./cMD", "--config", str(root / "cMD.config"),
-               "--all-in-one"],
+        CLI + ["build-md", "-odir", "./cMD", "--config", str(root / "cMD.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
     return root

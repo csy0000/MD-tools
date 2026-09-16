@@ -203,7 +203,7 @@ EXPECTED = list(range(0, 41, 5))
 def test_cmd_cv_runs_on_cuda_and_writes_the_declared_grid(cmd_project, tmp_path):
     from md_tools.build.record import read_record
 
-    scripts = _generate(cmd_project, "cudaA", _cmd_config(cmd_project), "--all-in-one")
+    scripts = _generate(cmd_project, "cudaA", _cmd_config(cmd_project))
     destination = tmp_path / "fresh"
     _run_cmd(scripts, destination)
 
@@ -218,7 +218,7 @@ def test_cmd_cv_resume_on_cuda_reproduces_the_grid_and_cost(cmd_project, tmp_pat
     from md_tools.build.record import read_record
     from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
 
-    scripts = _generate(cmd_project, "cudaB", _cmd_config(cmd_project), "--all-in-one")
+    scripts = _generate(cmd_project, "cudaB", _cmd_config(cmd_project))
     destination = tmp_path / "resumed"
     crashed = _run_cmd(scripts, destination, expect=1,
                        environment={FAULT_ENVIRONMENT: "after-pointer-replace",
@@ -249,7 +249,7 @@ def test_fixed_tau_phase_space_and_cv_resume_on_cuda(cmd_project, tmp_path):
     from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
 
     scripts = _generate(cmd_project, "cudaC",
-                        _cmd_config(cmd_project, tau=0.5, phase_space=5), "--all-in-one")
+                        _cmd_config(cmd_project, tau=0.5, phase_space=5))
     destination = tmp_path / "ps"
     _run_cmd(scripts, destination, expect=1,
              environment={FAULT_ENVIRONMENT: "after-pointer-replace",
@@ -473,7 +473,7 @@ def test_cmd_cv_survives_two_interruptions_on_cuda(cmd_project, tmp_path):
     from md_tools.build.record import read_record
     from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
 
-    scripts = _generate(cmd_project, "cudaD", _cmd_config(cmd_project), "--all-in-one")
+    scripts = _generate(cmd_project, "cudaD", _cmd_config(cmd_project))
 
     reference = tmp_path / "reference"
     _run_cmd(scripts, reference)

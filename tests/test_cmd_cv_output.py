@@ -39,7 +39,7 @@ collective_variables:
 
 @pytest.fixture(scope="module")
 def project(tmp_path_factory):
-    """A generated all-in-one cMD project with CV reporting enabled."""
+    """A generated cMD project with CV reporting enabled."""
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
     root = tmp_path_factory.mktemp("cmd-cv")
@@ -62,8 +62,7 @@ def project(tmp_path_factory):
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./cMD-run1", "--config", str(root / "cMD.config"),
-               "--all-in-one"],
+        CLI + ["build-md", "-odir", "./cMD-run1", "--config", str(root / "cMD.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
     return root
@@ -196,8 +195,7 @@ def _generate_without_cv(project: Path, tmp_path: Path) -> Path:
     configuration["collective_variables"] = {"file": None, "interval_steps": 0}
     (off / "cMD.config").write_text(yaml.safe_dump(configuration), encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-md", "-odir", "./cMD-run1", "--config", str(off / "cMD.config"),
-               "--all-in-one"],
+        CLI + ["build-md", "-odir", "./cMD-run1", "--config", str(off / "cMD.config")],
         cwd=off, capture_output=True, text=True, timeout=600)
     assert built.returncode == 0, built.stdout + built.stderr
     return off

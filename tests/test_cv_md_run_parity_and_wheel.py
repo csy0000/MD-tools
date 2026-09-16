@@ -58,8 +58,7 @@ def project(tmp_path_factory):
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./cMD-run1", "--config", str(root / "cMD.config"),
-               "--all-in-one"],
+        CLI + ["build-md", "-odir", "./cMD-run1", "--config", str(root / "cMD.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
     return root

@@ -86,7 +86,7 @@ def test_no_runtime_module_shadows_a_standard_library_module():
 
 
 @pytest.mark.parametrize("package, expected", [
-    ("md", {"run_generated_stage", "run_generated_workflow", "run_stage",
+    ("md", {"run_generated_stage", "run_stage",
             "PositionalRestraint", "ReportingConfig"}),
     ("rest2", {"REST2Scaler", "ScalingSelection"}),
     ("remd", {"REMDRunner", "NeighborExchangeRule", "run_remd", "run_generated_remd"}),

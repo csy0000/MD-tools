@@ -3,7 +3,8 @@
 ONE model, CONSUMED by every authoritative entry point:
 
     md_tools.run.main.md_run_main          the CLI dispatcher
-    md_tools.md.stage.stage_main           generated split stages and all-in-one workflows
+    md_tools.md.stage.stage_main           generated stage scripts
+    md_tools.build.md.build_scripts        the whole chain, at generation time
     md_tools.remd.generated.replica_main   generated REST2.py and rREST2.py
     md_tools.ais.run.ais_main              generated AIS.py
 
@@ -47,6 +48,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import yaml
@@ -588,7 +590,8 @@ def _continuation_inputs(coordinates, pending: PendingParent | None, *, where: s
     """`-c`, checked. A missing one is an error unless a named earlier stage will write it.
 
     The old rule tested `Path(c).exists()` and skipped the check when it did not. That reads as
-    leniency for the all-in-one `--check` chain, and it is also complete leniency for a typo: a
+    leniency for a chain whose parents do not exist yet, and it is also complete leniency for a
+    typo: a
     real run given `-c eq_npt_fre.xml` found nothing to check, started from the topology's
     coordinates, and completed. The pending case is now something a caller STATES, naming the
     stage that produces the file, so nothing else can fall through it.
@@ -720,7 +723,7 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
                     timestep_fs=None, ensemble=None, tau=0.0, stage=None,
                     number_of_groups=None, groupfile=None, whole=None, segment=1,
                     source_trajectory=None) -> StagePreflight:
-    """A conventional stage, including every stage of an all-in-one workflow."""
+    """A conventional stage, run on its own or planned as one link of a chain."""
     from ..md.stage import check_trajectory_suffix
 
     _reject_flags_outside_their_protocol(
@@ -763,6 +766,74 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
                           device_policy_detail=detail, particles=particles, loaded=loaded,
                           timestep=resolved_timestep, inventory=inventory,
                           trajectory=Path(trajectory) if trajectory else None, **prepared)
+
+
+def validate_generated_chain(*, topology, system, stages: list[dict[str, Any]],
+                             where: str = "build-md") -> None:
+    """Every stage of a chain, checked when the chain is GENERATED rather than when it runs.
+
+    This is the whole-chain guarantee `--all-in-one` used to carry and nothing else did. A split
+    chain preflights one stage at a time, each as it starts, so a configuration whose LAST stage
+    asks for 4 fs on unrepartitioned masses or declares NPT on an implicit System ran every
+    earlier stage to completion and then refused -- hours of queue time spent on a chain that
+    could never finish, and a run directory that cannot be resumed or cleanly restarted. Every
+    refusal below is knowable from the configuration and the built System alone, so there is no
+    reason to wait until a stage opens to raise it.
+
+    DEVICE-FREE, DELIBERATELY. This does not resolve a platform, place a device, open a CUDA
+    Context or consult the MPI world, and it must not: generation routinely happens on a login
+    node, in CI, or simply on a different machine from the run, so a device answered here would
+    be an answer about the wrong computer. Those checks stay in `preflight_stage`, where the
+    machine actually is. What is checked here is what a machine cannot change -- the masses in
+    the System, the ensemble against the solvent, the forces the scaling convention has to place,
+    and the paths the chain writes.
+    """
+    check_input_files(p=topology, s=system)
+    loaded = load_inputs(topology, system)
+
+    prepared_plans: dict[str, Any] = {}
+    previous_name = previous_restart = None
+    for entry in stages:
+        name = str(entry["name"])
+        stage_where = f"{where}: stage {name}"
+
+        # THE PARENT, STATED RATHER THAN INFERRED FROM ITS ABSENCE. At generation time every
+        # stage after the first is missing its parent BY CONSTRUCTION -- nothing has run -- which
+        # is exactly the one legitimate missing continuation `PendingParent` exists to name. It
+        # matters that this goes through `_continuation_inputs` rather than skipping the check:
+        # the rule is that a missing `-c` is refused unless a NAMED earlier stage will write it,
+        # and a chain that simply did not look would be the silent leniency that rule replaced.
+        _continuation_inputs(
+            str(previous_restart) if previous_restart is not None else None,
+            (PendingParent(path=previous_restart, produced_by=previous_name)
+             if previous_restart is not None else None),
+            where=stage_where)
+        if entry.get("timestep_fs") is not None:
+            _resolve_timestep(loaded, entry.get("timestep_fs"), where=stage_where)
+        check_ensemble(loaded, ensemble=entry.get("ensemble"),
+                       tau=float(entry.get("tau") or 0.0), where=stage_where)
+        # THE FORCE AUDIT, which is the refusal that most deserves to arrive early:
+        # `build_scaled_system` refuses a System carrying a force the scaling convention cannot
+        # place, and that is a property of the built System, not of the run.
+        if entry.get("stage") is not None:
+            _prepare_stage(loaded, stage=entry["stage"], name=name, where=stage_where)
+
+        inventory = _stage_inventory(
+            output=entry.get("output"), log=entry.get("log"),
+            trajectory=entry.get("trajectory"), restart=entry.get("restart"),
+            checkpoint=entry.get("checkpoint"))
+        # An output of this stage may not be one of the shared inputs every stage reads.
+        check_output_collisions(outputs=inventory.roles,
+                                inputs={"p": topology, "s": system})
+        prepared_plans[name] = SimpleNamespace(inventory=inventory)
+        previous_name, previous_restart = name, entry.get("restart")
+
+    # TWO STAGES WRITING ONE PATH, which no single stage's own inventory can see.
+    from ..md.stage import cross_stage_collision
+
+    collision = cross_stage_collision(prepared_plans)
+    if collision is not None:
+        raise PreflightError(f"{where}: {collision}")
 
 
 def _prepare_stage(loaded: LoadedInputs, *, stage: dict[str, Any], name: str,

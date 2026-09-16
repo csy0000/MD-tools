@@ -199,8 +199,7 @@ def test_a_real_stage_refuses_a_mutated_committed_prefix(tmp_path):
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", "./cMD", "--config", str(root / "cMD.config"),
-               "--all-in-one"],
+        CLI + ["build-md", "-odir", "./cMD", "--config", str(root / "cMD.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
 
@@ -284,8 +283,7 @@ def test_cv_cost_is_persisted_and_survives_two_interruptions(tmp_path):
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
     assert subprocess.run(
-        CLI + ["build-md", "-odir", "./cMD", "--config", str(root / "cMD.config"),
-               "--all-in-one"],
+        CLI + ["build-md", "-odir", "./cMD", "--config", str(root / "cMD.config")],
         cwd=root, capture_output=True, text=True, timeout=600).returncode == 0
 
     base = dict(os.environ)
@@ -397,8 +395,7 @@ def test_the_final_committed_generation_carries_the_cv_prefix_and_cost(tmp_path)
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
     assert subprocess.run(
-        CLI + ["build-md", "-odir", "./cMD", "--config", str(root / "cMD.config"),
-               "--all-in-one"],
+        CLI + ["build-md", "-odir", "./cMD", "--config", str(root / "cMD.config")],
         cwd=root, capture_output=True, text=True, timeout=600).returncode == 0
 
     base = dict(os.environ)

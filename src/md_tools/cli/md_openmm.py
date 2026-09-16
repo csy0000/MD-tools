@@ -73,7 +73,6 @@ def cmd_build_md(args) -> int:
         build_scripts(
             config_path=Path(args.config) if args.config else None,
             out_dir=Path(args.out_dir),
-            all_in_one=bool(args.all_in_one),
             overwrite=bool(args.overwrite),
         )
     except ConfigError as exc:
@@ -231,9 +230,6 @@ def build_parser() -> argparse.ArgumentParser:
                          "explicit-solvent cMD at `timestep_fs: auto` -- resolved from the masses "
                          "in built.xml when the run starts, so it is 2 fs ordinarily and 4 fs "
                          "only when the System proves hydrogen mass repartitioning")
-    md.add_argument("--all-in-one", action="store_true",
-                    help="emit a single md.py running every stage, instead of one script per "
-                         "stage; the resolved settings and stage boundaries are identical")
     md.add_argument("--overwrite", action="store_true",
                     help="replace an existing script directory instead of refusing")
     md.set_defaults(func=cmd_build_md)

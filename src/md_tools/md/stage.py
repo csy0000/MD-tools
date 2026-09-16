@@ -716,9 +716,10 @@ def cross_stage_collision(plans) -> str | None:
     only visible when the chain is considered as a whole. The consequence is a chain that
     overwrites its own inputs, with the run continuing from whichever stage happened to go last.
 
-    Separate from `run_generated_workflow` so it can be exercised directly -- the generator gives
-    every stage a distinct name, so this state cannot be produced from a valid project, and a
-    test that had to corrupt a configuration to reach it would be testing the corruption.
+    Separate from its caller so it can be exercised directly -- the generator gives every stage a
+    distinct name, so this state cannot be produced from a valid project, and a test that had to
+    corrupt a configuration to reach it would be testing the corruption. `md_tools.build.md`
+    validates the whole chain at generation time and calls this on the plans it prepared there.
     """
     claimed: dict[str, tuple[str, str]] = {}
     for entry_name, prepared in plans.items():
@@ -737,10 +738,9 @@ def cross_stage_collision(plans) -> str | None:
 def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared=None) -> int:
     """Run one stage. `stage` is the resolved settings the generated script declares.
 
-    `prepared` is a `StagePreflight` a caller has ALREADY validated -- the all-in-one chain plans
-    every stage before running any of them, and re-planning here would both duplicate the work
-    and open the possibility of the two plans differing. When it is None this function plans for
-    itself, which is what a split script does.
+    `prepared` is a `StagePreflight` a caller has ALREADY validated, and re-planning here would
+    both duplicate the work and open the possibility of the two plans differing. When it is None
+    this function plans for itself, which is what a generated stage script does.
     """
     args = stage_parser(stage.get("description", "one MD stage")).parse_args(argv)
 
@@ -838,7 +838,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     # PREFLIGHT, BEFORE THE FIRST FILESYSTEM MUTATION -- and before the completion check.
     #
     # This runs here, in the runtime, and not only in `md-openmm md-run`: the generated `min.py`
-    # and the all-in-one `md.py` call this function directly, so a guard living in the outer
+    # and every other stage script call this function directly, so a guard living in the outer
     # command would leave them open. A `.out` and a `.log` created before the machine
     # configuration has been read are a directory that reads as a started run.
     #
@@ -2064,165 +2064,7 @@ def run_generated_stage(script: str | Path, name: str, argv: list[str] | None = 
         f"regenerate the directory.")
 
 
-def run_generated_workflow(script: str | Path, argv: list[str] | None = None) -> int:
-    """Run every stage of this workflow in order, in one process.
-
-    The body of a generated `md.py`:
-
-        from md_tools.md import run_generated_workflow
-        raise SystemExit(run_generated_workflow(__file__))
-
-    Identical to running the split scripts in order -- same resolved settings, same boundaries,
-    same seeds, same logs, same checkpoints, same restart semantics. The only difference is the
-    number of processes.
-    """
-    import argparse
-
-    plan, config_path = load_generated_plan(script)
-    parser = argparse.ArgumentParser(
-        description="run every stage of this workflow in order",
-        # No abbreviation, as everywhere else: a misspelling argparse resolves RUNS.
-        allow_abbrev=False)
-    parser.add_argument("-p", "--topology", required=True, metavar="PDB")
-    parser.add_argument("-s", "--system", required=True, metavar="XML")
-    parser.add_argument("-c", "--continue-from", default=None, metavar="XML",
-                        help="starting state for the FIRST stage; the rest chain from each other")
-    parser.add_argument("-odir", "--out-dir", default=None, metavar="DIR",
-                        help="directory every stage's outputs go in (default: here)")
-    parser.add_argument("-o", "--output", default=None, metavar="OUT",
-                        help="human-readable output for the FIRST stage. The others are named "
-                             "after themselves: one path cannot describe a whole chain")
-    parser.add_argument("-log", "--log", default=None, metavar="LOG",
-                        help="provenance record for the FIRST stage, for the same reason")
-    parser.add_argument("--cpu", action="store_true",
-                        help="run every stage on the OpenMM CPU platform, overriding "
-                             "machine.openmm.platform for this invocation")
-    parser.add_argument("--device", default=None, metavar="N",
-                        help="CUDA device index. Placement, never platform")
-    parser.add_argument("--check", action="store_true",
-                        help="validate every stage and exit without integrating. READ-ONLY: the "
-                             "whole chain is checked and nothing at all is created")
-    parser.add_argument("--resume", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--overwrite", action="store_true",
-                        help="replace each stage's complete existing output inventory")
-    _add_refused_flags(parser, "a cMD workflow")
-    args = parser.parse_args(argv)
-
-    base = Path(args.out_dir) if args.out_dir else Path(".")
-
-    # THE WHOLE CHAIN IS VALIDATED BEFORE THE FIRST STAGE WRITES ANYTHING. An all-in-one workflow
-    # that discovered a broken machine configuration at stage four would have three stages of
-    # output on disk and no way to finish -- and `stage_main`'s own preflight, which runs per
-    # stage, could not have caught it any earlier than that.
-    #
-    # `-c` for the FIRST stage is not excluded. It is a file the caller named, produced by
-    # something outside this chain, so it must exist even under `--check`; only the parents this
-    # chain produces itself are allowed to be missing, and those are stated per stage below.
-    from ..run.preflight import PendingParent, PreflightError, preflight_stage
-
-    # EVERY STAGE, planned before the first one runs.
-    #
-    # Only the first stage was preflighted, so a chain whose LAST stage asks for 4 fs on
-    # unrepartitioned masses, or declares NPT on an implicit System, ran three stages to
-    # completion and then refused -- leaving three stages of output and no way to finish. The
-    # whole point of `--check` on a chain is that this cannot happen, and the run itself had none
-    # of that protection.
-    #
-    # The prepared plans are kept and handed to `stage_main`, so nothing is validated twice and
-    # nothing is re-resolved between planning and running.
-    prepared_plans: dict[str, Any] = {}
-    previous_name = previous_key = None
-    try:
-        for position, entry in enumerate(plan):
-            entry_name = entry["name"]
-            # THE FILING KEY, and it must be the same one the run loop below uses: this pass
-            # VALIDATES the paths that pass will write, so naming them differently here would
-            # check one set of files and then produce another -- a preflight that agrees with
-            # nothing. `previous_key` chains the parent for the same reason.
-            entry_key = str(entry.get("file_key") or entry_name)
-            parent = None if position == 0 else base / f"{previous_key}.xml"
-            prepared_plans[entry_name] = preflight_stage(
-                topology=args.topology, system=args.system,
-                coordinates=str(parent) if parent is not None else args.continue_from,
-                trajectory=base / f"{entry_key}.dcd",
-                restart=base / f"{entry_key}.xml",
-                checkpoint=base / f"{entry_key}.chk",
-                output=(args.output if position == 0 and args.output
-                        else base / f"{entry_key}.out"),
-                log=(args.log if position == 0 and args.log else base / f"{entry_key}.log"),
-                cpu=bool(args.cpu),
-                device=int(args.device) if args.device is not None else None,
-                protocol=f"stage {entry_name} of the {len(plan)}-stage workflow",
-                # The one legitimate missing continuation, and only here: an earlier stage of
-                # THIS chain writes it. Named, so nothing else falls through the exemption.
-                pending_parent=(PendingParent(path=parent, produced_by=previous_name)
-                                if parent is not None else None),
-                timestep_fs=entry.get("timestep_fs"), ensemble=entry.get("ensemble"),
-                tau=float(entry.get("tau") or 0.0),
-                stage=dict(entry, name=entry_name),
-                number_of_groups=args.number_of_groups, groupfile=args.groupfile,
-                source_trajectory=args.source_trajectory)
-            previous_name = entry_name
-            previous_key = entry_key
-    except PreflightError as refusal:
-        print(f"{Path(script).name}: {refusal}", file=sys.stderr)
-        return 2
-
-    collision = cross_stage_collision(prepared_plans)
-    if collision is not None:
-        print(f"{Path(script).name}: {collision}", file=sys.stderr)
-        return 2
-
-    previous = previous_name = None
-    for stage in plan:
-        name = stage["name"]
-        # THE FILING KEY, as in `md-run` and `stage_main`. These are passed explicitly, so they
-        # override the runtime's own defaults -- which is why naming them from the stage here made
-        # the all-in-one chain write `eq_nvt_posres.xml` and then look for the next stage's parent
-        # under a spelling nothing had written. Three surfaces, one set of filenames.
-        key = str(stage.get("file_key") or name)
-        stage_argv = ["-p", args.topology, "-s", args.system,
-                      "-log", str(base / f"{key}.log"), "-x", str(base / f"{key}.dcd"),
-                      "-o", str(base / f"{key}.out"),
-                      "-r", str(base / f"{key}.xml"), "-chk", str(base / f"{key}.chk")]
-        pending = None
-        if previous is not None:
-            stage_argv += ["-c", previous]
-            if args.check:
-                # THE one legitimate missing continuation, stated rather than inferred: under
-                # `--check` nothing has run, so this parent does not exist yet and the stage that
-                # will write it is named here. Outside `--check` no exemption is granted -- if
-                # the previous stage really ran, the file is there, and if it is not there the
-                # chain must stop rather than silently start this stage from -p.
-                pending = PendingParent(path=Path(previous), produced_by=previous_name)
-        elif args.continue_from:
-            stage_argv += ["-c", args.continue_from]
-        if args.device is not None:
-            stage_argv += ["--device", str(args.device)]
-        if args.cpu:
-            stage_argv.append("--cpu")
-        if args.check:
-            stage_argv += ["--check"]
-        # `--resume` is refused for cMD, so it is NOT forwarded: forwarding it would make every
-        # stage refuse and the chain fail with a per-stage message about a flag the caller gave
-        # the workflow. The workflow refuses it once, below, in its own name.
-        if args.resume:
-            stage_argv.append("--resume")
-        if args.overwrite:
-            stage_argv.append("--overwrite")
-        code = stage_main(dict(stage, resolved_config=str(config_path),
-                               pending_parent=pending), stage_argv,
-                          prepared=prepared_plans.get(name))
-        if code != 0:
-            print(f"{Path(script).name}: stage {name} failed with exit code {code}",
-                  file=sys.stderr)
-            return code
-        previous = str(base / f"{key}.xml")
-        previous_name = name
-    return 0
-
-
 #: `run_stage` is `stage_main` under the name the public API uses. A caller composing a run by
-#: hand passes a resolved stage dictionary directly; a generated script goes through the two
-#: helpers above, which build that dictionary from `resolved.config`.
+#: hand passes a resolved stage dictionary directly; a generated script goes through
+#: `run_generated_stage` above, which builds that dictionary from `resolved.config`.
 run_stage = stage_main

@@ -125,8 +125,6 @@ def workspace(tmp_path_factory):
     projects = {
         "split": {"protocol": "cMD", "solvent": "implicit", "stages": tiny,
                   "reporting": reporting},
-        "allinone": {"protocol": "cMD", "solvent": "implicit", "stages": tiny,
-                     "reporting": reporting},
         "REST2": {"protocol": "REST2", "solvent": "implicit", "stages": tiny,
                   "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 5,
                             "number_of_exchanges": 2},
@@ -145,10 +143,9 @@ def workspace(tmp_path_factory):
     }
     for name, document in projects.items():
         _config(root, f"{name}.config", document)
-        extra = ["--all-in-one"] if name == "allinone" else []
         done = subprocess.run(
             CLI + ["build-md", "-odir", f"./{name}-run1",
-                   "--config", str(root / f"{name}.config"), *extra],
+                   "--config", str(root / f"{name}.config")],
             cwd=root, capture_output=True, text=True, timeout=600)
         assert done.returncode == 0, f"{name}: {done.stdout}{done.stderr}"
 
@@ -214,7 +211,6 @@ def workspace(tmp_path_factory):
 #: script lives at `<system>/min/min.py` rather than in any one run. The others are per run.
 ENTRY = {
     "split": ("min/min.py", []),
-    "allinone": ("allinone-run1/md.py", []),
     "REST2": ("REST2-run1/REST2.py", []),
     "rREST2": ("rREST2-run1/rREST2.py", []),
     "AIS": ("AIS-run1/AIS.py", ["-source-traj", "../source.dcd"]),

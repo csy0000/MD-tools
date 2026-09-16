@@ -142,16 +142,9 @@ jobs:
           fi
           echo "refused before any output, for the right reason"
 
-      - name: retired subcommands must fail
+      - name: no second executable is installed
         working-directory: ${{ runner.temp }}/outside
         run: |
-          for retired in sys-config sys-gen md-gen setup show-default; do
-            if md-openmm "$retired" -h >/dev/null 2>&1; then
-              echo "::error title=Retired command still runs::md-openmm $retired exited 0"
-              exit 1
-            fi
-            echo "refused: md-openmm $retired"
-          done
           for gone in openmm-md md-template md-data-register md-data-finish; do
             if command -v "$gone" >/dev/null 2>&1; then
               echo "::error title=Retired executable installed::$gone is on PATH"
@@ -220,7 +213,7 @@ jobs:
           python - <<'PY'
           from md_tools.ais import run_generated_ais
           from md_tools.md import (PositionalRestraint, ReportingConfig, run_generated_stage,
-                                   run_generated_workflow, run_stage)
+                                   run_stage)
           from md_tools.remd import (NeighborExchangeRule, REMDRunner, run_generated_remd,
                                      run_remd)
           from md_tools.remd.reservoir import ReservoirRefreshRule
@@ -311,8 +304,6 @@ jobs:
                {"cMD.py", "run.sh", "resolved.config", "run.config", "build-md.log", "eq"}),
               ("cMD-implicit", "implicit", {"protocol": "cMD", "solvent": "implicit", **SHORT}, [],
                {"cMD.py", "run.sh", "resolved.config", "run.config", "build-md.log", "eq"}),
-              ("cMD-all-in-one", "explicit", {"protocol": "cMD", "solvent": "explicit", **SHORT},
-               ["--all-in-one"], {"md.py", "run.sh", "resolved.config", "build-md.log"}),
               ("REST2", "explicit", {"protocol": "REST2", "solvent": "explicit", **SHORT,
                          "rest2": {"number_of_replicas": 2, "exchange_interval_steps": 10,
                                    "number_of_exchanges": 2}}, [],

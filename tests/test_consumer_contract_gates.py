@@ -412,8 +412,9 @@ def test_a_standalone_stage_with_a_missing_parent_is_refused_even_under_check(sc
     guess for a genuine typo, which is how `-c eq_npt_fre.xml` became a run that continued
     nothing, started from the coordinates in `-p`, and reported success.
 
-    The pending case is now something the all-in-one chain STATES, naming the stage that produces
-    the file (see the test below). Here there is no such stage, so this is a refusal.
+    The pending case is now something the GENERATOR states, naming the stage that produces the
+    file: `build-md` validates the whole chain when it writes it, where every later parent is
+    absent by construction. Here there is no such stage, so this is a refusal.
 
     It also wrote `pending.log` while doing it, which `--check` may no longer do at all.
     """
@@ -428,10 +429,11 @@ def test_a_standalone_stage_with_a_missing_parent_is_refused_even_under_check(sc
     assert not (work / "pending.log").exists(), "--check wrote a log"
     assert sorted(p.name for p in work.iterdir()) == before, "--check created something"
 
-# The complementary case -- an all-in-one `--check` passing with every later parent absent, and
-# writing nothing -- is `test_the_all_in_one_check_still_allows_the_parent_a_later_stage_will_write`
-# in tests/test_runtime_contract_matrix.py, where an all-in-one project is generated. This
-# fixture generates split stages, so asserting it here could only be a skip.
+# The complementary case -- a whole chain accepted with every later parent absent, and writing
+# nothing -- is `test_generating_a_chain_accepts_the_parents_its_own_stages_will_write` in
+# tests/test_runtime_contract_matrix.py, which asserts it where it now lives: `build-md`, at
+# generation time. This fixture runs an already-generated stage, so asserting it here could only
+# be a skip.
 
 
 def test_a_large_timestep_without_hmr_is_refused_before_integrating(scripts):

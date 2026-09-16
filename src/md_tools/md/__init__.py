@@ -24,12 +24,11 @@ from .reporting import ReportingConfig
 from .restraints import PositionalRestraint
 from .simulation import (active_barostat_count, add_barostat, count_barostats, derive_seed,
                          resolve_platform)
-from .stage import run_generated_stage, run_generated_workflow, run_stage
+from .stage import run_generated_stage, run_stage
 
 __all__ = [
     # what a generated script calls
     "run_generated_stage",
-    "run_generated_workflow",
     "run_stage",
     # what a caller composing a run by hand needs
     "PositionalRestraint",

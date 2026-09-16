@@ -79,11 +79,6 @@ def generated(tmp_path_factory):
         root.mkdir()
         make_dataset_root(root)
         directories[name] = _generate(root, name)
-    all_in_one_root = work / "system_all_in_one"
-    all_in_one_root.mkdir()
-    make_dataset_root(all_in_one_root)
-    directories["all_in_one"] = _generate(all_in_one_root, "cMD", "--all-in-one",
-                                          into="cMD_all_in_one-run1")
     # The shared minimisation script belongs to the DATASET rather than to any one run, so it is
     # checked as its own entry instead of being missed by every run-scoped assertion.
     directories["shared_min"] = work / "system_cMD" / "min"
@@ -185,11 +180,6 @@ def test_ais_carries_no_equilibration_chain(generated):
     distribution."""
     names = {p.name for p in _scripts(generated["AIS"])}
     assert names == {"AIS.py"}, names
-
-
-def test_the_all_in_one_bundle_is_one_script(generated):
-    names = {p.name for p in _scripts(generated["all_in_one"])}
-    assert names == {"md.py"}, names
 
 
 def test_a_moved_directory_still_runs(generated, tmp_path):

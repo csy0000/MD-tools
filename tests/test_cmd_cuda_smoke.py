@@ -81,14 +81,6 @@ def split(built):
     return directory
 
 
-@pytest.fixture(scope="module")
-def all_in_one(built):
-    directory = _generate(built, "single", "--all-in-one")
-    ran = _run(directory)
-    assert ran.returncode == 0, ran.stdout[-3000:] + ran.stderr[-3000:]
-    return directory
-
-
 def test_the_split_chain_runs_every_stage_to_completion(split):
     """Each stage writes its own record, and each one says it finished.
 
@@ -125,23 +117,13 @@ def test_production_continued_from_the_state_equilibration_left(split):
     assert parent.get("sha256"), "the parent is named but not pinned by content"
 
 
-def test_the_all_in_one_layout_runs_the_same_stages_in_one_file(all_in_one):
-    """One file, same chain. The layout is a packaging choice, not a different protocol."""
-    assert (all_in_one / "md.py").is_file()
-    assert not list(all_in_one.glob("eq_*.py")), "an all-in-one bundle must not emit stage scripts"
-    records = [read_record(p) for p in all_in_one.glob("*.log") if p.name != "build-md.log"]
-    assert records, "the all-in-one run wrote no record"
-    assert all(r["status"] == "completed" for r in records), [r.get("status") for r in records]
-
-
-def test_both_layouts_produce_a_trajectory(split, all_in_one):
+def test_the_split_chain_produces_a_trajectory(split):
     """AMBER NetCDF, not DCD -- and the SOLUTE stream, which every stage writes.
 
     The glob was `*.dcd`, the only format a stage could honestly produce while it used OpenMM's
     own reporter. It now writes AMBER NetCDF through MD-tools' appending writer, which is the
     only format that carries an atom subset -- and a solute-only stream is exactly that.
     """
-    for directory in (split, all_in_one):
-        produced = list(directory.glob("solute_*.nc"))
-        assert produced, f"{directory.name} wrote no trajectory"
-        assert all(p.stat().st_size > 0 for p in produced), produced
+    produced = list(split.glob("solute_*.nc"))
+    assert produced, f"{split.name} wrote no trajectory"
+    assert all(p.stat().st_size > 0 for p in produced), produced

@@ -77,8 +77,16 @@ _pin_this_process_to_the_checkout()
 
 
 
-def make_dataset_root(root: Path) -> Path:
+#: A 3 nm cube, enough to make the System periodic. Nothing is solvated into it.
+_ANGSTROM_BOX = ((3.0, 0.0, 0.0), (0.0, 3.0, 0.0), (0.0, 0.0, 3.0))
+
+
+def make_dataset_root(root: Path, *, solvent: str = "implicit") -> Path:
     """A dataset root with `build/built.{xml,pdb}`, built WITHOUT tleap. Returns `root`.
+
+    *solvent* must match the projects the caller is about to generate: `build-md` validates the
+    whole chain against this System, so an explicit project needs `solvent="explicit"` and an
+    implicit one the default.
 
     WHY THIS EXISTS. Scaling moved to build time: `build-md` for a ladder now deserialises
     `../build/built.xml`, scales it to every rung and serialises the result, so a REST2 or rREST2
@@ -116,9 +124,24 @@ def make_dataset_root(root: Path) -> Path:
         return Path(root)
 
     pdb = app.PDBFile(str(ALA_PDB))
-    forcefield = app.ForceField("amber14-all.xml", "implicit/gbn2.xml")
-    system = forcefield.createSystem(pdb.topology, nonbondedMethod=app.NoCutoff,
-                                     constraints=app.HBonds, rigidWater=True)
+    if solvent == "explicit":
+        # PERIODIC, which is the property `build-md` now reads. Generation validates the whole
+        # chain against the built System, so an explicit project -- whose equilibration is NPT --
+        # is refused against the implicit System below: there is no volume to control. A test
+        # that generates explicit text therefore needs a System with a box.
+        #
+        # A BOX, NOT A SOLVATED SYSTEM. No water is added: filling a box costs seconds per
+        # fixture and none of the tests using this inspect the solvent. What they need is a
+        # System that is periodic and barostattable, which this is. Everything in the docstring
+        # above about what this helper may not stand for applies here with more force.
+        pdb.topology.setPeriodicBoxVectors(_ANGSTROM_BOX)
+        forcefield = app.ForceField("amber14-all.xml", "amber14/tip3pfb.xml")
+        system = forcefield.createSystem(pdb.topology, nonbondedMethod=app.PME,
+                                         constraints=app.HBonds, rigidWater=True)
+    else:
+        forcefield = app.ForceField("amber14-all.xml", "implicit/gbn2.xml")
+        system = forcefield.createSystem(pdb.topology, nonbondedMethod=app.NoCutoff,
+                                         constraints=app.HBonds, rigidWater=True)
     (build / "built.xml").write_text(XmlSerializer.serialize(system), encoding="utf-8")
     with open(build / "built.pdb", "w") as handle:
         app.PDBFile.writeFile(pdb.topology, pdb.positions, handle)

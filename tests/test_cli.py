@@ -14,7 +14,7 @@ import pytest
 
 from md_tools.cli.md_openmm import build_parser
 
-from tests.public_commands import PUBLIC_COMMANDS, RETIRED_COMMANDS
+from tests.public_commands import PUBLIC_COMMANDS
 
 
 def test_the_help_lists_every_public_command(md_openmm):
@@ -22,21 +22,6 @@ def test_the_help_lists_every_public_command(md_openmm):
     assert result.returncode == 0
     for name in PUBLIC_COMMANDS:
         assert name in result.stdout, f"{name} is missing from the top-level help"
-
-
-def test_the_retired_commands_are_gone():
-    """Not hidden, not deprecated: gone. A legacy route left in place becomes the real one.
-
-    Deliberately invokes the REAL command rather than the `md_openmm` fixture. conftest routes
-    the retired subcommand names to the surviving generator API so that the scientific tests
-    written against them keep running; this test is about the command surface, so it must not go
-    through that shim.
-    """
-    for name in RETIRED_COMMANDS:
-        result = subprocess.run([sys.executable, "-m", "md_tools.cli.md_openmm", name, "--help"],
-                                capture_output=True, text=True)
-        assert result.returncode != 0, f"{name} still runs"
-        assert "invalid choice" in result.stderr or "usage:" in result.stderr
 
 
 def test_the_subparsers_are_exactly_the_public_commands():

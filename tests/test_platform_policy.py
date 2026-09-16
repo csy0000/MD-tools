@@ -182,13 +182,17 @@ def test_ci_does_not_use_the_retired_openmm_v_tag_convention():
     assert not any(tag.startswith("openmm-v") for tag in tags), tags
 
 
-def test_ci_names_the_retired_commands_only_to_prove_they_fail():
-    """A workflow that *invokes* a retired command would teach an agent the wrong interface."""
+def test_ci_names_no_retired_command_at_all():
+    """A workflow that *invokes* a retired command would teach an agent the wrong interface.
+
+    It used to name each one once, in a loop asserting the spelling still fails. That loop is
+    gone with the names themselves: a guard against resurrecting `sys-gen` is only worth its
+    upkeep while somebody might plausibly type it, and the surviving guarantee -- that no second
+    executable is installed -- is the one the workflow still checks.
+    """
     workflow = _ci_workflow()
     for retired in ("sys-config", "sys-gen", "md-gen", "show-default"):
-        occurrences = workflow.count(retired)
-        assert occurrences == 1, f"{retired} appears {occurrences} times; expected only the must-fail loop"
-    assert "retired subcommands must fail" in workflow
+        assert retired not in workflow, f"{retired} is named in the workflow"
 
 
 def test_ci_exercises_exactly_the_three_public_commands():

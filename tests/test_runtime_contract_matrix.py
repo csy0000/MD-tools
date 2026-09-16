@@ -55,8 +55,6 @@ def _untouched(destination: Path, before):
 MISAPPLIED = {
     "split": [(["-ng", "4"], "-ng"), (["-groupfile", "g.txt"], "-groupfile"),
               (["-source-traj", "../source.dcd"], "-source-traj")],
-    "allinone": [(["-ng", "4"], "-ng"), (["-groupfile", "g.txt"], "-groupfile"),
-                 (["-source-traj", "../source.dcd"], "-source-traj")],
     "AIS": [(["-x", "one.nc"], "-x"), (["-c", "prev.xml"], "-c"),
             (["-r", "out.xml"], "-r"), (["-chk", "a.chk"], "-chk"),
             (["-groupfile", "g.txt"], "-groupfile")],
@@ -88,8 +86,8 @@ def test_an_explicitly_named_missing_continuation_is_refused(mode, workspace, tm
                                                              good_config):
     """`-c` naming a file that does not exist used to be silently dropped.
 
-    The old rule was `if Path(c).exists()`, which reads as leniency for the all-in-one `--check`
-    chain and is complete leniency for a typo. A real run given `-c eq_npt_fre.xml` found nothing
+    The old rule was `if Path(c).exists()`, which reads as leniency for a chain whose parents do
+    not exist yet and is complete leniency for a typo. A real run given `-c eq_npt_fre.xml` found nothing
     to check, started from the coordinates in `-p`, and finished reporting success -- having
     continued nothing.
     """
@@ -101,22 +99,33 @@ def test_an_explicitly_named_missing_continuation_is_refused(mode, workspace, tm
     _untouched(destination, before)
 
 
-def test_the_all_in_one_check_still_allows_the_parent_a_later_stage_will_write(
+def test_generating_a_chain_accepts_the_parents_its_own_stages_will_write(
         workspace, tmp_path, good_config):
     """The ONE legitimate missing continuation, and it must keep working.
 
-    Under `--check` nothing has run, so every stage after the first is missing its parent by
-    construction. That case is now stated by the chain -- it names the stage that produces the
-    file -- rather than inferred from the file's absence, which is what made the rule above
-    impossible to enforce.
+    `build-md` validates the whole chain as it generates it, and at generation time NOTHING has
+    run: every stage after the first is missing its parent by construction. That case is stated
+    by the chain -- each stage names the earlier stage that produces its `-c` -- rather than
+    inferred from the file's absence, which is what made the rule above impossible to enforce.
+
+    This is where the exemption is now proved. It used to be proved through `--all-in-one`, whose
+    `md.py` planned every stage before running any; with that retired, the generator is the only
+    surface that sees the whole chain, so it is the one that has to get this right. A generator
+    that instead treated an absent parent as a refusal could not emit a chain at all.
     """
-    destination = tmp_path / "check-chain"
-    before = _snapshot(destination)
-    done = _launch(workspace, "allinone", destination, "--check", *PROTOCOL_ONLY,
-                   environment=good_config)
+    config = _config(tmp_path, "pending.config",
+                     {"protocol": "cMD", "solvent": "implicit",
+                      "stages": {"minimization_iterations": 5, "restrained_nvt_steps": 5,
+                                 "restrained_npt_steps": 5, "unrestrained_npt_steps": 5,
+                                 "production_steps": 5},
+                      "reporting": {"crd_printout_solute": 5, "info_printout": 5,
+                                    "checkpoint_printout": 5}})
+    done = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "build-md",
+                 "-odir", "./pending-run1", "--config", str(config)],
+                cwd=workspace, environment=good_config)
     assert done.returncode == 0, done.stdout + done.stderr
-    # `--check` on the whole chain must also write nothing at all.
-    _untouched(destination, before)
+    assert (workspace / "pending-run1" / "cMD.py").is_file(), sorted(
+        p.name for p in (workspace / "pending-run1").iterdir())
 
 
 def test_a_first_stage_continuation_must_exist_even_under_check(workspace, tmp_path,
@@ -124,7 +133,7 @@ def test_a_first_stage_continuation_must_exist_even_under_check(workspace, tmp_p
     """`-c` for the FIRST stage names a file from outside this chain. Nothing here will write it."""
     destination = tmp_path / "check-first-c"
     before = _snapshot(destination)
-    done = _launch(workspace, "allinone", destination, "--check", "-c", "not_here.xml",
+    done = _launch(workspace, "split", destination, "--check", "-c", "not_here.xml",
                    *PROTOCOL_ONLY, environment=good_config)
     _refused(done, fragment="not_here.xml")
     _untouched(destination, before)
@@ -429,25 +438,6 @@ def test_a_cmd_stage_launched_under_mpirun_is_refused(workspace, tmp_path, good_
     _untouched(destination, before)
 
 
-@pytest.mark.slow
-def test_the_all_in_one_workflow_is_refused_under_a_plural_launch(workspace, tmp_path,
-                                                                   good_config):
-    import shutil
-
-    if shutil.which("mpirun") is None:
-        pytest.fail("no mpirun on PATH; see the note on the test above.")
-
-    destination = tmp_path / "plural-chain"
-    before = _snapshot(destination)
-    done = _run(["mpirun", "-n", "2", sys.executable, str(workspace / ENTRY["allinone"][0]),
-                 "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination),
-                 *PROTOCOL_ONLY],
-                cwd=workspace / Path(ENTRY["allinone"][0]).parent, environment=good_config)
-    assert done.returncode != 0
-    assert "serial protocol" in (done.stdout + done.stderr)
-    _untouched(destination, before)
-
-
 # --- AIS --overwrite is a complete fresh-run transaction ---------------------------------------
 
 def _identity_document(**overrides):
@@ -719,23 +709,26 @@ def test_a_corrupt_identity_refuses_every_disposition(tmp_path):
             "a refused disposition decision must not have touched anything")
 
 
-# --- the all-in-one chain is planned in full before stage 1 runs --------------------------------
+# --- the chain is validated in full before a single script is written ---------------------------
 
-def test_an_invalid_last_stage_stops_the_chain_before_stage_one_writes_anything(
+def test_an_invalid_last_stage_stops_the_chain_before_anything_is_generated(
         workspace, tmp_path, good_config):
     """Only the FIRST stage used to be preflighted.
 
     So a chain whose later stages are invalid ran every earlier stage to completion and then
-    refused -- leaving those stages' output on disk and no way to finish. That is exactly what
-    `--check` on a chain is supposed to make impossible, and the run itself had none of it.
+    refused -- leaving those stages' output on disk and no way to finish.
+
+    The guarantee used to belong to `--all-in-one`, whose `md.py` planned every stage before
+    running any. That is now the GENERATOR's job and arrives earlier still: the refusal comes
+    from `build-md`, before a script exists at all, so the invalid chain is never written rather
+    than written and then declined at run time.
 
     The invalid stage here is produced by real configuration rather than by corrupting one: an
-    EXPLICIT-solvent project (whose later stages are NPT) run against the IMPLICIT System this
-    workspace built. `min` is NVT and fine; the first NPT stage has no volume to control.
+    EXPLICIT-solvent project (whose later stages are NPT) generated against the IMPLICIT System
+    this workspace built. `min` is NVT and fine; the first NPT stage has no volume to control.
     """
     import yaml as _yaml
 
-    project = tmp_path / "explicit-plan"
     (tmp_path / "explicit.config").write_text(_yaml.safe_dump({
         "protocol": "cMD", "solvent": "explicit",
         "stages": {"minimization_iterations": 2, "restrained_nvt_steps": 5,
@@ -743,25 +736,20 @@ def test_an_invalid_last_stage_stops_the_chain_before_stage_one_writes_anything(
                    "production_steps": 5},
         "reporting": {"crd_printout_solute": 5, "info_printout": 5,
                       "checkpoint_printout": 5}}), encoding="utf-8")
-    built = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "build-md",
-                  "-odir", str(project), "--config", str(tmp_path / "explicit.config"),
-                  "--all-in-one"], cwd=tmp_path, environment=good_config)
-    assert built.returncode == 0, built.stdout + built.stderr
 
-    destination = tmp_path / "chain-out"
-    before = _snapshot(destination)
-    done = _run([sys.executable, str(project / "md.py"),
-                 "-p", str(workspace / "build" / "built.pdb"), "-s", str(workspace / "build" / "built.xml"),
-                 "-odir", str(destination), *PROTOCOL_ONLY],
-                cwd=project, environment=good_config)
+    # GENERATED INTO THE DATASET, because that is where the built System it is validated against
+    # lives: `build-md` now refuses a chain it cannot check at all.
+    project = workspace / "explicit-plan-run1"
+    done = _run([sys.executable, "-m", "md_tools.cli.md_openmm", "build-md",
+                 "-odir", "./explicit-plan-run1", "--config", str(tmp_path / "explicit.config")],
+                cwd=workspace, environment=good_config)
     message = done.stdout + done.stderr
     assert done.returncode != 0, message[-2000:]
     assert "no volume to control" in message, message[-2500:]
-    # THE POINT: `min` is a perfectly valid stage and it produced nothing, because the chain was
-    # planned in full before any of it ran.
-    assert _snapshot(destination) == before, (
-        f"the chain ran before validating its later stages: "
-        f"{sorted((_snapshot(destination) or {}).keys())}")
+    # THE POINT: `min` is a perfectly valid stage and nothing was generated for it, because the
+    # whole chain is validated before the first script is written. A refused generation leaves no
+    # run directory at all -- the same rule `--check` follows.
+    assert not project.exists(), sorted(p.name for p in project.iterdir())
 
 
 def test_two_stages_writing_one_path_are_refused(tmp_path):
