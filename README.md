@@ -47,6 +47,17 @@ in **[Installing](https://csy0000.github.io/MD-tools/install/)**; the platform a
 a machine property, configured once — see
 **[Machine configuration](https://csy0000.github.io/MD-tools/machine-configuration/)**.
 
+**Upgrading needs the reinstall, not just the pull.** This is not an editable install, and the
+shipped `configs/*.config` are wheel data files read from `<env>/share/md-tools/`, so a `git pull`
+leaves both the code and the examples on your `PATH` unchanged:
+
+```bash
+git pull && pip install --no-deps --force-reinstall .
+md-openmm --version        # must match `version` in pyproject.toml
+```
+
+`--force-reinstall` because two `dev` commits usually share a `version`, and pip otherwise no-ops.
+
 ## The five commands
 
 ```text

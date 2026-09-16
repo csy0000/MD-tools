@@ -120,6 +120,48 @@ md-openmm --version
 command -v sqm mpiexec        # both must resolve inside the environment
 ```
 
+## Upgrading
+
+**A `git pull` alone changes nothing you run.** `pip install --no-deps .` copies the package into
+`site-packages`; it is not an editable install, so the checkout and the thing on your `PATH` are
+two different copies of the code:
+
+```bash
+git pull
+pip install --no-deps --force-reinstall .
+```
+
+`--force-reinstall` is there because pip compares versions and does nothing when they match — and
+two different `dev` commits usually carry the same `version`. Without it, an upgrade silently
+no-ops and `md-openmm --version` keeps reporting what it reported before.
+
+Check that it took, rather than assuming:
+
+```bash
+md-openmm --version                     # must match `version` in pyproject.toml
+```
+
+**This applies to the shipped configurations too, and that part surprises people.**
+`configs/*.config` are installed as **wheel data files**, and `md_tools.configs.example()` reads
+them from `<env>/share/md-tools/configs/` — never from your checkout. So a stale install serves
+stale examples: on the machine this was written on, the installed `cMD.config` was 15,756 bytes of
+documentation that the checkout had reduced to 1,938 four commits earlier, and every local test
+run had been reading the old one for weeks without anyone noticing.
+
+**If you run the test suite**, note that `environment.yml` gained `pytest-xdist` in 0.5.3.
+`pyproject.toml` sets `addopts = "--dist loadgroup"`, which every `pytest` invocation passes, so an
+environment without the plugin exits 4 with `unrecognized arguments: --dist` and collects nothing.
+An existing environment needs it added once:
+
+```bash
+micromamba install -y -p ~/software/md-stack/envs/openmm-env -c conda-forge pytest-xdist
+```
+
+Running simulations needs none of this — it matters only for the suite.
+
+**The environment files were merged in 0.5.3.** There is one `environment.yml` now;
+`environment-ci.yml` and `environment-cuda.yml` are gone, so any script naming them needs updating.
+
 ## Next
 
 * [Machine configuration](machine-configuration.md) — the platform this machine uses, and `$MD_DATA`.
