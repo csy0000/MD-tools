@@ -75,6 +75,9 @@ def test_the_example_input_matches_what_build_md_generates(method, tmp_path):
     # now. The inputs this test compares are generated text and do not depend on which System
     # produced them -- see `make_dataset_root` on what that fixture may and may not stand for.
     make_dataset_root(tmp_path, solvent="explicit")
+    from .conftest import make_states_for
+
+    make_states_for(tmp_path, directory / "example.config")
     out = tmp_path / f"{method}-run1"
     done = subprocess.run(
         [sys.executable, "-c",

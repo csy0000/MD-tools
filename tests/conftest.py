@@ -180,6 +180,51 @@ def make_scaled_state(root: Path, *, tau: float, method: str = "cMD") -> Path:
     return state
 
 
+def make_scaled_ladder(root: Path, *, n_states: int = 4, tau_max: float = 0.5,
+                       extra: str = "") -> Path:
+    """`build/REST2/system_state<n>.xml` for a linear ladder from tau 0, beside the dataset's built
+    System. Returns the directory. A REST2 or rREST2 ladder integrates these as they are, and
+    `build-md` refuses to generate one until they exist (step 4). `extra` is appended to the
+    scaler.config, e.g. "unscaled_torsions: false\n"."""
+    from md_tools.build.scaler import build_scaled_states
+
+    build = Path(root) / "build"
+    directory = build / "REST2"
+    if (directory / "scaler.yaml").is_file():
+        return directory
+    config = build / "scaler-REST2.config"
+    config.write_text(f"method: REST2\nschedule:\n  n_states: {int(n_states)}\n"
+                      f"  tau_min: 0.0\n  tau_max: {float(tau_max)}\n{extra}", encoding="utf-8")
+    build_scaled_states(system_path=build / "built.xml", topology_path=build / "built.pdb",
+                        config_path=config, echo=False)
+    return directory
+
+
+def make_states_for(root: Path, config) -> None:
+    """The saved scaled states a `build-md` configuration needs, built beside `root/build/`.
+
+    `config` is a path to the configuration or its document. A REST2/rREST2 ladder gets
+    `build/REST2/` at its resolved state count and tau_max; a cMD run with `dynamics.tau > 0`
+    gets `build/cMD/system_state0.xml`. Anything else needs none. Generation refuses without them
+    (steps 3 and 4 of docs/amber-like-fix/REST2-scaler.md), so a fixture calls this first.
+    """
+    from md_tools.build.md import MD_SCHEMA
+    from md_tools.build.strict import load_yaml_strictly
+
+    document = config
+    if not isinstance(config, dict):
+        document = load_yaml_strictly(Path(config).read_text(encoding="utf-8"), source=str(config))
+    if (document or {}).get("protocol") not in ("REST2", "rREST2", "cMD"):
+        return
+    resolved = MD_SCHEMA.resolve(document)
+    protocol = resolved["protocol"]
+    if protocol in ("REST2", "rREST2"):
+        make_scaled_ladder(root, n_states=int(resolved["rest2"]["number_of_replicas"]),
+                           tau_max=float(resolved["rest2"]["tau_max"]))
+    elif protocol == "cMD" and float(resolved["dynamics"]["tau"]) > 0.0:
+        make_scaled_state(root, tau=float(resolved["dynamics"]["tau"]))
+
+
 @pytest.fixture
 def dataset_root(tmp_path):
     """A dataset root for one test. See `make_dataset_root`."""

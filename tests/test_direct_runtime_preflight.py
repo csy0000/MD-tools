@@ -143,6 +143,9 @@ def workspace(tmp_path_factory):
     }
     for name, document in projects.items():
         _config(root, f"{name}.config", document)
+        from .conftest import make_states_for
+
+        make_states_for(root, root / f"{name}.config")
         done = subprocess.run(
             CLI + ["build-md", "-odir", f"./{name}-run1",
                    "--config", str(root / f"{name}.config")],

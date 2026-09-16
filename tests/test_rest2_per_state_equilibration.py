@@ -128,6 +128,9 @@ def test_build_md_accepts_the_field_and_reports_it(tmp_path):
     from .conftest import make_dataset_root
 
     make_dataset_root(tmp_path)
+    from .conftest import make_states_for
+
+    make_states_for(tmp_path, config)
     done = subprocess.run(CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(config)],
                           cwd=tmp_path, capture_output=True, text=True, timeout=900)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]

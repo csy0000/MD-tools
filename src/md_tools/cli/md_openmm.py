@@ -43,6 +43,49 @@ def cmd_build_top(args) -> int:
     from ..build.strict import ConfigError
     from ..build.top import build_topology
 
+    # TWO MODES, and each refuses the other's flags by name rather than ignoring them.
+    #   build-top -i STRUCTURE ...                         builds a System
+    #   build-top --rest2-scaler -s SYSTEM -p PDB --config  scales a built System
+    # The output paths have documented defaults, so "given" means "not the default".
+    structure_flags = {"-i": args.input,
+                       "-os": None if args.out_system == "./built.xml" else args.out_system,
+                       "-op": None if args.out_pdb == "./built.pdb" else args.out_pdb,
+                       "-log": None if args.out_log == "./built.log" else args.out_log}
+    scaler_flags = {"-s": args.system, "-p": args.topology}
+    if args.rest2_scaler:
+        given = [flag for flag, value in structure_flags.items() if value is not None]
+        missing = [flag for flag, value in scaler_flags.items() if value is None]
+        if given or missing or not args.config:
+            print("build-top: --rest2-scaler scales a BUILT System, so it takes -s, -p and "
+                  "--config and nothing that builds one"
+                  + (f"; refused: {' '.join(given)}" if given else "")
+                  + (f"; missing: {' '.join(missing + ([] if args.config else ['--config']))}"
+                     if missing or not args.config else ""), file=sys.stderr)
+            return 2
+        from ..build.scaler import build_scaled_states
+
+        try:
+            build_scaled_states(system_path=Path(args.system), topology_path=Path(args.topology),
+                                config_path=Path(args.config), overwrite=bool(args.overwrite),
+                                check=bool(args.check))
+        except ConfigError as exc:
+            print(f"build-top: {exc}", file=sys.stderr)
+            return 2
+        except Exception as exc:
+            print(f"build-top: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+        return 0
+    given = [flag for flag, value in scaler_flags.items() if value is not None]
+    if given or args.check:
+        print(f"build-top: {' '.join(given + (['--check'] if args.check else []))} belong(s) to "
+              f"--rest2-scaler, which scales a built System; without it build-top builds one "
+              f"from -i", file=sys.stderr)
+        return 2
+    if args.input is None:
+        print("build-top: -i INPUT is required (or --rest2-scaler -s SYSTEM -p PDB --config)",
+              file=sys.stderr)
+        return 2
+
     try:
         build_topology(
             input_path=Path(args.input),
@@ -195,7 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
         "build-top", help="build an OpenMM System and topology from one structure",
         description="Build one OpenMM System from one input structure. Writes a serialised "
                     "System, the matching PDB, and a readable log that carries a machine record.")
-    top.add_argument("-i", "--input", required=True, metavar="INPUT",
+    top.add_argument("-i", "--input", default=None, metavar="INPUT",
                      help="input structure: an existing .pdb (peptide), or a .smi or .sdf "
                           "holding one molecule (.smi is embedded and minimised; .sdf supplies "
                           "its own coordinates)")
@@ -209,7 +252,18 @@ def build_parser() -> argparse.ArgumentParser:
                      help="build configuration (YAML syntax, .config suffix); built-in defaults "
                           "are used when omitted")
     top.add_argument("--overwrite", action="store_true",
-                     help="replace existing outputs instead of refusing")
+                     help="replace existing outputs instead of refusing (with --rest2-scaler, the "
+                          "previous build/<method>/ is moved aside, never deleted)")
+    top.add_argument("--rest2-scaler", action="store_true",
+                     help="scale a BUILT System into build/<method>/system_state<n>.xml with "
+                          "scaler.yaml, scaler.log and <RESNAME>-unscaled.png; takes -s, -p and "
+                          "--config (a scaler.config)")
+    top.add_argument("-s", "--system", default=None, metavar="XML",
+                     help="with --rest2-scaler: the built System to scale")
+    top.add_argument("-p", "--topology", default=None, metavar="PDB",
+                     help="with --rest2-scaler: its topology")
+    top.add_argument("--check", action="store_true",
+                     help="with --rest2-scaler: validate everything and create nothing")
     top.set_defaults(func=cmd_build_top)
 
     # -- build-md -----------------------------------------------------------------------------

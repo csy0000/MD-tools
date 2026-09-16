@@ -1487,7 +1487,7 @@ def _write_shared_input(path: Path, text: str, *, overwrite: bool) -> None:
 
 def _group_file_text(*, protocol: str, states: int, segment: int, segments: int,
                      taus: list[float], targets: dict[str, dict[str, Any]],
-                     run, dataset, solute_yaml: Path | None) -> str:
+                     run, dataset, solute_yaml: Path | None, state_files) -> str:
     """One group file per segment: one line per STATE, each naming its own rung Hamiltonian.
 
     `-s` IS PER LINE NOW, and that is the architecture change. Scaling used to happen at run time
@@ -1514,9 +1514,10 @@ def _group_file_text(*, protocol: str, states: int, segment: int, segments: int,
              "# because they describe the coordinated run rather than one replica.",
              "# Paths are relative to THIS FILE, which is how they are read back.",
              "#",
-             "# -s is this state's own pre-scaled rung, written by `build-md` and recorded in",
-             "# build_states.log beside it. It is NOT scaled again at run time: doing so would",
-             "# take solute-solute to (1-tau)^4 and produce entirely plausible numbers.",
+             "# -s is this state's SAVED scaled System, build/REST2/system_state<n>.xml, written by",
+             "# `md-openmm build-top --rest2-scaler` with scaler.yaml beside it. It is NOT scaled",
+             "# again at run time: that would take solute-solute to (1-tau)^4 and produce",
+             "# entirely plausible numbers.",
              ""]
     for index in range(states):
         # `-i` IS THE PROTOCOL MODULE, not the Amber-like input.
@@ -1540,7 +1541,7 @@ def _group_file_text(*, protocol: str, states: int, segment: int, segments: int,
         # load the protocol module.
         parts = [f"-i {os.path.relpath(run.root / '_protocol.py', run.root)}",
                  f"-p {os.path.relpath(dataset.built('pdb'), run.root)}",
-                 f"-s {os.path.relpath(run.state_system(index), run.root)}"]
+                 f"-s {os.path.relpath(state_files[index], run.root)}"]
         if segment == 1 and start:
             parts.append(f"-c {start}")
         if solute_yaml is not None:
@@ -1759,6 +1760,64 @@ raise SystemExit(run_generated_remd(__file__, protocol="{protocol}"))
 '''
 
 
+def _saved_ladder_states(resolved: dict[str, Any], dataset) -> dict[str, Any]:
+    """The saved scaled states a REST2/rREST2 ladder integrates, checked before anything is written.
+
+    A ladder scales nothing (docs/amber-like-fix/REST2-scaler.md, step 4): its states are
+    `build/REST2/system_state<n>.xml`, written by `md-openmm build-top --rest2-scaler`, and
+    `rest2.number_of_replicas` / `rest2.tau_max` are CLAIMS about them, refused when they
+    disagree. `build-md` used to scale and serialise its own rungs into every run directory, which
+    was a second place a Hamiltonian was made -- and, until 7a4ea5d, a place that made it without
+    the SDF.
+    """
+    from ..remd.generated import tau_ladder
+    from ..rest2.states import (RECORD_NAME, ScaledStateError, load_scaler_record,
+                                scaled_state_identity, state_system_name)
+
+    directory = dataset.build / "REST2"
+    record_path = directory / RECORD_NAME
+    n_states = int(resolved["rest2"]["number_of_replicas"])
+    tau_max = float(resolved["rest2"]["tau_max"])
+    command = (f"  md-openmm build-top --rest2-scaler -s {dataset.built('xml')} "
+               f"-p {dataset.built('pdb')} --config <scaler.config>\n"
+               f"with `method: REST2` and `schedule: {{n_states: {n_states}, tau_min: 0.0, "
+               f"tau_max: {tau_max}}}`")
+    if not record_path.is_file():
+        raise ConfigError(
+            f"a {resolved['protocol']} ladder integrates SAVED scaled states, and there are none: "
+            f"{record_path} does not exist. Build them first:\n{command}")
+    try:
+        record = load_scaler_record(record_path)
+        identities = [scaled_state_identity(directory / state_system_name(index))
+                      for index in range(len(record["states"]))]
+    except (ScaledStateError, FileNotFoundError) as refusal:
+        raise ConfigError(f"{record_path}: {refusal}") from None
+    if record["method"] != "REST2":
+        raise ConfigError(f"{record_path} was built with method: {record['method']}, not REST2.")
+    if record["source"]["system_sha256"] != _sha256_file(dataset.built("xml")):
+        raise ConfigError(
+            f"{record_path} was scaled from a System with sha256 "
+            f"{record['source']['system_sha256'][:16]}..., which is not {dataset.built('xml')}. "
+            f"Rebuild the states from the dataset's built System:\n{command}")
+    taus = [float(identity["tau"]) for identity in identities]
+    wanted = ([float(t) for t in tau_ladder(n_states, tau_max)] if n_states >= 2 else [])
+    if len(taus) != n_states or any(abs(a - b) > 1e-9 for a, b in zip(taus, wanted)):
+        raise ConfigError(
+            f"this ladder is configured as {n_states} states at tau {wanted} "
+            f"(rest2.number_of_replicas, rest2.tau_max), but {record_path} holds "
+            f"{len(taus)} at tau {taus}. A ladder scales nothing, so its configuration must "
+            f"describe the states it will integrate: change the configuration, or rebuild the "
+            f"states:\n{command}")
+    return {"directory": directory, "record": record_path, "taus": taus,
+            "files": [directory / state_system_name(index) for index in range(len(taus))]}
+
+
+def _sha256_file(path) -> str:
+    from .record import sha256_file
+
+    return sha256_file(Path(path))
+
+
 def build_scripts(*, config_path: Path | None, out_dir: Path,
                   overwrite: bool = False, echo: bool = True) -> dict[str, Any]:
     """Generate one run. `out_dir` is the RUN directory; returns the record written in it.
@@ -1812,28 +1871,9 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
             + "".join(f"  missing: {path}\n" for path in missing)
             + f"  Run `md-openmm build-top` into {dataset.build}/ first.")
 
+    ladder_states = None
     if resolved["protocol"] in ("REST2", "rREST2"):
-        # THE UNSCALED-TORSION CLASSIFICATION, also before anything is written, with the SAME evidence the
-        # run-time preflight uses: the `built.sdf` that `build-top` retains beside `built.xml`.
-        # The rung writer below was called without it, so every amide of a `peptide-like` or
-        # `ligand` solute arrived unclassified, was left out of the exclusions, and was SCALED in
-        # the rung files a grouped ladder integrates -- while `build_states.log` still said
-        # "ordinary_amide_omega: unscaled" (0.5.3). It enforces the same refusal itself; this is
-        # here so
-        # the refusal arrives before `input/` and the run directory exist.
-        from openmm.app import PDBFile
-
-        from ..md.stage import solute_atom_indices
-        from ..openmm.system import UnclassifiedTorsionError, unscaled_torsions
-        from ..run.preflight import _ligand_sdf_beside
-
-        topology = PDBFile(str(dataset.built("pdb"))).topology
-        try:
-            unscaled_torsions(topology, solute_atom_indices(topology),
-                             ligand_sdf=_ligand_sdf_beside(dataset.built("xml")))
-        except UnclassifiedTorsionError as refusal:
-            raise ConfigError(f"{resolved['protocol']} rungs for {dataset.built('pdb')}: "
-                              f"{refusal}") from None
+        ladder_states = _saved_ladder_states(resolved, dataset)
 
     # THE WHOLE CHAIN, VALIDATED BEFORE THE FIRST SCRIPT IS WRITTEN.
     #
@@ -2166,41 +2206,12 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
     # could not resolve it at all. Content-addressed, so every run on this system shares one.
     _place_definitions(dataset.input, definition_copies, overwrite=overwrite, note=note)
 
-    # -- the rungs, serialised, and one group file per segment ----------------------------------
+    # -- one group file per segment, each line naming its SAVED state -----------------------------
     #
-    # SCALING HAPPENS HERE NOW, not at run time. Each rung is written to
-    # `remd<n>/build_state<n>.xml` with `build_states.log` recording which factors were applied to
-    # which terms and which torsions were left alone, so the Hamiltonian a state ran under is
-    # readable rather than re-derivable. The group file names one rung per line.
-    rung_record = None
+    # The states are `build/REST2/system_state<n>.xml`, checked above; the ladder integrates them as
+    # they are. `build-md` no longer writes rungs of its own into `remd<n>/`.
     if protocol in ("REST2", "rREST2"):
-        from ..remd.generated import tau_ladder
-        from .rungs import RungWriteError, format_scaling_report, write_rung_systems
-        from ..run.preflight import _ligand_sdf_beside
-
-        system_path, topology_path = dataset.built("xml"), dataset.built("pdb")
-        missing = [path for path in (system_path, topology_path) if not path.is_file()]
-        if missing:
-            raise ConfigError(
-                "a ladder's rungs are scaled and serialised at BUILD time now, so build-md needs "
-                "the built system that every run on this dataset shares:\n"
-                + "".join(f"  missing: {path}\n" for path in missing)
-                + f"  Run `md-openmm build-top` into {dataset.build}/ first. (The scaling used to "
-                  f"happen at run time from one shared built.xml, which is why this used to "
-                  f"generate without it.)")
-        taus = tau_ladder(int(resolved["rest2"]["number_of_replicas"]),
-                          float(resolved["rest2"]["tau_max"]))
-        try:
-            rung_record = write_rung_systems(run, system_path=system_path,
-                                             topology_path=topology_path, taus=taus,
-                                             ligand_sdf=_ligand_sdf_beside(system_path),
-                                             overwrite=overwrite)
-        except RungWriteError as failure:
-            raise ConfigError(str(failure)) from None
-        for state in rung_record["states"]:
-            note(run.state_system(int(state["state"])))
-        note(run.root / "build_states.log")
-
+        taus = ladder_states["taus"]
         # `solute.yaml` is named on every group line when it exists beside the built system. It is
         # the resolved scaling selection, and a ladder that derived its own would be a second
         # answer to "what is the solute" -- two answers waiting to disagree, invisibly.
@@ -2210,6 +2221,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
             path.write_text(_group_file_text(
                 protocol=protocol, states=len(taus), segment=segment, segments=segments,
                 taus=taus, targets=targets, run=run, dataset=dataset,
+                state_files=ladder_states["files"],
                 solute_yaml=solute_yaml if solute_yaml.is_file() else None), encoding="utf-8")
             note(path)
         # The directories a segment writes into, made now so a refusal about them happens here
@@ -2318,10 +2330,11 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         encoding="utf-8")
     note(out_dir / "run.config")
 
-    if rung_record is not None:
-        log.heading("Rung Systems")
-        for line in format_scaling_report(rung_record).splitlines():
-            log(f"  {line}" if line else "")
+    if ladder_states is not None:
+        log.heading("Saved states")
+        log.field("record", str(ladder_states["record"]))
+        for index, (tau, path) in enumerate(zip(ladder_states["taus"], ladder_states["files"])):
+            log.field(f"state {index}", f"tau {tau:g}  {path}")
 
     log.heading("Outputs")
     for name in written:

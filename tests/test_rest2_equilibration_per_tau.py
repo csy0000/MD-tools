@@ -72,6 +72,9 @@ def _build_md(root, document, odir="REST2-run1"):
     make_dataset_root(root, solvent=str(document.get("solvent") or "implicit"))
     path = root / f"{odir}.config"
     path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    from .conftest import make_states_for
+
+    make_states_for(root, path)
     done = subprocess.run(CLI + ["build-md", "-odir", odir, "--config", str(path)], cwd=root,
                           capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
@@ -310,14 +313,7 @@ BEFORE = {
 #: is genuinely solvent-independent: the group file names rungs rather than describing them, and
 #: the two `run.config` files hold one number each.
 #:
-#: THE RUNG SYSTEMS ARE NOT, and used to be listed here as though they were. They are serialised
-#: FROM the built System, so they are solvent-dependent by construction; they only ever matched
-#: one set of digests because the fixture handed the explicit and implicit cases the same boxless
-#: stand-in. `build-md` now validates the chain against the System, which refuses an explicit
-#: project on a boxless one, so the two cases build against different Systems and serialise
-#: different rungs. They are pinned per solvent in `RUNGS` below. The implicit digests there are
-#: unchanged from when they lived here, which is what says this move is a correction to the
-#: table rather than a change in what the generator produces.
+#: THE RUNG SYSTEMS are no longer generated at all: see the note after this table.
 NEW_IN_THIS_LAYOUT = {
     # One group file per segment, naming one rung per line. New behaviour with the rungs.
     # REFRESHED: `-i` on every group line is `_protocol.py`, not `../input/REST2.in`.
@@ -328,8 +324,11 @@ NEW_IN_THIS_LAYOUT = {
     # whole equilibration chain had completed. `remd.generated._group_file_text` had always
     # written `_protocol.py`; the two group-file writers disagreed and the build-time one was the
     # wrong half.
+    # REFRESHED for step 4, diffed against 02fe5b1's text: the four `-s` paths now name
+    # `../build/REST2/system_state<n>.xml` in place of `remd<n>/build_state<n>.xml`, and the
+    # header comment says so. Nothing else changed, identically for both solvents.
     "REST2-run1/remd_groupfile.1":
-        "10814e4a3ac058da51b4425004e93583ccffd344351b3563b041620b4e93dd9a",
+        "79260b058729e880f1cd971ff0af9552786f682114909ce3a5aa22a4917e0729",
     # THE MINIMISATION'S OWN SEED. `min/` is shared, so it cannot hold a run's seed -- and it does
     # not need to: minimisation draws no velocities, so no run's sampling descends from this
     # number. Every run on the system may carry a different one without disturbing it.
@@ -341,43 +340,12 @@ NEW_IN_THIS_LAYOUT = {
     "REST2-run1/eq/run.config":
         "09847c0816635b3e559e754923710c189bb044551c0b9fae61af85120821f30b",
 }
-#: The four rung Systems, per solvent. See the note above for why these cannot be shared.
-#:
-#: These are the ONLY files in this comparison whose bytes depend on the built System, which is
-#: what makes them a useful pair: everything else in the table is identical across both cases, so
-#: a difference appearing anywhere but here would be this setting changing something it must not.
-RUNGS = {
-    "implicit": {
-        "REST2-run1/remd0/build_state0.xml":
-            "b4e773404dafae2dd0c51152e0819d376e98a0500a8db1938d846b906d670689",
-        # REFRESHED for REST2 convention v3 (unscaled torsions), rungs 1-3. Not pasted: the old
-        # digests were reproduced exactly from 6cc67c8 and the new Systems compared with them
-        # parameter by parameter. Every force but PeriodicTorsionForce is identical, and exactly
-        # TWO torsion terms differ per rung -- the amide-nitrogen impropers (4-8-6-7,
-        # 14-18-16-17), now unscaled. The other two impropers (1-6-4-5, 8-16-14-15) were already
-        # unscaled under v2 by accident: their middle atoms are the excluded amide C-N pair, and
-        # v2 looked only at the middle pair. Rung 0 is tau = 0 and unchanged.
-        "REST2-run1/remd1/build_state1.xml":
-            "29ca65acaa28039806c6a38d0e026d7a1ae94aa64eafce5b508c29920ff07ea6",
-        "REST2-run1/remd2/build_state2.xml":
-            "d04b378c1be0856e615d81531acd7e95ac8464f5d20b633fb16e3a5389a37354",
-        "REST2-run1/remd3/build_state3.xml":
-            "eb63d25f48053a489fe2484d8c72850aa86a33e667b25c8315a0c2adf7759c10",
-    },
-    "explicit": {
-        "REST2-run1/remd0/build_state0.xml":
-            "b78ffb12fa2135b6cc4ebe99a679738cb88dbe2d9d6c59bd577c371fb8a2bc75",
-        # REFRESHED for convention v3 the same way as the implicit table, against 02fe5b1: every
-        # force but PeriodicTorsionForce identical, and exactly torsion terms 39 and 41 -- the
-        # amide-nitrogen impropers -- differ in each rung, now at their unscaled constant.
-        "REST2-run1/remd1/build_state1.xml":
-            "21833c0a2211115938a9f06e19b1e9cb4584da8bd5aef7fffd4cdfe6adcd1c33",
-        "REST2-run1/remd2/build_state2.xml":
-            "9542468bbe55b52b83920bbd35a2c56ab22176aa4bbcae20d8f748f484eb89cd",
-        "REST2-run1/remd3/build_state3.xml":
-            "26f2c2a4a63afb24b8dec8ff62deac1535ff391104b6fe9b3bf6785b71052633",
-    },
-}
+#: THE RUNG SYSTEMS ARE NOT GENERATED ANY MORE (step 4 of docs/amber-like-fix/REST2-scaler.md):
+#: `build-md` no longer scales `remd<n>/build_state<n>.xml` into the run, and the group file names
+#: the SAVED states under `build/REST2/`, which are an INPUT to generation and excluded above like
+#: the rest of `build/`. Their bytes are pinned where they are made, in tests/test_rest2_scaler.py
+#: and tests/test_ladder_on_saved_states.py. The per-solvent `RUNGS` digest table that stood here
+#: also shadowed the integer `RUNGS` the GPU tests below read, and is gone with them.
 #: The `_protocol.py` a default four-state ladder materialises at 2 fs, before this setting.
 #: REFRESHED for convention v3: diffed against 6cc67c8's text, the only change is the docstring
 #: line "omega left unscaled" becoming "amide omega, aromatic ring, double bond and improper
@@ -396,10 +364,9 @@ def test_off_leaves_every_generated_file_as_it_was(tmp_path, solvent):
                   if name.startswith("build/") or name.endswith(".config")
                   and "/" not in name}
     generated -= {"REST2-run1/build-md.log", "REST2-run1/build_states.log"}
-    assert generated == (set(BEFORE[solvent]) | set(NEW_IN_THIS_LAYOUT)
-                         | set(RUNGS[solvent])), sorted(generated)
+    assert generated == (set(BEFORE[solvent]) | set(NEW_IN_THIS_LAYOUT)), sorted(generated)
 
-    for name, digest in {**BEFORE[solvent], **NEW_IN_THIS_LAYOUT, **RUNGS[solvent]}.items():
+    for name, digest in {**BEFORE[solvent], **NEW_IN_THIS_LAYOUT}.items():
         text = (root / name).read_text(encoding="utf-8")
         # The `.in` files and `resolved.config` gain exactly one line when the setting exists but
         # is off. The preparation inputs are the exception: they carry no `&remd` at all now, so

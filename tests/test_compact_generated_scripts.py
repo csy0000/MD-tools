@@ -39,6 +39,9 @@ def _generate(tmp_path: Path, protocol: str, *extra: str, into: str | None = Non
     config = tmp_path / f"{protocol}.config"
     config.write_text(yaml.safe_dump(CONFIGS[protocol], sort_keys=False), encoding="utf-8")
     out = tmp_path / (into or f"{protocol}-run1")
+    from .conftest import make_states_for
+
+    make_states_for(out.parent, config)            # saved scaled states, where the method needs them
     done = subprocess.run(
         [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", str(out),
          "--config", str(config), *extra],

@@ -1217,6 +1217,20 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
         # the same two impossibilities are refused as for a stage.
         check_ensemble(loaded, ensemble=ensemble, tau=tau, where=protocol)
     solute_record = None
+    # SAVED SCALED STATES. When every line of the group file names a state of ONE `scaler.yaml`,
+    # in state order, the ladder integrates those files AS THEY ARE: `build-top --rest2-scaler`
+    # scaled them, and nothing here scales or classifies again (docs/amber-like-fix/
+    # REST2-scaler.md, step 4). Before this, a grouped ladder loaded its first line's System and
+    # rebuilt every rung from it at run time -- re-classifying torsions from an SDF it looked for
+    # beside `remd0/build_state0.xml`, where none ever is, which is how 0.5.3 refused a ligand.
+    saved_states = None
+    if groupfile and loaded is not None:
+        saved_states = _saved_state_ladder(groupfile, replicas=int(replicas), ladder=ladder,
+                                           where=protocol)
+    if saved_states is not None:
+        solute_indices = list(saved_states["solute_indices"])
+        excluded_bonds = list(saved_states["excluded_bonds"])
+        solute_record = saved_states["solute_record"](loaded)
     if loaded is not None and solute_indices is None and route is not None:
         # Derived here rather than by the writer that used to do it. The torsion classification
         # carries its own refusal -- an amide that is neither ordinary nor proline-like -- and it
@@ -1252,7 +1266,14 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
         excluded_bonds = [tuple(int(a) for a in pair) for pair in
                           unscaled_bonds_of_solute_document(solute_record)]
 
-    if solute_indices is not None:
+    if solute_indices is not None and saved_states is not None:
+        from ..rest2.scaler import UnclassifiedForceError, audit_force_classes
+
+        try:
+            audit = audit_force_classes(loaded.system, where=protocol)
+        except UnclassifiedForceError as unknown:
+            raise PreflightError(str(unknown)) from None
+    elif solute_indices is not None:
         # The force classification, the unscaled-torsion handling and the scaled-System construction, all
         # before `solute.yaml`, `_protocol.py` or a group file exists. An unclassifiable force
         # used to be found once the run tree was already on disk.
@@ -1320,7 +1341,16 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
 
     rung_systems = ()
     rungs_tau = ()
-    if solute_indices is not None and ladder is not None and loaded is not None:
+    if saved_states is not None:
+        from ..remd.protocol import apply_ladder_restraints
+
+        rungs_tau = tuple(saved_states["taus"])
+        systems = [system_ for system_ in saved_states["systems"]]
+        if ladder_restraints:
+            for system_ in systems:
+                apply_ladder_restraints(system_, ladder_restraints)
+        rung_systems = tuple(systems)
+    elif solute_indices is not None and ladder is not None and loaded is not None:
         from ..remd.generated import tau_ladder
 
         rungs_tau = tuple(float(t) for t in
@@ -1525,6 +1555,87 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                            reservoir_source=source_facts, cv_definition=cv_definition,
                            ladder_restraints=tuple(ladder_restraints),
                            notes={"solute_document": solute_record} if solute_record else {})
+
+
+def _saved_state_ladder(groupfile, *, replicas: int, ladder, where: str):
+    """The ladder's rungs as SAVED SCALED STATES, or None when the group file names none.
+
+    Every line must name a state of the same `scaler.yaml`, line i state i, and the states must be
+    exactly the ladder: the configured count, and -- when the ladder is described -- the configured
+    tau list. A group file mixing saved states with other Systems is refused: half a ladder scaled
+    at build time and half at run time is two derivations of one Hamiltonian.
+    """
+    from openmm import XmlSerializer
+
+    from ..remd.executor import GroupFileError, parse_group_file
+    from ..rest2.states import ScaledStateError, load_scaler_record, scaled_state_identity
+
+    try:
+        groups = parse_group_file(groupfile)
+    except GroupFileError as refusal:
+        raise PreflightError(f"{where}: {refusal}") from None
+    identities = []
+    for group in groups:
+        try:
+            identities.append(scaled_state_identity(group["system"]) if group.get("system")
+                              else None)
+        except ScaledStateError as refusal:
+            raise PreflightError(f"{where}: {refusal}") from None
+    if all(identity is None for identity in identities):
+        return None
+    if any(identity is None for identity in identities):
+        raise PreflightError(
+            f"{where}: {groupfile} names saved scaled states on some lines and other Systems on "
+            f"others. A ladder's rungs are either all built by `build-top --rest2-scaler` or "
+            f"none are.")
+    records = {identity["record"] for identity in identities}
+    if len(records) != 1:
+        raise PreflightError(f"{where}: {groupfile} names states from {len(records)} different "
+                             f"scaler records ({sorted(records)}); a ladder is one schedule.")
+    record = load_scaler_record(next(iter(records)))
+    if len(identities) != replicas or len(record["states"]) != replicas:
+        raise PreflightError(
+            f"{where}: the ladder has {replicas} state(s), {groupfile} names {len(identities)} and "
+            f"{identities[0]['record']} holds {len(record['states'])}. They must be one number.")
+    for group, identity in zip(groups, identities):
+        if int(identity["state"]) != int(group.get("group_index", -1)):
+            raise PreflightError(
+                f"{where}: {groupfile}:{group['line']} gives --group-index "
+                f"{group.get('group_index')} the saved state {identity['state']}. Each line must "
+                f"name its own state, or the ladder runs one state's Hamiltonian under another's "
+                f"identity.")
+    taus = [float(identity["tau"]) for identity in identities]
+    if ladder is not None:
+        from ..remd.generated import tau_ladder
+
+        claimed = [float(t) for t in tau_ladder(int(ladder["n_states"]), float(ladder["tau_max"]))]
+        if any(abs(a - b) > 1e-9 for a, b in zip(claimed, taus)):
+            raise PreflightError(
+                f"{where}: the ladder is configured as tau {claimed} (rest2.number_of_replicas, "
+                f"rest2.tau_max) but its saved states are at tau {taus}. A ladder scales nothing: "
+                f"its configuration must describe the states it is given.")
+    section = record["unscaled_torsions"]
+    solute = [int(i) for i in record["solute"]["atom_indices"]]
+    excluded = [tuple(int(a) for a in bond) for bond in section["unscaled_central_bonds"]]
+    systems = [XmlSerializer.deserialize(Path(group["system"]).read_text(encoding="utf-8"))
+               for group in groups]
+
+    def solute_record(loaded):
+        from ..openmm.builders import _solute_document
+
+        document = _solute_document(
+            loaded.pdb.topology, solute,
+            {"unscaled_central_bonds": excluded, "central_bonds": section["central_bonds"],
+             "unscaled_impropers": section["unscaled_impropers"],
+             "proline_like_scaled_bonds": section["proline_like_scaled_bonds"],
+             "detection_method": section["method"], "unclassified": []},
+            route="saved-state", system=loaded.system)
+        document["rest2"]["scaled_states"] = {"record": identities[0]["record"],
+                                             "states": [i["system_sha256"] for i in identities]}
+        return document
+
+    return {"taus": taus, "systems": systems, "solute_indices": solute,
+            "excluded_bonds": excluded, "solute_record": solute_record}
 
 
 def _cv_interval_of(document) -> int:

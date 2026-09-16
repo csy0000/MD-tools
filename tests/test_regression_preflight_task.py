@@ -160,6 +160,9 @@ def generated(tmp_path_factory):
         if protocol == "AIS":
             document["ais_source"] = {"trajectory": "../source.dcd"}
         configuration.write_text(yaml.safe_dump(document), encoding="utf-8")
+        from .conftest import make_states_for
+
+        make_states_for(root, configuration)
         done = subprocess.run(CLI + ["build-md", "-odir", str(root / f"{protocol}-run1"),
                                      "--config", str(configuration)],
                               capture_output=True, text=True, timeout=600)

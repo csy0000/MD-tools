@@ -247,7 +247,7 @@ def _require_one_rung_system_per_state(path, groups):
     # (`<whole|solute>_state<n>_prod<x>.nc`) and raises on anything else, so handing it a
     # `build_state<n>.xml` raised every time and a blanket `except` turned this whole check into a
     # no-op that still read as one.
-    rung = re.compile(r"^build_state(\d+)\.xml$")
+    rung = re.compile(r"^(?:build_state|system_state)(\d+)\.xml$")
     seen: dict[str, int] = {}
     for group in groups:
         system = group.get("system")
