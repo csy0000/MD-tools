@@ -175,6 +175,131 @@ def resolve_residue_sdfs(topology, solute, *, system_dir, config_dir,
     return found
 
 
+def optional_residue_sdfs(topology, solute, *, system_dir, config_dir,
+                          sdf_filelist: Mapping[str, str] | None,
+                          proline_like_residues) -> dict[str, Path]:
+    """The same lookup as `resolve_residue_sdfs`, for EVERY non-standard residue, refusing nothing.
+
+    For the pictures: a residue with no amide needs no SDF to be classified, but its drawing still
+    says "nothing here is left unscaled", which is worth seeing. A name with no SDF is simply absent.
+    """
+    from ..openmm.system import PROTEIN_RESIDUES
+
+    solute = {int(i) for i in solute}
+    system_dir, config_dir = Path(system_dir), Path(config_dir)
+    proline = {str(name).upper() for name in proline_like_residues}
+    spelled: dict[str, str] = {}
+    for residue in topology.residues():
+        if any(atom.index in solute for atom in residue.atoms()):
+            spelled.setdefault(residue.name.upper(), residue.name)
+    non_standard = {name for name in spelled if name not in PROTEIN_RESIDUES and name not in proline}
+    listed = {str(k).upper(): v for k, v in (sdf_filelist or {}).items()}
+    found: dict[str, Path] = {}
+    for name in sorted(non_standard):
+        if name in listed:
+            path = Path(listed[name])
+            path = path if path.is_absolute() else config_dir / path
+        elif (system_dir / f"{spelled[name]}.sdf").is_file():
+            path = system_dir / f"{spelled[name]}.sdf"
+        elif len(non_standard) == 1:
+            path = system_dir / "built.sdf"
+        else:
+            continue
+        if path.is_file():
+            found[name] = path
+    return found
+
+
+# --- a picture of what is left unscaled ----------------------------------------------------------
+
+#: The one colour the pictures use for meaning. Atoms are drawn black and white, so red is never
+#: an oxygen: it is only ever "left unscaled".
+UNSCALED_RGB = (1.0, 0.0, 0.0)
+
+
+def depict_unscaled_torsions(topology, solute, residue_sdfs: Mapping[str, Path],
+                             unscaled_bonds, out_dir, *, omega_exclusion: bool = True,
+                             size: tuple[int, int] = (600, 450)) -> dict[str, dict[str, Any]]:
+    """`<RESNAME>-unscaled.png` per small-molecule residue: its unscaled torsions' bonds in RED.
+
+    An excluded central bond leaves EVERY torsion across it unscaled, so the bond is what is
+    coloured, with its two atoms. The drawing is the SDF's 2D depiction without hydrogens, in a
+    black-and-white atom palette; the caption lists the same bonds by the same topology indices
+    `scaler.yaml` uses, so the picture and the record can be checked against each other.
+
+    Drawn from the FIRST instance of each residue; every instance has the same chemistry. An SDF
+    whose atom count or element sequence does not match the residue is not drawn -- a picture of
+    the wrong molecule is worse than none -- and is returned under `skipped` with the reason.
+
+    Returns `{NAME: {file, unscaled_bonds, caption}}`; skipped names are logged by the caller.
+    """
+    from rdkit import Chem
+    from rdkit.Chem import rdDepictor
+    from rdkit.Chem.Draw import rdMolDraw2D
+
+    solute = {int(i) for i in solute}
+    out_dir = Path(out_dir)
+    bonds = [tuple(int(a) for a in bond) for bond in unscaled_bonds]
+    drawn: dict[str, dict[str, Any]] = {}
+    for name, sdf in sorted(residue_sdfs.items()):
+        residue = next((r for r in topology.residues() if r.name.upper() == name.upper()
+                        and any(a.index in solute for a in r.atoms())), None)
+        if residue is None:
+            continue
+        atoms = sorted((a for a in residue.atoms() if a.index in solute), key=lambda a: a.index)
+        mol = Chem.MolFromMolFile(str(sdf), removeHs=False)
+        if (mol is None or mol.GetNumAtoms() != len(atoms)
+                or any(mol.GetAtomWithIdx(i).GetSymbol() != (a.element.symbol if a.element else None)
+                       for i, a in enumerate(atoms))):
+            continue
+        for i, atom in enumerate(atoms):
+            mol.GetAtomWithIdx(i).SetIntProp("topology_index", int(atom.index))
+        members = {a.index for a in atoms}
+        mine = sorted(bond for bond in bonds if bond[0] in members and bond[1] in members)
+
+        heavy = Chem.RemoveHs(mol)
+        rdDepictor.Compute2DCoords(heavy)
+        where = {atom.GetIntProp("topology_index"): atom.GetIdx() for atom in heavy.GetAtoms()
+                 if atom.HasProp("topology_index")}
+        red_atoms, red_bonds = set(), set()
+        for a, b in mine:
+            if a in where and b in where:
+                red_atoms |= {where[a], where[b]}
+                bond = heavy.GetBondBetweenAtoms(where[a], where[b])
+                if bond is not None:
+                    red_bonds.add(bond.GetIdx())
+        # The topology index beside each red atom, so "1-3" in the caption and in scaler.yaml can be
+        # found in the picture without counting atoms.
+        for index in red_atoms:
+            atom = heavy.GetAtomWithIdx(index)
+            atom.SetProp("atomNote", str(atom.GetIntProp("topology_index")))
+
+        if not omega_exclusion:
+            caption = f"{residue.name}: omega exclusion OFF -- no torsion is left unscaled"
+        elif mine:
+            caption = (f"{residue.name}: red = unscaled torsions across bond(s) "
+                       + ", ".join(f"{a}-{b}" for a, b in mine))
+        else:
+            caption = f"{residue.name}: no torsion left unscaled"
+
+        drawer = rdMolDraw2D.MolDraw2DCairo(*size)
+        options = drawer.drawOptions()
+        options.useBWAtomPalette()
+        options.legendFontSize = 18
+        rdMolDraw2D.PrepareAndDrawMolecule(
+            drawer, heavy, legend=caption,
+            highlightAtoms=sorted(red_atoms), highlightBonds=sorted(red_bonds),
+            highlightAtomColors={i: UNSCALED_RGB for i in red_atoms},
+            highlightAtomRadii={i: 0.25 for i in red_atoms},
+            highlightBondColors={i: UNSCALED_RGB for i in red_bonds})
+        drawer.FinishDrawing()
+        target = out_dir / f"{residue.name}-unscaled.png"
+        target.write_bytes(drawer.GetDrawingText())
+        drawn[name] = {"file": target.name, "unscaled_bonds": [list(b) for b in mine],
+                       "caption": caption}
+    return drawn
+
+
 # --- the build ------------------------------------------------------------------------------------
 
 def _plain(value):
@@ -303,6 +428,7 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
         "md_tools": {"version": __version__, "commit": source_commit()},
     }
     if check:
+        record["omega"]["depictions"] = {}
         record["states"] = [{"state": i, "file": state_system_name(i), "tau": tau}
                             for i, tau in enumerate(taus)]
         return _plain(record)
@@ -318,6 +444,16 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
             "scaling": {"solute_solute": solute_solute, "solute_environment": solute_environment,
                         "solute_solute_expression": "(1 - tau)^2",
                         "solute_environment_expression": "1 - tau"}})
+    pictures = optional_residue_sdfs(
+        topology, solute, system_dir=parent, config_dir=config_path.parent,
+        sdf_filelist=config["sdf_filelist"],
+        proline_like_residues=config["proline_like_residues"])
+    pictures.update(residue_sdfs)
+    depictions = depict_unscaled_torsions(topology, solute, pictures, excluded, staging,
+                                          omega_exclusion=config["omega_exclusion"])
+    record["omega"]["depictions"] = {
+        name: dict(facts, sha256=_sha256(staging / facts["file"]))
+        for name, facts in sorted(depictions.items())}
     record = _plain(record)
 
     aside = None
@@ -349,6 +485,8 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
                                     f"scaled")
     for name, facts in record["omega"]["residue_sdfs"].items():
         log.field(f"SDF for {name}", facts["file"])
+    for name, facts in record["omega"]["depictions"].items():
+        log.field(f"picture of {name}", f"{facts['file']}  ({facts['caption']})")
     log.heading("States")
     for state in record["states"]:
         log(f"  {state['file']:<22} tau {state['tau']:<9} (1-tau)^2 "

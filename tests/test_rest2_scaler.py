@@ -345,3 +345,104 @@ def test_a_system_the_record_does_not_list_is_refused(tmp_path):
     stray.write_bytes((build / "built.xml").read_bytes())
     with pytest.raises(ScaledStateError, match="system_state9.xml"):
         scaled_state_identity(stray)
+
+
+# --- 6. a picture of what is left unscaled --------------------------------------------------------
+
+def _red_pixels(path):
+    image = pytest.importorskip("PIL.Image").open(path).convert("RGB")
+    return sum(1 for r, g, b in image.getdata() if r > 200 and g < 80 and b < 80)
+
+
+def _unscaled_bonds(topology, solute, sdfs):
+    from md_tools.openmm.system import omega_exclusions
+
+    return [tuple(b) for b in omega_exclusions(topology, solute,
+                                               residue_sdfs=sdfs)["omega_unscaled_bonds"]]
+
+
+def test_each_small_molecule_gets_a_picture_with_its_unscaled_bond_in_red(tmp_path):
+    from md_tools.build.scaler import depict_unscaled_torsions, resolve_residue_sdfs
+
+    topology, solute = _ligands(tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
+    sdfs = resolve_residue_sdfs(topology, solute, system_dir=tmp_path, config_dir=tmp_path,
+                                sdf_filelist=None, proline_like_residues=["PRO"])
+    out = tmp_path / "out"
+    out.mkdir()
+    drawn = depict_unscaled_torsions(topology, solute, sdfs,
+                                     _unscaled_bonds(topology, solute, sdfs), out)
+
+    assert sorted(drawn) == ["MO1", "MO2"]
+    assert drawn["MO1"]["file"] == "MO1-unscaled.png"
+    for name in ("MO1", "MO2"):
+        assert (out / f"{name}-unscaled.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert len(drawn["MO1"]["unscaled_bonds"]) == 1, "paracetamol's ordinary amide"
+    assert drawn["MO2"]["unscaled_bonds"] == [], "acetylpyrrolidine's amide is proline-like: scaled"
+    assert _red_pixels(out / "MO1-unscaled.png") > 50, "the unscaled bond must be drawn red"
+    assert _red_pixels(out / "MO2-unscaled.png") == 0, (
+        "nothing is unscaled, so nothing may be red -- and no atom may be drawn red either")
+
+
+def test_the_caption_names_the_bonds_by_the_records_indices(tmp_path):
+    from md_tools.build.scaler import depict_unscaled_torsions
+
+    topology, solute = _ligands(tmp_path, [("MO1", PARACETAMOL)])
+    sdfs = {"MO1": tmp_path / "MO1.sdf"}
+    bonds = _unscaled_bonds(topology, solute, sdfs)
+    drawn = depict_unscaled_torsions(topology, solute, sdfs, bonds, tmp_path)
+    (a, b), = bonds
+    assert drawn["MO1"]["unscaled_bonds"] == [[a, b]]
+    assert f"{a}-{b}" in drawn["MO1"]["caption"]
+
+
+def test_omega_exclusion_off_draws_nothing_red_and_says_why(tmp_path):
+    from md_tools.build.scaler import depict_unscaled_torsions
+
+    topology, solute = _ligands(tmp_path, [("MO1", PARACETAMOL)])
+    drawn = depict_unscaled_torsions(topology, solute, {"MO1": tmp_path / "MO1.sdf"}, [],
+                                     tmp_path, omega_exclusion=False)
+    assert "OFF" in drawn["MO1"]["caption"]
+    assert _red_pixels(tmp_path / "MO1-unscaled.png") == 0
+
+
+def test_an_sdf_that_is_not_this_residue_is_not_drawn(tmp_path):
+    """A picture of the wrong molecule would be worse than none."""
+    from md_tools.build.scaler import depict_unscaled_torsions
+
+    topology, solute = _ligands(tmp_path, [("MO1", PARACETAMOL), ("MO2", ACETYLPYRROLIDINE)])
+    drawn = depict_unscaled_torsions(topology, solute, {"MO1": tmp_path / "MO2.sdf"}, [],
+                                     tmp_path)
+    assert "MO1" not in drawn
+    assert not (tmp_path / "MO1-unscaled.png").exists()
+
+
+def test_a_peptide_gets_no_picture(tmp_path):
+    build = _dataset(tmp_path / "ALA")
+    record = _scale(build, _config(build, "method: REST2\n"))
+    assert record["omega"]["depictions"] == {}
+    assert not list((build / "REST2").glob("*.png"))
+
+
+@pytest.mark.slow
+def test_a_built_small_molecule_gets_its_picture_listed_in_the_record(tmp_path):
+    """End to end on what `build-top` really writes: paracetamol from SMILES, explicit water."""
+    import subprocess
+    import sys
+
+    build = tmp_path / "PARA" / "build"
+    build.mkdir(parents=True)
+    (build / "in.smi").write_text(f"{PARACETAMOL} paracetamol\n", encoding="utf-8")
+    (build / "sys.config").write_text("solute:\n  kind: ligand\n", encoding="utf-8")
+    done = subprocess.run(
+        [sys.executable, "-m", "md_tools.cli.md_openmm", "build-top", "-i", "in.smi",
+         "-os", "built.xml", "-op", "built.pdb", "-log", "built.log", "--config", "sys.config"],
+        cwd=build, capture_output=True, text=True, timeout=3600)
+    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+
+    record = _scale(build, _config(build, "method: REST2\n"))
+    (name, facts), = record["omega"]["depictions"].items()
+    png = build / "REST2" / facts["file"]
+    assert png.name == f"{name}-unscaled.png"
+    from md_tools.build.record import sha256_file
+    assert sha256_file(png) == facts["sha256"]
+    assert _red_pixels(png) > 50
