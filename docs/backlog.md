@@ -17,8 +17,10 @@ deferred by decision on 2026-09-16 rather than by oversight: the omega exclusion
 `peptide-like` solute, the `.in` file's undocumented divergences from Amber's input conventions, and
 rebuilding AIS as a transformation between two topologies. Entry 16 is **fixed in 0.5.3** — `.sdf`
 input, and the missing `built.sdf` on the explicit ligand route that adding it uncovered, which
-entry 13 should be re-checked against. Entries 17 and 18 are open and were filed the same day: the
-documentation reorganisation, and a `solute.residue_name` that is recorded but never applied.
+entry 13 should be re-checked against. Entries 17, 18 and 19 are open and were filed the same day: the
+documentation reorganisation, a `solute.residue_name` that is recorded but never applied, and a
+chemistry mismatch that exits 1 and leaves a directory where a shape mismatch exits 2 and leaves
+nothing.
 
 **Three of these entries described code that had already moved on** — 8 said a flag was dropped
 that was being forwarded, 9 described a reader whose sidecar nothing wrote, 1 said an aggregate
@@ -654,6 +656,40 @@ So the recorded name describes nothing, and a user who sets `solute.residue_name
 System whose residue is still `UNL` while the record says `LIG`. Either apply it to the written
 topology or stop recording it as though it were applied; a value that is documented, accepted and
 inert is worse than one refused.
+
+---
+
+## 19. A chemistry mismatch is a user-input error that exits 1 and leaves a directory — OPEN
+
+Filed 2026-09-16, found while writing the `build-top` documentation page and checking its claims
+against the program rather than against the source.
+
+Two refusals of the same kind — "this input cannot build what you asked for" — behave differently:
+
+| input | exit | leaves behind |
+|---|---|---|
+| `.sdf` with a 2D conformer, `kind: ligand` | 2 | nothing |
+| `.sdf` of ethanol, `kind: peptide-like` | **1** | **`<outdir>/built.log`** |
+
+The first is checked in `build/top.py` above the output `mkdir`, raises `ConfigError`, and the CLI
+maps it to 2. The second is `PeptideMapError`, raised from `openmm/implicit.py` during
+parameterisation — long after the log is open — and reaches `cmd_build_top`'s bare
+`except Exception`, which prints it and returns 1.
+
+**Why it matters.** 1 means "internal failure" everywhere else in this CLI, and the message is a
+bare exception class name rather than a refusal naming `-i`. A script distinguishing "the user
+gave me the wrong thing" from "the tool broke" gets the wrong answer, and the directory left
+behind holds a `built.log` describing an attempt, which `CLAUDE.md` says a refusal must not do:
+*"A `-odir` holding a `resolved.config` is indistinguishable from a run that happened."*
+
+**The fix is not simply to raise `ConfigError` there.** The mismatch is only detectable once the
+molecule has been read and mapped, which is after the point where nothing has been written. Either
+the peptide-like map runs as a preflight over the input before any output is created — it needs
+only the SDF, which is available — or the build becomes transactional, staging into a temporary
+directory and publishing on success. The first is smaller and matches how the suffix checks were
+moved above the `mkdir` in 0.5.3.
+
+Related: entry 13, which concerns the same `peptide-like` classification route.
 
 ---
 

@@ -92,6 +92,7 @@ nav:
       - Installing: install.md
       - Machine configuration: machine-configuration.md
   - Running a simulation:
+      - Building a system (build-top): build-top.md
       - Running (md-run): md-run.md
       - The run layout: run-layout.md
       - Configuration reference: md-configuration.md
