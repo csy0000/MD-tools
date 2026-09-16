@@ -1133,10 +1133,23 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                      trajectory=None, restart=None, checkpoint=None, output=None, log=None,
                      number_of_groups=None, cpu=False, device=None, machine_config=None,
                      protocol="this ladder", pending_parent=None, timestep_fs=None,
-                     ensemble=None, tau=0.0, solute_indices=None, excluded_bonds=(),
-                     route=None, source_trajectory=None,
+                     ensemble=None, tau=0.0, source_trajectory=None,
                      reservoir=False, ladder=None, out_dir=None) -> LadderPreflight:
-    """A REST2 or rREST2 ladder. `-ng`, the configured state count and the world must agree."""
+    """A REST2 or rREST2 ladder. `-ng`, the configured state count and the world must agree.
+
+    Since 0.5.4 a ladder reads `-s` ONLY from its group file, and every line must name a saved
+    scaled state (`md-openmm build-top --rest2-scaler`). Refused here, in the shared runtime guard,
+    whichever surface launched it.
+    """
+    if system is not None:
+        raise PreflightError(
+            f"{protocol}: -s {system} was given. A REST2/rREST2 ladder reads -s only from its "
+            f"group file (0.5.4): each line names one saved scaled state, "
+            f"build/REST2/system_state<n>.xml. Pass --groupfile and no -s.")
+    if not groupfile:
+        raise PreflightError(
+            f"{protocol}: no group file was given. A REST2/rREST2 ladder reads -s only from its "
+            f"group file (0.5.4); `build-md` writes remd_groupfile.<segment>.")
     if source_trajectory is not None:
         _reject_flags_outside_their_protocol(protocol_name="a REST2/rREST2 ladder",
                                              source_trajectory=source_trajectory)
@@ -1207,7 +1220,9 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
         outputs=inventory.roles,
         inputs=inputs, cpu=cpu, device=device, number_of_groups=number_of_groups,
         replicas=int(replicas), protocol=protocol, machine_config=machine_config,
-        load=timestep_fs is not None or solute_indices is not None or route is not None)
+        # ALWAYS loaded: the saved states' solute record, force audit and per-state equilibration
+        # all need the topology and the state System.
+        load=True)
 
     resolved_timestep = audit = scaled = None
     if timestep_fs is not None:
@@ -1223,62 +1238,24 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
     # REST2-scaler.md, step 4). Before this, a grouped ladder loaded its first line's System and
     # rebuilt every rung from it at run time -- re-classifying torsions from an SDF it looked for
     # beside `remd0/build_state0.xml`, where none ever is, which is how 0.5.3 refused a ligand.
-    saved_states = None
-    if groupfile and loaded is not None:
-        saved_states = _saved_state_ladder(groupfile, replicas=int(replicas), ladder=ladder,
-                                           where=protocol)
-    if saved_states is not None:
-        solute_indices = list(saved_states["solute_indices"])
-        excluded_bonds = list(saved_states["excluded_bonds"])
+    saved_states = _saved_state_ladder(groupfile, replicas=int(replicas), ladder=ladder,
+                                       where=protocol)
+    if saved_states is None:
+        raise PreflightError(
+            f"{protocol}: {groupfile} names no saved scaled states. A ladder scales nothing "
+            f"(0.5.4): each line must name build/REST2/system_state<n>.xml, written by "
+            f"`md-openmm build-top --rest2-scaler`, and `build-md` writes such a group file.")
+    solute_indices = list(saved_states["solute_indices"])
+    excluded_bonds = list(saved_states["excluded_bonds"])
+    if loaded is not None:
         solute_record = saved_states["solute_record"](loaded)
-    if loaded is not None and solute_indices is None and route is not None:
-        # Derived here rather than by the writer that used to do it. The torsion classification
-        # carries its own refusal -- an amide that is neither ordinary nor proline-like -- and it
-        # used to fire from inside `write_solute_document`, after `-odir` and both logs existed.
-        from ..remd.generated import solute_document
-        from ..openmm.builders import unscaled_bonds_of_solute_document
-
-        # THE SDF BESIDE THE SYSTEM, and the route that follows from it.
-        #
-        # `build-top` writes `<system stem>.sdf` when and only when it built the solute from
-        # SMILES through the small-molecule route. Its presence is therefore not a guess about
-        # what this system is -- it is the build recording what it did, in the one place a later
-        # run already has a path to. A peptide build writes none, so the default is unchanged and
-        # every existing ladder classifies exactly as before.
-        #
-        # Resolved here rather than left to a flag the operator must remember: forgetting
-        # `--route ligand` produced a refusal listing every backbone amide as unclassifiable,
-        # which is safe but reads like a chemistry problem rather than a missing argument.
-        ligand_sdf = _ligand_sdf_beside(system)
-        if ligand_sdf is not None and route == "peptide":
-            route = "ligand"
-
-        try:
-            solute_record = solute_document(loaded.pdb.topology, loaded.system, route=route,
-                                            ligand_sdf=ligand_sdf)
-        except SystemExit as refusal:
-            raise PreflightError(f"{protocol}: {refusal}") from None
-        span = solute_record.get("solute_atom_range")
-        if span and solute_record.get("solute_atom_indices_are_contiguous", False):
-            solute_indices = list(range(int(span[0]), int(span[1]) + 1))
-        else:
-            solute_indices = list(range(int(solute_record["n_solute_atoms"])))
-        excluded_bonds = [tuple(int(a) for a in pair) for pair in
-                          unscaled_bonds_of_solute_document(solute_record)]
-
-    if solute_indices is not None and saved_states is not None:
+    if loaded is not None:
         from ..rest2.scaler import UnclassifiedForceError, audit_force_classes
 
         try:
             audit = audit_force_classes(loaded.system, where=protocol)
         except UnclassifiedForceError as unknown:
             raise PreflightError(str(unknown)) from None
-    elif solute_indices is not None:
-        # The force classification, the unscaled-torsion handling and the scaled-System construction, all
-        # before `solute.yaml`, `_protocol.py` or a group file exists. An unclassifiable force
-        # used to be found once the run tree was already on disk.
-        audit, scaled = check_scaling_plan(loaded, solute_indices=solute_indices,
-                                           excluded_bonds=excluded_bonds, tau=tau, where=protocol)
 
     # -- EVERY rung, not just the top one -------------------------------------------------------
     #
@@ -1350,39 +1327,6 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
             for system_ in systems:
                 apply_ladder_restraints(system_, ladder_restraints)
         rung_systems = tuple(systems)
-    elif solute_indices is not None and ladder is not None and loaded is not None:
-        from ..remd.generated import tau_ladder
-
-        rungs_tau = tuple(float(t) for t in
-                          tau_ladder(int(replicas), float(ladder["tau_max"])))
-
-        def _rungs():
-            from ..remd.protocol import ProtocolError, build_rung_systems
-
-            try:
-                built, full_audit = build_rung_systems(
-                    loaded.system, list(solute_indices), rungs_tau,
-                    excluded_bonds=list(excluded_bonds),
-                    # NOT the config's `dynamics.pressure_bar`. A REST2/rREST2 runtime is NVT by
-                    # contract and the `Protocol` this ladder becomes carries `pressure_bar=None`;
-                    # the config block may still name a pressure for the equilibration stages that
-                    # precede the ladder. Reading it here refused every healthy explicit-solvent
-                    # ladder for requesting a barostat nobody had asked the ladder for.
-                    pressure_bar=None,
-                    # The same restraints on every rung, added after scaling. Empty unless
-                    # `umbrella.file` is set, so every existing ladder builds exactly as before.
-                    restraints=ladder_restraints)
-            except ProtocolError as refusal:
-                raise PreflightError(f"{protocol}: {refusal}") from None
-            except Exception as broken:
-                raise PreflightError(
-                    f"{protocol}: the ladder's rung Systems could not be constructed: "
-                    f"{type(broken).__name__}: {broken}") from None
-            return built, full_audit
-
-        built_systems, audit = collectively(coordination, _rungs,
-                                            what="the ladder's rung Systems")
-        rung_systems = tuple(built_systems)
 
     # -- per-tau equilibration, checked HERE ---------------------------------------------------
     #

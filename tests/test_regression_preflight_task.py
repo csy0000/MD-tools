@@ -167,6 +167,10 @@ def generated(tmp_path_factory):
                                      "--config", str(configuration)],
                               capture_output=True, text=True, timeout=600)
         assert done.returncode == 0, done.stdout + done.stderr
+    # The state the ladder's group file continues from (a ladder reads its inputs only there).
+    from .conftest import write_starting_state
+
+    write_starting_state(root, root / "REST2-run1")
     return root
 
 
@@ -179,8 +183,11 @@ def test_a_generated_wrapper_refuses_a_plural_world_without_mpi4py(protocol, gen
     """
     project = generated / f"{protocol}-run1"
     destination = tmp_path / "never"
+    # A ladder reads -s only from its group file (0.5.4); AIS still takes -s.
+    system = (["--groupfile", "remd_groupfile.1"] if protocol == "REST2"
+              else ["-s", "missing.xml"])
     argv = [sys.executable, str(project / f"{protocol}.py"),
-            "-p", "missing.pdb", "-s", "missing.xml", "-odir", str(destination)]
+            "-p", "missing.pdb", *system, "-odir", str(destination)]
     if protocol == "AIS":
         argv += ["-source-traj", "missing.dcd"]
 

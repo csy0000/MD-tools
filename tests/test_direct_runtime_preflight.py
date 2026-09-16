@@ -203,6 +203,14 @@ def workspace(tmp_path_factory):
                           step=index * 5, time_ps=float(index))
     finally:
         writer.close()
+
+    # THE STATE A LADDER'S GROUP FILE CONTINUES FROM. A ladder reads -s only from its group file
+    # (0.5.4), and every line of the one `build-md` wrote names `-c eq/eq_3.xml`: without it each
+    # launch below would be refused for the missing parent before reaching its own subject.
+    from .conftest import write_starting_state
+
+    for name in ("REST2", "rREST2"):
+        write_starting_state(root, root / f"{name}-run1")
     return root
 
 
@@ -214,8 +222,10 @@ def workspace(tmp_path_factory):
 #: script lives at `<system>/min/min.py` rather than in any one run. The others are per run.
 ENTRY = {
     "split": ("min/min.py", []),
-    "REST2": ("REST2-run1/REST2.py", []),
-    "rREST2": ("rREST2-run1/rREST2.py", []),
+    # A ladder reads -s only from its group file (0.5.4), so it is launched with the one
+    # `build-md` wrote rather than with -s.
+    "REST2": ("REST2-run1/REST2.py", ["--groupfile", "remd_groupfile.1"]),
+    "rREST2": ("rREST2-run1/rREST2.py", ["--groupfile", "remd_groupfile.1"]),
     "AIS": ("AIS-run1/AIS.py", ["-source-traj", "../source.dcd"]),
 }
 MODES = sorted(ENTRY)
@@ -228,8 +238,9 @@ def _launch(workspace, mode, destination: Path, *extra, environment=None):
     shared `min/` -- which is what every generated `run.sh` types too.
     """
     script, needed = ENTRY[mode]
+    system = [] if mode in ("REST2", "rREST2") else ["-s", "../build/built.xml"]
     argv = [sys.executable, str(workspace / script),
-            "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination),
+            "-p", "../build/built.pdb", *system, "-odir", str(destination),
             *needed, *extra]
     return _run(argv, cwd=workspace / Path(script).parent, environment=environment)
 
@@ -292,10 +303,19 @@ def test_a_missing_input_stops_a_generated_script_before_any_output(mode, flag, 
                                                                     workspace, tmp_path):
     destination = tmp_path / "never"
     script, needed = ENTRY[mode]
+    ladder = mode in ("REST2", "rREST2")
     argv = [sys.executable, str(workspace / script),
-            "-p", "../build/built.pdb", "-s", "../build/built.xml",
+            "-p", "../build/built.pdb", *([] if ladder else ["-s", "../build/built.xml"]),
             "-odir", str(destination), *needed]
-    argv[argv.index(flag) + 1] = missing
+    if ladder and flag == "-s":
+        # A ladder reads -s only from its group file (0.5.4): the missing System is on a line.
+        group = workspace / Path(script).parent / "remd_groupfile.1"
+        broken = tmp_path / "gone.group"
+        broken.write_text(group.read_text(encoding="utf-8").replace(
+            "../build/REST2/system_state0.xml", str(tmp_path / missing)), encoding="utf-8")
+        argv[argv.index("remd_groupfile.1")] = str(broken)
+    else:
+        argv[argv.index(flag) + 1] = missing
     done = _run(argv, cwd=workspace / Path(script).parent)
     _refused(done, fragment="does not exist")
     assert _snapshot(destination) is None
@@ -316,8 +336,9 @@ def test_a_topology_and_system_that_describe_different_particle_counts_are_refus
         "END\n", encoding="utf-8")
     destination = tmp_path / "never"
     script, needed = ENTRY[mode]
+    system = [] if mode in ("REST2", "rREST2") else ["-s", "../build/built.xml"]
     done = _run([sys.executable, str(workspace / script),
-                 "-p", str(stub), "-s", "../build/built.xml", "-odir", str(destination),
+                 "-p", str(stub), *system, "-odir", str(destination),
                  *needed,
                  *PROTOCOL_ONLY],
                 cwd=workspace / Path(script).parent)
@@ -367,9 +388,12 @@ def test_two_output_flags_that_resolve_to_one_file_are_refused(mode, workspace, 
 
 @pytest.mark.parametrize("mode", ["split", "REST2", "rREST2", "AIS"])
 def test_an_output_that_would_overwrite_an_input_is_refused(mode, workspace, tmp_path):
-    """Writing the log over `built.xml` destroys the System the run needs to read."""
+    """Writing the log over `built.pdb` destroys the topology the run needs to read.
+
+    The topology, not `built.xml`: every mode reads `-p`, while a ladder reads its Systems from
+    its group file (0.5.4) and never `built.xml`."""
     destination = tmp_path / "never"
-    done = _launch(workspace, mode, destination, "-log", "../build/built.xml")
+    done = _launch(workspace, mode, destination, "-log", "../build/built.pdb")
     _refused(done, fragment="input")
     assert _snapshot(destination) is None
 

@@ -157,7 +157,7 @@ def test_the_preflight_prepares_one_system_per_rung_before_anything_is_written(p
         topology=str(project / "build" / "built.pdb"), system=str(project / "build" / "built.xml"),
         replicas=3, output=destination / "REST2.out", log=destination / "REST2.log",
         trajectory=destination / "REST2.nc", cpu=True, protocol="REST2",
-        timestep_fs=2.0, route="peptide", ladder=ladder, out_dir=destination, tau=0.5)
+        timestep_fs=2.0, ladder=ladder, out_dir=destination, tau=0.5)
 
     assert len(checked.rung_systems) == 3, "the plan does not carry one System per rung"
     assert checked.tau_list == (0.0, 0.25, 0.5), checked.tau_list

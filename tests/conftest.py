@@ -225,6 +225,30 @@ def make_states_for(root: Path, config) -> None:
         make_scaled_state(root, tau=float(resolved["dynamics"]["tau"]))
 
 
+def write_starting_state(root: Path, run_dir: Path, name: str = "eq/eq_3.xml") -> Path:
+    """The equilibrated state a ladder's group file continues from, written without running it.
+
+    Every line `build-md` writes names `-c eq/eq_3.xml`, and a ladder reads its inputs only from
+    its group file (0.5.4), so a test that launches a ladder without running the equilibration
+    chain needs the file to exist. Positions from `build/built.pdb`, zero velocities, the built
+    System's box -- a State serialised from a Reference-platform Context that is never stepped.
+    """
+    import openmm
+    from openmm import XmlSerializer, app
+
+    system = XmlSerializer.deserialize((Path(root) / "build" / "built.xml").read_text(
+        encoding="utf-8"))
+    pdb = app.PDBFile(str(Path(root) / "build" / "built.pdb"))
+    context = openmm.Context(system, openmm.VerletIntegrator(0.001),
+                             openmm.Platform.getPlatformByName("Reference"))
+    context.setPositions(pdb.positions)
+    target = Path(run_dir) / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(XmlSerializer.serialize(
+        context.getState(getPositions=True, getVelocities=True)), encoding="utf-8")
+    return target
+
+
 @pytest.fixture
 def dataset_root(tmp_path):
     """A dataset root for one test. See `make_dataset_root`."""

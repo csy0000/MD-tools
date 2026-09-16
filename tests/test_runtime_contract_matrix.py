@@ -351,66 +351,6 @@ def test_group_file_paths_resolve_against_the_group_file_not_the_working_directo
     assert Path(group["solute"]) == elsewhere / "solute.yaml"
 
 
-def test_the_group_file_is_written_with_paths_relative_to_itself(tmp_path):
-    """The writer and the parser must agree about what a relative path is relative to.
-
-    Found by running an installed wheel from OUTSIDE the checkout, which is the only place the
-    two conventions come apart: the parser resolves against the group file (Amber's rule), the
-    writer emitted `-p` and `-s` exactly as they arrived on the command line, and those are
-    relative to the working directory. They agreed for as long as every ladder happened to be
-    launched from its own output directory -- which every test in this suite did, and which a
-    person running `md-openmm md-run -odir ./run` from their project root does not.
-
-    Run from anywhere else, every rank looked for `built.pdb` beside the group file. Not finding
-    it is the good case.
-    """
-    import argparse
-    import os
-
-    from md_tools.remd.executor import parse_group_file
-    from md_tools.remd.generated import _group_file_text
-
-    project = tmp_path / "project"
-    run = tmp_path / "project" / "run"
-    run.mkdir(parents=True)
-    (project / "built.pdb").write_text("END\n", encoding="utf-8")
-    (project / "built.xml").write_text("<System/>\n", encoding="utf-8")
-    (run / "eq.xml").write_text("<State/>\n", encoding="utf-8")
-    (run / "solute.yaml").write_text("n_solute_atoms: 1\n", encoding="utf-8")
-    (run / "_protocol.py").write_text("n_states = 2\n", encoding="utf-8")
-
-    # Exactly as a caller standing in `project` would spell them.
-    args = argparse.Namespace(topology="built.pdb", system="built.xml",
-                              continue_from="run/eq.xml")
-    here = Path.cwd()
-    os.chdir(project)
-    try:
-        text = _group_file_text("REST2", 2, {"tau_max": 0.5}, args,
-                                run / "_protocol.py", run / "solute.yaml")
-    finally:
-        os.chdir(here)
-    (run / "REST2.group").write_text(text, encoding="utf-8")
-
-    # Parsed with the working directory somewhere else entirely, which is the whole point.
-    os.chdir(tmp_path)
-    try:
-        groups = parse_group_file(run / "REST2.group")
-    finally:
-        os.chdir(here)
-
-    assert len(groups) == 2
-    for group in groups:
-        assert Path(group["topology"]) == (project / "built.pdb").resolve(), group["topology"]
-        assert Path(group["system"]) == (project / "built.xml").resolve(), group["system"]
-        assert Path(group["coordinates"]) == (run / "eq.xml").resolve(), group["coordinates"]
-    # Relative, not absolute: the directory has to stay movable, for the same reason a generated
-    # script contains no absolute path.
-    assert "/tmp" not in text and str(tmp_path) not in text, text
-
-
-# --- a serial protocol under a plural launch -------------------------------------------------
-
-@pytest.mark.slow
 def test_a_cmd_stage_launched_under_mpirun_is_refused(workspace, tmp_path, good_config):
     """N ranks running one serial stage is N simulations over ONE set of output paths.
 
@@ -1096,15 +1036,15 @@ def test_a_ladder_takes_a_group_file_instead_of_a_system(workspace, tmp_path, go
     assert "-s" in message, message[-2000:]
     _untouched(destination, before)
 
-    # BOTH: two answers to one question. One `-s` beside a group file claims a single Hamiltonian
-    # for every rung, which is the error the per-rung files exist to prevent.
+    # -s AT ALL: a ladder reads -s only from its group file (0.5.4), so -s beside a group file is
+    # refused by name exactly as -s alone is.
     destination = tmp_path / "both"
     before = _snapshot(destination)
     done = _run([sys.executable, script, "-p", "../build/built.pdb",
                  "-s", "../build/built.xml", "--groupfile", group.name,
                  "-odir", str(destination), "--cpu", "--check"],
                 cwd=run_dir, environment=good_config)
-    _refused(done, fragment="both")
+    _refused(done, fragment="only from its group file")
     _untouched(destination, before)
 
     # THE GROUP FILE ALONE reaches the runtime. It still needs one rank per state, and this test

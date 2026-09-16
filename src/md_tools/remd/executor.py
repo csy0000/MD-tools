@@ -909,7 +909,8 @@ def _preflight_from_groups(files, arguments, groups):
     first = groups[0]
     try:
         return preflight_ladder(
-            topology=first["topology"], system=first["system"], replicas=len(groups),
+            # No `system`: a ladder reads -s only from its group file, which the preflight parses.
+            topology=first["topology"], system=None, replicas=len(groups),
             coordinates=first.get("coordinates"), groupfile=arguments.groupfile,
             trajectory=files.trajectory, restart=files.restart,
             checkpoint=getattr(files, "checkpoint", None),

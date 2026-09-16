@@ -82,27 +82,12 @@ def test_a_configuration_that_does_not_describe_the_states_is_refused(tmp_path, 
     assert not (tmp_path / "REST2-run1").exists()
 
 
-def _starting_state(run: Path, root: Path):
-    """The `eq/eq_3.xml` every group line continues from, as the equilibration would leave it.
-    Written from a Reference-platform Context holding the built coordinates; nothing propagates."""
-    import openmm
-    from openmm import XmlSerializer, app
-
-    system = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
-    pdb = app.PDBFile(str(root / "build" / "built.pdb"))
-    context = openmm.Context(system, openmm.VerletIntegrator(0.001),
-                             openmm.Platform.getPlatformByName("Reference"))
-    context.setPositions(pdb.positions)
-    (run / "eq").mkdir(exist_ok=True)
-    (run / "eq" / "eq_3.xml").write_text(
-        XmlSerializer.serialize(context.getState(getPositions=True, getVelocities=True)),
-        encoding="utf-8")
-
-
 def _preflight(run: Path, root: Path):
     from md_tools.run.preflight import preflight_ladder
 
-    _starting_state(run, root)
+    from .conftest import write_starting_state
+
+    write_starting_state(root, run)
 
     destination = run / "planned"
     ladder = {"protocol": "REST2", "n_states": 4, "tau_max": 0.5,
@@ -114,7 +99,7 @@ def _preflight(run: Path, root: Path):
         groupfile=str(run / "remd_groupfile.1"), replicas=4,
         output=destination / "REST2.out", log=destination / "REST2.log",
         trajectory=destination / "REST2.nc", cpu=True, protocol="REST2",
-        timestep_fs=2.0, route="peptide", ladder=ladder, out_dir=destination, tau=0.5), destination
+        timestep_fs=2.0, ladder=ladder, out_dir=destination, tau=0.5), destination
 
 
 def _torsions(system):

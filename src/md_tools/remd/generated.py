@@ -327,8 +327,8 @@ def replica_parser(description: str = "one coordinated replica-exchange ladder")
     # `REST2.py` and `rREST2.py` call `replica_main` DIRECTLY: a refusal that lives only in the
     # outer command is a property of that command rather than of the ladder.
     parser.add_argument("-s", "--system", default=None, metavar="XML",
-                        help="the serialised System, for a homogeneous ladder. Omit it and pass "
-                             "--groupfile when each rung has its own pre-scaled Hamiltonian")
+                        help="REFUSED for a ladder: its states are named, one per line, in "
+                             "--groupfile. Accepted by the parser only so it is refused by name")
     parser.add_argument("-c", "--continue-from", default=None, metavar="XML",
                         help="equilibrated state every replica starts from")
     parser.add_argument("-log", "--log", default=None, metavar="LOG")
@@ -340,8 +340,8 @@ def replica_parser(description: str = "one coordinated replica-exchange ladder")
     parser.add_argument("-r", "--restart", default=None, metavar="JSON",
                         help="the ladder's restart manifest")
     parser.add_argument("--groupfile", default=None, metavar="FILE",
-                        help="an Amber-style group file to use instead of the one derived from "
-                             "the ladder. Rarely needed for a homogeneous ladder")
+                        help="REQUIRED: the Amber-style group file naming each state's saved "
+                             "scaled System, one per line (build-md writes remd_groupfile.<n>)")
     parser.add_argument("-odir", "--out-dir", default=".", metavar="DIR",
                         help="where the ladder's outputs are written (default: here)")
     parser.add_argument("-ng", "--number-of-groups", dest="number_of_groups", type=int,
@@ -352,8 +352,6 @@ def replica_parser(description: str = "one coordinated replica-exchange ladder")
     parser.add_argument("--cpu", action="store_true",
                         help="run every replica on the OpenMM CPU platform, overriding "
                              "machine.openmm.platform for this invocation")
-    parser.add_argument("--route", default="peptide", choices=("peptide", "ligand"),
-                        help="how the unscaled-torsion classifier reads the solute")
     parser.add_argument("--device", default=None, metavar="N",
                         help="CUDA device index for THIS rank. An execution placement, never a "
                              "platform choice. Under MPI the device is normally chosen by "
@@ -401,41 +399,6 @@ def _yaml_text(document) -> str:
             scratch = Path(directory) / "solute.yaml"
             write_yaml(scratch, document)
             return scratch.read_text(encoding="utf-8")
-
-
-def _group_file_text(protocol_name, states, ladder, args, protocol_file, solute_yaml) -> str:
-    """One line per state. Every path is written RELATIVE TO THE GROUP FILE.
-
-    That is how the parser reads them -- as Amber does, and as everyone who writes one by hand
-    expects. The writer used to emit `-p` and `-s` exactly as they arrived on the command line,
-    which are relative to the working directory, and the two conventions agreed only while the
-    ladder happened to be launched from its own output directory. Run from anywhere else, every
-    rank looked for `built.pdb` beside the group file and did not find it -- or, worse, found a
-    different one.
-
-    Relative rather than absolute so the directory stays movable, which is the same reason a
-    generated script contains no absolute path.
-    """
-    import os
-
-    directory = protocol_file.parent
-
-    def relative(value):
-        return os.path.relpath(Path(value).resolve(), directory)
-
-    lines = [f"# {protocol_name}: {states} states, tau 0.0 to {ladder['tau_max']}.",
-             "# One group per line, inputs only. Run-level outputs go on the executor call,",
-             "# because they describe the coordinated run rather than one replica.",
-             "# Paths are relative to THIS FILE, which is how they are read back.",
-             ""]
-    for index in range(states):
-        parts = [f"-i {protocol_file.name}", f"-p {relative(args.topology)}",
-                 f"-s {relative(args.system)}"]
-        if args.continue_from:
-            parts.append(f"-c {relative(args.continue_from)}")
-        parts += [f"--solute {solute_yaml.name}", f"--group-index {index}"]
-        lines.append(" ".join(parts))
-    return "\n".join(lines) + "\n"
 
 
 def _write_helper_if_compatible(destination: Path, text: str, *, force: bool = False) -> None:
@@ -546,30 +509,18 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
 
     protocol_name = ladder["protocol"]
 
-    # EXACTLY ONE OF `-s` AND `--groupfile`, refused BY NAME and READ-ONLY -- before `-odir`, a
-    # helper, a log or the run state is touched.
-    #
-    # Here as well as in `md-run`, because this function IS the ladder's entry point: the
-    # generated `REST2.py` and `rREST2.py` call it directly, so a refusal that lived only in the
-    # outer command would leave them open. That is the same reason the launch check and the
-    # per-tau resume refusal sit here rather than there.
-    #
-    # They are two answers to one question -- which System each replica integrates. `-s` is ONE
-    # System for the whole launch; a group file names one PER LINE, which is what a ladder has now
-    # that its rungs are scaled and serialised at build time. Neither is refused too: without a
-    # System and without a group file, `group_file` below would be derived for a launch that
-    # never said what to integrate.
-    if args.system and args.groupfile:
-        print(f"{protocol_name}: -s {args.system} and --groupfile {args.groupfile} were both "
-              f"given, and they are two answers to one question: which System each replica "
-              f"integrates. A group file names one System per line -- each rung's own pre-scaled "
-              f"Hamiltonian -- so a single -s beside it would claim one Hamiltonian for every "
-              f"rung. Pass one or the other, never both. Nothing was written.", file=sys.stderr)
+    # `-s` IS REFUSED ON A LADDER, and a group file is required -- by name, READ-ONLY, before
+    # `-odir`, a helper, a log or the run state is touched (user, 2026-09-16, for 0.5.4). A ladder's
+    # states are saved scaled files, one per group line; a single `-s` could only be scaled in
+    # memory, which is the second derivation of the Hamiltonian 0.5.4 removes. Here as well as in
+    # `md-run` because this function IS the ladder's entry point: the generated `REST2.py` and
+    # `rREST2.py` call it directly.
+    if args.system:
+        print(f"{protocol_name}: -s {args.system} was given. a REST2/rREST2 ladder reads -s only from its group file (0.5.4): each line names one saved scaled state, build/REST2/system_state<n>.xml, written by `md-openmm build-top --rest2-scaler`. Pass --groupfile -- `build-md` writes remd_groupfile.<segment> -- and no -s. Nothing was written.",
+              file=sys.stderr)
         return 2
-    if not args.system and not args.groupfile:
-        print(f"{protocol_name}: neither -s nor --groupfile was given, so nothing says which "
-              f"System each replica integrates. Pass -s for a homogeneous ladder, or --groupfile "
-              f"whose lines name each rung's own pre-scaled System. Nothing was written.",
+    if not args.groupfile:
+        print(f"{protocol_name}: no --groupfile was given. a REST2/rREST2 ladder reads -s only from its group file (0.5.4): each line names one saved scaled state, build/REST2/system_state<n>.xml, written by `md-openmm build-top --rest2-scaler`. Pass --groupfile -- `build-md` writes remd_groupfile.<segment> -- and no -s. Nothing was written.",
               file=sys.stderr)
         return 2
 
@@ -603,7 +554,6 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
             # scaled-System construction, all before `solute.yaml`, `_protocol.py` or the group
             # file exists. An unclassifiable force used to surface with three files on disk.
             timestep_fs=ladder["dynamics"]["timestep_fs"],
-            route=args.route,
             # rREST2 writes `reservoir.yaml` into the run directory and every rank reads it a
             # moment later. It was in no inventory, so a launch that found a stale one from
             # another ladder would have drawn its probability-one transfers from it.
@@ -719,7 +669,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     # A group file the caller SUPPLIED is an input. Writing a default one beside it created a file
     # nothing would ever read -- and left it behind for a later run to pick up as though this
     # ladder had produced it.
-    group_file = Path(args.groupfile) if args.groupfile else out / f"{protocol_name}.group"
+    group_file = Path(args.groupfile)
 
     # THE HELPERS. Rank 0 alone writes them, atomically; every rank then verifies it sees the
     # same bytes.
@@ -737,9 +687,6 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     solute_text = _yaml_text(checked.notes["solute_document"])
     protocol_text = protocol_file_text(ladder)
     helpers = {solute_yaml: solute_text, protocol_file: protocol_text}
-    if not args.groupfile:
-        helpers[group_file] = _group_file_text(protocol_name, states, ladder, args,
-                                               protocol_file, solute_yaml)
     reservoir_file = None
     if ladder.get("reservoir", {}).get("enabled"):
         # CONSUMED from the preflight, which built this text and validated the source before the
@@ -920,9 +867,7 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
     # says which Hamiltonian each state ran under, which is the question a reader of a REST2
     # record actually has.
     inputs: dict[str, Any] = {"topology": file_facts(Path(args.topology))}
-    if args.system:
-        inputs["system"] = file_facts(Path(args.system))
-    else:
+    if True:                       # a ladder always has a group file now; `-s` is refused above
         from .executor import parse_group_file
 
         inputs["group_file"] = file_facts(Path(group_file).resolve())

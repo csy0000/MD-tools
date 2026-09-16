@@ -403,6 +403,16 @@ def md_run_main(argv: list[str] | None = None) -> int:
     protocol = resolved["protocol"]
     replicas = (int(resolved["rest2"]["number_of_replicas"])
                 if protocol in ("REST2", "rREST2") else None)
+    # A LADDER READS -s ONLY FROM ITS GROUP FILE (0.5.4). Refused by name here, before -odir or
+    # resolved.config exist; the runtime (`replica_main`, `preflight_ladder`) refuses it again for
+    # the generated scripts that call it directly.
+    if protocol in ("REST2", "rREST2") and run_input.stage is None:
+        if args.system:
+            print(f"md-run: -s {args.system} was given. a REST2/rREST2 ladder reads -s only from its group file (0.5.4): each line names one saved scaled state, build/REST2/system_state<n>.xml, written by `md-openmm build-top --rest2-scaler`. Pass --groupfile -- `build-md` writes remd_groupfile.<segment> -- and no -s.", file=sys.stderr)
+            return 2
+        if not args.groupfile:
+            print("md-run: no -groupfile was given. a REST2/rREST2 ladder reads -s only from its group file (0.5.4): each line names one saved scaled state, build/REST2/system_state<n>.xml, written by `md-openmm build-top --rest2-scaler`. Pass --groupfile -- `build-md` writes remd_groupfile.<segment> -- and no -s.", file=sys.stderr)
+            return 2
     source = args.source_traj or (resolved["ais_source"]["trajectory"]
                                   if protocol == "AIS" else None)
 

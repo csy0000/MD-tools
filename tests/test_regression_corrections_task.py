@@ -414,8 +414,13 @@ def test_a_multi_rank_preflight_failure_leaves_no_authoritative_output(tmp_path)
     # reason than the one it is named for.
     (tmp_path / "built.pdb").write_text("END\n", encoding="utf-8")
     (tmp_path / "built.xml").write_text("<System/>\n", encoding="utf-8")
+    # A ladder reads -s only from its group file (0.5.4).
+    (tmp_path / "state.xml").write_text("<State/>\n", encoding="utf-8")
+    (tmp_path / "group").write_text("".join(
+        f"-i p.py -p built.pdb -s built.xml -c state.xml --group-index {i}\n" for i in range(4)),
+        encoding="utf-8")
     done = subprocess.run(
-        CLI + ["md-run", "-i", "REST2.in", "-p", "built.pdb", "-s", "built.xml",
+        CLI + ["md-run", "-i", "REST2.in", "-p", "built.pdb", "-groupfile", "group",
                "-ng", "4", "-odir", str(tmp_path / "out")],
         cwd=tmp_path, capture_output=True, text=True, timeout=300, env=environment)
     assert done.returncode != 0, done.stdout
