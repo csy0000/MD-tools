@@ -56,7 +56,10 @@ Each method page carries a minimal, runnable `example.config` beside it.
 
 | page | |
 |---|---|
-| [v0.5.0](release-notes/v0.5.0.md) | the current development cycle: what changed and what was verified |
+| [v0.5.3](release-notes/v0.5.3.md) | the current cycle: the run directory layout, an extension that can run its own group file, and the output work |
+| [v0.5.2](release-notes/v0.5.2.md) | a finished run can leave this package behind: `export-reference` for cMD and REST2, and the correction that is the reason to trust it |
+| [v0.5.1](release-notes/v0.5.1.md) | one fix: an interrupted CV-enabled REST2 ladder could not be resumed on any ladder whose tau is not exactly representable at six decimal places |
+| [v0.5.0](release-notes/v0.5.0.md) | the interface, torsion collective variables, the dataset contract and the stable import API |
 | [Runtime closure and CV evidence](release-notes/20260904-cv-and-runtime-closure-evidence.md) | the measured lanes, hardware, wheel and CUDA coverage behind the collective-variable and runtime-closure work |
 | [CUDA coverage matrix](release-notes/cuda-coverage-matrix.md) | every CUDA-relevant source site and the lane that exercises it, generated from a real run |
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.3 — 2026-09-13
+## 0.5.3 — 2026-09-16
 
 **An extension can run the group file an extension writes.** `--extend-from` takes the physical
 state from the parent's checkpoint and so writes no `-c`; the parser required `coordinates` on
@@ -134,6 +134,102 @@ a sound optimisation. It now says which shortcut is wrong and which is arithmeti
 real constraint: under PME with the long-range dispersion correction the scaler declines global
 switching altogether, because the tail term is computed from stored epsilons and does not follow a
 parameter offset.
+
+**A generated tree is now a SYSTEM with RUNS beside it, not one flat `md_script/`.** `build/` holds
+build-top's own output, `min/` the minimisation and `input/` the `.in` files — all three SHARED,
+because every run on a system starts from the same built System, the same minimised coordinates and
+the same instructions. Only what is genuinely per run goes into `<method>-run<N>/`: its `eq/`,
+`remd<n>/`, `remd_records/`, `rank/`, `bundles/`, and a `run.config` carrying the seed and nothing
+else. The sharing is enforced rather than assumed — a second configuration that resolves
+`input/min.in` or `input/eq_<k>.in` differently is refused by name, since the runs already beside
+that file read it, and two methods needing different equilibration are not comparable. `min/` is
+first-writer-wins with the seed exempt, because minimisation draws no velocities. `md_tools.layout`
+is the single authority for where every file goes, so the generator and the runtime read one answer
+instead of two. `build-md` refuses a run directory that already exists rather than generating into
+it, and `docs/run-layout.md` section 4 carries the migration for finished reference runs.
+
+**A stage has two names, and no `run.sh` chain could complete because they disagreed.** A stage is
+GENERATED as `eq_nvt_posres` — renamed to NVT spellings under implicit solvent or a scaled run, so a
+pressure-coupled name never appears on a boxless one — and FILED as `eq_1`, by position. The stage
+name decides the physics; the filing key decides the filename. `run.sh` chained `-c eq/eq_1.xml`
+while the stage wrote `eq/eq_nvt_posres.xml`, so **no cMD or REST2 chain could complete through
+`run.sh`**, the documented way to run one. `stage_plan` now stamps `file_key` on every plan entry
+and is the one function every surface goes through; the plan is recomputed from `resolved.config` at
+each execution rather than persisted, so an older generated tree gets the key too. The CV series
+moved to the filing key (`eq_1.cv.csv`) as a contract edit, and `CLAUDE.md` and
+`docs/collective_variables/README.md` moved with it.
+
+**A ladder's rungs are scaled at build time.** Each rung is serialised to
+`remd<n>/build_state<n>.xml` by `build-md` and recorded in `build_states.log`, so the Hamiltonian a
+state ran under is a file that can be read rather than a derivation that has to be trusted.
+`build-md` therefore needs `build/built.xml` to generate a ladder at all and refuses before writing
+anything if it is absent. A group file's `-s` is consequently PER LINE, and `system` left
+`HOMOGENEOUS_GROUP_FIELDS`; a stronger check replaced it — line *i* must name rung *i* and no two
+lines may name one file, so a line carrying `remd2/build_state2.xml` against `--group-index 3` is
+refused rather than run.
+
+**`-s` or `-groupfile`, exactly one — a grouped launch was impossible through every public
+surface.** A group file is the Amber-style description of a coordinated run (`-rem 3`, the only REMD
+type this build supports): the per-replica INPUT commands live on its lines, and `-i`, `-p`, `-s`
+and `-c` are validated THERE, not on the run-level command line, which carries only the outputs.
+`-s` was `required=True` in four parsers sitting above the runtime's own grouped exemption. Eight
+gates refused it in turn: argparse in `md-run` and in `replica_parser`; `_forward` splicing
+`["-s", None]` into the delegated runner; `_common`'s particle check; the XOR itself, now refused BY
+NAME and read-only in both surfaces; `preflight_ladder`, which resolves a System — and the starting
+state — from the group file's first line rather than skipping the check, because skipping would have
+dropped the HMR timestep refusal on every ladder; the provenance record, which now names
+`group_file` and each `system_state<i>`; and the group file's own `-i`, which must be `_protocol.py`,
+the field the executor imports as Python. `preflight_ladder` reading the group file's `-c` is what
+makes `rest2.equilibration_per_tau` usable under `run.sh`: it refused a fully described launch with
+"no -c was given" while every line named that state.
+
+**A completed ladder recorded itself as failed.** `replica_main` built the executor's `-r` as
+`args.restart or out / "restart.json"`, honouring what `run.sh` passes, but decided completion from
+the hardcoded default. With `-r` given the two disagreed, so a ladder that had just finished wrote
+`status: failed` with `failure_reason: "the executor returned 0"` while its own `.out` ended
+`run_status: completed`. Registration reads the record, so every `run.sh`-driven ladder was
+unregistrable, and two records of one run contradicted each other — which is what "completion is
+read from a machine record, never from prose" exists to prevent.
+
+**A refused `md-run` wrote into the tree it was declining to touch.** `resolved.config` records the
+content-addressed CV and umbrella copies by BARE NAME so a directory stays movable, and the copy is
+now written beside EACH declaration — the run root, the shared `input/`, `min/` and `eq/` — because
+the name resolves beside whichever declaration a reader started from. Written to the run root alone,
+`input/cMD.in` named a `cv.<digest>.yaml` that `input/` did not hold, so `md_tools.run.continuation`
+could not load the definition, returned `None`, and the read-only boundary silently did nothing: a
+REFUSED invocation wrote `resolved.config`, `<stage>.out` and `<stage>.log` into a protected tree.
+Sharing one copy is safe by construction, because the name carries the digest.
+
+**`run.sh` named two inputs that never existed.** The AIS branch typed `-i AIS.in` and the
+all-in-one branch `-i cMD.in`, both bare basenames, while the inputs live in `../input/`. Both died
+with `md-run: -i …: no such run input file`, and the all-in-one line named `cMD` literally, so an
+all-in-one umbrella run asked for a file no generation has ever written. `test_md_run_inputs` pinned
+only a SPLIT REST2 tree, which is why both survived two green fast lanes; it now pins the input line
+by protocol and by shape.
+
+**The sdist could not build a wheel from itself.** `pyproject.toml` declares
+`build-backend = "_build_backend"` with `backend-path = ["."]`, but `MANIFEST.in` never shipped
+`_build_backend.py`, so `python -m build` wrote the tarball and then failed with
+`BackendUnavailable: Cannot find module '_build_backend'`. Pre-existing since at least 0.5.2. The
+suite could not see it because `tests/wheel_build.py` builds from a copy of the working tree, where
+the file is present — nothing anywhere built from the sdist, which is the artefact a release
+publishes. A test now runs `python -m build` itself.
+
+**Also in this work.** `min.in` carries no collective-variable cadence, since minimisation produces
+no series and leaving it in made two runs differing only in CV reporting collide on a shared input.
+The seed left the shared input and became the per-run `run.config`. `remd_records/` holds the
+ladder's per-segment `.out`, `.log` and `restart_prod<N>.json` — a ledger, not a trajectory — so an
+extension writes a `_prod2` set beside the first rather than over it. A configuration manual is
+rendered from the schemas (`md_tools.build.manual`), with the shipped `configs/` reduced to minimal
+examples. The README gained an end-to-end REST2 walkthrough, and `md-openmm --help` teaches the
+layout.
+
+**Still open in 0.5.3.** The omega check is present but not firing: four sites carry it, and the
+remaining work is to find why it does not fire and then make "zero ordinary amides in a topology
+that has amide candidates" a refusal. Deferred deliberately to **0.5.4**. Two smaller items are
+filed rather than changed — `--all-in-one` writes its artefacts flat in the run root while the
+declarations sit in `eq/` (`docs/backlog.md` entry 12), and two runs on one system that differ only
+in CV reporting cannot share a root, because the cadence lives in `eq_*.in`.
 
 ## 0.5.2 — 2026-09-11
 
