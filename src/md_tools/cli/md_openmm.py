@@ -161,12 +161,31 @@ def build_parser() -> argparse.ArgumentParser:
         description="Build OpenMM topologies, generate MD run scripts, and register finished data.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
+            # THE LAYOUT, in the one place every user reads first. Every line here taught the
+            # retired flat tree -- `-odir ./md_script/`, `-i md_script/min.in`, a bare
+            # `built.pdb`, and a ladder with `-s`, which is now refused outright because each
+            # rung is its own pre-scaled System named on its own group-file line.
             "examples:\n"
-            "  md-openmm build-top -i ALA.pdb -os built.xml -op built.pdb -log built.log\n"
-            "  md-openmm build-md -odir ./md_script/ --config cMD.config\n"
-            "  md-openmm md-run -i md_script/min.in -p built.pdb -s built.xml -r min.xml\n"
-            "  mpirun -n 8 md-openmm md-run -ng 8 -i REST2.in -p built.pdb -s built.xml\n"
-            "  md-openmm data-register -idata ./data/ALA -project_name ALA "
+            "  # the system: build/ holds it, and every run beside it shares it\n"
+            "  md-openmm build-top -i ALA.pdb -os build/built.xml -op build/built.pdb \\\n"
+            "      -log build/built.log\n"
+            "\n"
+            "  # a run of its own, beside build/, min/ and input/\n"
+            "  md-openmm build-md -odir ./cMD-run1 --config cMD.config\n"
+            "  cd cMD-run1 && ./run.sh\n"
+            "\n"
+            "  # or one stage at a time: the inputs are SHARED, each stage names its own -odir\n"
+            "  md-openmm md-run -i ../input/min.in -p ../build/built.pdb \\\n"
+            "      -s ../build/built.xml -odir ../min\n"
+            "\n"
+            "  # a ladder: one rank per state, the rungs named per group-file line, NO -s\n"
+            "  mpirun -n 4 md-openmm md-run -ng 4 -i ../input/REST2.in \\\n"
+            "      -p ../build/built.pdb --groupfile remd_groupfile.1 -odir . \\\n"
+            "      -o remd_records/REST2_prod1.out -log remd_records/REST2_prod1.log \\\n"
+            "      -r remd_records/restart_prod1.json\n"
+            "\n"
+            "  # the registered unit is the RUN, checked by digest against what it ran against\n"
+            "  md-openmm data-register -idata ./cMD-run1 -project_name ALA "
             "-data_name ALA-cMD -year 2026\n"),
     )
     parser.add_argument("--version", action="version", version=f"md-tools {_version()}")

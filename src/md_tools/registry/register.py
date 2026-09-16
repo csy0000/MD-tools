@@ -54,7 +54,6 @@ COMPONENT_KINDS: dict[str, tuple[str, str | None, str]] = {
     "common": ("shared-input", None, "Prepared system and topology shared by every method."),
     "min": ("simulation", "minimization", "Restrained energy minimisation."),
     "eq": ("simulation", "equilibration", "The equilibration chain before production."),
-    "md_script": ("shared-input", None, "The generated run scripts and resolved configuration."),
     "cMD": ("simulation", "cMD", "Production molecular dynamics."),
     "REST2": ("simulation", "REST2", "Replica-exchange solute tempering ladder."),
     "rREST2": ("simulation", "rREST2", "Reservoir REST2 ladder."),

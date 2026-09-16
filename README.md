@@ -228,10 +228,12 @@ carries the code that built its rungs (`ladder/hamiltonian.py`, copied byte for 
 ## End to end
 
 ```bash
-# 1. build the system
-md-openmm build-top -i ALA.pdb -os built.xml -op built.pdb -log built.log
+# 1. build the system -- into the system's own build/, whose names are build-top's
+md-openmm build-top -i ALA.pdb \
+    -os build/built.xml -op build/built.pdb -log build/built.log
 
-# 2. generate the workflow
+# 2. generate a run beside it. build/, min/ and input/ are SHARED by every run here;
+#    only cMD-run1/ belongs to this one.
 md-openmm build-md -odir ./cMD-run1 --config configs/md/cMD.config
 
 # 3. run it
@@ -242,8 +244,9 @@ md-openmm md-run -i ../input/min.in -p ../build/built.pdb -s ../build/built.xml 
 #   or as ordinary Python -- the same run, reaching the same installed code:
 python ../min/min.py -p ../build/built.pdb -s ../build/built.xml -odir ../min
 
-# 4. register the result
-md-openmm data-register -idata ./data/ALA-cMD \
+# 4. register the result. The unit is the RUN: it is registered only once the build/, min/
+#    and input/ it ran against validate as the same construct, by digest, not by path.
+md-openmm data-register -idata ./cMD-run1 \
     -project_name ALA -data_name ALA-cMD -year 2026
 ```
 
@@ -270,17 +273,95 @@ There is no automatic fall back — a run that quietly moved to the CPU finishes
 and reports success two orders of magnitude later. `--cpu` overrides the machine default for one
 invocation, and the record distinguishes all three provenances.
 
-Parallel protocols are launched the way Amber launches them:
+## A REST2 ladder, end to end
+
+A ladder is one process per thermodynamic state, launched the way Amber launches one. Everything
+below is what `build-md` generates and what `run.sh` types — the point of reading it is that you
+can also type it yourself.
 
 ```bash
-mpirun -n 8 md-openmm md-run -ng 8 -i REST2.in -p built.pdb -s built.xml \
-          -o REST2.out -x REST2.nc -r restart.json -log REST2.log
-mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in   -p built.pdb -s built.xml \
-          -source-traj ../cMD_tau0p5/tau_0p5.dcd -o AIS.out -log AIS.log -odir ./AIS
+# 1. the system, once. Every run on it shares this build/.
+md-openmm build-top -i ALA.pdb \
+    -os build/built.xml -op build/built.pdb -log build/built.log
+
+# 2. the ladder. Its rungs are SCALED AND SERIALISED HERE, not at run time,
+#    so build-md needs the built System and refuses without it.
+md-openmm build-md -odir ./REST2-run1 --config configs/md/REST2.config
+
+# 3. run it. run.sh minimises, equilibrates, then launches the ladder under mpirun.
+cd REST2-run1 && ./run.sh
+```
+
+That produces the tree below. `build/`, `min/` and `input/` are the SYSTEM's, shared by every run
+beside them; the rest belongs to this run:
+
+```text
+ALA/                                   <- the system, and what you register
+  build/    built.xml  built.pdb  built.log
+  min/      min.py  min.xml  min.log  min.out  min.checkpoints/
+            resolved.config  run.config              <- shared: one minimised structure
+  input/    min.in  eq_1.in  eq_2.in  eq_3.in  REST2.in
+                                                     <- shared: what a method was asked to do
+  REST2-run1/
+    run.sh  REST2.py  resolved.config  run.config  build-md.log  build_states.log
+    eq/                eq_<k>.{py,xml,out,log}  eq_<k>.checkpoints/
+                       solute_eq_<k>.nc  mdout_eq_<k>.csv  energy_components_eq_<k>.csv
+                       resolved.config  run.config   <- the declaration each stage reads
+    remd0/             build_state0.xml              <- rung 0's own pre-scaled Hamiltonian
+    remd1/             build_state1.xml
+    remd_groupfile.1   one line per state, naming that state's rung
+    remd_records/      REST2_prod1.{out,log}  .rank01  restart_prod1.json  <- per segment
+    rank/              per-rank reports
+    solute.yaml  _protocol.py                        <- written by rank 0, verified by every rank
+    whole_state<i>_prod1.nc  solute_state<i>_prod1.nc
+    rem.log  exchange.csv  REST2.nc  REST2_checkpoint.nc  REST2.runstate.json
+```
+
+Two things about that tree are worth knowing before you type the commands yourself.
+
+**A ladder takes `-groupfile`, not `-s`.** Each rung is its own pre-scaled System, named on its own
+line of the group file, so there is no single `-s` for the launch to carry — one would claim one
+Hamiltonian for every rung. Exactly one of the two is given, and the other is refused by name:
+
+```bash
+# the preparation stages: each into its own directory, the inputs shared from ../input/
+md-openmm md-run -i ../input/min.in  -p ../build/built.pdb -s ../build/built.xml -odir ../min
+md-openmm md-run -i ../input/eq_1.in -p ../build/built.pdb -s ../build/built.xml \
+    -odir eq -c ../min/min.xml
+
+# the ladder: one rank per state, the rungs named per line, the records per segment
+mpirun -n 4 md-openmm md-run -ng 4 \
+    -i ../input/REST2.in -p ../build/built.pdb \
+    --groupfile remd_groupfile.1 -odir . \
+    -o remd_records/REST2_prod1.out \
+    -log remd_records/REST2_prod1.log \
+    -r remd_records/restart_prod1.json
+```
+
+**A stage is FILED by position, not by its name.** `eq_nvt_posres` is renamed to an NVT spelling
+under implicit solvent or a scaled run — so a pressure-coupled name never appears on a boxless run
+— and it is filed as `eq_1`. Its input is `input/eq_1.in` and its restart is `eq/eq_1.xml`. Leave
+`-r`, `-o`, `-log` and `-chk` off: `md-run` names all four inside `-odir`, and a value given
+explicitly is taken against the working directory instead.
+
+`CUDA_VISIBLE_DEVICES` is yours to set. Nothing binds ranks to devices for you, and without it
+every rank builds its Context on the default device and the whole ladder runs on one GPU, silently:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 ./run.sh
+```
+
+AIS is launched the same way, from an ensemble you have already produced:
+
+```bash
+mpirun -n 4 md-openmm md-run -ng 4 -i ../input/AIS.in -p ../build/built.pdb \
+    -s ../build/built.xml -source-traj ../hot-run1/whole_prod1.nc \
+    -odir . -o AIS.out -log AIS.log
 ```
 
 See [Running](docs/md-run.md) for the flags, the input language, the platform policy, the MPI
-rules, and what AIS writes.
+rules, and what AIS writes; [the layout](docs/run-layout.md) for why the tree is shaped this way
+and what is shared.
 
 ## Worked examples you can run
 

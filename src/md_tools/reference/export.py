@@ -516,8 +516,8 @@ stages before it are not part of this dataset.
 
 **4. With md-tools, from the structure.**
 
-    md-openmm build-top -i input/{structure} {config_flag}-os built.xml -op built.pdb -log built.log
-    md-openmm build-md --config input/build-md.config -odir md_script
+    md-openmm build-top -i input/{structure} {config_flag}-os build/built.xml -op build/built.pdb -log build/built.log
+    md-openmm build-md --config input/build-md.config -odir ./<method>-run1
 """
 
 STANDALONE_BUILD = Path(__file__).with_name("standalone_build.py")

@@ -4,8 +4,8 @@
     md_tools.run.md_run_main       the subcommand's body
 
 A surface over the runtime, never a second copy of it. Each protocol is handed to the same
-function a generated script calls, so a run started here and a run started from `md_script/` are
-the same run.
+function a generated script calls, so a run started here and a run started from a generated
+`<method>-run<N>/` are the same run.
 """
 from __future__ import annotations
 
