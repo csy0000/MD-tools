@@ -6,3 +6,13 @@ recursive-include configs *.config *.example
 # The contract's generated schema and its migration note.
 recursive-include src/md_tools/data_contract *.json *.md
 include README.md
+# THE IN-TREE BUILD BACKEND ITSELF. `pyproject.toml` declares
+# `build-backend = "_build_backend"` with `backend-path = ["."]`, so the file has to be IN the
+# sdist or the sdist cannot build a wheel from itself:
+#
+#   BackendUnavailable: Cannot find module '_build_backend' in [.../md_tools-0.5.3]
+#
+# `python -m build` therefore produced the tarball and then failed on the wheel. The suite could
+# not see it: `tests/wheel_build.py` builds from a COPY OF THE WORKING TREE, where this file is
+# present, so every wheel test passed while `python -m build` was broken.
+include _build_backend.py

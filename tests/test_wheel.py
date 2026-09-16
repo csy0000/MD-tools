@@ -145,3 +145,31 @@ def test_the_console_scripts_are_installed(installed):
     assert "md-openmm" in scripts, scripts
     assert "md-template" not in scripts, scripts
     assert "openmm-md" not in scripts, scripts
+
+
+def test_the_sdist_can_build_a_wheel_from_itself(tmp_path):
+    """`python -m build` end to end, from the sdist it just wrote.
+
+    Every other wheel test here builds from a COPY OF THE WORKING TREE (`tests/wheel_build.py`),
+    which is right for what those tests are about and blind to one thing: whether the SDIST
+    carries what a build needs. `pyproject.toml` declares an in-tree backend --
+    `build-backend = "_build_backend"` with `backend-path = ["."]` -- and `MANIFEST.in` did not
+    ship `_build_backend.py`, so the tarball could not build a wheel from itself:
+
+        BackendUnavailable: Cannot find module '_build_backend' in [.../md_tools-0.5.3]
+
+    `python -m build` produced the sdist and then failed, while this suite stayed green. That is
+    the shape of gap this test exists to close: the packaging path nobody exercised.
+
+    Slow because it is two real builds. Worth it once: a package that cannot be built from its own
+    source distribution is not releasable, and nothing else here would say so.
+    """
+    build = subprocess.run([sys.executable, "-m", "build", "--outdir", str(tmp_path)],
+                           cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=1800)
+    assert build.returncode == 0, (
+        "python -m build failed:\n" + build.stdout[-4000:] + build.stderr[-4000:])
+
+    made = sorted(p.name for p in tmp_path.iterdir())
+    assert any(n.endswith(".tar.gz") for n in made), made
+    assert any(n.endswith(".whl") for n in made), (
+        "the sdist was written but no wheel was built from it: " + repr(made))
