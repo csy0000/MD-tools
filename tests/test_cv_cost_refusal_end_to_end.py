@@ -188,7 +188,9 @@ def cmd_project(tmp_path_factory):
 
 def _run_cmd(root: Path, destination: Path, environment=None):
     return subprocess.run(
-        [sys.executable, str(root / "cMD-run1" / "md.py"),
+        # The production stage: the retired `--all-in-one` md.py ran the whole chain, and every
+        # equilibration length above is 0, so this is the same dynamics.
+        [sys.executable, str(root / "cMD-run1" / "cMD.py"),
          "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-odir", str(destination), "--cpu"],
         cwd=root / "cMD-run1", capture_output=True, text=True, timeout=1800,

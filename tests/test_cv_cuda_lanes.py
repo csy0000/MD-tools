@@ -186,7 +186,9 @@ def _run_cmd(scripts, destination, *, environment=None, expect=0):
     # against, now that each variant has a root of its own.
     root = Path(scripts).parent
     done = subprocess.run(
-        [sys.executable, str(scripts / "md.py"),
+        # The production stage, named for the protocol: the retired `--all-in-one` md.py ran the
+        # whole chain, and every equilibration length in `_cmd_config` is 0.
+        [sys.executable, str(scripts / "cMD.py"),
          "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-odir", str(destination)],
         cwd=scripts, capture_output=True, text=True, timeout=2400,

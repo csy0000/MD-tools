@@ -52,9 +52,12 @@ TRAJECTORY_EVERY = 20
 
 def _project(root: Path, *, tau: float = 0.0, phase_space: int = 0) -> Path:
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
+    # INTO `build/`: the System belongs to the DATASET, and `build-md` validates the chain it
+    # generates against it.
+    (root / "build").mkdir(exist_ok=True)
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
 
@@ -104,8 +107,11 @@ def _run(project: Path, destination: Path, *extra, environment=None, expect=0):
     base["MD_TOOLS_CONFIG"] = str(user)
     base.update(environment or {})
     done = subprocess.run(
-        [sys.executable, str(project / "cMD" / "md.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+        # THE PRODUCTION STAGE. This ran the retired `--all-in-one` md.py; every equilibration
+        # length in the document above is 0, so production is the only dynamics stage either way.
+        [sys.executable, str(project / "cMD" / "cMD.py"),
+         "-p", str(project / "build" / "built.pdb"),
+         "-s", str(project / "build" / "built.xml"),
          "-odir", str(destination), "--cpu", *extra],
         cwd=project / "cMD", capture_output=True, text=True, timeout=1800, env=base)
     if expect is not None:

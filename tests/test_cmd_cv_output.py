@@ -78,7 +78,9 @@ def _run(project: Path, destination: Path, *extra, environment=None):
     base["MD_TOOLS_CONFIG"] = str(user)
     base.update(environment or {})
     return subprocess.run(
-        [sys.executable, str(project / "cMD-run1" / "md.py"),
+        # The production stage: the retired `--all-in-one` md.py ran the whole chain, and every
+        # equilibration length above is 0, so this is the same dynamics.
+        [sys.executable, str(project / "cMD-run1" / "cMD.py"),
          "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-odir", str(destination), "--cpu", *extra],
         cwd=project / "cMD-run1", capture_output=True, text=True, timeout=1800, env=base)
@@ -334,7 +336,7 @@ def test_the_definition_is_copied_in_content_addressed_and_the_tree_is_movable(p
     base["MD_TOOLS_CONFIG"] = str(user)
     destination = moved / "run"
     done = subprocess.run(
-        [sys.executable, str(moved / "cMD-run1" / "md.py"),
+        [sys.executable, str(moved / "cMD-run1" / "cMD.py"),
          "-p", str(moved / "built.pdb"), "-s", str(moved / "built.xml"),
          "-odir", str(destination), "--cpu"],
         cwd=moved / "cMD-run1", capture_output=True, text=True, timeout=1800, env=base)

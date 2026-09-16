@@ -181,9 +181,12 @@ def test_a_real_stage_refuses_a_mutated_committed_prefix(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
+    # INTO `build/`: the System belongs to the DATASET, and `build-md` validates the chain it
+    # generates against it.
+    (root / "build").mkdir(exist_ok=True)
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
     (root / "cv.yaml").write_text(
@@ -215,8 +218,12 @@ def test_a_real_stage_refuses_a_mutated_committed_prefix(tmp_path):
 
     def _launch(environment=None):
         return subprocess.run(
-            [sys.executable, str(root / "cMD" / "md.py"),
-             "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+            # THE PRODUCTION STAGE. This ran the retired `--all-in-one` md.py for the whole
+            # chain; every equilibration length is 0 above, so production is the only stage
+            # carrying a CV stream either way, and it resumes itself under the cMD contract.
+            [sys.executable, str(root / "cMD" / "cMD.py"),
+             "-p", str(root / "build" / "built.pdb"),
+             "-s", str(root / "build" / "built.xml"),
              "-odir", str(destination), "--cpu"],
             cwd=root / "cMD", capture_output=True, text=True, timeout=1800,
             env={**base, **(environment or {})})
@@ -264,9 +271,12 @@ def test_cv_cost_is_persisted_and_survives_two_interruptions(tmp_path):
     root = tmp_path / "project"
     root.mkdir()
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
+    # INTO `build/`: the System belongs to the DATASET, and `build-md` validates the chain it
+    # generates against it.
+    (root / "build").mkdir(exist_ok=True)
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
     (root / "cv.yaml").write_text(
@@ -301,8 +311,12 @@ def test_cv_cost_is_persisted_and_survives_two_interruptions(tmp_path):
 
     def _launch(destination, environment=None):
         return subprocess.run(
-            [sys.executable, str(root / "cMD" / "md.py"),
-             "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+            # THE PRODUCTION STAGE. This ran the retired `--all-in-one` md.py for the whole
+            # chain; every equilibration length is 0 above, so production is the only stage
+            # carrying a CV stream either way, and it resumes itself under the cMD contract.
+            [sys.executable, str(root / "cMD" / "cMD.py"),
+             "-p", str(root / "build" / "built.pdb"),
+             "-s", str(root / "build" / "built.xml"),
              "-odir", str(destination), "--cpu"],
             cwd=root / "cMD", capture_output=True, text=True, timeout=1800,
             env={**base, **(environment or {})})

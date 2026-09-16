@@ -101,7 +101,10 @@ def root(tmp_path_factory):
 
 def _run_cmd(root: Path, script_dir: Path, destination: Path, *extra, expect=0):
     done = subprocess.run(
-        [sys.executable, str(script_dir / "md.py"),
+        # The production stage, named for the protocol rather than for the run directory: the
+        # retired `--all-in-one` md.py ran the whole chain, and `_cmd_config` sets every
+        # equilibration length to 0, so production is the only dynamics stage either way.
+        [sys.executable, str(script_dir / "cMD.py"),
          "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
          "-odir", str(destination), "--cpu", *extra],
         cwd=script_dir, capture_output=True, text=True, timeout=1800, env=_environment(root))

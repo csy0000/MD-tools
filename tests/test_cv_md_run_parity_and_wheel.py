@@ -85,7 +85,7 @@ def test_the_generated_script_and_md_run_produce_the_same_cv_series(project, tmp
     """THE parity claim, on the CV section specifically."""
     direct = tmp_path / "direct"
     done = subprocess.run(
-        [sys.executable, str(project / "cMD-run1" / "md.py"),
+        [sys.executable, str(project / "cMD-run1" / "cMD.py"),
          "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
          "-odir", str(direct), "--cpu"],
         cwd=project / "cMD-run1", capture_output=True, text=True, timeout=1800,
