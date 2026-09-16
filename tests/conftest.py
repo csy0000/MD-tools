@@ -154,6 +154,32 @@ def make_dataset_root(root: Path, *, solvent: str = "implicit") -> Path:
     return Path(root)
 
 
+
+def make_scaled_state(root: Path, *, tau: float, method: str = "cMD") -> Path:
+    """One saved scaled state, `build/<method>/system_state0.xml`, beside the dataset's built
+    System. Returns its path.
+
+    A stage no longer scales (docs/amber-like-fix/REST2-scaler.md, step 3): a hot stage runs on a
+    saved state and checks its tau against the `scaler.yaml` beside it, and `build-md` refuses a
+    hot run until the state exists. This is what `md-openmm build-top --rest2-scaler` writes,
+    through the same function. An existing state is reused rather than rebuilt, for the same
+    reason `make_dataset_root` never overwrites a built System.
+    """
+    from md_tools.build.scaler import build_scaled_states
+    from md_tools.rest2.states import state_system_name
+
+    build = Path(root) / "build"
+    state = build / method / state_system_name(0)
+    if state.is_file():
+        return state
+    config = build / f"scaler-{method}.config"
+    config.write_text(f"method: {method}\nschedule:\n  n_states: 1\n"
+                      f"  tau_min: {float(tau)}\n  tau_max: {float(tau)}\n", encoding="utf-8")
+    build_scaled_states(system_path=build / "built.xml", topology_path=build / "built.pdb",
+                        config_path=config, echo=False)
+    return state
+
+
 @pytest.fixture
 def dataset_root(tmp_path):
     """A dataset root for one test. See `make_dataset_root`."""

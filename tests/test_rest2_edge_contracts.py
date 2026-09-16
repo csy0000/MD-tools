@@ -504,9 +504,10 @@ def test_the_generated_cmd_launcher_passes_no_continuation_flag(tmp_path):
     """
     from md_tools.build.md import build_scripts
 
-    from .conftest import make_dataset_root
+    from .conftest import make_dataset_root, make_scaled_state
 
     make_dataset_root(tmp_path)
+    make_scaled_state(tmp_path, tau=0.5)            # a hot stage runs on its saved state
     config = tmp_path / "hot.config"
     config.write_text("protocol: cMD\nsolvent: implicit\n"
                       "dynamics:\n  tau: 0.5\n"
@@ -521,9 +522,11 @@ def test_the_generated_cmd_launcher_passes_no_continuation_flag(tmp_path):
     assert "--resume" not in cmd and "--extend" not in cmd
     # The tau reaches the stage through `resolved.config`, which is the one declaration; the
     # script names the stage and nothing else. What matters is that the value survives the round
-    # trip to the stage that will scale with it.
+    # trip to every stage that claims it -- all but minimisation, which scales nothing and claims
+    # nothing because `min/` is shared by every method (step 3).
     from md_tools.build.md import resolve_md_config, stage_plan
 
     plan = stage_plan(resolve_md_config(out / "resolved.config"))
-    assert all(stage["tau"] == 0.5 for stage in plan), \
-        "the fixed tau must reach every stage it scales"
+    assert plan[0]["name"] == "min" and float(plan[0]["tau"]) == 0.0
+    assert all(stage["tau"] == 0.5 for stage in plan[1:]), \
+        "the fixed tau must reach every stage that claims it"

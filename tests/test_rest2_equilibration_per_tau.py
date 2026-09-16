@@ -367,12 +367,15 @@ RUNGS = {
     "explicit": {
         "REST2-run1/remd0/build_state0.xml":
             "b78ffb12fa2135b6cc4ebe99a679738cb88dbe2d9d6c59bd577c371fb8a2bc75",
+        # REFRESHED for convention v3 the same way as the implicit table, against 02fe5b1: every
+        # force but PeriodicTorsionForce identical, and exactly torsion terms 39 and 41 -- the
+        # amide-nitrogen impropers -- differ in each rung, now at their unscaled constant.
         "REST2-run1/remd1/build_state1.xml":
-            "63ab34b728c01f735e05d7d00e9cace74dac39e2cd7a988f91d2c06fcdc47e4a",
+            "21833c0a2211115938a9f06e19b1e9cb4584da8bd5aef7fffd4cdfe6adcd1c33",
         "REST2-run1/remd2/build_state2.xml":
-            "b3a59f8df3f054311494f5d2d5fc71aabed8e8ca4aec8b5a2951df6066b9c2cf",
+            "9542468bbe55b52b83920bbd35a2c56ab22176aa4bbcae20d8f748f484eb89cd",
         "REST2-run1/remd3/build_state3.xml":
-            "899b882ce9ddc2bcbe5b4e9208482c3b39ee002860ed5945efd27e91bab1dba5",
+            "26f2c2a4a63afb24b8dec8ff62deac1535ff391104b6fe9b3bf6785b71052633",
     },
 }
 #: The `_protocol.py` a default four-state ladder materialises at 2 fs, before this setting.
