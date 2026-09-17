@@ -80,7 +80,9 @@ def project(tmp_path_factory):
         encoding="utf-8")
     (root / "u.config").write_text(yaml.safe_dump({
         "protocol": "umbrella", "solvent": "implicit",
-        "stages": {"minimization_iterations": 2, "restrained_nvt_steps": CV_EVERY,
+        # A REAL minimisation, because the `min` stage below now actually runs. This count is the
+        # min stage's; a production stage never consults it.
+        "stages": {"minimization_iterations": 1000, "restrained_nvt_steps": CV_EVERY,
                    "production_steps": PRODUCTION_STEPS},
         "reporting": {"crd_printout_solute": CHECKPOINT_EVERY,
                       "info_printout": CHECKPOINT_EVERY,
@@ -92,6 +94,37 @@ def project(tmp_path_factory):
                           cwd=root, capture_output=True, text=True, timeout=600,
                           env=_environment())
     assert done.returncode == 0, done.stdout + done.stderr
+
+    # MINIMISE FIRST, and continue the window from that state (below, through `-c`).
+    #
+    # This file used to launch `umbrella.py` straight off `built.xml` with no `-c`, skipping the
+    # generated chain entirely. That is not a shortcut, it is a different experiment: the
+    # deposited geometry has
+    # phi at -180 exactly -- an eclipsed dipeptide -- while the window is centred at -60 with a
+    # stiff 800 kJ/mol/rad^2 bias. Production therefore opened 120 degrees from its own restraint,
+    # on a structure nothing had relaxed, and the strain became kinetic energy: 5723 K by step 100,
+    # then `Particle coordinate is NaN`.
+    #
+    # It was NOT a platform defect, though it looked exactly like one. The identical inputs were
+    # measured dying on CPU and surviving on CUDA -- and, in an isolated probe of the same System,
+    # dying on CUDA and surviving on CPU. Whichever platform happened to live was still integrating
+    # at 4525 K and testing nothing, so a `gpu` marker would have buried the problem rather than
+    # described it. Minimised and equilibrated first, the bias comes on from a relaxed 300 K
+    # structure and the window is steady on both platforms.
+    #
+    # MINIMISATION ONLY, not the three equilibration stages, and the reason is the step counter.
+    # It is ABSOLUTE across a chain, so equilibrating first would open production at step 10050
+    # (50 + 5000 + 5000) and every assertion below that reads a committed step against
+    # PRODUCTION_STEPS would be comparing an absolute number with a window length -- measured:
+    # "crashed at 10100 steps, assert 10100 < 600", and the resumes were then refused outright
+    # because a directory committed at 10100 no longer reads as 600 steps interrupted. `min`
+    # performs no dynamics, contributes no steps, and leaves production starting at zero, which is
+    # what these tests are written against. Relaxing the structure is the whole of what was needed.
+    stage = subprocess.run(
+        CLI + ["md-run", "-i", "input/min.in", "-p", "build/built.pdb", "-s", "build/built.xml",
+               "-odir", "min", *_platform_flags()],
+        cwd=root, capture_output=True, text=True, timeout=1800, env=_environment(root))
+    assert stage.returncode == 0, f"min failed:\n{stage.stdout}{stage.stderr}"
     return root
 
 
@@ -140,6 +173,9 @@ def _run(project_root: Path, work: Path, *, extra_env=None, extra=()):
         [sys.executable, str(project_root / "project" / "umbrella.py"),
          "-p", str(project_root / "build" / "built.pdb"),
          "-s", str(project_root / "build" / "built.xml"),
+         # CONTINUE FROM THE MINIMISED STATE. See the fixture for what running this stage off the
+         # unrelaxed build instead used to do, and why the chain stops at `min`.
+         "-c", str(project_root / "min" / "min.xml"),
          "-odir", str(work), *_platform_flags(), *extra],
         cwd=work, capture_output=True, text=True, timeout=1800,
         env=_environment(work, extra_env))
