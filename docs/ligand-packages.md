@@ -19,6 +19,7 @@ each preparation step: hydrogens, solvent and System.
     molecule.sdf       the exact chemical state; atom i is package atom i
     parameters.ffxml   self-contained OpenMM parameters for that molecule
     metadata.json      identities, charges, provenance and artifact digests
+    parameter.config   what a build must match to REUSE these parameters
 ```
 
 Three identities are kept apart:
@@ -109,6 +110,38 @@ that uses a custom Lennard-Jones representation, is refused before the package i
 * provenance;
 * the sha256 of `molecule.sdf` and `parameters.ffxml`.
 
+## Finding a package: what a build searches, and what counts as a match
+
+`parameter.config` is the file a search reads. It is YAML, like every configuration here, and it is
+DERIVED from `metadata.json` and re-derived on every load, so the two cannot drift. It declares four
+things, and a build reuses the package only if ALL of them match what it needs. A near match is a
+difference:
+
+| compared | what it is | what it deliberately ignores |
+|---|---|---|
+| `topology` | the heavy-atom skeleton: which atoms, bonded how | hydrogens, formal charges, bond orders -- so tautomers and protomers share it |
+| `protonation` | the exact chemical state: every hydrogen, formal charges, bond orders, stereochemistry | nothing |
+| `charges` | the method, the scheme it resolved to, and the IMPLEMENTATION that ran (`ambertools-sqm`, `openeye`, `openff-nagl`, with the NAGL model file and its digest) | the versions of that software, which are recorded but not compared |
+| `forcefield` | the exact small-molecule resource, e.g. `openff-2.2.1` | nothing |
+
+The charge implementation is part of the identity because a method name is not a number: AM1-BCC
+through AmberTools' `sqm`, AM1-BCC ELF10 through OpenEye, and NAGL's graph model trained to predict
+it are three different results for the same molecule. A package whose record cannot say which one
+produced it is refused at creation, and `import_package_from_system` requires `backend_id`.
+
+Software versions are recorded (`charge_software`) and NOT compared. Requiring them to be equal
+would force a regeneration on every AmberTools or toolkit upgrade; a build that cares can read them.
+
+`md_tools.ligands.match.matches` is the one definition of all of this. The catalog search and the
+"differs, so parameterise" branch both call it, because two implementations of "the same ligand"
+would drift and the drift would be invisible.
+
+The search itself compares against every `parameter.config` under the catalog roots, in order, and
+LOADS only the package that matched -- which verifies its parameters, digests and identity in full
+before anything reuses it. A catalog entry whose declaration cannot be read is reported as skipped
+rather than passed over silently. The report lists every candidate with the reason it did or did
+not match, and a build record keeps it.
+
 ## Making a package
 
 **In a build.** A single-molecule build (`solute.kind: ligand` or `peptide-like`) with no
@@ -142,20 +175,35 @@ parameter id.
 
 ## Reusing a package
 
+`solute.parameters` says where a build's parameters come from, and has three values:
+
 ```yaml
 solute:
   kind: ligand
   residue_name: TYL
-  parameters: CHEMBL112/param_e932f4c4f371
+  parameters: search                       # the default
 ligand_catalog:
   path: ../catalog          # optional; $MD_DATA/parameters/ligands is searched after it
 ```
 
-The input `.smi` or `.sdf` must describe the package's exact chemical state: the same graph with
+* `search` (the default) looks in the catalogs for a package whose declared criteria match this
+  build, REUSES it on a match and PARAMETERISES the molecule on any difference;
+* `CHEMBL112/param_e932f4c4f371` reuses exactly that package and searches nothing. This is the
+  explicit override: it is how a tutorial or a campaign pins the parameters it means to use;
+* `generate` parameterises the molecule whatever the catalog holds.
+
+Either kind of reuse requires the same thing of the input:
+
+the `.smi` or `.sdf` must describe the package's exact chemical state: the same graph with
 every hydrogen, charge and bond order, and the same stereochemistry in its coordinates. Anything
 else is refused. The atoms are put into package order with package names, the permutation is
 recorded, and no charge is computed. `solute.ligand_forcefield` and `solute.ligand_charge_method`
 may not be stated alongside `parameters`, because the package brings its own.
+
+`built.log` records the decision under `ligand_packages.attached`: `how` (`reused (catalog search)`,
+`reused (stated reference)` or `created`), `matched_on` with the four comparisons, and `search` with
+every candidate considered and the reason it did or did not match. A reuse with no record of what it
+matched is not evidence, so the record carries it.
 
 Rebuilding the tutorial paracetamol this way reproduces its `built.xml`, `built.solute.pdb` and
 `TYL.sdf` byte for byte, and `built.pdb` apart from its date line. It took 7 s; the original build

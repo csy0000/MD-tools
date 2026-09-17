@@ -80,6 +80,7 @@ def _import(mol, charges, root: Path, **kwargs):
     from md_tools.ligands import import_package_from_system
 
     system = kwargs.pop("system", None) or _system_with_charges(mol, charges, hmr=True)
+    kwargs.setdefault("charge_provenance", {"scheme": "am1bcc", "backend_id": "ambertools-sqm"})
     return import_package_from_system(
         mol, system=system, atom_indices=range(mol.GetNumAtoms()), compound_id="CHEMBL112",
         residue_name="TYL", out_root=root, forcefield="sage-2.2.1", charge_method="am1bcc",
@@ -96,7 +97,7 @@ def test_a_recovered_package_verifies_and_its_identity_comes_from_its_contents(
     assert package.parameter_id.startswith("param_") and len(package.parameter_id) == 18
     assert package.template_name == f"MDT_{package.parameter_id}"
     assert sorted(p.name for p in package.path.iterdir()) == [
-        "metadata.json", "molecule.sdf", "parameters.ffxml"]
+        "metadata.json", "molecule.sdf", "parameter.config", "parameters.ffxml"]
     reloaded = load_package(package.path)
     assert reloaded.package_sha256 == package.package_sha256
     assert reloaded.metadata["charges"]["source"] == "imported"
@@ -111,7 +112,8 @@ def test_hydrogen_mass_repartitioning_in_the_source_does_not_change_the_package(
     charges = _charges(mol)
     with_hmr = _import(mol, charges, tmp_path / "a",
                        system=_system_with_charges(mol, charges, hmr=True),
-                       charge_provenance={"scheme": "am1bcc", "backend": "stated by the test"})
+                       charge_provenance={"scheme": "am1bcc", "backend_id": "ambertools-sqm",
+                                          "backend": "stated by the test"})
     assert with_hmr.metadata["charges"]["backend"] == "stated by the test"
     assert with_hmr.metadata["charges"]["source"] == "imported"
     without = _import(mol, charges, tmp_path / "b",
@@ -242,22 +244,29 @@ def test_refusals_before_anything_is_written(tmp_path, no_charge_generation):
     system = _system_with_charges(mol, charges)
     from md_tools.ligands import import_package_from_system
 
+    sqm = {"scheme": "am1bcc", "backend_id": "ambertools-sqm"}
+    with pytest.raises(PackageError, match="backend_id"):
+        import_package_from_system(mol, system=system, atom_indices=range(mol.GetNumAtoms()),
+                                   compound_id="CHEMBL112", residue_name="TYL",
+                                   out_root=tmp_path / "c", forcefield="sage-2.2.1",
+                                   charge_method="am1bcc")
     with pytest.raises(CompoundIdError, match="aliases"):
         import_package_from_system(mol, system=system, atom_indices=range(mol.GetNumAtoms()),
                                    compound_id="paracetamol", residue_name="TYL",
                                    out_root=tmp_path / "c", forcefield="sage-2.2.1",
-                                   charge_method="am1bcc")
+                                   charge_method="am1bcc", charge_provenance=sqm)
 
     with pytest.raises(PackageError, match="GAFF"):
         import_package_from_system(mol, system=system, atom_indices=range(mol.GetNumAtoms()),
                                    compound_id="CHEMBL112", residue_name="TYL",
                                    out_root=tmp_path / "c", forcefield="gaff2",
-                                   charge_method="am1bcc")
+                                   charge_method="am1bcc", charge_provenance=sqm)
     with pytest.raises(PackageError, match="implicit hydrogens"):
         import_package_from_system(Chem.MolFromSmiles(PARACETAMOL), system=system,
                                    atom_indices=range(11), compound_id="CHEMBL112",
                                    residue_name="TYL", out_root=tmp_path / "c",
-                                   forcefield="sage-2.2.1", charge_method="am1bcc")
+                                   forcefield="sage-2.2.1", charge_method="am1bcc",
+                                   charge_provenance=sqm)
     chiral = _molecule("CC(N)C(=O)O")                    # alanine with no stereo stated
     flat = Chem.Mol(chiral)
     flat.RemoveAllConformers()
@@ -267,7 +276,7 @@ def test_refusals_before_anything_is_written(tmp_path, no_charge_generation):
         import_package_from_system(flat, system=system, atom_indices=range(flat.GetNumAtoms()),
                                    compound_id="CHEMBL112", residue_name="ALX",
                                    out_root=tmp_path / "c", forcefield="sage-2.2.1",
-                                   charge_method="am1bcc")
+                                   charge_method="am1bcc", charge_provenance=sqm)
     assert not (tmp_path / "c").exists()
 
 
