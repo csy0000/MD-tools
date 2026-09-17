@@ -129,6 +129,20 @@ def test_the_ladder_integrates_exactly_the_saved_states(tmp_path):
     assert not destination.exists(), "the preflight created output"
 
 
+def test_solute_yaml_names_the_scaler_record_relative_to_the_run(tmp_path):
+    """An absolute path stops resolving when the run tree is moved, and would make `solute.yaml`
+    -- which is content-addressed -- differ between two copies of one run."""
+    import os
+
+    make_dataset_root(tmp_path)
+    states = make_scaled_ladder(tmp_path)
+    run = _generate(tmp_path)
+    checked, destination = _preflight(run, tmp_path)
+    recorded = checked.notes["solute_document"]["rest2"]["scaled_states"]["record"]
+    assert not os.path.isabs(recorded), recorded
+    assert (destination / recorded).resolve() == (states / "scaler.yaml").resolve()
+
+
 def test_the_ladder_classifies_nothing_itself(tmp_path):
     """States built with `unscaled_torsions: false` from a topology the classifier would refuse
     (an unknown residue, no SDF). A runtime that classified again would refuse this ladder."""
@@ -159,3 +173,26 @@ def test_a_line_naming_another_states_file_is_refused(tmp_path):
     with pytest.raises((PreflightError, SystemExit)) as refused:
         _preflight(run, tmp_path)
     assert "state" in str(refused.value)
+
+
+def test_an_odir_that_is_not_the_group_files_protocol_directory_is_refused(tmp_path):
+    """The group file's `-i _protocol.py` resolves beside the group file; the ladder writes it into
+    `-odir`. Launched with `-odir` elsewhere, the preflight passed and the executor died importing a
+    protocol file that was never written. Refused by name now, before anything exists."""
+    import subprocess
+    import sys
+
+    from .conftest import write_starting_state
+
+    make_dataset_root(tmp_path)
+    make_scaled_ladder(tmp_path)
+    run = _generate(tmp_path)
+    write_starting_state(tmp_path, run)
+    elsewhere = tmp_path / "elsewhere"
+    done = subprocess.run(
+        [sys.executable, str(run / "REST2.py"), "-p", "../build/built.pdb", "-ng", "4",
+         "--groupfile", "remd_groupfile.1", "-odir", str(elsewhere), "--cpu"],
+        cwd=run, capture_output=True, text=True, timeout=600)
+    assert done.returncode == 2, done.stdout + done.stderr
+    assert "_protocol.py" in done.stderr and "Nothing was written" in done.stderr, done.stderr
+    assert not elsewhere.exists()

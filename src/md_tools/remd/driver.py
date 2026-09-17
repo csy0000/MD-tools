@@ -769,6 +769,80 @@ class ReplicaRun:
         return manifest, {"manifest": manifest_path, "analysis": parent / analysis,
                           "checkpoint": parent / checkpoint}
 
+    @classmethod
+    def validate_extension_parent(cls, parent):
+        """Every READ-ONLY reason to refuse extending `parent`, established from the parent alone.
+
+        Returns `(manifest, files, checkpoint, stored_identity)`. Separate from `_extend_from`
+        because the runtime has to ask it BEFORE `-odir` holds anything: `replica_main` publishes
+        `_protocol.py`, `solute.yaml` and opens the `.out`/`.log` before the driver runs, so a
+        parent refused only here left a new directory that read as a started extension. The one
+        check not made here is the comparison with THIS run's identity, which needs the prepared
+        ladder and stays in `_extend_from`.
+        """
+        from . import validate as replica_validate
+
+        parent = Path(parent)
+        manifest, files = cls.parent_files(parent)
+        for name in ("analysis", "checkpoint"):
+            if not files[name].is_file():
+                raise DriverError(
+                    f"{files['manifest']} names {files[name].name} as its {name}, and that "
+                    f"file is not in {parent}. The parent is incomplete: refused read-only, "
+                    f"before anything here is created.")
+
+        # The parent's CV series must still be what its manifest says. An extension
+        # concatenates onto that column, so a parent whose series was truncated or edited
+        # after completion produces an extended series that is the old measurement joined to
+        # a new one, with nothing in the file marking the join. Read-only, and before
+        # anything local exists.
+        if manifest.get("collective_variables") is not None:
+            from .cv_states import verify_manifest_entries
+
+            damaged = verify_manifest_entries(Path(parent),
+                                              manifest["collective_variables"])
+            if damaged:
+                raise DriverError(
+                    f"{parent} cannot be extended: its collective-variable output no longer "
+                    f"matches the completion manifest that describes it.\n  - "
+                    + "\n  - ".join(damaged))
+
+        # PHASE 1 -- READ ONLY, and complete. Nothing local exists yet, so a refusal here
+        # leaves no half-created extension directory behind to be mistaken for a run.
+        check = replica_validate.validate_replica_output(
+            analysis=str(files["analysis"]), checkpoint=str(files["checkpoint"]),
+            expect_completed=True, reconcilable=False)
+        if not check.ok:
+            raise storage.StorageError(replica_validate.format_report(
+                check, title=f"{parent} cannot be extended"))
+
+        if manifest.get("run_status") != "completed":
+            raise DriverError(
+                f"{files['manifest']} records run_status "
+                f"{manifest.get('run_status')!r}, not 'completed'. An extension continues a "
+                f"finished parent; an unfinished one is resumed in place instead, with "
+                f"--resume, so that its own budget is met before anything is added to it.")
+
+        stored = manifest.get("scientific_identity")
+        if stored is None:
+            raise IdentityError(
+                f"{files['manifest']} carries no scientific identity, so what the parent was "
+                f"created with cannot be established. Refusing rather than continuing a "
+                f"Hamiltonian that cannot be checked.")
+        require_compatible_implementation(
+            (stored.get("rest2_implementation") or {}),
+            what=f"the parent run in {parent}")
+
+        checkpoint = storage.ReplicaCheckpoint(str(files["checkpoint"])).read()
+        if int(checkpoint["step"]) != int(manifest["steps_completed"]):
+            raise DriverError(
+                f"{parent} is inconsistent: the completion manifest says "
+                f"{manifest['steps_completed']} steps but the terminal checkpoint holds "
+                f"{checkpoint['step']}. The two must agree before anything continues from "
+                f"either.")
+
+        return manifest, files, checkpoint, stored
+
     def _extend_from(self, identity, parent, *, extend):
         """Continue a COMPLETED parent into a NEW output set, leaving the parent untouched.
 
@@ -784,54 +858,7 @@ class ReplicaRun:
         """
         payload = None
         if self.coordinator.is_root:
-            from . import validate as replica_validate
-
-            manifest, files = self.parent_files(parent)
-            for name in ("analysis", "checkpoint"):
-                if not files[name].is_file():
-                    raise DriverError(
-                        f"{files['manifest']} names {files[name].name} as its {name}, and that "
-                        f"file is not in {parent}. The parent is incomplete: refused read-only, "
-                        f"before anything here is created.")
-
-            # The parent's CV series must still be what its manifest says. An extension
-            # concatenates onto that column, so a parent whose series was truncated or edited
-            # after completion produces an extended series that is the old measurement joined to
-            # a new one, with nothing in the file marking the join. Read-only, and before
-            # anything local exists.
-            if manifest.get("collective_variables") is not None:
-                from .cv_states import verify_manifest_entries
-
-                damaged = verify_manifest_entries(Path(parent),
-                                                  manifest["collective_variables"])
-                if damaged:
-                    raise DriverError(
-                        f"{parent} cannot be extended: its collective-variable output no longer "
-                        f"matches the completion manifest that describes it.\n  - "
-                        + "\n  - ".join(damaged))
-
-            # PHASE 1 -- READ ONLY, and complete. Nothing local exists yet, so a refusal here
-            # leaves no half-created extension directory behind to be mistaken for a run.
-            check = replica_validate.validate_replica_output(
-                analysis=str(files["analysis"]), checkpoint=str(files["checkpoint"]),
-                expect_completed=True, reconcilable=False)
-            if not check.ok:
-                raise storage.StorageError(replica_validate.format_report(
-                    check, title=f"{parent} cannot be extended"))
-
-            if manifest.get("run_status") != "completed":
-                raise DriverError(
-                    f"{files['manifest']} records run_status "
-                    f"{manifest.get('run_status')!r}, not 'completed'. An extension continues a "
-                    f"finished parent; an unfinished one is resumed in place instead, with "
-                    f"--resume, so that its own budget is met before anything is added to it.")
-
-            stored = manifest.get("scientific_identity")
-            if stored is None:
-                raise IdentityError(
-                    f"{files['manifest']} carries no scientific identity, so what the parent was "
-                    f"created with cannot be established. Refusing rather than continuing a "
-                    f"Hamiltonian that cannot be checked.")
+            manifest, files, checkpoint, stored = self.validate_extension_parent(parent)
             differences = self.compare_identity(stored, identity)
             if differences:
                 raise IdentityError(
@@ -839,18 +866,6 @@ class ReplicaRun:
                     "be a continuation of it. These differ:\n  - " + "\n  - ".join(
                         f"{key}: parent {stored.get(key)!r} vs here {identity.get(key)!r}"
                         for key in differences))
-
-            require_compatible_implementation(
-                (stored.get("rest2_implementation") or {}),
-                what=f"the parent run in {parent}")
-
-            checkpoint = storage.ReplicaCheckpoint(str(files["checkpoint"])).read()
-            if int(checkpoint["step"]) != int(manifest["steps_completed"]):
-                raise DriverError(
-                    f"{parent} is inconsistent: the completion manifest says "
-                    f"{manifest['steps_completed']} steps but the terminal checkpoint holds "
-                    f"{checkpoint['step']}. The two must agree before anything continues from "
-                    f"either.")
 
             inherited = {
                 "path": str(parent.resolve()),

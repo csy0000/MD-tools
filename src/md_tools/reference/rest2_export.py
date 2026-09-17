@@ -48,9 +48,10 @@ from .export import _continue_from, _digest, _locate, user_inputs_plan, write_us
 VENDORED = ("core.py", "rules.py", "engine.py", "statistics.py", "rem_log.py",
             "rung_equilibration.py")
 
-#: `md_tools/rest2/hamiltonian.py`, copied byte for byte beside them: the code that turns the
-#: unscaled System into a rung. With it, `verify_rungs.py` rebuilds every bundled rung from rung 0
-#: using OpenMM alone, so how the scaled Systems were derived is checkable rather than described.
+#: `md_tools/rest2/hamiltonian.py`, copied byte for byte beside them: the code that turned the
+#: built System into the saved states (`md-openmm build-top --rest2-scaler`). With it,
+#: `verify_rungs.py` rebuilds every bundled rung from `system_unscaled.xml` using OpenMM alone, so
+#: how the scaled Systems were derived is checkable rather than described.
 SCALING_MODULE = "hamiltonian.py"
 
 PACKAGE_INIT = '''"""The ladder's own decision-making, copied verbatim from md-tools {version}.
@@ -86,10 +87,11 @@ WHAT IS REPRODUCED
 
 HOW THE RUNGS WERE BUILT
 
-    system_rung0.xml is the unscaled System; every other rung is that System with the solute
-    scaled at its tau. `ladder/hamiltonian.py` is the code that did it, and `python
-    verify_rungs.py` rebuilds each rung from rung 0 with it and checks the result is identical.
-    provenance.json's `derivation` block holds the solute atoms and the unscaled bonds it needs.
+    system_rung<i>.xml are the saved states the ladder integrated, written by `md-openmm
+    build-top --rest2-scaler`: system_unscaled.xml with the solute scaled at each rung's tau.
+    `ladder/hamiltonian.py` is the code that did it, and `python verify_rungs.py` rebuilds each
+    rung from system_unscaled.xml with it and checks the result is identical. provenance.json's
+    `derivation` block, and scaler.yaml, hold the solute atoms and what stays unscaled.
 """
 import argparse
 import json
@@ -305,10 +307,11 @@ exec python run.py "$@"
 
 
 VERIFY = '''#!/usr/bin/env python
-"""Rebuild every rung of this ladder from rung 0, and check it is the rung this bundle carries.
+"""Rebuild every rung of this ladder from the built System, and check it is the rung bundled.
 
-Standalone. Needs OpenMM only. `ladder/hamiltonian.py` is the code md-tools built the rungs with,
-copied byte for byte, so this is the derivation that ran rather than a restatement of it.
+Standalone. Needs OpenMM only. `ladder/hamiltonian.py` is the code md-tools built the saved states
+with (`md-openmm build-top --rest2-scaler`), copied byte for byte, so this is the derivation that
+ran rather than a restatement of it. `system_unscaled.xml` is the built System they came from.
 
     python verify_rungs.py
 
@@ -333,22 +336,25 @@ def main():
     derivation = json.loads((HERE / "provenance.json").read_text(encoding="utf-8"))["derivation"]
     solute = [int(i) for i in derivation["solute_atom_indices"]]
     excluded = [tuple(int(a) for a in pair) for pair in derivation["excluded_bonds"]]
-    base = XmlSerializer.deserialize((HERE / "system_rung0.xml").read_text(encoding="utf-8"))
+    impropers = bool(derivation["unscaled_impropers"])
+    base = XmlSerializer.deserialize((HERE / "system_unscaled.xml").read_text(encoding="utf-8"))
 
     differing = []
     for index, tau in enumerate(settings["tau"]):
         bundled = XmlSerializer.serialize(XmlSerializer.deserialize(
             (HERE / f"system_rung{index}.xml").read_text(encoding="utf-8")))
         rebuilt = XmlSerializer.serialize(
-            build_scaled_system(base, solute, float(tau), excluded_bonds=excluded))
+            build_scaled_system(base, solute, float(tau), excluded_bonds=excluded,
+                                unscaled_impropers=impropers))
         same = rebuilt == bundled
         print(f"rung {index}  tau {float(tau):<10g} {'identical' if same else 'DIFFERS'}")
         if not same:
             differing.append(index)
     if differing:
-        print(f"rebuilt from rung 0, rung(s) {differing} do not match the bundled System(s)")
+        print(f"rebuilt from the built System, rung(s) {differing} do not match the bundled "
+              f"System(s)")
         return 1
-    print(f"all {len(settings['tau'])} rungs rebuild identically from rung 0")
+    print(f"all {len(settings['tau'])} rungs rebuild identically from the built System")
     return 0
 
 
@@ -413,12 +419,7 @@ def _openmm_build(record: dict[str, Any], packages: dict[str, Any],
 
 def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2") -> dict[str, Any]:
     """Write a standalone bundle for one finished REST2 ladder. Returns its manifest."""
-    from openmm import XmlSerializer
-
     from ..build.record import source_commit
-    from ..md.stage import solute_atom_indices
-    from ..openmm.system import unscaled_torsions
-    from ..remd.protocol import build_rung_systems
     from ..run.preflight import load_inputs
 
     # Resolved before anything is searched; see `export_reference`.
@@ -438,18 +439,68 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
             f"{run_dir} ran with a collective-variable definition, which this bundle does not "
             f"carry or report"
             + (", and torsion restraints, which its `verify_rungs.py` would rebuild by scaling "
-               "rung 0 -- a restraint is added after scaling and is not part of what that check "
-               "reconstructs" if (ladder.get("umbrella") or {}).get("file") else "")
+               "the built System -- a restraint is added after scaling and is not part of what "
+               "that check reconstructs" if (ladder.get("umbrella") or {}).get("file") else "")
             + ". Nothing has been written.")
 
+    # A 0.5.4 LADDER INTEGRATED SAVED STATES and recorded each as `system_state<i>`; there is no
+    # single `system` input. A record that has one ran before 0.5.4, when the ladder scaled at run
+    # time under an earlier torsion convention, and rebuilding it with this code would not be the
+    # Hamiltonian that ran.
+    if "system" in inputs and "system_state0" not in inputs:
+        raise ValueError(
+            f"{run_dir} was run before 0.5.4: it records one -s and scaled its rungs at run time, "
+            f"under an earlier unscaled-torsion convention. Export it with the md-tools that ran "
+            f"it. Nothing has been written.")
     found = {}
-    for role in ("topology", "system"):
+    roles = ["topology"] + [f"system_state{index}" for index in range(len(taus))]
+    for role in roles:
+        if role not in inputs:
+            raise ValueError(f"{run_dir}: the ladder record names no {role} input, so the "
+                             f"{len(taus)}-state ladder it describes cannot be bundled. Nothing "
+                             f"has been written.")
         source = _locate(run_dir, inputs[role])
         if source is None:
             raise FileNotFoundError(
                 f"{role} {inputs[role]['path']!r} (sha256 {inputs[role]['sha256'][:16]}...) is "
                 f"not beside {run_dir} or above it; it has to be found by digest.")
         found[role] = source
+
+    # EVERY STATE IS FOLLOWED BACK TO THE BUILT SYSTEM through the one `scaler.yaml` they share,
+    # as `export-reference` does for a hot stage: the build-top record proves built.xml, the scaler
+    # record proves each state came from it, at the tau the ladder recorded.
+    from ..rest2.states import ScaledStateError, load_scaler_record, scaled_state_identity
+
+    identities = []
+    for index in range(len(taus)):
+        try:
+            identity = scaled_state_identity(found[f"system_state{index}"])
+        except ScaledStateError as refusal:
+            raise ValueError(f"{refusal} Nothing has been written.") from None
+        if identity is None or identity["method"] != "REST2" or identity["state"] != index \
+                or abs(float(identity["tau"]) - taus[index]) > 1e-9:
+            raise ValueError(
+                f"{found[f'system_state{index}']} is not state {index} (tau {taus[index]:g}) of a "
+                f"REST2 scaler record beside it, which is what the ladder recorded integrating. "
+                f"Nothing has been written.")
+        identities.append(identity)
+    record_paths = {str(Path(identity["record"]).resolve()) for identity in identities}
+    if len(record_paths) != 1:
+        raise ValueError(f"{run_dir}: the ladder's states come from {len(record_paths)} scaler "
+                         f"records; a ladder is one schedule. Nothing has been written.")
+    scaler_path = Path(next(iter(record_paths)))
+    scaler = load_scaler_record(scaler_path)
+    built = scaler_path.parent.parent / scaler["source"]["system"]
+    if not built.is_file() or _digest(built) != scaler["source"]["system_sha256"]:
+        raise FileNotFoundError(
+            f"the ladder's states were made from {scaler['source']['system']!r} (sha256 "
+            f"{scaler['source']['system_sha256'][:16]}...), which is not at {built} with that "
+            f"digest, so the bundle could not prove how they were derived. Nothing has been "
+            f"written.")
+    if _digest(found["topology"]) != scaler["source"]["topology_sha256"]:
+        raise ValueError(f"the ladder's states were scaled against a topology with a different "
+                         f"sha256 from the one the ladder ran with. Nothing has been written.")
+    found["system"] = built
 
     # THE RECORDED `-c`, RESOLVED AGAINST THE RUN DIRECTORY -- then the bare name beside the
     # records. The fifth site holding this same assumption, after `_stage_inputs`, `_locate` and
@@ -459,6 +510,18 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
     # as the fallback for a run generated before the split, when every stage wrote to one place.
     parent = _continue_from(record)
     start = None
+    if not parent and "group_file" in inputs:
+        # A 0.5.4 ladder has no `-c` on its command line: every group line names its own, and the
+        # lines are homogeneous (`remd.executor` refuses a ladder whose starts differ). The group
+        # file is a recorded input, found by digest like the others; its paths are relative to it.
+        from ..remd.executor import GroupFileError, parse_group_file
+
+        group_path = _locate(run_dir, inputs["group_file"])
+        if group_path is not None:
+            try:
+                parent = parse_group_file(group_path)[0].get("coordinates")
+            except GroupFileError as refusal:
+                raise ValueError(f"{refusal} Nothing has been written.") from None
     if parent:
         recorded = Path(parent)
         options = [run_dir / recorded] if not recorded.is_absolute() else [recorded]
@@ -472,35 +535,42 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
 
     # -- the N Systems the ladder PROPAGATED ---------------------------------------------------
     #
-    # `build_rung_systems` is the function `Protocol.build_systems` delegates to and the one the
-    # preflight prepares the rungs with, so these are the ladder's own Systems rather than a
-    # second construction of them. Unlike a cMD stage there is no restraint force and no
-    # barostat: a ladder is NVT by contract and its rungs carry neither.
+    # The saved states themselves, byte for byte: the ladder integrated these files as they are,
+    # so the bundle carries them rather than a second construction. What they leave unscaled is
+    # read from the record that made them, never re-classified here.
     loaded = load_inputs(found["topology"], found["system"])
-    solute = solute_atom_indices(loaded.pdb.topology)
-    # A bundle must rebuild the rungs the run integrated, so it needs the same evidence the run
-    # used: the SDF beside the System, when `build-top` retained one.
-    from ..run.preflight import _ligand_sdf_beside
+    solute = [int(i) for i in scaler["solute"]["atom_indices"]]
+    torsions = scaler["unscaled_torsions"]
+    excluded = [tuple(int(a) for a in bond) for bond in torsions["unscaled_central_bonds"]]
+    impropers = bool(torsions["unscaled_impropers"])
+    from ..rest2.scaler import UnclassifiedForceError, audit_force_classes
 
-    # ENFORCED: `UnclassifiedTorsionError` is a ValueError, raised before `out_dir` exists.
-    unscaled = unscaled_torsions(loaded.pdb.topology, solute,
-                             ligand_sdf=_ligand_sdf_beside(found["system"]))
-    excluded = [tuple(int(a) for a in bond) for bond in unscaled["unscaled_central_bonds"]]
-    systems, audit = build_rung_systems(loaded.system, list(solute), tuple(taus),
-                                        excluded_bonds=excluded, pressure_bar=None)
-    if len(systems) != len(taus):
-        raise ValueError(f"built {len(systems)} rung System(s) for {len(taus)} tau value(s)")
+    try:
+        audit = audit_force_classes(loaded.system, where=f"{stage} reference export")
+    except UnclassifiedForceError as unknown:
+        raise ValueError(f"{unknown} Nothing has been written.") from None
 
     # Proven before the directory exists, like every other refusal here.
     inputs_plan = user_inputs_plan(run_dir, found["system"], found["topology"])
+    # How the states are MADE again: the scaler configuration `scaler.yaml` records by digest.
+    wanted_config = (scaler.get("config") or {}).get("sha256")
+    config_file = (scaler.get("config") or {}).get("file")
+    scaler_config = None
+    if config_file:
+        scaler_config = next((path for path in (scaler_path.parent / config_file,
+                                                scaler_path.parent.parent / config_file,
+                                                scaler_path.parent.parent.parent / config_file)
+                              if path.is_file() and _digest(path) == wanted_config), None)
+    inputs_plan["scaled_ladder"] = {"record": scaler_path, "config": scaler_config}
 
     out_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(found["topology"], out_dir / "topology.pdb")
     shutil.copy2(start, out_dir / "start.xml")
     user_inputs = write_user_inputs(inputs_plan, out_dir)
-    for index, system in enumerate(systems):
-        (out_dir / f"system_rung{index}.xml").write_text(XmlSerializer.serialize(system),
-                                                         encoding="utf-8")
+    for index in range(len(taus)):
+        shutil.copy2(found[f"system_state{index}"], out_dir / f"system_rung{index}.xml")
+    shutil.copy2(found["system"], out_dir / "system_unscaled.xml")
+    shutil.copy2(scaler_path, out_dir / "scaler.yaml")
 
     # -- the ladder's decision-making, copied rather than rewritten -----------------------------
     package = out_dir / "ladder"
@@ -566,7 +636,10 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
         "built_from": {
             "topology": {"path": inputs["topology"]["path"],
                          "sha256": _digest(found["topology"])},
-            "system": {"path": inputs["system"]["path"], "sha256": _digest(found["system"])},
+            "system": {"path": scaler["source"]["system"], "sha256": _digest(found["system"])},
+            "states": [{"path": inputs[f"system_state{index}"]["path"],
+                        "sha256": _digest(found[f"system_state{index}"])}
+                       for index in range(len(taus))],
             "continued_from": parent,
         },
         "inputs": user_inputs,
@@ -575,19 +648,22 @@ def export_rest2_reference(run_dir: Path, out_dir: Path, *, stage: str = "REST2"
         # input `build_scaled_system` takes besides tau. The solute list used to be absent, so a
         # bundle stated the scaling rules but not which atoms they applied to.
         "derivation": {
-            "rung_0": "system_rung0.xml, the unscaled System every other rung is derived from",
-            "code": "ladder/hamiltonian.py: build_scaled_system(rung_0, solute_atom_indices, "
-                    "tau, excluded_bonds)",
+            "unscaled": "system_unscaled.xml, the built System every rung is derived from",
+            "record": "scaler.yaml, written by `md-openmm build-top --rest2-scaler`",
+            "code": "ladder/hamiltonian.py: build_scaled_system(unscaled, solute_atom_indices, "
+                    "tau, excluded_bonds, unscaled_impropers)",
             "check": "python verify_rungs.py",
             "solute_atom_indices": [int(i) for i in solute],
             "excluded_bonds": [[int(a), int(b)] for a, b in excluded],
+            "unscaled_impropers": impropers,
         },
         "note": "The modules in ladder/ are byte-for-byte copies of md_tools/remd/* and "
                 "md_tools/rest2/hamiltonian.py at `ladder_modules_from` -- the exporter's commit, "
                 "which is not necessarily the engine that ran (`md_tools_commit`). They are "
                 "md_tools' own acceptance criterion, sweep schedule and rung construction, not a "
-                "reimplementation. system_rung<i>.xml are the Systems the ladder propagated; "
-                "verify_rungs.py rebuilds them from rung 0. Needs OpenMM and numpy only.",
+                "reimplementation. system_rung<i>.xml are the saved states the ladder "
+                "propagated; verify_rungs.py rebuilds them from system_unscaled.xml. Needs OpenMM "
+                "and numpy only.",
     }
     (out_dir / "provenance.json").write_text(json.dumps(provenance, indent=2, default=str) + "\n",
                                              encoding="utf-8")

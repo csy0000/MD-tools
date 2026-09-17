@@ -27,6 +27,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from .conftest import ladder_group_file
+
 REPO = Path(__file__).resolve().parents[1]
 CLI = [sys.executable, "-m", "md_tools.cli.md_openmm"]
 ALA = REPO / "tests" / "data" / "ALA.pdb"
@@ -239,6 +241,12 @@ def _launch(workspace, mode, destination: Path, *extra, environment=None):
     """
     script, needed = ENTRY[mode]
     system = [] if mode in ("REST2", "rREST2") else ["-s", "../build/built.xml"]
+    if mode in ("REST2", "rREST2"):
+        # INTO `destination`, not the run directory, so the group file's `-i` must name the
+        # `_protocol.py` the ladder writes THERE; a mismatch is refused before anything else.
+        needed = ["--groupfile", str(ladder_group_file(
+            workspace, Path(destination).resolve(), run_dir=f"{mode}-run1",
+            start=workspace / f"{mode}-run1" / "eq" / "eq_3.xml"))]
     argv = [sys.executable, str(workspace / script),
             "-p", "../build/built.pdb", *system, "-odir", str(destination),
             *needed, *extra]
@@ -304,17 +312,21 @@ def test_a_missing_input_stops_a_generated_script_before_any_output(mode, flag, 
     destination = tmp_path / "never"
     script, needed = ENTRY[mode]
     ladder = mode in ("REST2", "rREST2")
+    if ladder:
+        # A group file for a launch into `destination` (its `-i` must name the protocol written
+        # there), and a ladder reads -s only from it (0.5.4): the missing System is on a line.
+        group = ladder_group_file(workspace, destination.resolve(), run_dir=f"{mode}-run1",
+                                  start=workspace / f"{mode}-run1" / "eq" / "eq_3.xml")
+        needed = ["--groupfile", str(group)]
+        if flag == "-s":
+            state = str((workspace / "build" / "REST2" / "system_state0.xml").resolve())
+            text = group.read_text(encoding="utf-8")
+            assert state in text, text
+            group.write_text(text.replace(state, str(tmp_path / missing)), encoding="utf-8")
     argv = [sys.executable, str(workspace / script),
             "-p", "../build/built.pdb", *([] if ladder else ["-s", "../build/built.xml"]),
             "-odir", str(destination), *needed]
-    if ladder and flag == "-s":
-        # A ladder reads -s only from its group file (0.5.4): the missing System is on a line.
-        group = workspace / Path(script).parent / "remd_groupfile.1"
-        broken = tmp_path / "gone.group"
-        broken.write_text(group.read_text(encoding="utf-8").replace(
-            "../build/REST2/system_state0.xml", str(tmp_path / missing)), encoding="utf-8")
-        argv[argv.index("remd_groupfile.1")] = str(broken)
-    else:
+    if not (ladder and flag == "-s"):
         argv[argv.index(flag) + 1] = missing
     done = _run(argv, cwd=workspace / Path(script).parent)
     _refused(done, fragment="does not exist")
@@ -337,6 +349,12 @@ def test_a_topology_and_system_that_describe_different_particle_counts_are_refus
     destination = tmp_path / "never"
     script, needed = ENTRY[mode]
     system = [] if mode in ("REST2", "rREST2") else ["-s", "../build/built.xml"]
+    if mode in ("REST2", "rREST2"):
+        # INTO `destination`, not the run directory, so the group file's `-i` must name the
+        # `_protocol.py` the ladder writes THERE; a mismatch is refused before anything else.
+        needed = ["--groupfile", str(ladder_group_file(
+            workspace, Path(destination).resolve(), run_dir=f"{mode}-run1",
+            start=workspace / f"{mode}-run1" / "eq" / "eq_3.xml"))]
     done = _run([sys.executable, str(workspace / script),
                  "-p", str(stub), *system, "-odir", str(destination),
                  *needed,

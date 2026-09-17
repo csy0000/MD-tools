@@ -46,43 +46,13 @@ def tau_ladder(n_states: int, tau_max: float, *, tau_min: float = 0.0) -> list[f
     return [round(float(tau_min) + index * step, 6) for index in range(n_states)]
 
 
-def write_solute_document(topology_path: Path, system_path: Path, out: Path, *,
-                          route: str = "peptide", ligand_sdf=None) -> dict[str, Any]:
-    """Derive and write solute.yaml from the built system.
-
-# `templates_directory` and `_ensure_runtime_importable` lived here. They located the loose
-# module directory and put it on `sys.path` so the executor's bare imports would resolve.
-# There are no bare imports left -- those modules are `md_tools.remd` now -- so there is
-# nothing to enable, and removing the insertion removes a real hazard with it: while that
-# directory was on `sys.path`, `remd/statistics.py` shadowed the standard library's
-# `statistics` for anything that imported it.
-
-    Derived, never configured. The unscaled-torsion classification decides which torsions keep their physical
-    barrier at the hot rungs; a stale hand-written list would change the Hamiltonian silently.
-    """
-    from openmm import XmlSerializer
-    from openmm.app import PDBFile
-
-    from ..openmm.yaml_io import write_yaml
-    from ..openmm.builders import _solute_document
-    from ..md.stage import solute_atom_indices
-
-    topology = PDBFile(str(topology_path)).topology
-    system = XmlSerializer.deserialize(Path(system_path).read_text(encoding="utf-8"))
-    document = solute_document(topology, system, route=route, ligand_sdf=ligand_sdf)
-    write_yaml(out, document)
-    return document
-
-
 def solute_document(topology, system, *, route: str = "peptide",
                     ligand_sdf=None) -> dict[str, Any]:
     """The same derivation, WITHOUT writing anything.
 
-    Split out because it carries a refusal -- an amide candidate that is neither ordinary nor
-    proline-like -- and that refusal used to fire from inside the writer, after `-odir`,
-    `solute.yaml`'s own directory and both logs already existed. The preflight calls this; the
-    writer above calls it too, so there is one derivation and the file always holds what was
-    validated.
+    It carries a refusal -- a torsion that cannot be classified -- and raises it as SystemExit.
+    A 0.5.4 ladder does not call it: its selection is read from the `scaler.yaml` of its saved
+    states, and `build-top --rest2-scaler` is where the classification happens.
     """
     from ..openmm.system import UnclassifiedTorsionError, unscaled_torsions
     from ..openmm.builders import _solute_document
@@ -524,6 +494,29 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
+    # EVERY GROUP LINE'S `-i` MUST BE THE `_protocol.py` THIS LADDER WRITES INTO `-odir`. A group
+    # line's paths resolve against the group file, and `build-md` writes `-i _protocol.py` beside
+    # it; the protocol file is written into `-odir`. With `-odir` anywhere else the preflight
+    # passed and the executor then died with a traceback importing a file that was never written
+    # (or, worse, imported a stale one left there by a different ladder). Before 0.5.4 the runtime
+    # wrote the group file into `-odir` itself, so the two always agreed. Refused by name, before
+    # anything exists.
+    from .executor import GroupFileError, parse_group_file
+
+    try:
+        _lines = parse_group_file(args.groupfile)
+    except GroupFileError:
+        _lines = []   # reported, with the line number, by the ladder preflight below
+    _expected = (Path(args.out_dir) / "_protocol.py").resolve()
+    _elsewhere = sorted({line["input"] for line in _lines
+                         if line.get("input") and Path(line["input"]) != _expected})
+    if _elsewhere:
+        print(f"{protocol_name}: --groupfile {args.groupfile} names -i {', '.join(_elsewhere)}, but "
+              f"this ladder writes its protocol to {_expected} (-odir {args.out_dir}). Run from the "
+              f"group file's directory with -odir . -- as run.sh does -- or give a group file "
+              f"whose -i is <odir>/_protocol.py. Nothing was written.", file=sys.stderr)
+        return 2
+
     # THE LAUNCH IS VALIDATED BEFORE `-odir` EXISTS. This runs here, in the shared runtime, and
     # not only in `md-openmm md-run`, because the generated `REST2.py` and `rREST2.py` call this
     # function directly -- a guard that lives in the outer command is a property of that command
@@ -586,6 +579,23 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
                   f"seeds. Rerun with --overwrite instead of "
                   f"{'--resume' if args.resume else '--extend'}. Nothing was written.",
                   file=sys.stderr)
+            return 2
+
+    # AN EXTENSION'S PARENT is validated here, read-only and before `-odir`, a helper, the `.out`
+    # or the `.log` exists. The driver validated it too, but only once this function had already
+    # published `_protocol.py` and `solute.yaml` and opened the logs, so a refused parent left a
+    # new directory that read as a started extension. Every rank reads the same parent and
+    # reaches the same answer. The comparison with this run's identity still happens in the
+    # driver, which is where that identity is built.
+    if args.extend_from:
+        from .driver import DriverError, ReplicaRun
+        from .storage import StorageError
+
+        try:
+            ReplicaRun.validate_extension_parent(Path(args.extend_from))
+        except (DriverError, StorageError, ValueError, OSError) as refusal:
+            print(f"{protocol_name}: --extend-from {args.extend_from}: {refusal} Nothing was "
+                  f"written.", file=sys.stderr)
             return 2
 
     if args.check:

@@ -259,9 +259,13 @@ def test_every_generated_input_resolves_back_to_its_resolved_config(tmp_path):
 #: and implicit tables because the fixture System is the same GBn2 one in both -- an md
 #: configuration's `solvent` key does not change the built System. They pin that scaling is
 #: deterministic, and they are NOT explicit-solvent evidence.
+#: REFRESHED for 0.5.4 (REST2.py and run.sh only; checked by reverting each change in the generated
+#: text and recovering the old digest): run.sh's header stops at the first flag, so
+#: `./run.sh --cpu` no longer takes "--cpu" as the topology; REST2.py's usage shows the
+#: group-file launch, since -s on the command line is refused.
 BEFORE = {
     "explicit": {
-        "REST2-run1/REST2.py": "3e039fcc9c24d68ebadeda2c73c88b47c628011583e55b75430d80e4cd1c2f87",
+        "REST2-run1/REST2.py": "09af17815c1e151c6292e8fbeb8394fbabf8996c3b1d7d753ebc999ae1e93cce",
         "REST2-run1/eq/eq_1.py": "b5a332209934c06cbc1fe47f8cb780933bd672cf13de18f2d76214bb6cf89019",
         "REST2-run1/eq/eq_2.py": "a9a19c6c5e8f839a7a51e81a1ec554f89655bd04d581bc0c1babaa6aa07e6562",
         "REST2-run1/eq/eq_3.py": "6daed6d160528e34e730c67997fb015667e2a3fe5cf80677be6b3f1e68b3ccad",
@@ -278,7 +282,7 @@ BEFORE = {
             "8bf04c0240f9678a1859aa267103bd4c56e941396bfffff9ea7077c06345e782",
         "REST2-run1/run.config":
             "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
-        "REST2-run1/run.sh": "b62d46bee2e7d56ea7c1699d93c9ce37bf0c3545bd77ab4d35b551263392c5fb",
+        "REST2-run1/run.sh": "583fa241e887760637a9f729d71cb8b85e40314b034c4e695ea952b92d1aff8f",
         "input/REST2.in": "b17734119b56cb502a5a0a0c5a71ef2ae04a926eaf97a5c109febc687b3dc189",
         "input/eq_1.in": "149c24d1d7536173034b74f8f8dfa035292b2710aebe1d62449fcc7d2a8cd4eb",
         "input/eq_2.in": "1e803fb37f931840ea037601df2255831815a0e4e2aea7676f35af5a3cf74cd3",
@@ -287,7 +291,7 @@ BEFORE = {
         "min/min.py": "c85b0c6bfd43627551e84f9fec6a0e76db4d16f089a640053d78fba522d9d601",
     },
     "implicit": {
-        "REST2-run1/REST2.py": "3e039fcc9c24d68ebadeda2c73c88b47c628011583e55b75430d80e4cd1c2f87",
+        "REST2-run1/REST2.py": "09af17815c1e151c6292e8fbeb8394fbabf8996c3b1d7d753ebc999ae1e93cce",
         "REST2-run1/eq/eq_1.py": "b5a332209934c06cbc1fe47f8cb780933bd672cf13de18f2d76214bb6cf89019",
         "REST2-run1/eq/eq_2.py": "3054435667e24ebc079e4ecae1f1ddbc3de854035a6ee440f1a61e4f95c2cd35",
         "REST2-run1/eq/eq_3.py": "63f242cd9e3c1bf26ae98ff86e95792d76bbe4d94d06653bdaa6c1b140628f62",
@@ -299,7 +303,7 @@ BEFORE = {
             "299fd1aa5d3e8f67bf8887d68e782d6878a54cae88b1ac8a01af70f98da19d0a",
         "REST2-run1/run.config":
             "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
-        "REST2-run1/run.sh": "b62d46bee2e7d56ea7c1699d93c9ce37bf0c3545bd77ab4d35b551263392c5fb",
+        "REST2-run1/run.sh": "583fa241e887760637a9f729d71cb8b85e40314b034c4e695ea952b92d1aff8f",
         "input/REST2.in": "11ed2bef6c9eb724d1efa4ed382125a001e7fde3745c51324b241e9d33411b7a",
         "input/eq_1.in": "97f1e792f92394f75abb30a88161566cc617990a3ad32d075401afd421057e20",
         "input/eq_2.in": "42adbaf0eac18587f548d8b040d915f89b41078a94600e4d0972f9dd2d1756e8",
@@ -616,17 +620,23 @@ def _stage(run, name, parent=None):
     return produced
 
 
-def _ladder_argv(start, *extra):
-    """The ladder, driven as `run.sh` drives it.
+def _ladder_argv(run, start, *extra):
+    """The ladder, driven as `run.sh` drives it: through the group file `build-md` wrote.
 
-    `-s` IS STILL REQUIRED HERE, and dropping it was wrong. Per-rung Systems arrive through a
-    GROUP FILE -- one `-s` per line -- and these tests drive `md-run` directly with no group
-    file, where `-s` is mandatory and names the System the ladder scales from. Leaving it off got
-    an argparse usage error, not a per-rung ladder.
+    NO `-s` AND NO `-c` (0.5.4). A ladder reads both only from its group file, one line per
+    state: `-s` is that state's saved scaled System under `build/REST2/`, and `-c` the state the
+    ladder continues from. An earlier revision required `-s` here because these tests drove
+    `md-run` with no group file and the ladder scaled from the built System; that path is gone.
+    `start` is what the calling test prepared, and every line must name it -- otherwise the
+    ladder would begin from a file this test never wrote.
     """
+    group = Path(run) / "remd_groupfile.1"
+    lines = [line for line in group.read_text(encoding="utf-8").splitlines()
+             if line.strip() and not line.lstrip().startswith("#")]
+    assert len(lines) == RUNGS and all(f" -c {start} " in f" {line} " for line in lines), lines
     return ["mpirun", "-n", str(RUNGS), *CLI, "md-run", "-ng", str(RUNGS),
             "-i", "../input/REST2.in", "-p", "../build/built.pdb",
-            "-s", "../build/built.xml", "-c", start,
+            "--groupfile", group.name,
             "-x", "REST2.nc", "-r", "restart.json", "-o", "REST2.out", "-log", "REST2.log",
             "--cpu", *extra]
 
@@ -657,7 +667,7 @@ def implicit_ladder(tmp_path_factory):
     _build_top(root, "solvent:\n  model: GBn2\n")
     run = _build_md(root, IMPLICIT, odir="run")
     start = _stage(run, "min")
-    done = subprocess.run(_ladder_argv(start), cwd=run, capture_output=True, text=True,
+    done = subprocess.run(_ladder_argv(run, start), cwd=run, capture_output=True, text=True,
                           timeout=3600, env=ONE_THREAD)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return root, run, done.stdout
@@ -792,8 +802,8 @@ def test_resume_after_an_interruption_during_it_is_refused_and_writes_nothing(im
     state_path.write_text(json.dumps(document), encoding="utf-8")
     before = _tree(copy)
 
-    done = subprocess.run(_ladder_argv("../min/min.xml", "--resume"), cwd=run, capture_output=True,
-                          text=True, timeout=1800, env=ONE_THREAD)
+    done = subprocess.run(_ladder_argv(run, "../min/min.xml", "--resume"), cwd=run,
+                          capture_output=True, text=True, timeout=1800, env=ONE_THREAD)
     assert done.returncode != 0, done.stdout[-2000:]
     assert "per-tau equilibration" in done.stderr and "--overwrite" in done.stderr, done.stderr
     assert _tree(copy) == before, "a refused continuation changed the directory"
@@ -809,7 +819,7 @@ def test_a_failure_during_it_stops_the_whole_ladder(implicit_ladder, tmp_path):
     run = _build_md(tmp_path, IMPLICIT, odir="run")
     start = _stage(run, "min")
     done = subprocess.run(
-        _ladder_argv(start), cwd=run, capture_output=True, text=True, timeout=1800,
+        _ladder_argv(run, start), cwd=run, capture_output=True, text=True, timeout=1800,
         env={**ONE_THREAD, "MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": "2",
              "MD_TOOLS_FAIL_LADDER_AT": "per-tau-equilibration"})
     assert done.returncode != 0
@@ -839,7 +849,7 @@ def explicit_ladder(tmp_path_factory):
         # The parent is the LAYOUT path of the state the previous stage wrote, not `<name>.xml`
         # at the run root: minimisation leaves `../min/min.xml` and equilibration `eq/eq_<k>.xml`.
         parent = _stage(run, name, parent)
-    done = subprocess.run(_ladder_argv(parent), cwd=run, capture_output=True,
+    done = subprocess.run(_ladder_argv(run, parent), cwd=run, capture_output=True,
                           text=True, timeout=3600, env=ONE_THREAD)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return root, run

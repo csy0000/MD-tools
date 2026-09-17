@@ -316,7 +316,9 @@ def _check_file_roles(args) -> None:
                 f"output TRAJECTORY, as in Amber's mdcrd; use `-s` for the serialized System.\n"
                 f"  This surface briefly used `-x` for built.xml. It does not any more: writing "
                 f"a trajectory over built.xml would destroy the System the run needs.")
-        if trajectory.resolve() == system.resolve():
+        # Only when there IS an `-s`: a grouped ladder launch has none, and this read an unbound
+        # `system` there, so every ladder given `-x` died with UnboundLocalError.
+        if args.system and trajectory.resolve() == Path(args.system).resolve():
             raise SystemExit(
                 f"-x and -s are the same path ({args.trajectory}). The trajectory would be "
                 f"written over the System.")

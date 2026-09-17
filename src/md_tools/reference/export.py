@@ -823,6 +823,31 @@ def write_user_inputs(plan: dict[str, Any], out_dir: Path) -> dict[str, Any]:
     # Hamiltonian that ran is proven end to end.
     scaled = plan.get("scaled_state")
     scaler_command = scaled_text = ""
+    ladder_scaler = plan.get("scaled_ladder")
+    if ladder_scaler is not None:
+        # A REST2 LADDER's states travel one level up, as `system_rung<i>.xml` beside
+        # `scaler.yaml` and `verify_rungs.py`; what belongs here is how to MAKE them again.
+        config_name = "<scaler.config>"
+        if ladder_scaler.get("config") is not None:
+            shutil.copy2(ladder_scaler["config"], target / "scaler.config")
+            manifest["scaler_config"] = {
+                "file": "input/scaler.config", "sha256": _digest(target / "scaler.config"),
+                "verified": "sha256 matches the one scaler.yaml records"}
+            rows.append("| `scaler.config` | the configuration `build-top --rest2-scaler` read |")
+            config_name = "input/scaler.config"
+        else:
+            manifest["scaler_config"] = {"file": None, "verified": False,
+                                         "why": "the scaler.config whose sha256 scaler.yaml "
+                                                "records was not found"}
+        scaler_command = (f"    md-openmm build-top --rest2-scaler -s build/built.xml "
+                          f"-p build/built.pdb --config {config_name}\n")
+        scaled_text = ("\n## The scaled states\n\nThe ladder integrated the saved states "
+                       "`build/REST2/system_state<i>.xml`, one per line of the group file "
+                       "`build-md` writes (`remd_groupfile.1`); a ladder reads `-s` only from "
+                       "there. They are bundled one level up as `system_rung<i>.xml`, with the "
+                       "`scaler.yaml` that made them. Make them again from the built System with "
+                       "the command in route 4, or check them with OpenMM alone:\n\n"
+                       "    cd .. && python verify_rungs.py\n")
     if scaled is not None:
         state, scaler_record = Path(scaled["state"]), Path(scaled["record"])
         shutil.copy2(state, target / state.name)

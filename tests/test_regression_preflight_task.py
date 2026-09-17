@@ -183,9 +183,16 @@ def test_a_generated_wrapper_refuses_a_plural_world_without_mpi4py(protocol, gen
     """
     project = generated / f"{protocol}-run1"
     destination = tmp_path / "never"
-    # A ladder reads -s only from its group file (0.5.4); AIS still takes -s.
-    system = (["--groupfile", "remd_groupfile.1"] if protocol == "REST2"
-              else ["-s", "missing.xml"])
+    # A ladder reads -s only from its group file (0.5.4), whose `-i` must name the protocol this
+    # launch writes into `destination`; AIS still takes -s.
+    if protocol == "REST2":
+        from .conftest import ladder_group_file
+
+        system = ["--groupfile", str(ladder_group_file(
+            generated, destination.resolve(), run_dir="REST2-run1",
+            start=generated / "REST2-run1" / "eq" / "eq_3.xml"))]
+    else:
+        system = ["-s", "missing.xml"]
     argv = [sys.executable, str(project / f"{protocol}.py"),
             "-p", "missing.pdb", *system, "-odir", str(destination)]
     if protocol == "AIS":

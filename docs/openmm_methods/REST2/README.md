@@ -48,19 +48,62 @@ does it.
 | generalized Born (implicit) | `(1 − τ)` |
 | environment–environment | `1` — untouched |
 | bonds and angles | `1` — untouched |
-| ordinary amide ω torsions | `1` — **unscaled by convention** |
+| **unscaled torsions**: every proper torsion across an ordinary amide C–N (ω), an aromatic ring bond or another double bond; every improper | `1` — **unscaled by convention** |
 
-Leaving ω unscaled is *this repository's* convention, not textbook REST2. A softened ω barrier lets
-the backbone sample *cis* amides that the force field was never fit to describe, so the hot rungs
-would explore a region the parameters do not cover. The exclusion is expressed as **central bonds**:
-every torsion term that shares a peptide C–N bond is excluded, so no term is missed because it was
-enumerated differently.
+Leaving these unscaled is *this repository's* convention (v3, `rest2-unscaled-torsions`), not
+textbook REST2. A softened ω barrier lets the backbone sample *cis* amides the force field was never
+fit to describe; a softened ring or double-bond torsion lets a hot state bend a planar group, and a
+softened improper lets it invert a centre. In every case the hot states would explore geometry
+state 0 never visits, and exchanges would stop being useful. The exclusion is expressed as
+**central bonds**: every proper torsion term across such a bond is left unscaled, so no term is
+missed because it was enumerated differently. The ARG guanidinium counts as double bonds.
 
-The resolved exclusions are written to `solute.yaml` beside the run, with the topology digest they
-were derived against. See [`ScalingSelection`](#the-selection-file).
+**How a bond is classified.** Protein residues from a residue table (PHE, TYR, TRP, HIS rings; ARG
+NE–CZ, CZ–NH1, CZ–NH2). A small molecule from its bond orders, read from an SDF (see
+[the scaler](#the-scaled-states-build-top-rest2-scaler)). A torsion is proper or improper by the
+bond graph: a bonded chain is proper; one atom bonded to the other three is improper. **A torsion
+that cannot be classified is refused**, never silently scaled. A ring-locked amide nitrogen
+(proline, or a ring of at most `max_proline_ring_size` atoms) keeps its ω eligible for scaling.
 
-The scaling is applied by `md_tools.rest2.REST2Scaler`. Fixed-τ cMD, REST2, rREST2 and AIS all use
-that one implementation.
+## The scaled states: `build-top --rest2-scaler`
+
+**The ladder scales nothing.** Its states are built ONCE, as files, before any run:
+
+```bash
+md-openmm build-top --rest2-scaler -s build/built.xml -p build/built.pdb --config build/scaler.config
+```
+
+```yaml
+# build/scaler.config
+method: REST2              # REST2 (a ladder), cMD (one hot state) or AIS (the V0 end state)
+schedule:
+  kind: linear
+  n_states: 4
+  tau_min: 0.0             # default
+  tau_max: 0.5
+# unscaled_torsions: true  # default; false scales every solute torsion
+# sdf_filelist: {MO1: MO1.sdf, MO2: MO2.sdf}
+```
+
+It writes `build/REST2/`:
+
+```text
+build/REST2/
+├── system_state0.xml … system_state3.xml   one scaled System per state, tau 0 … 0.5
+├── scaler.yaml       the record: source System sha256, every state's tau and sha256, the solute,
+│                     every unscaled central bond and improper, the SDFs used
+├── scaler.log
+└── <RESNAME>-unscaled.png   each small molecule, its unscaled torsions' bonds in red
+```
+
+A small molecule's bond orders come from `sdf_filelist`, else `<RESNAME>.sdf` beside the System,
+else `built.sdf` when it is the only non-standard residue; with several and no mapping, the scaler
+refuses rather than guesses. The directory appears complete or not at all, and `--overwrite` moves
+the previous set aside rather than deleting it.
+
+`build-md` refuses a REST2 configuration until `build/REST2/scaler.yaml` exists, was built from
+this `built.xml`, and holds exactly the configured taus. Every run integrates those files as they
+are; a state is never scaled a second time.
 
 ## What MD-tools implements
 
@@ -83,14 +126,17 @@ that one implementation.
 
 ## Required inputs
 
-`built.pdb`, `built.xml`, and an equilibrated state to start every rung from — normally
-`eq_npt_free.xml` from the cMD chain that `build-md` generates alongside the ladder.
+`built.pdb`, `built.xml`, the saved states in `build/REST2/`, and an equilibrated state to start
+every rung from — normally `eq_npt_free.xml` from the cMD chain that `build-md` generates alongside
+the ladder.
 
 ## Minimal sequence
 
 ```bash
 md-openmm build-top -i ALA.pdb \
     -os build/built.xml -op build/built.pdb -log build/built.log
+md-openmm build-top --rest2-scaler -s build/built.xml -p build/built.pdb \
+    --config build/scaler.config
 md-openmm build-md  -odir ./REST2-run1 --config example.config
 cd REST2-run1 && ./run.sh
 ```
@@ -115,9 +161,11 @@ mpirun -n 4 md-openmm md-run -ng 4 -i ../input/REST2.in -p ../build/built.pdb \
     -r remd_records/restart_prod1.json
 ```
 
-**A ladder takes `--groupfile`, not `-s`.** Each rung is its own pre-scaled System, named on its
-own line of the group file, so there is no single `-s` for the launch to carry — one would claim
-one Hamiltonian for every rung. Exactly one of the two is given, and the other is refused by name.
+**A ladder reads `-s` only from its group file.** Every line names one saved state,
+`-s ../build/REST2/system_state<i>.xml`, state i on line i, all from one `scaler.yaml` whose taus
+are the ladder's. There is no single `-s` for the launch to carry — one would claim one Hamiltonian
+for every rung — so `-s` on the command line is refused by name, and so is a group file naming
+anything other than saved states.
 
 **`--groupfile` always comes with `-ng`**, and the group file also carries each rung's own `-c`, so
 none is passed on the command line. `-ng` states how many groups the file is expected to hold: a
@@ -200,23 +248,23 @@ by scaling, which is not how a restraint is applied, so `export-reference` refus
 ```text
 ALA/                          the dataset root -- this is what you register
 ├── build/                    built.xml  built.pdb  built.log
+│   └── REST2/                system_state<n>.xml  scaler.yaml  <RESNAME>-unscaled.png
 ├── min/                      the minimised structure, shared
 ├── input/                    min.in  eq_1.in  eq_2.in  eq_3.in  REST2.in
 └── REST2-run1/
     ├── resolved.config       authoritative      run.config   the seed
     ├── REST2.py              the compact ladder entry point
-    ├── run.sh                build-md.log       build_states.log
+    ├── run.sh                build-md.log
     ├── eq/                   this run's equilibration: eq_<k>.{py,xml,out,log}
     │                         solute_eq_<k>.nc  mdout_eq_<k>.csv
     ├── remd0/  remd1/ …      ONE DIRECTORY PER THERMODYNAMIC STATE
-    │                         build_state<n>.xml          that rung's pre-scaled Hamiltonian
     │                         remd_state<n>_prod<x>.nc    whole-system trajectory, segment x
     │                         solute_state<n>_prod<x>.nc  solute trajectory, segment x
     ├── remd_records/         the ladder's own records, ONE SET PER SEGMENT:
     │                         REST2_prod<x>.{out,log}  restart_prod<x>.json  rem_prod<x>.log
     │                         exchange_prod<x>.csv  ledger_prod<x>.nc
     ├── cv_state<i>.csv       the CV series, one per STATE, with its cv_state<i>.json sidecar
-    ├── remd_groupfile.1      one line per state, naming that state's rung
+    ├── remd_groupfile.1      one line per state, naming that state's saved System
     ├── rank/                 per-PROCESS reports
     └── solute.yaml  _protocol.py    written by rank 0, verified by every rank
 ```
@@ -308,16 +356,11 @@ is never treated as completion.
 
 ## The selection file
 
-`solute.yaml` carries a schema version, the topology digest it was derived against, the solute atom
-indices, and the unscaled torsion central bonds with readable residue and atom labels. Supplying
-your own is supported; it is validated rather than trusted:
-
-* the topology digest must match the topology actually loaded;
-* every atom index must be in range and every named bond must exist;
-* duplicates are refused;
-* an exclusion that matches **no** torsion is refused rather than silently ignored.
-
-If no file is supplied, the classifier derives the selection and writes the resolved file.
+`solute.yaml`, written beside the run by rank 0, records what the ladder integrated: the solute
+atom indices, the unscaled central bonds and impropers with readable residue and atom labels, the
+topology digest, and `rest2.scaled_states` — the `scaler.yaml` it came from (relative to the run)
+and every state's sha256. It is a **record, not an input**: the selection is made once, by
+`build-top --rest2-scaler`, and the ladder classifies nothing itself.
 
 ## Configuration fields that matter
 

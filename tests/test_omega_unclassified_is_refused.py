@@ -6,9 +6,10 @@ until this file only ONE of its production consumers acted on it: the ladder pre
 rest -- so a candidate the classifier could not name was simply left out of the exclusions and
 SCALED, like any other solute torsion:
 
-  * `build/rungs.write_rung_systems`, which serialises the rungs a grouped ladder actually
-    integrates -- and which `build-md` called WITHOUT the `built.sdf` beside `built.xml`, so every
-    amide of a `peptide-like` or `ligand` solute arrived here unclassified;
+  * `build/rungs.write_rung_systems`, which serialised the rungs a grouped ladder integrated --
+    and which `build-md` called WITHOUT the `built.sdf` beside `built.xml`, so every amide of a
+    `peptide-like` or `ligand` solute arrived there unclassified (deleted in 0.5.4: the rungs are
+    the saved states of `build-top --rest2-scaler`, whose refusal is tested below);
   * the fixed-tau cMD stage preflight and the AIS preflight;
   * the REST2 reference export;
   * `ScalingSelection.derive`, which did not even get as far as scaling: it iterated a candidate
@@ -137,18 +138,6 @@ def test_a_tau_zero_stage_is_not_refused(unclassifiable):
     _prepare_stage(loaded, stage=stage, name="prod", where="prod")
 
 
-def test_the_rung_writer_refuses_and_writes_no_rung(unclassifiable, tmp_path):
-    from md_tools import layout as L
-    from md_tools.build.rungs import RungWriteError, write_rung_systems
-
-    run = L.DatasetLayout(tmp_path / "ALA").next_run("REST2")
-    with pytest.raises(RungWriteError) as refused:
-        write_rung_systems(run, system_path=unclassifiable / "built.xml",
-                           topology_path=unclassifiable / "built.pdb", taus=[0.0, 0.3])
-    assert "XAA" in str(refused.value)
-    assert not run.state_system(0).exists() and not run.state_system(1).exists()
-
-
 def test_the_ladder_solute_document_still_refuses(unclassifiable):
     from md_tools.remd.generated import solute_document
 
@@ -237,13 +226,18 @@ CYCLO_GDR = "O=C1NCC(=O)N[C@H](CC(=O)[O-])C(=O)N[C@H]1CCCNC(N)=[NH2+]"
 
 
 @pytest.mark.slow
-def test_build_md_rungs_of_a_peptide_like_solute_exclude_its_omegas(tmp_path):
+def test_saved_ladder_states_of_a_peptide_like_solute_exclude_its_omegas(tmp_path):
     """THE REPRODUCTION. Before the fix `build-md` wrote these rungs with
     `excluded_central_bonds: []` and `n_excluded_torsions: 0` under a header claiming
     `ordinary_amide_omega: unscaled` -- every omega of the macrocycle scaled, in the files the
     grouped ladder integrates, because the rung writer was never handed `built.sdf`.
+
+    MIGRATED for 0.5.4: `build-md` writes no rungs any more (renamed from
+    `test_build_md_rungs_...`). The files a ladder integrates are the saved states
+    `md-openmm build-top --rest2-scaler` writes, found here by the SDF beside the System with no
+    mapping given, and `build-md` only names them. The assertion is the same one, on the record
+    those files are written with.
     """
-    import json
     import subprocess
     import sys
 
@@ -275,11 +269,21 @@ def test_build_md_rungs_of_a_peptide_like_solute_exclude_its_omegas(tmp_path):
     amides = [c for c in classified["central_bonds"] if c["class"] == "amide_omega"]
     assert len(amides) == 3, amides
 
+    import yaml
+
+    from .conftest import make_states_for
+
     config = tmp_path / "REST2.config"
     config.write_text("protocol: REST2\n", encoding="utf-8")
-    build_scripts(config_path=config, out_dir=dataset / "REST2-run1", echo=False)
+    make_states_for(dataset, config)
 
-    record = json.loads((dataset / "REST2-run1" / "build_states.log").read_text(encoding="utf-8"))
-    written = {tuple(sorted(b)) for b in record["unscaled_torsions"]["excluded_central_bonds"]}
+    record = yaml.safe_load((build / "REST2" / "scaler.yaml").read_text(encoding="utf-8"))
+    written = {tuple(sorted(b)) for b in record["unscaled_torsions"]["unscaled_central_bonds"]}
     assert written == expected, (written, expected)
-    assert record["unscaled_torsions"]["n_excluded_torsions"] > 0
+    assert record["unscaled_torsions"]["counts"]["amide_omega"] == 3, record["unscaled_torsions"]
+    assert record["unscaled_torsions"]["torsion_terms"]["n_excluded_torsions"] > 0
+
+    # ...and those are the Systems the generated ladder is pointed at.
+    build_scripts(config_path=config, out_dir=dataset / "REST2-run1", echo=False)
+    group = (dataset / "REST2-run1" / "remd_groupfile.1").read_text(encoding="utf-8")
+    assert "-s ../build/REST2/system_state0.xml" in group, group

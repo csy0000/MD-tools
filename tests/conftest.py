@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -247,6 +248,39 @@ def write_starting_state(root: Path, run_dir: Path, name: str = "eq/eq_3.xml") -
     target.write_text(XmlSerializer.serialize(
         context.getState(getPositions=True, getVelocities=True)), encoding="utf-8")
     return target
+
+
+def ladder_group_file(root: Path, destination: Path, *, run_dir: str = "REST2-run1",
+                      start: Path | None = None) -> Path:
+    """The group file for a ladder launched into `destination`, from the one `build-md` wrote.
+
+    A ladder reads its inputs ONLY from its group file (0.5.4): each line names a saved scaled state
+    `build/REST2/system_state<i>.xml` as its -s. `build-md`'s `remd_groupfile.1` is written for a
+    run into its own directory -- its `-i _protocol.py` and `-c eq/eq_3.xml` are relative to it --
+    while these tests launch into a fresh `-odir` each time and start from `initial_state.xml`
+    without running the chain (or from `start`, when given). So the lines are kept, state i on line
+    i, and only those two paths are pointed at this launch; -p and -s become absolute. Written BESIDE `destination`, never in
+    it, so the output directory still starts empty.
+    """
+    source = root / run_dir / "remd_groupfile.1"
+    lines = []
+    for line in source.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        tokens = shlex.split(line)
+        for position in range(len(tokens) - 1):
+            flag, value = tokens[position], tokens[position + 1]
+            if flag == "-i":
+                tokens[position + 1] = str(destination / "_protocol.py")
+            elif flag == "-c":
+                tokens[position + 1] = str(start or root / "initial_state.xml")
+            elif flag in ("-p", "-s"):
+                tokens[position + 1] = str((root / run_dir / value).resolve())
+        lines.append(shlex.join(tokens))
+    group = destination.parent / f"{destination.name}.group"
+    group.parent.mkdir(parents=True, exist_ok=True)
+    group.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return group
 
 
 @pytest.fixture

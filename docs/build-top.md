@@ -133,8 +133,35 @@ and the build refuses to write either if they disagree, re-reading both after pl
 itself the signal that the molecular route does not apply. It is not a copy of your input: it is
 the prepared molecule, written by one writer for both routes. It is kept because bond orders are
 not recoverable from a topology, and three later consumers need them — the ligand route of the
-omega classifier, the peptide-like map, and the run-time preflight, which looks for `<system
-stem>.sdf` beside the System.
+unscaled-torsion classifier (which of the molecule's bonds are aromatic or double), the
+peptide-like map, and `build-top --rest2-scaler`, which reads it when the molecule is the only
+non-standard residue.
+
+## Scaled states: `--rest2-scaler`
+
+The second mode of `build-top` scales a System it already built. It is the ONLY place a REST2
+Hamiltonian is made: REST2 ladders, hot cMD stages and AIS integrate the files it writes and scale
+nothing themselves.
+
+```bash
+md-openmm build-top --rest2-scaler -s build/built.xml -p build/built.pdb --config build/scaler.config
+md-openmm build-top --rest2-scaler -s build/built.xml -p build/built.pdb --config build/scaler.config --check
+```
+
+```yaml
+method: REST2              # REST2, cMD or AIS; also the output directory build/<method>/
+schedule: {kind: linear, n_states: 4, tau_min: 0.0, tau_max: 0.5}
+unscaled_torsions: true    # default
+sdf_filelist: null         # {RESNAME: path.sdf}, relative to this file
+```
+
+It writes `build/<method>/system_state<i>.xml`, `scaler.yaml` (the source System's sha256, each
+state's tau and sha256, the solute, every unscaled central bond and improper) and
+`<RESNAME>-unscaled.png` for each small molecule, with its unscaled torsions' bonds in red. With
+`unscaled_torsions: true` a torsion that cannot be classified is refused. `--check` validates and
+writes nothing; `--overwrite` moves an existing set aside. The structure flags `-i`, `-os`, `-op`
+and `-log` are refused in this mode, and `-s`/`-p`/`--check` without it. See
+[REST2](openmm_methods/REST2/README.md#the-scaled-states-build-top-rest2-scaler).
 
 ## Refusals
 

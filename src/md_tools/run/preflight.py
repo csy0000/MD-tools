@@ -46,6 +46,7 @@ destroyed the thing it was protecting.
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -736,7 +737,7 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
     inputs = _continuation_inputs(coordinates, pending_parent, where=protocol)
     inventory = _stage_inventory(output=output, log=log, trajectory=trajectory, whole=whole,
                                  restart=restart, segment=segment,
-                                 checkpoint=checkpoint)
+                                 checkpoint=checkpoint, stage=stage)
     coordination, machine, acceleration, index, detail, particles, loaded = _common(
         topology=topology, system=system,
         outputs=inventory.roles,
@@ -827,7 +828,7 @@ def validate_generated_chain(*, topology, system, stages: list[dict[str, Any]],
         inventory = _stage_inventory(
             output=entry.get("output"), log=entry.get("log"),
             trajectory=entry.get("trajectory"), restart=entry.get("restart"),
-            checkpoint=entry.get("checkpoint"))
+            checkpoint=entry.get("checkpoint"), stage=entry["stage"])
         # An output of this stage may not be one of the shared inputs every stage reads.
         check_output_collisions(outputs=inventory.roles,
                                 inputs={"p": topology, "s": stage_system})
@@ -960,7 +961,7 @@ def cv_sidecar_path(csv_path) -> Path:
 
 
 def _stage_inventory(*, output, log, trajectory, restart, checkpoint,
-                     whole=None, segment=1) -> OutputInventory:
+                     whole=None, segment=1, stage=None) -> OutputInventory:
     """A stage's complete inventory, including the outputs it derives rather than is given.
 
     The phase-space stream and the checkpoint GENERATION TREE are the two that were invisible:
@@ -998,9 +999,16 @@ def _stage_inventory(*, output, log, trajectory, restart, checkpoint,
         # Three different files are deliberately not conflated: the INPUT `cv.yaml` a person
         # writes, the content-addressed copy `build-md` puts in the generated directory, and this
         # OUTPUT sidecar, which says how to read the CSV beside it.
-        roles["collective_variables"] = Path(trajectory).with_suffix(".cv.csv")
-        roles["collective_variables_definition"] = cv_sidecar_path(
-            Path(trajectory).with_suffix(".cv.csv"))
+        #
+        # NAMED BY `cv_csv_path`, the one authority the stage writes through: `<key>.cv.csv`.
+        # This derived `<trajectory stem>.cv.csv` -- `solute_prod1.cv.csv`, a file no stage writes
+        # since a stage has two trajectories -- so a completed resumed stage was refused as
+        # missing its series, and `--overwrite` left the real `cMD.cv.csv` and `.cv.json` behind.
+        from ..md.stage import cv_csv_path
+
+        series = cv_csv_path(Path(trajectory), stage)
+        roles["collective_variables"] = series
+        roles["collective_variables_definition"] = cv_sidecar_path(series)
     if checkpoint:
         checkpoint = Path(checkpoint)
         roles["checkpoints"] = checkpoint.parent / f"{checkpoint.stem}.checkpoints"
@@ -1239,7 +1247,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
     # rebuilt every rung from it at run time -- re-classifying torsions from an SDF it looked for
     # beside `remd0/build_state0.xml`, where none ever is, which is how 0.5.3 refused a ligand.
     saved_states = _saved_state_ladder(groupfile, replicas=int(replicas), ladder=ladder,
-                                       where=protocol)
+                                       where=protocol, out_dir=out_dir)
     if saved_states is None:
         raise PreflightError(
             f"{protocol}: {groupfile} names no saved scaled states. A ladder scales nothing "
@@ -1501,7 +1509,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                            notes={"solute_document": solute_record} if solute_record else {})
 
 
-def _saved_state_ladder(groupfile, *, replicas: int, ladder, where: str):
+def _saved_state_ladder(groupfile, *, replicas: int, ladder, where: str, out_dir=None):
     """The ladder's rungs as SAVED SCALED STATES, or None when the group file names none.
 
     Every line must name a state of the same `scaler.yaml`, line i state i, and the states must be
@@ -1574,7 +1582,13 @@ def _saved_state_ladder(groupfile, *, replicas: int, ladder, where: str):
              "proline_like_scaled_bonds": section["proline_like_scaled_bonds"],
              "detection_method": section["method"], "unclassified": []},
             route="saved-state", system=loaded.system)
-        document["rest2"]["scaled_states"] = {"record": identities[0]["record"],
+        # RELATIVE to the directory `solute.yaml` is written into, as every path a run records
+        # about its inputs is: an absolute path stops resolving when the run tree is moved, and
+        # `solute.yaml` is content-addressed, so it would also differ between two copies of one run.
+        record_path = identities[0]["record"]
+        if out_dir is not None:
+            record_path = os.path.relpath(Path(record_path).resolve(), Path(out_dir).resolve())
+        document["rest2"]["scaled_states"] = {"record": record_path,
                                              "states": [i["system_sha256"] for i in identities]}
         return document
 

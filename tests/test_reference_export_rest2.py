@@ -102,6 +102,11 @@ def _engine_ladder_and_bundle(root, *, equilibration_steps, per_tau=False):
         f"exchange_interval_steps: {INTERVAL}, number_of_exchanges: {EXCHANGES}, "
         "state_trajectory: true, rem_log: true, neighbour_acceptance_report: true}\n",
         encoding="utf-8")
+    # A ladder integrates SAVED scaled states (0.5.4): `build-md` refuses to generate one until
+    # `build/REST2/` exists, as `md-openmm build-top --rest2-scaler` writes it.
+    from .conftest import make_states_for
+
+    make_states_for(root, root / "REST2.config")
     assert subprocess.run(CLI + ["build-md", "-odir", "./run-run1", "--config",
                                  str(root / "REST2.config")],
                           cwd=root, capture_output=True, text=True, timeout=600).returncode == 0
@@ -118,11 +123,15 @@ def _engine_ladder_and_bundle(root, *, equilibration_steps, per_tau=False):
     # and the answer is the one `run.sh` uses: minimisation into `../min`, equilibration into
     # `eq/`, each beside its own declaration. The explicit names move with it so the ladder's
     # `-c` still finds this state.
-    stage_odir, start = ("../min", "../min/eq.xml") if per_tau else ("eq", "eq/eq.xml")
+    #
+    # THE END STATE IS NAMED WHAT THE GROUP FILE CONTINUES FROM. A ladder reads its inputs only from
+    # `remd_groupfile.1` (0.5.4), whose lines name `-c eq/eq_3.xml`, or `-c ../min/min.xml` under
+    # per-tau equilibration; the shortened chain here writes that file directly.
+    stage_odir, start = ("../min", "../min/min.xml") if per_tau else ("eq", "eq/eq_3.xml")
     equilibration = subprocess.run(
         CLI + ["md-run", "-i", "../input/min.in" if per_tau else "../input/eq_1.in",
                "-p", "../build/built.pdb", "-s", "../build/built.xml",
-               "-r", f"{stage_odir}/eq.xml", "-chk", f"{stage_odir}/eq.chk",
+               "-r", start, "-chk", f"{stage_odir}/eq.chk",
                "-o", f"{stage_odir}/eq.out", "-log", f"{stage_odir}/eq.log",
                "-odir", stage_odir, "--cpu"],
         cwd=run, capture_output=True, text=True, timeout=1800, env=ONE_THREAD)
@@ -130,7 +139,7 @@ def _engine_ladder_and_bundle(root, *, equilibration_steps, per_tau=False):
 
     done = subprocess.run(
         ["mpirun", "-n", str(RUNGS), *CLI, "md-run", "-ng", str(RUNGS), "-i", "../input/REST2.in",
-         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-c", start, "-x", "REST2.nc",
+         "-p", "../build/built.pdb", "--groupfile", "remd_groupfile.1", "-x", "REST2.nc",
          "-r", "restart.json", "-o", "REST2.out", "-log", "REST2.log", "--cpu"],
         cwd=run, capture_output=True, text=True, timeout=3600, env=ONE_THREAD)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
@@ -221,7 +230,7 @@ def test_every_rung_rebuilds_from_rung_zero_without_md_tools(ladder, tmp_path):
     done = subprocess.run([sys.executable, "_blocked.py"], cwd=copy, capture_output=True,
                           text=True, timeout=600, env={**ONE_THREAD, "PYTHONPATH": ""})
     assert done.returncode == 0, done.stdout + done.stderr
-    assert f"all {RUNGS} rungs rebuild identically from rung 0" in done.stdout, done.stdout
+    assert f"all {RUNGS} rungs rebuild identically from the built System" in done.stdout, done.stdout
 
 
 def test_a_tampered_rung_is_named(ladder, tmp_path):
@@ -282,11 +291,16 @@ def test_input_holds_what_the_user_supplied_each_one_proven(ladder):
             "build_settings.json", "structure.leap"} <= names
     assert (inputs / "REST2.in").read_bytes() == (root / "input" / "REST2.in").read_bytes()
     readme = (inputs / "README.md").read_text(encoding="utf-8")
-    assert (f"mpirun -n {RUNGS} md-openmm md-run -ng {RUNGS} -i input/REST2.in "
-            "-p input/built.pdb -s input/built.xml -c ") in readme
-    # The starting state is quoted as the run recorded it -- a layout path now, since a
-    # preparation stage writes into `../min` under per-tau equilibration and into `eq/` otherwise.
-    assert ("-c ../min/eq.xml" in readme) or ("-c eq/eq.xml" in readme), readme
+    # A 0.5.4 ladder reads -s (and -c) only from its group file, so the command names the group
+    # file and no System; the states are made by the scaler, whose command route 4 now carries.
+    ladder_line = next(line for line in readme.splitlines()
+                       if f"mpirun -n {RUNGS} md-openmm md-run -ng {RUNGS}" in line)
+    assert "-i input/REST2.in -p input/built.pdb --groupfile remd_groupfile.1" in ladder_line
+    assert " -s " not in ladder_line and " -c " not in ladder_line, ladder_line
+    assert ("md-openmm build-top --rest2-scaler -s build/built.xml -p build/built.pdb "
+            "--config input/scaler.config") in readme, readme
+    assert (inputs / "scaler.config").is_file()
+    assert "python verify_rungs.py" in readme
     assert str(root) not in readme
 
 
