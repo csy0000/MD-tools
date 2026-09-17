@@ -101,6 +101,12 @@ type: string or null · default: `null`
 
 Build this BIOLOGICAL ASSEMBLY of an mmCIF input (the `_pdbx_struct_assembly` id, quoted: "3"), not its asymmetric unit. They are different molecules: 1TYL's asymmetric unit is an insulin dimer, its assembly 3 the T3R3 hexamer. Every copy of a chain gets its own chain id (A, B, C ... in operator order), and build/assembly.json maps each back to its author chain, label_asym ids and operator. An ion or water every operator places on the same symmetry-axis position is kept once, and each dropped copy is recorded; coinciding protein or ligand atoms are refused. `ligands` selectors and `protonation.overrides` name the EXPANDED chain ids. Null builds the file as deposited. Only for a .cif input and kind: peptide or complex.
 
+#### `input.missing_atoms`
+
+type: string · default: `refuse` · one of `refuse`, `add`
+
+What to do when a standard residue lacks heavy atoms -- a disordered surface side chain, a missing terminal OXT. `refuse` (the default) stops the build and lists every such residue and the atoms it lacks. `add` builds them with PDBFixer and records every added atom in built.log; they carry no crystallographic evidence. Missing RESIDUES inside a chain (a C-N break above 2 A) are always refused: that is loop modelling. Only for kind: peptide or complex built from a .pdb or .cif.
+
 ### `protonation`
 
 Protonation of titratable protein residues.

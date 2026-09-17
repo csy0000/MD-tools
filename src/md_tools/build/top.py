@@ -166,6 +166,14 @@ BUILD_SCHEMA = Schema(
                       "selectors and `protonation.overrides` name the EXPANDED chain ids. Null "
                       "builds the file as deposited. Only for a .cif input and kind: peptide or "
                       "complex."),
+            Field("missing_atoms", str, default="refuse", enum=("refuse", "add"),
+                  doc="What to do when a standard residue lacks heavy atoms -- a disordered "
+                      "surface side chain, a missing terminal OXT. `refuse` (the default) stops "
+                      "the build and lists every such residue and the atoms it lacks. `add` builds "
+                      "them with PDBFixer and records every added atom in built.log; they carry "
+                      "no crystallographic evidence. Missing RESIDUES inside a chain (a C-N "
+                      "break above 2 A) are always refused: that is loop modelling. Only for "
+                      "kind: peptide or complex built from a .pdb or .cif."),
         ], doc="How the structure file is read."),
         Section("protonation", [
             Field("method", str, default="openmm", enum=("openmm", "propka"),
@@ -918,7 +926,9 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     # THE BIOLOGICAL ASSEMBLY, expanded before anything else reads the structure: ligand selectors
     # and protonation overrides name the EXPANDED chain ids. Into a private temporary directory,
     # so an assembly refusal -- or a mapping refusal that follows it -- leaves nothing behind.
-    assembly_build = None
+    assembly_record = None
+    prepared_pdb_bytes = None
+    completion_record = None
     assembly_scratch = None
     out_assembly = out_system.parent / "assembly.json"
     structure_input = input_path
@@ -932,8 +942,34 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         except AssemblyError as exc:
             assembly_scratch.cleanup()
             raise ConfigError(f"-i {input_path}: {exc}") from None
-        assembly_build = {"record": assembly_record, "pdb_bytes": expanded.read_bytes()}
+        prepared_pdb_bytes = expanded.read_bytes()
         structure_input = expanded
+
+    # MISSING HEAVY ATOMS AND CHAIN BREAKS, decided before anything reads the structure for real:
+    # a break is refused, and incomplete residues are refused or built under input.missing_atoms.
+    if (peptide or complex_build) and suffix in (".pdb", ".cif"):
+        from openmm import app as _app
+
+        from ..openmm.completion import CompletionError, inspect_structure
+
+        reader = _app.PDBxFile if structure_input.suffix.lower() == ".cif" else _app.PDBFile
+        try:
+            original = reader(str(structure_input))
+            completed_topology, completed_positions, completion_record = inspect_structure(
+                original.topology, original.positions,
+                missing_atoms=resolved["input"]["missing_atoms"])
+        except CompletionError as exc:
+            if assembly_scratch is not None:
+                assembly_scratch.cleanup()
+            raise ConfigError(f"-i {input_path}: {exc}") from None
+        if completion_record["atoms_added"]:
+            if assembly_scratch is None:
+                assembly_scratch = tempfile.TemporaryDirectory(prefix="build-top-assembly-")
+            completed = Path(assembly_scratch.name) / "completed.pdb"
+            with completed.open("w") as handle:
+                _app.PDBFile.writeFile(completed_topology, completed_positions, handle, keepIds=True)
+            structure_input = completed
+            prepared_pdb_bytes = completed.read_bytes()
 
     mapped = None
     out_mapping = out_system.parent / "ligand_mapping.json"
@@ -943,7 +979,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
     existing = [p for p in (out_system, out_pdb, *([out_sdf] if out_sdf else []),
                             *([out_mapping] if complex_build else []),
-                            *([out_assembly] if assembly_build else [])) if p.exists()]
+                            *([out_assembly] if assembly_record else [])) if p.exists()]
     if existing and not overwrite:
         raise ConfigError(
             f"refusing to replace {', '.join(str(p) for p in existing)}. Pass --overwrite to "
@@ -983,10 +1019,15 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     log("=" * 68)
     log.heading("Command")
     log.field("input", input_path)
-    if assembly_build is not None:
-        record_ = assembly_build["record"]
-        log.field("assembly", f"{record_['assembly_id']}: {len(record_['chains'])} chain(s), "
-                              f"{len(record_['deduplicated'])} on-axis copy(ies) dropped")
+    if assembly_record is not None:
+        log.field("assembly", f"{assembly_record['assembly_id']}: "
+                              f"{len(assembly_record['chains'])} chain(s), "
+                              f"{len(assembly_record['deduplicated'])} on-axis copy(ies) dropped")
+    if completion_record is not None and completion_record["atoms_added"]:
+        added_residues = {(a["chain"], a["resid"], a["insertion_code"])
+                          for a in completion_record["atoms_added"]}
+        log.field("missing atoms", f"{len(completion_record['atoms_added'])} atom(s) added to "
+                                   f"{len(added_residues)} residue(s) (input.missing_atoms: add)")
     log.field("config", config_path if config_path else "(none -- built-in defaults)")
     log.field("system out", out_system)
     log.field("topology out", out_pdb)
@@ -1128,11 +1169,12 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
             def builder(path, cfg, staging, *, route, log):          # noqa: F811
                 return _build_complex(path, cfg, staging, mapped=mapped, log=log)
-        if assembly_build is not None:
-            # From here the assembly IS a PDB, built as the `.pdb` route would build it.
-            structure_path = staging / "assembly" / "assembly.pdb"
+        if prepared_pdb_bytes is not None:
+            # From here the expanded and/or completed structure IS a PDB, built as the `.pdb`
+            # route would build it.
+            structure_path = staging / "prepared" / "prepared.pdb"
             structure_path.parent.mkdir(parents=True, exist_ok=True)
-            structure_path.write_bytes(assembly_build["pdb_bytes"])
+            structure_path.write_bytes(prepared_pdb_bytes)
             if assembly_scratch is not None:
                 assembly_scratch.cleanup()
         if sequence_build is not None:
@@ -1317,9 +1359,9 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                 f"refusing to report completion")
         if out_sdf is not None:
             outputs.append((staged_sdf, out_sdf))
-        if assembly_build is not None:
+        if assembly_record is not None:
             staged_assembly = staging / "assembly.json"
-            staged_assembly.write_text(json.dumps(assembly_build["record"], indent=2) + "\n",
+            staged_assembly.write_text(json.dumps(assembly_record, indent=2) + "\n",
                                        encoding="utf-8")
             outputs.append((staged_assembly, out_assembly))
         for source, target in outputs:
@@ -1349,8 +1391,10 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             written_outputs["solute_sdf"] = {**file_facts(out_sdf), "residue_name": residue_name}
         if complex_build:
             written_outputs["ligand_mapping"] = file_facts(out_mapping)
-        if assembly_build is not None:
+        if assembly_record is not None:
             written_outputs["assembly"] = file_facts(out_assembly)
+        if completion_record is not None:
+            log.update(structure_completion=completion_record)
         protonation = (record.get("protonation") or {}).get("protonation")
         if protonation is not None:
             log.update(protonation=protonation)

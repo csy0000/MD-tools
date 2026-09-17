@@ -373,6 +373,66 @@ def _seeded_global_random(seed: int):
         random.setstate(state)
 
 
+def _retained_solvent_last(topology, positions):
+    """A Modeller with every input water and ion residue moved AFTER everything else.
+
+    A deposited structure keeps its crystal waters and ions (1BRS's waters, 1TYL's zinc and
+    chloride) interleaved with its chains. Every REST2 index set is defined by the solute being
+    atoms `0 .. n_solute-1`, so they are moved to follow the solute -- the same residue names,
+    chain ids, residue ids and coordinates, and their intra-residue bonds -- and `addSolvent`
+    then appends its own after them. Returns the Modeller and one record per moved residue.
+    """
+    from openmm import app
+
+    solvent_names = WATER_RESIDUE_NAMES | ION_RESIDUE_NAMES
+    residues = list(topology.residues())
+    moved = [r for r in residues if r.name.upper() in solvent_names]
+    modeller = app.Modeller(topology, positions)
+    if not moved:
+        return modeller, []
+    tail = app.Topology()
+    tail_positions = []
+    chains = {}
+    mapping = {}
+    for residue in moved:
+        chain = chains.get(residue.chain)
+        if chain is None:
+            chain = chains[residue.chain] = tail.addChain(residue.chain.id)
+        copy = tail.addResidue(residue.name, chain, residue.id, residue.insertionCode)
+        for atom in residue.atoms():
+            mapping[atom] = tail.addAtom(atom.name, atom.element, copy, atom.id)
+            tail_positions.append(positions[atom.index])
+    dropped = []
+    for bond in topology.bonds():
+        if bond[0] in mapping and bond[1] in mapping:
+            tail.addBond(mapping[bond[0]], mapping[bond[1]])
+        elif bond[0] in mapping or bond[1] in mapping:
+            # A bond from a retained ion or water to the solute (a CONECT or struct_conn metalc
+            # record) does not survive moving the residue. No System carries it today, but a
+            # bonded metal-site model will, so it is RECORDED rather than lost silently.
+            dropped.append([_atom_label(bond[0]), _atom_label(bond[1])])
+    moved_atoms = {atom.index for residue in moved for atom in residue.atoms()}
+    modeller.delete([a for a in modeller.topology.atoms() if a.index in moved_atoms])
+    from openmm import unit
+
+    modeller.add(tail, unit.Quantity([p.value_in_unit(unit.nanometer) for p in tail_positions],
+                                     unit.nanometer))
+    record = [{"chain": r.chain.id, "resid": str(r.id).strip(),
+               "insertion_code": (r.insertionCode or "").strip(), "residue": r.name,
+               "n_atoms": len(list(r.atoms())),
+               "dropped_bonds": [pair for pair in dropped
+                                 if any(label.startswith(f"{r.chain.id}:{str(r.id).strip()}"
+                                                         f"{(r.insertionCode or '').strip()} ")
+                                        for label in pair)]} for r in moved]
+    return modeller, record
+
+
+def _atom_label(atom) -> str:
+    residue = atom.residue
+    return (f"{residue.chain.id}:{str(residue.id).strip()}{(residue.insertionCode or '').strip()} "
+            f"{residue.name} {atom.name}")
+
+
 def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] = None,
             route: Optional[str] = None, *, residue_templates_for=None) -> dict:
     """Solvate in a rhombic-dodecahedron box with ``padding_nm`` of water and NaCl at 0.15 M.
@@ -389,10 +449,12 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
 
     pdb = app.PDBFile(str(pdb_in))
     forcefield, ff_info = build_forcefield(cfg, ligand_sdf, route=route)
-    modeller = app.Modeller(pdb.topology, pdb.positions)
+    modeller, retained = _retained_solvent_last(pdb.topology, pdb.positions)
 
-    n_solute = modeller.topology.getNumAtoms()
-    solute_residues = [r.name for r in modeller.topology.residues()]
+    n_retained = sum(entry["n_atoms"] for entry in retained)
+    n_solute = modeller.topology.getNumAtoms() - n_retained
+    solute_residues = [r.name for r in modeller.topology.residues()][
+        :modeller.topology.getNumResidues() - len(retained)]
 
     geometry = _resolve_box(modeller, cfg)
     water_model, water_note = reconcile_water_model(
@@ -423,6 +485,13 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
         )
 
     topology = modeller.topology
+    from ..md.stage import solute_atom_indices
+
+    if n_solute != len(solute_atom_indices(topology)):
+        raise RuntimeError(
+            f"solvation counted {n_solute} solute atoms but solute_atom_indices finds "
+            f"{len(solute_atom_indices(topology))}; the two definitions of the solute every REST2 "
+            f"index set depends on disagree")
     # the solute must still be the first n_solute atoms
     for atom in list(topology.atoms())[:n_solute]:
         if atom.residue.name.upper() in WATER_RESIDUE_NAMES | ION_RESIDUE_NAMES:
@@ -438,9 +507,14 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
         app.PDBFile.writeFile(topology, modeller.positions, fh, keepIds=True)
 
     box = topology.getPeriodicBoxVectors().value_in_unit(unit.nanometer)
-    n_water = sum(1 for r in topology.residues() if r.name.upper() in WATER_RESIDUE_NAMES)
+    # ADDED solvent only: retained crystal waters and ions are reported under `retained`, and a
+    # retained Zn2+ must not enter the monovalent salt arithmetic as though addSolvent had put it.
+    first_added = n_solute + n_retained
+    added_residues = [r for r in topology.residues()
+                      if next(iter(r.atoms())).index >= first_added]
+    n_water = sum(1 for r in added_residues if r.name.upper() in WATER_RESIDUE_NAMES)
     ions: dict[str, int] = {}
-    for r in topology.residues():
+    for r in added_residues:
         if r.name.upper() in ION_RESIDUE_NAMES:
             ions[r.name] = ions.get(r.name, 0) + 1
     volume_nm3 = float(np.abs(np.linalg.det(np.array(box))))
@@ -449,6 +523,9 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
         "input_pdb": str(pdb_in),
         "output_pdb": str(out_pdb),
         "n_solute_atoms": n_solute,
+        # Crystal waters and ions kept from the input, moved after the solute (identities kept).
+        "retained": retained,
+        "n_retained_atoms": n_retained,
         "solute_residues": solute_residues,
         "n_atoms_total": topology.getNumAtoms(),
         "n_waters": n_water,
