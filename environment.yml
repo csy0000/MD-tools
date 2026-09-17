@@ -105,6 +105,7 @@ dependencies:
   - rdkit                     # SMILES -> 3D conformer
   - networkx                  # ligand-instance graph matching (md_tools.ligands.mapping); also required by openff-toolkit
   - mdtraj                    # reads the AIS source DCD and its box vectors
+  - propka=3.5.1              # PROPKA3 pKa prediction for build-top protonation (`protonation.method: propka`)
 
   # --- the REST2 engine ---------------------------------------------------------------------------
   # REST2 runs on openmmtools.multistate.ReplicaExchangeSampler. The version is EXACT because
