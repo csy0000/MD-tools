@@ -128,7 +128,7 @@ def test_the_states_are_exactly_what_a_ladder_integrates(tmp_path):
 
     out = build / "REST2"
     assert sorted(p.name for p in out.iterdir()) == [
-        "scaler.log", "scaler.yaml",
+        "protein-unscaled.png", "scaler.log", "scaler.yaml",
         "system_state0.xml", "system_state1.xml", "system_state2.xml", "system_state3.xml"]
 
     base = XmlSerializer.deserialize((build / "built.xml").read_text(encoding="utf-8"))
@@ -432,11 +432,37 @@ def test_an_sdf_that_is_not_this_residue_is_not_drawn(tmp_path):
     assert not (tmp_path / "MO1-unscaled.png").exists()
 
 
-def test_a_peptide_gets_no_picture(tmp_path):
+def test_a_peptide_gets_a_picture_of_its_protein_residues(tmp_path):
+    """ACE-ALA-NME is classified from the residue table and has no SDF, so the small-molecule
+    picture could never draw it. It used to get NO picture; a capped peptide is exactly what a
+    tutorial shows first, and its two amide omegas are the torsions a reader wants to see."""
     build = _dataset(tmp_path / "ALA")
     record = _scale(build, _config(build, "method: REST2\n"))
-    assert record["unscaled_torsions"]["depictions"] == {}
-    assert not list((build / "REST2").glob("*.png"))
+    section = record["unscaled_torsions"]
+    picture = section["depictions"]["protein"]
+    assert picture["file"] == "protein-unscaled.png"
+    assert picture["residues"] == ["ACE", "ALA", "NME"]
+    assert sorted(map(tuple, picture["unscaled_bonds"])) == sorted(
+        map(tuple, section["unscaled_central_bonds"])), "the picture draws exactly the record's bonds"
+    path = build / "REST2" / "protein-unscaled.png"
+    assert path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert _red_pixels(path) > 50, "the amide omega bonds must be drawn red"
+    for a, b in picture["unscaled_bonds"]:
+        assert f"{a}-{b}" in picture["caption"]
+
+
+def test_a_protein_too_large_to_read_is_not_drawn_and_says_why(tmp_path):
+    from openmm.app import PDBFile
+
+    from md_tools.build.scaler import depict_protein_unscaled
+    from md_tools.md.stage import solute_atom_indices
+
+    build = _dataset(tmp_path / "ALA")
+    topology = PDBFile(str(build / "built.pdb")).topology
+    drawn = depict_protein_unscaled(topology, solute_atom_indices(topology), [], tmp_path,
+                                    max_heavy_atoms=3)
+    assert "above 3" in drawn["protein"]["skipped"]
+    assert not (tmp_path / "protein-unscaled.png").exists()
 
 
 @pytest.mark.slow

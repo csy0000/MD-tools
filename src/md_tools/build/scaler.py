@@ -313,6 +313,106 @@ def depict_unscaled_torsions(topology, solute, residue_sdfs: Mapping[str, Path],
     return drawn
 
 
+#: A protein-route picture is drawn only up to this many solute heavy atoms. Beyond it a 2D drawing
+#: of a whole chain is a tangle nobody can read the red bonds in, and `scaler.yaml` is the record.
+MAX_PROTEIN_PICTURE_HEAVY_ATOMS = 200
+
+#: The file a protein-route picture is written to, beside the states.
+PROTEIN_PICTURE = "protein-unscaled.png"
+
+
+def depict_protein_unscaled(topology, solute, unscaled_bonds, out_dir, *, enabled: bool = True,
+                            improper_centres=(), size: tuple[int, int] = (700, 500),
+                            max_heavy_atoms: int = MAX_PROTEIN_PICTURE_HEAVY_ATOMS
+                            ) -> dict[str, dict[str, Any]]:
+    """`protein-unscaled.png`: the solute's STANDARD residues, unscaled bonds and centres in RED.
+
+    The same picture a small molecule gets, for the residues classified from the protein table
+    (a capped peptide such as ACE-ALA-NME has no SDF, so `depict_unscaled_torsions` draws nothing
+    for it). The drawing is built from the TOPOLOGY's heavy atoms and bonds; a topology carries no
+    bond orders, so every bond is drawn single -- which bonds are red, and the indices beside them,
+    are what the picture is for. Skipped, with the reason returned, above `max_heavy_atoms`.
+
+    Returns `{"protein": {file, residues, unscaled_bonds, improper_centres, caption}}`, or `{}` when
+    the solute has no standard residue, or `{"protein": {"skipped": reason}}` when too large.
+    """
+    from rdkit import Chem
+    from rdkit.Chem import rdDepictor
+    from rdkit.Chem.Draw import rdMolDraw2D
+
+    from ..openmm.system import PROTEIN_RESIDUES
+
+    solute = {int(i) for i in solute}
+    residues = [r for r in topology.residues()
+                if r.name.upper() in PROTEIN_RESIDUES and any(a.index in solute for a in r.atoms())]
+    if not residues:
+        return {}
+    heavy = [a for r in residues for a in r.atoms()
+             if a.index in solute and a.element is not None and a.element.symbol != "H"]
+    names = "-".join(r.name for r in residues[:6]) + ("-..." if len(residues) > 6 else "")
+    if len(heavy) > max_heavy_atoms:
+        return {"protein": {"skipped": (f"{len(heavy)} heavy atoms in {len(residues)} residue(s), "
+                                        f"above {max_heavy_atoms}: not drawn; scaler.yaml lists "
+                                        f"every unscaled bond")}}
+
+    mol = Chem.RWMol()
+    where = {}
+    for atom in heavy:
+        rd = Chem.Atom(atom.element.symbol)
+        rd.SetNoImplicit(True)
+        rd.SetIntProp("topology_index", int(atom.index))
+        where[atom.index] = mol.AddAtom(rd)
+    for bond in topology.bonds():
+        a, b = bond[0].index, bond[1].index
+        if a in where and b in where and mol.GetBondBetweenAtoms(where[a], where[b]) is None:
+            mol.AddBond(where[a], where[b], Chem.BondType.SINGLE)
+    mol = mol.GetMol()
+    mol.UpdatePropertyCache(strict=False)
+    Chem.FastFindRings(mol)
+    rdDepictor.Compute2DCoords(mol)
+
+    members = set(where)
+    mine = sorted(tuple(int(x) for x in bond) for bond in unscaled_bonds
+                  if int(bond[0]) in members and int(bond[1]) in members)
+    red_atoms, red_bonds = set(), set()
+    for a, b in mine:
+        red_atoms |= {where[a], where[b]}
+        found = mol.GetBondBetweenAtoms(where[a], where[b])
+        if found is not None:
+            red_bonds.add(found.GetIdx())
+    centres = sorted(a for a in improper_centres if a in members)
+    red_atoms |= {where[a] for a in centres}
+    for index in red_atoms:
+        atom = mol.GetAtomWithIdx(index)
+        atom.SetProp("atomNote", str(atom.GetIntProp("topology_index")))
+
+    if not enabled:
+        caption = f"{names}: unscaled torsions OFF -- every torsion is scaled"
+    elif mine or centres:
+        caption = (f"{names}: red = unscaled torsions across bond(s) "
+                   + (", ".join(f"{a}-{b}" for a, b in mine) or "none")
+                   + f"; {len(centres)} improper centre(s)")
+    else:
+        caption = f"{names}: no torsion left unscaled"
+
+    drawer = rdMolDraw2D.MolDraw2DCairo(*size)
+    options = drawer.drawOptions()
+    options.useBWAtomPalette()
+    options.legendFontSize = 18
+    rdMolDraw2D.PrepareAndDrawMolecule(
+        drawer, mol, legend=caption,
+        highlightAtoms=sorted(red_atoms), highlightBonds=sorted(red_bonds),
+        highlightAtomColors={i: UNSCALED_RGB for i in red_atoms},
+        highlightAtomRadii={i: 0.25 for i in red_atoms},
+        highlightBondColors={i: UNSCALED_RGB for i in red_bonds})
+    drawer.FinishDrawing()
+    target = Path(out_dir) / PROTEIN_PICTURE
+    target.write_bytes(drawer.GetDrawingText())
+    return {"protein": {"file": target.name, "residues": [r.name for r in residues],
+                        "unscaled_bonds": [list(b) for b in mine],
+                        "improper_centres": centres, "caption": caption}}
+
+
 # --- the build ------------------------------------------------------------------------------------
 
 def _plain(value):
@@ -502,11 +602,15 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
         sdf_filelist=config["sdf_filelist"],
         proline_like_residues=config["proline_like_residues"])
     pictures.update(residue_sdfs)
+    centres = _improper_centres(loaded.system, report["unscaled_improper_indices"])
     depictions = depict_unscaled_torsions(
         topology, solute, pictures, excluded, staging, enabled=enabled,
-        improper_centres=_improper_centres(loaded.system, report["unscaled_improper_indices"]))
+        improper_centres=centres)
+    depictions.update(depict_protein_unscaled(topology, solute, excluded, staging,
+                                              enabled=enabled, improper_centres=centres))
     record["unscaled_torsions"]["depictions"] = {
-        name: dict(facts, sha256=_sha256(staging / facts["file"]))
+        name: (dict(facts, sha256=_sha256(staging / facts["file"])) if "file" in facts
+               else dict(facts))
         for name, facts in sorted(depictions.items())}
     record = _plain(record)
 
@@ -546,7 +650,8 @@ def build_scaled_states(*, system_path, topology_path, config_path, overwrite: b
     for name, facts in section["residue_sdfs"].items():
         log.field(f"SDF for {name}", facts["file"])
     for name, facts in section["depictions"].items():
-        log.field(f"picture of {name}", f"{facts['file']}  ({facts['caption']})")
+        log.field(f"picture of {name}", f"{facts['file']}  ({facts['caption']})" if "file" in facts
+                  else f"not drawn: {facts['skipped']}")
     log.heading("States")
     for state in record["states"]:
         log(f"  {state['file']:<22} tau {state['tau']:<9} (1-tau)^2 "
