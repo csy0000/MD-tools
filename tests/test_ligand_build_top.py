@@ -311,13 +311,11 @@ solvent:
 
 
 @pytest.mark.slow
-def test_a_stated_package_that_cannot_be_loaded_refuses_before_any_output(tmp_path):
-    """The reporting half of the legacy-package case: a refusal, named, with nothing created.
+def test_a_stated_package_without_a_recorded_backend_builds_and_the_record_says_so(tmp_path):
+    """A package written before the implementation was recorded: usable when NAMED, never searched.
 
-    Whether such a package should be accepted at all is a policy question about existing data.
-    What is not a policy question is how it arrives: build-top must refuse by name, exit 2, and
-    leave no output directory, rather than let the error escape as a traceback from several steps
-    into the build.
+    The build proceeds -- its numbers are unchanged -- and built.log states that the package does
+    not record what produced its charges, so a reader is never told this was reuse of known ones.
     """
     import json
 
@@ -342,7 +340,31 @@ solvent:
   model: TIP3P
   padding_nm: 1.0
 """)
-    assert result.returncode == 2, result.stdout[-2000:] + result.stderr[-2000:]
-    assert "Traceback" not in result.stderr
-    assert str(tyl.path) in result.stderr and "solute.parameters" in result.stderr
-    assert not (work / "build").exists()
+    assert result.returncode == 0, result.stdout[-2000:] + result.stderr[-2000:]
+    attached = _record(work / "build" / "built.log")["ligand_packages"]["attached"]
+    assert attached["how"] == "reused (stated reference)"
+    assert attached["charges_generated_in_this_build"] is False
+    assert attached["charge_backend_recorded"] is False
+    assert attached["charge_backend_id"] is None
+
+    # The same package is never the answer to a search.
+    searched = tmp_path / "searched"
+    searched.mkdir()
+    (searched / "in.smi").write_text("CC(=O)Nc1ccc(O)cc1 paracetamol\n", encoding="utf-8")
+    result = _build(searched, Path("in.smi"), f"""
+solute:
+  kind: ligand
+  residue_name: TYL
+  compound_id: CHEMBL112
+  parameters: search
+ligand_catalog:
+  path: {tmp_path / 'catalog'}
+solvent:
+  model: TIP3P
+  padding_nm: 1.0
+""")
+    assert result.returncode == 0, result.stderr[-2000:]
+    attached = _record(searched / "build" / "built.log")["ligand_packages"]["attached"]
+    assert attached["how"] == "created"
+    row = next(c for c in attached["search"]["considered"] if c["reference"] == tyl.reference)
+    assert "does not record which implementation" in row["compared"]["charges"]

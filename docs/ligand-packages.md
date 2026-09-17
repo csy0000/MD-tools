@@ -118,7 +118,20 @@ that uses a custom Lennard-Jones representation, is refused before the package i
 ## Finding a package: what a build searches, and what counts as a match
 
 `parameter.config` is the file a search reads. It is YAML, like every configuration here, and it is
-DERIVED from `metadata.json` and re-derived on every load, so the two cannot drift. It declares four
+DERIVED from `metadata.json` and re-derived on every load, so the two cannot drift.
+
+It states the SCHEMA it was written in, and that decides how it is read:
+
+* the same schema: the stored and derived documents must be equal exactly. A difference means the
+  file was edited, and the package is refused -- this is the check that protects a catalog;
+* another schema: the file was written in a different vocabulary, which is not the same as
+  disagreeing with its package, so it is RE-DERIVED rather than compared. This is what an ABSENT
+  declaration already does, and the two now behave alike. A package's `criteria` records
+  `declaration_schema` and `declaration_is_current` so a reader can tell.
+
+The alternative -- compare strictly and bump the schema when the shape changes -- was tried and
+does not hold: adding one field made every declaration already on disk read as a contradiction,
+with the symptom "the parameters do not support this file" for packages that matched perfectly. It declares four
 things, and a build reuses the package only if ALL of them match what it needs. A near match is a
 difference:
 
@@ -131,8 +144,20 @@ difference:
 
 The charge implementation is part of the identity because a method name is not a number: AM1-BCC
 through AmberTools' `sqm`, AM1-BCC ELF10 through OpenEye, and NAGL's graph model trained to predict
-it are three different results for the same molecule. A package whose record cannot say which one
-produced it is refused at creation, and `import_package_from_system` requires `backend_id`.
+it are three different results for the same molecule. A package being WRITTEN must say which one
+produced it: `import_package_from_system` requires `backend_id`, and creation records it.
+
+**A package written before that was recorded still loads.** Its numbers are whatever they are and
+nothing about them changed, so a configuration may name it explicitly and the build proceeds. It is
+never the answer to a SEARCH, because what is missing is exactly the thing a search compares. The
+two cases are distinguishable in the criteria -- `charges.backend_recorded` is `false` and
+`charges.backend_id` is `null` -- and in the build record, which carries `charge_backend_recorded`,
+so a reader is never told that reuse of unknown charges was reuse of known ones. The search reports
+such a package as considered, with "the package does not record which implementation produced its
+charges, so it can be used only by naming it explicitly".
+
+Regenerating such a package is one command and gives the same parameter id, so accommodating them
+further was deliberately not done.
 
 Software versions are recorded (`charge_software`) and NOT compared. Requiring them to be equal
 would force a regeneration on every AmberTools or toolkit upgrade; a build that cares can read them.

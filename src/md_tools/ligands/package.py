@@ -143,6 +143,11 @@ class LigandPackage:
             "chemical_state_digest": self.metadata["chemical_state"]["digest"],
             "forcefield": self.metadata["forcefield"]["resource"],
             "charge_method": self.metadata["charges"]["method"],
+            # WHICH implementation produced the charges, or the fact that this package does not
+            # say. A package that does not say can be used when a configuration names it, and is
+            # never the answer to a search; either way the build record states it.
+            "charge_backend_id": self.metadata["charges"].get("backend_id"),
+            "charge_backend_recorded": bool(self.metadata["charges"].get("backend_id")),
             "net_formal_charge": self.metadata["chemical_state"]["net_formal_charge"],
             "n_atoms": len(self.atom_names),
         }
@@ -827,6 +832,18 @@ def load_package(directory: Path, *, expected_directory_name: bool = True) -> Li
         if atom[2] != record["partial_charge_e"]:
             raise PackageError(f"{directory}: metadata partial charge of atom {record['index']} "
                                f"is not the ffxml's")
+    # THE DIRECTORY'S IDENTITY, checked before any of the returns below. It used to sit at the end
+    # of this function, which stopped being safe the moment the criteria handling grew early
+    # returns: a package whose declaration was absent or written under another schema skipped it
+    # silently. Two tests caught that; this placement is why they cannot catch it again.
+    if expected_directory_name:
+        if directory.name != expected_id:
+            raise PackageError(f"{directory}: the directory is named {directory.name!r} but the "
+                               f"package is {expected_id}; a directory label is not an identity")
+        if directory.parent.name != compound_id:
+            raise PackageError(f"{directory}: the parent directory is {directory.parent.name!r} "
+                               f"but the package's compound is {compound_id}")
+
     try:
         derived = criteria_document(metadata, mol)
     except PackageError as exc:
@@ -841,8 +858,30 @@ def load_package(directory: Path, *, expected_directory_name: bool = True) -> Li
         # what is derived here. `declared_in_package` says which it was.
         return LigandPackage(path=directory, metadata=metadata, ffxml_text=ffxml_text,
                              atom_names=tuple(names), table=table, mol=mol,
-                             criteria={**derived, "declared_in_package": False})
+                             criteria={**derived, "declared_in_package": False,
+                                       "declaration_schema": None,
+                                       "declaration_is_current": False})
+    from .match import CRITERIA_SCHEMA
+
     criteria = read_criteria(directory / CRITERIA_NAME)
+    stored_schema = criteria.get("schema_version")
+    if stored_schema != CRITERIA_SCHEMA:
+        # A DIFFERENT VOCABULARY, not a contradiction. The file states which shape it was written
+        # in, and this version derives a different one, so comparing them field by field would
+        # refuse packages whose parameters are perfectly good -- which is what happened when a
+        # single key was added to the derived document and every file on disk began reading as a
+        # lie. The file is derived from metadata.json, so re-deriving it here is no more than what
+        # an ABSENT one already does; the two cases now behave the same way, which is the
+        # asymmetry that made a stale file fatal while a missing one was fine.
+        return LigandPackage(path=directory, metadata=metadata, ffxml_text=ffxml_text,
+                             atom_names=tuple(names), table=table, mol=mol,
+                             criteria={**derived, "declared_in_package": True,
+                                       "declaration_schema": stored_schema,
+                                       "declaration_is_current": False})
+    # WITHIN one schema the comparison is strict, and that is the check worth keeping: a
+    # parameter.config written under this shape that disagrees with the parameters beside it is an
+    # edited catalog, and a build searching it would match against something the parameters do not
+    # support.
     if criteria != derived:
         differing = sorted(k for k in set(criteria) | set(derived)
                            if criteria.get(k) != derived.get(k))
@@ -851,17 +890,14 @@ def load_package(directory: Path, *, expected_directory_name: bool = True) -> Li
             f"what metadata.json and {MOLECULE_NAME} say. It is derived, so it is never edited by "
             f"hand; a build searching the catalog would match against something the parameters do "
             f"not support.")
-
-    if expected_directory_name:
-        if directory.name != expected_id:
-            raise PackageError(f"{directory}: the directory is named {directory.name!r} but the "
-                               f"package is {expected_id}; a directory label is not an identity")
-        if directory.parent.name != compound_id:
-            raise PackageError(f"{directory}: the parent directory is {directory.parent.name!r} "
-                               f"but the package's compound is {compound_id}")
+    # The DERIVED document is what the package means; the stored one is a browsable index that
+    # has just been checked against it. Returning the derived one is what lets a package written
+    # under an older shape be matched on today's terms.
     return LigandPackage(path=directory, metadata=metadata, ffxml_text=ffxml_text,
                          atom_names=tuple(names), table=table, mol=mol,
-                         criteria={**criteria, "declared_in_package": True})
+                         criteria={**derived, "declared_in_package": True,
+                                   "declaration_schema": stored_schema,
+                                   "declaration_is_current": stored_schema == CRITERIA_SCHEMA})
 
 
 def _rdkit_version() -> Optional[str]:

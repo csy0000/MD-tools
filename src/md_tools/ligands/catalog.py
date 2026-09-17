@@ -19,6 +19,7 @@ import re
 from pathlib import Path
 from typing import Iterable, Optional
 
+from .match import CRITERIA_SCHEMA
 from .package import (CRITERIA_NAME, LigandPackage, PackageError, load_package,
                       read_criteria)
 
@@ -164,8 +165,12 @@ def search_for_match(request: dict, roots: Iterable[Path]) -> tuple[Optional[Lig
                 # A package written before the criteria file existed declares the same things in
                 # its metadata, so it is loaded and its criteria derived rather than skipped: it
                 # is an older package, not an incomplete one.
-                candidate = (read_criteria(criteria_path) if criteria_path.is_file()
-                             else load_package(directory).criteria)
+                candidate = read_criteria(criteria_path) if criteria_path.is_file() else None
+                if candidate is None or candidate.get("schema_version") != CRITERIA_SCHEMA:
+                    # Absent, or written in another vocabulary: derive it from the package itself
+                    # rather than compare two shapes. That costs a full load for such an entry and
+                    # keeps older catalogs usable instead of quietly unmatchable.
+                    candidate = load_package(directory).criteria
             except Exception as exc:
                 considered.append({"reference": reference, "root": str(root), "matched": False,
                                    "skipped": f"its criteria could not be read ({exc})"})
