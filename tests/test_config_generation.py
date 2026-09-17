@@ -740,11 +740,17 @@ def test_every_declaration_carries_the_definition_it_names(tmp_path):
     for directory in ("input", "min", "cMD-run1", "cMD-run1/eq"):
         assert (tmp_path / directory / copy).read_bytes() == payload, directory
 
-    # And every declaration names exactly this file, by bare name.
-    for declaration in ("min/resolved.config", "cMD-run1/resolved.config",
-                        "cMD-run1/eq/resolved.config"):
+    # And every declaration that reports names exactly this file, by bare name.
+    for declaration in ("cMD-run1/resolved.config", "cMD-run1/eq/resolved.config"):
         document = yaml.safe_load((tmp_path / declaration).read_text(encoding="utf-8"))
         assert document["collective_variables"]["file"] == copy, declaration
+    # EXCEPT THE MINIMISATION, which produces no series: `input/min.in` omits the CV keys, and a
+    # `min/resolved.config` naming them made `md-run -i ../input/min.in -odir ../min` refuse every
+    # CV-enabled run at its first stage, because the declaration and its input disagreed. The copy
+    # is still placed in `min/` (asserted above) so nothing that resolves beside it goes missing.
+    minimisation = yaml.safe_load((tmp_path / "min/resolved.config").read_text(encoding="utf-8"))
+    assert minimisation["collective_variables"]["file"] is None
+    assert minimisation["collective_variables"]["interval_steps"] == 0
 
 
 def test_the_implicit_stages_are_renamed_not_silently_run_as_nvt(tmp_path):

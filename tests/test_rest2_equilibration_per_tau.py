@@ -268,6 +268,18 @@ def test_every_generated_input_resolves_back_to_its_resolved_config(tmp_path):
 #: refresh_interval_exchanges: 1, velocities: resample}` to each resolved.config, and
 #: `reservoir_enabled = false, refresh_interval_exchanges = 1, reservoir_velocities = resample`
 #: to the end of &remd, which recovers every previous digest exactly. Nothing else moved.
+#:
+#: REFRESHED AGAIN FOR 0.5.4 on the AIS branch, rebased onto the rREST2 archive: the same two
+#: changes as below, re-verified against these digests -- removing `collective_variables.generate`
+#: and `ais_source.generate` and re-inserting the four retired AIS lines reproduces every previous
+#: digest, both solvents; nothing else moved.
+#: REFRESHED AGAIN FOR 0.5.4, when the single-topology AIS keys were retired. The three
+#: `resolved.config` digests per solvent moved, and nothing else: inserting exactly the four removed
+#: lines (`tau_start: 0.5`, `tau_end: 0.0`, `work_measurement: work`, `verify_every_updates: 0`)
+#: back into the freshly generated files at their schema positions reproduces each OLD pinned
+#: digest, for both solvents. And once more in 0.5.4 for two ADDED fields,
+#: `collective_variables.generate: null` and `ais_source.generate: false`: stripping exactly those
+#: two lines from the fresh files reproduces the previous digests, for both solvents.
 BEFORE = {
     "explicit": {
         "REST2-run1/REST2.py": "09af17815c1e151c6292e8fbeb8394fbabf8996c3b1d7d753ebc999ae1e93cce",
@@ -275,16 +287,16 @@ BEFORE = {
         "REST2-run1/eq/eq_2.py": "a9a19c6c5e8f839a7a51e81a1ec554f89655bd04d581bc0c1babaa6aa07e6562",
         "REST2-run1/eq/eq_3.py": "6daed6d160528e34e730c67997fb015667e2a3fe5cf80677be6b3f1e68b3ccad",
         "REST2-run1/resolved.config":
-            "fe7c4eb9d718ee976314c37e672480a9ddbeb6fe51641dda349b6f4f7096067a",
+            "58024eedd192a1f4eb8c8fd6429471cc191c1872d31790c4f73f1e1a1ccd6a59",
         # BYTE-IDENTICAL to the run root's, and the equality is the assertion: `eq/` holds
         # generated scripts, and a generated script reads the `resolved.config` strictly beside
         # itself, so the copy must be the same document rather than a second one.
         "REST2-run1/eq/resolved.config":
-            "5e641449a71ee3def42daf5a14f7952e30d95677e168b89dcd5a970b7205895e",
+            "510c971677c93a1eb62336702bb6d215ddf3bc98d6584cd37c7b0293edddd827",
         # The SHARED minimisation's declaration: method-neutral, so it is the same file whichever
         # method generates it first. Its digest therefore differs from the run's by construction.
         "min/resolved.config":
-            "5e641449a71ee3def42daf5a14f7952e30d95677e168b89dcd5a970b7205895e",
+            "510c971677c93a1eb62336702bb6d215ddf3bc98d6584cd37c7b0293edddd827",
         "REST2-run1/run.config":
             "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
         "REST2-run1/run.sh": "583fa241e887760637a9f729d71cb8b85e40314b034c4e695ea952b92d1aff8f",
@@ -301,11 +313,11 @@ BEFORE = {
         "REST2-run1/eq/eq_2.py": "3054435667e24ebc079e4ecae1f1ddbc3de854035a6ee440f1a61e4f95c2cd35",
         "REST2-run1/eq/eq_3.py": "63f242cd9e3c1bf26ae98ff86e95792d76bbe4d94d06653bdaa6c1b140628f62",
         "REST2-run1/resolved.config":
-            "bb398c8fb1722a64851aef83d3a4d78c68ccf9cda1c51ab947d36520e4b4e12a",
+            "3d2b554a9794380b5cd79c8a34a00f7cb9e40da757fdb066a3a66eebd3442ead",
         "REST2-run1/eq/resolved.config":
-            "3e21b7c5c11a448cef03b5b2de55086b3591460ec9fdc79010ed3c98998fcaa8",
+            "492eb4c2cdef5f342067b0274f8ca8690b5b5a963ee3ddfb5b128cc57fbdcfc9",
         "min/resolved.config":
-            "3e21b7c5c11a448cef03b5b2de55086b3591460ec9fdc79010ed3c98998fcaa8",
+            "492eb4c2cdef5f342067b0274f8ca8690b5b5a963ee3ddfb5b128cc57fbdcfc9",
         "REST2-run1/run.config":
             "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
         "REST2-run1/run.sh": "583fa241e887760637a9f729d71cb8b85e40314b034c4e695ea952b92d1aff8f",

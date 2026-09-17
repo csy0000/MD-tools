@@ -20,12 +20,12 @@ def _resolve(**block):
 
 def test_reporting_is_off_by_default():
     resolved = MD_SCHEMA.resolve({"protocol": "cMD"})["collective_variables"]
-    assert resolved == {"file": None, "interval_steps": 0}
+    assert resolved == {"file": None, "generate": None, "interval_steps": 0}
 
 
 def test_both_keys_given_together_is_accepted():
     resolved = _resolve(file="cv.yaml", interval_steps=100)["collective_variables"]
-    assert resolved == {"file": "cv.yaml", "interval_steps": 100}
+    assert resolved == {"file": "cv.yaml", "generate": None, "interval_steps": 100}
 
 
 def test_both_keys_explicitly_off_is_accepted():

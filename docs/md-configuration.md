@@ -22,7 +22,7 @@ A key that a protocol does not read is refused rather than ignored, so this tabl
 |---|---|
 | `cMD` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables` |
 | `REST2` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables`, `umbrella`, `rest2` |
-| `AIS` | `top-level`, `dynamics`, `reporting`, `collective_variables`, `ais`, `ais_source` |
+| `AIS` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables`, `ais`, `ais_source` |
 | `umbrella` | `top-level`, `dynamics`, `stages`, `reporting`, `collective_variables`, `umbrella` |
 
 ## `build-top`: topology and System construction
@@ -39,7 +39,7 @@ What the input is, and how it is parameterised.
 
 type: string · default: `peptide` · one of `peptide`, `peptide-like`, `ligand`
 
-What the solute IS, which decides how it is parameterised and what chemistry may be read from it. This is the authoritative classification. peptide       -- read -i as a peptide/protein PDB and parameterise it with the protein force field. Sage never touches it. ligand        -- read -i as a .smi or .sdf and parameterise the whole molecule with the small-molecule force field. One residue, no peptide chemistry is claimed or read. A .smi states the chemistry and the conformer is generated (ETKDGv3, then MMFF); a .sdf carries the coordinates too and they are used as given. peptide-like  -- the SAME whole-molecule route as `ligand`, with the same force field and the same charges, PLUS a validated peptide-chemistry map over the result. It exists for a head-to-tail cyclic peptide built from SMILES, whose residues are real amino acids but which a single-residue ligand representation cannot describe -- so residue-keyed corrections such as mbondi3's silently miss it. It never loads a protein force field and never replaces Sage's charges or bonded terms.
+What the solute IS, which decides how it is parameterised and what chemistry may be read from it. This is the authoritative classification. peptide       -- read -i as a peptide/protein .pdb, or as a .seq holding one line of residue names that tleap's `sequence` builds (extended), and parameterise it with the protein force field. Sage never touches it. ligand        -- read -i as a .smi or .sdf and parameterise the whole molecule with the small-molecule force field. One residue, no peptide chemistry is claimed or read. A .smi states the chemistry and the conformer is generated (ETKDGv3, then MMFF); a .sdf carries the coordinates too and they are used as given. peptide-like  -- the SAME whole-molecule route as `ligand`, with the same force field and the same charges, PLUS a validated peptide-chemistry map over the result. It exists for a head-to-tail cyclic peptide built from SMILES, whose residues are real amino acids but which a single-residue ligand representation cannot describe -- so residue-keyed corrections such as mbondi3's silently miss it. It never loads a protein force field and never replaces Sage's charges or bonded terms.
 
 #### `solute.peptide`
 
@@ -63,7 +63,7 @@ Partial-charge method for the small molecule. am1bcc is the validated default an
 
 type: string or null · default: `null`
 
-Three-character residue name for a molecule read from .smi or .sdf. Left null, a deterministic name is assigned from the file and recorded, so the same input always produces the same residue identity.
+Three-character residue name for a molecule read from .smi or .sdf. It is APPLIED: the molecule's residue in built.pdb, built.solute.pdb and the topology carries it, and the prepared molecule is written beside the System as `<residue_name>.sdf`. Left null, a deterministic name is assigned from the file (the .smi name field, else the file stem) and recorded, so the same input always produces the same residue identity. Three letters or digits; a name that already means water, an ion or a protein residue is refused, because solvent selection and the omega classifier read residue names. Refused for kind: peptide, whose residues are named by the input.
 
 ### `forcefield`
 
@@ -307,7 +307,13 @@ Torsion collective-variable reporting. Observation only: no Force is added and t
 
 type: string or null · default: `null`
 
-Path to a cv.yaml defining the torsions to report, resolved relative to THIS configuration file. Null disables collective-variable reporting.
+Path to a cv.yaml defining the torsions to report, resolved relative to THIS configuration file. Null disables collective-variable reporting unless `generate` is set.
+
+#### `collective_variables.generate`
+
+type: string or null · default: `null` · one of `all_solute_torsions`
+
+Have `build-md` WRITE the cv.yaml instead of naming one: `all_solute_torsions` lists every proper torsion of the solute (every chain of four bonded solute atoms, hydrogens included), by explicit atom selector, read from build/built.pdb and the bonds of build/built.xml. The generated file is copied in exactly as a named one would be, and `resolved.config` then names that copy in `file` -- so the run measures what an ordinary, readable cv.yaml says. Give `file` or `generate`, not both.
 
 #### `collective_variables.interval_steps`
 
@@ -375,25 +381,13 @@ Report acceptance for each neighbouring pair. A single averaged acceptance hides
 
 ### `ais`
 
-The switching path. Ignored unless protocol is AIS. Every length is an exact integer step count; nothing here is a duration that has to divide by a timestep.
+The switching path: lambda from 0 to 1, V(lambda) = (1 - lambda) V0 + lambda V1, where V0 is `-s`/`-p` (the state the source ensemble was sampled from) and V1 is `-s2`/`-p2`. Ignored unless protocol is AIS. Every length is an exact integer step count; nothing here is a duration that has to divide by a timestep.
 
 #### `ais.number_of_paths`
 
 type: integer · default: `100` · minimum 1
 
 How many independent switching paths to run. Each gets its own directory, its own trajectory, and its own deterministic seeds.
-
-#### `ais.tau_start`
-
-type: number · default: `0.5` · minimum 0.0; maximum 0.95
-
-The tau the path starts at. It must equal the tau of the source ensemble: the path begins in the ensemble it anneals away from, and the source's own record is checked against this rather than assumed.
-
-#### `ais.tau_end`
-
-type: number · default: `0.0` · minimum 0.0; maximum 0.95
-
-The tau the path ends at. 0.0 is the unmodified physical Hamiltonian. tau_start and tau_end must differ, or the Hamiltonian never changes and every work value would be zero.
 
 #### `ais.switching_steps`
 
@@ -405,25 +399,13 @@ The length of the switching path, as an exact step count. 50000 steps is 100 ps 
 
 type: integer · default: `2500` · minimum 1; unit: steps
 
-How often a path is observed: one coordinate frame and one work row. switching_steps must divide by this exactly, so the last observation lands at tau_end. 50000/2500 gives 20 intervals and therefore 21 observations, counting both endpoints. AN OBSERVATION IS NOT A STEP.
+How often a path is observed: one coordinate frame and one work row. switching_steps must divide by this exactly, so the last observation lands at lambda = 1. 50000/2500 gives 20 intervals and therefore 21 observations, counting both endpoints. AN OBSERVATION IS NOT A STEP.
 
 #### `ais.parameter_update_interval_steps`
 
 type: integer · default: `1` · minimum 1; unit: steps
 
-How often tau moves. 1 changes the Hamiltonian every step -- 50000 parameter changes over the path above. observation_interval_steps must divide by this, or observations would not sit on the update grid.
-
-#### `ais.work_measurement`
-
-type: string · default: `work` · one of `work`, `components`
-
-How the work increment at each parameter update is obtained, and what else is recorded with it. This is a scientific choice AND the dominant cost of an AIS run: everything else here controls what is written, this controls what is computed. work        -- TWO energy evaluations per update, U(tau_k) and U(tau_k+1). The work integral, and nothing more. This is the default because it is what a free energy for the schedule you actually ran needs. components  -- a THREE-point basis probe per update, at amplitudes (0, 0.5, 1), from which the work follows analytically. It also gives the potential as a FUNCTION of tau, which is what reweighting onto a different schedule, a different endpoint, or a Hummer-Szabo estimator evaluated at an unvisited tau requires. A single total work cannot produce that function, and re-running at another tau is not reweighting. Component columns are ABSENT from a `work` path rather than zero, so a reader expecting them fails instead of treating a missing measurement as a measured nought.
-
-#### `ais.verify_every_updates`
-
-type: integer · default: `0` · minimum 0
-
-In `components` mode, how often the fitted work is checked against a directly measured U(tau_k+1) - U(tau_k). Costs two extra evaluations whenever it fires. 0 (the default) verifies the FIRST update of every path and no other. That is not a token check: the three-group identity is a property of the SYSTEM, not of the step -- a force carrying tau-dependence outside the basis is outside it at any coordinate -- so one verified update per path establishes the model the whole path relies on, for two evaluations rather than two thousand. N > 0 re-verifies every N updates as well, for the case the first update cannot cover: a force whose tau-dependence only switches on at some geometry the path reaches later. Ignored in `work` mode, where the work IS the direct measurement and there is nothing to cross-check it against.
+How often lambda moves. 1 changes the Hamiltonian every step -- 50000 parameter changes over the path above. observation_interval_steps must divide by this, or observations would not sit on the update grid.
 
 ### `ais_source`
 
@@ -433,7 +415,13 @@ Where the starting configurations come from. Ignored unless protocol is AIS.
 
 type: string or null · default: `null`
 
-REQUIRED for AIS. The equilibrium trajectory the paths start from, typically a fixed-tau cMD run at tau = ais.tau_start. Resolved relative to the directory run.sh is invoked from.
+The equilibrium trajectory the paths start from, sampled from V0 -- typically a fixed-tau cMD run whose System is the -s given to AIS. A trajectory that records its System digest is checked against -s. Resolved relative to the directory run.sh is invoked from. Required unless `generate` is true, in which case build-md sets it to the source stage's whole-system trajectory.
+
+#### `ais_source.generate`
+
+type: boolean · default: `false`
+
+Generate the source ensemble in this run instead of naming one. build-md then writes a stage chain before AIS: minimisation of the UNSCALED build/built.xml (the shared min/), the equilibration stages and a `source` production stage on V0, then the switching paths from that stage's whole-system trajectory. `run.sh` passes build/built.xml for minimisation and as V1, and the saved scaled state build/AIS/system_state0.xml (V0) for everything else. `stages.production_steps` is the source run's length and `reporting.crd_printout_whole` its frame interval, so both must be set. `dynamics.tau` must be V0's tau, which the stages check against the scaler.yaml beside the state and which makes the equilibration fixed-volume.
 
 #### `ais_source.topology`
 

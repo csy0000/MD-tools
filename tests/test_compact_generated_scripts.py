@@ -116,8 +116,8 @@ def test_no_generated_script_parses_arguments_or_imports_openmm(generated):
 def test_no_generated_script_constructs_the_physics(generated):
     """No reporter, restraint, barostat, scaler or exchange rule is built in a generated file."""
     forbidden = ("CustomExternalForce", "MonteCarloBarostat", "LangevinMiddleIntegrator",
-                 "Simulation(", "DCDReporter", "StateDataReporter", "TauSwitcher",
-                 "build_scaled_system", "NeighbouringExchangeRule")
+                 "Simulation(", "DCDReporter", "StateDataReporter", "TwoStateHamiltonian",
+                 "CustomCVForce", "build_scaled_system", "NeighbouringExchangeRule")
     for name, directory in generated.items():
         for script in _scripts(directory):
             body = script.read_text(encoding="utf-8").split('"""', 2)[-1]

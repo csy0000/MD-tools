@@ -542,7 +542,12 @@ deliverable is a documented mapping, plus a refusal for any Amber variable we ac
 
 ---
 
-## 15. AIS should become an Amber-style transformation between two topologies
+## 15. AIS should become an Amber-style transformation between two topologies — IMPLEMENTED for 0.5.4
+
+> **IMPLEMENTED 2026-09-16** on `ais/two-topology`, parameters-only V0/V1 with linear mixing.
+> Design, decisions and measurements: `docs/amber-like-fix/AIS-two-topology.md`. Out of scope and
+> refused: atom mapping, softcore, dummy atoms, non-linear schedules (the stated future work).
+> The entry below is kept as the record of why.
 
 DEFERRED TO 0.5.4 or later by decision, 2026-09-16. A design change, not a fix.
 
@@ -681,7 +686,7 @@ structure should leave it a place rather than be rearranged for it later.
 
 ---
 
-## 18. `solute.residue_name` is resolved, recorded, and never applied — OPEN
+## 18. `solute.residue_name` is resolved, recorded, and never applied — CLOSED in 0.5.4
 
 Filed 2026-09-16, found while adding `.sdf` input. Small, and not urgent.
 
@@ -696,6 +701,16 @@ So the recorded name describes nothing, and a user who sets `solute.residue_name
 System whose residue is still `UNL` while the record says `LIG`. Either apply it to the written
 topology or stop recording it as though it were applied; a value that is documented, accepted and
 inert is worse than one refused.
+
+**Closed (0.5.4, by applying it).** Both molecule preparers name the residue before writing the
+prepared molecule, so `built.pdb`, `built.solute.pdb` and the serialised topology carry it on the
+`.smi` and `.sdf` routes under either solvent, and build-top verifies the built topology carries
+it before placing any output. The molecule is written as `<RESNAME>.sdf`, titled with the name,
+instead of `built.sdf`; `preflight._ligand_sdf_beside` reads `<system stem>.sdf` first (older
+builds) and otherwise the file named for the one non-solvent residue in `<system stem>.pdb`. A
+stated name must be three letters or digits and must not already mean water, an ion or a protein
+residue -- solvent selection and the omega classifier read residue names -- and is refused under
+`kind: peptide`, where it would be inert. Tests: `tests/test_build_top_residue_name.py`.
 
 ---
 

@@ -500,20 +500,20 @@ def test_example_3b_resuming_a_ladder_is_a_different_command(rest2_run):
 def test_example_4_switching_paths_from_a_fixed_tau_ensemble(system):
     """AIS: many short non-equilibrium paths, each starting from a frame of a FIXED-TAU cMD run.
 
-    AIS is `protocol: AIS` in a `build-md` configuration, not a separate command. It needs a
-    SOURCE trajectory -- the ensemble the paths anneal away from -- which you pass with
-    `-source-traj`. `number_of_paths` is the GLOBAL total, not a count per rank.
+    AIS is `protocol: AIS` in a `build-md` configuration, not a separate command. It transforms
+    one end state into another,
 
-    THE SOURCE MUST BE SAMPLED AT `ais.tau_start`, and this example used to break that rule. It
-    took example 1's ordinary cMD, which runs at tau = 0, and left `ais.tau_start` at its default
-    of 0.5 -- so every path claimed to begin in an ensemble that had never been sampled, and
-    every work value measured a switch that did not start where it said. `tau_start`'s own
-    documentation states the requirement ("It must equal the tau of the source ensemble"), and
-    nothing could check it: the trajectory recorded no tau, and the log said so in as many words.
+        V(lambda) = (1 - lambda) V0 + lambda V1,   lambda 0 -> 1,
 
-    It is checked now, from the `tau` attribute the source records for itself, so this example
-    has to do what it always should have: run its own short cMD AT tau = 0.5 and anneal from
-    that. The extra build is the point of the example, not overhead around it.
+    with V0 given as `-p`/`-s` and V1 as `-p2`/`-s2`. It needs a SOURCE trajectory -- sampled
+    from V0 -- which you pass with `-source-traj`. `number_of_paths` is the GLOBAL total, not a
+    count per rank.
+
+    THE SOURCE MUST BE V0's ENSEMBLE, and this example once broke that rule: it took example 1's
+    ordinary cMD, sampled from the physical Hamiltonian, and annealed from a scaled one. So it
+    runs its own short cMD AT tau = 0.5, and V0 is the scaled System that run integrated, written
+    to a file; V1 is the physical `built.xml`. The extra build is the point of the example, not
+    overhead around it.
     """
     built = system("ais")
     hot_config = built / "hot.config"
@@ -521,7 +521,7 @@ def test_example_4_switching_paths_from_a_fixed_tau_ensemble(system):
         "protocol": "cMD",
         "solvent": "implicit",
         # `tau: 0.5` -- the whole reason this run exists. It samples the scaled ensemble that
-        # `ais.tau_start` below names.
+        # V0 below is the Hamiltonian of.
         "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "seed": 20260908, "tau": 0.5},
         "stages": {"minimization_iterations": 10, "restrained_nvt_steps": 10,
                    "restrained_npt_steps": 10, "unrestrained_npt_steps": 10,
@@ -549,17 +549,34 @@ def test_example_4_switching_paths_from_a_fixed_tau_ensemble(system):
                    "restrained_npt_steps": 0, "unrestrained_npt_steps": 0,
                    "production_steps": 0},
         "reporting": {"crd_printout_solute": 10, "info_printout": 10, "checkpoint_printout": 10},
-        # tau_start MATCHES the source above, and is checked against the tau that file records.
+        # No tau here: the end states are the two System FILES given to md-run below.
         "ais": {"number_of_paths": 2, "switching_steps": 20,
-                "observation_interval_steps": 10, "parameter_update_interval_steps": 5,
-                "tau_start": 0.5, "tau_end": 0.0},
+                "observation_interval_steps": 10, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": str(source)},
     }), encoding="utf-8")
     _md_openmm(built, "build-md", "-odir", "./AIS-run1", "--config", "AIS.config")
 
     # `../input/AIS.in`: the input is SHARED at the dataset root, not inside the run.
+    # V0: the scaled System the hot run integrated, built by the same function and selection a
+    # fixed-tau stage uses. V1: the physical System.
+    from openmm import XmlSerializer
+    from openmm.app import PDBFile
+
+    from md_tools.md.stage import solute_atom_indices
+    from md_tools.openmm.system import classify_omega_bonds
+    from md_tools.rest2 import build_scaled_system
+
+    topology = PDBFile(str(built / "build" / "built.pdb")).topology
+    solute = solute_atom_indices(topology)
+    omega = classify_omega_bonds(topology, solute)
+    excluded = [tuple(int(a) for a in bond) for bond in omega.get("omega_unscaled_bonds", [])]
+    physical = XmlSerializer.deserialize((built / "build" / "built.xml").read_text())
+    (built / "build" / "V0_tau0p5.xml").write_text(
+        XmlSerializer.serialize(build_scaled_system(physical, solute, 0.5, excluded)))
+
     _md_openmm(built / "AIS-run1", "md-run", "-i", "../input/AIS.in",
-               "-p", "../build/built.pdb", "-s", "../build/built.xml",
+               "-p", "../build/built.pdb", "-s", "../build/V0_tau0p5.xml",
+               "-p2", "../build/built.pdb", "-s2", "../build/built.xml",
                "-source-traj", str(source), "-odir", "./out", "-log", "AIS.log", "--cpu",
                timeout=3600)
 
@@ -609,14 +626,16 @@ def test_example_5_a_cyclic_peptide_built_from_smiles(tmp_path):
     log = (tmp_path / "build" / "built.log").read_text(encoding="utf-8")
     assert "peptide_like_mbondi3" in log
     assert "molecular_map_digest" in log
-    # `built.sdf` is retained beside the System: bond orders are not recoverable from a topology,
-    # and the omega classifier needs them for a ladder over this solute.
-    assert (tmp_path / "build" / "built.sdf").is_file()
+    # The prepared molecule is retained beside the System as `<RESNAME>.sdf` (`built.sdf` before
+    # 0.5.4): bond orders are not recoverable from a topology, and the omega classifier needs them
+    # for a ladder over this solute. The .smi names it CYC.
+    assert (tmp_path / "build" / "CYC.sdf").is_file()
+    assert not (tmp_path / "build" / "built.sdf").exists()
 
     # The map is reusable, and it is what you would define collective variables from.
     from md_tools.openmm.peptide_map import map_from_sdf
 
-    mapped = map_from_sdf(tmp_path / "build" / "built.sdf")
+    mapped = map_from_sdf(tmp_path / "build" / "CYC.sdf")
     assert sorted(mapped.sequence) == ["ARG", "ASP", "GLY"]
     assert len(mapped.torsions()) == 9          # phi, psi, omega for each of three residues
     assert len(mapped.carboxylate_oxygens) == 2

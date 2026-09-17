@@ -2,6 +2,23 @@
 
 ## 0.5.4 — unreleased
 
+**`build-top` takes a peptide as a sequence.** `-i ALA.seq`, where the file holds one line of
+residue names (`ACE ALA NME`), builds the chain with tleap's `sequence` from the residue library
+matching `forcefield.protein`, and then continues exactly as the `.pdb` peptide route, explicit or
+implicit. The conformation is tleap's extended one, and the log says so. Only `solute.kind:
+peptide` accepts it; a malformed file or a residue tleap does not know is refused before any
+output exists. The record keeps the residues, the tleap commands and the digests of its log and
+of the PDB it wrote.
+
+**`solute.residue_name` is applied, and the prepared molecule is `<RESNAME>.sdf`.** A `.smi` or
+`.sdf` molecule's residue used to be RDKit's `UNL` whatever the record said (backlog 18). The
+stated or assigned name is now the residue name in `built.pdb`, `built.solute.pdb` and the
+topology, and the molecule beside the System is written as `<RESNAME>.sdf` instead of `built.sdf`.
+The run-time preflight reads either layout, so existing build directories keep working; build-top
+refuses to write a new System beside an old `built.sdf`. A stated name that is not three letters or
+digits, that already names water, an ion or a protein residue, or that is given for a peptide, is
+refused.
+
 **`--all-in-one` is retired, and its whole-chain preflight moved to generation.** The flag emitted
 one `md.py` running every stage in one process instead of one script per stage, under identical
 resolved settings, seeds, logs, checkpoints and restart semantics — so it bought a reader nothing
@@ -30,6 +47,36 @@ computer. Those checks stay in the run-time preflight.
 `show-default` have been gone long enough that a test and a CI loop asserting they still fail were
 upkeep with nothing behind them. The rule that no second executable is installed is separate, still
 live, and still checked.
+
+**AIS is a linear transformation between two topologies.** Until now AIS switched ONE System along
+a REST2 `tau`, which made the potential quadratic in `1 − tau`, needed a three-point basis probe to
+decompose the work, and could not switch explicit solvent without re-uploading every solute
+parameter at every update. It now mixes two end-state Systems given as files,
+`V(λ) = (1 − λ)·V0 + λ·V1` with λ running 0 → 1: V0 is `-s`/`-p`, the state the source ensemble was
+sampled from, and V1 is the new `-s2`/`-p2`. The two must hold identical particles, masses,
+constraints and force layout — parameters only, like sander's no-softcore mixing — and any other
+difference is refused by name, together with a barostat in either. The work is
+`ΔW_j = (λ_{j+1} − λ_j)·(V1 − V0)(x_j)`, exact for a linear path and one evaluation per switch;
+every saved observation records `V0`, `V1` and `V(λ)` with the identity checked. Mechanism: shared
+forces are added once and each differing force pair becomes a collective variable of one
+`CustomCVForce`, so λ is a Context parameter for every System, explicit solvent included. Measured
+on 6232 explicit-solvent particles on an RTX 3080: 1.40 ms per switch-and-step against 7.77 ms for
+the tau switch.
+
+A REST2 switch is now a pair of files, the scaled state and `build/built.xml`. `TauSwitcher`, the
+global-parameter switching code, `md_tools.ais.decomposition` and `build_scaled_system`'s
+`prepare_for_switching` are deleted; `ais.tau_start`, `ais.tau_end`, `ais.work_measurement` and
+`ais.verify_every_updates` are refused with the migration, in a configuration and in an `.in`.
+An `-odir`, checkpoint or manifest written by the single-topology AIS is refused rather than
+continued. A stage's whole-system NetCDF now records `system_sha256` when the Hamiltonian it
+integrated is `-s` unmodified, and AIS refuses a source whose recorded digest is not V0's.
+
+**One promise changes.** A `CustomCVForce` cannot resume bit-for-bit on CUDA: its inner Contexts
+keep atom-ordering state no checkpoint captures. A resumed path restores the committed generation
+exactly and continues the same switching process as a new realisation; on CPU it still reproduces
+an uninterrupted path exactly. Path-by-path results from 0.5.3 AIS are not comparable with 0.5.4:
+the endpoints and ΔF are the same, the path — and so the work distribution — is not. Design and
+measurements: `docs/amber-like-fix/AIS-two-topology.md`.
 
 ## 0.5.3 — 2026-09-16
 

@@ -393,8 +393,6 @@ SPEC_EXAMPLE = """\
   solvent  = explicit,
 /
 &AIS
-  tau_start                  = 0.5,
-  tau_end                    = 0.0,
   number_of_paths            = 100,
   switching_steps            = 250,
   observation_interval_steps = 10,
@@ -408,7 +406,7 @@ SPEC_EXAMPLE = """\
   info_printout            = 50,
   checkpoint_printout        = 50,
   random_seed                = 20260902,
-  source_traj                = ../cMD_tau0p5/tau_0p5.dcd,
+  source_traj                = ../cMD_V0/whole_prod1.dcd,
 /
 """
 
@@ -422,19 +420,39 @@ def test_the_specified_ais_example_parses_and_every_key_takes_effect():
     """
     parsed = parse_run_input(_written(SPEC_EXAMPLE))
     assert parsed.protocol == "AIS"
+    # Exactly these: the end states are FILES (-s/-p and -s2/-p2), so the resolved `ais` block
+    # names no coordinate, no endpoint and no measurement mode.
     assert parsed.resolved["ais"] == {
-        "number_of_paths": 100, "tau_start": 0.5, "tau_end": 0.0,
+        "number_of_paths": 100,
         "switching_steps": 250, "observation_interval_steps": 10,
-        "parameter_update_interval_steps": 1,
-        # The example names neither, so both come from the schema. `work` is the DEFAULT: an
-        # input that says nothing about how to measure the work gets the two-evaluation direct
-        # measurement, not the basis probe.
-        "work_measurement": "work", "verify_every_updates": 0}
+        "parameter_update_interval_steps": 1}
     assert parsed.resolved["ais_source"]["frame_stride"] == 10
-    assert parsed.resolved["ais_source"]["trajectory"] == "../cMD_tau0p5/tau_0p5.dcd"
+    assert parsed.resolved["ais_source"]["trajectory"] == "../cMD_V0/whole_prod1.dcd"
     assert parsed.resolved["dynamics"]["seed"] == 20260902
     assert parsed.resolved["reporting"] == {"crd_printout_solute": 10, "crd_printout_whole": 0,
                                             "info_printout": 50, "checkpoint_printout": 50}
+
+
+@pytest.mark.parametrize("line", [
+    "  tau_start                  = 0.5,",
+    "  tau_end                    = 0.0,",
+    "  work_measurement           = work,",
+    "  verify_every_updates       = 0,",
+])
+def test_a_retired_single_topology_key_in_an_ais_input_is_refused_with_the_migration(line):
+    """An old `.in` reaches the same refusal as an old configuration, not "unknown key".
+
+    The four keys were not misspelled: the single-topology tau switch they configured is gone.
+    Refusing them as unknown words would send a user hunting for a typo; refusing them by name
+    says what replaced them -- two end-state files given as -s/-p and -s2/-p2.
+    """
+    text = SPEC_EXAMPLE.replace("&AIS\n", "&AIS\n" + line + "\n")
+    key = line.split("=")[0].strip()
+    with pytest.raises(ConfigError) as refusal:
+        parse_run_input(_written(text))
+    message = str(refusal.value)
+    assert f"ais.{key}" in message and "retired" in message, message
+    assert "-s2/-p2" in message, message
 
 
 def test_the_selection_spelling_is_named_when_a_near_miss_is_written():

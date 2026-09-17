@@ -215,6 +215,13 @@ def make_states_for(root: Path, config) -> None:
     document = config
     if not isinstance(config, dict):
         document = load_yaml_strictly(Path(config).read_text(encoding="utf-8"), source=str(config))
+    if (document or {}).get("protocol") == "AIS":
+        # Read from the document, not resolved: an AIS configuration's reporting defaults are
+        # applied by `resolve_md_config`, which a bare schema resolve here would not do.
+        if ((document.get("ais_source") or {}).get("generate")
+                and float((document.get("dynamics") or {}).get("tau") or 0.0) > 0.0):
+            make_scaled_state(root, tau=float(document["dynamics"]["tau"]), method="AIS")
+        return
     if (document or {}).get("protocol") not in ("REST2", "cMD"):
         return
     resolved = MD_SCHEMA.resolve(document)
@@ -224,6 +231,7 @@ def make_states_for(root: Path, config) -> None:
                            tau_max=float(resolved["rest2"]["tau_max"]))
     elif protocol == "cMD" and float(resolved["dynamics"]["tau"]) > 0.0:
         make_scaled_state(root, tau=float(resolved["dynamics"]["tau"]))
+
 
 
 def write_starting_state(root: Path, run_dir: Path, name: str = "eq/eq_3.xml") -> Path:
