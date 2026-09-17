@@ -159,15 +159,31 @@ def test_each_rank_kept_its_own_record_and_ran_on_cuda(ladder):
     assert "platform           : CUDA" in other, other
     # Deterministic placement, recorded: not "a GPU" but WHICH one, and by what rule.
     #
-    # MIGRATED wording. The phrase used to be "one rank per device", written by the driver's own
-    # platform resolution. The driver no longer resolves a platform -- it consumes the one
-    # `preflight_ladder` established before any of these files existed -- so the sentence now
-    # comes from the single shared authority and names the setting it obeyed. What is asserted
-    # here is the substance, and it is strictly more than before: each rank names its own device
-    # index and its own rank, so the two records cannot both be describing GPU 0.
-    assert "device_policy: local_rank" in text, text
-    assert "device=0" in text and "(rank 0 of 2)" in text, text
-    assert "device=1" in other and "(rank 1 of 2)" in other, other
+    # MIGRATED TWICE, and the substance grew each time. It was "one rank per device", written by
+    # the driver's own platform resolution; then "device_policy: local_rank", after the driver
+    # began consuming what `preflight_ladder` established. Since 0.6.0 the rule is not a policy
+    # NAME at all: `md_tools.openmm.placement` measures each visible device and places workers by
+    # what it measured, so the record names the rule, this rank's device, this rank's identity ON
+    # ITS NODE, and how many workers share that device.
+    #
+    # The rank phrases are asserted WHOLE, through "local rank", deliberately. "rank 0" alone
+    # appears in "local rank 0" as well, so a shortened assertion would match the wrong half of
+    # the line on rank 1 and assert nothing at all.
+    assert "measured throughput (balanced)" in text, text
+    assert "(rank 0 of 2, local rank 0" in text, text
+    assert "(rank 1 of 2, local rank 1" in other, other
+    # WHICH ordinals is not asserted, and that is the point. Placement takes the FASTEST devices
+    # it measured, so with four cards visible two ranks may land on 2 and 3 as easily as on 0 and
+    # 1 -- the order is a measurement of the machine on the day. Asserting `device=0` and
+    # `device=1` therefore passed or failed by luck: it did both on this branch, an hour apart, on
+    # the same code. What must be true is that each record names ITS OWN device and that the two
+    # differ, which is the substance of "they cannot both be describing one GPU".
+    devices = [record.split("device=")[1].split()[0]
+               for record in (text, other) if "device=" in record]
+    assert len(devices) == 2 and len(set(devices)) == 2, (devices, text, other)
+    # One worker per device: what "they cannot both be GPU 0" has to mean now that sharing a
+    # device is a supported configuration rather than an accident.
+    assert "1 worker(s) on this device" in text and "1 worker(s) on this device" in other
     assert "this process drives: state(s) [0]" in text, text
     assert "this process drives: state(s) [1]" in other, other
 
