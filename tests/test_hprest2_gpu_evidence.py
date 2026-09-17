@@ -42,6 +42,8 @@ from pathlib import Path
 
 import pytest
 
+from .conftest import make_states_for
+
 REPO = Path(__file__).resolve().parents[1]
 ALA = REPO / "tests" / "data" / "ALA.pdb"
 CLI = [sys.executable, "-m", "md_tools.cli.md_openmm"]
@@ -166,6 +168,9 @@ def _build_and_equilibrate(built: Path, name: str, config: str) -> Path:
         shutil.copy2(built / helper, root / helper)
 
     (root / f"{name}.config").write_text(config, encoding="utf-8")
+    # A REST2 ladder integrates SAVED scaled states (0.5.4): `build-md` refuses to generate one
+    # until `build-top --rest2-scaler` has written build/REST2/ beside the System.
+    make_states_for(root, root / f"{name}.config")
     done = _cli(root, "build-md", "-odir", f"./{name}-run1", "--config", f"{name}.config")
     assert done.returncode == 0, done.stdout[-2000:] + done.stderr[-2000:]
     run = root / f"{name}-run1"
@@ -180,12 +185,24 @@ def _build_and_equilibrate(built: Path, name: str, config: str) -> Path:
     done = _cli(run, "md-run", "-i", "../input/eq_1.in", "-p", "../build/built.pdb",
                 "-s", "../build/built.xml", "-odir", "eq")
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+    # THE REST OF THE GENERATED CHAIN, zero-length here. Every line of the group file `build-md`
+    # wrote continues from `-c eq/eq_3.xml`, and a ladder reads its inputs only from that file
+    # (0.5.4), so the ladder no longer takes `-c eq/eq_1.xml` on its command line. Running the two
+    # zero-step stages is what run.sh types; with no steps they carry eq_1's configuration forward.
+    for key, parent in (("eq_2", "eq/eq_1.xml"), ("eq_3", "eq/eq_2.xml")):
+        done = _cli(run, "md-run", "-i", f"../input/{key}.in", "-p", "../build/built.pdb",
+                    "-s", "../build/built.xml", "-c", parent, "-odir", "eq")
+        assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
     return run
 
 
-#: The helpers an extension's own directory needs. `_protocol.py`, `solute.yaml` and the group
-#: file are written by rank 0 at run time -- the group file by `--extend-from` itself, which is the
-#: fix under test -- so only the entry point and the resolved declaration are copied.
+#: The helpers an extension's own directory needs. `_protocol.py` and `solute.yaml` are written by
+#: rank 0 at run time, into `-odir`. THE GROUP FILE IS COPIED TOO (0.5.4): the runtime writes none,
+#: a ladder reads -s only from one, and its `-i _protocol.py` resolves beside the group file -- so
+#: the group file must sit in the directory the extension writes into, or the launch is refused.
+#: Its `../build/` paths still resolve, the extension being a sibling of the run. The `-c
+#: eq/eq_3.xml` every line names is copied with it, since the line names it; an extension does not
+#: read it, which `test_supplying_coordinates_to_an_extension_is_inert` is about.
 #:
 #: NO `.in`. The generated `REST2.py` reads `resolved.config` beside itself and nothing else --
 #: `run_generated_remd(__file__, protocol="REST2")` is its whole body -- and `_generated` passes no
@@ -193,7 +210,7 @@ def _build_and_equilibrate(built: Path, name: str, config: str) -> Path:
 #: directory holds none to copy: this named `REST2.in` and every extension test died with
 #: `FileNotFoundError: .../baseline-run1/REST2.in`. An extension directory is a sibling of the run
 #: inside the same system root, so `../input/` still resolves from it if anything ever needs it.
-EXTENSION_FILES = ("REST2.py", "resolved.config")
+EXTENSION_FILES = ("REST2.py", "resolved.config", "remd_groupfile.1", "eq/eq_3.xml")
 
 
 def _generated(work: Path, *extra: str, timeout: int = 3600):
@@ -203,15 +220,19 @@ def _generated(work: Path, *extra: str, timeout: int = 3600):
     `--resume`/`--overwrite` -- and `REST2.py` forwards both to the executor. So this is the only
     way to launch an extension of a generated ladder, and using `md-run` here would fail in
     argparse before any of the behaviour under test ran.
+
+    NO -s: a ladder reads its saved states only from a group file (0.5.4), the copy of the
+    parent's in the extension's own directory (see EXTENSION_FILES).
     """
     return subprocess.run(["mpirun", "-n", str(RUNGS), sys.executable, "REST2.py",
-                           "-p", "../build/built.pdb", "-s", "../build/built.xml", "-ng", str(RUNGS), *extra],
+                           "-p", "../build/built.pdb", "--groupfile", "remd_groupfile.1",
+                           "-ng", str(RUNGS), *extra],
                           cwd=str(work), capture_output=True, text=True, timeout=timeout)
 
 
 def _run_ladder(run: Path, *extra: str, timeout: int = 3600):
     return _cli(run, "md-run", "-ng", str(RUNGS), "-i", "../input/REST2.in", "-p", "../build/built.pdb",
-                "-s", "../build/built.xml", "-x", "REST2.nc", "-r", "restart.json", "-o", "REST2.out",
+                "--groupfile", "remd_groupfile.1", "-x", "REST2.nc", "-r", "restart.json", "-o", "REST2.out",
                 "-log", "REST2.log", *extra, launch=["mpirun", "-n", str(RUNGS)], timeout=timeout)
 
 
@@ -221,7 +242,7 @@ def _run_ladder(run: Path, *extra: str, timeout: int = 3600):
 @pytest.fixture(scope="module")
 def baseline(built):
     run = _build_and_equilibrate(built, "baseline", _ladder_config())
-    done = _run_ladder(run, "-c", "eq/eq_1.xml")
+    done = _run_ladder(run)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return run
 
@@ -271,6 +292,7 @@ def test_an_extension_continues_its_parent_without_coordinates(baseline, tmp_pat
     extension = baseline.parent / "extension"
     extension.mkdir()
     for helper in EXTENSION_FILES:
+        (extension / helper).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(baseline / helper, extension / helper)
 
     # Through the GENERATED entry point, which is what a build-md tree gives a user: `md-run`
@@ -356,6 +378,7 @@ def test_supplying_coordinates_to_an_extension_is_inert(baseline, tmp_path):
         out = baseline.parent / f"inert-{name}"
         out.mkdir()
         for helper in EXTENSION_FILES:
+            (out / helper).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(baseline / helper, out / helper)
         done = _generated(out, "--extend", "2", "--extend-from", str(baseline), *extra)
         assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
@@ -387,7 +410,7 @@ def test_a_restrained_ladder_runs_and_its_bias_cancels_from_the_exchange(built):
 
     run = _build_and_equilibrate(built, "restrained", _ladder_config(exchanges=20,
                                                                     restrained=True))
-    done = _run_ladder(run, "-c", "eq/eq_1.xml")
+    done = _run_ladder(run)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     manifest = json.loads((run / "restart.json").read_text(encoding="utf-8"))
     restraints = ((manifest.get("scientific_identity") or {}).get("torsion_restraints") or {})

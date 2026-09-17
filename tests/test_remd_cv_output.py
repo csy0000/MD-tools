@@ -39,6 +39,8 @@ collective_variables:
 """
 
 
+from .conftest import ladder_group_file  # noqa: E402
+
 @pytest.fixture(scope="module")
 def project(tmp_path_factory):
     if not ALA.is_file():
@@ -63,6 +65,11 @@ def project(tmp_path_factory):
         # Finer than the exchange interval, and dividing it exactly.
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
     }), encoding="utf-8")
+    # A ladder integrates SAVED scaled states (0.5.4): `build-md` refuses to generate one until
+    # `build/REST2/` exists, as `md-openmm build-top --rest2-scaler` writes it.
+    from .conftest import make_states_for
+
+    make_states_for(root, root / "REST2.config")
     done = subprocess.run(
         CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
@@ -104,8 +111,9 @@ def completed(project, tmp_path_factory):
     base["MD_TOOLS_CONFIG"] = str(project / "user.config")
     done = subprocess.run(
         [sys.executable, str(project / "REST2-run1" / "REST2.py"),
-         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
-         "-c", str(initial), "-odir", str(destination), "--cpu"],
+         "-p", str(project / "build" / "built.pdb"),
+         "--groupfile", str(ladder_group_file(project, destination)),
+         "-odir", str(destination), "--cpu"],
         cwd=project / "REST2-run1", capture_output=True, text=True, timeout=1800, env=base)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return destination
@@ -237,9 +245,12 @@ def test_a_cv_interval_that_does_not_divide_the_exchange_interval_is_refused(pro
     # configuration error -- and a ladder's rungs are now scaled from `build/built.xml` at build
     # time, so without one build-md refuses for the missing System and never reaches the check
     # this test is named for.
-    from .conftest import make_dataset_root
+    from .conftest import make_dataset_root, make_states_for
 
     make_dataset_root(tmp_path)
+    # ...and its saved scaled states, without which build-md refuses a ladder for their absence
+    # (0.5.4) before reaching the CV schedule either.
+    make_states_for(tmp_path, tmp_path / "bad.config")
     done = subprocess.run(
         CLI + ["build-md", "-odir", str(tmp_path / "bad-run1"),
                "--config", str(tmp_path / "bad.config")],
@@ -247,13 +258,19 @@ def test_a_cv_interval_that_does_not_divide_the_exchange_interval_is_refused(pro
     message = done.stdout + done.stderr
     if done.returncode == 0:
         # Refused at run time instead of build time is acceptable; refused nowhere is not.
+        # Every generated group line continues from `eq/eq_3.xml`, and the chain is not run here.
+        from .conftest import write_starting_state
+
+        write_starting_state(tmp_path, tmp_path / "bad-run1")
         base = dict(os.environ)
         base["PYTHONPATH"] = str(REPO / "src")
         base["MD_TOOLS_CONFIG"] = str(project / "user.config")
         done = subprocess.run(
             [sys.executable, str(tmp_path / "bad-run1" / "REST2.py"),
-             "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
-             "-odir", str(tmp_path / "bad-run"), "--cpu", "--check"],
+             "-p", str(tmp_path / "build" / "built.pdb"),
+             # Into its own directory, as `run.sh` launches it: the group file's `-i _protocol.py`
+             # is that directory's helper, and any other -odir is refused for it.
+             "--groupfile", "remd_groupfile.1", "-odir", ".", "--cpu", "--check"],
             cwd=tmp_path / "bad-run1", capture_output=True, text=True, timeout=900, env=base)
         message = done.stdout + done.stderr
     assert done.returncode != 0, message[-3000:]

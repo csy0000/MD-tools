@@ -28,6 +28,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from .conftest import make_states_for
+
 REPO = Path(__file__).resolve().parents[1]
 ALA = REPO / "tests" / "data" / "ALA.pdb"
 CLI = [sys.executable, "-m", "md_tools.cli.md_openmm"]
@@ -103,6 +105,8 @@ def project(tmp_path_factory):
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": CV_EVERY},
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
+    # A REST2 ladder integrates SAVED scaled states (0.5.4); `build-md` refuses without them.
+    make_states_for(root, root / "REST2.config")
     done = subprocess.run(
         CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=900)
@@ -118,20 +122,41 @@ def project(tmp_path_factory):
     context = openmm.Context(system, integrator, openmm.Platform.getPlatformByName("CUDA"))
     context.setPositions(pdb.positions)
     context.setVelocitiesToTemperature(300.0 * unit.kelvin, 1)
-    (root / "initial_state.xml").write_text(XmlSerializer.serialize(
+    # WHERE EVERY GROUP LINE CONTINUES FROM, `-c eq/eq_3.xml` relative to the group file: a ladder
+    # reads its coordinates only from its group file (0.5.4), so the state is written there rather
+    # than passed as `-c initial_state.xml`.
+    starting = root / "REST2-run1" / "eq" / "eq_3.xml"
+    starting.parent.mkdir(parents=True, exist_ok=True)
+    starting.write_text(XmlSerializer.serialize(
         context.getState(getPositions=True, getVelocities=True)), encoding="utf-8")
     return root
+
+
+def _run_directory(project: Path, tmp_path: Path, name: str) -> Path:
+    """A fresh copy of the generated run directory, for one launch into itself.
+
+    A ladder's group file names `-i _protocol.py` relative to ITSELF and the runtime writes that
+    helper into `-odir`, so the two must be one directory: a ladder launched with any other `-odir`
+    is refused before writing anything. `run.sh` launches with `-odir .` in the run directory, and
+    so does this -- a copy per case, a sibling of `REST2-run1` so `../build/` still resolves, since
+    every case needs an output directory of its own.
+    """
+    import shutil
+
+    destination = project / f"{tmp_path.name}-{name}"
+    shutil.copytree(project / "REST2-run1", destination)
+    return destination
 
 
 def _launch(project: Path, destination: Path, *extra, ranks=STATES, environment=None,
             expect=0):
     done = subprocess.run(
-        ["mpirun", "-n", str(ranks), sys.executable,
-         str(project / "REST2-run1" / "REST2.py"),
-         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
-         "-c", str(project / "initial_state.xml"),
-         "-ng", str(ranks), "-odir", str(destination), *extra],
-        cwd=project / "REST2-run1", capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
+        ["mpirun", "-n", str(ranks), sys.executable, str(destination / "REST2.py"),
+         # NO -s and no -c: a ladder reads both only from its group file, whose lines name the
+         # saved scaled states under build/REST2/ and the starting state in eq/eq_3.xml.
+         "-p", str(project / "build" / "built.pdb"), "--groupfile", "remd_groupfile.1",
+         "-ng", str(ranks), "-odir", ".", *extra],
+        cwd=destination, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(project, **(environment or {})))
     if expect is not None:
         assert (done.returncode == 0) == (expect == 0), \
@@ -151,7 +176,7 @@ def _reports(destination: Path) -> str:
 
 def test_a_two_rank_cuda_ladder_writes_cv_for_every_state(project, tmp_path):
     """CV reporting on, several ranks, real devices, and the rank-to-device mapping recorded."""
-    destination = tmp_path / "fresh"
+    destination = _run_directory(project, tmp_path, "fresh")
     _launch(project, destination)
 
     manifest = json.loads((destination / "restart.json").read_text(encoding="utf-8"))
@@ -174,12 +199,12 @@ def test_cv_continuation_under_mpi_on_cuda(project, tmp_path):
     A continuation therefore has to agree across ranks about how many rows are committed. If it
     did not, the resumed series would duplicate or drop the overlap.
     """
-    reference = tmp_path / "reference"
+    reference = _run_directory(project, tmp_path, "reference")
     _launch(project, reference)
     expected = {index: [int(r["step"]) for r in _rows(reference / f"cv_state{index}.csv")]
                 for index in range(STATES)}
 
-    destination = tmp_path / "resumed"
+    destination = _run_directory(project, tmp_path, "resumed")
     crashed = _launch(project, destination, expect=1,
                       environment={"MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": "0",
                                    "MD_TOOLS_FAIL_LADDER_AT": "after-cv-row",
@@ -223,7 +248,7 @@ def test_a_rank_local_failure_stops_the_whole_communicator(project, tmp_path, ra
     timeout is what distinguishes a stopped job from a hung one, so a test that waited forever
     could not detect the failure it exists for.
     """
-    destination = tmp_path / f"fail-{boundary}-{rank}"
+    destination = _run_directory(project, tmp_path, f"fail-{boundary}-{rank}")
     done = _launch(project, destination, expect=1,
                    environment={"MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": str(rank),
                                 "MD_TOOLS_FAIL_LADDER_AT": boundary,

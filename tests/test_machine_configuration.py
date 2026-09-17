@@ -156,23 +156,28 @@ def test_an_invalid_configuration_stops_the_command_before_any_output(case, tmp_
     document, _ = INVALID[case]
     broken = _config(tmp_path, document)
 
-    work = tmp_path / "work"
-    work.mkdir()
+    # A dataset root with its built System: `build-md` validates the chain against it and refuses
+    # a root without one. The stand-in System is enough -- the subject is the machine configuration.
+    from .conftest import make_dataset_root
+
+    work = make_dataset_root(tmp_path / "work", solvent="explicit")
     (work / "cMD.config").write_text(yaml.safe_dump({"protocol": "cMD", "solvent": "explicit"}),
                                      encoding="utf-8")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "cMD-run1"),
                                       "--config", str(work / "cMD.config")],
                                capture_output=True, text=True, timeout=600)
     assert generated.returncode == 0, generated.stdout + generated.stderr
-    (work / "built.pdb").write_text("END\n", encoding="utf-8")
-    (work / "built.xml").write_text("<System/>\n", encoding="utf-8")
 
     destination = tmp_path / "never"
     done = subprocess.run(
-        CLI + ["md-run", "-i", "../input/cMD.in", "-p", "../built.pdb", "-s", "../built.xml",
+        CLI + ["md-run", "-i", "../input/cMD.in", "-p", "../build/built.pdb",
+               "-s", "../build/built.xml",
                "-odir", str(destination)],
         cwd=work / "cMD-run1", capture_output=True, text=True, timeout=600,
         env=dict(os.environ, MD_TOOLS_CONFIG=str(broken)))
 
     assert done.returncode != 0, done.stdout
+    # REFUSED FOR THE CONFIGURATION. The inputs are a real built System now, so nothing else about
+    # this invocation is wrong; the fake `<System/>` it used to pass could have been the reason.
+    assert str(broken) in done.stdout + done.stderr, done.stdout + done.stderr
     assert not destination.exists(), sorted(p.name for p in destination.iterdir())

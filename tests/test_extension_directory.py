@@ -46,6 +46,15 @@ PARENT_FILES = ("exchange.nc", "checkpoint.nc", "restart.json", "rem.log",
     for content in ("whole", "solute") for state in range(len(TAUS)))
 
 
+@pytest.fixture(scope="module")
+def prepared(prepared, tmp_path_factory):
+    """The shared two-state ladder with every group line naming a SAVED scaled state: a ladder
+    scales nothing (0.5.4). See `test_grouped_run_end_to_end.saved_state_ladder`."""
+    from .test_grouped_run_end_to_end import saved_state_ladder
+
+    return saved_state_ladder(prepared, tmp_path_factory.mktemp("saved-states"))
+
+
 def _digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 

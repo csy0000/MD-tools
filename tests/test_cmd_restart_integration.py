@@ -73,9 +73,12 @@ def project(tmp_path_factory):
     root = tmp_path_factory.mktemp("cmd-restart")
 
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
+    # INTO `build/`: the System belongs to the DATASET, and `build-md` refuses to generate a chain
+    # it cannot validate against `<root>/build/built.{xml,pdb}` (MIGRATED; this built at the root).
+    (root / "build").mkdir()
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
 
@@ -108,7 +111,8 @@ def _run_stage(project_root: Path, work: Path, *, environment=None, timeout=900,
     base.update(environment or {})
     return subprocess.run(
         [sys.executable, str(project_root / "project" / "cMD.py"),
-         "-p", str(project_root / "built.pdb"), "-s", str(project_root / "built.xml"),
+         "-p", str(project_root / "build" / "built.pdb"),
+         "-s", str(project_root / "build" / "built.xml"),
          "-odir", str(work), *extra],
         cwd=work, capture_output=True, text=True, timeout=timeout, env=base)
 
@@ -315,7 +319,8 @@ def test_a_completed_log_from_another_configuration_is_not_treated_as_done(proje
     base.update(_user_config(work))
     again = subprocess.run(
         [sys.executable, str(altered / "cMD.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+         "-p", str(project / "build" / "built.pdb"),
+         "-s", str(project / "build" / "built.xml"),
          "-odir", str(work)],
         cwd=work, capture_output=True, text=True, timeout=900, env=base)
     assert again.returncode != 0, again.stdout + again.stderr

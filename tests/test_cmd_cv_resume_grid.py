@@ -140,21 +140,25 @@ EXPECTED_STEPS = list(range(0, PRODUCTION + 1, CV_EVERY))
 
 
 def _commits_before_production(project: Path) -> int:
-    """How many checkpoint commits the chain performs before production starts.
+    """How many checkpoint commits precede production's in the process `_run` launches: NONE.
 
-    EVERY stage commits a final generation, including the minimisation and the zero-length
-    equilibration stages. `MD_TOOLS_CHECKPOINT_FAULT_AFTER` counts boundary crossings globally, so
-    a fault meant for the production stage has to let those through first. Derived from the plan
-    rather than written as a literal: a change to the stage chain would otherwise silently move
-    the crash into a different stage, and the test would still "pass" while testing nothing.
+    `MD_TOOLS_CHECKPOINT_FAULT_AFTER` counts boundary crossings in ONE process. This counted the
+    minimisation and the zero-length equilibration stages, because the retired `--all-in-one`
+    md.py ran them in the same process as production and each commits a final generation. `_run`
+    now launches the production stage script alone, so the count is zero, and keeping the old one
+    moved every crash two commits later -- which the guard in the resume test caught ("aimed at a
+    commit at step 10 and landed at 40"). RE-DERIVED for the split layout, not tuned to pass.
+
+    Still checked against the plan, so a chain whose production is not the only dynamics stage
+    fails here rather than silently interrupting a different stage.
     """
     from md_tools.build.md import resolve_md_config, stage_plan
 
     plan = stage_plan(resolve_md_config(project / "cMD.config"))
-    before = [stage for stage in plan if int(stage.get("steps") or 0) == 0]
-    assert len(before) == len(plan) - 1, (
+    dynamics = [stage for stage in plan if int(stage.get("steps") or 0) > 0]
+    assert len(dynamics) == 1, (
         f"expected exactly one dynamics stage in this chain, got plan {[s['name'] for s in plan]}")
-    return len(before)
+    return 0
 
 
 def test_an_uninterrupted_run_writes_the_declared_grid(project, tmp_path):
@@ -242,9 +246,13 @@ def test_trajectory_frame_indices_stay_global_across_a_resume(project, tmp_path)
 
     import mdtraj
 
-    trajectory = sorted(destination.rglob("*.dcd"))
-    assert trajectory, "no trajectory was written"
-    frames = mdtraj.load(str(trajectory[0]), top=str(project / "built.pdb"))
+    # The production stage's SOLUTE stream, `solute_prod1.nc`, AMBER NetCDF. This looked for a
+    # `.dcd` beside a `built.pdb` at the project root: the retired `--all-in-one` md.py wrote one
+    # DCD into its -odir, and the System lived at the root before it moved into `build/`. The
+    # solute here is the whole capped dipeptide, so the built topology describes every frame.
+    trajectory = sorted(destination.rglob("solute_*.nc"))
+    assert len(trajectory) == 1, f"expected one solute trajectory, got {trajectory}"
+    frames = mdtraj.load(str(trajectory[0]), top=str(project / "build" / "built.pdb"))
     assert frames.n_frames == 2, (
         f"a resumed run wrote {frames.n_frames} frames; a frame index in the CV series names a "
         f"frame that must exist in the continued trajectory")

@@ -118,12 +118,24 @@ def _generate(root: Path, name: str, document: dict, *extra):
 
         make_scaled_state(system, tau=tau)
     (system / f"{name}.config").write_text(yaml.safe_dump(document), encoding="utf-8")
+    if document.get("protocol") in ("REST2", "rREST2"):
+        # A ladder integrates SAVED scaled states (0.5.4); `build-md` refuses without them.
+        from .conftest import make_states_for
+
+        make_states_for(system, system / f"{name}.config")
     done = subprocess.run(
         CLI + ["build-md", "-odir", f"./{name}-run1",
                "--config", str(system / f"{name}.config"), *extra],
         cwd=system, capture_output=True, text=True, timeout=900)
     assert done.returncode == 0, done.stdout + done.stderr
-    return system / f"{name}-run1"
+    run = system / f"{name}-run1"
+    if document.get("protocol") in ("REST2", "rREST2") and (system / "initial_state.xml").is_file():
+        # WHERE EVERY GROUP LINE CONTINUES FROM, `-c eq/eq_3.xml` beside the group file: a ladder
+        # reads its coordinates only from its group file, so the CUDA-made starting state goes
+        # there instead of onto the command line.
+        (run / "eq").mkdir(exist_ok=True)
+        shutil.copy2(system / "initial_state.xml", run / "eq" / "eq_3.xml")
+    return run
 
 
 def _initial_state(root: Path):
@@ -210,6 +222,13 @@ def _run_cmd(scripts, destination, *, environment=None, expect=0):
 
 EXPECTED = list(range(0, 41, 5))
 
+#: Checkpoint commits `_run_cmd`'s process lets through before the injected crash: the one at step
+#: 10, so production dies committing step 20 (commits every 10 of 40 steps). RE-DERIVED for the split
+#: layout: this was "6" when the retired `--all-in-one` md.py ran the minimisation and three
+#: zero-length equilibration stages in the same process, each committing a final generation. With
+#: production launched alone, 6 is past its last commit and the run finished instead of crashing.
+COMMITS_BEFORE_THE_CRASH = "1"
+
 
 def test_cmd_cv_runs_on_cuda_and_writes_the_declared_grid(cmd_project, tmp_path):
     from md_tools.build.record import read_record
@@ -233,7 +252,7 @@ def test_cmd_cv_resume_on_cuda_reproduces_the_grid_and_cost(cmd_project, tmp_pat
     destination = tmp_path / "resumed"
     crashed = _run_cmd(scripts, destination, expect=1,
                        environment={FAULT_ENVIRONMENT: "after-pointer-replace",
-                                    FAULT_AFTER_ENVIRONMENT: "6"})
+                                    FAULT_AFTER_ENVIRONMENT: COMMITS_BEFORE_THE_CRASH})
     assert crashed.returncode != 0
     _run_cmd(scripts, destination)
 
@@ -264,7 +283,7 @@ def test_fixed_tau_phase_space_and_cv_resume_on_cuda(cmd_project, tmp_path):
     destination = tmp_path / "ps"
     _run_cmd(scripts, destination, expect=1,
              environment={FAULT_ENVIRONMENT: "after-pointer-replace",
-                          FAULT_AFTER_ENVIRONMENT: "6"})
+                          FAULT_AFTER_ENVIRONMENT: COMMITS_BEFORE_THE_CRASH})
     _run_cmd(scripts, destination)
 
     _assert_cuda(read_record(destination / "cMD.log"), "fixed-tau cMD")
@@ -298,13 +317,31 @@ def _ladder_config(root: Path, *, reservoir=False, states=3):
     return document
 
 
+def _ladder_directory(scripts, tmp_path, label):
+    """A fresh copy of the generated run directory for one ladder, which runs INTO itself.
+
+    The group file names `-i _protocol.py` relative to itself and the runtime writes that helper
+    into `-odir`, so the two must be one directory (any other `-odir` is refused) -- `run.sh`
+    launches with `-odir .` in the run directory. A copy per case, as a sibling of the generated
+    one so the group file's `../build/` paths still resolve.
+    """
+    destination = Path(scripts).parent / f"{tmp_path.name}-{label}"
+    shutil.copytree(scripts, destination)
+    return destination
+
+
 def _run_ladder(scripts, destination, name, *extra, environment=None, expect=0):
+    """`destination` is a run directory from `_ladder_directory`; the ladder is launched in it.
+
+    NO -s and no -c: a ladder reads both only from its group file (0.5.4), whose lines name the
+    saved scaled states under `build/REST2/` and the starting state in `eq/eq_3.xml`.
+    """
     root = Path(scripts).parent
     done = subprocess.run(
-        [sys.executable, str(scripts / f"{name}.py"),
-         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
-         "-c", str(root / "initial_state.xml"), "-odir", str(destination), *extra],
-        cwd=scripts, capture_output=True, text=True, timeout=2400,
+        [sys.executable, str(destination / f"{name}.py"),
+         "-p", str(root / "build" / "built.pdb"), "--groupfile", "remd_groupfile.1",
+         "-odir", ".", *extra],
+        cwd=destination, capture_output=True, text=True, timeout=2400,
         env={**_environment(root), **(environment or {})})
     if expect is not None:
         assert (done.returncode == 0) == (expect == 0), \
@@ -327,7 +364,7 @@ def ladder_project(tmp_path_factory):
 def test_rest2_cv_runs_on_cuda_fresh_and_resumed(ladder_project, tmp_path):
     scripts = _generate(ladder_project, "REST2", _ladder_config(ladder_project))
 
-    fresh = tmp_path / "fresh"
+    fresh = _ladder_directory(scripts, tmp_path, "fresh")
     _run_ladder(scripts, fresh, "REST2")
     manifest = json.loads((fresh / "restart.json").read_text(encoding="utf-8"))
     assert (manifest.get("execution") or {}).get("platform") == "CUDA", manifest.get("execution")
@@ -335,7 +372,7 @@ def test_rest2_cv_runs_on_cuda_fresh_and_resumed(ladder_project, tmp_path):
     for index in range(3):
         assert [int(r["step"]) for r in _rows(fresh / f"cv_state{index}.csv")] == EXPECTED
 
-    resumed = tmp_path / "resumed"
+    resumed = _ladder_directory(scripts, tmp_path, "resumed")
     _run_ladder(scripts, resumed, "REST2", expect=1,
                 environment={"MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": "0",
                              "MD_TOOLS_FAIL_LADDER_AT": "after-cv-row",
@@ -358,7 +395,7 @@ def test_rrest2_cv_on_cuda_holds_the_pre_refresh_configuration(ladder_project, t
     _reservoir(ladder_project)
     scripts = _generate(ladder_project, "rREST2",
                         _ladder_config(ladder_project, reservoir=True))
-    destination = tmp_path / "rrest2"
+    destination = _ladder_directory(scripts, tmp_path, "rrest2")
     _run_ladder(scripts, destination, "rREST2")
 
     manifest = json.loads((destination / "restart.json").read_text(encoding="utf-8"))
@@ -490,21 +527,25 @@ def test_cmd_cv_survives_two_interruptions_on_cuda(cmd_project, tmp_path):
     _run_cmd(scripts, reference)
     want = (sorted(reference.rglob("*.cv.csv"))[0]).read_text(encoding="utf-8")
 
-    # Both counts come from what the runs actually do, not from a guess. The first invocation
-    # runs the whole chain, and its first three generations belong to the minimisation and
-    # equilibration stages; production then commits every 10 steps, which is every second CV
-    # row. 4 crashes at step 10 with 3 of the 9 rows committed, leaving three production commits
-    # still to come -- room for a SECOND interruption. The resumed invocation skips every
-    # finished stage, so its first commit is already inside production and 0 crashes there.
+    # Both counts come from what the runs actually do, not from a guess. `_run_cmd` launches the
+    # PRODUCTION stage alone, which commits every 10 steps -- every second CV row. 0 crashes on its
+    # first commit, step 10, with 3 of the 9 rows committed, leaving three production commits still
+    # to come -- room for a SECOND interruption. The resumed invocation's first commit is step 20,
+    # and 0 crashes there too, with 5 rows.
     #
-    # Crashing first at 6 (step 30, the count the single-resume test above uses) leaves exactly
-    # one commit remaining, so the resumed run necessarily wrote every remaining row before its
-    # fault could fire: the series was already complete and the third invocation then correctly
-    # refused to re-run a finished run. The assertion below is what caught that, and it stays,
-    # so a future edit cannot quietly reduce this back to a single interruption.
+    # RE-DERIVED for the split layout. This was ("4", "0") while the retired `--all-in-one` md.py
+    # ran the minimisation and equilibration stages in the same process, whose three generations
+    # the first count had to let through; launched alone, 4 was past step 30 and the two crashes
+    # left [9, 9] -- which the assertion below caught.
+    #
+    # Crashing first at step 30 leaves exactly one commit remaining, so the resumed run necessarily
+    # wrote every remaining row before its fault could fire: the series was already complete and
+    # the third invocation then correctly refused to re-run a finished run. The assertion below is
+    # what caught that, and it stays, so a future edit cannot quietly reduce this back to a single
+    # interruption.
     destination = tmp_path / "twice"
     committed = []
-    for allowed in ("4", "0"):
+    for allowed in ("0", "0"):
         crashed = _run_cmd(scripts, destination, expect=1,
                            environment={FAULT_ENVIRONMENT: "after-pointer-replace",
                                         FAULT_AFTER_ENVIRONMENT: allowed})
@@ -530,10 +571,10 @@ def test_cmd_cv_survives_two_interruptions_on_cuda(cmd_project, tmp_path):
 
 def _ladder_twice(scripts, name, tmp_path):
     """Fresh reference, then two interruptions and completion. Returns (reference, resumed)."""
-    reference = tmp_path / f"{name}-reference"
+    reference = _ladder_directory(scripts, tmp_path, f"{name}-reference")
     _run_ladder(scripts, reference, name)
 
-    resumed = tmp_path / f"{name}-twice"
+    resumed = _ladder_directory(scripts, tmp_path, f"{name}-twice")
     _run_ladder(scripts, resumed, name, expect=1,
                 environment={"MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": "0",
                              "MD_TOOLS_FAIL_LADDER_AT": "after-cv-row",

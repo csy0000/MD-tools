@@ -142,8 +142,11 @@ def test_every_reported_value_matches_an_independent_calculation(completed, proj
     import math
 
     path, _header, rows = _series(completed)
-    trajectory = sorted(completed.rglob("*.dcd"))
-    assert trajectory, "no trajectory to check the alignment against"
+    # The production stage's SOLUTE stream, AMBER NetCDF. This looked for the `.dcd` the retired
+    # `--all-in-one` md.py wrote; the stage script names `solute_prod1.nc`, and the solute is the
+    # whole capped dipeptide, so the built topology describes every frame.
+    trajectory = sorted(completed.rglob("solute_*.nc"))
+    assert len(trajectory) == 1, f"expected one solute trajectory to check against, got {trajectory}"
     frames = mdtraj.load(str(trajectory[0]), top=str(project / "build" / "built.pdb"))
 
     checked = 0

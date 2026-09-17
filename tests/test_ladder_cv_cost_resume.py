@@ -66,6 +66,8 @@ collective_variables:
 """
 
 
+from .conftest import ladder_group_file  # noqa: E402
+
 def _reservoir(root: Path, *, frames=6, tau_max=0.5):
     """Reuse the pre-refresh test's builder so both files agree what a reservoir is."""
     from tests.test_rrest2_pre_refresh_cv import _reservoir as build
@@ -73,7 +75,10 @@ def _reservoir(root: Path, *, frames=6, tau_max=0.5):
     build(root, frames=frames, tau_max=tau_max)
 
 
-@pytest.fixture(scope="module", params=["REST2", "rREST2"])
+@pytest.fixture(scope="module", params=[
+    "REST2",
+    pytest.param("rREST2", marks=pytest.mark.skip(
+        reason="rREST2 is archived for 0.5.4; removed with the archive"))])
 def project(request, tmp_path_factory):
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
@@ -107,6 +112,11 @@ def project(request, tmp_path_factory):
         document["reservoir"] = {"enabled": True, "path": "../reservoir.nc",
                                  "refresh_interval_exchanges": 1, "velocities": "inherit"}
     (root / f"{protocol}.config").write_text(yaml.safe_dump(document), encoding="utf-8")
+    # A ladder integrates SAVED scaled states (0.5.4): `build-md` refuses to generate one until
+    # `build/REST2/` exists, as `md-openmm build-top --rest2-scaler` writes it.
+    from .conftest import make_states_for
+
+    make_states_for(root, root / f"{protocol}.config")
     done = subprocess.run(
         CLI + ["build-md", "-odir", f"./{protocol}-run1", "--config", str(root / f"{protocol}.config")],
         cwd=root, capture_output=True, text=True, timeout=900)
@@ -139,8 +149,9 @@ def _run(project, destination: Path, *extra, environment=None, expect=0):
     base["OPENMM_CPU_THREADS"] = "1"     # see WHY ONE CPU THREAD
     done = subprocess.run(
         [sys.executable, str(root / f"{protocol}-run1" / f"{protocol}.py"),
-         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
-         "-c", str(root / "initial_state.xml"), "-odir", str(destination), "--cpu", *extra],
+         "-p", str(root / "build" / "built.pdb"),
+         "--groupfile", str(ladder_group_file(root, destination, run_dir=f"{protocol}-run1")),
+         "-odir", str(destination), "--cpu", *extra],
         cwd=root / f"{protocol}-run1", capture_output=True, text=True, timeout=1800,
         env={**base, **(environment or {})})
     if expect is not None:

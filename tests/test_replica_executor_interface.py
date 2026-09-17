@@ -202,6 +202,15 @@ def test_the_ungrouped_route_is_gone(workspace):
 LADDER_INPUTS = ("topology.pdb", "system.xml", "coordinates.xml", "protocol.py", "ladder.group")
 
 
+@pytest.fixture(scope="module")
+def prepared(prepared, tmp_path_factory):
+    """The shared two-state ladder with every group line naming a SAVED scaled state: a ladder
+    scales nothing (0.5.4). See `test_grouped_run_end_to_end.saved_state_ladder`."""
+    from .test_grouped_run_end_to_end import saved_state_ladder
+
+    return saved_state_ladder(prepared, tmp_path_factory.mktemp("saved-states"))
+
+
 @pytest.fixture
 def ladder(prepared, tmp_path):
     """A private copy of the real two-state ladder, so a run may mutate it.

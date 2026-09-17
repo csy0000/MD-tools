@@ -54,6 +54,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from .conftest import make_states_for
+
 REPO = Path(__file__).resolve().parents[1]
 ALA = REPO / "tests" / "data" / "ALA.pdb"
 CLI = [sys.executable, "-m", "md_tools.cli.md_openmm"]
@@ -231,6 +233,10 @@ def rest2_run(system):
         pytest.skip("no mpirun on PATH")
     built = system("rest2")
     _write_rest2_config(built)
+    # A REST2 ladder integrates SAVED scaled states (0.5.4), written once by
+    #     md-openmm build-top --rest2-scaler -s build/built.xml -p build/built.pdb --config ...
+    # and `build-md` refuses to generate the ladder until they exist.
+    make_states_for(built, built / "REST2.config")
     _md_openmm(built, "build-md", "-odir", "./REST2-run1", "--config", "REST2.config")
     _run_sh(built / "REST2-run1", "--cpu", timeout=7200)
     return built / "REST2-run1"
@@ -259,7 +265,11 @@ def _write_rest2_config(built):
 def test_example_2_a_rest2_ladder_under_a_launcher(rest2_run):
     """Replica exchange: N states of one system, differing only in Hamiltonian.
 
-        mpirun -n 3 md-openmm md-run -ng 3 -i REST2.in -p ../built.pdb -s ../built.xml ...
+        mpirun -n 3 md-openmm md-run -ng 3 -i ../input/REST2.in -p ../build/built.pdb \
+            --groupfile remd_groupfile.1 ...
+
+    NO -s. Each line of the group file names its state's saved scaled System,
+    build/REST2/system_state<i>.xml, and a ladder reads -s from nowhere else.
 
     `run.sh` writes that line for you with `-n` equal to the state count. **Any other world size
     is refused**: a ladder run in fewer processes is a different schedule, not a smaller one.
@@ -451,10 +461,11 @@ def test_example_3b_resuming_a_ladder_is_a_different_command(rest2_run):
         # cMD-style min/eq stages reject --resume before the ladder is reached:
         ./run.sh ../built.pdb ../built.xml --resume
 
-        # this is how you resume a ladder: the launcher line, directly.
+        # this is how you resume a ladder: run.sh's launcher line, directly, plus --resume.
         mpirun -n 3 md-openmm md-run -ng 3 -i ../input/REST2.in \
-            -p ../build/built.pdb -s ../build/built.xml -c eq/eq_3.xml \
-            -x REST2.nc -r restart.json -o REST2.out -log REST2.log --resume
+            -p ../build/built.pdb --groupfile remd_groupfile.1 -odir . \
+            -o remd_records/REST2_prod1.out -log remd_records/REST2_prod1.log \
+            -r remd_records/restart_prod1.json --resume
 
     It continues to the ORIGINAL budget and does not extend it. Run against a ladder that already
     finished it reports completion rather than repeating the work.
@@ -470,9 +481,13 @@ def test_example_3b_resuming_a_ladder_is_a_different_command(rest2_run):
     before = (directory / "whole_state0_prod1.nc").stat().st_mtime_ns
     done = subprocess.run(
         # `../input/REST2.in`: the input is SHARED at the dataset root, not inside the run.
+        # EXACTLY run.sh's launcher line plus --resume: the group file (a ladder reads -s only
+        # from it, and its lines carry `-c eq/eq_3.xml`), and the run's own record names -- a
+        # resume that named a different `-r` would not be continuing this run's record.
         ["mpirun", "-n", "3", *CLI, "md-run", "-ng", "3", "-i", "../input/REST2.in",
-         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-c", "eq/eq_3.xml",
-         "-x", "REST2.nc", "-r", "restart.json", "-o", "REST2.out", "-log", "REST2.log",
+         "-p", "../build/built.pdb", "--groupfile", "remd_groupfile.1", "-odir", ".",
+         "-o", "remd_records/REST2_prod1.out", "-log", "remd_records/REST2_prod1.log",
+         "-r", "remd_records/restart_prod1.json",
          "--cpu", "--resume"],
         cwd=directory, capture_output=True, text=True, timeout=3600)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]

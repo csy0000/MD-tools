@@ -27,6 +27,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from .conftest import ladder_group_file
+
 REPO = Path(__file__).resolve().parents[1]
 CLI = [sys.executable, "-m", "md_tools.cli.md_openmm"]
 ALA = REPO / "tests" / "data" / "ALA.pdb"
@@ -72,6 +74,11 @@ def _project(root: Path, *, cv: bool):
                                  if cv else {"file": None, "interval_steps": 0}),
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
+    # A ladder integrates SAVED scaled states (0.5.4): `build-md` refuses to generate one until
+    # `build/REST2/` exists, as `md-openmm build-top --rest2-scaler` writes it.
+    from .conftest import make_states_for
+
+    make_states_for(root, root / "REST2.config")
     done = subprocess.run(
         CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
@@ -109,8 +116,8 @@ def _run(project: Path, destination: Path, *extra, expect=0):
     base["MD_TOOLS_CONFIG"] = str(user)
     done = subprocess.run(
         [sys.executable, str(project / "REST2-run1" / "REST2.py"),
-         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
-         "-c", str(project / "initial_state.xml"),
+         "-p", str(project / "build" / "built.pdb"),
+         "--groupfile", str(ladder_group_file(project, destination)),
          "-odir", str(destination), "--cpu", *extra],
         cwd=project / "REST2-run1", capture_output=True, text=True, timeout=1800, env=base)
     if expect is not None:

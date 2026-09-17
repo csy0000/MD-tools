@@ -36,6 +36,44 @@ pytest.importorskip("openmm")
 from md_tools.remd import amber_trajectory as amber
 
 
+def saved_state_ladder(prepared, work: Path):
+    """`prepared`'s ladder, with every group line naming a SAVED scaled state.
+
+    A ladder scales nothing (0.5.4): each line's -s must be `system_state<i>.xml` from one
+    `scaler.yaml`, which `md-openmm build-top --rest2-scaler` writes -- here through the same
+    function. `prepared` itself is session-scoped and shared with modules that never launch a
+    ladder, so its tree is copied rather than rewritten.
+
+    The states are named by ABSOLUTE path: the suites below copy the ladder's input files into
+    directories of their own, and every copy must find the same states.
+    """
+    import shutil
+
+    from md_tools.build.scaler import build_scaled_states
+    from md_tools.rest2.states import state_system_name
+
+    source, n_atoms, unit = prepared
+    work = Path(work)
+    for name in ("system.xml", "topology.pdb", "coordinates.xml", "protocol.py"):
+        shutil.copy(source / name, work / name)
+    config = work / "scaler.config"
+    config.write_text(f"method: REST2\nschedule:\n  n_states: {len(TAUS)}\n"
+                      f"  tau_min: {float(TAUS[0])}\n  tau_max: {float(TAUS[-1])}\n",
+                      encoding="utf-8")
+    build_scaled_states(system_path=work / "system.xml", topology_path=work / "topology.pdb",
+                        config_path=config, echo=False)
+    lines = [f"-i protocol.py -p topology.pdb -s {work / 'REST2' / state_system_name(index)} "
+             f"-c coordinates.xml --group-index {index}" for index in range(len(TAUS))]
+    (work / "ladder.group").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return work, n_atoms, unit
+
+
+@pytest.fixture(scope="module")
+def prepared(prepared, tmp_path_factory):
+    """The shared ladder on saved states. See `saved_state_ladder`."""
+    return saved_state_ladder(prepared, tmp_path_factory.mktemp("saved-states"))
+
+
 def _run(work, *extra):
     environment = dict(os.environ, PYTHONPATH=str(SRC), OPENMM_CPU_THREADS="1")
     return subprocess.run(

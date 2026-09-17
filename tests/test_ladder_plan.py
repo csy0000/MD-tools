@@ -35,6 +35,8 @@ ALA = REPO / "tests" / "data" / "ALA.pdb"
 
 # --- the one implementation of "what System is rung i" -----------------------------------------
 
+from .conftest import ladder_group_file  # noqa: E402
+
 def test_the_protocol_and_the_preflight_build_rungs_through_the_same_function():
     """`Protocol.build_systems` must delegate, not carry its own copy of the construction.
 
@@ -134,10 +136,28 @@ def project(tmp_path_factory):
                   "number_of_exchanges": 2},
         "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5},
     }), encoding="utf-8")
+    # A ladder integrates SAVED scaled states (0.5.4): `build-md` refuses to generate one until
+    # `build/REST2/` exists, as `md-openmm build-top --rest2-scaler` writes it.
+    from .conftest import make_states_for
+
+    make_states_for(root, root / "REST2.config")
     done = subprocess.run(
         CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=600)
     assert done.returncode == 0, done.stdout + done.stderr
+
+    from openmm import XmlSerializer, unit
+    from openmm.app import PDBFile
+    import openmm
+
+    pdb = PDBFile(str(root / "build" / "built.pdb"))
+    system = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
+    integrator = openmm.VerletIntegrator(1.0 * unit.femtosecond)
+    context = openmm.Context(system, integrator, openmm.Platform.getPlatformByName("Reference"))
+    context.setPositions(pdb.positions)
+    context.setVelocitiesToTemperature(300.0 * unit.kelvin, 1)
+    (root / "initial_state.xml").write_text(XmlSerializer.serialize(
+        context.getState(getPositions=True, getVelocities=True)), encoding="utf-8")
     return root
 
 
@@ -153,8 +173,11 @@ def test_the_preflight_prepares_one_system_per_rung_before_anything_is_written(p
                            "friction_per_ps": 1.0},
               "exchange_interval_steps": 5, "number_of_exchanges": 2}
 
+    # The rungs are the SAVED states the group file names (0.5.4): a ladder is given no -s and
+    # scales nothing, so "one System per rung" is one deserialised state per line.
     checked = preflight_ladder(
-        topology=str(project / "build" / "built.pdb"), system=str(project / "build" / "built.xml"),
+        topology=str(project / "build" / "built.pdb"), system=None,
+        groupfile=str(ladder_group_file(project, destination)),
         replicas=3, output=destination / "REST2.out", log=destination / "REST2.log",
         trajectory=destination / "REST2.nc", cpu=True, protocol="REST2",
         timestep_fs=2.0, ladder=ladder, out_dir=destination, tau=0.5)
@@ -244,21 +267,8 @@ def test_a_real_ladder_runs_on_the_prepared_systems(project, tmp_path):
         "d.ReplicaRun._begin = spy\n" % str(REPO / "src"),
         encoding="utf-8")
 
-    from openmm import XmlSerializer, unit
-    from openmm.app import PDBFile
-    import openmm
-
-    pdb = PDBFile(str(project / "build" / "built.pdb"))
-    system = XmlSerializer.deserialize((project / "build" / "built.xml").read_text(encoding="utf-8"))
-    integrator = openmm.VerletIntegrator(1.0 * unit.femtosecond)
-    context = openmm.Context(system, integrator, openmm.Platform.getPlatformByName("Reference"))
-    context.setPositions(pdb.positions)
-    context.setVelocitiesToTemperature(300.0 * unit.kelvin, 1)
-    state = context.getState(getPositions=True, getVelocities=True)
-    initial = project / "initial_state.xml"
-    initial.write_text(XmlSerializer.serialize(state), encoding="utf-8")
-
     destination = tmp_path / "run"
+    group = ladder_group_file(project, destination)
     user = project / "user.config"
     user.write_text(yaml.safe_dump(
         {"schema_version": "1.0", "user": {"person_id": "t", "name": "T"}}), encoding="utf-8")
@@ -276,7 +286,7 @@ def test_a_real_ladder_runs_on_the_prepared_systems(project, tmp_path):
          f"exec(open({str(probe)!r}).read()); "
          f"import runpy, sys; "
          f"sys.argv = ['REST2.py', '-p', {str(project / 'build' / 'built.pdb')!r}, "
-         f"'-s', {str(project / 'build' / 'built.xml')!r}, '-c', {str(initial)!r}, "
+         f"'--groupfile', {str(group)!r}, "
          f"'-odir', {str(destination)!r}, '--cpu']; "
          f"runpy.run_path({str(project / 'REST2-run1' / 'REST2.py')!r}, run_name='__main__')"],
         cwd=project / "REST2-run1", capture_output=True, text=True, timeout=900, env=environment)

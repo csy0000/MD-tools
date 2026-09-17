@@ -79,7 +79,13 @@ def ladder(built):
                   "exchange_interval_steps": 50, "number_of_exchanges": 4},
         "reporting": {"crd_printout_solute": 25, "info_printout": 50,
                       "checkpoint_printout": 50}}, sort_keys=False), encoding="utf-8")
-    assert _cli(built, "build-md", "-odir", "./rest2-run1", "--config", str(config)).returncode == 0
+    # A REST2 ladder integrates SAVED scaled states (0.5.4): `build-md` refuses to generate one
+    # until `build-top --rest2-scaler` has written build/REST2/.
+    from .conftest import make_states_for
+
+    make_states_for(built, config)
+    generated = _cli(built, "build-md", "-odir", "./rest2-run1", "--config", str(config))
+    assert generated.returncode == 0, generated.stdout + generated.stderr
 
     out = built / "rest2-run1"
     # EACH PREPARATION STAGE INTO ITS OWN DIRECTORY, and no `-r`/`-log`.
@@ -105,8 +111,11 @@ def ladder(built):
         assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
         previous = f"../min/min.xml" if key == "min" else f"eq/{key}.xml"
 
+    # NO -s and no -c: a ladder reads both only from the group file `build-md` wrote, whose lines
+    # name build/REST2/system_state<i>.xml and continue from eq/eq_3.xml -- the stage just run.
+    assert previous == "eq/eq_3.xml"
     done = _md_run(out, "-ng", "2", "-i", "../input/REST2.in", "-p", "../build/built.pdb",
-                   "-s", "../build/built.xml", "-c", previous, "-log", "REST2.log", ranks=2)
+                   "--groupfile", "remd_groupfile.1", "-log", "REST2.log", ranks=2)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return out
 
@@ -152,7 +161,7 @@ def test_each_rank_kept_its_own_record_and_ran_on_cuda(ladder):
 def test_a_world_that_is_not_the_state_count_is_refused_before_integrating(ladder):
     _require_mpi()
     done = _md_run(ladder, "-ng", "3", "-i", "../input/REST2.in", "-p", "../build/built.pdb",
-                   "-s", "../build/built.xml", "-log", "refused.log", ranks=3)
+                   "--groupfile", "remd_groupfile.1", "-log", "refused.log", ranks=3)
     assert done.returncode != 0
     message = done.stdout + done.stderr
     # All four numbers, so the reader knows which one is the odd one out.
@@ -734,18 +743,23 @@ def test_a_multi_rank_launch_without_mpi4py_fails_before_any_output(built, tmp_p
     _require_mpi()
     # `ladder`, requested above, is what builds this directory. Reaching for it on the strength
     # of another test having run first is what made this fail under pytest-xdist.
+    # IN THE RUN DIRECTORY, `-odir .`: a ladder's group file resolves `-i _protocol.py` beside
+    # itself and the runtime writes that helper into `-odir`, so any other `-odir` is refused for
+    # that reason first. The records are named into a subdirectory that does not exist, and
+    # "nothing written" is that directory still absent and the run directory's listing unchanged.
     out = built / "rest2-run1"
-    destination = tmp_path / "nothing"
+    destination = out / "nothing"
+    before = sorted(str(p.relative_to(out)) for p in out.rglob("*"))
     environment = dict(os.environ, MD_TOOLS_FORCE_NO_MPI4PY="1")
     done = subprocess.run(
         ["mpirun", "-n", "2", "md-openmm", "md-run", "-ng", "2", "-i", "../input/REST2.in",
-         "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination),
-         "-o", str(destination / "x.out"), "-log", str(destination / "x.log")],
+         "-p", "../build/built.pdb", "--groupfile", "remd_groupfile.1", "-odir", ".",
+         "-o", "nothing/x.out", "-log", "nothing/x.log"],
         cwd=out, capture_output=True, text=True, timeout=600, env=environment)
     assert done.returncode != 0
     assert "mpi4py" in done.stdout + done.stderr, done.stdout + done.stderr
-    assert not destination.exists() or not list(destination.iterdir()), \
-        sorted(p.name for p in destination.iterdir())
+    assert not destination.exists(), sorted(p.name for p in destination.iterdir())
+    assert sorted(str(p.relative_to(out)) for p in out.rglob("*")) == before
 
 
 def test_a_serial_run_needs_no_mpi4py(built, tmp_path, stage_project):

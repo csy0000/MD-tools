@@ -316,6 +316,15 @@ def test_a_generated_stage_consumes_the_corrected_system_without_rebuilding_it(t
                    "production_steps": 20},
         "reporting": {"crd_printout_solute": 10, "info_printout": 10, "checkpoint_printout": 10},
     }), encoding="utf-8")
+    # THE DATASET ROOT. `build-md` validates the chain it generates against `build/built.xml`, the
+    # System every run on a dataset shares, and refuses without one. The corrected build is
+    # COPIED there byte for byte, so the stage still reads exactly the System the build wrote.
+    import shutil
+
+    (tmp_path / "build").mkdir()
+    for name in ("built.xml", "built.pdb", "built.sdf"):
+        if (trees["like"] / name).is_file():
+            shutil.copy(trees["like"] / name, tmp_path / "build" / name)
     generated = subprocess.run(
         CLI + ["build-md", "-odir", "./cMD", "--config", str(config)],
         cwd=tmp_path, capture_output=True, text=True, timeout=900)
@@ -323,7 +332,7 @@ def test_a_generated_stage_consumes_the_corrected_system_without_rebuilding_it(t
 
     run = subprocess.run(
         [sys.executable, str(tmp_path / "cMD" / "cMD.py"),
-         "-p", str(trees["like"] / "built.pdb"), "-s", str(trees["like"] / "built.xml"),
+         "-p", str(tmp_path / "build" / "built.pdb"), "-s", str(tmp_path / "build" / "built.xml"),
          "-odir", str(tmp_path / "out"), "--cpu", "-log", "cMD.log"],
         cwd=tmp_path / "cMD", capture_output=True, text=True, timeout=1800)
     assert run.returncode == 0, run.stdout[-4000:] + run.stderr[-4000:]

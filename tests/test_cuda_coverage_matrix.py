@@ -526,6 +526,33 @@ def built(tmp_path_factory):
     return root
 
 
+def _seed_build(source_root: Path, work: Path) -> None:
+    """The dataset root's built System, copied in before a run is generated into `work`.
+
+    `build-md -odir work/<run>` makes `work` the dataset root, and generation validates the chain
+    against the System every run on that root shares -- refusing a root with no `build/built.xml`.
+    Copied rather than rebuilt: the physics is identical and `build-top` is the slow part.
+    """
+    import shutil
+
+    shutil.copytree(source_root / "build", work / "build")
+
+
+def _ladder_launch(project: Path, start: Path) -> None:
+    """Put the equilibrated state where the generated group file names it, `eq/eq_3.xml`.
+
+    A ladder reads `-s` and `-c` only from its group file (0.5.4), and that file resolves
+    `-i _protocol.py` beside itself while the runtime writes the helper into `-odir` -- so a
+    ladder runs in its run directory with `-odir .`, as `run.sh` launches it. `_equilibrate` runs
+    the chain into a directory of its own; its last restart is the state `run.sh`'s chain would
+    have left in `eq/eq_3.xml`.
+    """
+    import shutil
+
+    (project / "eq").mkdir(exist_ok=True)
+    shutil.copy2(start, project / "eq" / "eq_3.xml")
+
+
 #: Results collected across the lanes, written into the evidence document at teardown.
 RESULTS: list[dict[str, object]] = []
 
@@ -553,6 +580,7 @@ def test_cuda_precision_lane(precision, built, hardware, tmp_path):
                    "production_steps": 20},
         "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 10}}),
         encoding="utf-8")
+    _seed_build(built, work)
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "cMD.config")],
                                capture_output=True, text=True, timeout=600)
@@ -586,21 +614,51 @@ def test_hmr_timestep_lane(built, hardware, tmp_path):
 
     Both halves on the GPU, because the refusal is the half that matters and a refusal proved on
     the CPU says nothing about the platform the run would have used.
+
+    MIGRATED for the dataset-root check. `build-md` now validates the chain against the root's
+    own `build/built.xml`, so a 4 fs project can only be GENERATED on an HMR root -- on an ordinary
+    one generation itself refuses, which is asserted as (a0). The stage-level refusal on the GPU is
+    then the same generated 4 fs stage pointed at the ordinary System, (a).
     """
     work = tmp_path / "hmr"
     work.mkdir()
-
-    # (a) the refusal: 4 fs against the ordinary masses in `built.xml`.
     (work / "fast.config").write_text(yaml.safe_dump({
         "protocol": "cMD", "solvent": "implicit",
         "stages": {"minimization_iterations": 2, "production_steps": 10},
         "dynamics": {"timestep_fs": 4.0},
         "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 10}}),
         encoding="utf-8")
+
+    # (a0) generation refuses 4 fs on a root whose System has ordinary masses.
+    ordinary = work / "ordinary"
+    ordinary.mkdir()
+    _seed_build(built, ordinary)
+    refused_generation = subprocess.run(CLI + ["build-md", "-odir", str(ordinary / "fast"),
+                                               "--config", str(work / "fast.config")],
+                                        capture_output=True, text=True, timeout=600)
+    assert refused_generation.returncode != 0, refused_generation.stdout
+    assert "repartitioning" in refused_generation.stdout + refused_generation.stderr, (
+        refused_generation.stdout + refused_generation.stderr)
+    assert not (ordinary / "fast").exists(), "the refused generation created output"
+
+    # An HMR-built system is the root the 4 fs project is generated on.
+    (work / "hmr.config").write_text(
+        "solvent:\n  model: GBn2\nhydrogen_mass_repartitioning:\n  enabled: true\n",
+        encoding="utf-8")
+    (work / "build").mkdir()
+    hmr_built = subprocess.run(
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(work / "hmr.config")],
+        cwd=work, capture_output=True, text=True, timeout=1800)
+    if hmr_built.returncode != 0:
+        pytest.fail(f"could not build an HMR system, so the 4 fs lane cannot be run:\n"
+                    f"{hmr_built.stdout}{hmr_built.stderr}")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "fast"),
                                       "--config", str(work / "fast.config")],
                                capture_output=True, text=True, timeout=600)
     assert generated.returncode == 0, generated.stdout + generated.stderr
+
+    # (a) the refusal: the 4 fs stage against the ordinary masses in `built.xml`.
     destination = work / "refused"
     refused = subprocess.run(
         [sys.executable, str(work / "fast" / "cMD.py"),
@@ -608,23 +666,15 @@ def test_hmr_timestep_lane(built, hardware, tmp_path):
         cwd=work, capture_output=True, text=True, timeout=900,
         env=_environment(work, **_machine()))
     assert refused.returncode != 0, refused.stdout + refused.stderr
+    assert "repartitioning" in refused.stdout + refused.stderr, (
+        "refused, but not for the masses: " + (refused.stdout + refused.stderr)[-2000:])
     assert not destination.exists(), "the refusal created output"
 
-    # (b) an HMR-built system takes 4 fs and runs.
-    (work / "hmr.config").write_text(
-        "solvent:\n  model: GBn2\nhydrogen_mass_repartitioning:\n  enabled: true\n",
-        encoding="utf-8")
-    hmr_built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "hmr.xml", "-op", "hmr.pdb",
-               "-log", "hmr.log", "--config", str(work / "hmr.config")],
-        cwd=work, capture_output=True, text=True, timeout=1800)
-    if hmr_built.returncode != 0:
-        pytest.fail(f"could not build an HMR system, so the 4 fs lane cannot be run:\n"
-                    f"{hmr_built.stdout}{hmr_built.stderr}")
-
+    # (b) the HMR-built system takes 4 fs and runs.
     ran = subprocess.run(
         [sys.executable, str(work / "fast" / "cMD.py"),
-         "-p", str(work / "hmr.pdb"), "-s", str(work / "hmr.xml"), "-odir", str(work / "ok")],
+         "-p", str(work / "build" / "built.pdb"), "-s", str(work / "build" / "built.xml"),
+         "-odir", str(work / "ok")],
         cwd=work, capture_output=True, text=True, timeout=1800,
         env=_environment(work, **_machine()))
     assert ran.returncode == 0, ran.stdout + ran.stderr
@@ -660,6 +710,7 @@ def test_explicit_device_placement_lane(built, hardware, tmp_path):
         "stages": {"minimization_iterations": 2, "production_steps": 10},
         "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 10}}),
         encoding="utf-8")
+    _seed_build(built, work)
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "cMD.config")],
                                capture_output=True, text=True, timeout=600)
@@ -862,6 +913,7 @@ def test_there_is_no_automatic_cpu_fallback_on_this_machine(built, hardware, tmp
         "stages": {"minimization_iterations": 2, "production_steps": 5},
         "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5}}),
         encoding="utf-8")
+    _seed_build(built, work)
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "cMD.config")],
                                capture_output=True, text=True, timeout=600)
@@ -922,6 +974,7 @@ def test_explicit_solvent_npt_lane(built_explicit, hardware, tmp_path):
                    "production_steps": 20},
         "reporting": {"crd_printout_solute": 10, "info_printout": 10,
                       "checkpoint_printout": 10}}), encoding="utf-8")
+    _seed_build(built_explicit, work)
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "cMD.config")],
                                capture_output=True, text=True, timeout=600)
@@ -1034,6 +1087,10 @@ def test_explicit_solvent_rest2_lane(built_explicit, hardware, tmp_path):
                   "number_of_exchanges": 2},
         "reporting": {"crd_printout_solute": 10, "info_printout": 10,
                       "checkpoint_printout": 10}}), encoding="utf-8")
+    # A ladder integrates SAVED scaled states (0.5.4); `build-md` refuses without them.
+    from .conftest import make_states_for
+
+    make_states_for(work, work / "REST2.config")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "REST2.config")],
                                capture_output=True, text=True, timeout=600)
@@ -1041,17 +1098,18 @@ def test_explicit_solvent_rest2_lane(built_explicit, hardware, tmp_path):
 
     start = _equilibrate(work / "project", built_explicit / "build" / "built.pdb",
                          built_explicit / "build" / "built.xml", work, work / "run")
+    _ladder_launch(work / "project", start)
     done = subprocess.run(
         [sys.executable, str(work / "project" / "REST2.py"),
-         "-p", str(built_explicit / "build" / "built.pdb"), "-s", str(built_explicit / "build" / "built.xml"),
-         "-c", str(start), "-odir", str(work / "run")],
-        cwd=work, capture_output=True, text=True, timeout=3600,
+         "-p", str(built_explicit / "build" / "built.pdb"), "--groupfile", "remd_groupfile.1",
+         "-odir", "."],
+        cwd=work / "project", capture_output=True, text=True, timeout=3600,
         env=_environment(work, **_machine()))
     assert done.returncode == 0, done.stdout + done.stderr
 
-    trajectories = sorted((work / "run").glob("whole_state*_prod1.nc"))
+    trajectories = sorted((work / "project").glob("whole_state*_prod1.nc"))
     assert len(trajectories) == 2, [p.name for p in trajectories]
-    report = (work / "run" / "REST2.out").read_text(encoding="utf-8")
+    report = (work / "project" / "REST2.out").read_text(encoding="utf-8")
     assert "platform           : CUDA" in report, report[:2000]
     _record("test_explicit_solvent_rest2_lane",
             feature="REST2 explicit (PME), 2 states, serial",
@@ -1088,6 +1146,10 @@ def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_
                   "number_of_exchanges": 2},
         "reporting": {"crd_printout_solute": 10, "info_printout": 10,
                       "checkpoint_printout": 10}}), encoding="utf-8")
+    # A ladder integrates SAVED scaled states (0.5.4); `build-md` refuses without them.
+    from .conftest import make_states_for
+
+    make_states_for(work, work / "REST2.config")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "REST2.config")],
                                capture_output=True, text=True, timeout=600)
@@ -1095,15 +1157,16 @@ def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_
 
     start = _equilibrate(work / "project", built / "build" / "built.pdb", built / "build" / "built.xml",
                          work, work / "run")
+    _ladder_launch(work / "project", start)
     done = subprocess.run(
         ["mpirun", "-n", str(states), sys.executable, str(work / "project" / "REST2.py"),
-         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
-         "-c", str(start), "-odir", str(work / "run"), "-ng", str(states)],
-        cwd=work, capture_output=True, text=True, timeout=3600,
+         "-p", str(built / "build" / "built.pdb"), "--groupfile", "remd_groupfile.1",
+         "-odir", ".", "-ng", str(states)],
+        cwd=work / "project", capture_output=True, text=True, timeout=3600,
         env=_environment(work, **_machine()))
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
 
-    trajectories = sorted((work / "run").glob("whole_state*_prod1.nc"))
+    trajectories = sorted((work / "project").glob("whole_state*_prod1.nc"))
     assert len(trajectories) == states, [p.name for p in trajectories]
 
     # One device per rank, and they must be DIFFERENT devices: `device_policy: local_rank` is the
@@ -1111,7 +1174,7 @@ def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_
     devices = []
     for rank in range(states):
         name = "REST2.out" if rank == 0 else f"REST2.out.rank{rank:02d}"
-        text = (work / "run" / name).read_text(encoding="utf-8")
+        text = (work / "project" / name).read_text(encoding="utf-8")
         assert "platform           : CUDA" in text, text[:1500]
         line = next(line for line in text.splitlines() if "platform           :" in line)
         devices.append(line.split("device=")[1].split()[0] if "device=" in line else None)
@@ -1138,6 +1201,7 @@ def test_a_genuinely_absent_cuda_device_is_refused_without_any_seam(built, hardw
         "stages": {"minimization_iterations": 2, "production_steps": 5},
         "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5}}),
         encoding="utf-8")
+    _seed_build(built, work)
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "cMD.config")],
                                capture_output=True, text=True, timeout=600)
@@ -1190,6 +1254,10 @@ def test_a_genuinely_unimportable_mpi4py_stops_a_plural_launch(built, hardware, 
                   "number_of_exchanges": 2},
         "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5}}),
         encoding="utf-8")
+    # A ladder integrates SAVED scaled states (0.5.4); `build-md` refuses without them.
+    from .conftest import make_states_for
+
+    make_states_for(work, work / "REST2.config")
     generated = subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                       "--config", str(work / "REST2.config")],
                                capture_output=True, text=True, timeout=600)
@@ -1199,17 +1267,30 @@ def test_a_genuinely_unimportable_mpi4py_stops_a_plural_launch(built, hardware, 
     environment["PYTHONPATH"] = os.pathsep.join(
         [str(work / "shadow"), environment.get("PYTHONPATH", "")])
 
-    destination = work / "run"
+    # IN THE RUN DIRECTORY with `-odir .`, the only `-odir` a ladder's group file allows, so
+    # "nothing written" is the run directory's listing unchanged rather than `-odir` absent.
+    project = work / "project"
+
+    def listing():
+        return sorted(str(p.relative_to(project)) for p in project.rglob("*"))
+
+    # The state every group line continues from, so the launch is refused for mpi4py rather than
+    # for a missing `-c eq/eq_3.xml` first.
+    from .conftest import write_starting_state
+
+    write_starting_state(work, project)
+    before = listing()
     done = subprocess.run(
-        ["mpirun", "-n", "2", sys.executable, str(work / "project" / "REST2.py"),
-         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
-         "-odir", str(destination)],
-        cwd=work, capture_output=True, text=True, timeout=900, env=environment)
+        ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
+         "-p", str(built / "build" / "built.pdb"), "--groupfile", "remd_groupfile.1",
+         "-odir", "."],
+        cwd=project, capture_output=True, text=True, timeout=900, env=environment)
     message = done.stdout + done.stderr
     assert done.returncode != 0, message[-2000:]
     assert "mpi4py" in message, message[-2000:]
-    assert not destination.exists(), (
-        "two uncoordinated ranks created output over one set of paths")
+    assert listing() == before, (
+        "two uncoordinated ranks created output over one set of paths: "
+        f"{sorted(set(listing()) - set(before))}")
     _record("test_a_genuinely_unimportable_mpi4py_stops_a_plural_launch",
             feature="mpi4py genuinely unimportable under mpirun -n 2: refused, nothing written",
             precision="-", device="-",
@@ -1618,6 +1699,7 @@ def test_the_generated_wrapper_and_md_run_agree_for_a_stage(built, hardware, tmp
                    "production_steps": 20},
         "reporting": {"crd_printout_solute": 10, "info_printout": 10,
                       "checkpoint_printout": 20}}), encoding="utf-8")
+    _seed_build(built, work)
     assert subprocess.run(CLI + ["build-md", "-odir", str(work / "project"),
                                  "--config", str(work / "cMD.config")],
                           capture_output=True, text=True, timeout=600).returncode == 0

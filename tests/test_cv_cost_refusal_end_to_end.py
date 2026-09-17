@@ -197,6 +197,24 @@ def _run_cmd(root: Path, destination: Path, environment=None):
         env=_environment(root, **(environment or {})))
 
 
+#: RE-DERIVED for the split layout. The crash lands on production's FIRST commit (step 10 of 60,
+#: a commit every 10), as it always meant to. This was "4" when the retired `--all-in-one` md.py
+#: ran the minimisation and three zero-length equilibration stages in the same process, each
+#: committing a final generation first; launched alone, 4 moved the crash to step 50. That still
+#: interrupted the run, so nothing failed -- which is why the landing step is now asserted.
+CMD_COMMITS_BEFORE_THE_CRASH = "0"
+CMD_CRASH_STEP = 10
+
+
+def _assert_interrupted_at(destination: Path, step: int):
+    from md_tools.openmm.checkpoint import read_committed
+
+    done = int(read_committed(_cv_reporting_checkpoints(destination))["state"]["steps_done"])
+    assert done == step, (
+        f"the crash was aimed at the commit of step {step} and landed at {done}; the continuation "
+        f"under test would not be the one this case describes")
+
+
 CMD_MUTATIONS = [
     ("fractional-counter", lambda cost: cost["cumulative"].__setitem__("cv_observations", 7.5)),
     ("numeric-string", lambda cost: cost["cumulative"].__setitem__("cv_observations", "7")),
@@ -225,8 +243,9 @@ def test_cmd_continuation_refuses_a_malformed_cost_and_writes_nothing(cmd_projec
     destination = tmp_path / "run"
     crashed = _run_cmd(cmd_project, destination,
                        {FAULT_ENVIRONMENT: "after-pointer-replace",
-                        FAULT_AFTER_ENVIRONMENT: "4"})
+                        FAULT_AFTER_ENVIRONMENT: CMD_COMMITS_BEFORE_THE_CRASH})
     assert crashed.returncode != 0
+    _assert_interrupted_at(destination, CMD_CRASH_STEP)
 
     _doctor_checkpoint_cost(_cv_reporting_checkpoints(destination), mutate)
 
@@ -372,32 +391,43 @@ def ladder_project(tmp_path_factory):
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": 5},
         "dynamics": {"seed": 20260905},
     }), encoding="utf-8")
-    assert subprocess.run(
+    # MIGRATED (0.5.4): a ladder integrates SAVED scaled states, which `build-md` refuses to
+    # generate without, and reads its -s and -c only from the group file it writes. The starting
+    # state every generated line continues from, `eq/eq_3.xml`, is written rather than run.
+    from .conftest import make_states_for, write_starting_state
+
+    make_states_for(root, root / "REST2.config")
+    done = subprocess.run(
         CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
-        cwd=root, capture_output=True, text=True, timeout=900).returncode == 0
-
-    import openmm
-    from openmm import XmlSerializer, unit
-    from openmm.app import PDBFile
-
-    pdb = PDBFile(str(root / "build" / "built.pdb"))
-    system = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
-    context = openmm.Context(system, openmm.VerletIntegrator(1.0 * unit.femtosecond),
-                             openmm.Platform.getPlatformByName("Reference"))
-    context.setPositions(pdb.positions)
-    context.setVelocitiesToTemperature(300.0 * unit.kelvin, 1)
-    (root / "initial_state.xml").write_text(XmlSerializer.serialize(
-        context.getState(getPositions=True, getVelocities=True)), encoding="utf-8")
+        cwd=root, capture_output=True, text=True, timeout=900)
+    assert done.returncode == 0, done.stdout + done.stderr
+    write_starting_state(root, root / "REST2-run1")
     return root
 
 
-def _run_ladder(root: Path, destination: Path, *extra, environment=None):
+def _ladder_run_directory(root: Path, name: str) -> Path:
+    """A run directory of its own for one ladder, beside `build/` as every generated run sits.
+
+    The group file names `-i _protocol.py` and `-c eq/eq_3.xml` relative to ITSELF, and the
+    runtime materialises `_protocol.py` into `-odir`, so a generated group file runs into its own
+    directory -- `run.sh` types `-odir .`. Each case therefore gets a copy of the generated run
+    rather than a destination elsewhere, which failed after preflight with "no such file
+    _protocol.py" beside the group file.
+    """
+    import shutil
+
+    run = root / name
+    if not run.exists():
+        shutil.copytree(root / "REST2-run1", run)
+    return run
+
+
+def _run_ladder(root: Path, run: Path, *extra, environment=None):
     return subprocess.run(
-        [sys.executable, str(root / "REST2-run1" / "REST2.py"),
-         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
-         "-c", str(root / "initial_state.xml"),
-         "-odir", str(destination), "--cpu", *extra],
-        cwd=root / "REST2-run1", capture_output=True, text=True, timeout=1800,
+        [sys.executable, str(run / "REST2.py"),
+         "-p", str(root / "build" / "built.pdb"), "--groupfile", "remd_groupfile.1",
+         "-odir", ".", "--cpu", *extra],
+        cwd=run, capture_output=True, text=True, timeout=1800,
         env=_environment(root, **(environment or {})))
 
 
@@ -412,7 +442,7 @@ def test_ladder_continuation_refuses_a_malformed_per_state_cost(ladder_project, 
 
     from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT  # noqa: F401 - parity
 
-    destination = tmp_path / "ladder"
+    destination = _ladder_run_directory(ladder_project, f"per-state-{tmp_path.name}")
     crashed = _run_ladder(ladder_project, destination,
                           environment={"MD_TOOLS_FAIL_PROPAGATION_ON_RANKS": "0",
                                        "MD_TOOLS_FAIL_LADDER_AT": "after-cv-row",
@@ -437,21 +467,26 @@ def test_ladder_continuation_refuses_a_malformed_per_state_cost(ladder_project, 
 def test_ladder_extension_refuses_a_malformed_parent_cost(ladder_project, tmp_path):
     """An extension reads its parent read-only; a malformed parent must be refused before the
     extension directory holds anything."""
-    destination = tmp_path / "parent"
-    assert _run_ladder(ladder_project, destination).returncode == 0
+    destination = _ladder_run_directory(ladder_project, f"parent-{tmp_path.name}")
+    done = _run_ladder(ladder_project, destination)
+    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
 
     manifest = json.loads((destination / "restart.json").read_text(encoding="utf-8"))
     manifest["collective_variables"]["cost"]["per_state"][0]["cumulative"]["cv_evaluations"] = 3.0
     (destination / "restart.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     before = _tree(destination)
-    extension = tmp_path / "extension"
+    extension = _ladder_run_directory(ladder_project, f"extension-{tmp_path.name}")
+    extension_before = _tree(extension)
     refused = _run_ladder(ladder_project, extension, "--extend", "2",
                           "--extend-from", str(destination))
     assert refused.returncode != 0, refused.stdout[-2000:]
     _assert_unchanged(destination, before, "a refused ladder extension")
-    assert not list(extension.glob("cv_state*.csv")), (
-        "the extension wrote CV outputs before refusing its parent")
+    # NOTHING in the extension's directory either -- not `_protocol.py`, `solute.yaml`, the `.out`
+    # or the `.log`. They used to be published before the driver refused the parent, which left a
+    # directory reading as a started extension; checking only for CV outputs did not notice.
+    _assert_unchanged(extension, extension_before, "a refused ladder extension (its own -odir)")
+    assert "Nothing was written" in refused.stderr, refused.stderr[-2000:]
 
 
 # --- the PUBLIC entry point, at the same boundary as the generated wrappers ---------------------
@@ -472,8 +507,9 @@ def test_md_run_refuses_a_malformed_record_without_touching_the_tree(cmd_project
     destination = tmp_path / "public"
     crashed = _run_cmd(cmd_project, destination,
                        {FAULT_ENVIRONMENT: "after-pointer-replace",
-                        FAULT_AFTER_ENVIRONMENT: "4"})
+                        FAULT_AFTER_ENVIRONMENT: CMD_COMMITS_BEFORE_THE_CRASH})
     assert crashed.returncode != 0
+    _assert_interrupted_at(destination, CMD_CRASH_STEP)
 
     _doctor_checkpoint_cost(
         _cv_reporting_checkpoints(destination),

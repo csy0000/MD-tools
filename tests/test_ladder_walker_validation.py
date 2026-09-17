@@ -61,6 +61,8 @@ collective_variables:
 """
 
 
+from .conftest import ladder_group_file  # noqa: E402
+
 @pytest.fixture(scope="module")
 def finished(tmp_path_factory):
     """One completed three-rung REST2 ladder. Three, so a permutation is not just a swap."""
@@ -86,6 +88,11 @@ def finished(tmp_path_factory):
         "collective_variables": {"file": str(root / "cv.yaml"), "interval_steps": CV_EVERY},
         "dynamics": {"seed": 20260904},
     }), encoding="utf-8")
+    # A ladder integrates SAVED scaled states (0.5.4): `build-md` refuses to generate one until
+    # `build/REST2/` exists, as `md-openmm build-top --rest2-scaler` writes it.
+    from .conftest import make_states_for
+
+    make_states_for(root, root / "REST2.config")
     done = subprocess.run(
         CLI + ["build-md", "-odir", "./REST2-run1", "--config", str(root / "REST2.config")],
         cwd=root, capture_output=True, text=True, timeout=900)
@@ -114,8 +121,9 @@ def finished(tmp_path_factory):
     run = root / "run-run1"
     ran = subprocess.run(
         [sys.executable, str(root / "REST2-run1" / "REST2.py"),
-         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
-         "-c", str(root / "initial_state.xml"), "-odir", str(run), "--cpu"],
+         "-p", str(root / "build" / "built.pdb"),
+         "--groupfile", str(ladder_group_file(root, run)),
+         "-odir", str(run), "--cpu"],
         cwd=root / "REST2-run1", capture_output=True, text=True, timeout=1800, env=base)
     assert ran.returncode == 0, ran.stdout[-4000:] + ran.stderr[-4000:]
     return root, run
@@ -251,8 +259,9 @@ def test_an_invalid_ladder_is_refused_an_extension_before_outputs_appear(finishe
     extension = tmp_path / "extended"
     done = subprocess.run(
         [sys.executable, str(root / "REST2-run1" / "REST2.py"),
-         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
-         "-c", str(root / "initial_state.xml"), "-odir", str(extension), "--cpu",
+         "-p", str(root / "build" / "built.pdb"),
+         "--groupfile", str(ladder_group_file(root, extension)),
+         "-odir", str(extension), "--cpu",
          "--extend", "2", "--extend-from", str(destination)],
         cwd=root / "REST2-run1", capture_output=True, text=True, timeout=1800, env=base)
     assert done.returncode != 0, done.stdout[-3000:]

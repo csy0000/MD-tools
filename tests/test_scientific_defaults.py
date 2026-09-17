@@ -26,7 +26,7 @@ import pytest
 from md_tools.build.record import read_record
 import yaml
 
-from .conftest import ALA_PDB, run_cli, run_stage
+from .conftest import ALA_PDB, make_states_for, run_cli, run_stage
 
 
 # --- the box gate, without building anything ---------------------------------
@@ -137,7 +137,11 @@ def default_project(tmp_path_factory):
         "rest2": {"number_of_replicas": 2, "tau_max": 0.05,
                   "exchange_interval_steps": 25, "number_of_exchanges": 2},
     }, sort_keys=False), encoding="utf-8")
-    assert _build_md(ladder, "REST2.config", "./REST2-run1").returncode == 0
+    # A REST2 ladder integrates SAVED scaled states (0.5.4), and build-md refuses to generate one
+    # until `build-top --rest2-scaler` has written them beside the built System.
+    make_states_for(ladder, ladder / "REST2.config")
+    built = _build_md(ladder, "REST2.config", "./REST2-run1")
+    assert built.returncode == 0, built.stdout + built.stderr
     return work
 
 

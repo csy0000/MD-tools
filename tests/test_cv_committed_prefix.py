@@ -228,9 +228,19 @@ def test_a_real_stage_refuses_a_mutated_committed_prefix(tmp_path):
             cwd=root / "cMD", capture_output=True, text=True, timeout=1800,
             env={**base, **(environment or {})})
 
+    # RE-DERIVED for the split layout: "1" lets production's commit at step 10 through and crashes
+    # committing step 20. This was "5" when the retired `--all-in-one` md.py ran the minimisation
+    # and three zero-length equilibration stages in the same process, each committing a final
+    # generation first; launched alone, 5 is past production's last commit (40 steps, every 10).
     crashed = _launch({FAULT_ENVIRONMENT: "after-pointer-replace",
-                       FAULT_AFTER_ENVIRONMENT: "5"})
+                       FAULT_AFTER_ENVIRONMENT: "1"})
     assert crashed.returncode != 0
+    from md_tools.openmm.checkpoint import read_committed
+
+    committed = int(read_committed(destination / "cMD.checkpoints")["state"]["steps_done"])
+    assert committed == 20, (
+        f"the crash was aimed at the commit of step 20 and landed at {committed}; the prefix being "
+        f"mutated would not be a mid-run committed prefix")
 
     series = sorted(destination.rglob("*.cv.csv"))
     assert series, "the interrupted stage wrote no CV series"
@@ -333,12 +343,25 @@ def test_cv_cost_is_persisted_and_survives_two_interruptions(tmp_path):
 
     # TWO interruptions, at different committed generations.
     resumed = tmp_path / "resumed"
+    # RE-DERIVED for the split layout (60 steps, a commit every 10). The first launch lets one
+    # commit through and crashes committing step 20; the resumed second lets 30 and 40 through and
+    # crashes committing step 50. The first was "5" when the retired `--all-in-one` md.py ran the
+    # minimisation and three zero-length equilibration stages in the same process, each committing
+    # first; launched alone, 5 crashed on production's FINAL commit, so there was no second
+    # interruption to survive. The second was already counted from a resumed production.
+    from md_tools.openmm.checkpoint import read_committed
+
+    def _committed():
+        return int(read_committed(resumed / "cMD.checkpoints")["state"]["steps_done"])
+
     first = _launch(resumed, {FAULT_ENVIRONMENT: "after-pointer-replace",
-                              FAULT_AFTER_ENVIRONMENT: "5"})
+                              FAULT_AFTER_ENVIRONMENT: "1"})
     assert first.returncode != 0
+    assert _committed() == 20, f"the first crash was aimed at step 20 and landed at {_committed()}"
     second = _launch(resumed, {FAULT_ENVIRONMENT: "after-pointer-replace",
                                FAULT_AFTER_ENVIRONMENT: "2"})
     assert second.returncode != 0
+    assert _committed() == 50, f"the second crash was aimed at step 50 and landed at {_committed()}"
     assert _launch(resumed).returncode == 0
 
     after = read_record(resumed / "cMD.log")["collective_variable_cost"]

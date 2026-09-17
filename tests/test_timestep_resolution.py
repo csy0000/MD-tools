@@ -111,19 +111,21 @@ def test_one_generated_script_resolves_two_and_four_fs_from_two_real_systems(tmp
     repo = __import__("pathlib").Path(__file__).resolve().parents[1]
     ala = repo / "tests" / "data" / "ALA.pdb"
 
-    built = {}
+    # Each System is built INTO its own dataset root's `build/`: `build-md` validates the chain it
+    # generates against the System every run on that root shares, and refuses a root without one.
     for enabled in (False, True):
         config = tmp_path / f"b{int(enabled)}.config"
         config.write_text(yaml.safe_dump(
             {"solvent": {"padding_nm": 0.5, "cutoff_nm": 0.6},
              "hydrogen_mass_repartitioning": {"enabled": enabled}}), encoding="utf-8")
+        root = tmp_path / f"sys{int(enabled)}"
+        (root / "build").mkdir(parents=True)
         done = subprocess.run(
             [sys.executable, "-m", "md_tools.cli.md_openmm", "build-top", "-i", str(ala),
-             "-os", f"b{int(enabled)}.xml", "-op", f"b{int(enabled)}.pdb",
-             "-log", f"b{int(enabled)}.log", "--config", str(config)],
-            cwd=tmp_path, capture_output=True, text=True, timeout=1800)
+             "-os", "build/built.xml", "-op", "build/built.pdb",
+             "-log", "build/built.log", "--config", str(config)],
+            cwd=root, capture_output=True, text=True, timeout=1800)
         assert done.returncode == 0, done.stdout + done.stderr
-        built[enabled] = (f"b{int(enabled)}.pdb", f"b{int(enabled)}.xml")
 
     md = tmp_path / "md.config"
     md.write_text(yaml.safe_dump(
@@ -143,13 +145,12 @@ def test_one_generated_script_resolves_two_and_four_fs_from_two_real_systems(tmp
         # Systems sharing one root would share one minimisation -- which is exactly the refusal
         # this test must not depend on.
         root = tmp_path / f"sys{int(enabled)}"
-        root.mkdir()
-        assert subprocess.run(
+        generated = subprocess.run(
             [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", "./md-run1",
-             "--config", str(md)], cwd=root, capture_output=True, text=True).returncode == 0
-        pdb, xml = built[enabled]
+             "--config", str(md)], cwd=root, capture_output=True, text=True)
+        assert generated.returncode == 0, generated.stdout + generated.stderr
         done = subprocess.run(
-            [sys.executable, "min.py", "-p", f"../../{pdb}", "-s", f"../../{xml}",
+            [sys.executable, "min.py", "-p", "../build/built.pdb", "-s", "../build/built.xml",
              "-r", "m.xml", "-log", "m.log"],
             cwd=root / "min", capture_output=True, text=True, timeout=1800)
         assert done.returncode == 0, done.stdout + done.stderr

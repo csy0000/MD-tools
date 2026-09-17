@@ -884,17 +884,28 @@ def test_a_ladder_reruns_in_place_under_overwrite(workspace, ladder_start, tmp_p
     """
     destination = tmp_path / "ladder-rerun"
 
-    start = ["-c", str(ladder_start)]
-    first = _launch(workspace, "REST2", destination, *start, *PROTOCOL_ONLY,
-                    environment=good_config)
+    # A ladder reads -s and -c only from its group file (0.5.4), and its `-i _protocol.py` must be
+    # the helper this launch writes into `-odir`, so the group file `build-md` wrote -- for a run
+    # into its own directory -- is re-pointed at this destination and this start. The saved
+    # states and the line order are kept as generated.
+    from .conftest import ladder_group_file
+
+    group = ladder_group_file(workspace, destination, start=ladder_start)
+
+    def launch(*extra):
+        return _run([sys.executable, str(workspace / "REST2-run1" / "REST2.py"),
+                     "-p", "../build/built.pdb", "-odir", str(destination),
+                     "--groupfile", str(group), *extra, *PROTOCOL_ONLY],
+                    cwd=workspace / "REST2-run1", environment=good_config)
+
+    first = launch()
     assert first.returncode == 0, first.stdout + first.stderr
     written = sorted(p.name for p in destination.glob("whole_state*_prod1.nc"))
     assert written, (
         f"the first ladder wrote no per-state trajectory, so the rerun below collides with "
         f"nothing: {sorted(p.name for p in destination.iterdir())}")
 
-    second = _launch(workspace, "REST2", destination, "--overwrite", *start, *PROTOCOL_ONLY,
-                     environment=good_config)
+    second = launch("--overwrite")
     message = second.stdout + second.stderr
     assert second.returncode == 0, (
         f"--overwrite was refused by the ladder it was passed to:\n{message[-3000:]}")
