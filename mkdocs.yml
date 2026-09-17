@@ -103,6 +103,13 @@ nav:
   - Getting started:
       - Installing: install.md
       - Machine configuration: machine-configuration.md
+  - Tutorials:
+      - tutorial/README.md
+      - cMD:
+          - Paracetamol: tutorial/cMD/paracetamol.md
+          - Chinolin: tutorial/cMD/chinolin.md
+      - REST2:
+          - Paracetamol: tutorial/REST2/paracetamol.md
   - Running a simulation:
       - The commands:
           - Building a system (build-top): build-top.md
