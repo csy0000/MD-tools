@@ -340,6 +340,31 @@ def _has_committed_checkpoint(directory):
         return False
 
 
+def test_the_interrupt_waits_for_a_commit_not_for_a_directory(tmp_path):
+    """The guard for `_has_committed_checkpoint`, deterministic and costing nothing.
+
+    The helper decides WHEN example 3 fires its interrupt, and it used to answer "yes" to a tree
+    holding nothing but an empty `checkpoints/` subdirectory. The interrupt then landed inside the
+    checkpoint transaction, and the re-run correctly refused a directory with outputs and no
+    committed checkpoint -- while the test asserted a resume. It took a loaded `-n 2` lane to
+    surface, so it is pinned here where a laptop will catch it.
+    """
+    torn = tmp_path / "cMD.checkpoints"
+    (torn / "checkpoints").mkdir(parents=True)
+    assert not _has_committed_checkpoint(torn), (
+        "a tree with no committed pointer must not read as committed: this is the state a crash "
+        "mid-transaction leaves, and interrupting on it produces a directory the resume contract "
+        "refuses by design")
+
+    (torn / "checkpoints" / "generation_000001.chk").write_bytes(b"not a checkpoint")
+    (torn / "checkpoints" / "generation_000001.json.partial").write_text("{}", encoding="utf-8")
+    assert not _has_committed_checkpoint(torn), (
+        "a generation whose sidecar is still `.partial` and which no pointer names is exactly the "
+        "torn state observed in the failing lane; it is not a commit")
+
+    assert not _has_committed_checkpoint(tmp_path / "absent.checkpoints")
+
+
 def _interrupt_when(directory, condition, *, what, until_output=None, timeout=900):
     """Run `run.sh`, wait for something to be TRUE, then SIGINT it. Returns the output.
 
