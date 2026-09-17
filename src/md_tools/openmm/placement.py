@@ -590,16 +590,43 @@ def needs_measurement(facts: Sequence[WorkerFacts], *, platform: str, device_pol
 
 def refuse_unverified_sharing(plan: LaunchPlan, mps: MpsStatus, *, rank: int,
                               where: str = "this launch") -> None:
-    """A shared GPU without VERIFIED MPS is refused. Requested or detected is not enough."""
-    mine = plan.for_rank(rank)
+    """A shared GPU without VERIFIED MPS is refused, and the refusal is the WHOLE LAUNCH's.
+
+    The rule is global because a ladder is synchronous: one rank sharing a device sets the pace for
+    every rank, so a rank sitting alone is not thereby fine. That made the first version of this
+    message read as nonsense to the one person it mattered to -- it said "device 1 hosts 1
+    worker(s)" (this rank's own placement) and then "MPS is required whenever a GPU hosts more than
+    one worker", and both were true. It cost an hour and three wrong theories. The message now
+    names the devices that ARE shared, across the launch, before it says anything about the rank
+    reading it.
+    """
     if not plan.shared_devices or mps.status == "verified":
         return
-    tenants = mine.get("co_tenants")
-    sharing = (f"device {mine['device']} hosts {tenants} worker(s)" if mine["device"] is not None
-               else "the workers are not partitioned onto distinct devices")
+    mine = plan.for_rank(rank)
+    tenants: dict[Any, int] = {}
+    for worker in plan.assignment.values():
+        if worker["device"] is not None:
+            tenants[worker["device"]] = tenants.get(worker["device"], 0) + 1
+    crowded = sorted((device, count) for device, count in tenants.items() if count > 1)
+
+    if crowded:
+        sharing = "this launch shares " + ", ".join(
+            f"device {device} between {count} workers" for device, count in crowded)
+        here = (f"this rank is alone on device {mine['device']}, but the launch cannot proceed "
+                f"unverified: a ladder is synchronous, so the shared device sets the pace for "
+                f"every rank"
+                if (mine["device"] is not None and tenants.get(mine["device"], 0) == 1)
+                else f"this rank is one of {tenants.get(mine['device'])} on device "
+                     f"{mine['device']}")
+    else:
+        sharing = ("this launch does not partition its workers onto distinct devices "
+                   "(machine.openmm.device_policy: openmm, with nothing outside this package "
+                   "giving each worker its own)")
+        here = "no worker here can be shown to have a device to itself"
+
     raise PlacementError(
-        f"{where}: {sharing}, and NVIDIA MPS is {mps.status} for this process "
-        f"({mps.detail}).\n"
+        f"{where}: {sharing}. NVIDIA MPS is {mps.status} for this process ({mps.detail}); "
+        f"{here}.\n"
         f"  Without MPS, workers on one GPU are time-sliced: each waits for the others' kernels, "
         f"and a synchronous ladder runs at the pace of that shared GPU. MPS is required whenever "
         f"a GPU hosts more than one worker, and this package does not start or stop the daemon.\n"
@@ -607,7 +634,33 @@ def refuse_unverified_sharing(plan: LaunchPlan, mps: MpsStatus, *, rank: int,
         f"      export CUDA_MPS_PIPE_DIRECTORY=<a directory you own>\n"
         f"      export CUDA_MPS_LOG_DIRECTORY=<another>\n"
         f"      nvidia-cuda-mps-control -d\n"
-        f"  and launch from that environment, or give each worker its own GPU.")
+        f"  and launch from that environment, or give each worker its own GPU.\n"
+        f"  {_why_doubled_up(plan, mine)}")
+
+
+def _why_doubled_up(plan: "LaunchPlan", mine: Mapping[str, Any]) -> str:
+    """Why more workers landed on one device than another, in the refusal that resulted.
+
+    Placement doubles up only when a MEASUREMENT said the alternative was worse, and the numbers
+    are the first thing a reader needs -- a device can measure slow because it IS slower or because
+    somebody else is using it, and those are indistinguishable from here. Leaving the reader to go
+    and find `steps_per_second` in a record cost an hour and three wrong theories once already.
+    """
+    measured = (plan.measurement or {}).get(mine.get("host"))
+    if not measured:
+        return f"Workers were placed by: {plan.placement}."
+    rates = measured.get("steps_per_second") or []
+    listing = ", ".join(f"device {index} {rate:.0f}" for index, rate in enumerate(rates))
+    spread = ""
+    if rates and min(rates) > 0 and max(rates) / min(rates) > 1.5:
+        slowest = rates.index(min(rates))
+        spread = (f" Device {slowest} measured {max(rates) / min(rates):.1f}x slower than the "
+                  f"fastest, so it was given fewer workers or none. A device measures slow "
+                  f"because it is slower OR because something else on this machine is using it, "
+                  f"and this measurement cannot tell those apart -- check the card before "
+                  f"concluding anything about the hardware.")
+    return (f"Workers were placed by: {plan.placement}. Measured steps/s at preflight: "
+            f"{listing}.{spread}")
 
 
 # ---------------------------------------------------------------------------------------------

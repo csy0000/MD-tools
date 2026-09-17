@@ -1308,8 +1308,26 @@ def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_
     trajectories = sorted((work / "project").glob("whole_state*_prod1.nc"))
     assert len(trajectories) == states, [p.name for p in trajectories]
 
-    # One device per rank, and they must be DIFFERENT devices: `device_policy: local_rank` is the
-    # setting, and N ranks sharing one GPU is the failure it exists to prevent.
+    # Each rank on a device it NAMES, and no rank silently sharing one.
+    #
+    # This asserted `len(set(devices)) == states` -- one distinct device per rank -- which was the
+    # right assertion when placement dealt ranks over devices in turn. Since 0.6.0 placement
+    # measures every visible device and maximises the slowest worker's share, so a device that
+    # MEASURES slow gets fewer workers or none, and the workers it would have had double up
+    # elsewhere. A worker on a slow device sets the pace for the whole synchronous ladder, so this
+    # is the arithmetic working.
+    #
+    # A device measures slow for two reasons the measurement cannot tell apart: it IS slower, or
+    # something else on the machine is using it. One run of six ranks here placed nobody on one
+    # card and two ranks on another; the card it avoided turned out to be busy with an unrelated
+    # job at the time, which is contention rather than hardware. Either way the old assertion --
+    # `len(set(devices)) == states` -- encoded one-rank-per-device, which the feature deliberately
+    # does not promise, and it failed through no fault of the run.
+    #
+    # What IS promised, and is asserted here: a run that COMPLETED either gave every rank its own
+    # device or was a verified MPS client, because sharing without verified MPS is refused before
+    # anything is written. Both halves are real evidence; neither depends on the cards being
+    # matched.
     devices = []
     for rank in range(states):
         name = "REST2.out" if rank == 0 else f"REST2.out.rank{rank:02d}"
@@ -1317,11 +1335,21 @@ def test_multi_rank_rest2_ladders_of_several_sizes(states, built, hardware, tmp_
         assert "platform           : CUDA" in text, text[:1500]
         line = next(line for line in text.splitlines() if "platform           :" in line)
         devices.append(line.split("device=")[1].split()[0] if "device=" in line else None)
-    assert len(set(devices)) == states, f"ranks shared devices: {devices}"
+    assert None not in devices, f"a rank did not record its device: {devices}"
+
+    placement = json.loads((work / "project" / "restart.json").read_text(
+        encoding="utf-8"))["execution"]["acceleration"]["placement"]
+    if len(set(devices)) != states:
+        assert placement["mps"]["status"] == "verified", (
+            f"ranks shared devices {devices} without verified MPS, which the preflight refuses: "
+            f"{placement['mps']}")
+        assert not placement["mps"].get("forced"), placement["mps"]
+    shared = "one rank per device" if len(set(devices)) == states else (
+        f"{len(set(devices))} device(s) for {states} ranks under verified MPS")
     _record("test_multi_rank_rest2_ladders_of_several_sizes",
             feature=f"REST2 implicit, {states} states, real mpirun -n {states}",
             precision="mixed", device=", ".join(str(d) for d in devices),
-            detail=f"{len(trajectories)} state trajectories; one rank per device")
+            detail=f"{len(trajectories)} state trajectories; {shared}")
 
 
 def test_a_genuinely_absent_cuda_device_is_refused_without_any_seam(built, hardware, tmp_path):

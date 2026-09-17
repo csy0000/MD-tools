@@ -230,7 +230,10 @@ def test_four_workers_on_one_card_are_refused_without_mps_and_write_nothing(ladd
                 cards=card, ranks=RUNGS)
     message = done.stdout + done.stderr
     assert done.returncode != 0, message[-4000:]
-    assert f"device 0 hosts {RUNGS} worker(s)" in message, message[-4000:]
+    assert f"shares device 0 between {RUNGS} workers" in message, message[-4000:]
+    # Named as the LAUNCH's refusal: the rule is global because a ladder is synchronous, and a
+    # rank's own tenant count is not what decides it.
+    assert f"this rank is one of {RUNGS} on device 0" in message, message[-4000:]
     # The verdict is the driver's, not an assumption: with no daemon on this host it is `absent`,
     # and if one were running but this process were not its client it would be `not-a-client`.
     assert ("NVIDIA MPS is absent" in message or "NVIDIA MPS is not-a-client" in message), \

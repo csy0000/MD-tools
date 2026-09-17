@@ -361,6 +361,15 @@ ones. Fewer devices than workers is allowed, including uneven splits: 4 workers 
 are placed 2, 1, 1. Whatever else the GPUs are running at that moment is part of the measurement.
 A single worker takes the first visible device, as before, and measures nothing.
 
+**The measurement is of the machine as it is, contention included.** A card another job is using
+measures slow, and placement cannot tell that apart from a card that IS slow: it gives that device
+fewer workers or none, and doubles the others up instead. Two identical launches minutes apart can
+therefore be placed differently, and one of them refused, because a GPU that is shared needs MPS.
+That is the measurement doing its job — a busy card really is slower for this run — but it means
+placement is a property of the host at preflight time, not of the configuration alone. The rates
+are in every refusal and in `acceleration.placement.measurement`; if one device is far below the
+others, look at what else is running on it before concluding anything about the hardware.
+
 **3. MPS, whenever a GPU hosts more than one worker.** Without NVIDIA MPS, processes on one GPU
 are time-sliced, and a synchronous ladder runs at the pace of that shared GPU. A shared device is
 therefore refused unless MPS is **verified** for each worker. Three states are told apart and
