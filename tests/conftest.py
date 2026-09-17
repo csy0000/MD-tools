@@ -506,7 +506,11 @@ _MACHINE_DEVICES = None
 
 #: What CUDA_VISIBLE_DEVICES held before the suite touched it. A value set from outside is an
 #: instruction -- someone confining this run to particular cards meant it -- so the assignment
-#: below stands down entirely rather than widening it.
+#: below never WIDENS it: it shares out exactly those cards and no others.
+#:
+#: It used to stand down entirely instead, which on a shared machine meant every worker's CUDA
+#: tests ran on the FIRST listed card while the others sat idle: `CUDA_VISIBLE_DEVICES=0,1,2`
+#: with eight workers put the whole GPU lane on GPU 0.
 _INHERITED_VISIBLE_DEVICES = os.environ.get("CUDA_VISIBLE_DEVICES")
 
 
@@ -531,20 +535,25 @@ def pytest_runtest_setup(item):
     else:
         os.environ["CUDA_VISIBLE_DEVICES"] = _INHERITED_VISIBLE_DEVICES
 
-    if "gpu" not in item.keywords or _INHERITED_VISIBLE_DEVICES:
+    if "gpu" not in item.keywords:
         return
 
     module = Path(str(item.fspath)).name
     if module in UNASSIGNED_MODULES:
         return
 
-    devices = _machine_devices()
+    # THE CARDS THIS RUN MAY USE: the inherited list when one was given, else the whole machine.
+    devices = ([d.strip() for d in _INHERITED_VISIBLE_DEVICES.split(",") if d.strip()]
+               if _INHERITED_VISIBLE_DEVICES else _machine_devices())
     if len(devices) <= 1:
         return
 
     worker = _worker_number()
     if module in MULTI_RANK_MODULES:
-        pool = [d for d in devices if d != str(RESERVED_FOR_SERIAL_ONLY)]
+        # Device 0 is kept off the ladders only when the whole machine is available; a run
+        # confined to a few cards by its caller gets all of them, or its ladders could not run.
+        pool = (list(devices) if _INHERITED_VISIBLE_DEVICES
+                else [d for d in devices if d != str(RESERVED_FOR_SERIAL_ONLY)])
         if not pool:
             return
         # Rotated per worker so two workers running ladders at once do not both start at device 1.
