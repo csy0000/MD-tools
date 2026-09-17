@@ -308,12 +308,36 @@ def test_example_2_a_rest2_ladder_under_a_launcher(rest2_run):
 
 
 def _has_committed_checkpoint(directory):
-    """A `.checkpoints` directory exists AND holds a committed generation.
+    """A `.checkpoints` directory holding a COMMITTED generation, by the runtime's definition.
 
-    The directory is created before the first checkpoint lands in it, so its mere existence is
-    not the event worth waiting for.
+    ASK THE RUNTIME, because this helper decides when the interrupt lands and the contract it is
+    testing turns on exactly this word. It used to be `directory.is_dir() and
+    any(directory.iterdir())`, which goes true the moment the empty `checkpoints/` subdirectory is
+    created -- before anything is committed -- while the docstring above it already claimed "holds
+    a committed generation". The code asked one question and promised another.
+
+    What that cost, measured once in a full `-n 2` slow lane and kept because it is the whole
+    reason this is written down: the interrupt fired INSIDE the checkpoint transaction. The tree
+    left behind held `generation_000001.chk` written, its sidecar still `generation_000001
+    .json.partial`, and no `current_checkpoint.json` at all. The re-run read that correctly as
+    nothing committed, saw `cMD.log`, `cMD.out`, `mdout.csv` and `solute_prod1.nc` already in
+    place, and refused the directory as half a run nobody claimed -- which is the cMD resume
+    contract behaving exactly as written -- while this test asserted it would resume. The product
+    was right and the test was wrong, and it only showed up under load because the window between
+    creating the directory and replacing the pointer is narrow.
+
+    `read_committed` is the ONE definition of committed: the pointer parses, the sidecar it names
+    exists and parses, the checkpoint it names exists, and its sha256 matches. A tree caught
+    mid-transaction raises rather than returning, and for a waiter that simply means "not yet".
     """
-    return directory.is_dir() and any(directory.iterdir())
+    from md_tools.openmm.checkpoint import CheckpointError, read_committed
+
+    if not directory.is_dir():
+        return False
+    try:
+        return read_committed(directory) is not None
+    except CheckpointError:
+        return False
 
 
 def _interrupt_when(directory, condition, *, what, until_output=None, timeout=900):
