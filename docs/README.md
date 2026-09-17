@@ -25,6 +25,7 @@ Each method page carries a minimal, runnable `example.config` beside it.
 | [Running](md-run.md) | `md-run`: the flags, the `.in` language, the platform policy, the MPI rules |
 | [Configuration reference](md-configuration.md) | every key of every configuration, generated from the schemas |
 | [The run layout](run-layout.md) | what `build-md` writes, and what is shared between runs |
+| [Ligand parameter packages](ligand-packages.md) | one compound, one saved parameter set: package format, reuse, `kind: complex` ligand mapping, the catalog |
 
 | page | |
 |---|---|

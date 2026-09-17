@@ -203,7 +203,7 @@ def test_an_unknown_suffix_is_refused_by_the_format_gate(tmp_path):
     structure = _write_sdf(tmp_path / "in.mol2")
     done = _build(tmp_path, structure, "ligand")
     assert done.returncode == 2, done.stdout[-2000:] + done.stderr[-2000:]
-    assert ".pdb, .seq, .smi or .sdf" in done.stderr, done.stderr
+    assert ".pdb, .cif, .seq, .smi or .sdf" in done.stderr, done.stderr
     assert not (tmp_path / "out").exists()
 
 

@@ -482,6 +482,8 @@ def user_inputs_plan(run_dir: Path, system_path: Path,
             top_config = path
             break
 
+    ligand_packages, ligand_mapping = _proven_ligand_inputs(log, record)
+
     protocol = run_dir / "resolved.config"
     if not protocol.is_file():
         raise FileNotFoundError(f"{run_dir} has no resolved.config, which is the authoritative "
@@ -490,7 +492,39 @@ def user_inputs_plan(run_dir: Path, system_path: Path,
             "build_top_config_named": named_config,
             "build_top_resolved": record.get("resolved_config"), "build_md_config": protocol,
             "build_system": system_path, "build_topology": topology_path,
-            "build_top_record": record, "stage_inputs": _stage_inputs(run_dir)}
+            "build_top_record": record, "stage_inputs": _stage_inputs(run_dir),
+            "ligand_packages": ligand_packages, "ligand_mapping": ligand_mapping}
+
+
+def _proven_ligand_inputs(log: Path, record: dict[str, Any]) -> tuple[list[Path], Path | None]:
+    """The parameter packages and ligand mapping build-top placed beside its System, verified.
+
+    Each package directory must still verify (`load_package`) and hash to the digest the record
+    holds; the mapping must hash to the recorded output. Anything else refuses before a byte of
+    the bundle is written.
+    """
+    from ..ligands.package import PackageError, load_package
+
+    packages = []
+    for entry in (record.get("ligand_packages") or {}).get("packages") or []:
+        source = log.parent / entry["path"]
+        try:
+            package = load_package(source)
+        except PackageError as exc:
+            raise FileNotFoundError(f"the ligand package build-top recorded at {source} does not "
+                                    f"verify ({exc}). Nothing has been written.") from exc
+        if package.package_sha256 != entry["package_sha256"]:
+            raise FileNotFoundError(f"{source} is not the package build-top recorded (package "
+                                    f"digest changed). Nothing has been written.")
+        packages.append(source)
+    mapping = None
+    recorded = (record.get("outputs") or {}).get("ligand_mapping")
+    if recorded:
+        mapping = log.parent / recorded["path"]
+        if not mapping.is_file() or _digest(mapping) != recorded["sha256"]:
+            raise FileNotFoundError(f"{mapping} is not the ligand mapping build-top recorded. "
+                                    f"Nothing has been written.")
+    return packages, mapping
 
 
 INPUT_README = """# Inputs
@@ -587,12 +621,11 @@ _STEPS = {
     ("peptide", "explicit"): "hydrogens deleted and re-added at pH {ph} (seeded), the {shape} box "
                              "sized from the solute, {water} water and ions added (seeded), the "
                              "System created",
-    ("ligand", "explicit"): "{structure_step}, charges assigned "
-                            "({charges}), the {shape} box sized, {water} water and ions added "
-                            "(seeded), the System created",
+    ("ligand", "explicit"): "{structure_step}, {charges_step}, the {shape} box sized, {water} "
+                            "water and ions added (seeded), the System created",
     ("peptide", "implicit"): "tleap writes the Amber topology with {radii} radii, ParmEd creates "
                              "the {gb} System",
-    ("ligand", "implicit"): "{structure_step}, charges assigned ({charges}), "
+    ("ligand", "implicit"): "{structure_step}, {charges_step}, "
                             "the {ligand} parameters written to Amber files through ParmEd, ParmEd "
                             "creates the {gb} System",
 }
@@ -643,6 +676,24 @@ def standalone_settings(record: dict[str, Any], structure: Path, system: Path,
         "expected": {"system": {"file": system.name, "sha256": _digest(system)},
                      "topology": {"file": topology.name, "sha256": _digest(topology)}},
     }
+    packaged = ((record.get("ligand_packages") or {}).get("attached") or {})
+    if packaged.get("reference"):
+        # The package build-top attached, bundled under input/ligands/. The rebuild loads its
+        # ffxml and applies the recorded atom permutation; it computes no charge.
+        path = packaged["copied_to"]
+        settings["ligand_package"] = {
+            "reference": packaged["reference"], "path": path,
+            "prepared_atom_for_package_atom": packaged["prepared_atom_for_package_atom"],
+            "prepared_files_rewritten_in_package_order":
+                packaged["prepared_files_rewritten_in_package_order"]}
+        settings["builder"]["forcefield"]["ligand_package_ffxml"] = f"{path}/parameters.ffxml"
+    if route == "complex":
+        settings["unsupported"] = (
+            "a protein-ligand complex is rebuilt from its deposited structure through md-tools' "
+            "ligand mapping (selectors, graph matching, hydrogen placement), which this script "
+            "does not carry. The bundled built.xml IS the Hamiltonian the run integrated, with "
+            "the ligand packages under input/ligands/ and the mapping in "
+            "input/ligand_mapping.json; rebuild from the structure with md-openmm build-top.")
     if implicit and kind == "peptide-like":
         # The mbondi3 corrections for a peptide-like solute come from md-tools' molecular map,
         # which this script does not carry. Said, rather than built without them.
@@ -729,10 +780,14 @@ def _standalone_text(settings: dict[str, Any]) -> str:
     steps = _STEPS[(settings["route"], settings["solvent"])].format(
         ph=b["protonation"]["ph"], shape=b["solvation"]["box_shape"],
         water=str(b["solvation"]["water_model"]).upper(), structure_step=structure_step,
-        charges=b["forcefield"]["ligand_charge_method"], ligand=b["forcefield"]["ligand"],
+        charges_step=(f"its parameters loaded from the bundled package "
+                      f"{settings['ligand_package']['reference']} (no charge computed)"
+                      if settings.get("ligand_package") else
+                      f"charges assigned ({b['forcefield']['ligand_charge_method']})"),
+        ligand=b["forcefield"]["ligand"],
         radii=(settings["implicit"] or {}).get("radii"), gb=(settings["implicit"] or {}).get("model"))
     caveat = ""
-    if (settings["route"] == "ligand"
+    if (settings["route"] == "ligand" and not settings.get("ligand_package")
             and str(b["forcefield"]["ligand_charge_method"]).lower() == "am1bcc"):
         caveat = (" For this molecule that equality is not guaranteed: the OpenFF toolkit computes "
                   "AM1-BCC charges on a conformer it generates itself, unseeded, so a flexible "
@@ -749,8 +804,10 @@ def _standalone_text(settings: dict[str, Any]) -> str:
             f"md-tools: OpenMM"
             + (", AmberTools (tleap) and ParmEd" if settings["route"] == "peptide"
                and settings["solvent"] == "implicit" else "")
-            + (", RDKit, the OpenFF toolkit, openmmforcefields and AmberTools"
-               + (" and ParmEd" if settings["solvent"] == "implicit" else "")
+            + ((", RDKit" + (" and ParmEd" if settings["solvent"] == "implicit" else "")
+                if settings.get("ligand_package") else
+                ", RDKit, the OpenFF toolkit, openmmforcefields and AmberTools"
+                + (" and ParmEd" if settings["solvent"] == "implicit" else ""))
                if settings["route"] == "ligand" else "")
             + ".")
 
@@ -830,6 +887,27 @@ def write_user_inputs(plan: dict[str, Any], out_dir: Path) -> dict[str, Any]:
             "verified": f"sha256 matches the run record's inputs.{role} and the build-top output"}
         rows.append(f"| `{source.name}` | the built {'System' if role == 'system' else 'topology'}"
                     f" every stage ran on (`-{'s' if role == 'system' else 'p'}`) |")
+
+    # THE LIGAND PARAMETER PACKAGES the build used, and a complex's ligand mapping. Small, and the
+    # only place the ligands' parameters exist as parameters rather than as terms in a System.
+    from ..ligands.package import load_package
+
+    for source in plan.get("ligand_packages") or []:
+        placed = load_package(source).copy_into(target / "ligands")
+        package = load_package(placed)
+        manifest.setdefault("ligand_packages", []).append({
+            "path": f"input/ligands/{package.compound_id}/{package.parameter_id}",
+            "reference": package.reference, "package_sha256": package.package_sha256,
+            "verified": "loads and verifies, and matches the digest the build-top record holds"})
+        rows.append(f"| `ligands/{package.reference}/` | the ligand parameter package the build "
+                    f"loaded: molecule.sdf, parameters.ffxml, metadata.json |")
+    if plan.get("ligand_mapping") is not None:
+        shutil.copy2(plan["ligand_mapping"], target / "ligand_mapping.json")
+        manifest["ligand_mapping"] = {"file": "input/ligand_mapping.json",
+                                      "sha256": _digest(target / "ligand_mapping.json"),
+                                      "verified": "sha256 matches the build-top record's output"}
+        rows.append("| `ligand_mapping.json` | each ligand instance's selector, package and atom "
+                    "map |")
 
     # THE SAVED SCALED STATE a hot stage integrated, with the record that says how it was made from
     # the built System above, and the code that made it -- so the chain from the structure to the

@@ -230,6 +230,7 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
     from .system import build_system
 
     ligand_sdf = None
+    package_record = None
     if route == "ligand":
         # ONE staging location for the prepared molecule, shared with the implicit route. This was
         # bare `staging` here and `staging / "structure"` there, while `build/top.py` copies
@@ -243,6 +244,13 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
         source = Path(prepared["solute_pdb"])
         ligand_sdf = Path(prepared["solute_sdf"])
         log(f"ligand       : {prepared.get('smiles', '')[:60]}")
+        # THE PACKAGE, before any force field exists: every later step loads these parameters.
+        from ..ligands.build import attach_for_build
+
+        package_record = attach_for_build(cfg, staging, solute_sdf=ligand_sdf, solute_pdb=source)
+        if package_record is not None:
+            log(f"parameters   : {package_record.get('reference', package_record['how'])} "
+                f"({package_record['how']})")
     else:
         source = staging / "input.pdb"
         shutil.copy2(input_path, source)
@@ -283,7 +291,7 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
     state_path = _write_initial_state(system, pdb, staging)
     return {"system_xml": built["system_xml"], "topology_pdb": solvated["output_pdb"],
             "initial_state": state_path, "n_solute_atoms": solvated["n_solute_atoms"],
-            "ligand_sdf": ligand_sdf, "omega": built,
+            "ligand_sdf": ligand_sdf, "omega": built, "ligand_package": package_record,
             # Carried through for forcefield.json: what the box actually ended up containing is
             # part of how the system was parameterised, not a log line.
             "n_waters": solvated.get("n_waters"), "ions": solvated.get("ions"),
@@ -296,6 +304,70 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
             # clearance the built box actually has.
             "box_geometry": solvated.get("geometry"),
             "salt": solvated.get("salt"),
+            "water_model": solvated.get("water_model"),
+            "water_packing_model": solvated.get("water_packing_model"),
+            "water_packing_substituted": solvated.get("water_packing_substituted"),
+            "water_model_reconciled": solvated.get("water_model_reconciled")}
+
+def _build_complex(input_path: Path, cfg: dict, staging: Path, *, mapped, log: Log) -> dict:
+    """Protein chains plus mapped ligand instances: hydrogens, solvent, System.
+
+    `mapped` is the structure with every selected ligand already replaced by its package's atoms
+    (`md_tools.ligands.mapping.map_ligands`), resolved by `build-top` before any output existed.
+    The instances are frozen through every step and checked after each one.
+    """
+    from openmm import XmlSerializer, app
+
+    from ..ligands.mapping import assert_instances_unchanged
+    from .solvation import solvate
+    from .system import build_system, protonate_complex
+
+    for instance in mapped.instances:
+        log(f"ligand       : {instance.residue_name} {instance.selector.label()} -> "
+            f"{instance.package.reference}")
+    protonated = protonate_complex(mapped, staging, cfg)
+    log(f"protonation  : pH {protonated['ph']}, {protonated['n_hydrogens_before']} -> "
+        f"{protonated['n_hydrogens_after']} hydrogens; "
+        f"{len(protonated['frozen_ligand_instances'])} ligand instance(s) kept as packaged")
+
+    solvated = solvate(Path(protonated["output_pdb"]), staging, cfg, route="complex",
+                       residue_templates_for=mapped.residue_templates)
+    ions = solvated.get("ions") or {}
+    log(f"solvation    : {solvated['n_waters']} waters, ions {ions.get('counts', ions)}, box "
+        f"{solvated.get('box_shape')} ({solvated.get('box_volume_nm3', 0):.1f} nm^3)")
+
+    residue_sdfs = {}
+    sdf_dir = staging / "ligand_sdf"
+    sdf_dir.mkdir(parents=True, exist_ok=True)
+    for instance in mapped.instances:
+        name = instance.residue_name.upper()
+        path = sdf_dir / f"{instance.package.parameter_id}.sdf"
+        if name in residue_sdfs and residue_sdfs[name] != path:
+            raise ValueError(
+                f"residue name {name} is mapped to two different packages; the unscaled-torsion "
+                f"classifier reads bond orders per residue name, so give the species distinct "
+                f"residue names")
+        path.write_bytes((instance.package.path / "molecule.sdf").read_bytes())
+        residue_sdfs[name] = path
+
+    built = build_system(Path(solvated["output_pdb"]), staging, cfg, solvated["n_solute_atoms"],
+                         route="complex", residue_templates_for=mapped.residue_templates,
+                         residue_sdfs=residue_sdfs)
+    pdb = app.PDBFile(str(solvated["output_pdb"]))
+    assert_instances_unchanged(mapped, pdb.topology, pdb.positions, step="solvation")
+    nonbonded = built.get("nonbonded") or {}
+    log(f"system       : {nonbonded.get('method')}, cutoff {nonbonded.get('cutoff_nm')} nm, "
+        f"{cfg['system_build']['constraints']}")
+    system = XmlSerializer.deserialize(Path(built["system_xml"]).read_text())
+    state_path = _write_initial_state(system, pdb, staging)
+    return {"system_xml": built["system_xml"], "topology_pdb": solvated["output_pdb"],
+            "initial_state": state_path, "n_solute_atoms": solvated["n_solute_atoms"],
+            "ligand_sdf": None, "omega": built, "protonation": protonated,
+            "n_waters": solvated.get("n_waters"), "ions": solvated.get("ions"),
+            "box_shape": solvated.get("box_shape"),
+            "box_volume_nm3": solvated.get("box_volume_nm3"),
+            "box_vectors_nm": solvated.get("box_vectors_nm"),
+            "box_geometry": solvated.get("geometry"), "salt": solvated.get("salt"),
             "water_model": solvated.get("water_model"),
             "water_packing_model": solvated.get("water_packing_model"),
             "water_packing_substituted": solvated.get("water_packing_substituted"),
@@ -333,6 +405,7 @@ def _build_implicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
     return {"system_xml": built["system_xml"], "topology_pdb": built["topology_pdb"],
             "initial_state": state_path, "n_solute_atoms": built["n_solute_atoms"],
             "ligand_sdf": built.get("ligand_sdf"),
+            "ligand_package": built.get("ligand_package"),
             "omega": built.get("build_record") or {},
             # The builder's own report of what it loaded: the tleap protein resource, the radii,
             # and on the ligand route the OpenFF report from build_forcefield. Surfaced here so

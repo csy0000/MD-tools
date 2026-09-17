@@ -395,6 +395,32 @@ def build_forcefield(cfg: dict, ligand_sdf: Optional[Path] = None,
     }
     forcefield = app.ForceField(*xmls)
 
+    package_dirs = list(ff_cfg.get("ligand_packages") or [])
+    if package_dirs:
+        # SAVED PARAMETERS, loaded as they are. No charge is assigned and no template generator
+        # is registered: the package was created (or verified) once, before this function was
+        # first called, and every step of the build -- hydrogens, solvent, System -- loads the
+        # same file. `ligand_sdf` is not read for parameters on this path.
+        from ..ligands.build import packages_from_dirs
+        from ..ligands.mapping import load_packages_into
+
+        packages = packages_from_dirs(package_dirs)
+        compatibility = load_packages_into(forcefield, packages)
+        first = packages[0]
+        info["ligand"] = {
+            "forcefield": first.metadata["forcefield"]["resource"],
+            "charge_method": first.metadata["charges"]["method"],
+            "charge_scheme": first.metadata["charges"].get("scheme"),
+            "charge_source": first.metadata["charges"].get("source"),
+            "net_charge_e": float(first.metadata["net_partial_charge_e"]),
+            "formal_charge": first.metadata["chemical_state"]["net_formal_charge"],
+            "n_atoms": len(first.atom_names),
+            "family": first.metadata["forcefield"]["family"],
+            "packages": [p.summary() for p in packages],
+            "nonbonded_compatibility": compatibility,
+        }
+        return forcefield, info
+
     if ligand_sdf is not None:
         from openff.toolkit import Molecule
         from openff.toolkit.utils.toolkits import GLOBAL_TOOLKIT_REGISTRY
@@ -600,6 +626,81 @@ def protonate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path]
         "n_atoms": modeller.topology.getNumAtoms(),
         # which variant addHydrogens chose for each residue -- the record of what pH 7 meant here
         "variants": [None if v is None else str(v) for v in added],
+        "forcefield": ff_info,
+    }
+    (out_dir / "protonation.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
+    return info
+
+
+def protonate_complex(mapped, out_dir: Path, cfg: dict) -> dict:
+    """Hydrogens for everything EXCEPT the mapped ligand instances, which are frozen.
+
+    The ligands already carry exactly the hydrogens their packages define, placed by
+    `md_tools.ligands.mapping`. Deleting and re-adding them here would replace a chemical state
+    that was chosen and parameterised with whatever the template matcher prefers, so only
+    residues outside `mapped.frozen_residues` lose and regain hydrogens. The package templates
+    are loaded and named per residue, because `addHydrogens` builds a System over the whole
+    topology to relax the new hydrogens. Afterwards the instances are checked unchanged.
+
+    This is the complex route's one protonation call site, and the place a PROPKA-derived
+    assignment replaces `addHydrogens(pH)`'s own variant choice.
+    """
+    from openmm import Platform, app
+    from openmm.app import element as elem
+
+    from ..ligands.mapping import assert_instances_unchanged
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pcfg = cfg["protonation"]
+    forcefield, ff_info = build_forcefield(cfg, route="complex")
+    modeller = app.Modeller(mapped.topology, mapped.positions)
+    frozen = mapped.frozen_residues
+
+    def key(residue):
+        return (residue.chain.id, str(residue.id).strip(), (residue.insertionCode or "").strip())
+
+    n_h_before = sum(1 for a in modeller.topology.atoms() if a.element == elem.hydrogen)
+    if pcfg["delete_existing_hydrogens"]:
+        modeller.delete([a for a in modeller.topology.atoms()
+                         if a.element == elem.hydrogen and key(a.residue) not in frozen])
+    from .seeds import DEFAULT_MASTER_SEED, derive_build_seed as derive_seed
+
+    master = (cfg.get("run") or {}).get("seed")
+    hydrogen_seed = derive_seed(
+        int(master if master is not None else DEFAULT_MASTER_SEED), "structure/protonation")
+    state = random.getstate()
+    random.seed(hydrogen_seed)
+    try:
+        added = modeller.addHydrogens(
+            forcefield, pH=float(pcfg["ph"]), variants=None,
+            platform=Platform.getPlatformByName("Reference"),
+            residueTemplates=mapped.residue_templates(modeller.topology))
+    finally:
+        random.setstate(state)
+    assert_instances_unchanged(mapped, modeller.topology, modeller.positions,
+                               step="protein hydrogen addition")
+
+    out_pdb = out_dir / "solute_h.pdb"
+    with out_pdb.open("w") as fh:
+        app.PDBFile.writeFile(modeller.topology, modeller.positions, fh, keepIds=True)
+    residues = list(modeller.topology.residues())
+    info = {
+        "output_pdb": str(out_pdb),
+        "route": "complex",
+        "ph": float(pcfg["ph"]),
+        "note": (f"addHydrogens at pH {pcfg['ph']}, seed {hydrogen_seed}, on every residue except "
+                 f"the {len(frozen)} mapped ligand instance(s), whose package hydrogens were kept"),
+        "frozen_ligand_instances": [
+            {"chain": c, "resid": r, "insertion_code": i} for c, r, i in sorted(frozen)],
+        "n_hydrogens_before": n_h_before,
+        "n_hydrogens_after": sum(1 for a in modeller.topology.atoms()
+                                 if a.element == elem.hydrogen),
+        "n_atoms": modeller.topology.getNumAtoms(),
+        # Bound to residue identity, not to a position in a list.
+        "variants": [{"chain": r.chain.id, "resid": str(r.id).strip(),
+                      "insertion_code": (r.insertionCode or "").strip(), "residue": r.name,
+                      "variant": str(v)} for r, v in zip(residues, added) if v is not None],
         "forcefield": ff_info,
     }
     (out_dir / "protonation.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
@@ -1521,8 +1622,14 @@ def constraint_option(name):
 
 
 def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: int,
-                 ligand_sdf: Optional[Path] = None, route: str = "peptide") -> dict:
-    """Create the OpenMM ``System`` (PME, 1.0 nm, HBonds, HMR) and serialise it to XML."""
+                 ligand_sdf: Optional[Path] = None, route: str = "peptide", *,
+                 residue_templates_for=None, residue_sdfs: Optional[dict] = None) -> dict:
+    """Create the OpenMM ``System`` (PME, 1.0 nm, HBonds, HMR) and serialise it to XML.
+
+    ``residue_templates_for(topology)`` names the template for each mapped ligand residue, so
+    template matching never chooses between packages by graph alone; ``residue_sdfs`` gives the
+    unscaled-torsion classifier each ligand species' bond orders on the complex route.
+    """
     from openmm import XmlSerializer, app, unit
 
     out_dir = Path(out_dir)
@@ -1531,6 +1638,7 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
 
     pdb = app.PDBFile(str(solvated_pdb))
     forcefield, ff_info = build_forcefield(cfg, ligand_sdf, route=route)
+    templates = residue_templates_for(pdb.topology) if residue_templates_for else {}
 
     method = {"PME": app.PME, "LJPME": app.LJPME, "CutoffPeriodic": app.CutoffPeriodic}[
         bcfg["nonbonded_method"]
@@ -1571,6 +1679,7 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
         rigidWater=bool(bcfg["rigid_water"]),
         removeCMMotion=bool(bcfg["remove_cm_motion"]),
         ewaldErrorTolerance=float(bcfg["ewald_error_tolerance"]),
+        residueTemplates=templates,
         **({"hydrogenMass": target_h_mass * unit.amu} if delegate_hmr else {}),
     )
 
@@ -1629,6 +1738,7 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
             rigidWater=bool(bcfg["rigid_water"]),
             removeCMMotion=bool(bcfg["remove_cm_motion"]),
             ewaldErrorTolerance=float(bcfg["ewald_error_tolerance"]),
+            residueTemplates=templates,
         )
         hmr["group_conservation"] = verify_hmr_group_masses(
             system, reference, pdb.topology,
@@ -1640,7 +1750,7 @@ def build_system(solvated_pdb: Path, out_dir: Path, cfg: dict, n_solute_atoms: i
     rcfg = cfg["rest2"]
     if rcfg["unscaled_torsions"]:
         unscaled_info = classify_unscaled_torsions(
-            pdb.topology, range(n_solute_atoms), ligand_sdf=ligand_sdf,
+            pdb.topology, range(n_solute_atoms), ligand_sdf=ligand_sdf, residue_sdfs=residue_sdfs,
             proline_like_residues=rcfg["proline_like_residues"],
             max_proline_ring_size=int(rcfg["max_proline_ring_size"]),
         )

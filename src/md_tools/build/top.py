@@ -20,6 +20,7 @@ in a comment.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -52,15 +53,32 @@ SEQUENCE_LEAPRC = {
 assert set(SEQUENCE_LEAPRC) == set(PROTEIN_FORCEFIELDS)
 
 #: Every `-i` suffix build-top reads, and the `solute.kind`s each may be built as.
-INPUT_SUFFIXES = (".pdb", ".seq", ".smi", ".sdf")
+INPUT_SUFFIXES = (".pdb", ".cif", ".seq", ".smi", ".sdf")
 
 BUILD_SCHEMA = Schema(
     "md_build.config",
     doc="Topology and System construction for `md-openmm build-top`.",
+    fields=[
+        Field("ligands", list, default=[],
+              doc="The ligand instances of a `kind: complex` build, each mapped explicitly onto a "
+                  "reusable parameter package. One entry per instance:\n"
+                  "  - select: {chain: B, resid: \"201\", insertion_code: \"\"}\n"
+                  "    parameters: CHEMBL112/param_e932f4c4f371\n"
+                  "`chain` is the chain id the input file carries (the AUTHOR chain for mmCIF); "
+                  "`resid` is a quoted string. Each selector must name exactly one residue. The "
+                  "residue's heavy atoms are matched to the package's chemical graph, its "
+                  "hydrogens come from the package, and its deposited pose is kept. A match that "
+                  "is ambiguous in a way that changes the chemistry (the two oxygens of a "
+                  "carboxylic acid) is refused unless the entry adds `atom_map: {deposited atom "
+                  "name: package atom name}` for every heavy atom. Repeated copies name the same "
+                  "package. Every residue that is not a standard protein residue, water or ion "
+                  "must be listed; nothing is guessed. Empty, and refused if set, for every other "
+                  "kind."),
+    ],
     sections=[
         Section("solute", [
             Field("kind", str, default="peptide",
-                  enum=("peptide", "peptide-like", "ligand"),
+                  enum=("peptide", "peptide-like", "ligand", "complex"),
                   doc="What the solute IS, which decides how it is parameterised and what "
                       "chemistry may be read from it. This is the authoritative "
                       "classification.\n"
@@ -79,7 +97,12 @@ BUILD_SCHEMA = Schema(
                       "single-residue ligand representation cannot describe -- so "
                       "residue-keyed corrections such as mbondi3's silently miss it. It never "
                       "loads a protein force field and never replaces Sage's charges or bonded "
-                      "terms."),
+                      "terms.\n"
+                      "  complex       -- read -i as a .pdb or .cif holding protein chains and "
+                      "ligand instances. The protein takes the protein force field; each ligand "
+                      "instance listed under `ligands` takes the parameters of an existing "
+                      "package, loaded as saved -- no charge is generated. Explicit solvent "
+                      "only."),
             Field("peptide", bool, default=None, nullable=True,
                   doc="RETIRED spelling of `kind`, kept so configurations written before `kind` "
                       "existed -- including every `resolved.config` already on disk -- still "
@@ -101,6 +124,23 @@ BUILD_SCHEMA = Schema(
                   enum=("am1bcc", "am1bccelf10", "gasteiger", "nagl"),
                   doc="Partial-charge method for the small molecule. am1bcc is the validated "
                       "default and runs on CPU; it is the slowest part of a ligand build."),
+            Field("compound_id", str, default=None, nullable=True,
+                  doc="Catalog identity of the molecule for kind: ligand or peptide-like: a "
+                      "ChEMBL id (`CHEMBL112`) or `LOCAL-<first block of the standard InChIKey>`. "
+                      "The build writes the parameter package it creates under this compound. "
+                      "Left null, the LOCAL form is derived from the molecule and recorded."),
+            Field("aliases", list, default=[],
+                  doc="Searchable names stored with a package this build creates: "
+                      "`[paracetamol, acetaminophen, TYL]`. Names, not identities."),
+            Field("parameters", str, default=None, nullable=True,
+                  doc="REUSE an existing parameter package, `<compound id>/param_<12 hex>`, "
+                      "instead of creating one. The prepared molecule must be that package's "
+                      "exact chemical state (every hydrogen, charge and bond order, and the "
+                      "stereochemistry of its coordinates); its atoms are put into package order "
+                      "and no charge is generated. The package's force field and charges are "
+                      "used, so `ligand_forcefield` and `ligand_charge_method` must be left at "
+                      "their defaults or state the package's own values. Looked up in "
+                      "`ligand_catalog.path`, then in $MD_DATA/parameters/ligands."),
             Field("residue_name", str, default=None, nullable=True,
                   doc="Three-character residue name for a molecule read from .smi or .sdf. It is "
                       "APPLIED: the molecule's residue in built.pdb, built.solute.pdb and the "
@@ -113,6 +153,15 @@ BUILD_SCHEMA = Schema(
                       "classifier read residue names. Refused for kind: peptide, whose residues "
                       "are named by the input."),
         ], doc="What the input is, and how it is parameterised."),
+        Section("ligand_catalog", [
+            Field("path", str, default=None, nullable=True,
+                  doc="A directory laid out as `<compound id>/<parameter id>/`, searched FIRST "
+                      "for `solute.parameters` and `ligands[].parameters` -- a registered "
+                      "catalog, or the `ligands/` directory of an earlier build. Relative to the "
+                      "configuration file. The shared catalog $MD_DATA/parameters/ligands is "
+                      "searched after it when $MD_DATA is known. A build only reads a catalog; "
+                      "registration writes to it."),
+        ], doc="Where reusable ligand parameter packages are looked up."),
         Section("forcefield", [
             Field("protein", str, default="ff14SB", enum=tuple(PROTEIN_FORCEFIELDS),
                   doc="Protein force field. ff19SB is intended to be paired with OPC water; the "
@@ -324,6 +373,7 @@ def resolve_build_config(path: Path | None) -> dict[str, Any]:
     _check_pairings(resolved)
     _check_hmr_constraints(resolved)
     _check_residue_name(resolved)
+    _check_ligand_settings(resolved)
     resolved.pop("_explicit_keys")
     resolved["_stated"] = stated
     return resolved
@@ -392,7 +442,9 @@ def _sys_document(resolved: dict[str, Any]) -> dict[str, Any]:
     # THE ROUTE, from the classification. `peptide-like` takes the ligand route deliberately and
     # completely: same force field, same charges, same builder. What it adds is a validated map
     # over the result, not a different parameterisation.
-    peptide = kind == "peptide"
+    # A complex loads the protein force field exactly as a peptide does; its ligands come from
+    # packages, which the builder adds, so the ligand-only nulling of the protein must not apply.
+    peptide = kind in ("peptide", "complex")
     document = sys_defaults(peptide=peptide, solvent=solvent, kind=kind)
     # DERIVED, never independently authoritative. Downstream readers that predate `kind` still
     # find the boolean they expect, but it is recomputed from `kind` at every crossing rather
@@ -487,7 +539,7 @@ def _check_residue_name(resolved: dict[str, Any]) -> None:
     if stated is None:
         return
     kind = str(resolved["solute"]["kind"])
-    if kind == "peptide":
+    if kind in ("peptide", "complex"):
         raise ConfigError(
             f"solute.residue_name = {stated!r} is set, but solute.kind is 'peptide': a peptide's "
             f"residues are named by its .pdb or .seq input, so this name would be applied to "
@@ -504,6 +556,88 @@ def _check_residue_name(resolved: dict[str, Any]) -> None:
             f"solute.residue_name = {stated!r} already names water, an ion or a protein residue. "
             f"Solvent selection and the omega classifier read residue names, so a molecule called "
             f"{text.upper()} would be treated as one. Choose another name.")
+
+
+def _check_ligand_settings(resolved: dict[str, Any]) -> None:
+    """Package and instance settings, refused where they cannot apply. Nothing is loaded here."""
+    from ..ligands.catalog import parse_reference
+    from ..ligands.identity import CompoundIdError, check_compound_id
+    from ..ligands.package import PackageError
+
+    solute = resolved["solute"]
+    kind = str(solute["kind"])
+    entries = resolved["ligands"]
+    stated = resolved.get("_explicit_keys", {}).get("solute", ())
+    single = kind in ("ligand", "peptide-like")
+    if kind == "complex":
+        if is_implicit(canonical_solvent(resolved["solvent"]["model"])):
+            raise ConfigError(
+                "solute.kind is 'complex' with an implicit solvent. The complex route builds "
+                "through ForceField templates and explicit solvent only; a GBn2 protein-ligand "
+                "System would need the ligand packages carried into the tleap/ParmEd route, "
+                "which is not implemented.")
+        if not entries:
+            raise ConfigError(
+                "solute.kind is 'complex' but `ligands` is empty. A structure with no ligand "
+                "instances is `kind: peptide`; a complex names every ligand instance and the "
+                "package that parameterises it.")
+    elif entries:
+        raise ConfigError(
+            f"`ligands` lists {len(entries)} instance(s), but solute.kind is {kind!r}. Ligand "
+            f"instances are mapped only in a `kind: complex` build.")
+    for key in ("compound_id", "parameters"):
+        if solute.get(key) is not None and not single:
+            raise ConfigError(f"solute.{key} is set, but solute.kind is {kind!r}; it describes the "
+                              f"single molecule of a kind: ligand or peptide-like build.")
+    if solute.get("aliases") and not single:
+        raise ConfigError(f"solute.aliases is set, but solute.kind is {kind!r}.")
+    if not all(isinstance(a, str) for a in solute.get("aliases") or []):
+        raise ConfigError("solute.aliases must be a list of strings")
+    if solute.get("aliases") and solute.get("parameters"):
+        raise ConfigError("solute.aliases describe a package this build CREATES; with "
+                          "solute.parameters the package already exists and keeps its aliases.")
+    if solute.get("parameters") and solute.get("compound_id"):
+        raise ConfigError("solute.compound_id and solute.parameters are both set; the reference "
+                          "already names the compound.")
+    try:
+        if solute.get("compound_id") is not None:
+            check_compound_id(solute["compound_id"])
+        if solute.get("parameters") is not None:
+            parse_reference(solute["parameters"])
+            for key in ("ligand_forcefield", "ligand_charge_method"):
+                if key in stated:
+                    raise ConfigError(
+                        f"solute.{key} is stated together with solute.parameters. A reused "
+                        f"package brings its own force field and charges; a second statement "
+                        f"could only agree with it or be ignored. Remove solute.{key}.")
+        for n, entry in enumerate(entries):
+            if not isinstance(entry, dict) or "parameters" not in entry:
+                raise ConfigError(f"ligands[{n}] must be a mapping with `select` and `parameters`")
+            parse_reference(entry["parameters"])
+    except (CompoundIdError, PackageError) as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+def catalog_roots(resolved: dict[str, Any], config_path: Path | None) -> list[Path]:
+    """Where packages are looked up, in order: `ligand_catalog.path`, then $MD_DATA's catalog.
+
+    `ligand_catalog.path` stays in the configuration as written, so no record carries this
+    machine's absolute path; a relative one is resolved against the configuration file here, when
+    the catalog is actually searched.
+    """
+    from ..ligands.catalog import default_catalog_root
+
+    roots = []
+    stated = resolved["ligand_catalog"]["path"]
+    if stated is not None:
+        path = Path(stated).expanduser()
+        if not path.is_absolute() and config_path is not None:
+            path = Path(config_path).parent / path
+        roots.append(path)
+    default = default_catalog_root()
+    if default is not None:
+        roots.append(default)
+    return roots
 
 
 def _assigned_residue_name(stated: str | None, name_field: str | None, source: Path) -> str:
@@ -592,7 +726,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     suffix = input_path.suffix.lower()
     if suffix not in INPUT_SUFFIXES:
         raise ConfigError(
-            f"-i {input_path}: expected a .pdb, .seq, .smi or .sdf FILE. `-i` names a file so "
+            f"-i {input_path}: expected a .pdb, .cif, .seq, .smi or .sdf FILE. `-i` names a file so "
             f"that the input is unambiguous and can be hashed into the record; an inline "
             f"structure, sequence or SMILES string is not accepted.")
 
@@ -608,10 +742,14 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     # "Input interpretation" section below reports what was decided rather than deciding it
     # again. These used to be checked down there, so every refusal of them created the output
     # directory first.
+    complex_build = kind == "complex"
     if peptide and suffix not in (".pdb", ".seq"):
         raise ConfigError(f"-i {input_path}: solute.kind is 'peptide', so the input must be "
                           f"a .pdb or .seq file, not {suffix}")
-    if not peptide and suffix not in (".smi", ".sdf"):
+    if complex_build and suffix not in (".pdb", ".cif"):
+        raise ConfigError(f"-i {input_path}: solute.kind is 'complex', so the input must be a "
+                          f".pdb or .cif structure, not {suffix}")
+    if not peptide and not complex_build and suffix not in (".smi", ".sdf"):
         raise ConfigError(f"-i {input_path}: solute.kind is {kind!r}, which is built from a "
                           f"molecular graph, so the input must be a .smi or .sdf file, not "
                           f"{suffix}")
@@ -627,7 +765,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     smiles = name_field = residue_name = None
     if suffix == ".smi":
         smiles, name_field = read_single_smiles(input_path)
-    if not peptide:
+    if not peptide and not complex_build:
         residue_name = _assigned_residue_name(resolved["solute"]["residue_name"], name_field,
                                               input_path)
 
@@ -650,7 +788,17 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             f"stem>.sdf` before `<residue name>.sdf`, so it would be paired with the System this "
             f"build writes. Move it aside (or build into a new directory) and run again.")
 
-    existing = [p for p in (out_system, out_pdb, *([out_sdf] if out_sdf else [])) if p.exists()]
+    # THE LIGAND INSTANCES of a complex, resolved and mapped before anything exists: an unknown
+    # package, an ambiguous selector, an unmapped residue or a mismatched chemical state is a
+    # statement about the inputs, and refuses with nothing created.
+    mapped = None
+    out_mapping = out_system.parent / "ligand_mapping.json"
+    if complex_build:
+        mapped = _map_complex_ligands(input_path, resolved, config_path)
+    out_ligands = out_system.parent / "ligands"
+
+    existing = [p for p in (out_system, out_pdb, *([out_sdf] if out_sdf else []),
+                            *([out_mapping] if complex_build else [])) if p.exists()]
     if existing and not overwrite:
         raise ConfigError(
             f"refusing to replace {', '.join(str(p) for p in existing)}. Pass --overwrite to "
@@ -683,7 +831,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     # Two names for two different questions. `route` is how the System is BUILT and has exactly
     # two values, because there are exactly two parameterisation paths; `kind` is what the solute
     # IS and has three. `peptide-like` is a ligand build whose chemistry is then mapped.
-    route = "peptide" if peptide else "ligand"
+    route = "peptide" if peptide else ("complex" if complex_build else "ligand")
 
     log = LogWriter(out_log, record_type="build-top", echo=echo)
     log("md-openmm build-top")
@@ -703,7 +851,16 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             log.field(f"{section}.{key}", f"{value}   ({origin})")
 
     log.heading("Input interpretation")
-    if peptide and sequence_build is not None:
+    if complex_build:
+        log.field("interpreted as",
+                  f"protein-ligand complex ({suffix}), {len(mapped.instances)} ligand instance(s) "
+                  f"mapped to parameter packages")
+        for instance in mapped.instances:
+            log.field(f"ligand {instance.residue_name}",
+                      f"{instance.selector.label()} -> {instance.package.reference}")
+        log.field("coordinates", "the deposited pose; ligand hydrogens from each package")
+        log.field("small-molecule FF", "not run: parameters loaded from the packages")
+    elif peptide and sequence_build is not None:
         log.field("interpreted as", "peptide sequence, built by tleap `sequence`")
         log.field("sequence", " ".join(sequence))
         log.field("residue library", sequence_build["protein_forcefield"])
@@ -747,6 +904,21 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     # THE RESIDUE NAME, handed to the one place that writes the prepared molecule. Both preparers
     # read it, so the .smi and .sdf routes and both solvent routes carry it into the topology.
     cfg["solute"]["residue_name"] = residue_name
+    roots = catalog_roots(resolved, config_path) if (complex_build or not peptide) else []
+    if not peptide and not complex_build:
+        # A single molecule gets a package: reused if `solute.parameters` names one, created once
+        # otherwise. The builder attaches it before its first force field is built.
+        cfg["ligand_package"] = {
+            "forcefield": sys_resolved["forcefield"].get("ligand"),
+            "charge_method": sys_resolved["forcefield"].get("ligand_charge_method"),
+            "compound_id": resolved["solute"]["compound_id"],
+            "aliases": list(resolved["solute"]["aliases"] or []),
+            "parameters": resolved["solute"]["parameters"],
+            "catalog_roots": roots,
+            "residue_name": residue_name,
+            "input_name": input_path.name,
+            "input_sha256": file_facts(input_path)["sha256"],
+        }
 
     # A supported-but-unvalidated combination is allowed and never silent. Emitted on stderr so a
     # person watching sees it, and recorded structurally so a reader of the DATA sees it too --
@@ -798,6 +970,15 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
         builder_log = _BuilderLog(staging / "builder.log", echo=False)
         builder = _build_implicit if implicit else _build_explicit
         structure_path = input_path
+        if complex_build:
+            from ..openmm.builders import _build_complex
+
+            staged_ligands = staging / "ligands"
+            placed = [package.copy_into(staged_ligands) for package in mapped.packages]
+            cfg["forcefield"]["ligand_packages"] = [str(path) for path in placed]
+
+            def builder(path, cfg, staging, *, route, log):          # noqa: F811
+                return _build_complex(path, cfg, staging, mapped=mapped, log=log)
         if sequence_build is not None:
             # From here the sequence IS a PDB, and the build is the `.pdb` peptide route exactly.
             structure_path = staging / "sequence" / "sequence.pdb"
@@ -962,6 +1143,16 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                                   keepIds=True)
         outputs = [(built_xml, out_system), (built_pdb, out_pdb),
                    (staged_solute, out_solute)]
+        if complex_build:
+            from ..ligands.mapping import assert_instances_unchanged
+
+            final = app.PDBFile(str(built_pdb))
+            assert_instances_unchanged(mapped, final.topology, final.positions,
+                                       step="the whole build")
+            mapping_record = mapped.record(final.topology)
+            staged_mapping = staging / "ligand_mapping.json"
+            staged_mapping.write_text(json.dumps(mapping_record, indent=2) + "\n", encoding="utf-8")
+            outputs.append((staged_mapping, out_mapping))
         staged_sdf = staging / "structure" / "solute.sdf"
         if (out_sdf is not None) != staged_sdf.is_file():
             raise RuntimeError(
@@ -986,12 +1177,30 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                               "completion")
         log.field("re-read check", f"{reread.topology.getNumAtoms()} atoms == "
                                    f"{resystem.getNumParticles()} particles  OK")
+        placed_packages = _place_packages(staging / "ligands", out_ligands)
+        if placed_packages:
+            log.field("ligand packages", ", ".join(
+                f"{p['reference']} ({p['how']})" for p in placed_packages))
         written_outputs = {"system_xml": file_facts(out_system),
                            "topology_pdb": file_facts(out_pdb),
                            "solute_topology_pdb": file_facts(out_solute)}
         if out_sdf is not None:
             written_outputs["solute_sdf"] = {**file_facts(out_sdf), "residue_name": residue_name}
-        log.update(outputs=written_outputs)
+        if complex_build:
+            written_outputs["ligand_mapping"] = file_facts(out_mapping)
+        log.update(outputs=written_outputs,
+                   ligand_packages={
+                       "catalog_searched": [str(r) for r in ([resolved["ligand_catalog"]["path"]]
+                                                             if resolved["ligand_catalog"]["path"]
+                                                             else [])],
+                       "placed_in": "ligands",
+                       "packages": placed_packages,
+                       "attached": record.get("ligand_package"),
+                       "instances": ([{"selector": i.selector.as_dict(),
+                                       "residue_name": i.residue_name,
+                                       "parameters": i.package.reference}
+                                      for i in mapped.instances] if complex_build else None),
+                   })
         log.complete()
         log.heading("Summary")
         log(f"  built {n_pdb} particles, {len(residues)} residues, "
@@ -1008,3 +1217,60 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
     log.save()
     return log.record
+
+
+def _map_complex_ligands(input_path: Path, resolved: dict[str, Any], config_path: Path | None):
+    """Load every package the configuration names and map every ligand instance. Writes nothing."""
+    from openmm import app
+
+    from ..ligands.catalog import find_package
+    from ..ligands.mapping import LigandSelector, MappingError, map_ligands, unmapped_residues
+    from ..ligands.package import PackageError
+    from ..openmm.system import ION_RESIDUE_NAMES, PROTEIN_RESIDUES, WATER_RESIDUE_NAMES
+
+    try:
+        reader = app.PDBxFile if input_path.suffix.lower() == ".cif" else app.PDBFile
+        structure = reader(str(input_path))
+    except Exception as exc:
+        raise ConfigError(f"-i {input_path}: OpenMM could not read this structure ({exc})") from exc
+    roots = catalog_roots(resolved, config_path)
+    entries = resolved["ligands"]
+    try:
+        packages = {}
+        for entry in entries:
+            reference = entry["parameters"]
+            if reference not in packages:
+                packages[reference] = find_package(reference, roots)
+        selectors = [LigandSelector.from_mapping(entry.get("select") or {},
+                                                 where=f"ligands[{n}].select")
+                     for n, entry in enumerate(entries)]
+        known = set(PROTEIN_RESIDUES) | set(WATER_RESIDUE_NAMES) | set(ION_RESIDUE_NAMES)
+        left = unmapped_residues(structure.topology, selectors, known_residue_names=known)
+        if left:
+            shown = "; ".join(f"{r['residue_name']} chain {r['chain']!r} resid {r['resid']!r}"
+                              + (f" icode {r['insertion_code']!r}" if r["insertion_code"] else "")
+                              for r in left[:10])
+            raise ConfigError(
+                f"-i {input_path}: {len(left)} residue(s) are neither standard protein residues, "
+                f"water nor ions, and no `ligands` entry maps them: {shown}"
+                + (" ..." if len(left) > 10 else "") + ". Each needs an entry naming its "
+                f"parameter package; nothing is parameterised by guessing, and nothing is "
+                f"silently deleted.")
+        return map_ligands(structure.topology, structure.positions, entries, packages)
+    except (PackageError, MappingError) as exc:
+        raise ConfigError(f"-i {input_path}: {exc}") from exc
+
+
+def _place_packages(staged_root: Path, out_root: Path) -> list[dict[str, Any]]:
+    """Put the packages a build used beside built.xml. An identical identity already there is kept."""
+    from ..ligands.catalog import register_package
+
+    placed = []
+    if not staged_root.is_dir():
+        return placed
+    for package_dir in sorted(staged_root.glob("*/param_*")):
+        package, destination, written = register_package(package_dir, out_root)
+        placed.append({**package.summary(),
+                       "path": str(destination.relative_to(out_root.parent)),
+                       "how": "written" if written else "already present with this identity"})
+    return placed

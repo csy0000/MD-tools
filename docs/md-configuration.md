@@ -31,15 +31,23 @@ Topology and System construction for `md-openmm build-top`.
 
 Resolved by `md-openmm build-top`. Unknown keys are refused by name rather than ignored, so a typo is an error and never silent metadata.
 
+### Top-level keys
+
+#### `ligands`
+
+type: list · default: `[]`
+
+The ligand instances of a `kind: complex` build, each mapped explicitly onto a reusable parameter package. One entry per instance: - select: {chain: B, resid: "201", insertion_code: ""} parameters: CHEMBL112/param_e932f4c4f371 `chain` is the chain id the input file carries (the AUTHOR chain for mmCIF); `resid` is a quoted string. Each selector must name exactly one residue. The residue's heavy atoms are matched to the package's chemical graph, its hydrogens come from the package, and its deposited pose is kept. A match that is ambiguous in a way that changes the chemistry (the two oxygens of a carboxylic acid) is refused unless the entry adds `atom_map: {deposited atom name: package atom name}` for every heavy atom. Repeated copies name the same package. Every residue that is not a standard protein residue, water or ion must be listed; nothing is guessed. Empty, and refused if set, for every other kind.
+
 ### `solute`
 
 What the input is, and how it is parameterised.
 
 #### `solute.kind`
 
-type: string · default: `peptide` · one of `peptide`, `peptide-like`, `ligand`
+type: string · default: `peptide` · one of `peptide`, `peptide-like`, `ligand`, `complex`
 
-What the solute IS, which decides how it is parameterised and what chemistry may be read from it. This is the authoritative classification. peptide       -- read -i as a peptide/protein .pdb, or as a .seq holding one line of residue names that tleap's `sequence` builds (extended), and parameterise it with the protein force field. Sage never touches it. ligand        -- read -i as a .smi or .sdf and parameterise the whole molecule with the small-molecule force field. One residue, no peptide chemistry is claimed or read. A .smi states the chemistry and the conformer is generated (ETKDGv3, then MMFF); a .sdf carries the coordinates too and they are used as given. peptide-like  -- the SAME whole-molecule route as `ligand`, with the same force field and the same charges, PLUS a validated peptide-chemistry map over the result. It exists for a head-to-tail cyclic peptide built from SMILES, whose residues are real amino acids but which a single-residue ligand representation cannot describe -- so residue-keyed corrections such as mbondi3's silently miss it. It never loads a protein force field and never replaces Sage's charges or bonded terms.
+What the solute IS, which decides how it is parameterised and what chemistry may be read from it. This is the authoritative classification. peptide       -- read -i as a peptide/protein .pdb, or as a .seq holding one line of residue names that tleap's `sequence` builds (extended), and parameterise it with the protein force field. Sage never touches it. ligand        -- read -i as a .smi or .sdf and parameterise the whole molecule with the small-molecule force field. One residue, no peptide chemistry is claimed or read. A .smi states the chemistry and the conformer is generated (ETKDGv3, then MMFF); a .sdf carries the coordinates too and they are used as given. peptide-like  -- the SAME whole-molecule route as `ligand`, with the same force field and the same charges, PLUS a validated peptide-chemistry map over the result. It exists for a head-to-tail cyclic peptide built from SMILES, whose residues are real amino acids but which a single-residue ligand representation cannot describe -- so residue-keyed corrections such as mbondi3's silently miss it. It never loads a protein force field and never replaces Sage's charges or bonded terms. complex       -- read -i as a .pdb or .cif holding protein chains and ligand instances. The protein takes the protein force field; each ligand instance listed under `ligands` takes the parameters of an existing package, loaded as saved -- no charge is generated. Explicit solvent only.
 
 #### `solute.peptide`
 
@@ -59,11 +67,39 @@ type: string · default: `am1bcc` · one of `am1bcc`, `am1bccelf10`, `gasteiger`
 
 Partial-charge method for the small molecule. am1bcc is the validated default and runs on CPU; it is the slowest part of a ligand build.
 
+#### `solute.compound_id`
+
+type: string or null · default: `null`
+
+Catalog identity of the molecule for kind: ligand or peptide-like: a ChEMBL id (`CHEMBL112`) or `LOCAL-<first block of the standard InChIKey>`. The build writes the parameter package it creates under this compound. Left null, the LOCAL form is derived from the molecule and recorded.
+
+#### `solute.aliases`
+
+type: list · default: `[]`
+
+Searchable names stored with a package this build creates: `[paracetamol, acetaminophen, TYL]`. Names, not identities.
+
+#### `solute.parameters`
+
+type: string or null · default: `null`
+
+REUSE an existing parameter package, `<compound id>/param_<12 hex>`, instead of creating one. The prepared molecule must be that package's exact chemical state (every hydrogen, charge and bond order, and the stereochemistry of its coordinates); its atoms are put into package order and no charge is generated. The package's force field and charges are used, so `ligand_forcefield` and `ligand_charge_method` must be left at their defaults or state the package's own values. Looked up in `ligand_catalog.path`, then in $MD_DATA/parameters/ligands.
+
 #### `solute.residue_name`
 
 type: string or null · default: `null`
 
 Three-character residue name for a molecule read from .smi or .sdf. It is APPLIED: the molecule's residue in built.pdb, built.solute.pdb and the topology carries it, and the prepared molecule is written beside the System as `<residue_name>.sdf`. Left null, a deterministic name is assigned from the file (the .smi name field, else the file stem) and recorded, so the same input always produces the same residue identity. Three letters or digits; a name that already means water, an ion or a protein residue is refused, because solvent selection and the omega classifier read residue names. Refused for kind: peptide, whose residues are named by the input.
+
+### `ligand_catalog`
+
+Where reusable ligand parameter packages are looked up.
+
+#### `ligand_catalog.path`
+
+type: string or null · default: `null`
+
+A directory laid out as `<compound id>/<parameter id>/`, searched FIRST for `solute.parameters` and `ligands[].parameters` -- a registered catalog, or the `ligands/` directory of an earlier build. Relative to the configuration file. The shared catalog $MD_DATA/parameters/ligands is searched after it when $MD_DATA is known. A build only reads a catalog; registration writes to it.
 
 ### `forcefield`
 

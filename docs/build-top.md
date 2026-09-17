@@ -10,7 +10,7 @@ md-openmm build-top -i INPUT [-os PATH] [-op PATH] [-log PATH] [--config PATH] [
 
 | flag | what it is | default |
 |---|---|---|
-| `-i` | the input structure: a `.pdb`, `.seq`, `.smi` or `.sdf` **file** | required |
+| `-i` | the input structure: a `.pdb`, `.cif`, `.seq`, `.smi` or `.sdf` **file** | required |
 | `-os` | the serialised OpenMM System | `./built.xml` |
 | `-op` | the final coordinates and topology | `./built.pdb` |
 | `-log` | the readable log, which carries the machine record | `./built.log` |
@@ -20,22 +20,24 @@ md-openmm build-top -i INPUT [-os PATH] [-op PATH] [-log PATH] [--config PATH] [
 `-i` names a **file**, never an inline string: the input has to be unambiguous and hashable into
 the provenance record, so a SMILES or a sequence typed on the command line is not accepted.
 
-## Four inputs, and what separates them
+## The inputs, and what separates them
 
 ```text
 .pdb   a peptide or protein, with residue names      parameterised by the protein force field
 .seq   a peptide, as one line of residue names       coordinates BUILT by tleap (extended chain)
 .smi   one molecule, as SMILES                       coordinates GENERATED (ETKDGv3 + MMFF)
 .sdf   one molecule, with coordinates                coordinates USED AS GIVEN
+.cif   protein chains and ligands (kind: complex)    each ligand mapped onto a parameter package
 ```
 
 The format is not a free choice: it follows `solute.kind`, which says what the solute *is*.
 
-| `solute.kind` | `.pdb` | `.seq` | `.smi` | `.sdf` |
-|---|:---:|:---:|:---:|:---:|
-| `peptide` (default) | ✅ | ✅ | ❌ | ❌ |
-| `ligand` | ❌ | ❌ | ✅ | ✅ |
-| `peptide-like` | ❌ | ❌ | ✅ | ✅ |
+| `solute.kind` | `.pdb` | `.cif` | `.seq` | `.smi` | `.sdf` |
+|---|:---:|:---:|:---:|:---:|:---:|
+| `peptide` (default) | ✅ | ❌ | ✅ | ❌ | ❌ |
+| `ligand` | ❌ | ❌ | ❌ | ✅ | ✅ |
+| `peptide-like` | ❌ | ❌ | ❌ | ✅ | ✅ |
+| `complex` | ✅ | ✅ | ❌ | ❌ | ❌ |
 
 Anything else is refused by name, before any output directory is created.
 
@@ -161,6 +163,18 @@ residue-keyed corrections such as mbondi3's do not silently miss it. It never lo
 force field. A molecule that is not a peptide fails the map — `no amide bond was found` — though
 not as cleanly as a bad suffix does; see [Refusals](#refusals).
 
+### A protein with ligands: `kind: complex`
+
+A `.pdb` or `.cif` holding protein chains and ligand instances. Each ligand instance is listed under
+`ligands` with a selector (`chain`, `resid`, `insertion_code`) and the parameter package it takes.
+The package is loaded as saved and no charge is computed. Every non-standard residue must be listed,
+and the ligands' hydrogens come from their packages. See
+[Ligand parameter packages](ligand-packages.md).
+
+A single-molecule build (`ligand`, `peptide-like`) now also works through a package. It either
+reuses the one `solute.parameters` names, or creates one from the prepared molecule and writes it to
+`ligands/` beside `built.xml`. Either way the charges are computed at most once per build.
+
 ## What a build writes
 
 ```text
@@ -169,6 +183,8 @@ build/  built.xml           the serialised OpenMM System -- the Hamiltonian
         built.solute.pdb    the solute alone, for solute-only trajectories
         built.log           the readable log, ending in the machine record
         <RESNAME>.sdf       the prepared molecule, e.g. ETH.sdf -- MOLECULAR INPUTS ONLY
+        ligands/            the parameter packages the build loaded -- ligand and complex builds
+        ligand_mapping.json each ligand instance's selector, package and atom map -- COMPLEX ONLY
 ```
 
 `built.pdb` and `built.xml` are a **pair**: the System's particle order matches the PDB exactly,
