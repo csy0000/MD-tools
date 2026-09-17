@@ -490,6 +490,16 @@ def user_inputs_plan(run_dir: Path, system_path: Path,
             break
 
     ligand_packages, ligand_mapping = _proven_ligand_inputs(log, record)
+    prepared = None
+    prepared_entry = (record.get("outputs") or {}).get("prepared_structure")
+    if prepared_entry:
+        prepared = log.parent / Path(prepared_entry["path"]).name
+        if not prepared.is_file() or _digest(prepared) != prepared_entry["sha256"]:
+            raise FileNotFoundError(
+                f"build-top recorded a prepared structure ({prepared_entry['path']!r}, sha256 "
+                f"{prepared_entry['sha256'][:16]}...) -- the assembly-expanded and/or completed "
+                f"coordinates protonation started from -- and it is not beside the build with that "
+                f"digest. Nothing has been written.")
 
     protocol = run_dir / "resolved.config"
     if not protocol.is_file():
@@ -500,7 +510,8 @@ def user_inputs_plan(run_dir: Path, system_path: Path,
             "build_top_resolved": record.get("resolved_config"), "build_md_config": protocol,
             "build_system": system_path, "build_topology": topology_path,
             "build_top_record": record, "stage_inputs": _stage_inputs(run_dir),
-            "ligand_packages": ligand_packages, "ligand_mapping": ligand_mapping}
+            "ligand_packages": ligand_packages, "ligand_mapping": ligand_mapping,
+            "prepared_structure": prepared}
 
 
 def _recorded_ligand_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
@@ -692,6 +703,13 @@ def standalone_settings(record: dict[str, Any], structure: Path, system: Path,
         "sequence": record.get("sequence"),
         "builder": {key: cfg[key] for key in ("run", "structure", "protonation", "forcefield",
                                               "solvation", "system_build")},
+        # The PREPARED structure, when build-top expanded an assembly or built missing atoms: the
+        # rebuild starts from it, because expansion and completion are md-tools/PDBFixer steps this
+        # script does not carry. Null when the input was built as supplied.
+        "prepared_structure_file": (Path(((record.get("outputs") or {})
+                                          .get("prepared_structure") or {})["path"]).name
+                                    if (record.get("outputs") or {}).get("prepared_structure")
+                                    else None),
         "implicit": ({"model": "GBn2", "radii": "mbondi3", "remove_cm_motion": True,
                       "nonpolar_sasa": bool((cfg.get("implicit_solvent") or {})
                                             .get("nonpolar_sasa", False))}
@@ -699,6 +717,17 @@ def standalone_settings(record: dict[str, Any], structure: Path, system: Path,
         "expected": {"system": {"file": system.name, "sha256": _digest(system)},
                      "topology": {"file": topology.name, "sha256": _digest(topology)}},
     }
+    recorded = record.get("protonation")
+    if recorded:
+        # The variants build-top ASSIGNED, bound to residue identity, and the pH addHydrogens was
+        # called with. A rebuild applies them: PROPKA is a preparation dependency and is not rerun.
+        settings["builder"]["protonation"]["recorded"] = {
+            "method": recorded["method"],
+            "addhydrogens_ph": recorded["addhydrogens_ph"],
+            "variants": [{"chain": a["chain"], "resid": a["resid"],
+                          "insertion_code": a["insertion_code"], "variant": a["variant"]}
+                         for a in recorded["assignments"]],
+        }
     packaged = ((record.get("ligand_packages") or {}).get("attached") or {})
     if packaged.get("reference"):
         # The package build-top attached, bundled under input/ligands/. The rebuild loads its
@@ -867,6 +896,14 @@ def write_user_inputs(plan: dict[str, Any], out_dir: Path) -> dict[str, Any]:
                               "sha256": _digest(target / structure.name),
                               "verified": "sha256 matches the build-top record's input"}}
     rows = [f"| `{structure.name}` | the structure `build-top -i` read |"]
+    if plan.get("prepared_structure") is not None:
+        prepared = Path(plan["prepared_structure"])
+        shutil.copy2(prepared, target / prepared.name)
+        manifest["prepared_structure"] = {
+            "file": f"input/{prepared.name}", "sha256": _digest(target / prepared.name),
+            "verified": "sha256 matches the build-top record's outputs.prepared_structure"}
+        rows.append(f"| `{prepared.name}` | the expanded/completed structure protonation started "
+                    f"from; `build_system.py` rebuilds from it |")
     config_flag = ""
     if plan["build_top_config"] is not None:
         shutil.copy2(plan["build_top_config"], target / "build-top.config")

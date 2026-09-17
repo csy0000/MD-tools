@@ -50,6 +50,14 @@ CASES = {
     # A .seq PEPTIDE (0.5.4): the rebuild runs the recorded tleap `sequence` commands first.
     "peptide-seq-implicit": ("ALA.seq", "solvent:\n  model: GBn2\n"),
     "peptide-seq-explicit-hmr": ("ALA.seq", "hydrogen_mass_repartitioning:\n  enabled: true\n"),
+    # PROPKA (next release): the rebuild applies the variants build-top RECORDED, by residue
+    # identity, at the pH its addHydrogens received; PROPKA is not rerun.
+    "peptide-explicit-propka": ("ALA.pdb", "protonation:\n  method: propka\n"),
+    # A DEPOSITED-STRUCTURE shape: an alanine CB missing (built under input.missing_atoms: add)
+    # and a crystal water retained. The rebuild starts from the recorded prepared structure and
+    # moves the retained water after the solute, as build-top's solvation does.
+    "peptide-explicit-prepared": ("ALA-deposited.pdb",
+                                  "input:\n  missing_atoms: add\nprotonation:\n  method: propka\n"),
 }
 
 BLOCKER = (
@@ -86,6 +94,25 @@ def test_its_seeds_are_build_tops_seeds():
                     == derive_build_seed(master, purpose))
 
 
+def _deposited(path: Path) -> None:
+    """ACE-ALA-NME with no hydrogens, its alanine CB deleted, and one crystal water beside it."""
+    from openmm import Vec3, app, unit
+    from openmm.app import element
+
+    pdb = app.PDBFile(str(ALA))
+    modeller = app.Modeller(pdb.topology, pdb.positions)
+    modeller.delete([a for a in modeller.topology.atoms()
+                     if a.element == element.hydrogen or (a.residue.name, a.name) == ("ALA", "CB")])
+    water = app.Topology()
+    chain = water.addChain("W")
+    residue = water.addResidue("HOH", chain, "101")
+    water.addAtom("O", element.oxygen, residue)
+    first = modeller.positions[0].value_in_unit(unit.nanometer)
+    modeller.add(water, [Vec3(first[0] + 0.45, first[1], first[2])] * unit.nanometer)
+    with path.open("w") as handle:
+        app.PDBFile.writeFile(modeller.topology, modeller.positions, handle, keepIds=True)
+
+
 def _built(case: str, root: Path) -> Path:
     """build-top in `root/case`, then the input/ directory an export would write beside it."""
     from md_tools.build.record import read_record
@@ -94,7 +121,9 @@ def _built(case: str, root: Path) -> Path:
     structure, config = CASES[case]
     work = root / case
     work.mkdir()
-    if structure.endswith(".pdb"):
+    if structure == "ALA-deposited.pdb":
+        _deposited(work / structure)
+    elif structure.endswith(".pdb"):
         shutil.copy2(ALA, work / structure)
     elif structure.endswith(".seq"):
         (work / structure).write_text("# alanine dipeptide\nACE ALA NME\n", encoding="utf-8")
@@ -119,6 +148,8 @@ def _built(case: str, root: Path) -> Path:
     inputs.mkdir()
     for name in (structure, "built.xml", "built.pdb"):
         shutil.copy2(work / name, inputs / name)
+    if (work / "built.prepared.pdb").is_file():
+        shutil.copy2(work / "built.prepared.pdb", inputs / "built.prepared.pdb")
     if (work / "ligands").is_dir():
         # The parameter package a ligand build attached, as an export bundles it.
         shutil.copytree(work / "ligands", inputs / "ligands")

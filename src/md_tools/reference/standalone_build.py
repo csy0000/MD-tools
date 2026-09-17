@@ -122,6 +122,8 @@ def structure_from_sequence(path: Path, work: Path, sequence: dict) -> Path:
 
 def peptide_structure(settings: dict, work: Path) -> Path:
     """The peptide PDB build-top parameterised: the supplied file, or the one tleap made."""
+    if settings.get("prepared_structure_file"):
+        return HERE / settings["prepared_structure_file"]
     structure = HERE / settings["structure_file"]
     if str(settings.get("input_format", "pdb")).lower() == "seq":
         return structure_from_sequence(structure, work / "sequence", settings["sequence"])
@@ -383,11 +385,22 @@ def protonate(source: Path, work: Path, builder: dict, ligand_sdf: Path | None,
         if settings["delete_existing_hydrogens"]:
             modeller.delete([a for a in modeller.topology.atoms() if a.element == element.hydrogen])
         seed = derive_build_seed(int(builder["run"]["seed"]), "structure/protonation")
+        recorded = settings.get("recorded")
+        ph, variants = float(settings["ph"]), settings["variants"]
+        if recorded:
+            # The variants build-top assigned, by (chain, resid, insertion code), and the pH its
+            # addHydrogens call received. PROPKA is not rerun: the assignment is the record.
+            by_key = {(v["chain"], v["resid"], v["insertion_code"]): v["variant"]
+                      for v in recorded["variants"]}
+            variants = [by_key.get((r.chain.id, str(r.id).strip(),
+                                    (r.insertionCode or "").strip()))
+                        for r in modeller.topology.residues()]
+            ph = float(recorded["addhydrogens_ph"])
         with seeded_global_random(seed):
-            modeller.addHydrogens(forcefield_, pH=float(settings["ph"]),
-                                  variants=settings["variants"],
+            modeller.addHydrogens(forcefield_, pH=ph, variants=variants,
                                   platform=Platform.getPlatformByName("Reference"))
-        say("hydrogens", f"added at pH {settings['ph']}, seed {seed}, Reference platform")
+        say("hydrogens", f"added at pH {ph}, seed {seed}, Reference platform"
+                         + (f", {recorded['method']} variants as recorded" if recorded else ""))
     return write_pdb(modeller.topology, modeller.positions, work / "solute_h.pdb")
 
 
@@ -449,14 +462,42 @@ def box_for(modeller, builder: dict) -> np.ndarray:
     return box_vectors(width, shape)
 
 
+def retained_solvent_last(topology, positions):
+    """Input waters and ions moved after the solute, as build-top's solvation does."""
+    from openmm import app, unit
+
+    names = WATER_RESIDUE_NAMES | ION_RESIDUE_NAMES
+    moved = [r for r in topology.residues() if r.name.upper() in names]
+    modeller = app.Modeller(topology, positions)
+    if not moved:
+        return modeller, 0
+    tail, tail_positions, chains, mapping = app.Topology(), [], {}, {}
+    for residue in moved:
+        chain = chains.get(residue.chain)
+        if chain is None:
+            chain = chains[residue.chain] = tail.addChain(residue.chain.id)
+        copy = tail.addResidue(residue.name, chain, residue.id, residue.insertionCode)
+        for atom in residue.atoms():
+            mapping[atom] = tail.addAtom(atom.name, atom.element, copy, atom.id)
+            tail_positions.append(positions[atom.index])
+    for bond in topology.bonds():
+        if bond[0] in mapping and bond[1] in mapping:
+            tail.addBond(mapping[bond[0]], mapping[bond[1]])
+    indices = {atom.index for residue in moved for atom in residue.atoms()}
+    modeller.delete([a for a in modeller.topology.atoms() if a.index in indices])
+    modeller.add(tail, unit.Quantity([p.value_in_unit(unit.nanometer) for p in tail_positions],
+                                     unit.nanometer))
+    return modeller, len(indices)
+
+
 def solvate(source: Path, work: Path, builder: dict, ligand_sdf: Path | None,
             ligand_only: bool) -> tuple[Path, int]:
     from openmm import Vec3, app, unit
 
     pdb = app.PDBFile(str(source))
     forcefield_ = forcefield(builder, ligand_sdf, ligand_only=ligand_only)
-    modeller = app.Modeller(pdb.topology, pdb.positions)
-    n_solute = modeller.topology.getNumAtoms()
+    modeller, n_retained = retained_solvent_last(pdb.topology, pdb.positions)
+    n_solute = modeller.topology.getNumAtoms() - n_retained
     vectors = box_for(modeller, builder)
 
     solvation = builder["solvation"]

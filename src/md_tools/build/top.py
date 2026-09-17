@@ -931,6 +931,9 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     completion_record = None
     assembly_scratch = None
     out_assembly = out_system.parent / "assembly.json"
+    # THE PREPARED STRUCTURE: the expanded and/or completed coordinates protonation starts from.
+    # Saved beside the System so a rebuild -- and a reference bundle -- can start from exactly it.
+    out_prepared = out_pdb.with_name(out_pdb.stem + ".prepared.pdb")
     structure_input = input_path
     if assembly_id is not None:
         from ..openmm.assembly import AssemblyError, expand_assembly
@@ -979,7 +982,9 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
     existing = [p for p in (out_system, out_pdb, *([out_sdf] if out_sdf else []),
                             *([out_mapping] if complex_build else []),
-                            *([out_assembly] if assembly_record else [])) if p.exists()]
+                            *([out_assembly] if assembly_record else []),
+                            *([out_prepared] if prepared_pdb_bytes is not None else []))
+                if p.exists()]
     if existing and not overwrite:
         raise ConfigError(
             f"refusing to replace {', '.join(str(p) for p in existing)}. Pass --overwrite to "
@@ -1359,6 +1364,9 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                 f"refusing to report completion")
         if out_sdf is not None:
             outputs.append((staged_sdf, out_sdf))
+        if prepared_pdb_bytes is not None:
+            staged_prepared = staging / "prepared" / "prepared.pdb"
+            outputs.append((staged_prepared, out_prepared))
         if assembly_record is not None:
             staged_assembly = staging / "assembly.json"
             staged_assembly.write_text(json.dumps(assembly_record, indent=2) + "\n",
@@ -1393,6 +1401,8 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             written_outputs["ligand_mapping"] = file_facts(out_mapping)
         if assembly_record is not None:
             written_outputs["assembly"] = file_facts(out_assembly)
+        if prepared_pdb_bytes is not None:
+            written_outputs["prepared_structure"] = file_facts(out_prepared)
         if completion_record is not None:
             log.update(structure_completion=completion_record)
         protonation = (record.get("protonation") or {}).get("protonation")
