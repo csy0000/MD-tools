@@ -103,6 +103,7 @@ dependencies:
   - ambertools                # sqm/antechamber for AM1-BCC, tleap for implicit peptide topologies
   - parmed                    # prmtop/rst7 <-> OpenMM
   - rdkit                     # SMILES -> 3D conformer
+  - networkx                  # ligand-instance graph matching (md_tools.ligands.mapping); also required by openff-toolkit
   - mdtraj                    # reads the AIS source DCD and its box vectors
 
   # --- the REST2 engine ---------------------------------------------------------------------------
