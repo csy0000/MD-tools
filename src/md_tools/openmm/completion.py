@@ -129,3 +129,46 @@ def inspect_structure(topology, positions, *, missing_atoms: str = "refuse"):
         if (a.residue.chain.id, str(a.residue.id).strip(), a.residue.insertionCode or "",
             a.name) not in before]
     return fixer.topology, fixer.positions, record
+
+
+def remove_residues(topology, positions, entries):
+    """(topology, positions, record) with each `input.remove` entry's ONE residue deleted.
+
+    A selector matching no residue or several, or naming a standard protein residue, is refused:
+    the removal is a stated decision about a specific residue, never a pattern.
+    """
+    from openmm import app
+
+    from .system import PROTEIN_RESIDUES
+
+    if not entries:
+        return topology, positions, []
+    residues = list(topology.residues())
+    record, doomed = [], []
+    for n, entry in enumerate(entries):
+        select = entry["select"]
+        key = (str(select["chain"]), str(select["resid"]).strip(),
+               str(select.get("insertion_code") or "").strip())
+        matches = [r for r in residues if (r.chain.id, str(r.id).strip(),
+                                           (r.insertionCode or "").strip()) == key]
+        label = f"{key[0]}:{key[1]}{key[2]}"
+        if len(matches) != 1:
+            raise CompletionError(
+                f"input.remove[{n}] selects {label}, which matches {len(matches)} residues; it must "
+                f"name exactly one (chain ids are the expanded ones when input.assembly is set). "
+                f"Nothing was written.")
+        residue = matches[0]
+        if residue.name.upper() in PROTEIN_RESIDUES:
+            raise CompletionError(
+                f"input.remove[{n}] selects {residue.name} {label}, a standard protein residue. "
+                f"Removal is for additives and other non-protein residues; editing the protein "
+                f"belongs in the structure you supply. Nothing was written.")
+        if residue in doomed:
+            raise CompletionError(f"input.remove names {label} twice")
+        doomed.append(residue)
+        record.append({"chain": key[0], "resid": key[1], "insertion_code": key[2],
+                       "residue": residue.name, "n_atoms": len(list(residue.atoms())),
+                       "reason": str(entry["reason"]).strip()})
+    modeller = app.Modeller(topology, positions)
+    modeller.delete(doomed)
+    return modeller.topology, modeller.positions, record
