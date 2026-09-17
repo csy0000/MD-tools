@@ -15,6 +15,7 @@ precision.
 |---|---|---|---|
 | [paracetamol](cMD/paracetamol.md) | cMD | one small molecule, explicit TIP3P, 1800 atoms | ~2 min |
 | [chignolin](cMD/chignolin.md) | cMD | 10-residue peptide from 1UAO, explicit TIP3P, 2553 atoms, 1 ns at 4 fs | ~1 min |
+| [barnase–barstar](cMD/barnase-barstar.md) | cMD | protein–protein complex from 1BRS assembly 3, PROPKA protonation, explicit TIP3P, 29725 atoms, 10 ns (release after 0.5.4) | ~40 min |
 | [paracetamol](REST2/paracetamol.md) | REST2 | explicit TIP3P, 4 states, 10 ns per state, 4 GPUs | ~12 min |
 | [chignolin](REST2/chignolin.md) | REST2 | 10-residue peptide from 1UAO, explicit TIP3P, 6 states, 10 ns per state, 6 GPUs | ~8 min |
 | [alanine dipeptide](AIS/alanine.md) | AIS | from a sequence, explicit TIP3P, 2 ns source + 64 switching paths, 1 GPU | ~12 min |
