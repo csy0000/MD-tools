@@ -1027,6 +1027,21 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     out_mapping = out_system.parent / "ligand_mapping.json"
     if complex_build:
         mapped = _map_complex_ligands(structure_input, resolved, config_path)
+    elif not peptide and str(resolved["solute"]["parameters"] or "search") not in ("search",
+                                                                                  "generate"):
+        # A STATED package reference, loaded and verified here, where a refusal still leaves
+        # nothing behind. The builder loads it again when it attaches it; without this the first
+        # thing to read the package was several steps into the build, so a package that could not
+        # be loaded -- one written before it recorded which implementation charged it, say --
+        # failed after the output directory and its log already existed.
+        from ..ligands.catalog import find_package
+        from ..ligands.package import PackageError
+
+        try:
+            find_package(resolved["solute"]["parameters"],
+                         catalog_roots(resolved, config_path))
+        except PackageError as exc:
+            raise ConfigError(f"solute.parameters: {exc}") from exc
     out_ligands = out_system.parent / "ligands"
 
     existing = [p for p in (out_system, out_pdb, *([out_sdf] if out_sdf else []),

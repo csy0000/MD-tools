@@ -29,6 +29,8 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from .package import PackageError
+
 __all__ = ["CRITERIA_SCHEMA", "BACKEND_IDS", "MatchVerdict", "criteria_of_metadata",
            "matches", "requested_criteria", "topology_identity"]
 
@@ -87,7 +89,10 @@ def charge_identity(method: str, *, scheme: Optional[str], backend_id: Optional[
                     model: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """What produced the charges, named exactly enough to compare."""
     if backend_id not in BACKEND_IDS:
-        raise ValueError(
+        # PackageError, not a bare ValueError: build-top's ligand validation turns PackageError
+        # into a refusal naming the configuration key, and a bare one escaped that handler and
+        # reached the user as a traceback. PackageError IS a ValueError, so nothing else changes.
+        raise PackageError(
             f"charge backend {backend_id!r} is not one of {BACKEND_IDS}. A charge method alone "
             f"does not identify the numbers: AM1-BCC through AmberTools' sqm, through OpenEye and "
             f"through NAGL's graph model are three different results, and a package that cannot "
@@ -123,7 +128,7 @@ def requested_criteria(mol, *, charge_method: str, forcefield: str) -> dict[str,
         charges = charge_identity(method, scheme=model["name"], backend_id="openff-nagl",
                                   model=model)
     else:
-        raise ValueError(f"charge method {charge_method!r} cannot be searched for; supported: "
+        raise PackageError(f"charge method {charge_method!r} cannot be searched for; supported: "
                          f"am1bcc, am1bcc_nagl")
     return {"schema_version": CRITERIA_SCHEMA,
             "topology": topology_identity(prepared),

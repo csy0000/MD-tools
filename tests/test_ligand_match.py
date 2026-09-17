@@ -148,3 +148,32 @@ def test_an_empty_or_missing_catalog_means_parameterise(tmp_path):
 
     found, report = search_for_match(_request(_molecule("CCO")), [tmp_path / "nothing-here"])
     assert found is None and report["decision"] == "parameterise" and report["considered"] == []
+
+
+def test_a_package_that_cannot_name_its_charge_implementation_refuses_by_name(tmp_path):
+    """It is refused, and the refusal names the package -- it does not arrive as a traceback.
+
+    A package whose record cannot say which implementation produced its charges cannot be matched
+    against a build's requirements: AM1-BCC through sqm, through OpenEye and through NAGL are three
+    different results. What must not happen is a raw ValueError escaping build-top's ligand
+    validation, which is what a caller saw when a stale copy under a build's own ligands/ shadowed
+    a good catalog entry.
+    """
+    import json
+
+    from md_tools.ligands import PackageError, load_package
+
+    package = _package(tmp_path, "CCO", "CHEMBL545", "EOH")
+    metadata = json.loads((package.path / "metadata.json").read_text())
+    metadata["charges"].pop("backend_id")
+    metadata["charges"].pop("backend", None)
+    (package.path / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True))
+    (package.path / "parameter.config").unlink()
+
+    with pytest.raises(PackageError) as refused:
+        load_package(package.path)
+    message = str(refused.value)
+    assert str(package.path) in message
+    assert "charge backend" in message or "implementation" in message
+    # PackageError is a ValueError, so a caller catching either still catches this one.
+    assert isinstance(refused.value, ValueError)
