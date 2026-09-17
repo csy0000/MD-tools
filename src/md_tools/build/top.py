@@ -726,7 +726,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     suffix = input_path.suffix.lower()
     if suffix not in INPUT_SUFFIXES:
         raise ConfigError(
-            f"-i {input_path}: expected a .pdb, .seq, .smi or .sdf FILE. `-i` names a file so "
+            f"-i {input_path}: expected a .pdb, .cif, .seq, .smi or .sdf FILE. `-i` names a file so "
             f"that the input is unambiguous and can be hashed into the record; an inline "
             f"structure, sequence or SMILES string is not accepted.")
 
