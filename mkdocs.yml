@@ -107,6 +107,7 @@ nav:
       - tutorial/README.md
       - cMD:
           - Paracetamol: tutorial/cMD/paracetamol.md
+          - Chignolin: tutorial/cMD/chignolin.md
       - REST2:
           - Paracetamol: tutorial/REST2/paracetamol.md
           - Chignolin: tutorial/REST2/chignolin.md
