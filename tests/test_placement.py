@@ -282,10 +282,31 @@ def test_a_process_the_driver_does_not_list_cannot_be_verified():
 def test_a_shared_device_is_refused_unless_mps_is_verified(status):
     plan = plan_launch(_facts(4), platform="CUDA", device_policy="local_rank",
                        throughput={"node": [100.0]})
-    with pytest.raises(PlacementError, match="device 0 hosts 4 worker") as refused:
+    with pytest.raises(PlacementError, match="shares device 0 between 4 workers") as refused:
         refuse_unverified_sharing(plan, status, rank=2, where="REST2")
     assert status.status in str(refused.value)
     assert "nvidia-cuda-mps-control -d" in str(refused.value)
+
+
+def test_a_rank_alone_on_a_device_is_told_why_it_is_refused_anyway():
+    """The message that cost an hour: "device 1 hosts 1 worker(s)" beside "MPS is required whenever
+    a GPU hosts more than one worker". Both true, and together nonsense, because the rule is the
+    LAUNCH's and the number was the rank's."""
+    # Six workers, six devices, one measuring far slower than the rest -- slower hardware, or a
+    # card somebody else is using; the measurement cannot tell those apart. Placement doubles up
+    # on a fast device rather than put a worker on it, so some ranks sit alone.
+    plan = plan_launch(_facts(6, devices=6), platform="CUDA", device_policy="local_rank",
+                       throughput={"node": [13258.0, 110828.0, 118000.0, 124301.0, 120000.0,
+                                            115000.0]})
+    alone = next(rank for rank in range(6) if plan.for_rank(rank)["co_tenants"] == 1)
+    with pytest.raises(PlacementError) as refused:
+        refuse_unverified_sharing(plan, ABSENT, rank=alone, where="REST2")
+    message = str(refused.value)
+    assert "this launch shares device" in message, message
+    assert "this rank is alone on device" in message, message
+    assert "sets the pace for every rank" in message, message
+    # And the slow device carried nobody, which is why anything was shared at all.
+    assert 0 not in {plan.for_rank(rank)["device"] for rank in range(6)}, plan.assignment
 
 
 def test_a_shared_device_with_verified_mps_is_accepted_and_an_unshared_one_needs_none():
@@ -345,3 +366,29 @@ def test_a_forced_verdict_is_recorded_as_forced():
     assert forced.status == "verified" and forced.forced is True
     assert forced.record()["forced"] is True
     assert "MD_TOOLS_FORCE_MPS_VERDICT" in forced.verdict_source
+
+
+def test_the_refusal_shows_the_measurement_that_caused_the_doubling_up():
+    """A device measures slow because it IS slow or because somebody else is using it, and the
+    measurement cannot tell those apart. The refusal says so, with the numbers, rather than
+    leaving them in a record the reader has to go and find."""
+    from dataclasses import replace
+
+    plan = plan_launch(_facts(6, devices=6), platform="CUDA", device_policy="local_rank",
+                       throughput={"node": [13258.0, 110828.0, 118000.0, 124301.0, 120000.0,
+                                            115000.0]})
+    plan = replace(plan, this_rank=0, measurement={"node": {
+        "steps_per_second": [13258.0, 110828.0, 118000.0, 124301.0, 120000.0, 115000.0]}})
+    with pytest.raises(PlacementError) as refused:
+        refuse_unverified_sharing(plan, ABSENT, rank=0, where="REST2")
+    message = str(refused.value)
+    assert "Measured steps/s at preflight: device 0 13258" in message, message
+    assert "9.4x slower" in message, message
+    assert "something else on this machine is using it" in message, message
+
+
+def test_a_refusal_without_a_measurement_still_names_the_rule():
+    plan = plan_launch(_facts(4), platform="CUDA", device_policy="local_rank",
+                       throughput={"node": [100.0]})
+    with pytest.raises(PlacementError, match="Workers were placed by: measured throughput"):
+        refuse_unverified_sharing(plan, ABSENT, rank=0)
