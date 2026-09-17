@@ -110,7 +110,10 @@ def test_hydrogen_mass_repartitioning_in_the_source_does_not_change_the_package(
     mol = _molecule()
     charges = _charges(mol)
     with_hmr = _import(mol, charges, tmp_path / "a",
-                       system=_system_with_charges(mol, charges, hmr=True))
+                       system=_system_with_charges(mol, charges, hmr=True),
+                       charge_provenance={"scheme": "am1bcc", "backend": "stated by the test"})
+    assert with_hmr.metadata["charges"]["backend"] == "stated by the test"
+    assert with_hmr.metadata["charges"]["source"] == "imported"
     without = _import(mol, charges, tmp_path / "b",
                       system=_system_with_charges(mol, charges, hmr=False, constraints=False))
     assert with_hmr.parameter_id == without.parameter_id

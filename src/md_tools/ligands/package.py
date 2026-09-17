@@ -529,8 +529,13 @@ def import_package_from_system(mol, *, system, atom_indices: Sequence[int], comp
                                residue_name: str, out_root: Path, forcefield: str,
                                charge_method: str, aliases: Sequence[str] = (),
                                atom_names: Optional[Sequence[str]] = None,
-                               source: Optional[dict[str, Any]] = None) -> LigandPackage:
+                               source: Optional[dict[str, Any]] = None,
+                               charge_provenance: Optional[dict[str, Any]] = None) -> LigandPackage:
     """Recover a package from an already-built, UNSCALED System, without generating charges.
+
+    `charge_provenance` states what produced the charges in the SOURCE build -- the scheme and
+    backend its own record names -- and is stored beside `source: imported`; this function cannot
+    establish it and does not guess it.
 
     `atom_indices[i]` is the System particle of package atom i. The charges are read off the
     System; the force field then assigns every other parameter with those charges fixed, and the
@@ -569,7 +574,7 @@ def import_package_from_system(mol, *, system, atom_indices: Sequence[int], comp
     return _finish_package(
         mol=mol, names=names, raw_ffxml=raw_ffxml, reference_table=reference_table,
         compound_id=compound_id, aliases=aliases, residue_name=residue_name, resource=resource,
-        charges={"method": charge_method, "source": "imported",
+        charges={**(charge_provenance or {}), "method": charge_method, "source": "imported",
                  "note": ("read from the source System's NonbondedForce; not regenerated")},
         provenance={"route": "imported-from-system", "source": source or {},
                     "constrained_bonds_in_source": [list(p) for p in sorted(constrained)],
