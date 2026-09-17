@@ -242,6 +242,33 @@ NON_CUDA_CONTEXT_SITES = {
         "CUDA-covered would be the same false entry the AIS CV path once carried: a gap invites "
         "work, a false entry closes the question. If a CUDA post-hoc lane is ever added, this "
         "moves to CUDA_SITES and cites it.",
+    "ligands/mapping.py::_relax_hydrogens":
+        "creates a Context and minimises -- and does so on the REFERENCE platform, by name, with "
+        "every heavy atom's mass set to zero. It relaxes the hydrogens a package supplies onto a "
+        "deposited ligand pose, in vacuum, at BUILD time: tens of atoms, once per ligand "
+        "instance, before any run exists. Reference is chosen for the same reason `protonate` "
+        "relaxes added hydrogens there -- it is single-threaded and reproducible, and a built "
+        "System must be bit-identical between builds -- so this is a deliberate refusal of the "
+        "machine platform rather than an omission. `dynamics.platform` does not reach it and "
+        "`--cpu` does not either. If it ever takes the machine platform it becomes a CUDA site "
+        "and needs a lane; today a CUDA lane over it would prove nothing about any run.",
+    "ligands/mapping.py::map_ligands":
+        "copies the periodic box from the input structure onto the topology it rebuilds: "
+        "`Topology.getPeriodicBoxVectors` and `Topology.setPeriodicBoxVectors`, which are "
+        "`openmm.app.Topology` accessors and share their spelling with the Context ones. No "
+        "Context, no System and no platform are involved -- this function maps ligand residues "
+        "onto parameter packages and hands back a topology.",
+    "ligands/package.py::_subsystem_table":
+        "walks `System.getForces()` -- the host-side list of Force OBJECTS, not `State.getForces`, "
+        "which is the device-derived array of the same name -- to read a ligand's parameters out "
+        "of an already-built System: charges, Lennard-Jones, bonds, angles, torsions, exceptions "
+        "and constraint lengths. Every call is a Force accessor; nothing is evaluated and no "
+        "Context exists.",
+    "ligands/package.py::import_package_from_system":
+        "the same `System.getForces()` list, to find the one NonbondedForce whose particle "
+        "parameters carry the charges being recovered. Host-side accessors on a deserialised "
+        "System; the recovery runs no dynamics and creates no Context, which is why it can verify "
+        "a package on a machine with no GPU at all.",
     "md/completion.py::verify_completed_stage":
         "deserialises the final State FROM XML ON DISK to re-read its particle count. The same "
         "getPositions spelling as a live Context, but the object is a file's contents -- the "
