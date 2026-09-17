@@ -43,14 +43,48 @@ def test_a_package_declares_what_a_build_must_match(tmp_path):
     assert criteria["charges"]["backend_id"] == "ambertools-sqm"
     assert criteria["forcefield"]["resource"] == "openff-2.2.1"
     assert criteria["topology"]["n_heavy_atoms"] == 11
-    # It is derived, so editing it by hand is caught rather than believed.
+    # Written under the CURRENT schema, so editing it by hand is caught rather than believed.
     from md_tools.ligands import PackageError, load_package
+    from md_tools.ligands.match import CRITERIA_SCHEMA
 
+    assert criteria["schema_version"] == CRITERIA_SCHEMA
     text = (package.path / "parameter.config").read_text()
     (package.path / "parameter.config").write_text(
         text.replace("backend_id: ambertools-sqm", "backend_id: openeye"))
     with pytest.raises(PackageError, match="does not describe this package"):
         load_package(package.path)
+
+
+def test_a_declaration_from_another_schema_is_re_derived_not_contradicted(tmp_path):
+    """Version skew is not corruption, and must not read as it.
+
+    A parameter.config states the vocabulary it was written in. This version derives a different
+    one, so comparing them field by field would refuse packages whose parameters are perfect --
+    which is exactly what happened when one key was added to the derived document and every file
+    on disk began failing. The file is derived from metadata.json, so re-deriving an old one is no
+    more than what an ABSENT one already does. Strict equality still applies WITHIN a schema.
+    """
+    from md_tools.ligands import load_package
+    from md_tools.ligands.catalog import search_for_match
+    from md_tools.ligands.match import CRITERIA_SCHEMA
+
+    package = _package(tmp_path, "CCO", "CHEMBL545", "EOH")
+    text = (package.path / "parameter.config").read_text()
+    # An older vocabulary: another version string, and a field this version would not write.
+    older = text.replace(f"schema_version: {CRITERIA_SCHEMA}",
+                         "schema_version: md-tools-ligand-criteria/0") + "a_retired_field: 7\n"
+    (package.path / "parameter.config").write_text(older, encoding="utf-8")
+
+    loaded = load_package(package.path)
+    assert loaded.criteria["declared_in_package"] is True
+    assert loaded.criteria["declaration_schema"] == "md-tools-ligand-criteria/0"
+    assert loaded.criteria["declaration_is_current"] is False
+    assert loaded.criteria["charges"]["backend_id"] == "ambertools-sqm"
+
+    # And it is still reusable: the criteria that decide a match are the derived ones.
+    found, report = search_for_match(_request(_molecule("CCO")), [tmp_path / "catalog"])
+    assert found is not None and found.reference == package.reference
+    assert report["decision"] == "reuse"
 
 
 @pytest.mark.parametrize("difference", ["none", "protonation", "topology", "charge-backend",
@@ -150,18 +184,20 @@ def test_an_empty_or_missing_catalog_means_parameterise(tmp_path):
     assert found is None and report["decision"] == "parameterise" and report["considered"] == []
 
 
-def test_a_package_that_cannot_name_its_charge_implementation_refuses_by_name(tmp_path):
-    """It is refused, and the refusal names the package -- it does not arrive as a traceback.
+def test_a_package_that_does_not_record_its_charge_implementation_loads_but_never_matches(
+        tmp_path):
+    """The acceptance rule for packages written before the implementation was recorded.
 
-    A package whose record cannot say which implementation produced its charges cannot be matched
-    against a build's requirements: AM1-BCC through sqm, through OpenEye and through NAGL are three
-    different results. What must not happen is a raw ValueError escaping build-top's ligand
-    validation, which is what a caller saw when a stale copy under a build's own ligands/ shadowed
-    a good catalog entry.
+    They LOAD, because their numbers are whatever they are and nothing about them changed, and a
+    configuration may name one explicitly -- that is the user saying they know what it is. What
+    they must never do is satisfy a SEARCH, because "am1bcc" alone does not identify a result:
+    AM1-BCC through sqm, through OpenEye and through NAGL are three different ones. The two cases
+    are distinguishable in the criteria, not only in a log.
     """
     import json
 
-    from md_tools.ligands import PackageError, load_package
+    from md_tools.ligands import load_package
+    from md_tools.ligands.catalog import find_package, search_for_match
 
     package = _package(tmp_path, "CCO", "CHEMBL545", "EOH")
     metadata = json.loads((package.path / "metadata.json").read_text())
@@ -170,10 +206,58 @@ def test_a_package_that_cannot_name_its_charge_implementation_refuses_by_name(tm
     (package.path / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True))
     (package.path / "parameter.config").unlink()
 
-    with pytest.raises(PackageError) as refused:
-        load_package(package.path)
-    message = str(refused.value)
-    assert str(package.path) in message
-    assert "charge backend" in message or "implementation" in message
-    # PackageError is a ValueError, so a caller catching either still catches this one.
-    assert isinstance(refused.value, ValueError)
+    legacy = load_package(package.path)
+    assert legacy.parameter_id == package.parameter_id
+    assert legacy.criteria["charges"]["backend_id"] is None
+    assert legacy.criteria["charges"]["backend_recorded"] is False
+    assert legacy.summary()["charge_backend_recorded"] is False
+
+    # Named explicitly, it resolves: the numbers are unchanged and the user chose this package.
+    assert find_package(package.reference, [tmp_path / "catalog"]).reference == package.reference
+
+    # Searched for, it is never the answer, and the report says why in those words.
+    found, report = search_for_match(_request(_molecule("CCO")), [tmp_path / "catalog"])
+    assert found is None and report["decision"] == "parameterise"
+    row = next(c for c in report["considered"] if c["reference"] == package.reference)
+    assert row["compared"]["topology"] == "same" and row["compared"]["protonation"] == "same"
+    assert "does not record which implementation" in row["compared"]["charges"]
+
+
+def test_a_new_package_must_still_record_its_charge_implementation(tmp_path):
+    """Tolerance is for packages that already exist, never for ones being written now."""
+    from md_tools.ligands import PackageError, import_package_from_system
+    from tests.test_ligand_packages import _charges, _system_with_charges
+
+    mol = _molecule("CCO")
+    charges = _charges(mol)
+    with pytest.raises(PackageError, match="backend_id"):
+        import_package_from_system(mol, system=_system_with_charges(mol, charges),
+                                   atom_indices=range(mol.GetNumAtoms()),
+                                   compound_id="CHEMBL545", residue_name="EOH",
+                                   out_root=tmp_path / "new", forcefield="sage-2.2.1",
+                                   charge_method="am1bcc")
+    assert not (tmp_path / "new").exists()
+
+
+@pytest.mark.parametrize("declaration", ["absent", "another schema"])
+def test_the_directory_identity_is_checked_whatever_the_declaration_says(tmp_path, declaration):
+    """The identity checks must not be skipped by the paths that re-derive the criteria.
+
+    They used to sit after the criteria handling, so a package whose declaration was missing or
+    written under another schema returned before reaching them: a renamed directory loaded.
+    """
+    from md_tools.ligands import PackageError, load_package
+    from md_tools.ligands.match import CRITERIA_SCHEMA
+
+    package = _package(tmp_path, "CCO", "CHEMBL545", "EOH")
+    if declaration == "absent":
+        (package.path / "parameter.config").unlink()
+    else:
+        text = (package.path / "parameter.config").read_text()
+        (package.path / "parameter.config").write_text(
+            text.replace(f"schema_version: {CRITERIA_SCHEMA}",
+                         "schema_version: md-tools-ligand-criteria/0"), encoding="utf-8")
+
+    renamed = package.path.rename(package.path.with_name("param_000000000000"))
+    with pytest.raises(PackageError, match="a directory label is not an identity"):
+        load_package(renamed)

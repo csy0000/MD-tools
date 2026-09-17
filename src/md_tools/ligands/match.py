@@ -31,10 +31,24 @@ from typing import Any, Optional
 
 from .package import PackageError
 
-__all__ = ["CRITERIA_SCHEMA", "BACKEND_IDS", "MatchVerdict", "criteria_of_metadata",
+__all__ = ["CRITERIA_SCHEMA", "TOPOLOGY_SCHEME", "BACKEND_IDS", "MatchVerdict", "criteria_of_metadata",
            "matches", "requested_criteria", "topology_identity"]
 
-CRITERIA_SCHEMA = "md-tools-ligand-criteria/1"
+#: The shape of a criteria document. BUMPED whenever the derived document gains or loses a field,
+#: because a stored `parameter.config` is compared with a freshly derived one: without a version
+#: that moves, a file written by older code and a file that genuinely disagrees with its package
+#: are indistinguishable, and adding one key made every existing file read as a contradiction.
+CRITERIA_SCHEMA = "md-tools-ligand-criteria/2"
+
+#: A stored document that states a different schema is RE-DERIVED rather than compared: it was
+#: written in another vocabulary, which is not the same as disagreeing with its package. Strict
+#: equality applies within one schema, and that is what catches an edited catalog.
+
+#: The namespace the heavy-atom skeleton digest is computed in. SEPARATE from CRITERIA_SCHEMA, and
+#: it does not move with it: the digest identifies a molecule's skeleton, and if it were derived
+#: from the document's version then adding a field elsewhere would change what every stored
+#: digest is compared against. It changes only if the skeleton canonicalisation itself changes.
+TOPOLOGY_SCHEME = "md-tools-ligand-topology/1"
 
 #: The charge implementations this package can name. A record that cannot say which one ran is
 #: refused rather than written: "am1bcc" alone does not identify the numbers.
@@ -80,15 +94,28 @@ def topology_identity(mol) -> dict[str, Any]:
     smiles = Chem.MolToSmiles(skeleton.GetMol(), canonical=True)
     key = Chem.MolToInchiKey(Chem.RemoveHs(Chem.Mol(mol))) or ""
     return {"skeleton_smiles": smiles,
-            "skeleton_digest": hashlib.sha256(f"{CRITERIA_SCHEMA}|{smiles}".encode()).hexdigest(),
+            "skeleton_digest": hashlib.sha256(f"{TOPOLOGY_SCHEME}|{smiles}".encode()).hexdigest(),
             "standard_inchikey_skeleton": key.split("-")[0] if key else None,
             "n_heavy_atoms": skeleton.GetMol().GetNumAtoms()}
 
 
 def charge_identity(method: str, *, scheme: Optional[str], backend_id: Optional[str],
-                    model: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """What produced the charges, named exactly enough to compare."""
+                    model: Optional[dict[str, Any]] = None,
+                    allow_unknown: bool = False) -> dict[str, Any]:
+    """What produced the charges, named exactly enough to compare.
+
+    `allow_unknown` is for READING a package written before the implementation was recorded. Such
+    a package loads and can be used when a configuration names it explicitly -- its numbers are
+    whatever they are, and nothing about them changed -- but `backend_recorded: false` travels
+    with it and `matches` never lets it satisfy a search. Requesting charges is never unknown: a
+    build always knows which implementation it would run.
+    """
     if backend_id not in BACKEND_IDS:
+        if backend_id is None and allow_unknown:
+            return {"method": str(method), "scheme": scheme, "backend_id": None,
+                    "backend_recorded": False,
+                    "model": ({"name": model.get("name"), "sha256": model.get("sha256")}
+                              if model else None)}
         # PackageError, not a bare ValueError: build-top's ligand validation turns PackageError
         # into a refusal naming the configuration key, and a bare one escaped that handler and
         # reached the user as a traceback. PackageError IS a ValueError, so nothing else changes.
@@ -98,6 +125,7 @@ def charge_identity(method: str, *, scheme: Optional[str], backend_id: Optional[
             f"through NAGL's graph model are three different results, and a package that cannot "
             f"say which one produced it cannot be reused safely.")
     return {"method": str(method), "scheme": scheme, "backend_id": backend_id,
+            "backend_recorded": True,
             "model": ({"name": model.get("name"), "sha256": model.get("sha256")}
                       if model else None)}
 
@@ -150,9 +178,11 @@ def criteria_of_metadata(metadata: dict[str, Any], mol) -> dict[str, Any]:
             "topology": topology_identity(mol),
             "protonation": {k: state[k] for k in
                             ("digest", "fixed_h_inchikey", "net_formal_charge", "canonical_smiles")},
+            # allow_unknown: a package written before the implementation was recorded still
+            # loads. `matches` refuses to reuse it; see `charge_identity`.
             "charges": charge_identity(charges["method"], scheme=charges.get("scheme"),
                                        backend_id=charges.get("backend_id"),
-                                       model=charges.get("model")),
+                                       model=charges.get("model"), allow_unknown=True),
             "forcefield": {"family": metadata["forcefield"]["family"],
                            "resource": metadata["forcefield"]["resource"]}}
 
@@ -175,6 +205,15 @@ def matches(request: dict[str, Any], candidate: dict[str, Any]) -> MatchVerdict:
             why = "same" if same else (f"a different chemical state ({have['canonical_smiles']} is "
                                        f"not {want['canonical_smiles']})")
         elif name == "charges":
+            if not have.get("backend_recorded", True) or have.get("backend_id") is None:
+                # NEVER a match. The package's numbers may be anything; what is missing is which
+                # implementation produced them, and "am1bcc" alone does not identify a result. A
+                # configuration may still name this package explicitly -- that is the user saying
+                # they know what it is -- but a search must not present it as reuse of known
+                # charges.
+                reasons[name] = ("the package does not record which implementation produced its "
+                                 "charges, so it can be used only by naming it explicitly")
+                return MatchVerdict(False, reasons, notes)
             same = (want["method"] == have["method"] and want["scheme"] == have["scheme"]
                     and want["backend_id"] == have["backend_id"] and want["model"] == have["model"])
             why = "same" if same else (
@@ -190,3 +229,4 @@ def matches(request: dict[str, Any], candidate: dict[str, Any]) -> MatchVerdict:
         if not same:
             return MatchVerdict(False, reasons, notes)
     return MatchVerdict(True, reasons, notes)
+
