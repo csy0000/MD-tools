@@ -11,10 +11,15 @@ the release, without blocking implementation.
 
 ## 1. Objective and boundaries
 
-Make MD-tools prepare reproducible multi-component systems, reuse ligand parameters across
-projects, assign protein protonation with PROPKA3, run REST2 replicas and AIS paths
-concurrently on shared CUDA GPUs, and give AIS a second switching schedule and a correct
-evenly spaced source-frame selection. Demonstrate the preparation workflow through a 4A9K
+**Reusable ligand parameters are the most important feature of this release** (the user,
+2026-09-17): one compound keeps IDENTICAL parameters in every environment it is simulated in --
+water, lipid, organic solvent, protein -- so results across systems are comparable at all.
+Registering a package into the shared catalog `$MD_DATA/parameters/ligands/<ChEMBL ID>/<parameter-id>/`
+is a RELEASE REQUIREMENT, not an option, and CHEMBL112 (paracetamol) is its first entry.
+
+Around that: prepare reproducible multi-component systems, assign protein protonation with
+PROPKA3, run REST2 replicas and AIS paths concurrently on shared CUDA GPUs, and give AIS a second
+switching schedule and a correct evenly spaced source-frame selection. Demonstrate the preparation workflow through a 4A9K
 protein–paracetamol tutorial and a 1BRS barnase–barstar protein–protein tutorial, each with
 10 ns conventional MD.
 
@@ -44,7 +49,7 @@ Separate three identities:
 
 Use the proposed shared catalog location:
 
-    $MD_DATA/parameters/ligands/<compound-id>/<parameter-id>/
+    $MD_DATA/parameters/ligands/<ChEMBL ID>/<parameter-id>/
         molecule.sdf
         parameters.ffxml
         metadata.json
@@ -260,10 +265,8 @@ identity, so an existing run directory with the old selection is refused, not si
 
 ### 4A9K protein–paracetamol
 
-Changed by the user on 2026-09-17: the protein–paracetamol tutorial uses **4A9K** (CREBBP
-bromodomain with N-(4-hydroxyphenyl)acetamide, residue TYL; X-ray, 1.81 Å) instead of 1TYL, so
-that no metal site has to be parameterized. The 1TYL insulin-hexamer and MCPB.py zinc-site work
-is out of this release (section 9).
+The protein–paracetamol tutorial is **4A9K** (CREBBP bromodomain with
+N-(4-hydroxyphenyl)acetamide, residue TYL; X-ray, 1.81 Å). No metal site has to be parameterized.
 
 Scope: preparation, equilibration and 10 ns production cMD only. No REST2 or AIS production
 campaign is required for this tutorial.
@@ -326,6 +329,7 @@ limitations of a 10 ns run.
 
 | Area | Required evidence |
 | --- | --- |
+| Catalog registration (release requirement) | CHEMBL112/<parameter-id> registered under `$MD_DATA/parameters/ligands/`, reachable from a fresh build, with the record naming the catalog path and digests; a build that reuses it runs no charge generation. |
 | Parameter reuse | Same package digests and ligand per-atom/bonded/nonbonded parameters in ligand-only and complex builds; no charge-generation call on reuse. Validate isolated-ligand energies/forces at common coordinates, not whole-system energies against each other. |
 | Mapping | Repeated copies and a distinct second ligand map correctly; reordered atoms give equivalent physical parameters/energies; ambiguous selectors, mismatched chemical states and incompatible packages are rejected. |
 | Protonation | Real PROPKA integration fixture, deterministic prediction-to-variant mapping, explicit overrides, unsupported-group reporting, near-ligand/ion warnings and preserved ligand hydrogens. An ordinary nonproximal histidine does not spuriously trigger proximity warnings. |
@@ -346,7 +350,8 @@ For each criterion report the commit, environment, exact command, inputs, expect
 observed result and evidence location. Do not claim old hardware reservations remain valid.
 Acquire currently available resources. Record hardware-blocked tests explicitly.
 
-Recommended implementation order: (1) package identity/reuse and multi-component mapping,
+Recommended implementation order, most important first: (1) package identity, reuse, catalog
+registration and multi-component mapping,
 (2) PROPKA and warnings, (3) tutorial builds and cMD, (4) concurrent CUDA/MPS validation with
 the core and placement rules, (5) AIS schedules and frame selection (independent of 1–4, can
 start at once), (6) registration/export and release evidence.
@@ -398,14 +403,6 @@ import assignments from external preparation software. Automatic general ligand 
 enumeration, quantitative metal-site pKa treatment and constant-pH MD are not in this release.
 The present predictor/override records should allow these additions without changing the
 meaning of existing parameter packages.
-
-### General metal-site preparation
-
-General automated MCPB.py/QM orchestration, transferable metal-site libraries, alternative
-12-6-4 or dummy-atom models, and coordination-exchange simulations are deferred. So is the
-1TYL insulin-hexamer tutorial (biological assembly 3, site-specific MCPB.py zinc parameters
-fitted with QM), which the 4A9K tutorial replaced in this release; no QM program is installed on
-the development machine.
 
 ## 10. Reference entry points
 
