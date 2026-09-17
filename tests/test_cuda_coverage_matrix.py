@@ -89,6 +89,26 @@ CUDA_SITES = {
         "the ladder's preflight resolved -- restraint strength pushed in after the configuration, "
         "`integrator.step`, and the equilibrated positions, velocities and box read back",
         "test_rest2_equilibration_per_tau_cuda.py::test_per_tau_equilibration_under_mpi_on_cuda"),
+    "openmm/placement.py::measure_device_throughput": (
+        "the measurement every multi-worker placement is decided from: one CUDA Context per "
+        "VISIBLE device in turn, over this run's own System, warmed up and then integrated for "
+        "about a second, and the steps per second of each. It is real device work -- a Context, "
+        "an integrator and thousands of steps per card -- done before any output exists, and it "
+        "is why a slower card carries fewer workers",
+        # A --cpu file would not be evidence for this: the function is only reached on CUDA.
+        "test_placement_cuda.py::test_the_throughput_measurement_runs_on_every_visible_device "
+        "(4 ranks, 4 cards, asserts a positive rate per card)"),
+    "run/preflight.py::_verify_mps": (
+        "opens a one-particle CUDA Context on THIS rank's device and, while it is held, asks the "
+        "driver whether this process is listed as an MPS client (`M+C`) or an ordinary CUDA one "
+        "(`C`). The Context is the point: a process that holds none is not listed at all, so the "
+        "verdict could not be read. It runs only when a device hosts more than one worker",
+        # Both verdicts, on hardware: the refusal path with no reachable daemon, and the accepted
+        # path as a real client of one. Neither is arrangeable on the CPU.
+        "test_placement_cuda.py::test_four_workers_on_one_card_are_refused_without_mps_and_write_"
+        "nothing (verdict `C`), test_four_workers_share_one_card_with_mps_and_the_ladder_completes "
+        "and test_twelve_workers_on_four_cards_run_together_under_mps (verdict `M+C`; both need a "
+        "daemon this process can reach, and SKIP rather than pass without one)"),
     "openmm/platform_policy.py::_prove_cuda_initialises": (
         "opens a one-particle CUDA Context to prove the platform works before any output exists",
         "test_platform_policy.py, and every preflight in every lane below"),
