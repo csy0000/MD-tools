@@ -369,10 +369,11 @@ recorded:
 | status | meaning |
 |---|---|
 | `requested-not-detected` | `CUDA_MPS_PIPE_DIRECTORY` is set, and no control daemon serves it |
-| `detected-unverified` | a daemon is running with its `control` pipe in this process's pipe directory; nothing yet says this process is its client |
+| `detected-unverified` | the pipe directory's `nvidia-cuda-mps-control.pid` names a live daemon; nothing yet says this process is its client |
+| `unknown` | the directory holds sockets but no pid file, so it cannot be attributed to a live daemon — a stopped one leaves `control` behind — or the process table could not be read |
 | `verified` | while this worker holds a Context, `nvidia-smi -q -x` lists its PID as an MPS client (`M+C`) |
 | `not-a-client` | the driver lists the worker as an ordinary CUDA process (`C`): the daemon exists, but this process is not using it |
-| `absent` / `unknown` | no daemon; or the process table could not be read |
+| `absent` | no daemon, and none was asked for |
 
 MD-tools never starts, stops or talks to an MPS daemon: it is a shared service that someone else
 may own. To run with one you started yourself:
@@ -391,8 +392,27 @@ echo quit | nvidia-cuda-mps-control                 # stop it: only a daemon you
 
 A client finds the daemon only through `CUDA_MPS_PIPE_DIRECTORY` (default `/tmp/nvidia-mps`); a
 worker launched without it runs as an ordinary CUDA process and says nothing, which is why
-detection is not verification. The daemon's own `CUDA_VISIBLE_DEVICES` limits which GPUs its
-clients can use.
+detection is not verification.
+
+Two properties of a daemon bite hard enough to be worth stating, and both were learned by being
+caught by them on this machine:
+
+**A daemon on the DEFAULT pipe directory captures the whole host.** Every new CUDA process that
+does not set `CUDA_MPS_PIPE_DIRECTORY` is routed through it, including runs that know nothing about
+MPS and jobs belonging to other people. Start one on a private directory, as above, unless
+capturing the host is what you meant.
+
+**A client addresses the daemon's devices as `0..n-1` of the set the DAEMON was started with**, not
+by their physical numbers. A daemon started with `CUDA_VISIBLE_DEVICES=4,5,6,7` serves four
+devices, and its clients ask for `0,1,2,3`. Asking such a client for `4,5,6,7` gives
+`CUDA_ERROR_NO_DEVICE (100)`; so does asking for a card the daemon does not hold, while
+`nvidia-smi` shows that card idle and healthy. A run that is not a client keeps the physical
+numbering, so the same list means two different things depending on whether MPS is reached — which
+is why a launch that switches between them must switch its device list too.
+
+A stopped daemon leaves `control`, `control_lock` and `control_privileged` behind and removes its
+`nvidia-cuda-mps-control.pid`, so the pid file is what the status is read from: sockets alone are
+reported as `unknown`, never as a running daemon.
 
 The run record carries the whole plan under `acceleration.placement`: every worker's host, local
 rank, CPU block and the CPUs the launcher had bound it to, its device and how many workers share

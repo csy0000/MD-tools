@@ -184,33 +184,71 @@ def test_the_openmm_policy_is_sharing_unless_every_worker_was_given_its_own_devi
 
 # --- MPS ------------------------------------------------------------------------------------
 
+def _pipe(tmp_path, *, control=True, pid=None):
+    if control:
+        (tmp_path / "control").write_text("")
+        (tmp_path / "control_lock").write_text("")
+    if pid is not None:
+        (tmp_path / "nvidia-cuda-mps-control.pid").write_text(f"{pid}\n")
+    return {"CUDA_MPS_PIPE_DIRECTORY": str(tmp_path)}
+
+
 def test_no_daemon_and_no_request_is_absent(tmp_path):
     status = read_mps_status({}, process_running=lambda name: False)
     assert status.status == "absent" and not status.requested
 
 
 def test_a_request_without_a_daemon_is_not_detection(tmp_path):
-    status = read_mps_status({"CUDA_MPS_PIPE_DIRECTORY": str(tmp_path)},
+    status = read_mps_status(_pipe(tmp_path, control=False),
                              process_running=lambda name: False)
     assert status.requested and status.status == "requested-not-detected"
 
 
 def test_a_daemon_on_another_pipe_directory_is_not_detected_for_this_process(tmp_path):
-    status = read_mps_status({"CUDA_MPS_PIPE_DIRECTORY": str(tmp_path)},
-                             process_running=lambda name: True)
+    status = read_mps_status(_pipe(tmp_path, control=False), process_running=lambda name: True)
     assert status.daemon == "not-running", status
     assert "different pipe directory" in status.detail
 
 
-def test_a_daemon_with_its_control_pipe_is_detected_but_not_verified(tmp_path):
-    (tmp_path / "control").write_text("")
-    status = read_mps_status({"CUDA_MPS_PIPE_DIRECTORY": str(tmp_path)},
-                             process_running=lambda name: True)
-    assert status.status == "detected-unverified"
+def test_a_pid_file_naming_a_live_daemon_is_detection(tmp_path):
+    status = read_mps_status(_pipe(tmp_path, pid=4242),
+                             process_running=lambda name: True,
+                             pid_is=lambda name, pid: pid == 4242)
+    assert status.status == "detected-unverified" and "4242" in status.detail
+
+
+def test_a_pid_file_naming_a_dead_daemon_is_a_stopped_one(tmp_path):
+    """The sockets outlive the daemon. `control` existing is not a daemon existing."""
+    status = read_mps_status(_pipe(tmp_path, pid=4242),
+                             process_running=lambda name: True,
+                             pid_is=lambda name, pid: False)
+    assert status.daemon == "not-running", status
+    assert "has stopped" in status.detail
+
+
+def test_sockets_with_no_pid_file_are_unknown_rather_than_running(tmp_path):
+    """A leftover directory looked exactly like a live daemon, and another daemon elsewhere on the
+    host made the process check agree. Unknown permits nothing, so saying so costs nothing."""
+    status = read_mps_status(_pipe(tmp_path), process_running=lambda name: True)
+    assert status.status == "unknown", status
+    assert "leaves its sockets behind" in status.detail
+
+    alone = read_mps_status(_pipe(tmp_path), process_running=lambda name: False)
+    assert alone.daemon == "not-running" and "leftover sockets" in alone.detail
 
 
 def test_an_unreadable_process_table_is_unknown_not_absent():
     assert read_mps_status({}, process_running=lambda name: None).status == "unknown"
+
+
+def test_the_process_check_truncates_the_name_the_way_the_kernel_does(tmp_path):
+    """`pgrep nvidia-cuda-mps-control` matches nothing: /proc/<pid>/comm holds 15 characters."""
+    from md_tools.openmm import placement as module
+
+    (tmp_path / "77" ).mkdir()
+    (tmp_path / "77" / "comm").write_text("nvidia-cuda-mps\n")
+    assert module._pid_is("nvidia-cuda-mps-control", 77, proc=tmp_path) is True
+    assert module._pid_is("nvidia-cuda-mps-control", 78, proc=tmp_path) is False
 
 
 def _smi(*processes):

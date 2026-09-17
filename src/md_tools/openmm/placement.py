@@ -113,9 +113,12 @@ class MpsStatus:
             return "not-a-client"
         if self.daemon == "running":
             return "detected-unverified"
-        if self.requested:
-            return "requested-not-detected"
-        return "absent" if self.daemon == "not-running" else "unknown"
+        # UNKNOWN OUTRANKS REQUESTED. A directory that cannot be attributed to a live daemon is
+        # not the same fact as a daemon that is not there, and reporting the request instead would
+        # let `requested-not-detected` stand for "we could not tell".
+        if self.daemon == "unknown":
+            return "unknown"
+        return "requested-not-detected" if self.requested else "absent"
 
     def with_verification(self, verified: bool | None, detail: str) -> "MpsStatus":
         return MpsStatus(requested=self.requested, pipe_directory=self.pipe_directory,
@@ -212,39 +215,91 @@ def _process_running(name: str, *, proc: Path = Path("/proc")) -> bool | None:
     return False
 
 
+def _pid_is(name: str, pid: int, *, proc: Path = Path("/proc")) -> bool | None:
+    """Is `pid` alive and running `name`? None when /proc will not say.
+
+    The comm the kernel exposes is truncated to 15 characters, so the NAME is truncated the same
+    way before comparing -- which is also why `pgrep nvidia-cuda-mps-control` matches nothing
+    whatever the truth, and why this does not use it. One consequence stated rather than papered
+    over: the control daemon and its server are indistinguishable by comm, so the pipe directory
+    is what makes the status specific.
+    """
+    try:
+        return (proc / str(int(pid)) / "comm").read_text().strip() == name[:15]
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+
+
 def read_mps_status(environment: Mapping[str, str] | None = None, *,
-                    process_running: Callable[[str], bool | None] = _process_running
-                    ) -> MpsStatus:
+                    process_running: Callable[[str], bool | None] = _process_running,
+                    pid_is: Callable[[str, int], bool | None] = _pid_is) -> MpsStatus:
     """Requested and detected. Verification needs a live Context: `verify_mps_client`.
 
     Never starts, stops or talks to the daemon. Asking `nvidia-cuda-mps-control` a question is a
-    conversation with a shared service somebody else may own; the process table and the pipe
-    directory answer "is one there" without it.
+    conversation with a shared service somebody else may own; the pipe directory and the process
+    table answer "is one there" without it.
+
+    THE PID FILE IS THE EVIDENCE, not the socket. A daemon that has been stopped leaves `control`,
+    `control_lock` and `control_privileged` behind and takes its `.pid` file with it, so "the
+    control pipe exists" reported a daemon that had been shut down half an hour earlier -- and a
+    second daemon running elsewhere on the host made the process check agree with it. A directory
+    with sockets and no pid file is therefore UNKNOWN rather than running: it may be a live daemon
+    that has not written one, or a leftover, and nothing here can tell which. Unknown permits
+    nothing -- only `verified` does -- so the honest answer costs nothing.
     """
     environment = os.environ if environment is None else environment
     pipe = environment.get("CUDA_MPS_PIPE_DIRECTORY") or MPS_DEFAULT_PIPE_DIRECTORY
+    requested = bool(environment.get("CUDA_MPS_PIPE_DIRECTORY"))
+    directory = Path(pipe)
+    control = directory / "control"
+    pid_file = directory / f"{MPS_CONTROL_PROCESS}.pid"
+
+    def status(daemon: str, detail: str) -> MpsStatus:
+        return MpsStatus(requested=requested, pipe_directory=pipe, daemon=daemon,
+                         environment={name: environment.get(name) for name in MPS_ENVIRONMENT},
+                         detail=detail)
+
+    try:
+        recorded = int(pid_file.read_text().split()[0]) if pid_file.is_file() else None
+    except (OSError, ValueError, IndexError):
+        recorded = None
+
+    if recorded is not None:
+        alive = pid_is(MPS_CONTROL_PROCESS, recorded)
+        if alive is True:
+            return status("running", f"{pipe}/{pid_file.name} names pid {recorded}, which is "
+                                     f"running {MPS_CONTROL_PROCESS}")
+        if alive is False:
+            return status("not-running", f"{pipe}/{pid_file.name} names pid {recorded}, which is "
+                                         f"not running: the daemon it belonged to has stopped")
+        return status("unknown", f"pid {recorded} from {pipe}/{pid_file.name} could not be "
+                                 f"checked in /proc")
+
     running = process_running(MPS_CONTROL_PROCESS)
-    control = Path(pipe) / "control"
     if running is None:
-        daemon, detail = "unknown", "the process table could not be read"
-    elif running and control.exists():
-        daemon, detail = "running", f"{MPS_CONTROL_PROCESS} is running and {control} exists"
-    elif running:
-        daemon, detail = "not-running", (
-            f"{MPS_CONTROL_PROCESS} is running but {control} does not exist: this process looks "
-            f"for the daemon in {pipe}, and the daemon is serving a different pipe directory. "
-            f"Set CUDA_MPS_PIPE_DIRECTORY to the directory it was started with.")
-    else:
-        daemon, detail = "not-running", f"no {MPS_CONTROL_PROCESS} process on this host"
-    return MpsStatus(requested=bool(environment.get("CUDA_MPS_PIPE_DIRECTORY")),
-                     pipe_directory=pipe, daemon=daemon,
-                     environment={name: environment.get(name) for name in MPS_ENVIRONMENT},
-                     detail=detail)
+        return status("unknown", "the process table could not be read")
+    if not control.exists():
+        return status("not-running",
+                      f"no control pipe in {pipe}" + (
+                          f", though a {MPS_CONTROL_PROCESS} process is running on this host: it "
+                          f"serves a different pipe directory, and a client reaches a daemon only "
+                          f"through CUDA_MPS_PIPE_DIRECTORY" if running else ""))
+    if running:
+        return status("unknown",
+                      f"{pipe} holds a control pipe and no {pid_file.name}, and a "
+                      f"{MPS_CONTROL_PROCESS} process is running on this host. A stopped daemon "
+                      f"leaves its sockets behind, so this cannot be attributed to a live one.")
+    return status("not-running", f"{pipe} holds a control pipe but no {MPS_CONTROL_PROCESS} "
+                                 f"process is running: leftover sockets from a stopped daemon")
 
 
 #: Test seam: `verified` or `not-a-client` stands in for the driver's verdict in a child process,
-#: so the refusal and acceptance paths run through the real command on a machine with no daemon.
-#: Never set in normal use.
+#: so both paths run through the real command on a machine whose daemon state cannot be arranged.
+#: Never set in normal use, and never used to make a shared-GPU run that the rule refuses LOOK
+#: acceptable: a timing measured that way is a timing of a configuration the product does not
+#: allow.
 FORCE_MPS_VERDICT = "MD_TOOLS_FORCE_MPS_VERDICT"
 
 
