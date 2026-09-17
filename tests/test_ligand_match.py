@@ -121,6 +121,28 @@ def test_the_search_reports_what_it_considered_and_why(tmp_path):
     assert len(skipped) == 1 and "could not be read" in skipped[0]["skipped"]
 
 
+def test_a_package_written_before_the_criteria_file_still_loads_and_is_searchable(tmp_path):
+    """A build on an earlier commit wrote three files. Those packages are older, not incomplete.
+
+    Refusing them would break builds and reference bundles that carry a copy, so the criteria are
+    derived from metadata.json instead, which is where they come from in the first place.
+    """
+    from md_tools.ligands import load_package
+    from md_tools.ligands.catalog import search_for_match
+
+    package = _package(tmp_path, "CCO", "CHEMBL545", "EOH")
+    (package.path / "parameter.config").unlink()
+
+    legacy = load_package(package.path)
+    assert legacy.criteria["declared_in_package"] is False
+    assert legacy.criteria["charges"]["backend_id"] == "ambertools-sqm"
+    assert legacy.parameter_id == package.parameter_id
+
+    found, report = search_for_match(_request(_molecule("CCO")), [tmp_path / "catalog"])
+    assert found is not None and found.reference == package.reference
+    assert report["decision"] == "reuse"
+
+
 def test_an_empty_or_missing_catalog_means_parameterise(tmp_path):
     from md_tools.ligands.catalog import search_for_match
 

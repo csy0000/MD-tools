@@ -156,14 +156,19 @@ def search_for_match(request: dict, roots: Iterable[Path]) -> tuple[Optional[Lig
     for root in roots:
         if root is None or not Path(root).is_dir():
             continue
-        for criteria_path in sorted(Path(root).glob("*/param_*/" + CRITERIA_NAME)):
-            directory = criteria_path.parent
+        for metadata_path in sorted(Path(root).glob("*/param_*/metadata.json")):
+            directory = metadata_path.parent
             reference = f"{directory.parent.name}/{directory.name}"
+            criteria_path = directory / CRITERIA_NAME
             try:
-                candidate = read_criteria(criteria_path)
+                # A package written before the criteria file existed declares the same things in
+                # its metadata, so it is loaded and its criteria derived rather than skipped: it
+                # is an older package, not an incomplete one.
+                candidate = (read_criteria(criteria_path) if criteria_path.is_file()
+                             else load_package(directory).criteria)
             except Exception as exc:
                 considered.append({"reference": reference, "root": str(root), "matched": False,
-                                   "skipped": f"{CRITERIA_NAME} could not be read ({exc})"})
+                                   "skipped": f"its criteria could not be read ({exc})"})
                 continue
             verdict = matches(request, candidate)
             considered.append({"reference": reference, "root": str(root), **verdict.as_dict()})
