@@ -153,6 +153,57 @@ BUILD_SCHEMA = Schema(
                       "classifier read residue names. Refused for kind: peptide, whose residues "
                       "are named by the input."),
         ], doc="What the input is, and how it is parameterised."),
+        Section("input", [
+            Field("assembly", str, default=None, nullable=True,
+                  doc="Build this BIOLOGICAL ASSEMBLY of an mmCIF input (the `_pdbx_struct_assembly` "
+                      "id, quoted: \"3\"), not its asymmetric unit. They are different molecules: "
+                      "1TYL's asymmetric unit is an insulin dimer, its assembly 3 the T3R3 "
+                      "hexamer. Every copy of a chain gets its own chain id (A, B, C ... in "
+                      "operator order), and build/assembly.json maps each back to its author "
+                      "chain, label_asym ids and operator. An ion or water every operator places "
+                      "on the same symmetry-axis position is kept once, and each dropped copy is "
+                      "recorded; coinciding protein or ligand atoms are refused. `ligands` "
+                      "selectors and `protonation.overrides` name the EXPANDED chain ids. Null "
+                      "builds the file as deposited. Only for a .cif input and kind: peptide or "
+                      "complex."),
+        ], doc="How the structure file is read."),
+        Section("protonation", [
+            Field("method", str, default="openmm", enum=("openmm", "propka"),
+                  doc="How titratable protein residues get their protonation states.\n"
+                      "  openmm -- Modeller.addHydrogens(pH) chooses, as md-tools always did.\n"
+                      "  propka -- PROPKA3 predicts pKa values on the prepared structure (ligands "
+                      "and ions kept), and md-tools assigns variants by one stated rule: ASP/GLU "
+                      "protonated (ASH/GLH) when pKa > pH, LYS neutral (LYN) when pKa < pH, HIS "
+                      "doubly protonated (HIP) when pKa > pH and otherwise NEUTRAL, with OpenMM's "
+                      "hydrogen-bond heuristic choosing HID or HIE -- PROPKA does not resolve that "
+                      "tautomer -- and CYX for disulfides. A predicted state no supported variant "
+                      "builds (deprotonated CYS, tyrosinate, neutral ARG, a changed terminus) is "
+                      "REPORTED and the standard state kept. PROPKA missing or failing is an "
+                      "error, never a fall back. Predictions within `near_ph_window` of the pH "
+                      "are flagged. Everything is recorded in build/protonation.json.\n"
+                      "  Either way the states are held fixed for the run: this is not "
+                      "constant-pH MD."),
+            Field("ph", float, default=7.0, minimum=0.0, maximum=14.0,
+                  doc="Target pH."),
+            Field("overrides", list, default=[],
+                  doc="Explicit per-residue variants, which win over any prediction and are "
+                      "reported when they do:\n"
+                      "  - select: {chain: A, resid: \"102\", insertion_code: \"\"}\n"
+                      "    variant: HIE\n"
+                      "One of ASP ASH GLU GLH HID HIE HIP LYS LYN CYS CYX, of the residue's own "
+                      "family. An unknown selector or another family's variant is refused."),
+            Field("histidine_proximity_angstrom", float, default=5.0, minimum=0.0, maximum=20.0,
+                  unit="A",
+                  doc="A histidine with a heavy atom within this distance of a ligand or ion "
+                      "heavy atom is printed as a WARNING: chain/resid/icode, the neighbour, the "
+                      "distance, the predicted pKa, the final variant and where it came from, and "
+                      "for an ion the ND1-ion and NE2-ion distances separately. Screening only: "
+                      "proximity is not coordination, and no tautomer is imposed; set an override "
+                      "if it matters."),
+            Field("near_ph_window", float, default=1.0, minimum=0.0, maximum=7.0,
+                  doc="A predicted pKa within this many units of the pH is flagged as "
+                      "near-pH, so its assigned state reads as uncertain."),
+        ], doc="Protonation of titratable protein residues."),
         Section("ligand_catalog", [
             Field("path", str, default=None, nullable=True,
                   doc="A directory laid out as `<compound id>/<parameter id>/`, searched FIRST "
@@ -374,6 +425,7 @@ def resolve_build_config(path: Path | None) -> dict[str, Any]:
     _check_hmr_constraints(resolved)
     _check_residue_name(resolved)
     _check_ligand_settings(resolved)
+    _check_input_and_protonation(resolved)
     resolved.pop("_explicit_keys")
     resolved["_stated"] = stated
     return resolved
@@ -488,6 +540,13 @@ def _sys_document(resolved: dict[str, Any]) -> dict[str, Any]:
         "hydrogen_mass_amu": (float(hmr_block["hydrogen_mass_amu"])
                               if hmr_block["enabled"] else None),
     }
+    document.setdefault("protonation", {}).update({
+        "method": resolved["protonation"]["method"],
+        "ph": float(resolved["protonation"]["ph"]),
+        "overrides": list(resolved["protonation"]["overrides"]),
+        "histidine_proximity_angstrom": float(resolved["protonation"]["histidine_proximity_angstrom"]),
+        "near_ph_window": float(resolved["protonation"]["near_ph_window"]),
+    })
     document.pop("dataset", None)          # registration is a separate command now
     return document
 
@@ -645,6 +704,40 @@ def recorded_ligands(config_path: Path | None) -> list[dict[str, Any]]:
     return ligand_entries(resolve_build_config(config_path))
 
 
+def _check_input_and_protonation(resolved: dict[str, Any]) -> None:
+    """`input.assembly` and `protonation` settings, refused where they cannot apply.
+
+    The suffix half of `input.assembly` (a .cif) is checked in `build_topology`, where the input
+    path is known. Overrides are parsed strictly here, so a malformed one refuses before anything
+    is read; whether its residue exists is known only once the structure is.
+    """
+    from ..openmm.protonation import ProtonationError, parse_overrides
+
+    kind = str(resolved["solute"]["kind"])
+    implicit = is_implicit(canonical_solvent(resolved["solvent"]["model"]))
+    stated = resolved.get("_explicit_keys", {}).get("protonation", ())
+    protein = kind in ("peptide", "complex")
+    if resolved["input"]["assembly"] is not None and not protein:
+        raise ConfigError(
+            f"input.assembly = {resolved['input']['assembly']!r}, but solute.kind is {kind!r}. A "
+            f"biological assembly is expanded from a protein structure: kind: peptide or complex.")
+    protonation = resolved["protonation"]
+    if not protein and stated:
+        raise ConfigError(
+            f"protonation.{', protonation.'.join(stated)} is set, but solute.kind is {kind!r}. A "
+            f"molecule built from .smi/.sdf keeps the protomer its input encodes; nothing titrates "
+            f"it.")
+    if implicit and (protonation["method"] == "propka" or protonation["overrides"]):
+        raise ConfigError(
+            "protonation.method: propka and protonation.overrides apply to the explicit-solvent "
+            "route, where hydrogens are added by OpenMM. The implicit (GBn2) route builds the "
+            "protein with tleap, which assigns its own residue states.")
+    try:
+        parse_overrides(protonation["overrides"])
+    except ProtonationError as exc:
+        raise ConfigError(str(exc)) from None
+
+
 def catalog_roots(resolved: dict[str, Any], config_path: Path | None) -> list[Path]:
     """Where packages are looked up, in order: `ligand_catalog.path`, then $MD_DATA's catalog.
 
@@ -770,9 +863,13 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     # again. These used to be checked down there, so every refusal of them created the output
     # directory first.
     complex_build = kind == "complex"
-    if peptide and suffix not in (".pdb", ".seq"):
+    assembly_id = resolved["input"]["assembly"]
+    if assembly_id is not None and suffix != ".cif":
+        raise ConfigError(f"-i {input_path}: input.assembly = {assembly_id!r} expands an mmCIF "
+                          f"biological assembly, so the input must be a .cif file, not {suffix}")
+    if peptide and suffix not in (".pdb", ".seq") and not (suffix == ".cif" and assembly_id):
         raise ConfigError(f"-i {input_path}: solute.kind is 'peptide', so the input must be "
-                          f"a .pdb or .seq file, not {suffix}")
+                          f"a .pdb or .seq file (or a .cif with input.assembly), not {suffix}")
     if complex_build and suffix not in (".pdb", ".cif"):
         raise ConfigError(f"-i {input_path}: solute.kind is 'complex', so the input must be a "
                           f".pdb or .cif structure, not {suffix}")
@@ -818,14 +915,35 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     # THE LIGAND INSTANCES of a complex, resolved and mapped before anything exists: an unknown
     # package, an ambiguous selector, an unmapped residue or a mismatched chemical state is a
     # statement about the inputs, and refuses with nothing created.
+    # THE BIOLOGICAL ASSEMBLY, expanded before anything else reads the structure: ligand selectors
+    # and protonation overrides name the EXPANDED chain ids. Into a private temporary directory,
+    # so an assembly refusal -- or a mapping refusal that follows it -- leaves nothing behind.
+    assembly_build = None
+    assembly_scratch = None
+    out_assembly = out_system.parent / "assembly.json"
+    structure_input = input_path
+    if assembly_id is not None:
+        from ..openmm.assembly import AssemblyError, expand_assembly
+
+        assembly_scratch = tempfile.TemporaryDirectory(prefix="build-top-assembly-")
+        expanded = Path(assembly_scratch.name) / "assembly.pdb"
+        try:
+            assembly_record = expand_assembly(input_path, assembly_id, expanded)
+        except AssemblyError as exc:
+            assembly_scratch.cleanup()
+            raise ConfigError(f"-i {input_path}: {exc}") from None
+        assembly_build = {"record": assembly_record, "pdb_bytes": expanded.read_bytes()}
+        structure_input = expanded
+
     mapped = None
     out_mapping = out_system.parent / "ligand_mapping.json"
     if complex_build:
-        mapped = _map_complex_ligands(input_path, resolved, config_path)
+        mapped = _map_complex_ligands(structure_input, resolved, config_path)
     out_ligands = out_system.parent / "ligands"
 
     existing = [p for p in (out_system, out_pdb, *([out_sdf] if out_sdf else []),
-                            *([out_mapping] if complex_build else [])) if p.exists()]
+                            *([out_mapping] if complex_build else []),
+                            *([out_assembly] if assembly_build else [])) if p.exists()]
     if existing and not overwrite:
         raise ConfigError(
             f"refusing to replace {', '.join(str(p) for p in existing)}. Pass --overwrite to "
@@ -865,6 +983,10 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     log("=" * 68)
     log.heading("Command")
     log.field("input", input_path)
+    if assembly_build is not None:
+        record_ = assembly_build["record"]
+        log.field("assembly", f"{record_['assembly_id']}: {len(record_['chains'])} chain(s), "
+                              f"{len(record_['deduplicated'])} on-axis copy(ies) dropped")
     log.field("config", config_path if config_path else "(none -- built-in defaults)")
     log.field("system out", out_system)
     log.field("topology out", out_pdb)
@@ -1006,6 +1128,13 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
 
             def builder(path, cfg, staging, *, route, log):          # noqa: F811
                 return _build_complex(path, cfg, staging, mapped=mapped, log=log)
+        if assembly_build is not None:
+            # From here the assembly IS a PDB, built as the `.pdb` route would build it.
+            structure_path = staging / "assembly" / "assembly.pdb"
+            structure_path.parent.mkdir(parents=True, exist_ok=True)
+            structure_path.write_bytes(assembly_build["pdb_bytes"])
+            if assembly_scratch is not None:
+                assembly_scratch.cleanup()
         if sequence_build is not None:
             # From here the sequence IS a PDB, and the build is the `.pdb` peptide route exactly.
             structure_path = staging / "sequence" / "sequence.pdb"
@@ -1188,6 +1317,11 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                 f"refusing to report completion")
         if out_sdf is not None:
             outputs.append((staged_sdf, out_sdf))
+        if assembly_build is not None:
+            staged_assembly = staging / "assembly.json"
+            staged_assembly.write_text(json.dumps(assembly_build["record"], indent=2) + "\n",
+                                       encoding="utf-8")
+            outputs.append((staged_assembly, out_assembly))
         for source, target in outputs:
             target.parent.mkdir(parents=True, exist_ok=True)
             tmp = target.with_name(target.name + ".partial")
@@ -1215,6 +1349,11 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             written_outputs["solute_sdf"] = {**file_facts(out_sdf), "residue_name": residue_name}
         if complex_build:
             written_outputs["ligand_mapping"] = file_facts(out_mapping)
+        if assembly_build is not None:
+            written_outputs["assembly"] = file_facts(out_assembly)
+        protonation = (record.get("protonation") or {}).get("protonation")
+        if protonation is not None:
+            log.update(protonation=protonation)
         log.update(outputs=written_outputs,
                    ligand_packages={
                        "catalog_searched": [str(r) for r in ([resolved["ligand_catalog"]["path"]]

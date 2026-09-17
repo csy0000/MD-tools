@@ -581,6 +581,7 @@ def protonate_structure(topology, positions, forcefield, protonation_cfg: Mappin
         "assignments": [dict(a.record(), final_variant=final.get(a.key)) for a in assignments],
         "unsupported": unsupported,
         "histidine_proximity": proximity,
+        "warnings": warnings,
         "propka": None if propka is None else {
             key: value for key, value in propka.items() if key != "predictions"} | {
             "predictions": [{"group": p.group, "chain": p.key[0], "resid": p.key[1],

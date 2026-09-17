@@ -91,6 +91,50 @@ type: string or null · default: `null`
 
 Three-character residue name for a molecule read from .smi or .sdf. It is APPLIED: the molecule's residue in built.pdb, built.solute.pdb and the topology carries it, and the prepared molecule is written beside the System as `<residue_name>.sdf`. Left null, a deterministic name is assigned from the file (the .smi name field, else the file stem) and recorded, so the same input always produces the same residue identity. Three letters or digits; a name that already means water, an ion or a protein residue is refused, because solvent selection and the omega classifier read residue names. Refused for kind: peptide, whose residues are named by the input.
 
+### `input`
+
+How the structure file is read.
+
+#### `input.assembly`
+
+type: string or null · default: `null`
+
+Build this BIOLOGICAL ASSEMBLY of an mmCIF input (the `_pdbx_struct_assembly` id, quoted: "3"), not its asymmetric unit. They are different molecules: 1TYL's asymmetric unit is an insulin dimer, its assembly 3 the T3R3 hexamer. Every copy of a chain gets its own chain id (A, B, C ... in operator order), and build/assembly.json maps each back to its author chain, label_asym ids and operator. An ion or water every operator places on the same symmetry-axis position is kept once, and each dropped copy is recorded; coinciding protein or ligand atoms are refused. `ligands` selectors and `protonation.overrides` name the EXPANDED chain ids. Null builds the file as deposited. Only for a .cif input and kind: peptide or complex.
+
+### `protonation`
+
+Protonation of titratable protein residues.
+
+#### `protonation.method`
+
+type: string · default: `openmm` · one of `openmm`, `propka`
+
+How titratable protein residues get their protonation states. openmm -- Modeller.addHydrogens(pH) chooses, as md-tools always did. propka -- PROPKA3 predicts pKa values on the prepared structure (ligands and ions kept), and md-tools assigns variants by one stated rule: ASP/GLU protonated (ASH/GLH) when pKa > pH, LYS neutral (LYN) when pKa < pH, HIS doubly protonated (HIP) when pKa > pH and otherwise NEUTRAL, with OpenMM's hydrogen-bond heuristic choosing HID or HIE -- PROPKA does not resolve that tautomer -- and CYX for disulfides. A predicted state no supported variant builds (deprotonated CYS, tyrosinate, neutral ARG, a changed terminus) is REPORTED and the standard state kept. PROPKA missing or failing is an error, never a fall back. Predictions within `near_ph_window` of the pH are flagged. Everything is recorded in build/protonation.json. Either way the states are held fixed for the run: this is not constant-pH MD.
+
+#### `protonation.ph`
+
+type: number · default: `7.0` · minimum 0.0; maximum 14.0
+
+Target pH.
+
+#### `protonation.overrides`
+
+type: list · default: `[]`
+
+Explicit per-residue variants, which win over any prediction and are reported when they do: - select: {chain: A, resid: "102", insertion_code: ""} variant: HIE One of ASP ASH GLU GLH HID HIE HIP LYS LYN CYS CYX, of the residue's own family. An unknown selector or another family's variant is refused.
+
+#### `protonation.histidine_proximity_angstrom`
+
+type: number · default: `5.0` · minimum 0.0; maximum 20.0; unit: A
+
+A histidine with a heavy atom within this distance of a ligand or ion heavy atom is printed as a WARNING: chain/resid/icode, the neighbour, the distance, the predicted pKa, the final variant and where it came from, and for an ion the ND1-ion and NE2-ion distances separately. Screening only: proximity is not coordination, and no tautomer is imposed; set an override if it matters.
+
+#### `protonation.near_ph_window`
+
+type: number · default: `1.0` · minimum 0.0; maximum 7.0
+
+A predicted pKa within this many units of the pH is flagged as near-pH, so its assigned state reads as uncertain.
+
 ### `ligand_catalog`
 
 Where reusable ligand parameter packages are looked up.

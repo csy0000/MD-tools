@@ -87,6 +87,13 @@ def _legacy_cfg(resolved: dict[str, Any]) -> dict[str, Any]:
     cfg["solute"]["kind"] = solute.get("kind") or ("peptide" if solute.get("peptide", True)
                                                    else "ligand")
 
+    # PROTONATION, carried across for the same reason: a key not copied here does not reach the
+    # builders, so `protonation.method: propka` would be resolved, recorded as asked, and built
+    # with OpenMM's defaults.
+    for key in ("method", "ph", "overrides", "histidine_proximity_angstrom", "near_ph_window"):
+        if key in (resolved.get("protonation") or {}):
+            cfg["protonation"][key] = resolved["protonation"][key]
+
     cfg["system_build"]["constraints"] = constraints.get("type", "HBonds")
     cfg["system_build"]["rigid_water"] = bool(constraints.get("rigid_water", not implicit))
     cfg["system_build"]["hydrogen_mass_amu"] = constraints.get("hydrogen_mass_amu")
@@ -262,6 +269,7 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
                                         else "pdb"))
     log(f"protonation  : pH {protonated.get('ph')}, "
         f"{protonated.get('n_hydrogens_before')} -> {protonated.get('n_hydrogens_after')} hydrogens")
+    _log_protonation(protonated.get("protonation"), log)
 
     solvated = solvate(Path(protonated["output_pdb"]), staging, cfg,
                        ligand_sdf=ligand_sdf, route=route)
@@ -292,6 +300,7 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
     return {"system_xml": built["system_xml"], "topology_pdb": solvated["output_pdb"],
             "initial_state": state_path, "n_solute_atoms": solvated["n_solute_atoms"],
             "ligand_sdf": ligand_sdf, "omega": built, "ligand_package": package_record,
+            "protonation": protonated,
             # Carried through for forcefield.json: what the box actually ended up containing is
             # part of how the system was parameterised, not a log line.
             "n_waters": solvated.get("n_waters"), "ions": solvated.get("ions"),
@@ -308,6 +317,22 @@ def _build_explicit(input_path: Path, cfg: dict, staging: Path, *, route: str, l
             "water_packing_model": solvated.get("water_packing_model"),
             "water_packing_substituted": solvated.get("water_packing_substituted"),
             "water_model_reconciled": solvated.get("water_model_reconciled")}
+
+def _log_protonation(record, log) -> None:
+    """The method, every flagged assignment and every warning, in the build log a person reads."""
+    if not record:
+        return
+    log(f"protonation  : method {record['method']}"
+        + (f", PROPKA {record['propka']['version']}" if record.get("propka") else ""))
+    for entry in record["assignments"]:
+        if entry["source"] == "override" or entry["near_ph"] or entry["coupled"]:
+            flags = [name for name in ("near_ph", "coupled") if entry[name]]
+            log(f"  {entry['chain']}:{entry['resid']}{entry['insertion_code']} {entry['residue']} "
+                f"pKa {entry['pka']} -> {entry['final_variant'] or entry['variant']} "
+                f"({entry['source']}){' [' + ', '.join(flags) + ']' if flags else ''}")
+    for line in record.get("warnings") or []:
+        log(f"  {line}")
+
 
 def _build_complex(input_path: Path, cfg: dict, staging: Path, *, mapped, log: Log) -> dict:
     """Protein chains plus mapped ligand instances: hydrogens, solvent, System.
@@ -329,6 +354,7 @@ def _build_complex(input_path: Path, cfg: dict, staging: Path, *, mapped, log: L
     log(f"protonation  : pH {protonated['ph']}, {protonated['n_hydrogens_before']} -> "
         f"{protonated['n_hydrogens_after']} hydrogens; "
         f"{len(protonated['frozen_ligand_instances'])} ligand instance(s) kept as packaged")
+    _log_protonation(protonated.get("protonation"), log)
 
     solvated = solvate(Path(protonated["output_pdb"]), staging, cfg, route="complex",
                        residue_templates_for=mapped.residue_templates)

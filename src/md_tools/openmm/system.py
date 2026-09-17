@@ -559,6 +559,7 @@ def protonate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path]
     n_h_before = sum(1 for a in modeller.topology.atoms() if a.element == elem.hydrogen)
     is_ligand_only = route == "ligand"
 
+    protonation_record = None
     if is_ligand_only and pcfg["skip_for_ligand"]:
         added: list = []
         note = (
@@ -570,43 +571,24 @@ def protonate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path]
             "is wanted at pH 7, write it into the SMILES."
         )
     else:
-        if pcfg["delete_existing_hydrogens"]:
-            modeller.delete(
-                [a for a in modeller.topology.atoms() if a.element == elem.hydrogen]
-            )
-        # `addHydrogens` is nondeterministic twice over, and both halves have to be pinned or a
-        # bundle cannot be rebuilt. It places each new hydrogen from a RANDOM direction drawn from
-        # Python's global `random` -- unseeded, repeat calls move hydrogens by up to 0.18 nm -- and
-        # it then relaxes them with a minimisation whose threaded floating-point reductions are
-        # themselves order-dependent, leaving ~1e-4 nm of drift even once the RNG is fixed.
-        #
-        # A tenth of a nanometre on a hydrogen is not a rounding error: the box is sized from the
-        # solute's extent, so it changes the box, and a box change of 0.04 Angstrom was enough to
-        # add or drop one whole water molecule between builds. Bundle hashes, relocation checks and
-        # every "which value did I choose?" provenance comparison depend on this being stable.
-        #
-        # Seeding alone leaves the floating-point half, so the relaxation runs on the Reference
-        # platform, which is single-threaded and reproducible. Together these are bit-identical
-        # across builds. Reference is slower, but this minimises only the added hydrogens of a
-        # solute -- a macrocycle or a small peptide here -- so the cost is seconds.
+        # ONE implementation of protein hydrogen addition, shared with the complex route: delete,
+        # predict (protonation.method: propka), assign by the stated rule, add hydrogens seeded
+        # and relaxed on the Reference platform, and screen histidines near ions. See
+        # `md_tools.openmm.protonation`.
+        from .protonation import protonate_structure
         from .seeds import DEFAULT_MASTER_SEED, derive_build_seed as derive_seed
 
         master = (cfg.get("run") or {}).get("seed")
         hydrogen_seed = derive_seed(
             int(master if master is not None else DEFAULT_MASTER_SEED), "structure/protonation")
-        from openmm import Platform
-
-        reference = Platform.getPlatformByName("Reference")
-        state = random.getstate()
-        random.seed(hydrogen_seed)
-        try:
-            added = modeller.addHydrogens(
-                forcefield, pH=float(pcfg["ph"]), variants=pcfg["variants"], platform=reference
-            )
-        finally:
-            random.setstate(state)
-        note = (f"addHydrogens at pH {pcfg['ph']}, seed {hydrogen_seed}, "
-                "relaxed on the Reference platform for reproducibility")
+        result = protonate_structure(
+            modeller.topology, modeller.positions, forcefield, pcfg, seed=hydrogen_seed,
+            workdir=out_dir / "protonation", echo=None)
+        modeller = app.Modeller(result.topology, result.positions)
+        protonation_record = result.record
+        added = [a["final_variant"] for a in result.record["assignments"]]
+        note = (f"{pcfg.get('method', 'openmm')} protonation at pH {pcfg['ph']}, seed "
+                f"{hydrogen_seed}, relaxed on the Reference platform for reproducibility")
 
     out_pdb = out_dir / "solute_h.pdb"
     with out_pdb.open("w") as fh:
@@ -624,8 +606,10 @@ def protonate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path]
         "n_hydrogens_before": n_h_before,
         "n_hydrogens_after": n_h_after,
         "n_atoms": modeller.topology.getNumAtoms(),
-        # which variant addHydrogens chose for each residue -- the record of what pH 7 meant here
+        # which variant each titratable residue ended with, bound to residue identity in
+        # `protonation` below; this flat list is kept for readers that predate it
         "variants": [None if v is None else str(v) for v in added],
+        "protonation": protonation_record,
         "forcefield": ff_info,
     }
     (out_dir / "protonation.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
@@ -661,23 +645,17 @@ def protonate_complex(mapped, out_dir: Path, cfg: dict) -> dict:
         return (residue.chain.id, str(residue.id).strip(), (residue.insertionCode or "").strip())
 
     n_h_before = sum(1 for a in modeller.topology.atoms() if a.element == elem.hydrogen)
-    if pcfg["delete_existing_hydrogens"]:
-        modeller.delete([a for a in modeller.topology.atoms()
-                         if a.element == elem.hydrogen and key(a.residue) not in frozen])
+    from .protonation import protonate_structure
     from .seeds import DEFAULT_MASTER_SEED, derive_build_seed as derive_seed
 
     master = (cfg.get("run") or {}).get("seed")
     hydrogen_seed = derive_seed(
         int(master if master is not None else DEFAULT_MASTER_SEED), "structure/protonation")
-    state = random.getstate()
-    random.seed(hydrogen_seed)
-    try:
-        added = modeller.addHydrogens(
-            forcefield, pH=float(pcfg["ph"]), variants=None,
-            platform=Platform.getPlatformByName("Reference"),
-            residueTemplates=mapped.residue_templates(modeller.topology))
-    finally:
-        random.setstate(state)
+    result = protonate_structure(
+        modeller.topology, modeller.positions, forcefield, pcfg, frozen_residues=frozen,
+        residue_templates_for=mapped.residue_templates, seed=hydrogen_seed,
+        workdir=out_dir / "protonation", echo=None)
+    modeller = app.Modeller(result.topology, result.positions)
     assert_instances_unchanged(mapped, modeller.topology, modeller.positions,
                                step="protein hydrogen addition")
 
@@ -689,8 +667,9 @@ def protonate_complex(mapped, out_dir: Path, cfg: dict) -> dict:
         "output_pdb": str(out_pdb),
         "route": "complex",
         "ph": float(pcfg["ph"]),
-        "note": (f"addHydrogens at pH {pcfg['ph']}, seed {hydrogen_seed}, on every residue except "
-                 f"the {len(frozen)} mapped ligand instance(s), whose package hydrogens were kept"),
+        "note": (f"{pcfg.get('method', 'openmm')} protonation at pH {pcfg['ph']}, seed "
+                 f"{hydrogen_seed}, on every residue except the {len(frozen)} mapped ligand "
+                 f"instance(s), whose package hydrogens were kept"),
         "frozen_ligand_instances": [
             {"chain": c, "resid": r, "insertion_code": i} for c, r, i in sorted(frozen)],
         "n_hydrogens_before": n_h_before,
@@ -698,9 +677,10 @@ def protonate_complex(mapped, out_dir: Path, cfg: dict) -> dict:
                                  if a.element == elem.hydrogen),
         "n_atoms": modeller.topology.getNumAtoms(),
         # Bound to residue identity, not to a position in a list.
-        "variants": [{"chain": r.chain.id, "resid": str(r.id).strip(),
-                      "insertion_code": (r.insertionCode or "").strip(), "residue": r.name,
-                      "variant": str(v)} for r, v in zip(residues, added) if v is not None],
+        "variants": [{"chain": a["chain"], "resid": a["resid"], "insertion_code": a["insertion_code"],
+                      "residue": a["residue"], "variant": a["final_variant"]}
+                     for a in result.record["assignments"] if a["final_variant"] is not None],
+        "protonation": result.record,
         "forcefield": ff_info,
     }
     (out_dir / "protonation.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
