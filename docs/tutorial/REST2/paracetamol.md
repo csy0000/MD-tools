@@ -224,5 +224,4 @@ the saved states (`detection_route: saved-state`, and the sha256 of each).
 
 ## Next
 
-* the same ladder for a rigid molecule: [REST2: Chinolin](chinolin.md)
 * the ordinary MD version of this molecule: [cMD: paracetamol](../cMD/paracetamol.md)

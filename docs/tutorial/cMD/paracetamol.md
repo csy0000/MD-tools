@@ -202,5 +202,4 @@ study, raise `production_steps`.
 ## Next
 
 * the same molecule with enhanced sampling: [REST2: paracetamol](../REST2/paracetamol.md)
-* another small molecule, same steps: [cMD: Chinolin](chinolin.md)
 * register the finished directory as a dataset: [Registering a finished run](../../data_register/README.md)
