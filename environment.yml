@@ -106,6 +106,7 @@ dependencies:
   - networkx                  # ligand-instance graph matching (md_tools.ligands.mapping); also required by openff-toolkit
   - mdtraj                    # reads the AIS source DCD and its box vectors
   - propka=3.5.1              # PROPKA3 pKa prediction for build-top protonation (`protonation.method: propka`)
+  - gemmi=0.7.5               # mmCIF reading and biological-assembly expansion (1TYL assembly 3)
 
   # --- the REST2 engine ---------------------------------------------------------------------------
   # REST2 runs on openmmtools.multistate.ReplicaExchangeSampler. The version is EXACT because
