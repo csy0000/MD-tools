@@ -189,8 +189,53 @@ def solute_structure(settings: dict, work: Path) -> tuple[Path, Path]:
     structure = HERE / settings["structure_file"]
     residue_name = settings.get("residue_name")
     if str(settings.get("input_format", "smi")).lower() == "sdf":
-        return structure_from_sdf(structure, work, residue_name)
-    return structure_from_smiles(read_smiles(structure), work, settings["builder"], residue_name)
+        prepared = structure_from_sdf(structure, work, residue_name)
+    else:
+        prepared = structure_from_smiles(read_smiles(structure), work, settings["builder"],
+                                         residue_name)
+    package = settings.get("ligand_package")
+    if package:
+        in_package_order(*prepared, package, residue_name)
+    return prepared
+
+
+def in_package_order(sdf: Path, pdb: Path, package: dict, residue_name) -> None:
+    """Put the prepared molecule into the atom order and names of the bundled parameter package.
+
+    build-top matched the molecule to the package's chemical graph and RECORDED the permutation
+    it chose (`prepared_atom_for_package_atom`), so this applies that permutation rather than
+    searching for one: among symmetric atoms a fresh search could pick another, equally valid,
+    order and the rebuilt topology would differ by it.
+    """
+    from rdkit import Chem
+
+    reference = Chem.SDMolSupplier(str(HERE / package["path"] / "molecule.sdf"),
+                                   removeHs=False)[0]
+    names = reference.GetProp("MDT_ATOM_NAMES").split()
+    permutation = [int(i) for i in package["prepared_atom_for_package_atom"]]
+    if not package["prepared_files_rewritten_in_package_order"]:
+        say("parameters", f"{package['reference']}: prepared molecule already in package order")
+        return
+    mol = Chem.MolFromMolFile(str(sdf), removeHs=False)
+    ordered = Chem.RenumberAtoms(mol, permutation)
+    for atom, expected in zip(ordered.GetAtoms(), reference.GetAtoms()):
+        if atom.GetAtomicNum() != expected.GetAtomicNum():
+            raise SystemExit(f"the recorded permutation does not map the prepared molecule onto "
+                             f"package {package['reference']}")
+    out = Chem.Mol(reference)
+    conformer = out.GetConformer()
+    for i in range(out.GetNumAtoms()):
+        conformer.SetAtomPosition(i, ordered.GetConformer().GetAtomPosition(i))
+    for atom, name in zip(out.GetAtoms(), names):
+        atom.SetMonomerInfo(Chem.AtomPDBResidueInfo(f"{name:<4}"[:4], residueName=residue_name,
+                                                    residueNumber=1, isHeteroAtom=True))
+    out.SetProp("_Name", residue_name)
+    for prop in list(out.GetPropNames()):
+        if prop != "_Name":
+            out.ClearProp(prop)
+    Chem.MolToMolFile(out, str(sdf))
+    Chem.MolToPDBFile(out, str(pdb))
+    say("parameters", f"{package['reference']}: prepared molecule put into package atom order")
 
 
 def structure_from_smiles(smiles: str, work: Path, builder: dict,
@@ -254,6 +299,12 @@ def forcefield(builder: dict, ligand_sdf: Path | None, *, ligand_only: bool):
     files = [x for x in ([protein] if protein else []) + [ff["water"], *ff["extra_xml"]] if x]
     forcefield = app.ForceField(*files)
     if ligand_sdf is None:
+        return forcefield
+    if ff.get("ligand_package_ffxml"):
+        # SAVED PARAMETERS: the package build-top used, loaded as it is. No charge is computed,
+        # so neither the OpenFF toolkit nor AmberTools is needed, and a flexible molecule rebuilds
+        # with exactly the charges it was built with.
+        forcefield.loadFile(str(HERE / ff["ligand_package_ffxml"]))
         return forcefield
 
     from openff.toolkit import Molecule

@@ -119,6 +119,9 @@ def _built(case: str, root: Path) -> Path:
     inputs.mkdir()
     for name in (structure, "built.xml", "built.pdb"):
         shutil.copy2(work / name, inputs / name)
+    if (work / "ligands").is_dir():
+        # The parameter package a ligand build attached, as an export bundles it.
+        shutil.copytree(work / "ligands", inputs / "ligands")
     settings = standalone_settings(read_record(work / "built.log"), inputs / structure,
                                    inputs / "built.xml", inputs / "built.pdb")
     (inputs / "build_settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
@@ -218,3 +221,69 @@ def test_a_tleap_sequence_structure_is_recognised_and_an_edited_one_is_not(tmp_p
     edited = tmp_path / "ALA.pdb"
     edited.write_text("".join(lines), encoding="utf-8")
     assert leap_sequence_origin(edited) is None
+
+
+PARAMETERISATION_BLOCKER = (
+    "import sys, runpy\n"
+    "class B:\n"
+    "    def find_spec(self, name, path=None, target=None):\n"
+    "        if name.split('.')[0] in ('md_tools', 'openff', 'openmmforcefields'):\n"
+    "            raise ImportError('build_system.py imported ' + name)\n"
+    "        return None\n"
+    "sys.meta_path.insert(0, B())\n"
+    "sys.argv = ['input/build_system.py', '--out', 'rebuilt']\n"
+    "runpy.run_path('input/build_system.py', run_name='__main__')\n")
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("solvent", ["explicit", "implicit"])
+def test_a_packaged_ligand_rebuilds_without_any_parameterisation_package(tmp_path, solvent):
+    """The bundled package IS the parameters: no OpenFF, no openmmforcefields, no AmberTools call.
+
+    The input is an SDF whose atoms are in a different order from the package's, so the rebuild
+    also has to apply build-top's recorded permutation rather than find its own.
+    """
+    import numpy as np
+    from rdkit import Chem
+
+    from md_tools.build.record import read_record
+    from md_tools.reference.export import STANDALONE_BUILD, standalone_settings
+    from tests.test_ligand_mapping import _package
+
+    package = _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    work = tmp_path / "work"
+    work.mkdir()
+    mol = Chem.Mol(package.mol)
+    for prop in list(mol.GetPropNames()):
+        mol.ClearProp(prop)
+    order = list(range(mol.GetNumAtoms()))
+    np.random.default_rng(11).shuffle(order)
+    Chem.MolToMolFile(Chem.RenumberAtoms(mol, order), str(work / "tyl.sdf"))
+    (work / "sys.config").write_text(
+        f"solute:\n  kind: ligand\n  residue_name: TYL\n  parameters: {package.reference}\n"
+        f"ligand_catalog:\n  path: {tmp_path / 'catalog'}\n"
+        + ("solvent:\n  model: GBn2\n" if solvent == "implicit" else
+           "solvent:\n  model: TIP3P\n  padding_nm: 1.0\n"), encoding="utf-8")
+    done = subprocess.run(CLI + ["build-top", "-i", "tyl.sdf", "-os", "built.xml", "-op",
+                                 "built.pdb", "-log", "built.log", "--config", "sys.config"],
+                          cwd=work, capture_output=True, text=True, timeout=1800)
+    assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
+    record = read_record(work / "built.log")
+    assert record["ligand_packages"]["attached"]["prepared_files_rewritten_in_package_order"]
+
+    inputs = work / "input"
+    inputs.mkdir()
+    for name in ("tyl.sdf", "built.xml", "built.pdb"):
+        shutil.copy2(work / name, inputs / name)
+    shutil.copytree(work / "ligands", inputs / "ligands")
+    settings = standalone_settings(record, inputs / "tyl.sdf", inputs / "built.xml",
+                                   inputs / "built.pdb")
+    assert settings["ligand_package"]["reference"] == package.reference
+    (inputs / "build_settings.json").write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    shutil.copy2(STANDALONE_BUILD, inputs / "build_system.py")
+    (work / "_blocked.py").write_text(PARAMETERISATION_BLOCKER, encoding="utf-8")
+    rebuilt = _rebuild(work)
+    assert rebuilt.returncode == 0, rebuilt.stdout[-3000:] + rebuilt.stderr[-3000:]
+    assert "imported" not in rebuilt.stderr
+    assert (work / "rebuilt" / "built.xml").read_bytes() == (work / "built.xml").read_bytes()
+    assert _undated(work / "rebuilt" / "built.pdb") == _undated(work / "built.pdb")

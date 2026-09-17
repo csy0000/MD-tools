@@ -29,13 +29,17 @@ __all__ = ["LIGANDS_DIRNAME", "attach_ligand_package", "order_like_package",
 LIGANDS_DIRNAME = "ligands"
 
 
-def order_like_package(mol, package: LigandPackage, *, where: str) -> np.ndarray:
+def order_like_package(mol, package: LigandPackage, *, where: str) -> tuple[np.ndarray, list[int]]:
     """Coordinates of *mol* (ANGSTROM, as read) in package atom order, iff it IS the package's state.
 
     The match is on the full chemical graph -- elements, formal charges, bond orders, every
     hydrogen -- so a different tautomer, protomer or compound has no match and is refused. Any
     match that exists is a symmetry of that graph and assigns identical chemistry; the first in a
     deterministic order is taken. Stereochemistry is then checked from the coordinates.
+
+    Returns the ordered coordinates and the permutation: element i is the input atom that became
+    package atom i. The permutation is recorded, so a rebuild outside md-tools applies exactly
+    this one instead of searching for its own among the symmetric alternatives.
     """
     from networkx.algorithms.isomorphism import GraphMatcher
 
@@ -59,12 +63,13 @@ def order_like_package(mol, package: LigandPackage, *, where: str) -> np.ndarray
     # Kept in the file's own unit: a round trip through nanometres changes the last digit of a
     # coordinate written back at the SDF's and PDB's precision.
     xyz = mol.GetConformer().GetPositions()
-    ordered = np.array([xyz[match[i]] for i in range(package.mol.GetNumAtoms())])
+    permutation = [int(match[i]) for i in range(package.mol.GetNumAtoms())]
+    ordered = np.array([xyz[j] for j in permutation])
     try:
         _check_stereo(package, ordered / 10.0, where)
     except MappingError as exc:
         raise PackageError(str(exc)) from exc
-    return ordered
+    return ordered, permutation
 
 
 def write_prepared_molecule(package: LigandPackage, positions_angstrom: np.ndarray,
@@ -121,7 +126,7 @@ def attach_ligand_package(*, prepared_sdf: Path, prepared_pdb: Path, settings: d
     reference = settings.get("parameters")
     if reference:
         package = find_package(reference, settings.get("catalog_roots") or [])
-        positions = order_like_package(mol, package, where="solute.parameters")
+        positions, permutation = order_like_package(mol, package, where="solute.parameters")
         package = load_package(package.copy_into(root))
         how = "reused"
     else:
@@ -131,15 +136,18 @@ def attach_ligand_package(*, prepared_sdf: Path, prepared_pdb: Path, settings: d
             forcefield=resource, charge_method=settings["charge_method"],
             aliases=settings.get("aliases") or (),
             source={"input": settings.get("input_name"), "input_sha256": settings.get("input_sha256")})
-        positions = order_like_package(mol, package, where="the prepared molecule")
+        positions, permutation = order_like_package(mol, package, where="the prepared molecule")
         how = "created"
-    if not _already_in_package_order(mol, package, Path(prepared_pdb)):
+    rewritten = not _already_in_package_order(mol, package, Path(prepared_pdb))
+    if rewritten:
         write_prepared_molecule(package, positions, residue_name, Path(prepared_sdf),
                                 Path(prepared_pdb))
     return {"package": package, "how": how,
             "record": {**package.summary(), "how": how,
                        "copied_to": f"{LIGANDS_DIRNAME}/{package.compound_id}/{package.parameter_id}",
-                       "charges_generated_in_this_build": how == "created"}}
+                       "charges_generated_in_this_build": how == "created",
+                       "prepared_atom_for_package_atom": permutation,
+                       "prepared_files_rewritten_in_package_order": rewritten}}
 
 
 def _already_in_package_order(mol, package: LigandPackage, prepared_pdb: Path) -> bool:
