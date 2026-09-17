@@ -258,6 +258,19 @@ MD_SCHEMA = Schema(
                   doc="How often lambda moves. 1 changes the Hamiltonian every step -- 50000 "
                       "parameter changes over the path above. observation_interval_steps must "
                       "divide by this, or observations would not sit on the update grid."),
+            Field("lambda_schedule", str, default="linear", enum=("linear", "tau-linear"),
+                  doc="How lambda follows the switching progress t (0 -> 1). linear: lambda = t. "
+                      "tau-linear: lambda = [(1 - tau0 + tau0 t)^2 - (1 - tau0)^2] / "
+                      "[1 - (1 - tau0)^2], for V0 a saved REST2 state at tau0 and V1 its unscaled "
+                      "source: the mixture's solute-solute scaling then equals (1 - tau)^2 along a "
+                      "tau linear in t. Its solute-environment scaling does NOT equal (1 - tau); "
+                      "one lambda cannot follow both. The run refuses tau-linear unless -s is a "
+                      "saved state at tau0 whose record names -s2 as its source."),
+            Field("lambda_schedule_tau0", float, default=None, nullable=True, minimum=0.0,
+                  maximum=0.95,
+                  doc="V0's tau, for lambda_schedule: tau-linear, and refused with linear. When "
+                      "ais_source.generate is true it defaults to dynamics.tau and must equal it; "
+                      "build-md writes the value into resolved.config."),
         ], doc="The switching path: lambda from 0 to 1, V(lambda) = (1 - lambda) V0 + lambda V1, "
                "where V0 is `-s`/`-p` (the state the source ensemble was sampled from) and V1 is "
                "`-s2`/`-p2`. Ignored unless protocol is AIS. Every length is an exact integer "
@@ -465,6 +478,28 @@ SOURCE_STAGE = "source"
 GENERATED_SOURCE_TRAJECTORY = "whole_prod1.nc"
 
 
+def ais_lambda_schedule(resolved: dict[str, Any]) -> tuple[str, float | None]:
+    """The lambda schedule an AIS configuration asks for, as (kind, tau0).
+
+    One reading for build-md and the runtime preflight. With `ais_source.generate` the source
+    stages run on V0 at `dynamics.tau`, so a tau-linear tau0 left unset IS that tau, and a
+    different one is refused; otherwise tau0 is exactly what the configuration states.
+    """
+    ais = resolved["ais"]
+    kind = str(ais.get("lambda_schedule") or "linear")
+    tau0 = ais.get("lambda_schedule_tau0")
+    tau0 = None if tau0 is None else float(tau0)
+    if kind == "tau-linear" and (resolved.get("ais_source") or {}).get("generate"):
+        claimed = float(resolved["dynamics"]["tau"])
+        if tau0 is not None and abs(tau0 - claimed) > 1e-12:
+            raise ConfigError(
+                f"ais.lambda_schedule_tau0 is {tau0} but dynamics.tau is {claimed}. The source "
+                f"stages run on V0 at dynamics.tau, so tau-linear must follow that tau; leave "
+                f"lambda_schedule_tau0 unset and build-md takes it from dynamics.tau.")
+        tau0 = claimed
+    return kind, tau0
+
+
 def _check_ais(resolved: dict[str, Any]) -> None:
     """Everything about an AIS run that is decidable before a path is written.
 
@@ -507,6 +542,8 @@ def _check_ais(resolved: dict[str, Any]) -> None:
             "ais_source.trajectory is required for AIS. It is the equilibrium ensemble the "
             "switching paths start from -- there is no default, because it is data you produced. "
             "Or set ais_source.generate: true to have this run produce it.")
+
+    schedule_kind, tau0 = ais_lambda_schedule(resolved)
 
     # EVERY enabled step interval must divide the switching path exactly.
     #
@@ -567,7 +604,9 @@ def _check_ais(resolved: dict[str, Any]) -> None:
             # Refused at BUILD time, with the numbers that would fix it, rather than by every
             # generated script the first time it is run.
             cv_interval_steps=int(
-                (resolved.get("collective_variables") or {}).get("interval_steps") or 0))
+                (resolved.get("collective_variables") or {}).get("interval_steps") or 0),
+            lambda_schedule=schedule_kind,
+            lambda_schedule_tau0=tau0)
     except ValueError as error:
         raise ConfigError(str(error)) from None
 
@@ -2042,6 +2081,10 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         # `resolved.config` then states where the paths start rather than leaving it to run.sh.
         resolved["ais_source"] = dict(resolved["ais_source"],
                                       trajectory=GENERATED_SOURCE_TRAJECTORY)
+        if resolved["ais"].get("lambda_schedule") == "tau-linear":
+            # Written into resolved.config, so the run reads a number and never a REST2 record.
+            resolved["ais"] = dict(resolved["ais"],
+                                   lambda_schedule_tau0=float(resolved["dynamics"]["tau"]))
     chain_plan = stage_plan(resolved)
     chain_targets = _stage_targets(chain_plan, run=run, dataset=dataset)
     from ..run.preflight import PreflightError, validate_generated_chain
@@ -2252,7 +2295,10 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
                         // resolved["ais"]["observation_interval_steps"] + 1)
         log.heading("AIS")
         log.field("paths", resolved["ais"]["number_of_paths"])
-        log.field("lambda", "0 -> 1: V0 (-s/-p) -> V1 (-s2/-p2), linear")
+        schedule_text = resolved["ais"].get("lambda_schedule") or "linear"
+        if resolved["ais"].get("lambda_schedule_tau0") is not None:
+            schedule_text += f" (tau0 {resolved['ais']['lambda_schedule_tau0']})"
+        log.field("lambda", f"0 -> 1: V0 (-s/-p) -> V1 (-s2/-p2), schedule {schedule_text}")
         switching_steps = resolved["ais"]["switching_steps"]
         log.field("switching", (f"{switching_steps} steps = "
                                 f"{switching_steps * numeric / 1000.0:g} ps") if numeric

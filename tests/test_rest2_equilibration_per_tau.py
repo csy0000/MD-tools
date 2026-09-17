@@ -280,6 +280,10 @@ def test_every_generated_input_resolves_back_to_its_resolved_config(tmp_path):
 #: digest, for both solvents. And once more in 0.5.4 for two ADDED fields,
 #: `collective_variables.generate: null` and `ais_source.generate: false`: stripping exactly those
 #: two lines from the fresh files reproduces the previous digests, for both solvents.
+#: REFRESHED for the AIS lambda schedules: every `resolved.config` gained exactly
+#: `lambda_schedule: linear` and `lambda_schedule_tau0: null` in its `ais` block. Generated from
+#: dev 01e86a6 and from this branch into separate roots and diffed file by file: those two lines are
+#: the whole difference, and the dev files reproduce the previous digests, for both solvents.
 BEFORE = {
     "explicit": {
         "REST2-run1/REST2.py": "09af17815c1e151c6292e8fbeb8394fbabf8996c3b1d7d753ebc999ae1e93cce",
@@ -287,16 +291,16 @@ BEFORE = {
         "REST2-run1/eq/eq_2.py": "a9a19c6c5e8f839a7a51e81a1ec554f89655bd04d581bc0c1babaa6aa07e6562",
         "REST2-run1/eq/eq_3.py": "6daed6d160528e34e730c67997fb015667e2a3fe5cf80677be6b3f1e68b3ccad",
         "REST2-run1/resolved.config":
-            "58024eedd192a1f4eb8c8fd6429471cc191c1872d31790c4f73f1e1a1ccd6a59",
+            "41baeb581e97fae87a4f4ec40fac13bd54b08f8ed4d4d84c4226362b8911624d",
         # BYTE-IDENTICAL to the run root's, and the equality is the assertion: `eq/` holds
         # generated scripts, and a generated script reads the `resolved.config` strictly beside
         # itself, so the copy must be the same document rather than a second one.
         "REST2-run1/eq/resolved.config":
-            "510c971677c93a1eb62336702bb6d215ddf3bc98d6584cd37c7b0293edddd827",
+            "9373d2ae7c0cce005d01f3a7cba211d01205f5c97086340c03306dd3120d6ca0",
         # The SHARED minimisation's declaration: method-neutral, so it is the same file whichever
         # method generates it first. Its digest therefore differs from the run's by construction.
         "min/resolved.config":
-            "510c971677c93a1eb62336702bb6d215ddf3bc98d6584cd37c7b0293edddd827",
+            "9373d2ae7c0cce005d01f3a7cba211d01205f5c97086340c03306dd3120d6ca0",
         "REST2-run1/run.config":
             "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
         "REST2-run1/run.sh": "583fa241e887760637a9f729d71cb8b85e40314b034c4e695ea952b92d1aff8f",
@@ -313,11 +317,11 @@ BEFORE = {
         "REST2-run1/eq/eq_2.py": "3054435667e24ebc079e4ecae1f1ddbc3de854035a6ee440f1a61e4f95c2cd35",
         "REST2-run1/eq/eq_3.py": "63f242cd9e3c1bf26ae98ff86e95792d76bbe4d94d06653bdaa6c1b140628f62",
         "REST2-run1/resolved.config":
-            "3d2b554a9794380b5cd79c8a34a00f7cb9e40da757fdb066a3a66eebd3442ead",
+            "1a185610b88b15c92884aed5a32f84eb08de5f208e09b8acce6fb677af70fd50",
         "REST2-run1/eq/resolved.config":
-            "492eb4c2cdef5f342067b0274f8ca8690b5b5a963ee3ddfb5b128cc57fbdcfc9",
+            "518dae1547bdd9691e8780b255943bc0685a0bd7c014ad6a0413a12dd1f2f23a",
         "min/resolved.config":
-            "492eb4c2cdef5f342067b0274f8ca8690b5b5a963ee3ddfb5b128cc57fbdcfc9",
+            "518dae1547bdd9691e8780b255943bc0685a0bd7c014ad6a0413a12dd1f2f23a",
         "REST2-run1/run.config":
             "0a421e80abb4cd6c47291af8b0304341f8dddd1828fbec077aa528f732c2e71c",
         "REST2-run1/run.sh": "583fa241e887760637a9f729d71cb8b85e40314b034c4e695ea952b92d1aff8f",

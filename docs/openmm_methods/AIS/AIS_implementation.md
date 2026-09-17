@@ -156,4 +156,5 @@ twice (Amber 2026 manual, p. 552). These loops stand in for `run_one_path`; they
 * The costs above are for one system, one GPU and mixed precision.
 * Evaluating only the solute-dependent part of the nonbonded force twice — splitting the
   solvent–solvent interactions out of the mixture — is a possible optimisation and is not done.
-* Non-linear schedules, softcore and atom mapping are future work, not partial features.
+* Schedules beyond `linear` and `tau-linear`, softcore and atom mapping are future work, not
+  partial features.

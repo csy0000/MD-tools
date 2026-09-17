@@ -101,6 +101,8 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "switching_steps": "ais.switching_steps",
         "observation_interval_steps": "ais.observation_interval_steps",
         "parameter_update_interval_steps": "ais.parameter_update_interval_steps",
+        "lambda_schedule": "ais.lambda_schedule",
+        "lambda_schedule_tau0": "ais.lambda_schedule_tau0",
         # RETIRED with the single-topology AIS. Still mapped, so an old input reaches
         # `build.md._refuse_retired_ais_keys` and is told what replaced each one, rather than
         # being refused as four unknown words. Never written: a resolved config has no value

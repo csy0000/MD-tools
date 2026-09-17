@@ -122,7 +122,7 @@ RUN_IDENTITY = "AIS_run.json"
 
 #: The schema of that record. Bumped when the SET of fields changes, so a directory written by an
 #: older build is refused by name rather than compared field by field against a shape it never had.
-RUN_IDENTITY_VERSION = 2
+RUN_IDENTITY_VERSION = 3
 
 #: The global work table rank 0 writes once every path this run owns has finished.
 #:
@@ -271,9 +271,14 @@ def choose_frames(*, eligible: list[int], count: int, selection: str, allow_repe
                 f"{count} paths were requested from {len(eligible)} eligible frames with "
                 f"evenly_spaced selection. Widen the window, ask for fewer paths, or set "
                 f"ais_source.allow_repeated_frames.")
-        stride = max(1, len(eligible) // max(1, count))
-        chosen = [eligible[min(index * stride, len(eligible) - 1)] for index in range(count)]
-        return chosen
+        # Spread over the WHOLE window. The stride used to be floored (`len // count`), so 64 paths
+        # from 95 frames took frames 0..63 of the window and never the rest of it.
+        n = len(eligible)
+        if count <= n:
+            if count == 1:
+                return [eligible[0]]
+            return [eligible[round(index * (n - 1) / (count - 1))] for index in range(count)]
+        return [eligible[index * n // count] for index in range(count)]
     generator = random.Random(seed)
     if allow_repeats:
         return [generator.choice(eligible) for _ in range(count)]
@@ -528,6 +533,15 @@ def write_work_table(out: Path, chosen: list[int], *, contributions=None,
             "collective_variable_cost": cv_cost}
 
 
+def schedule_description(schedule: dict[str, Any]) -> str:
+    """The lambda schedule in one line, for the .out and the .log."""
+    kind = schedule.get("lambda_schedule", "linear")
+    if kind == "tau-linear":
+        return (f"tau-linear (tau0 {schedule['lambda_schedule_tau0']:g}): solute-solute scaling "
+                f"follows (1 - tau)^2 with tau = tau0 (1 - t)")
+    return "linear: lambda = t"
+
+
 def run_identity_document(*, fingerprint, end_state_facts, source_facts, source_format,
                           schedule, ais, dynamics, chosen, reporting,
                           resolved_config) -> dict[str, Any]:
@@ -546,7 +560,9 @@ def run_identity_document(*, fingerprint, end_state_facts, source_facts, source_
         # finished paths and run the rest toward another Hamiltonian.
         "end_states": end_state_facts,
         "source": {"sha256": source_facts["sha256"], "format": source_format},
-        "lambda": {"start": 0.0, "end": 1.0, "interpolation": "linear"},
+        "lambda": {"start": 0.0, "end": 1.0, "interpolation": "linear",
+                   "schedule": schedule.get("lambda_schedule", "linear"),
+                   "tau0": schedule.get("lambda_schedule_tau0")},
         "schedule": {k: v for k, v in schedule.items()
                      if k not in ("observations", "lambdas", "note")},
         "reporting": {k: int(reporting[k]) for k in sorted(reporting)},
@@ -565,6 +581,9 @@ def _single_topology_note(document) -> str:
     if isinstance(document, dict) and document.get("schema_version") == 1 and "tau" in document:
         return (" -- v1 is the retired single-topology AIS, which switched one REST2 System along "
                 "tau; its paths cannot be continued by a two-state switch")
+    if isinstance(document, dict) and document.get("schema_version") == 2:
+        return (" -- v2 predates lambda schedules and the evenly spaced frame fix, so neither its "
+                "lambdas nor its selected frames can be confirmed unchanged")
     return ""
 
 
@@ -2220,7 +2239,8 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         log.update(end_states=hamiltonian.record())
 
         log.heading("Path")
-        log.field("lambda", "0 -> 1 (linear): V(lambda) = (1 - lambda) V0 + lambda V1")
+        log.field("lambda", "0 -> 1: V(lambda) = (1 - lambda) V0 + lambda V1")
+        log.field("schedule", schedule_description(schedule))
         log.field("switching", f"{schedule['switching_steps']} steps "
                                f"= {schedule['switching_ps']:g} ps at {dynamics['timestep_fs']} fs")
         log.field("parameter updates", f"{schedule['number_of_updates']} "
@@ -2398,7 +2418,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         contributions: dict[int, dict] = {}
 
         sim_out.heading("Schedule")
-        sim_out.field("lambda", "0 -> 1 (linear), V0 -> V1")
+        sim_out.field("lambda", f"0 -> 1, V0 -> V1, {schedule_description(schedule)}")
         sim_out.field("switching", f"{schedule['switching_steps']} steps "
                                    f"= {schedule['switching_ps']:g} ps")
         sim_out.field("work observations", f"{schedule['number_of_observations']} "

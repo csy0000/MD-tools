@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+**AIS has a second switching schedule, `tau-linear`.** `ais.lambda_schedule: tau-linear` moves λ as
+`[(1 − τ₀ + τ₀t)² − (1 − τ₀)²] / [1 − (1 − τ₀)²]`, so that with V0 a saved REST2 state at τ₀ and V1
+its unscaled source the solute–solute scaling of the mixture follows `(1 − τ)²` along a τ linear in
+time. The solute–environment scaling does not follow `(1 − τ)`, and the documentation says so.
+`linear` stays the default and its λ values are unchanged. τ₀ is `ais.lambda_schedule_tau0`, filled
+from `dynamics.tau` when the run generates its source; the run refuses tau-linear unless `-s` is the
+saved state at τ₀ and `-s2` the System it was scaled from.
+
+**`evenly_spaced` source frames cover the whole window.** The stride was rounded down, so 64 paths
+from 95 eligible frames started from the first 64 and never the rest. The picks are now spread from
+the first eligible frame to the last.
+
+**AIS run identity is v3.** It records the schedule, τ₀ and a digest of the λ table. A v2 run
+directory — any AIS run from 0.5.4 — is refused on continuation, because neither its λ values nor
+its selected frames can be confirmed unchanged. Start a new `-odir`.
+
 ## 0.5.4 — 2026-09-17
 
 **`build-top` takes a peptide as a sequence.** `-i ALA.seq`, where the file holds one line of

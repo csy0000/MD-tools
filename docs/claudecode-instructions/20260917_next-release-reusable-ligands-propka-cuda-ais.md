@@ -238,10 +238,13 @@ splitting is NOT part of this release (see section 9).
   then does NOT follow `(1−τ)` exactly; no single λ can match both, and the documentation
   must say so.
 
-AIS itself must not read REST2 records. `build-md`, which knows τ₀ from
-`build/<method>/scaler.yaml`, resolves `tau-linear` into an explicit λ value per parameter
-update and writes it into the resolved configuration; the runtime only consumes λ values.
-Refuse `tau-linear` when V0 is not a saved scaled state or V1 is not its unscaled source.
+AIS must not derive λ from REST2 records. τ₀ is a number in the resolved configuration,
+`ais.lambda_schedule_tau0`: build-md fills it from `dynamics.tau` when the run generates its
+source, and it must be stated otherwise. The runtime computes the λ table from that number and
+records a digest of it. The preflight CHECKS the claim against the saved-state record and refuses
+`tau-linear` when V0 is not a saved scaled state at τ₀ or V1 is not its recorded unscaled source.
+(As implemented on feature/ais-schedules; a per-update λ table in resolved.config was considered
+and not used, because 5000+ values in every `.in` would bury the input.)
 λ must be monotone from exactly 0 to exactly 1. Work stays the frozen-coordinate finite
 difference `ΔW_j = V(λ_{j+1}, x_j) − V(λ_j, x_j)`, which for the linear mixture is
 `(λ_{j+1} − λ_j)(V1 − V0)(x_j)` for any schedule. Record the schedule kind, τ₀ and a digest of

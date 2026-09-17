@@ -174,7 +174,13 @@ Do not change these without a failing test that demonstrates a defect.
   (`md_tools.ais.two_state`: shared forces once, differing force pairs as the collective variables
   of one `CustomCVForce`, `λ` a Context parameter). `dV/dλ = V1 − V0`, so
   `ΔW_j = (λ_{j+1} − λ_j)·(V1 − V0)(x_j)` exactly — one evaluation per switch. The finite
-  difference stays the DEFINITION so a future non-linear schedule cannot change what work means.
+  difference stays the DEFINITION, so a schedule changes which λ a path visits and never what
+  work means. `ais.lambda_schedule` is `linear` (λ = t) or `tau-linear`
+  (λ = [(1−τ₀+τ₀t)² − (1−τ₀)²]/[1 − (1−τ₀)²], matching REST2's solute–solute `(1−τ)²` along a τ
+  linear in t, NOT its solute–environment `(1−τ)`); τ₀ is a number in `resolved.config`, never
+  read from a REST2 record, and tau-linear is refused unless `-s` is the saved state at τ₀ and
+  `-s2` its recorded source. The schedule, τ₀ and a digest of the λ table are in `AIS_run.json`
+  and the fingerprint.
   The **work-basis probe** runs at the frozen pre-switch `x_j`, which is where the work convention
   defines work. The **observation-potential probe** runs at the coordinate a row SAVES, under that
   row's λ, which is what Hummer–Szabo reweighting consumes. They are different coordinates and

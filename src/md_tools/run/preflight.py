@@ -1887,6 +1887,51 @@ def _source_ensemble_evidence(source: Path, system_sha256: str) -> dict[str, Any
     return {"status": "verified", "system_sha256": digest}
 
 
+def _ais_schedule_claim(*, ais, source_config, dynamics, where, system0, system1):
+    """The lambda schedule, with a tau-linear claim checked against the end-state files.
+
+    tau-linear follows REST2's solute-solute scaling from tau0 to 0, so it is only meaningful when
+    V0 IS a saved scaled state at tau0 and V1 is the unscaled System that state was scaled from.
+    The record beside V0 is read to CHECK that claim; the lambdas themselves come from the
+    configuration's number, never from the record.
+    """
+    from ..build.md import ais_lambda_schedule
+    from ..build.record import file_facts
+    from ..build.strict import ConfigError
+    from ..rest2.states import ScaledStateError, load_scaler_record, scaled_state_identity
+
+    try:
+        kind, tau0 = ais_lambda_schedule({"ais": ais, "ais_source": source_config,
+                                          "dynamics": dynamics})
+    except ConfigError as refusal:
+        raise PreflightError(f"{where}: {refusal}") from None
+    if kind != "tau-linear" or tau0 is None:
+        return kind, tau0
+    try:
+        identity = scaled_state_identity(system0)
+    except ScaledStateError as refusal:
+        raise PreflightError(f"{where}: -s {Path(system0).name}: {refusal}") from None
+    if identity is None:
+        raise PreflightError(
+            f"{where}: ais.lambda_schedule is tau-linear, but -s {Path(system0).name} is not a "
+            f"saved scaled state (no scaler.yaml beside it). tau-linear follows REST2 scaling from "
+            f"tau0 to 0, which means nothing for an arbitrary V0. Use lambda_schedule: linear, or "
+            f"pass the state built by `md-openmm build-top --rest2-scaler`.")
+    if abs(float(identity["tau"]) - float(tau0)) > 1e-9:
+        raise PreflightError(
+            f"{where}: ais.lambda_schedule_tau0 is {tau0}, but -s {Path(system0).name} is the "
+            f"saved state at tau {identity['tau']} ({identity['record']}). The schedule would "
+            f"follow a scaling V0 does not have.")
+    source_sha = load_scaler_record(Path(identity["record"]))["source"]["system_sha256"]
+    if source_sha != file_facts(system1)["sha256"]:
+        raise PreflightError(
+            f"{where}: ais.lambda_schedule is tau-linear, but -s2 {Path(system1).name} is not the "
+            f"System -s was scaled from ({identity['record']} records sha256 "
+            f"{source_sha[:16]}...). tau-linear switches the scaling off, so V1 must be the "
+            f"unscaled source of V0.")
+    return kind, tau0
+
+
 def _prepare_ais(loaded: LoadedInputs, *, topology2: Path, system2: Path, source: Path, dynamics,
                  ais, reporting, source_config, collective_variables=None, config_directory=None):
     """Every AIS refusal that needs the end states or the source file, before any output exists."""
@@ -1914,6 +1959,10 @@ def _prepare_ais(loaded: LoadedInputs, *, topology2: Path, system2: Path, source
     except EndStateError as refusal:
         raise PreflightError(f"{where}: {refusal}") from None
 
+    schedule_kind, tau0 = _ais_schedule_claim(
+        ais=ais, source_config=source_config, dynamics=dynamics, where=where,
+        system0=loaded.system_path, system1=end_state_1.system_path)
+
     try:
         schedule = switching_schedule(
             switching_steps=int(ais["switching_steps"]),
@@ -1923,7 +1972,8 @@ def _prepare_ais(loaded: LoadedInputs, *, topology2: Path, system2: Path, source
             trajectory_interval_steps=int(reporting["crd_printout_solute"]),
             state_interval_steps=int(reporting["info_printout"]),
             checkpoint_interval_steps=int(reporting["checkpoint_printout"]),
-            cv_interval_steps=int((collective_variables or {}).get("interval_steps") or 0))
+            cv_interval_steps=int((collective_variables or {}).get("interval_steps") or 0),
+            lambda_schedule=schedule_kind, lambda_schedule_tau0=tau0)
     except (ValueError, SystemExit) as refusal:
         raise PreflightError(f"{where}: {refusal}") from None
 

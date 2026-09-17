@@ -425,7 +425,9 @@ def test_the_specified_ais_example_parses_and_every_key_takes_effect():
     assert parsed.resolved["ais"] == {
         "number_of_paths": 100,
         "switching_steps": 250, "observation_interval_steps": 10,
-        "parameter_update_interval_steps": 1}
+        "parameter_update_interval_steps": 1,
+        # The schedule defaults: a mixing constant, never a coordinate.
+        "lambda_schedule": "linear", "lambda_schedule_tau0": None}
     assert parsed.resolved["ais_source"]["frame_stride"] == 10
     assert parsed.resolved["ais_source"]["trajectory"] == "../cMD_V0/whole_prod1.dcd"
     assert parsed.resolved["dynamics"]["seed"] == 20260902

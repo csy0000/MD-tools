@@ -198,6 +198,12 @@
   ! unit: steps; minimum: 1
   parameter_update_interval_steps = 1,
   !
+  ! How lambda follows the switching progress t. linear: lambda = t. tau-linear: lambda =
+  ! [(1 - tau0 + tau0 t)^2 - (1 - tau0)^2] / [1 - (1 - tau0)^2], for V0 a saved REST2 state at
+  ! tau0 and V1 its unscaled source; it also needs lambda_schedule_tau0.
+  ! one of: linear, tau-linear
+  lambda_schedule                 = linear,
+  !
   ! First eligible frame, INCLUSIVE, as a 0-based index into the trajectory file. A frame
   ! index, never a time: the two are interchangeable only when the frame interval is known,
   ! and it is not always. Use this to discard equilibration.

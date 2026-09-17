@@ -407,6 +407,18 @@ type: integer · default: `1` · minimum 1; unit: steps
 
 How often lambda moves. 1 changes the Hamiltonian every step -- 50000 parameter changes over the path above. observation_interval_steps must divide by this, or observations would not sit on the update grid.
 
+#### `ais.lambda_schedule`
+
+type: string · default: `linear` · one of `linear`, `tau-linear`
+
+How lambda follows the switching progress t (0 -> 1). linear: lambda = t. tau-linear: lambda = [(1 - tau0 + tau0 t)^2 - (1 - tau0)^2] / [1 - (1 - tau0)^2], for V0 a saved REST2 state at tau0 and V1 its unscaled source: the mixture's solute-solute scaling then equals (1 - tau)^2 along a tau linear in t. Its solute-environment scaling does NOT equal (1 - tau); one lambda cannot follow both. The run refuses tau-linear unless -s is a saved state at tau0 whose record names -s2 as its source.
+
+#### `ais.lambda_schedule_tau0`
+
+type: number or null · default: `null` · minimum 0.0; maximum 0.95
+
+V0's tau, for lambda_schedule: tau-linear, and refused with linear. When ais_source.generate is true it defaults to dynamics.tau and must equal it; build-md writes the value into resolved.config.
+
 ### `ais_source`
 
 Where the starting configurations come from. Ignored unless protocol is AIS.

@@ -10,12 +10,24 @@ lambdas the path visits, when the parameters change, and which of those points a
 `lambda` is the one public, persisted coordinate. It always runs 0 -> 1, the Amber convention, and
 the source ensemble is always V0's: a reverse switch is expressed by exchanging the two end-state
 files, never by a schedule running downhill, so the Jarzynski average is over the V0 ensemble by
-construction. The schedule is linear; non-linear schedules are future work, and the work
-definition (a finite potential difference at frozen coordinates) is written so they cannot change
-what `work` means.
+construction.
+
+TWO SCHEDULES say how lambda follows the switching progress `t = update / number_of_updates`:
+
+    linear       lambda = t
+    tau-linear   lambda = [(1 - tau0 + tau0 t)^2 - (1 - tau0)^2] / [1 - (1 - tau0)^2]
+
+`tau-linear` is for V0 a saved REST2 state at tau0 and V1 its unscaled source. The mixture then
+scales solute-solute terms by `(1 - lambda)(1 - tau0)^2 + lambda = (1 - tau)^2` along
+`tau = tau0 (1 - t)`, which is what a tau switch linear in time would do to them. It does NOT make
+the solute-environment factor `(1 - tau)`: one mixing coefficient cannot follow two different
+powers of `1 - tau`. The schedule only chooses the lambdas; the work definition (a finite potential
+difference at frozen coordinates) is unchanged by it.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 #: Endpoint-inclusive: 21 observations are 20 equal intervals plus the starting configuration.
@@ -24,10 +36,13 @@ DEFAULT_OBSERVATIONS = 21
 #: is cheaper than supporting it wrongly.
 LAMBDA_START = 0.0
 LAMBDA_END = 1.0
-#: The only path type and interpolation this implementation supports. Named rather than assumed so
-#: a record says which it was.
+#: The mixing of the two end states, which is always linear in lambda whatever the schedule. Named
+#: rather than assumed so a record says which it was.
 PATH_TYPE = "two_state_linear"
 INTERPOLATION = "linear"
+#: How lambda follows the switching progress. `ais.lambda_schedule` in a configuration.
+SCHEDULE_KINDS = ("linear", "tau-linear")
+DEFAULT_SCHEDULE = "linear"
 COORDINATE_SCOPE = "whole_system"
 SELECTION = "uniform_random"
 
@@ -40,6 +55,39 @@ WORK_CONVENTION = (
     "with the single common beta of the run temperature. Fixed volume throughout, so no "
     "pressure-volume term is included."
 )
+
+
+def check_schedule(kind: str, tau0: float | None) -> None:
+    """Refuse a schedule kind or tau0 that cannot define a lambda path."""
+    if kind not in SCHEDULE_KINDS:
+        raise ValueError(f"ais.lambda_schedule is {kind!r}; the schedules are "
+                         f"{', '.join(SCHEDULE_KINDS)}")
+    if kind == "linear":
+        if tau0 is not None:
+            raise ValueError(
+                f"ais.lambda_schedule_tau0 is {tau0} but ais.lambda_schedule is linear, which "
+                f"does not use it. Remove it, or choose tau-linear.")
+        return
+    if tau0 is None:
+        raise ValueError(
+            "ais.lambda_schedule is tau-linear, which needs V0's tau: set "
+            "ais.lambda_schedule_tau0 (build-md sets it from dynamics.tau when the run generates "
+            "its own source).")
+    if not 0.0 < float(tau0) < 1.0:
+        raise ValueError(
+            f"ais.lambda_schedule_tau0 is {tau0}; tau-linear needs 0 < tau0 < 1. At 0 the two end "
+            f"states have the same solute scaling and there is nothing for the schedule to follow.")
+
+
+def lambda_at(progress: float, *, kind: str = DEFAULT_SCHEDULE, tau0: float | None = None) -> float:
+    """lambda at switching progress `progress` in [0, 1], under schedule `kind`."""
+    t = float(progress)
+    if kind == "linear":
+        return t
+    if kind == "tau-linear":
+        start = (1.0 - float(tau0)) ** 2
+        return ((1.0 - float(tau0) + float(tau0) * t) ** 2 - start) / (1.0 - start)
+    raise ValueError(f"unknown lambda schedule {kind!r}")
 
 
 def exact_steps(duration_ps: float, timestep_fs: float, *, field: str) -> int:
@@ -62,7 +110,9 @@ def switching_schedule(*, switching_steps: int,
                        trajectory_interval_steps: int | None = None,
                        state_interval_steps: int = 0,
                        checkpoint_interval_steps: int = 0,
-                       cv_interval_steps: int = 0) -> dict[str, Any]:
+                       cv_interval_steps: int = 0,
+                       lambda_schedule: str = DEFAULT_SCHEDULE,
+                       lambda_schedule_tau0: float | None = None) -> dict[str, Any]:
     """Every lambda the path visits, and which of them are observed.
 
     EVERY LENGTH HERE IS AN INTEGER STEP COUNT. A step count is exact; a duration in picoseconds is
@@ -97,6 +147,9 @@ def switching_schedule(*, switching_steps: int,
 
     `lambdas[j]` is the Hamiltonian in force during the j-th propagation interval, so `lambdas[0]`
     is 0 -- V0, the source Hamiltonian, before any change -- and `lambdas[number_of_updates]` is 1.
+    Between the two they follow `lambda_schedule` (see the module docstring), and the result names
+    the schedule, its tau0 and a sha256 of the lambda table, so a record and a checkpoint
+    fingerprint both change when the lambdas do.
 
     OBSERVATION 0 PRECEDES ALL WORK. It is the source configuration under the source Hamiltonian,
     before any parameter change and before any propagation, and its cumulative work is exactly zero
@@ -162,12 +215,19 @@ def switching_schedule(*, switching_steps: int,
     checkpoint_steps = ([s for s in range(checkpoint_every, steps + 1, checkpoint_every)]
                         if checkpoint_every else [])
 
-    lambdas = [LAMBDA_START + (LAMBDA_END - LAMBDA_START) * j / updates
+    check_schedule(lambda_schedule, lambda_schedule_tau0)
+    tau0 = None if lambda_schedule_tau0 is None else float(lambda_schedule_tau0)
+    lambdas = [LAMBDA_START + (LAMBDA_END - LAMBDA_START)
+               * lambda_at(j / updates, kind=lambda_schedule, tau0=tau0)
                for j in range(updates + 1)]
     # Written back exactly rather than left to accumulate rounding: the last lambda must BE 1, not
     # a float a few ulp away from it, because the final work row is the work of reaching V1.
     lambdas[0] = LAMBDA_START
     lambdas[-1] = LAMBDA_END
+    if any(lambdas[j + 1] < lambdas[j] for j in range(updates)):
+        raise ValueError(f"the {lambda_schedule} schedule is not monotone in lambda")
+    lambda_sha256 = hashlib.sha256(json.dumps([repr(value) for value in lambdas])
+                                   .encode()).hexdigest()
 
     observations = []
     for index in range(number_of_observations):
@@ -222,6 +282,9 @@ def switching_schedule(*, switching_steps: int,
         "number_of_frames": len(frame_steps),
         "number_of_state_rows": len(state_steps),
         "number_of_checkpoints": len(checkpoint_steps),
+        "lambda_schedule": lambda_schedule,
+        "lambda_schedule_tau0": tau0,
+        "lambda_sha256": lambda_sha256,
         "lambdas": lambdas,
         "observations": observations,
         # Derived for the reader; the step counts above are what runs.

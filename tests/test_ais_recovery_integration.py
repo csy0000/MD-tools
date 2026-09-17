@@ -872,7 +872,8 @@ def test_the_run_identity_document_names_every_field_that_may_not_change():
         assert field in document, field
     assert RUN_IDENTITY_REQUIRED_KEYS <= set(document)
     assert set(document["end_states"]) == {"V0", "V1"}
-    assert document["lambda"] == {"start": 0.0, "end": 1.0, "interpolation": "linear"}
+    assert document["lambda"] == {"start": 0.0, "end": 1.0, "interpolation": "linear",
+                                  "schedule": "linear", "tau0": None}
     assert document["observation_columns"] == list(OBSERVATION_COLUMNS)
     assert "tau" not in document and "decomposition_schema" not in document
     # The derived, per-invocation parts of the schedule are excluded: `lambdas` is a list of

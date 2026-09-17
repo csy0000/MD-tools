@@ -148,11 +148,16 @@ def test_lambda_is_the_one_public_coordinate_and_no_tau_is_persisted_in_the_ais_
     does not depend on a build existing. `tau` is REST2's coordinate: a tau in the `ais` block would
     describe the retired single-topology switch, and `s` or `sqrt(s)` were only ever derived from
     it. Neither is resolved, and neither is a column.
+
+    The one exception is `lambda_schedule_tau0`: a constant of the tau-linear SCHEDULE (V0's tau,
+    which fixes how lambda follows progress), never a coordinate a path moves along or a column.
     """
     path = tmp_path / "AIS.config"
     path.write_text(yaml.safe_dump(_base(), sort_keys=False), encoding="utf-8")
     resolved = resolve_md_config(path)
-    text = yaml.safe_dump({"ais": resolved["ais"], "ais_source": resolved["ais_source"]})
+    ais = {k: v for k, v in resolved["ais"].items() if k != "lambda_schedule_tau0"}
+    assert "lambda_schedule_tau0" in resolved["ais"]
+    text = yaml.safe_dump({"ais": ais, "ais_source": resolved["ais_source"]})
     for forbidden in ("tau", "\ns:", "sqrt_s", "work_measurement", "verify_every_updates"):
         assert forbidden not in text, f"the resolved AIS block persists {forbidden!r}"
 
