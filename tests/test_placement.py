@@ -332,3 +332,16 @@ def test_the_mps_refusal_names_a_section_that_exists():
     quoted = str(refused.value).split('docs/md-run.md, "')[1].split('"')[0]
     headings = (REPO_ROOT / "docs" / "md-run.md").read_text(encoding="utf-8")
     assert f"## {quoted}" in headings, quoted
+
+
+def test_a_forced_verdict_is_recorded_as_forced():
+    """The seam makes `status` read `verified` beside a daemon that is not running. `detail` says
+    so, and `forced` is the field a reader can filter on rather than having to read prose."""
+    honest = ABSENT.with_verification(True, "the driver lists it as M+C")
+    assert honest.status == "verified" and honest.forced is False
+    assert honest.verdict_source == "the CUDA driver"
+
+    forced = ABSENT.with_verification(True, "seam", forced=True)
+    assert forced.status == "verified" and forced.forced is True
+    assert forced.record()["forced"] is True
+    assert "MD_TOOLS_FORCE_MPS_VERDICT" in forced.verdict_source

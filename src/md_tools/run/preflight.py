@@ -341,6 +341,7 @@ def _plan_placement(coordination, machine: dict[str, Any], *, cpu: bool, device:
 def _verify_mps(device, precision: str, status):
     """Hold a Context on this rank's device and ask the driver whether we are an MPS client."""
     import os as _os
+    import sys as _sys
 
     from openmm import Context, Platform, System, VerletIntegrator, unit
 
@@ -348,8 +349,16 @@ def _verify_mps(device, precision: str, status):
 
     if _os.environ.get(placing.FORCE_MPS_VERDICT):
         verdict = _os.environ[placing.FORCE_MPS_VERDICT]
+        # LOUD, on the interpreter's own stderr. A forced verdict makes the preflight accept a
+        # configuration the rule refuses, and the run record then reads `verified` beside a daemon
+        # that is not running. Nobody may reach that state without seeing it said.
+        print(f"WARNING: {placing.FORCE_MPS_VERDICT}={verdict} is set: the MPS verdict is being "
+              f"FORCED, not read from the driver. This is a test seam. Any timing or record from "
+              f"this run describes a configuration the rule would refuse.",
+              file=_sys.__stderr__ or _sys.stderr, flush=True)
         return status.with_verification({"verified": True, "not-a-client": False}.get(verdict),
-                                        f"{placing.FORCE_MPS_VERDICT}={verdict} (test seam)")
+                                        f"{placing.FORCE_MPS_VERDICT}={verdict} (test seam)",
+                                        forced=True)
     system = System()
     system.addParticle(1.0 * unit.amu)
     properties = {"Precision": precision}
@@ -1191,7 +1200,8 @@ def _placement_lines(plan) -> list[str]:
         lines.append(f"  throughput        {rates} steps/s by device")
     if plan.mps is not None:
         lines.append(f"  mps               {plan.mps.status}"
-                     + (" (required: a device is shared)" if plan.shared_devices else ""))
+                     + (" (required: a device is shared)" if plan.shared_devices else "")
+                     + (f" -- FORCED by {plan.mps.verdict_source}" if plan.mps.forced else ""))
     return lines
 
 

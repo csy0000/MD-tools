@@ -104,6 +104,10 @@ class MpsStatus:
     verified: bool | None = None
     environment: dict[str, str | None] = field(default_factory=dict)
     detail: str = ""
+    #: True when the verdict came from `FORCE_MPS_VERDICT` rather than from the driver. A record
+    #: whose `status` reads `verified` while no daemon was running is contradictory on its face,
+    #: and `detail` alone is too easy to skim past: this is the field a reader can filter on.
+    forced: bool = False
 
     @property
     def status(self) -> str:
@@ -120,13 +124,18 @@ class MpsStatus:
             return "unknown"
         return "requested-not-detected" if self.requested else "absent"
 
-    def with_verification(self, verified: bool | None, detail: str) -> "MpsStatus":
+    def with_verification(self, verified: bool | None, detail: str, *,
+                          forced: bool = False) -> "MpsStatus":
         return MpsStatus(requested=self.requested, pipe_directory=self.pipe_directory,
                          daemon=self.daemon, verified=verified, environment=self.environment,
-                         detail=detail)
+                         detail=detail, forced=forced)
 
     def record(self) -> dict[str, Any]:
         return {**asdict(self), "status": self.status}
+
+    @property
+    def verdict_source(self) -> str:
+        return f"{FORCE_MPS_VERDICT} (test seam)" if self.forced else "the CUDA driver"
 
 
 @dataclass(frozen=True)
