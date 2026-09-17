@@ -465,6 +465,7 @@ MULTI_RANK_MODULES = frozenset({
     "test_runtime_contract_matrix.py", "test_own_replica_exchange.py",
     "test_rest2_equilibration_per_tau_cuda.py",
     "test_hprest2_gpu_evidence.py",
+    "test_placement_cuda.py",
 })
 
 #: Modules that must see the machine EXACTLY as it is, and get no assignment at all.

@@ -539,7 +539,7 @@ def refuse_unverified_sharing(plan: LaunchPlan, mps: MpsStatus, *, rank: int,
         f"  Without MPS, workers on one GPU are time-sliced: each waits for the others' kernels, "
         f"and a synchronous ladder runs at the pace of that shared GPU. MPS is required whenever "
         f"a GPU hosts more than one worker, and this package does not start or stop the daemon.\n"
-        f"  Start one (docs/md-run.md, \"Sharing a GPU with MPS\"):\n"
+        f"  Start one (docs/md-run.md, \"CPUs, devices and MPS\"):\n"
         f"      export CUDA_MPS_PIPE_DIRECTORY=<a directory you own>\n"
         f"      export CUDA_MPS_LOG_DIRECTORY=<another>\n"
         f"      nvidia-cuda-mps-control -d\n"

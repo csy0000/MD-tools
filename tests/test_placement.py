@@ -281,3 +281,16 @@ def test_placement_is_the_only_device_chooser():
         assert "def select_device_for_rank(" not in text, path
         assert "def device_index_for(" not in text, path
         assert "% len(devices)" not in text, path
+
+
+def test_the_mps_refusal_names_a_section_that_exists():
+    """The refusal sends a person to a heading. A stale name is a pointer nobody can follow."""
+    from .conftest import REPO_ROOT
+
+    plan = plan_launch(_facts(2), platform="CUDA", device_policy="local_rank",
+                       throughput={"node": [100.0]})
+    with pytest.raises(PlacementError) as refused:
+        refuse_unverified_sharing(plan, ABSENT, rank=0)
+    quoted = str(refused.value).split('docs/md-run.md, "')[1].split('"')[0]
+    headings = (REPO_ROOT / "docs" / "md-run.md").read_text(encoding="utf-8")
+    assert f"## {quoted}" in headings, quoted
