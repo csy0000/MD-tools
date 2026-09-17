@@ -62,7 +62,14 @@ METADATA_NAME = "metadata.json"
 #: browsable YAML file. Derived from `metadata.json` and re-derived on every load, so the two
 #: cannot drift; `md_tools.ligands.match` is the one definition of what they mean.
 CRITERIA_NAME = "parameter.config"
-PACKAGE_FILES = (MOLECULE_NAME, FFXML_NAME, METADATA_NAME, CRITERIA_NAME)
+#: The files a package must hold. `parameter.config` is not among them: it is DERIVED from
+#: metadata.json, every package written since it existed carries it, and a package written before
+#: -- by a build on an earlier commit, or copied into a build directory or a reference bundle by
+#: one -- is complete without it. Such a package loads, and its criteria are derived on the spot.
+#: Refusing it would break builds and bundles that are correct.
+PACKAGE_FILES = (MOLECULE_NAME, FFXML_NAME, METADATA_NAME)
+#: Files a package MAY hold beside the required ones. Anything else is refused.
+OPTIONAL_PACKAGE_FILES = (CRITERIA_NAME,)
 ATOM_NAMES_PROPERTY = "MDT_ATOM_NAMES"
 PARAMETER_ID_PREFIX = "param_"
 IDENTITY_SCHEME = ("parameter_id = 'param_' + sha256(canonical_json({'chemical_state': "
@@ -155,13 +162,13 @@ class LigandPackage:
         destination.parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=f".{self.parameter_id}-", dir=destination.parent))
         try:
-            for name in PACKAGE_FILES:
+            for name in package_files(self.path):
                 shutil.copy2(self.path / name, staging / name)
             if package_digest(staging) != self.package_sha256:
                 raise PackageError(f"the copy of {self.reference} in {staging} does not verify")
             os.rename(staging, destination)
         except BaseException:
-            for name in PACKAGE_FILES:
+            for name in (*PACKAGE_FILES, *OPTIONAL_PACKAGE_FILES):
                 (staging / name).unlink(missing_ok=True)
             if staging.exists():
                 staging.rmdir()
@@ -176,14 +183,19 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def package_digest(directory: Path) -> str:
-    """One digest for the three files together: sha256 over `name sha256` lines, sorted."""
-    lines = []
+def package_files(directory: Path) -> list[str]:
+    """The package's files: the required ones, plus any optional one it carries."""
     for name in PACKAGE_FILES:
-        path = Path(directory) / name
-        if not path.is_file():
+        if not (Path(directory) / name).is_file():
             raise PackageError(f"{directory}: missing {name}")
-        lines.append(f"{name} {_sha256_bytes(path.read_bytes())}")
+    return [*PACKAGE_FILES, *(name for name in OPTIONAL_PACKAGE_FILES
+                              if (Path(directory) / name).is_file())]
+
+
+def package_digest(directory: Path) -> str:
+    """One digest for the package's files: sha256 over `name sha256` lines, sorted."""
+    lines = [f"{name} {_sha256_bytes((Path(directory) / name).read_bytes())}"
+             for name in package_files(directory)]
     return _sha256_bytes("\n".join(sorted(lines)).encode())
 
 
@@ -538,7 +550,7 @@ def _finish_package(*, mol, names: list[str], raw_ffxml: str, reference_table: d
         load_package(staging, expected_directory_name=False)
         os.rename(staging, destination)
     except BaseException:
-        for name in PACKAGE_FILES:
+        for name in (*PACKAGE_FILES, *OPTIONAL_PACKAGE_FILES):
             (staging / name).unlink(missing_ok=True)
         if staging.exists():
             staging.rmdir()
@@ -747,10 +759,12 @@ def load_package(directory: Path, *, expected_directory_name: bool = True) -> Li
     for name in PACKAGE_FILES:
         if not (directory / name).is_file():
             raise PackageError(f"{directory}: not a ligand package (missing {name})")
-    extra = sorted(p.name for p in directory.iterdir() if p.name not in PACKAGE_FILES)
+    known = (*PACKAGE_FILES, *OPTIONAL_PACKAGE_FILES)
+    extra = sorted(p.name for p in directory.iterdir() if p.name not in known)
     if extra:
-        raise PackageError(f"{directory}: unexpected files {extra}; a package holds exactly "
-                           f"{', '.join(PACKAGE_FILES)}")
+        raise PackageError(f"{directory}: unexpected files {extra}; a package holds "
+                           f"{', '.join(PACKAGE_FILES)}, optionally with "
+                           f"{', '.join(OPTIONAL_PACKAGE_FILES)}")
     try:
         metadata = json.loads((directory / METADATA_NAME).read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -813,8 +827,15 @@ def load_package(directory: Path, *, expected_directory_name: bool = True) -> Li
         if atom[2] != record["partial_charge_e"]:
             raise PackageError(f"{directory}: metadata partial charge of atom {record['index']} "
                                f"is not the ffxml's")
-    criteria = read_criteria(directory / CRITERIA_NAME)
     derived = criteria_document(metadata, mol)
+    if not (directory / CRITERIA_NAME).is_file():
+        # A package from before the criteria file existed. Everything it declares is derived from
+        # metadata.json, so nothing is missing; the package is simply older, and a search reads
+        # what is derived here. `declared_in_package` says which it was.
+        return LigandPackage(path=directory, metadata=metadata, ffxml_text=ffxml_text,
+                             atom_names=tuple(names), table=table, mol=mol,
+                             criteria={**derived, "declared_in_package": False})
+    criteria = read_criteria(directory / CRITERIA_NAME)
     if criteria != derived:
         differing = sorted(k for k in set(criteria) | set(derived)
                            if criteria.get(k) != derived.get(k))
@@ -832,7 +853,8 @@ def load_package(directory: Path, *, expected_directory_name: bool = True) -> Li
             raise PackageError(f"{directory}: the parent directory is {directory.parent.name!r} "
                                f"but the package's compound is {compound_id}")
     return LigandPackage(path=directory, metadata=metadata, ffxml_text=ffxml_text,
-                         atom_names=tuple(names), table=table, mol=mol, criteria=criteria)
+                         atom_names=tuple(names), table=table, mol=mol,
+                         criteria={**criteria, "declared_in_package": True})
 
 
 def _rdkit_version() -> Optional[str]:

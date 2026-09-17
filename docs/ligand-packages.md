@@ -22,6 +22,11 @@ each preparation step: hydrogens, solvent and System.
     parameter.config   what a build must match to REUSE these parameters
 ```
 
+The first three files are required. `parameter.config` is derived from `metadata.json`, so a
+package written before it existed -- by a build on an earlier commit, or a copy carried in a build
+directory or a reference bundle -- loads exactly as it did, with its criteria derived on the spot.
+Such a package is older, not incomplete, and it is searchable like any other.
+
 Three identities are kept apart:
 
 | identity | example | what it names |
