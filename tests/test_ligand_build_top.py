@@ -308,3 +308,41 @@ solvent:
     forced = build("forced", "CC(=O)Nc1ccc(O)cc1", parameters="generate")
     assert forced["how"] == "created" and forced["search"] is None
     assert forced["reference"] == tyl.reference or forced["parameter_id"].startswith("param_")
+
+
+@pytest.mark.slow
+def test_a_stated_package_that_cannot_be_loaded_refuses_before_any_output(tmp_path):
+    """The reporting half of the legacy-package case: a refusal, named, with nothing created.
+
+    Whether such a package should be accepted at all is a policy question about existing data.
+    What is not a policy question is how it arrives: build-top must refuse by name, exit 2, and
+    leave no output directory, rather than let the error escape as a traceback from several steps
+    into the build.
+    """
+    import json
+
+    tyl = _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    metadata = json.loads((tyl.path / "metadata.json").read_text())
+    metadata["charges"].pop("backend_id")
+    metadata["charges"].pop("backend", None)
+    (tyl.path / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True))
+    (tyl.path / "parameter.config").unlink()
+
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "in.smi").write_text("CC(=O)Nc1ccc(O)cc1 paracetamol\n", encoding="utf-8")
+    result = _build(work, Path("in.smi"), f"""
+solute:
+  kind: ligand
+  residue_name: TYL
+  parameters: {tyl.reference}
+ligand_catalog:
+  path: {tmp_path / 'catalog'}
+solvent:
+  model: TIP3P
+  padding_nm: 1.0
+""")
+    assert result.returncode == 2, result.stdout[-2000:] + result.stderr[-2000:]
+    assert "Traceback" not in result.stderr
+    assert str(tyl.path) in result.stderr and "solute.parameters" in result.stderr
+    assert not (work / "build").exists()

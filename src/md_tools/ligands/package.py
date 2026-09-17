@@ -827,7 +827,14 @@ def load_package(directory: Path, *, expected_directory_name: bool = True) -> Li
         if atom[2] != record["partial_charge_e"]:
             raise PackageError(f"{directory}: metadata partial charge of atom {record['index']} "
                                f"is not the ffxml's")
-    derived = criteria_document(metadata, mol)
+    try:
+        derived = criteria_document(metadata, mol)
+    except PackageError as exc:
+        # The package itself is what cannot be described; say WHICH one. A build that named it
+        # explicitly gets the path of the copy that was actually read, which is not always the
+        # one the configuration points at: a stale copy under a build's own ligands/ shadows the
+        # catalog entry.
+        raise PackageError(f"{directory}: {exc}") from exc
     if not (directory / CRITERIA_NAME).is_file():
         # A package from before the criteria file existed. Everything it declares is derived from
         # metadata.json, so nothing is missing; the package is simply older, and a search reads
