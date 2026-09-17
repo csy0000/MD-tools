@@ -275,20 +275,28 @@ campaign is required for this tutorial.
 - Neither has a chain break. Each has 3 residues with missing side-chain atoms plus a C-terminal
   OXT (built under `input.missing_atoms: add`) and 4 residues with alternate conformations.
 
-Choose ONE biological assembly explicitly and record why, with the source file, assembly
-definition and hashes. Record alternate-conformer handling, rebuilt atoms, and every retained
-or removed water and ion. EDO (ethylene glycol) and SCN (thiocyanate) are crystallisation
-additives: either remove each explicitly, recorded as a preparation decision, or keep it with its
-own parameter package. Never drop them silently, and never pick an assembly only because it
-builds more easily. A retained K+ uses TIP3P-compatible Amber ion parameters and needs no
-site-specific model.
+**Decided by the user (2026-09-17): assembly 1 (chain A), with the crystallisation additives EDO
+and SCN removed.** Record the assembly definition, the source file and its hashes. The removal is
+a recorded preparation decision made through build-top's explicit per-residue option
+`input.remove` (md-tools-propka, agreed with md-tools-ligands): each entry names one residue
+instance by selector and carries a required reason, so nothing is removed by name pattern.
+For assembly 1:
+
+    input:
+      remove:
+        - {select: {chain: A, resid: "2198"}, reason: crystallisation additive (EDO)}
+        - {select: {chain: A, resid: "2199"}, reason: crystallisation additive (EDO)}
+        - {select: {chain: A, resid: "2201"}, reason: crystallisation additive (SCN)}
+
+Paracetamol is TYL A:2200 and is kept. Assembly 1 contains no K+. Also record alternate-conformer handling,
+the rebuilt atoms, and every retained or removed crystallographic water.
 
 | Component | Tutorial choice |
 | --- | --- |
 | Protein | Amber ff14SB |
 | Water | TIP3P |
 | Paracetamol | Existing registered Sage/charge parameter package, unchanged |
-| Ions (retained or bulk) | TIP3P-compatible Amber ion parameters |
+| Bulk salt ions | TIP3P-compatible Amber ion parameters |
 
 Reuse the registered ligand-only paracetamol package (CHEMBL112) without regeneration and
 preserve its bound heavy-atom pose. Show protein/ligand mapping, PROPKA results, histidine
@@ -326,7 +334,7 @@ limitations of a 10 ns run.
 | CPU/GPU placement | Core counts that are not a multiple of the worker count refused before output; uneven GPU splits (4 replicas on 3 GPUs) accepted only with MPS verified; placement from measured throughput recorded; throughput compared with the old round-robin under matched settings. |
 | AIS schedules | `linear` unchanged bit-for-bit in its λ values; `tau-linear` λ table equal to the formula, monotone, exactly 0 and 1 at the ends; the mixture's solute–solute prefactor equal to `(1−τ)²` at every update; frozen-coordinate work checked against independent end-state energies; schedule change on continuation refused. |
 | Frame selection | `evenly_spaced` covers the whole eligible window with distinct frames; more paths than frames still refused; old-selection run directories refused on continuation. |
-| Tutorials | 4A9K and 1BRS each complete 10 ns cMD after equilibration; all inputs and preparation decisions recorded, including the assembly choice and the handling of EDO, SCN, K+ and alternate conformers; 4A9K reuses the ligand package; analysis and limitations reported. |
+| Tutorials | 4A9K and 1BRS each complete 10 ns cMD after equilibration; all inputs and preparation decisions recorded, including assembly 1, the recorded EDO/SCN removal, crystallographic waters and alternate conformers; 4A9K reuses the ligand package; analysis and limitations reported. |
 | Export | Relocated standalone bundle reproduces the built Hamiltonian and executes the supported protocol with OpenMM and explicitly declared output dependencies, without MD-tools or a parameterization/prediction package at runtime. |
 | Regression | Relevant existing tests, CUDA lanes and installed-wheel checks pass; strict configuration and continuation contracts remain intact. |
 
