@@ -8,6 +8,7 @@ One installed executable, `md-openmm`. Exactly four public work commands:
 
 ```text
 md-openmm build-top      a structure       -> built.xml + built.pdb + built.log
+                         --rest2-scaler: a built System -> build/<method>/system_state<i>.xml + scaler.yaml
 md-openmm build-md       a protocol config -> run scripts, .in files and run.sh in ./md_script/
 md-openmm md-run         an Amber-like .in -> a stage, a ladder, or AIS switching paths
 md-openmm data-register  a finished tree   -> a verified dataset under $MD_DATA
@@ -29,7 +30,9 @@ and hands the work to the same function a generated script calls — `stage_main
 ```
 
 `-x` is never the System. `-s` is required, `-x` is optional with a protocol default, and both
-mistakes are refused by name. Flag abbreviation is off.
+mistakes are refused by name. Flag abbreviation is off. A REST2 ladder is the one exception to
+where `-s` goes: it reads `-s` ONLY from its group file, one saved state per line, and refuses it on
+the command line.
 
 **`-o` and `-log` are two files**, for two readers: `.out` is what a person tails during a run,
 `.log` is the machine-readable provenance record. Never merge them; only a genuine collision is
@@ -48,7 +51,7 @@ same reason completion is read from a machine record rather than from prose. Eve
 ```text
 configs/machine/user.config.example   identity, $MD_DATA, and `machine.openmm`
 configs/sys/build-top.config          force fields, solvent, box, ions, constraints, HMR
-configs/md/{cMD,REST2,rREST2,AIS}.config   protocol, stage lengths, reporting
+configs/md/{cMD,REST2,AIS}.config   protocol, stage lengths, reporting
 ```
 
 `md_tools.build.md` is the ONE authority for MD workflow configuration — protocol, stage lengths,
@@ -61,7 +64,6 @@ and nothing else. If you find a second function resolving an MD configuration, i
 md_tools.md      PositionalRestraint, ReportingConfig, run_stage, run_generated_stage
 md_tools.rest2   REST2Scaler, ScalingSelection
 md_tools.remd    REMDRunner, NeighborExchangeRule, run_remd, run_generated_remd
-md_tools.remd.reservoir   ReservoirRefreshRule
 md_tools.ais     run_generated_ais, path_trajectory_name, paths_for_rank
 md_tools.run     parse_run_input, md_run_main
 ```
@@ -79,7 +81,9 @@ scaler or exchange rule built there. `resolved.config` beside the script is the 
 declaration: located from `__file__` so the directory is movable, re-validated by the strict
 resolver at execution, and bound into the checkpoint fingerprint.
 
-ONE REST2 scaler serves fixed-τ cMD, REST2, rREST2 and AIS. `md_tools/openmm/templates/` is gone —
+ONE REST2 scaler, and it runs in ONE place: `md-openmm build-top --rest2-scaler`, which writes
+every scaled Hamiltonian a run will integrate as a file (see the invariants below). A stage and a
+ladder never scale. `md_tools/openmm/templates/` is gone —
 it held installed runtime code, not templates. `md_tools.runtime` is compatibility-only: it
 re-exports and defines nothing, and new work must not import from it.
 
@@ -107,8 +111,10 @@ generated from the models and drift-checked; never hand-edit one.
 
 Do not change these without a failing test that demonstrates a defect.
 
-* **REST2/rREST2**: every replica at the same physical temperature — Hamiltonian scaling, not
-  temperature REMD. Bonds and angles unscaled; ordinary amide omega torsions unscaled; eligible
+* **REST2**: every replica at the same physical temperature — Hamiltonian scaling, not
+  temperature REMD. Convention v3, `rest2-unscaled-torsions`: bonds and angles unscaled; every
+  UNSCALED TORSION unscaled — each proper torsion across an ordinary amide C–N (omega), an aromatic
+  ring bond or another double bond (the ARG guanidinium included), and every improper; eligible
   solute torsions and CMAP by `(1-tau)²`; solute–solute nonbonded and 1-4 by `(1-tau)²`;
   solute–environment by `(1-tau)`; generalized-Born by `(1-tau)`. Exchanges never rescale
   velocities. The runtime is NVT. One trajectory per fixed thermodynamic **state**
@@ -116,6 +122,39 @@ Do not change these without a failing test that demonstrates a defect.
   `whole_state<i>_prod<N>.nc` — `state_trajectory_name` is the one authority), never per walker.
   The index is the STATE's, not the walker's: Amber and GROMACS write walker-following files and
   sort them afterwards, which is why `cpptraj` needs `remdtrajtemp` and GROMACS ships `demux.pl`.
+* **A scaled Hamiltonian is built once, as a file, and never re-derived at run time.**
+  `md-openmm build-top --rest2-scaler -s build/built.xml -p build/built.pdb --config
+  build/scaler.config` writes `build/<method>/system_state<i>.xml` (method REST2, cMD or AIS) and a
+  `scaler.yaml` recording the source System's sha256, every state's tau and sha256, the solute and
+  every unscaled central bond and improper, plus `<RESNAME>-unscaled.png` for each small molecule.
+  The directory is staged and renamed into place; `--overwrite` moves the old one aside, never
+  deletes it. `md_tools.build.scaler` is the one writer and `md_tools.rest2.states.
+  scaled_state_identity` the one reader.
+* **Unscaled torsions are CLASSIFIED, and a torsion nobody can classify is refused.** Proteins by
+  the residue table (`PROTEIN_UNSCALED_BONDS`), small molecules by bond orders from an SDF:
+  `sdf_filelist` in the scaler config, else `<RESNAME>.sdf` beside the System, else `built.sdf`
+  when it is the only non-standard residue; with several and no mapping it refuses rather than
+  guesses. Proper versus improper is
+  decided from the bond graph (bonds ∪ constraints): a bonded chain is proper, one atom bonded to
+  the other three is improper, anything else is refused. `unscaled_torsions` (the old
+  `omega_*` keys) is the one enforcing entry point; records written under the old names are still
+  read, and continuing a v2 run is refused.
+* **A stage never scales; `dynamics.tau` is a CLAIM checked against the System it is given.** A
+  saved state is integrated as it is, and a tau that disagrees with its `scaler.yaml` -- including
+  tau 0 on a hot state, which is an NPT stage on a scaled System -- is refused. tau > 0 on a
+  System that is not a saved state is refused, naming the command that builds one. Minimisation
+  claims tau 0 and minimises the unscaled built System, because `min/` is shared by every method.
+  `build-md` refuses a hot run until `build/<method>/system_state0.xml` exists, and `run.sh` passes
+  it as `SCALED_SYSTEM`.
+* **A REST2 ladder integrates saved states, and reads them only from its group file.** Every line
+  of `remd_groupfile.<segment>` names `-s ../build/REST2/system_state<i>.xml`, state i on line i,
+  all from ONE `scaler.yaml` whose taus equal the ladder's; `build-md` checks that record against
+  `built.xml` before writing a line, and the ladder preflight checks it again. The runtime writes no
+  group file; `solute.yaml` records the `scaler.yaml` (relative to the run) and every state's
+  sha256. Each line's `-i` must be the `_protocol.py` the ladder writes into `-odir` -- `run.sh`
+  launches from the run directory with `-odir .` -- and any other `-odir` is refused before
+  output. A REST2 reference bundle carries the saved states byte for byte, with `scaler.yaml` and
+  the built System that `verify_rungs.py` re-derives them from.
 * **AIS**: `tau` is the only public, persisted coordinate — never persist `s` or `sqrt(s)`.
   Work is `ΔW_j = U(τ_{j+1}, x_j) − U(τ_j, x_j)`: parameters move at frozen coordinates, then the
   configuration propagates. Observation 0 precedes all work and has exactly zero. Switching is at
@@ -199,7 +238,7 @@ Do not change these without a failing test that demonstrates a defect.
   are accepted by the parser and refused BY NAME in the preflight — leaving them off makes argparse
   say "unrecognized arguments", which explains nothing and puts the rule where `md-run` and a
   generated script can disagree about it. They did.
-* **Under MPI, rank 0 writes the shared files** — `solute.yaml`, `_protocol.py`, the group file —
+* **Under MPI, rank 0 writes the shared files** — `solute.yaml`, `_protocol.py` —
   atomically, and every rank then verifies the digest. The helpers are content-addressed: a stale
   `_protocol.py` from a ladder with a different state count is executable, runs perfectly and
   simulates something else.
@@ -219,7 +258,7 @@ Do not change these without a failing test that demonstrates a defect.
   roles, resolved-path collisions (outputs against each other AND against the inputs), input
   existence and format, topology/System agreement, the MPI launch, the machine configuration,
   `--cpu`/`--device`, the device policy, platform availability and a real CUDA Context — before
-  `mkdir`, `resolved.config`, the `.out`, the `.log`, `solute.yaml`, `_protocol.py`, a group file,
+  `mkdir`, `resolved.config`, the `.out`, the `.log`, `solute.yaml`, `_protocol.py`,
   a trajectory or a checkpoint exists. A `-odir` holding a `resolved.config` is indistinguishable
   from a run that happened, and a refusal must not touch an existing directory either.
 * **`explicit_cpu` means the user typed `--cpu` on this invocation.** Nothing else. A machine
@@ -254,7 +293,7 @@ Do not change these without a failing test that demonstrates a defect.
   on and off.
 * **A CV cadence is independent of every other cadence, and must be exact.** It may be finer than
   the trajectory — that is the point of a separate series. `interval_steps` divides the cMD stage
-  length, the REST2/rREST2 `exchange_interval_steps`, and for AIS is a multiple of
+  length, the REST2 `exchange_interval_steps`, and for AIS is a multiple of
   `parameter_update_interval_steps` *and* divides `switching_steps`. Step 0 and the final step
   appear exactly once **in every protocol, ladders included** — a ladder observes step 0 before a
   single step is propagated, with `exchange_attempt = -1`; minimisation produces no series, because its iterations have no timestep
@@ -292,15 +331,11 @@ Do not change these without a failing test that demonstrates a defect.
   hash cannot say which file changed and would not notice two states' files being swapped. The
   prefix is validated -- digest, columns, finite values, grid, identifiers -- BEFORE a byte is
   truncated, and a checkpoint with no prefix record refuses with a compatibility message.
-* **An rREST2 CV row holds the configuration the state PROPAGATED, never the reservoir sample.**
-  The complete walker-indexed configurations are snapshotted before `_exchange`, because
-  `_apply_reservoir` replaces an entry in the list outright and a saved mapping cannot undo that.
-  A refreshed state also names no trajectory frame even though its walker index did not change:
-  the frame holds the sample, the row holds the propagated coordinates.
-* **A declared reservoir selects the refresh rule.** rREST2 IS REST2 plus the Boltzmann refresh,
-  so the protocol chooses the rule; only an explicit `--exchange-rule` overrides it. It used to
-  fall through to the plain neighbouring rule, so a generated rREST2 opened its reservoir,
-  reported it in the run header, and never drew from it once.
+* **rREST2 is archived.** `protocol: rREST2`, `protocol = rREST2` and the `reservoir` section are
+  refused by name, pointing at `archive/rREST2/` and the tag that holds the last working version.
+  Nothing under `archive/` is packaged, imported or collected by pytest. Do not restore a piece of
+  it into `src/` on its own: the reservoir refresh, its CV pre-refresh snapshot and its NetCDF
+  variables were one design, and a partial return is a reservoir that opens and never draws.
 * **A ladder's CV series are authoritative completed outputs.** `restart.json` records every
   state's digests, sizes, row count, header, grid, definition and conventions; completion is
   refused if any fails verification; `validate_replica_output` and extension-parent validation
