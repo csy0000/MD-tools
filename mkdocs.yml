@@ -109,6 +109,7 @@ nav:
           - Paracetamol: tutorial/cMD/paracetamol.md
           - Chignolin: tutorial/cMD/chignolin.md
           - Barnase-barstar (1BRS): tutorial/cMD/barnase-barstar.md
+          - Bromodomain + paracetamol (4A9K): tutorial/cMD/bromodomain-paracetamol.md
       - REST2:
           - Paracetamol: tutorial/REST2/paracetamol.md
           - Chignolin: tutorial/REST2/chignolin.md
