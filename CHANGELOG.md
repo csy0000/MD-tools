@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.4 — unreleased
+## 0.5.4 — 2026-09-17
 
 **`build-top` takes a peptide as a sequence.** `-i ALA.seq`, where the file holds one line of
 residue names (`ACE ALA NME`), builds the chain with tleap's `sequence` from the residue library

@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Repository | MD-tools (`csy0000/MD-tools`), version 0.5.3 |
+| Repository | MD-tools (`csy0000/MD-tools`), version 0.5.4 |
 | Applies to | the defaults `md-openmm build-top` and `md-openmm build-md` apply |
 | Date | 2026-08-27 |
 | References | `docs/scientific-defaults.bib` |

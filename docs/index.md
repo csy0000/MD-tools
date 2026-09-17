@@ -13,7 +13,7 @@ md-openmm data-register     a finished tree   -> a verified dataset under $MD_DA
 md-openmm export-reference  a finished run    -> a bundle that runs on OpenMM alone
 ```
 
-**Status:** `0.5.3`. Not on PyPI — install from the repository.
+**Status:** `0.5.4`. Not on PyPI — install from the repository.
 
 ## Start here
 
