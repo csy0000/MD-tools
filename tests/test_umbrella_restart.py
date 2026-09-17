@@ -109,17 +109,30 @@ def _environment(work: Path | None = None, extra=None) -> dict[str, str]:
 
 
 def _platform_flags():
-    """`--cpu` where there is no CUDA, which is what this file's exemption already claims.
+    """`--cpu` unless a CUDA DEVICE is actually usable.
 
-    The docstring says "whatever platform is available", and the tests then asked for none -- so
-    the runtime applied its default, CUDA, and refused on a machine without it: "CUDA is required
-    and this OpenMM build does not provide it". That is the correct refusal; the test was simply
-    not asking for what it said it wanted, and it turned CI's non-GPU lane red.
+    WHICH PLATFORMS ARE REGISTERED IS A DIFFERENT QUESTION FROM WHETHER A DEVICE EXISTS, and this
+    helper used to ask the first while promising the second. The CUDA platform stays registered
+    when `CUDA_VISIBLE_DEVICES=""` -- there is simply nothing behind it -- so the old check found
+    "CUDA" in the platform list, returned no flag, the runtime applied its CUDA default, and the
+    stage died with `CUDA_ERROR_NO_DEVICE`. Every GPU-hidden run of this file went red while the
+    file's own docstring promised "--cpu where there is no CUDA", and three sessions reported it
+    as a mystery failure before it was diagnosed.
+
+    So probe the device rather than the registration: build the smallest possible Context on CUDA
+    and fall back to `--cpu` if that cannot be done, for any reason.
     """
-    from openmm import Platform
+    try:
+        from openmm import Context, Platform, System, VerletIntegrator, unit
 
-    available = {Platform.getPlatform(i).getName() for i in range(Platform.getNumPlatforms())}
-    return () if "CUDA" in available else ("--cpu",)
+        system = System()
+        system.addParticle(1.0 * unit.amu)
+        context = Context(system, VerletIntegrator(0.001 * unit.picosecond),
+                          Platform.getPlatformByName("CUDA"))
+        del context
+    except Exception:
+        return ("--cpu",)
+    return ()
 
 
 def _run(project_root: Path, work: Path, *, extra_env=None, extra=()):
