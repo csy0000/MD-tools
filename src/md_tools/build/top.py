@@ -618,6 +618,33 @@ def _check_ligand_settings(resolved: dict[str, Any]) -> None:
         raise ConfigError(str(exc)) from exc
 
 
+def ligand_entries(resolved: dict[str, Any]) -> list[dict[str, Any]]:
+    """The `ligands:` block, normalised: selector, package reference and atom map, IN ORDER.
+
+    Order is part of it. Two instances whose selectors are swapped are a different assignment of
+    packages to residues, and comparing unordered sets would call them the same configuration.
+    """
+    from ..ligands.mapping import LigandSelector
+
+    entries = []
+    for n, entry in enumerate(resolved.get("ligands") or []):
+        selector = LigandSelector.from_mapping(entry.get("select") or {},
+                                               where=f"ligands[{n}].select")
+        atom_map = entry.get("atom_map")
+        entries.append({"selector": selector.as_dict(),
+                        "parameters": str(entry.get("parameters")),
+                        "atom_map": dict(atom_map) if atom_map else None})
+    return entries
+
+
+def recorded_ligands(config_path: Path | None) -> list[dict[str, Any]]:
+    """What a build-top record would hold as `ligand_packages.instances` selectors for this file.
+
+    The counterpart of `recorded_configuration` for the one block that resolution does not carry.
+    """
+    return ligand_entries(resolve_build_config(config_path))
+
+
 def catalog_roots(resolved: dict[str, Any], config_path: Path | None) -> list[Path]:
     """Where packages are looked up, in order: `ligand_catalog.path`, then $MD_DATA's catalog.
 
@@ -1196,10 +1223,18 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                        "placed_in": "ligands",
                        "packages": placed_packages,
                        "attached": record.get("ligand_package"),
+                       # WHICH PACKAGE EACH INSTANCE GOT, in the order the configuration listed
+                       # them, with the atom map when one was stated. This is what proves that a
+                       # `ligands:` block found later is the one that produced this build:
+                       # `ligands` is a top-level list, so it reaches neither `resolved_config`
+                       # nor `stated_keys`, and an export comparing only those would accept an
+                       # edited one. See `ligand_entries` and `reference.export.user_inputs_plan`.
                        "instances": ([{"selector": i.selector.as_dict(),
                                        "residue_name": i.residue_name,
-                                       "parameters": i.package.reference}
-                                      for i in mapped.instances] if complex_build else None),
+                                       "parameters": i.package.reference,
+                                       "atom_map": entry.get("atom_map")}
+                                      for i, entry in zip(mapped.instances, resolved["ligands"])]
+                                     if complex_build else None),
                    })
         log.complete()
         log.heading("Summary")

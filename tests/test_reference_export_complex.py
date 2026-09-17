@@ -107,3 +107,65 @@ solvent:
         "runpy.run_path('run.py', run_name='__main__')\n", encoding="utf-8")
     done = _run([sys.executable, "_blocked.py"], moved, env={**ONE_THREAD, "PYTHONPATH": ""})
     assert "imported" not in done.stderr
+
+
+def test_a_ligands_block_edited_after_the_build_is_not_passed_off_as_the_one_used(tmp_path):
+    """`ligands:` decides which package parameterised each instance, so it is compared too.
+
+    Reproduces the real failure: the two entries' selectors are swapped after the build, which is
+    a different assignment of packages to residues. `ligands` is a top-level list, so it reaches
+    neither `resolved_config` nor `stated_keys`, and an export comparing only those accepted the
+    edited file and labelled it as the configuration that produced the System.
+    """
+    from md_tools.reference.export import user_inputs_plan, write_user_inputs
+
+    tyl = _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    root = tmp_path / "project"
+    root.mkdir()
+    _write_structure(root / "complex.pdb", [("B", "201", "TYL", tyl, (1.2, 0.2, 0.1)),
+                                            ("C", "201", "TYL", tyl, (0.1, 1.3, 0.2))])
+    config = root / "top.config"
+    config.write_text(f"""
+solute:
+  kind: complex
+ligands:
+  - select: {{chain: B, resid: "201"}}
+    parameters: {tyl.reference}
+  - select: {{chain: C, resid: "201"}}
+    parameters: {tyl.reference}
+ligand_catalog:
+  path: {tmp_path / 'catalog'}
+solvent:
+  model: TIP3P
+  padding_nm: 1.0
+""", encoding="utf-8")
+    _run(CLI + ["build-top", "-i", "complex.pdb", "-os", "build/built.xml", "-op",
+                "build/built.pdb", "-log", "build/built.log", "--config", "top.config"], root)
+    (root / "cMD.config").write_text(
+        "protocol: cMD\nsolvent: explicit\n"
+        "dynamics: {timestep_fs: 2.0, temperature_K: 300.0, seed: 7}\n"
+        "stages: {minimization_iterations: 0, restrained_nvt_steps: 20, restrained_npt_steps: 0,"
+        " unrestrained_npt_steps: 0, production_steps: 40}\n"
+        "reporting: {crd_printout_solute: 20, info_printout: 20, checkpoint_printout: 40}\n",
+        encoding="utf-8")
+    _run(CLI + ["build-md", "-odir", "./run1", "--config", "cMD.config"], root)
+    run = root / "run1"
+    system, topology = root / "build" / "built.xml", root / "build" / "built.pdb"
+
+    plan = user_inputs_plan(run, system, topology)
+    assert plan["build_top_config"] == config
+
+    text = config.read_text(encoding="utf-8")
+    swapped = (text.replace('{chain: B, resid: "201"}', '{chain: TMP, resid: "201"}')
+                   .replace('{chain: C, resid: "201"}', '{chain: B, resid: "201"}')
+                   .replace('{chain: TMP, resid: "201"}', '{chain: C, resid: "201"}'))
+    assert swapped != text
+    config.write_text(swapped, encoding="utf-8")
+
+    plan = user_inputs_plan(run, system, topology)
+    assert plan["build_top_config"] is None
+    assert plan["build_top_config_named"] == "top.config"
+    manifest = write_user_inputs(plan, tmp_path / "bundle")
+    assert manifest["build_top_config"]["verified"] is False
+    assert manifest["build_top_config"]["file"] == "input/build-top.resolved.yaml"
+    assert not (tmp_path / "bundle" / "input" / "build-top.config").exists()

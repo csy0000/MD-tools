@@ -423,7 +423,7 @@ def user_inputs_plan(run_dir: Path, system_path: Path,
     `rest2_implicit.config` beside a registered ladder was not the configuration that produced it.
     """
     from ..build.record import RecordError, read_record
-    from ..build.top import recorded_configuration
+    from ..build.top import recorded_configuration, recorded_ligands
 
     run_dir, system_path = Path(run_dir), Path(system_path)
     wanted = _digest(system_path)
@@ -477,8 +477,15 @@ def user_inputs_plan(run_dir: Path, system_path: Path,
             resolved, stated = recorded_configuration(path)
         except Exception:
             continue
-        if _same(resolved, record.get("resolved_config")) and _same(stated,
-                                                                   record.get("stated_keys")):
+        # THE LIGAND BLOCK IS COMPARED SEPARATELY, and it decides which package parameterised
+        # each ligand instance. `ligands:` is a top-level list: it reaches neither
+        # `resolved_config` nor `stated_keys` (which collects only keys whose value is a mapping),
+        # so the two comparisons above pass for a file whose ligand entries were edited after the
+        # build. A bundle would then ship that file labelled as the one that produced the System.
+        # Order matters: two instances with their selectors swapped is a different assignment.
+        if _same(resolved, record.get("resolved_config")) \
+                and _same(stated, record.get("stated_keys")) \
+                and _same(recorded_ligands(path), _recorded_ligand_entries(record)):
             top_config = path
             break
 
@@ -494,6 +501,22 @@ def user_inputs_plan(run_dir: Path, system_path: Path,
             "build_system": system_path, "build_topology": topology_path,
             "build_top_record": record, "stage_inputs": _stage_inputs(run_dir),
             "ligand_packages": ligand_packages, "ligand_mapping": ligand_mapping}
+
+
+def _recorded_ligand_entries(record: dict[str, Any]) -> list[dict[str, Any]]:
+    """The build's own ligand entries, in the shape `build.top.ligand_entries` produces.
+
+    A record from before ligand packages existed has no instances, and its configuration could
+    not have had a `ligands:` block either, so both sides are empty and the comparison passes. A
+    record that predates `atom_map` being recorded reads as null there, so a configuration that
+    states one does not match it -- which is the safe direction: it falls through to the
+    unverified path rather than claiming a file is the one that ran.
+    """
+    instances = (record.get("ligand_packages") or {}).get("instances") or []
+    return [{"selector": dict(instance["selector"]),
+             "parameters": str(instance["parameters"]),
+             "atom_map": (dict(instance["atom_map"]) if instance.get("atom_map") else None)}
+            for instance in instances]
 
 
 def _proven_ligand_inputs(log: Path, record: dict[str, Any]) -> tuple[list[Path], Path | None]:
