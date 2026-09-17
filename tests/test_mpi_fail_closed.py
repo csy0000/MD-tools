@@ -362,7 +362,7 @@ def test_every_rank_failing_reports_the_reason_once_rather_than_n_times(projects
     before = _listing(project)
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
-         "-p", "../build/built.pdb", *_inputs("REST2"), "-odir", "."],
+         "-p", "../build/built.pdb", *_inputs("REST2"), "-odir", ".", "--cpu"],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(**{FAIL_RANKS: "0,1"}))
     message = done.stdout + done.stderr
@@ -413,7 +413,7 @@ def test_a_rank_zero_helper_failure_stops_every_rank_rather_than_hanging_them(pr
 
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
-         "-p", "../build/built.pdb", *_inputs("REST2"), "-odir", "."],
+         "-p", "../build/built.pdb", *_inputs("REST2"), "-odir", ".", "--cpu"],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment())
     message = done.stdout + done.stderr
@@ -434,6 +434,21 @@ def test_a_rank_zero_helper_failure_stops_every_rank_rather_than_hanging_them(pr
 
 FAIL_PHASE = "MD_TOOLS_FAIL_PHASE"
 
+# `--cpu` ON EVERY LAUNCH BELOW, and it is not incidental.
+#
+# What these tests are about is MPI failure semantics -- one rank dying without hanging the rest --
+# and nothing in them is a claim about CUDA. They are marked `slow`, not `gpu`, so the "not gpu"
+# lane runs them, and a test in that lane must not need a device at all.
+#
+# They used to take whatever the runner exposed. Two ranks with one card visible then landed on the
+# same device, and since 0.6.0 that is refused before anything is written: a GPU hosting more than
+# one worker needs verified MPS. The refusal is correct and has nothing to do with the subject of
+# these tests, so all nine failed with a message about MPS on any single-GPU machine, and on any
+# lane that narrowed CUDA_VISIBLE_DEVICES -- which a gate normally does. `--cpu` removes the
+# dependency rather than papering over it: the failure semantics are the same on either platform,
+# and the placement rules have their own coverage in tests/test_placement.py and
+# tests/test_placement_cuda.py.
+
 
 @pytest.mark.parametrize("failing_rank", [0, 1])
 @pytest.mark.parametrize("phase", ["creating the output directory", "opening the rank report"])
@@ -445,7 +460,7 @@ def test_a_rank_local_failure_after_preflight_stops_the_whole_ladder(failing_ran
 
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
-         "-p", "../build/built.pdb", *_inputs("REST2"), "-odir", "."],
+         "-p", "../build/built.pdb", *_inputs("REST2"), "-odir", ".", "--cpu"],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(**{FAIL_PHASE: f"REST2: {phase}:{failing_rank}"}))
     message = done.stdout + done.stderr
@@ -466,7 +481,7 @@ def test_a_rank_local_failure_after_preflight_stops_the_whole_ais_run(failing_ra
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(project / "AIS.py"),
          "-p", "../build/built.pdb", "-s", "../build/built.xml", *AIS_V1,
-         "-source-traj", "../source.dcd", "-odir", str(destination)],
+         "-source-traj", "../source.dcd", "-odir", str(destination), "--cpu"],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(**{FAIL_PHASE: f"AIS: opening the rank reports:{failing_rank}"}))
     message = done.stdout + done.stderr
@@ -514,7 +529,7 @@ def test_a_rank_local_failure_during_propagation_stops_the_whole_ladder_without_
 
     done = subprocess.run(
         ["mpirun", "-n", "2", sys.executable, str(project / "REST2.py"),
-         "-p", "../build/built.pdb", *_inputs("REST2"), "-odir", "."],
+         "-p", "../build/built.pdb", *_inputs("REST2"), "-odir", ".", "--cpu"],
         cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT,
         env=_environment(**{PROPAGATION_FAIL_RANKS: str(failing_rank)}))
     message = done.stdout + done.stderr
