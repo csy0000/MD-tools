@@ -265,10 +265,13 @@ def test_an_invalid_ladder_is_refused_an_extension_before_outputs_appear(finishe
          "--extend", "2", "--extend-from", str(destination)],
         cwd=root / "REST2-run1", capture_output=True, text=True, timeout=1800, env=base)
     assert done.returncode != 0, done.stdout[-3000:]
-    # The refusal itself is written to the run's own log, which is where a reader looking at a
-    # failed extension goes; the launcher only points at it.
-    reported = (extension / "REST2.out").read_text(encoding="utf-8")
-    assert f"walker {STATES}" in reported, reported[-3000:]
-    assert "cannot be extended" in reported, reported[-3000:]
-    assert not list(extension.glob("cv_state*.csv")), (
-        "the extension wrote CV outputs before refusing its parent")
+    # REFUSED READ-ONLY, ON STDERR, with NOTHING in the extension's -odir. This used to assert
+    # the refusal inside `extended/REST2.out` -- i.e. that the launch had already created the
+    # directory, published `_protocol.py` and `solute.yaml` and opened its logs before the driver
+    # looked at the parent. `replica_main` now validates the parent first
+    # (`ReplicaRun.validate_extension_parent`), as a refused continuation must.
+    assert f"walker {STATES}" in done.stderr, done.stderr[-3000:]
+    assert "cannot be extended" in done.stderr, done.stderr[-3000:]
+    assert "Nothing was written" in done.stderr, done.stderr[-3000:]
+    assert not extension.exists() or not any(extension.iterdir()), (
+        f"the refused extension left {sorted(p.name for p in extension.iterdir())}")
