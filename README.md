@@ -10,7 +10,7 @@ under `mpirun` when the protocol is parallel; moves a finished run into managed 
 verified, immutable dataset; and exports one as a bundle that runs on OpenMM alone, with nothing
 of this package in it.
 
-**Status:** `0.5.4`, on `dev`. Not tagged, not on PyPI.
+**Status:** `0.5.4`, on `dev` and `main`, tagged `v0.5.4`. Not on PyPI.
 
 📖 **[Documentation](https://csy0000.github.io/MD-tools/)** — installation, machine configuration,
 the methods, and the reference pages.
