@@ -638,7 +638,7 @@ def test_example_6_the_shipped_protocol_configs_are_usable_starting_points(name,
     if not source.is_file():
         pytest.skip(f"{source} is not shipped")
     resolved = resolve_md_config(source)
-    assert resolved["protocol"] in ("cMD", "REST2", "rREST2", "AIS")
+    assert resolved["protocol"] in ("cMD", "REST2", "AIS")
 
 
 def test_example_6b_the_shipped_build_top_config_is_usable(tmp_path):

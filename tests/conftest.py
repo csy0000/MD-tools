@@ -215,11 +215,11 @@ def make_states_for(root: Path, config) -> None:
     document = config
     if not isinstance(config, dict):
         document = load_yaml_strictly(Path(config).read_text(encoding="utf-8"), source=str(config))
-    if (document or {}).get("protocol") not in ("REST2", "rREST2", "cMD"):
+    if (document or {}).get("protocol") not in ("REST2", "cMD"):
         return
     resolved = MD_SCHEMA.resolve(document)
     protocol = resolved["protocol"]
-    if protocol in ("REST2", "rREST2"):
+    if protocol == "REST2":
         make_scaled_ladder(root, n_states=int(resolved["rest2"]["number_of_replicas"]),
                            tau_max=float(resolved["rest2"]["tau_max"]))
     elif protocol == "cMD" and float(resolved["dynamics"]["tau"]) > 0.0:

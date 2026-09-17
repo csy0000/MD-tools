@@ -96,7 +96,7 @@ def test_the_documentation_uses_the_amber_flag_meanings_everywhere():
 
 def test_no_page_documents_a_retired_flag():
     """`--platform` and `-x built.xml` are retired. A page that still shows them is stale text."""
-    for page in PAGES + [REPO / "docs" / "openmm_methods" / "rREST2" / "README.md"]:
+    for page in PAGES:
         text = page.read_text(encoding="utf-8")
         for retired in ("--platform ", "-x built.xml", "-x ../built.xml", "--trajectory "):
             assert retired not in text, f"{page.name} still documents {retired!r}"

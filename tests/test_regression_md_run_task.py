@@ -252,7 +252,7 @@ def test_no_shipped_config_has_a_section_key_that_parses_as_a_scalar():
     from md_tools.build.md import MD_SCHEMA
 
     sections = set(MD_SCHEMA.sections)
-    for name in ("cMD", "REST2", "rREST2", "AIS", "umbrella"):
+    for name in ("cMD", "REST2", "AIS", "umbrella"):
         path = REPO / "configs" / "md" / f"{name}.config"
         if not path.is_file():
             continue

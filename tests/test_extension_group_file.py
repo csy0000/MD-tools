@@ -77,8 +77,7 @@ def test_the_executor_can_ANNOUNCE_a_group_file_with_no_coordinates(tmp_path, ca
     from md_tools.remd.executor import _announce
 
     groups = parse_group_file(_write(tmp_path, LINE, n=2), extending=True)
-    arguments = SimpleNamespace(groupfile=str(tmp_path / "REST2.group"), exchange_rule=None,
-                                reservoir=None)
+    arguments = SimpleNamespace(groupfile=str(tmp_path / "REST2.group"), exchange_rule=None)
     files = SimpleNamespace(trajectory="REST2.nc", checkpoint="REST2_checkpoint.nc",
                             restart="restart.json")
     _announce(arguments, files, groups, 0, 2)                     # must not raise
