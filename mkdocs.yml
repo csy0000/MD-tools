@@ -111,6 +111,9 @@ nav:
       - REST2:
           - Paracetamol: tutorial/REST2/paracetamol.md
           - Chinolin: tutorial/REST2/chinolin.md
+      - AIS:
+          - Alanine dipeptide: tutorial/AIS/alanine.md
+          - Paracetamol: tutorial/AIS/paracetamol.md
       - Archived:
           - tutorial/archived/README.md
           - 0.5.3 cMD paracetamol: tutorial/archived/0.5.3/cMD/paracetamol.md

@@ -17,6 +17,8 @@ precision.
 | [Chinolin](cMD/chinolin.md) | cMD | quinoline, explicit TIP3P, 1806 atoms | ~1 min |
 | [paracetamol](REST2/paracetamol.md) | REST2 | explicit TIP3P, 4 states, 10 ns per state, 4 GPUs | ~12 min |
 | [Chinolin](REST2/chinolin.md) | REST2 | explicit TIP3P, 4 states, 10 ns per state, 4 GPUs | ~11 min |
+| [alanine dipeptide](AIS/alanine.md) | AIS | from a sequence, explicit TIP3P, 2 ns source + 64 switching paths, 1 GPU | ~12 min |
+| [paracetamol](AIS/paracetamol.md) | AIS | explicit TIP3P, 2 ns source + 64 switching paths, 1 GPU | ~13 min |
 
 Start with **cMD: paracetamol**. It explains each step; the others refer back to it.
 
