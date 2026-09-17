@@ -19,10 +19,12 @@ import re
 from pathlib import Path
 from typing import Iterable, Optional
 
-from .package import LigandPackage, PackageError, load_package
+from .package import (CRITERIA_NAME, LigandPackage, PackageError, load_package,
+                      read_criteria)
 
 __all__ = [
     "CATALOG_SUBPATH",
+    "search_for_match",
     "REFERENCE_PATTERN",
     "catalog_root_for",
     "default_catalog_root",
@@ -133,3 +135,40 @@ def search_catalog(text: str, root: Path) -> list[dict]:
                           "forcefield": metadata["forcefield"]["resource"],
                           "charge_method": metadata["charges"]["method"]})
     return found
+
+
+def search_for_match(request: dict, roots: Iterable[Path]) -> tuple[Optional[LigandPackage],
+                                                                    dict]:
+    """The first package in *roots* whose declared criteria match *request*, and why.
+
+    Candidates are compared on their `parameter.config`, which is cheap to read and is what the
+    catalog publishes; only the one that matches is then LOADED, which verifies its parameters,
+    digests and identity in full before anything reuses it. A candidate whose file cannot be read
+    is reported as a candidate that was skipped, not silently ignored: a catalog entry nobody can
+    parse is a fact the build record should carry.
+
+    The report lists every candidate considered with the reason it did or did not match, so a
+    build can record WHY it reused a package -- or why it went on to parameterise the molecule.
+    """
+    from .match import matches
+
+    considered: list[dict] = []
+    for root in roots:
+        if root is None or not Path(root).is_dir():
+            continue
+        for criteria_path in sorted(Path(root).glob("*/param_*/" + CRITERIA_NAME)):
+            directory = criteria_path.parent
+            reference = f"{directory.parent.name}/{directory.name}"
+            try:
+                candidate = read_criteria(criteria_path)
+            except Exception as exc:
+                considered.append({"reference": reference, "root": str(root), "matched": False,
+                                   "skipped": f"{CRITERIA_NAME} could not be read ({exc})"})
+                continue
+            verdict = matches(request, candidate)
+            considered.append({"reference": reference, "root": str(root), **verdict.as_dict()})
+            if verdict.matched:
+                package = load_package(directory)
+                return package, {"decision": "reuse", "matched": reference,
+                                 "catalog_root": str(root), "considered": considered}
+    return None, {"decision": "parameterise", "matched": None, "considered": considered}

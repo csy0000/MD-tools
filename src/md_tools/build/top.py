@@ -132,15 +132,26 @@ BUILD_SCHEMA = Schema(
             Field("aliases", list, default=[],
                   doc="Searchable names stored with a package this build creates: "
                       "`[paracetamol, acetaminophen, TYL]`. Names, not identities."),
-            Field("parameters", str, default=None, nullable=True,
-                  doc="REUSE an existing parameter package, `<compound id>/param_<12 hex>`, "
-                      "instead of creating one. The prepared molecule must be that package's "
-                      "exact chemical state (every hydrogen, charge and bond order, and the "
+            Field("parameters", str, default="search", nullable=True,
+                  doc="Where this molecule's parameters come from. Three values:\n"
+                      "  search (the default) -- look in the catalog for a package whose declared "
+                      "criteria match this build: the molecule's topology, its protonation state, "
+                      "and the charge method INCLUDING the implementation that would run here "
+                      "(AM1-BCC through AmberTools' sqm is not AM1-BCC through OpenEye, and "
+                      "neither is NAGL's graph model of it), together with the small-molecule "
+                      "force field. Reuse on a match, parameterise on any difference; a near "
+                      "match is a difference. Which package matched, on what, and what else was "
+                      "considered, are recorded in built.log.\n"
+                      "  <compound id>/param_<12 hex> -- reuse exactly that package, and search "
+                      "nothing.\n"
+                      "  generate -- parameterise the molecule whatever the catalog holds.\n"
+                      "On either kind of reuse the prepared molecule must be the package's exact "
+                      "chemical state (every hydrogen, charge and bond order, and the "
                       "stereochemistry of its coordinates); its atoms are put into package order "
-                      "and no charge is generated. The package's force field and charges are "
-                      "used, so `ligand_forcefield` and `ligand_charge_method` must be left at "
-                      "their defaults or state the package's own values. Looked up in "
-                      "`ligand_catalog.path`, then in $MD_DATA/parameters/ligands."),
+                      "and no charge is generated. A reused package brings its own force field "
+                      "and charges, so ligand_forcefield and ligand_charge_method may not be "
+                      "stated beside a reference. Catalogs are searched in order: "
+                      "ligand_catalog.path, then $MD_DATA/parameters/ligands."),
             Field("residue_name", str, default=None, nullable=True,
                   doc="Three-character residue name for a molecule read from .smi or .sdf. It is "
                       "APPLIED: the molecule's residue in built.pdb, built.solute.pdb and the "
@@ -664,31 +675,40 @@ def _check_ligand_settings(resolved: dict[str, Any]) -> None:
         raise ConfigError(
             f"`ligands` lists {len(entries)} instance(s), but solute.kind is {kind!r}. Ligand "
             f"instances are mapped only in a `kind: complex` build.")
+    # STATED, not merely resolved: `parameters` has a default ("search"), so a peptide build that
+    # never mentions it must not be refused for carrying it.
     for key in ("compound_id", "parameters"):
-        if solute.get(key) is not None and not single:
+        # `parameters: search` is the default and says nothing about a ligand, so a peptide
+        # configuration that spells it out -- the shipped example does -- is not a mistake.
+        if key == "parameters" and solute.get(key) in (None, "search"):
+            continue
+        if key in stated and solute.get(key) is not None and not single:
             raise ConfigError(f"solute.{key} is set, but solute.kind is {kind!r}; it describes the "
                               f"single molecule of a kind: ligand or peptide-like build.")
     if solute.get("aliases") and not single:
         raise ConfigError(f"solute.aliases is set, but solute.kind is {kind!r}.")
     if not all(isinstance(a, str) for a in solute.get("aliases") or []):
         raise ConfigError("solute.aliases must be a list of strings")
-    if solute.get("aliases") and solute.get("parameters"):
-        raise ConfigError("solute.aliases describe a package this build CREATES; with "
-                          "solute.parameters the package already exists and keeps its aliases.")
-    if solute.get("parameters") and solute.get("compound_id"):
-        raise ConfigError("solute.compound_id and solute.parameters are both set; the reference "
-                          "already names the compound.")
+    stated_reference = solute.get("parameters") not in (None, "search", "generate")
+    if solute.get("aliases") and stated_reference:
+        raise ConfigError("solute.aliases describe a package this build CREATES; with a stated "
+                          "solute.parameters reference the package already exists and keeps its "
+                          "aliases.")
+    if stated_reference and solute.get("compound_id"):
+        raise ConfigError("solute.compound_id and a stated solute.parameters reference are both "
+                          "set; the reference already names the compound.")
     try:
         if solute.get("compound_id") is not None:
             check_compound_id(solute["compound_id"])
-        if solute.get("parameters") is not None:
+        if stated_reference:
             parse_reference(solute["parameters"])
             for key in ("ligand_forcefield", "ligand_charge_method"):
                 if key in stated:
                     raise ConfigError(
-                        f"solute.{key} is stated together with solute.parameters. A reused "
-                        f"package brings its own force field and charges; a second statement "
-                        f"could only agree with it or be ignored. Remove solute.{key}.")
+                        f"solute.{key} is stated together with a solute.parameters "
+                        f"reference. A reused package brings its own force field and "
+                        f"charges; a second statement could only agree with it or be "
+                        f"ignored. Remove solute.{key}.")
         for n, entry in enumerate(entries):
             if not isinstance(entry, dict) or "parameters" not in entry:
                 raise ConfigError(f"ligands[{n}] must be a mapping with `select` and `parameters`")

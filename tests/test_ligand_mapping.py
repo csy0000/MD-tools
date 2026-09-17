@@ -29,7 +29,8 @@ def _package(tmp_path, smiles, compound, residue, *, perturb=0.0):
     return import_package_from_system(
         mol, system=_system_with_charges(mol, charges), atom_indices=range(mol.GetNumAtoms()),
         compound_id=compound, residue_name=residue, out_root=tmp_path / "catalog",
-        forcefield="sage-2.2.1", charge_method="am1bcc")
+        forcefield="sage-2.2.1", charge_method="am1bcc",
+        charge_provenance={"scheme": "am1bcc", "backend_id": "ambertools-sqm"})
 
 
 def _rotation(seed):

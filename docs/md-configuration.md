@@ -81,9 +81,9 @@ Searchable names stored with a package this build creates: `[paracetamol, acetam
 
 #### `solute.parameters`
 
-type: string or null · default: `null`
+type: string or null · default: `search`
 
-REUSE an existing parameter package, `<compound id>/param_<12 hex>`, instead of creating one. The prepared molecule must be that package's exact chemical state (every hydrogen, charge and bond order, and the stereochemistry of its coordinates); its atoms are put into package order and no charge is generated. The package's force field and charges are used, so `ligand_forcefield` and `ligand_charge_method` must be left at their defaults or state the package's own values. Looked up in `ligand_catalog.path`, then in $MD_DATA/parameters/ligands.
+Where this molecule's parameters come from. Three values: search (the default) -- look in the catalog for a package whose declared criteria match this build: the molecule's topology, its protonation state, and the charge method INCLUDING the implementation that would run here (AM1-BCC through AmberTools' sqm is not AM1-BCC through OpenEye, and neither is NAGL's graph model of it), together with the small-molecule force field. Reuse on a match, parameterise on any difference; a near match is a difference. Which package matched, on what, and what else was considered, are recorded in built.log. <compound id>/param_<12 hex> -- reuse exactly that package, and search nothing. generate -- parameterise the molecule whatever the catalog holds. On either kind of reuse the prepared molecule must be the package's exact chemical state (every hydrogen, charge and bond order, and the stereochemistry of its coordinates); its atoms are put into package order and no charge is generated. A reused package brings its own force field and charges, so ligand_forcefield and ligand_charge_method may not be stated beside a reference. Catalogs are searched in order: ligand_catalog.path, then $MD_DATA/parameters/ligands.
 
 #### `solute.residue_name`
 

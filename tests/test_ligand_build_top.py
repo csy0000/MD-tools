@@ -96,7 +96,8 @@ solvent:
     assert result.returncode == 0, result.stderr[-3000:]
     record = _record(alone / "build" / "built.log")
     attached = record["ligand_packages"]["attached"]
-    assert attached["how"] == "reused" and attached["charges_generated_in_this_build"] is False
+    assert attached["how"] == "reused (stated reference)"
+    assert attached["charges_generated_in_this_build"] is False
     assert (alone / "build" / "ligands" / "CHEMBL112" / tyl.parameter_id / "parameters.ffxml").is_file()
 
     # A complex: a peptide, two copies of the same package and a second species.
@@ -249,6 +250,61 @@ solvent:
 """)
     assert result.returncode == 0, result.stderr[-3000:]
     attached = _record(second / "build" / "built.log")["ligand_packages"]["attached"]
-    assert attached["how"] == "reused"
+    assert attached["how"] == "reused (stated reference)"
     assert ((second / "build" / "built.xml").read_bytes()
             == (first / "build" / "built.xml").read_bytes())
+
+
+@pytest.mark.slow
+def test_build_top_searches_the_catalog_and_reuses_or_parameterises(tmp_path):
+    """The three-way rule, through the command: search, reuse on a match, parameterise on a difference.
+
+    The difference used is a protomer of the same compound: same topology, same charge method,
+    same force field, different protonation state. Reusing there would be the silent failure the
+    comparison exists to prevent, and nothing downstream could detect it.
+    """
+    tyl = _package(tmp_path, "CC(=O)Nc1ccc(O)cc1", "CHEMBL112", "TYL")
+    catalog = tmp_path / "catalog"
+
+    def build(name, smiles, parameters=None):
+        work = tmp_path / name
+        work.mkdir()
+        (work / "in.smi").write_text(f"{smiles} molecule\n", encoding="utf-8")
+        result = _build(work, Path("in.smi"), f"""
+solute:
+  kind: ligand
+  residue_name: TYL
+  compound_id: CHEMBL112
+{f'  parameters: {parameters}' if parameters else ''}
+ligand_catalog:
+  path: {catalog}
+solvent:
+  model: TIP3P
+  padding_nm: 1.0
+""")
+        assert result.returncode == 0, result.stderr[-3000:]
+        return _record(work / "build" / "built.log")["ligand_packages"]["attached"]
+
+    # 1. The catalog holds exactly this molecule, state, charge implementation and force field.
+    reused = build("reuse", "CC(=O)Nc1ccc(O)cc1")
+    assert reused["how"] == "reused (catalog search)"
+    assert reused["reference"] == tyl.reference
+    assert reused["charges_generated_in_this_build"] is False
+    assert reused["matched_on"] == {"topology": "same", "protonation": "same",
+                                    "charges": "same", "forcefield": "same"}
+    assert reused["search"]["decision"] == "reuse"
+
+    # 2. The phenolate: the same compound in another protonation state. No reuse.
+    made = build("differs", "CC(=O)Nc1ccc([O-])cc1")
+    assert made["how"] == "created"
+    assert made["charges_generated_in_this_build"] is True
+    assert made["reference"] != tyl.reference
+    assert made["search"]["decision"] == "parameterise"
+    considered = {row["reference"]: row for row in made["search"]["considered"]}
+    assert considered[tyl.reference]["compared"]["topology"] == "same"
+    assert "different chemical state" in considered[tyl.reference]["compared"]["protonation"]
+
+    # 3. `generate` parameterises whatever the catalog holds, and searches nothing.
+    forced = build("forced", "CC(=O)Nc1ccc(O)cc1", parameters="generate")
+    assert forced["how"] == "created" and forced["search"] is None
+    assert forced["reference"] == tyl.reference or forced["parameter_id"].startswith("param_")

@@ -1,13 +1,21 @@
 """What `build-top` does with packages: create or reuse one for a ligand, and put its atoms in order.
 
-A single-molecule build (`solute.kind: ligand` or `peptide-like`) either
+A single-molecule build (`solute.kind: ligand` or `peptide-like`) does one of three things, and
+`solute.parameters` says which:
 
-  * REUSES a package named by `solute.parameters`: the prepared molecule must be the package's
-    exact chemical state, its atoms are put into package order with package names, and no charge
-    is generated; or
-  * CREATES one from the prepared molecule, charges generated once, before any force field is
-    built, so every later step of the same build loads the saved parameters instead of charging
-    the molecule again.
+  * `search` (the default) -- look in the catalog for a package whose declared criteria match what
+    this build needs: the molecule's topology, its protonation state, and the charge method
+    INCLUDING the implementation that would run here. REUSE it on a match, PARAMETERISE the
+    molecule on any difference. A near match is a difference. `md_tools.ligands.match` is the one
+    definition of what a match is, and both branches consult it;
+  * an explicit `<compound>/<parameter>` reference -- reuse that package and search nothing. The
+    prepared molecule must still be its exact chemical state;
+  * `generate` -- parameterise, whatever the catalog holds.
+
+Reuse never generates a charge. Creation generates them once, before any force field is built, so
+every later step of the same build loads the saved parameters rather than charging the molecule
+again. Why a reuse happened is recorded: which package matched, on what, and what else was
+considered.
 
 Either way the package is copied into the build (`<build dir>/ligands/<compound>/<parameter>/`),
 so the build does not depend on the catalog staying where it is.
@@ -107,13 +115,15 @@ def attach_ligand_package(*, prepared_sdf: Path, prepared_pdb: Path, settings: d
     from rdkit import Chem
 
     from ..openmm.ligand_forcefield import is_gaff
-    from .catalog import find_package
+    from .catalog import find_package, search_for_match
     from .identity import local_compound_id
+    from .match import requested_criteria
     from .package import create_package, load_package
 
     resource = settings["forcefield"]
+    mode = settings.get("parameters") or "search"
     if is_gaff(resource):
-        if settings.get("parameters"):
+        if mode not in ("search", "generate"):
             raise PackageError("solute.parameters names a package, but solute.ligand_forcefield "
                                "is GAFF; a package carries its own force field, so leave "
                                "ligand_forcefield at its default when reusing one")
@@ -123,13 +133,27 @@ def attach_ligand_package(*, prepared_sdf: Path, prepared_pdb: Path, settings: d
         raise PackageError(f"{prepared_sdf}: the prepared molecule could not be re-read")
     residue_name = settings["residue_name"]
     root = Path(staging) / LIGANDS_DIRNAME
-    reference = settings.get("parameters")
-    if reference:
-        package = find_package(reference, settings.get("catalog_roots") or [])
+    roots = settings.get("catalog_roots") or []
+    search: Optional[dict[str, Any]] = None
+    package = None
+    if mode not in ("search", "generate"):
+        package = find_package(mode, roots)
         positions, permutation = order_like_package(mol, package, where="solute.parameters")
         package = load_package(package.copy_into(root))
-        how = "reused"
-    else:
+        how = "reused (stated reference)"
+    elif mode == "search":
+        # THE SEARCH, on the criteria the catalog publishes. `requested_criteria` resolves what
+        # would actually run here -- which AM1-BCC implementation, which NAGL model -- rather than
+        # trusting the label in the configuration.
+        request = requested_criteria(mol, charge_method=settings["charge_method"],
+                                     forcefield=resource)
+        found, search = search_for_match(request, roots)
+        search["request"] = request
+        if found is not None:
+            positions, permutation = order_like_package(mol, found, where="the catalog match")
+            package = load_package(found.copy_into(root))
+            how = "reused (catalog search)"
+    if package is None:
         compound_id = settings.get("compound_id") or local_compound_id(mol)
         package = create_package(
             mol, compound_id=compound_id, residue_name=residue_name, out_root=root,
@@ -144,6 +168,11 @@ def attach_ligand_package(*, prepared_sdf: Path, prepared_pdb: Path, settings: d
                                 Path(prepared_pdb))
     return {"package": package, "how": how,
             "record": {**package.summary(), "how": how,
+                       # WHY this package, in the build's own record: what was searched, what
+                       # matched and on which criteria, or why nothing did.
+                       "search": search,
+                       "matched_on": (search or {}).get("considered", [{}])[-1].get("compared")
+                       if how == "reused (catalog search)" else None,
                        "copied_to": f"{LIGANDS_DIRNAME}/{package.compound_id}/{package.parameter_id}",
                        "charges_generated_in_this_build": how == "created",
                        "prepared_atom_for_package_atom": permutation,
