@@ -714,6 +714,7 @@ def build_implicit_bundle_inputs(*, route: str, cfg: dict, staging: Path,
         "n_particles": system.getNumParticles(),
         "n_solute_atoms": system.getNumParticles(),   # implicit: the solute IS the system
         "route": route,
+        "ligand_package": amber.get("ligand_package") if route == "ligand" else None,
         "build": {**info, **{k: v for k, v in amber.items()
                              if k in ("tleap_commands", "protein_forcefield", "radii_requested",
                                       "small_molecule_forcefield", "charge_method",
@@ -740,6 +741,10 @@ def _amber_files_for_ligand(cfg: dict, staging: Path, *, smiles: Optional[str],
     else:
         raise ValueError("the implicit ligand route needs a .smi or .sdf input")
     ligand_sdf = Path(structure["solute_sdf"])
+    from ..ligands.build import attach_for_build
+
+    package_record = attach_for_build(cfg, staging, solute_sdf=ligand_sdf,
+                                      solute_pdb=Path(structure["solute_pdb"]))
     forcefield, ff_info = build_forcefield(cfg, ligand_sdf=ligand_sdf, route="ligand")
 
     solute = app.PDBFile(str(structure["solute_pdb"]))
@@ -758,4 +763,5 @@ def _amber_files_for_ligand(cfg: dict, staging: Path, *, smiles: Optional[str],
         "small_molecule_forcefield": (cfg.get("forcefield") or {}).get("ligand"),
         "charge_method": (cfg.get("forcefield") or {}).get("ligand_charge_method"),
         "forcefield_info": ff_info,
+        "ligand_package": package_record,
     }

@@ -374,7 +374,7 @@ def _seeded_global_random(seed: int):
 
 
 def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] = None,
-            route: Optional[str] = None) -> dict:
+            route: Optional[str] = None, *, residue_templates_for=None) -> dict:
     """Solvate in a rhombic-dodecahedron box with ``padding_nm`` of water and NaCl at 0.15 M.
 
     The solute atom indices are recorded here, before any water exists.  Modeller appends solvent,
@@ -418,6 +418,8 @@ def solvate(pdb_in: Path, out_dir: Path, cfg: dict, ligand_sdf: Optional[Path] =
             negativeIon=scfg["negative_ion"],
             ionicStrength=float(scfg["ionic_strength_molar"]) * unit.molar,
             neutralize=bool(scfg["neutralize"]),
+            residueTemplates=(residue_templates_for(modeller.topology)
+                              if residue_templates_for else {}),
         )
 
     topology = modeller.topology

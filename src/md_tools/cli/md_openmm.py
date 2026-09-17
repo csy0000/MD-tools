@@ -159,6 +159,9 @@ def cmd_data_register(args) -> int:
         print(f"wrote {path}")
         return 0
 
+    if args.ligand_package or args.find_ligand:
+        return _ligand_catalog_command(args)
+
     missing = [flag for flag, value in (("-idata", args.idata),
                                         ("-project_name", args.project_name),
                                         ("-data_name", args.data_name),
@@ -191,6 +194,62 @@ def cmd_data_register(args) -> int:
         return 1
     print(result["canonical_path"])
     return 0
+
+
+def _ligand_catalog_command(args) -> int:
+    """`data-register --ligand-package DIR` and `--find-ligand TEXT`: the parameter catalog.
+
+    The catalog is `$MD_DATA/parameters/ligands`, beside the registered datasets and not one of
+    them. Registration is write-once; an identity already present is kept, never replaced.
+    """
+    from ..ligands.catalog import catalog_root_for, register_package, search_catalog
+    from ..ligands.package import PackageError, load_package
+    from ..registry.errors import RegistrationError
+    from ..registry.userconfig import load_user_config, resolve_md_data
+
+    dataset_flags = [flag for flag, value in (("-idata", args.idata),
+                                              ("-project_name", args.project_name),
+                                              ("-data_name", args.data_name), ("-year", args.year),
+                                              ("--common-data", args.common_data),
+                                              ("--init", args.init)) if value]
+    if dataset_flags or (args.ligand_package and args.find_ligand):
+        print(f"data-register: --ligand-package and --find-ligand act on the ligand parameter "
+              f"catalog and take no dataset options, and not each other"
+              + (f" (got {', '.join(dataset_flags)})" if dataset_flags else ""), file=sys.stderr)
+        return 2
+    try:
+        try:
+            document, _, _ = load_user_config(args.user_config)
+        except RegistrationError:
+            if args.user_config:
+                raise
+            document = {}
+        md_data, origin = resolve_md_data(document, override=args.md_data)
+        catalog = catalog_root_for(md_data)
+        if args.find_ligand:
+            for hit in search_catalog(args.find_ligand, catalog):
+                print(f"{hit['reference']}  {hit['canonical_smiles']}  "
+                      f"{hit['forcefield']}/{hit['charge_method']}  "
+                      f"aliases: {', '.join(hit['aliases']) or '-'}")
+            return 0
+        package = load_package(Path(args.ligand_package), expected_directory_name=False)
+        destination = catalog / package.compound_id / package.parameter_id
+        if args.dry_run or args.verify_only:
+            if args.verify_only:
+                load_package(destination)
+                print(f"verified {destination}")
+            else:
+                print(f"would register {package.reference} at {destination} "
+                      f"({'already present' if destination.exists() else 'new'}; $MD_DATA from "
+                      f"{origin})")
+            return 0
+        package, placed, written = register_package(Path(args.ligand_package), catalog)
+        print(f"{'registered' if written else 'already registered, kept'} {package.reference} "
+              f"at {placed}")
+        return 0
+    except (PackageError, RegistrationError) as exc:
+        print(f"data-register: {exc}", file=sys.stderr)
+        return 2
 
 
 # ---------------------------------------------------------------------------------------------
@@ -345,6 +404,14 @@ def build_parser() -> argparse.ArgumentParser:
                      help="free text stored in the manifest. The only field asserted by you "
                           "rather than derived from the run's own records, so say how you know "
                           "whatever you put here.")
+    reg.add_argument("--ligand-package", default=None, metavar="DIR",
+                     help="register one ligand parameter package (<compound>/<param_...>/ with "
+                          "molecule.sdf, parameters.ffxml, metadata.json) into the catalog "
+                          "$MD_DATA/parameters/ligands, verified and write-once; with --dry-run "
+                          "or --verify-only, check without writing")
+    reg.add_argument("--find-ligand", default=None, metavar="TEXT",
+                     help="list catalog packages whose compound id, alias, residue name or "
+                          "SMILES contains TEXT, with the reference a configuration names")
     reg.set_defaults(func=cmd_data_register)
 
     ref = sub.add_parser(

@@ -16,7 +16,7 @@ pytest.importorskip("openff.toolkit")
 pytest.importorskip("openmmforcefields")
 pytest.importorskip("networkx")
 
-from test_ligand_packages import _charges, _import, _molecule, _system_with_charges  # noqa: E402
+from tests.test_ligand_packages import _charges, _import, _molecule, _system_with_charges  # noqa: E402
 
 ALA_PDB = Path(__file__).resolve().parent / "data" / "ALA.pdb"
 

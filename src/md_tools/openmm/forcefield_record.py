@@ -76,7 +76,7 @@ def build_forcefield_record(*, resolved: dict[str, Any], route: str, record: dic
         if path.is_file():
             checksums[role] = {"path": relative, "sha256": sha256_file(path)}
 
-    protein = _protein_record(implicit=implicit, is_ligand=is_ligand, reported=reported,
+    protein = _protein_record(implicit=implicit, is_ligand=(route == "ligand"), reported=reported,
                               requested=requested, implicit_report=implicit_report)
     ligand = _ligand_record(is_ligand=is_ligand, reported=reported, requested=solute,
                             checksums=checksums)
