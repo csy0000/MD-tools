@@ -45,8 +45,7 @@ from .rules import (ExchangeContext, NeighbouringExchangeRule, builtin_rule_iden
                             load_rule)
 from .mpi import Coordination
 from .core import stream_seed
-from .engine import (Configuration, ReplicaEngine,
-                            select_device_for_rank, visible_cuda_devices)
+from .engine import Configuration, ReplicaEngine
 from md_tools.rest2 import require_compatible_implementation
 
 

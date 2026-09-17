@@ -78,15 +78,20 @@ def test_a_valid_machine_block_is_honoured_and_its_origin_recorded(platform, tmp
 @pytest.mark.parametrize("policy", ["local_rank", "openmm"])
 def test_both_device_policies_are_accepted_and_do_something(policy, tmp_path):
     """Accepted AND implemented. `openmm` used to be validated and never consulted."""
-    from md_tools.openmm.platform_policy import device_index_for
+    from md_tools.openmm.placement import MpsStatus, WorkerFacts, plan_launch
 
     path = _config(tmp_path, {
         "schema_version": "1.0", "user": VALID_USER,
         "machine": {"openmm": {"device_policy": policy}}})
     assert machine_openmm_settings(path)["device_policy"] == policy
 
-    chosen = device_index_for(policy=policy, rank=1, size=2, devices=["0", "1"])
-    assert (chosen is None) == (policy == "openmm"), policy
+    absent = MpsStatus(requested=False, pipe_directory="/tmp/nvidia-mps", daemon="not-running")
+    facts = [WorkerFacts(rank=r, hostname="h", cpus=(0, 1), cpu_quota=None, visible_devices=2,
+                         cuda_visible_devices=None, cuda_device_order=None,
+                         launcher_local_rank=None, mps=absent) for r in range(2)]
+    plan = plan_launch(facts, platform="CUDA", device_policy=policy,
+                       throughput={"h": [1.0, 1.0]})
+    assert (plan.for_rank(1)["device"] is None) == (policy == "openmm"), policy
 
 
 # --- what is refused ----------------------------------------------------------------------------

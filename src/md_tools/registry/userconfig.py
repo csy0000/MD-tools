@@ -80,8 +80,10 @@ machine:
     # mixed is the OpenMM default and what the validated runs used. single is faster and less
     # accurate; double is neither, on the hardware this targets.
     precision: mixed
-    # How a rank picks its CUDA device under MPI. local_rank gives one rank per visible device,
-    # which is the only policy that keeps a ladder off a single GPU.
+    # How workers are placed under MPI. local_rank: MD-tools binds each worker to an equal block
+    # of CPUs and places it on a device by measured throughput; a GPU shared by several workers
+    # needs NVIDIA MPS (docs/md-run.md, "CPUs, devices and MPS"). openmm: OpenMM chooses, for a
+    # scheduler that already gave every rank its own device.
     device_policy: local_rank
 """
 

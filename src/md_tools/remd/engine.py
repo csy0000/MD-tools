@@ -120,21 +120,9 @@ def visible_cuda_devices(*, probe=True):
     return list(range(count_cuda_devices())) if probe else []
 
 
-def select_device_for_rank(rank, size, devices):
-    """Which CUDA device this rank drives, and the policy that decided it.
-
-    Nothing binds ranks to devices automatically. Without this every rank creates its Context on
-    the default device and the whole ladder runs on one GPU, silently and slowly.
-    """
-    if not devices:
-        return None, "no visible CUDA device"
-    if size <= 1:
-        return str(devices[0]), "single process: first visible device"
-    if len(devices) >= size:
-        return str(devices[rank]), f"one rank per device ({size} ranks, {len(devices)} devices)"
-    chosen = devices[rank % len(devices)]
-    return str(chosen), (f"round-robin: {size} ranks share {len(devices)} device(s), "
-                         f"{-(-size // len(devices))} rank(s) per device")
+# `select_device_for_rank` lived here and is gone. It dealt ranks over devices in turn
+# (`rank % n_devices`), by GLOBAL rank, ignoring device speed and whether a shared GPU had MPS.
+# Placement is `md_tools.openmm.placement`, decided once in the preflight for every protocol.
 
 
 class ReplicaEngine:

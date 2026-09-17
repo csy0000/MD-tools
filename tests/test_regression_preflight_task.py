@@ -428,11 +428,17 @@ def test_the_record_carries_the_selection_fields():
 
 def test_both_advertised_device_policies_have_behaviour():
     """`openmm` was accepted by validation and never consulted: a field with no runtime effect."""
-    from md_tools.openmm.platform_policy import device_index_for
+    from md_tools.openmm.placement import MpsStatus, WorkerFacts, plan_launch
 
-    assert device_index_for(policy="openmm", rank=2, size=4, devices=["0", "1", "2", "3"]) is None
-    assert device_index_for(policy="local_rank", rank=2, size=4,
-                            devices=["0", "1", "2", "3"]) == "2"
+    absent = MpsStatus(requested=False, pipe_directory="/tmp/nvidia-mps", daemon="not-running")
+    facts = [WorkerFacts(rank=r, hostname="h", cpus=tuple(range(4)), cpu_quota=None,
+                         visible_devices=4, cuda_visible_devices=None, cuda_device_order=None,
+                         launcher_local_rank=None, mps=absent) for r in range(4)]
+    openmm = plan_launch(facts, platform="CUDA", device_policy="openmm")
+    assert openmm.for_rank(2)["device"] is None
+    placed = plan_launch(facts, platform="CUDA", device_policy="local_rank",
+                         throughput={"h": [1.0, 1.0, 1.0, 1.0]})
+    assert placed.for_rank(2)["device"] == 2
 
 
 def test_ais_reads_the_device_policy_before_choosing_a_device():
@@ -444,18 +450,19 @@ def test_ais_reads_the_device_policy_before_choosing_a_device():
 
     # AIS no longer places a device at all. It asks preflight and uses the answer, so the
     # ordering cannot be got wrong here by editing this module: there is nothing left to order.
-    assert "device_index_for" not in inspect.getsource(run), \
-        "AIS picks its own device again; the placement belongs to the shared preflight"
+    for name in ("device_index_for", "plan_launch", "balanced_assignment"):
+        assert name not in inspect.getsource(run), \
+            f"AIS places its own device again ({name}); placement belongs to the shared preflight"
 
     # The ordering now lives in the one place that does the work, and is asserted there.
     source = inspect.getsource(preflight)
     settings = source.index("machine_openmm_settings(machine_config)")
-    placement = source.index("device_index_for(policy=")
+    placement = source.index("placing.plan_launch(")
     assert settings < placement, "the device is chosen before the machine policy is read"
 
     # And the policy the call is given is the machine's, not a constant.
     call = source[placement:placement + 200]
-    assert "policy=policy" in call, call
+    assert "device_policy=policy" in call, call
 
 
 # --- 8. crash-atomic AIS checkpoints -----------------------------------------------------------

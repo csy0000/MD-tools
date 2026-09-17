@@ -241,8 +241,8 @@ first time somebody scripted one and configured the other. `--device` says *whic
 
 | value | behaviour |
 |---|---|
-| `local_rank` | one rank per visible device. The only policy that keeps a ladder off a single GPU |
-| `openmm` | set no `DeviceIndex` and let OpenMM choose — right when a scheduler or MPS has already partitioned the GPUs |
+| `local_rank` | this package places every worker: CPUs, then devices by measured throughput (see *CPUs, devices and MPS*) |
+| `openmm` | set no `DeviceIndex` and let OpenMM choose — right when a scheduler has already given each rank one device with `CUDA_VISIBLE_DEVICES`. Otherwise the workers are treated as sharing, and MPS is required |
 
 **An absent configuration is not an invalid one.** No file at all resolves to the built-in
 defaults. A file that exists and is malformed — bad YAML, a duplicate key, an unknown field, an
@@ -269,6 +269,7 @@ acceleration:
   cuda_driver_version: "580.95.05"
   openmm_version: "8.6"
   mpi: {rank: 3, size: 8, local_rank: 3}
+  placement: {workers: 8, placement: measured throughput (balanced), ...}
 ```
 
 One resolver, `md_tools.openmm.platform_policy`, serves stages, ladders and AIS alike, so they
@@ -306,11 +307,10 @@ a REST2 ladder runs one process per thermodynamic state, and these three numbers
 unowned or shared, and the exchange record would describe neither. `-ng > 1` outside an MPI launch
 is refused too: it says how many processes coordinate, it does not create them.
 
-**Device placement is deterministic and recorded.** Nothing binds ranks to devices automatically;
-without placement every rank builds its Context on the default device and the whole ladder runs on
-one GPU, silently and slowly. `CUDA_VISIBLE_DEVICES` renumbers devices from 0 for the process, so
-the ordinals are `0..n-1` for that process rather than the driver values in the variable. If a rank
-cannot initialise its device, the coordinated run aborts; it never continues with that rank on CPU.
+**Placement is decided once, in the preflight, and recorded** — see *CPUs, devices and MPS* below.
+`CUDA_VISIBLE_DEVICES` renumbers devices from 0 for the process, so the ordinals are `0..n-1` for
+that process rather than the driver values in the variable. If a rank cannot initialise its device,
+the coordinated run aborts; it never continues with that rank on CPU.
 
 Ranks do not share output files. Rank 0 prepares the ladder's inputs behind a barrier, and each
 rank keeps its own `.out` and log beside rank 0's — a rank that failed to bind its device is
@@ -323,6 +323,82 @@ Amber-compatible `rem.log`, the neighbouring-pair acceptance report, and `restar
 A group file is still supported through `-groupfile`, but an ordinary homogeneous ladder shares one
 topology and one System, and restating the same two paths eight times is a way to get one of them
 wrong.
+
+## CPUs, devices and MPS
+
+A REST2 ladder runs one worker per state and an AIS launch one worker per rank. Where each worker
+runs is decided by `md_tools.openmm.placement`, for every protocol, in the preflight — before any
+output exists — in this order.
+
+**1. CPUs.** The CPUs the launch may use on a node must be an integer multiple of the workers on
+that node, and each worker is bound to its own equal block (whole cores together, one socket
+before the next). The count is what the kernel allows — the scheduler affinity, narrowed by a
+cgroup v2 `cpu.max` quota — never a number a configuration claims. Four workers accept 4, 8 or 12
+CPUs; five is refused, naming the arithmetic:
+
+```text
+REST2: 5 CPU(s) are available to 4 worker(s), and 5 is not an integer multiple of 4 (5 = 4 x 1 + 1).
+  Every worker gets an equal block of CPUs, so the count must divide exactly. Make 4 CPUs (1 per
+  worker) or 8 CPUs (2 per worker) available ...
+```
+
+Open MPI binds each rank to one core by default, and those cores are then all the launch may use.
+To give the workers a larger share, hand the launch its CPUs and let placement divide them:
+
+```bash
+taskset -c 0-23 mpirun --bind-to none -n 4 md-openmm md-run -ng 4 ...   # 6 CPUs per worker
+```
+
+On the CPU platform a bound worker's OpenMM thread pool is its block size, unless
+`OPENMM_CPU_THREADS` says otherwise.
+
+**2. Devices, by measured throughput.** With more than one worker on a node, the first rank on
+that node runs *this run's* System for about a second on each visible device, one device at a time,
+and every worker is placed from that measurement: each takes the device whose per-worker share
+(steps per second divided by the workers on it) stays highest, so a slower device carries fewer
+workers or none. With at least as many devices as workers, each worker gets its own — the fastest
+ones. Fewer devices than workers is allowed, including uneven splits: 4 workers on 3 equal devices
+are placed 2, 1, 1. Whatever else the GPUs are running at that moment is part of the measurement.
+A single worker takes the first visible device, as before, and measures nothing.
+
+**3. MPS, whenever a GPU hosts more than one worker.** Without NVIDIA MPS, processes on one GPU
+are time-sliced, and a synchronous ladder runs at the pace of that shared GPU. A shared device is
+therefore refused unless MPS is **verified** for each worker. Three states are told apart and
+recorded:
+
+| status | meaning |
+|---|---|
+| `requested-not-detected` | `CUDA_MPS_PIPE_DIRECTORY` is set, and no control daemon serves it |
+| `detected-unverified` | a daemon is running with its `control` pipe in this process's pipe directory; nothing yet says this process is its client |
+| `verified` | while this worker holds a Context, `nvidia-smi -q -x` lists its PID as an MPS client (`M+C`) |
+| `not-a-client` | the driver lists the worker as an ordinary CUDA process (`C`): the daemon exists, but this process is not using it |
+| `absent` / `unknown` | no daemon; or the process table could not be read |
+
+MD-tools never starts, stops or talks to an MPS daemon: it is a shared service that someone else
+may own. To run with one you started yourself:
+
+```bash
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_MPS_PIPE_DIRECTORY=$HOME/.mps/pipe      # directories you own
+export CUDA_MPS_LOG_DIRECTORY=$HOME/.mps/log
+mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
+nvidia-cuda-mps-control -d                          # the control daemon; servers start on demand
+
+mpirun --bind-to none -n 4 md-openmm md-run -ng 4 ...   # launched from the SAME environment
+
+echo quit | nvidia-cuda-mps-control                 # stop it: only a daemon you started
+```
+
+A client finds the daemon only through `CUDA_MPS_PIPE_DIRECTORY` (default `/tmp/nvidia-mps`); a
+worker launched without it runs as an ordinary CUDA process and says nothing, which is why
+detection is not verification. The daemon's own `CUDA_VISIBLE_DEVICES` limits which GPUs its
+clients can use.
+
+The run record carries the whole plan under `acceleration.placement`: every worker's host, local
+rank, CPU block and the CPUs the launcher had bound it to, its device and how many workers share
+it, the measurement, and the MPS status with the MPS environment. `--check` prints this rank's
+share of it. Placement never enters a scientific fingerprint: a ladder's state index is the state's
+and an AIS path id is the path's, whatever device ran them.
 
 ## AIS
 
