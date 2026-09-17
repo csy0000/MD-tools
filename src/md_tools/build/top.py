@@ -976,6 +976,9 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     prepared_pdb_bytes = None
     completion_record = None
     assembly_scratch = None
+    # What was done to `-i` before the structure was read, for the refusals that follow: they name
+    # the file the caller typed, not the temporary copy, which is gone by the time they read it.
+    prepared_by: list[str] = []
     out_assembly = out_system.parent / "assembly.json"
     # THE PREPARED STRUCTURE: the expanded and/or completed coordinates protonation starts from.
     # Saved beside the System so a rebuild -- and a reference bundle -- can start from exactly it.
@@ -993,6 +996,7 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             raise ConfigError(f"-i {input_path}: {exc}") from None
         prepared_pdb_bytes = expanded.read_bytes()
         structure_input = expanded
+        prepared_by.append(f"input.assembly: {assembly_record['assembly_id']}")
 
     # MISSING HEAVY ATOMS AND CHAIN BREAKS, decided before anything reads the structure for real:
     # a break is refused, and incomplete residues are refused or built under input.missing_atoms.
@@ -1022,11 +1026,18 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
                 _app.PDBFile.writeFile(completed_topology, completed_positions, handle, keepIds=True)
             structure_input = completed
             prepared_pdb_bytes = completed.read_bytes()
+            if removal_record:
+                prepared_by.append(f"input.remove: {len(removal_record)} residue(s)")
+            if completion_record["atoms_added"]:
+                prepared_by.append(f"input.missing_atoms: add, "
+                                   f"{len(completion_record['atoms_added'])} atom(s)")
 
     mapped = None
     out_mapping = out_system.parent / "ligand_mapping.json"
     if complex_build:
-        mapped = _map_complex_ligands(structure_input, resolved, config_path)
+        mapped = _map_complex_ligands(
+            structure_input, resolved, config_path, input_path=input_path,
+            prepared_by="after " + ", ".join(prepared_by) if prepared_by else None)
     elif not peptide and str(resolved["solute"]["parameters"] or "search") not in ("search",
                                                                                   "generate"):
         # A STATED package reference, loaded and verified here, where a refusal still leaves
@@ -1517,8 +1528,17 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
     return log.record
 
 
-def _map_complex_ligands(input_path: Path, resolved: dict[str, Any], config_path: Path | None):
-    """Load every package the configuration names and map every ligand instance. Writes nothing."""
+def _map_complex_ligands(structure_path: Path, resolved: dict[str, Any], config_path: Path | None,
+                         *, input_path: Path, prepared_by: str | None = None):
+    """Load every package the configuration names and map every ligand instance. Writes nothing.
+
+    `structure_path` is the file READ, which after assembly expansion or missing-atom completion
+    lives in a private temporary directory that no longer exists by the time anybody reads a
+    refusal. Every refusal here therefore names `input_path` -- the `-i` the caller typed -- and
+    says what was done to it (`prepared_by`): a refusal that cannot be traced back to the reader's
+    own input is close to useless, and this is the refusal a person meets when reusing a parameter
+    package. `built.prepared.pdb` beside the System is the durable copy of what was read.
+    """
     from openmm import app
 
     from ..ligands.catalog import find_package
@@ -1526,11 +1546,12 @@ def _map_complex_ligands(input_path: Path, resolved: dict[str, Any], config_path
     from ..ligands.package import PackageError
     from ..openmm.system import ION_RESIDUE_NAMES, PROTEIN_RESIDUES, WATER_RESIDUE_NAMES
 
+    where = f"-i {input_path}" + (f" ({prepared_by})" if prepared_by else "")
     try:
-        reader = app.PDBxFile if input_path.suffix.lower() == ".cif" else app.PDBFile
-        structure = reader(str(input_path))
+        reader = app.PDBxFile if structure_path.suffix.lower() == ".cif" else app.PDBFile
+        structure = reader(str(structure_path))
     except Exception as exc:
-        raise ConfigError(f"-i {input_path}: OpenMM could not read this structure ({exc})") from exc
+        raise ConfigError(f"{where}: OpenMM could not read this structure ({exc})") from exc
     roots = catalog_roots(resolved, config_path)
     entries = resolved["ligands"]
     try:
@@ -1549,14 +1570,14 @@ def _map_complex_ligands(input_path: Path, resolved: dict[str, Any], config_path
                               + (f" icode {r['insertion_code']!r}" if r["insertion_code"] else "")
                               for r in left[:10])
             raise ConfigError(
-                f"-i {input_path}: {len(left)} residue(s) are neither standard protein residues, "
+                f"{where}: {len(left)} residue(s) are neither standard protein residues, "
                 f"water nor ions, and no `ligands` entry maps them: {shown}"
                 + (" ..." if len(left) > 10 else "") + ". Each needs an entry naming its "
                 f"parameter package; nothing is parameterised by guessing, and nothing is "
                 f"silently deleted.")
         return map_ligands(structure.topology, structure.positions, entries, packages)
     except (PackageError, MappingError) as exc:
-        raise ConfigError(f"-i {input_path}: {exc}") from exc
+        raise ConfigError(f"{where}: {exc}") from exc
 
 
 def _place_packages(staged_root: Path, out_root: Path) -> list[dict[str, Any]]:

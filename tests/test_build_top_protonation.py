@@ -83,6 +83,34 @@ def test_an_unknown_assembly_is_refused_before_any_output(tmp_path):
     assert not out.exists()
 
 
+def test_a_ligand_refusal_names_the_input_the_caller_typed(tmp_path):
+    """Not the temporary copy: `input.assembly` and `input.missing_atoms` read a staged file in a
+    private directory that is gone by the time anybody reads the refusal, and a refusal nobody can
+    trace back to their own `-i` is close to useless. This is the refusal a person meets when
+    reusing a parameter package.
+    """
+    pytest.importorskip("pdbfixer")
+    from md_tools.build.top import build_topology
+
+    from .test_assembly_expansion import _cif
+
+    source = _cif(tmp_path)
+    config = _config(tmp_path, {
+        "solute": {"kind": "complex"},
+        "ligands": [{"select": {"chain": "A", "resid": "31"},
+                     "parameters": "CHEMBL999/param_000000000000"}],
+        "input": {"assembly": "1", "missing_atoms": "add"}})
+    out = tmp_path / "out"
+    with pytest.raises(ConfigError) as refusal:
+        build_topology(input_path=source, config_path=config, out_system=out / "built.xml",
+                       out_pdb=out / "built.pdb", out_log=out / "built.log", echo=False)
+    message = str(refusal.value)
+    assert f"-i {source}" in message
+    assert "after input.assembly: 1" in message
+    assert "build-top-assembly-" not in message
+    assert not out.exists()
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("method", ["openmm", "propka"])
 def test_the_build_records_how_the_protein_was_protonated(tmp_path, method):
