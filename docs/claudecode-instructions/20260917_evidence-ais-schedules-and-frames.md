@@ -40,20 +40,31 @@ python -m pytest "tests/test_ais_two_state.py::test_the_work_from_the_derivative
 ```
 
 Observed at 567a4df (CPU, CUDA hidden): `tests/test_ais_schedules.py` 26 passed; fast lane 1899
-passed (MD-tools-main's own run).
+passed (MD-tools-main's own run). At b4cd5db: fast lane 1920 passed, plus 5 in the run-level file.
+The 3 failures in `tests/test_umbrella_restart.py` under a hidden GPU are unrelated: they open a
+CUDA Context although they are not marked `gpu`.
 
-### GAPS in this row (no test yet; not passed)
+### Run-level evidence (was G1 and G2; CLOSED by `tests/test_ais_schedule_runs.py`)
 
-- **G1: run level, CPU.** One AIS path under tau-linear through `run_one_path`: the
-  `lambda_before`/`lambda_after` columns of `AIS_work.csv` equal the λ table at the observed
-  updates, `AIS_run.json` records the schedule, τ₀ and `lambda_sha256`, and every saved-frame row
-  satisfies `potential_direct = (1−λ)·V0 + λ·V1`. Proposed tolerance: λ exact; potentials abs 1e-6
-  kJ/mol with double-precision observation. Proposed home: `tests/test_ais_schedules.py`, marked slow.
-- **G2: continuation, CPU.** A v3 directory written under `linear` refused when re-invoked under
-  `tau-linear` (and vice versa, and under a different τ₀), naming `schedule`/`lambda` as the
-  differing field. The generic differing-field refusal is tested
-  (`tests/test_ais_directory_identity.py::test_an_incompatible_directory_is_refused_by_naming_what_differs_even_with_resume`);
-  the schedule-specific case is not.
+| # | claim | test (node id) | inputs | tolerance | device |
+|---|---|---|---|---|---|
+| R1 | the runtime visits the scheduled λ: every `AIS_work.csv` row's `lambda_before`/`lambda_after` is the table's value for the updates completed at that step, the last is exactly 1, and the set is provably not the linear one | `tests/test_ais_schedule_runs.py::test_the_work_table_visits_exactly_the_scheduled_lambdas` | 3 paths, 40 steps, update 5, observe 10, τ₀ 0.5, implicit ALA, `--cpu` | abs 1e-12 | CPU |
+| R2 | `AIS_hs.csv`: `potential_direct = (1−λ)·V0 + λ·V1` at the coordinate each row saved, with a guard that V1 − V0 exceeds 1 kJ/mol so the identity is not vacuous | `...::test_every_saved_frame_row_satisfies_the_mixing_identity` | as R1 | abs 1e-4, rel 1e-9 kJ/mol | CPU |
+| R3 | `AIS_run.json` records the schedule, τ₀ and `lambda_sha256` | `...::test_the_run_identity_records_the_schedule_its_tau0_and_the_lambda_digest` | as R1 | exact | CPU |
+| R4 | a linear invocation into a tau-linear directory is refused by name and rewrites nothing | `...::test_a_second_invocation_under_another_schedule_is_refused_by_name` | second dataset root, `--resume` | message match; `AIS_run.json` byte-identical | CPU |
+
+Command:
+
+```bash
+python -m pytest tests/test_ais_schedule_runs.py -q -p no:cacheprovider
+```
+
+Observed at b4cd5db: 5 passed. Note for R4: the second run needs its own DATASET ROOT, because
+`input/AIS.in` is shared by every run on a system and a configuration resolving to different bytes
+is refused there first.
+
+### GAP remaining in this row
+
 - **G3: CUDA.** A tau-linear AIS path on CUDA with the identity check at saved frames, entered in
   `docs/release-notes/cuda-coverage-matrix.md`. Needs the user's GPU go-ahead. The matrix itself is
   stale (it still names the retired `TauSwitcher.set_amplitude` and the decomposition probe) and
@@ -70,12 +81,9 @@ passed (MD-tools-main's own run).
 
 Command: included in the `tests/test_ais_schedules.py` run above.
 
-### GAP in this row
+| F5 | run level: `selected_source_frames.csv` spans the eligible window, first frame to last (was G4) | `tests/test_ais_schedule_runs.py::test_the_selected_frames_span_the_whole_eligible_window` | 8-frame source, 3 paths | exact: 0 and 7 | CPU |
 
-- **G4: run level, CPU.** `selected_source_frames.csv` of a generated-source run (for example the
-  existing `tests/test_ais_generated_source.py` chain with more paths than today's 3) spans the
-  eligible window from its first to its last frame. Proposed as an extra assertion in that slow
-  test rather than a new run.
+No gap remains in this row.
 
 ## Reproduction against the 0.5.4 tutorial (optional, documentation evidence)
 
