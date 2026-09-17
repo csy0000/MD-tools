@@ -851,7 +851,16 @@ def build_topology(*, input_path: Path, config_path: Path | None = None,
             log.field(f"{section}.{key}", f"{value}   ({origin})")
 
     log.heading("Input interpretation")
-    if peptide and sequence_build is not None:
+    if complex_build:
+        log.field("interpreted as",
+                  f"protein-ligand complex ({suffix}), {len(mapped.instances)} ligand instance(s) "
+                  f"mapped to parameter packages")
+        for instance in mapped.instances:
+            log.field(f"ligand {instance.residue_name}",
+                      f"{instance.selector.label()} -> {instance.package.reference}")
+        log.field("coordinates", "the deposited pose; ligand hydrogens from each package")
+        log.field("small-molecule FF", "not run: parameters loaded from the packages")
+    elif peptide and sequence_build is not None:
         log.field("interpreted as", "peptide sequence, built by tleap `sequence`")
         log.field("sequence", " ".join(sequence))
         log.field("residue library", sequence_build["protein_forcefield"])

@@ -125,6 +125,9 @@ solvent:
 """)
     assert result.returncode == 0, result.stderr[-3000:]
     build = complex_dir / "build"
+    readable = (build / "built.log").read_text()
+    assert "protein-ligand complex (.pdb), 3 ligand instance(s)" in readable
+    assert "single-molecule" not in readable and "supplied by the SDF" not in readable
     mapping = json.loads((build / "ligand_mapping.json").read_text())
     assert [i["package"]["reference"] for i in mapping["instances"]] == [
         tyl.reference, tyl.reference, eth.reference]
