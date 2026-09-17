@@ -21,8 +21,10 @@ The exact statement is the energy identity, and it is tested two ways:
 * here, the same identity is checked on configurations taken from a REAL GPU ladder, so it is
   established for the states the sampler actually visits rather than for a synthetic pair.
 
-Two GPUs, four rungs oversubscribed: `select_device_for_rank` round-robins when ranks exceed
-devices, which is what the instruction asks for.
+Two GPUs, four rungs oversubscribed. Round-robin placement (`select_device_for_rank`) is retired:
+`md_tools.openmm.placement` now puts two rungs on each device by measured throughput, and a shared
+device is refused unless NVIDIA MPS is verified for every rank. On a machine without an MPS daemon
+this file therefore refuses at the preflight; launch it from an MPS-enabled environment.
 
 Nothing here names a platform. The cancellation check at the end therefore evaluates its energies
 on CUDA in mixed precision like everything else in this file, and its tolerance says so: the EXACT

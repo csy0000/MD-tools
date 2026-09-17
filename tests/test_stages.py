@@ -263,8 +263,9 @@ def test_the_cold_rung_is_the_unmodified_system():
 # `device_groups` and `propagate_segment` are retired with the thread-based launchers that used
 # them: one process opened N Contexts and hand-scheduled them across devices. The ladder now runs
 # one MPI rank per state, so concurrency is the process model rather than a schedule to prove, and
-# the only remaining decision is which device each rank takes. That is
-# `replica_engine.select_device_for_rank`, asserted below.
+# the only remaining decision is which CPUs and device each rank takes. That is
+# `md_tools.openmm.placement`, which replaced the round-robin `select_device_for_rank` (migrated:
+# its assertions live in tests/test_placement.py, against balanced placement).
 
 
 # --- REST2 equilibration scheduling ------------------------------------------
@@ -280,33 +281,24 @@ def test_the_same_device_policy_serves_equilibration_and_production():
 
     root = REPO_ROOT / "src" / "md_tools"
     choosers = sorted(path.relative_to(root).as_posix() for path in root.rglob("*.py")
-                      if "def select_device_for_rank(" in path.read_text(encoding="utf-8")
+                      if "def balanced_assignment(" in path.read_text(encoding="utf-8")
+                      or "def select_device_for_rank(" in path.read_text(encoding="utf-8")
                       or "def device_groups(" in path.read_text(encoding="utf-8"))
-    assert choosers == ["remd/engine.py"], choosers
+    assert choosers == ["openmm/placement.py"], choosers
 
 
-def test_one_device_is_chosen_per_rank_and_ranks_never_share():
-    """`device_groups` placed replicas on devices for the retired thread-based launcher. The
-    ladder now runs one MPI rank per state, so placement is per rank -- and two ranks landing on
-    one device is the failure that used to halve throughput silently.
+def test_one_device_is_chosen_per_rank_and_ranks_never_share_when_devices_suffice():
+    """`device_groups` placed replicas on devices for the retired thread-based launcher. Two ranks
+    landing on one device is the failure that used to halve throughput silently; with enough
+    devices, placement gives every rank its own.
     """
-    from .conftest import template_module
+    from md_tools.openmm.placement import balanced_assignment
 
-    engine = importlib.import_module("md_tools.remd.engine")
-    devices = [0, 1, 2, 3]
-    # The engine returns the device index as OpenMM wants it -- a string for `DeviceIndex`.
-    chosen = [engine.select_device_for_rank(rank, 4, devices)[0] for rank in range(4)]
-    assert sorted(int(device) for device in chosen) == devices, \
-        f"ranks did not get distinct devices: {chosen}"
-
-    # Fewer devices than ranks is a real configuration, and it must wrap deterministically
-    # rather than leaving a rank with nothing.
-    two = [engine.select_device_for_rank(rank, 4, [0, 1])[0] for rank in range(4)]
-    assert all(device is not None for device in two), two
-    assert {int(device) for device in two} == {0, 1}, two
-
-    # No visible device is not a placement decision to guess at.
-    assert engine.select_device_for_rank(0, 4, [])[0] is None
+    assert sorted(balanced_assignment([100.0] * 4, 4)) == [0, 1, 2, 3]
+    # Fewer devices than ranks is a real configuration: every rank still gets a device, and the
+    # sharing is what `refuse_unverified_sharing` then demands MPS for.
+    two = balanced_assignment([100.0, 100.0], 4)
+    assert set(two) == {0, 1} and len(two) == 4, two
 
 
 def test_a_failing_replica_is_never_reported_as_a_finished_run():

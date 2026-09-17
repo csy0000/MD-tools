@@ -547,3 +547,54 @@ def test_the_phase_guard_is_the_only_mpi_authority():
             assert forbidden not in source, f"{module.__name__} has its own `{forbidden}`"
         assert "coordination.phase(" in source, (
             f"{module.__name__} does not guard its post-preflight phases")
+
+
+# --- CPU placement ------------------------------------------------------------------------------
+#
+# `--bind-to none` hands the launch the CPUs `taskset` gave it. Without it Open MPI binds each rank
+# to one core by default, and those cores are then what the launch may use -- which is the rule
+# working, but not the arithmetic under test here.
+
+@pytest.mark.parametrize("protocol", ["REST2", "AIS"])
+def test_a_cpu_count_that_does_not_divide_among_the_workers_is_refused_before_output(protocol,
+                                                                                     projects,
+                                                                                     tmp_path):
+    """Three CPUs for two workers. Refused on every rank, naming the arithmetic, writing nothing."""
+    _require_mpirun()
+    if shutil.which("taskset") is None:
+        pytest.skip("no taskset on PATH")
+    project, destination = _launch_directory(projects, protocol, tmp_path)
+    before = _listing(project)
+    argv = ["md-openmm", "md-run", "-i", f"../input/{protocol}.in", "-p", "../build/built.pdb",
+            *_inputs(protocol), "-odir", _odir(project, destination), "--cpu"]
+    if protocol == "AIS":
+        argv += ["-source-traj", "../source.dcd"]
+    done = subprocess.run(["taskset", "-c", "0-2", "mpirun", "--bind-to", "none", "-n", "2",
+                           *argv], cwd=project, capture_output=True, text=True,
+                          timeout=LAUNCH_TIMEOUT, env=_environment())
+    message = done.stdout + done.stderr
+    assert done.returncode != 0, message[-2000:]
+    assert "3 = 2 x 1 + 1" in message, message[-3000:]
+    assert "2 CPUs (1 per worker)" in message and "4 CPUs (2 per worker)" in message, message
+    _wrote_nothing(protocol, project, destination, before)
+
+
+def test_a_cpu_count_that_divides_binds_each_worker_to_its_own_block(projects, tmp_path):
+    """Four CPUs for two workers: `--check` passes, and each rank reports its own two CPUs."""
+    _require_mpirun()
+    if shutil.which("taskset") is None:
+        pytest.skip("no taskset on PATH")
+    project, destination = _launch_directory(projects, "REST2", tmp_path)
+    before = _listing(project)
+    done = subprocess.run(
+        ["taskset", "-c", "0-3", "mpirun", "--bind-to", "none", "-n", "2",
+         "md-openmm", "md-run", "-i", "../input/REST2.in", "-p", "../build/built.pdb",
+         *_inputs("REST2"), "-odir", ".", "--cpu", "--check"],
+        cwd=project, capture_output=True, text=True, timeout=LAUNCH_TIMEOUT, env=_environment())
+    message = done.stdout + done.stderr
+    assert done.returncode == 0, message[-3000:]
+    bound = sorted(line.split("bound (")[1].split(")")[0]
+                   for line in message.splitlines() if "cpus " in line and " bound (" in line)
+    assert len(bound) == 2 and len(set(bound)) == 2, message[-3000:]
+    assert "2 bound" in message and "of 4 usable" in message, message[-3000:]
+    _wrote_nothing("REST2", project, destination, before)

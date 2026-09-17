@@ -33,7 +33,6 @@ from typing import Any, Optional
 __all__ = [
     "FORCE_NO_CUDA",
     "PlatformRequest",
-    "device_index_for",
     "PlatformResolution",
     "PlatformUnavailable",
     "resolve_platform_request",
@@ -152,32 +151,9 @@ def _cuda_device_names() -> tuple[str, ...]:
     return ()
 
 
-def device_index_for(*, policy: str, rank: int, size: int, devices) -> str | None:
-    """Which CUDA device this process uses, under the machine's `device_policy`.
-
-    Both advertised values do something, which was the point of implementing this: `openmm` was
-    accepted by validation and never consulted, so a person could configure it and get local-rank
-    placement anyway -- a field with no runtime effect is worse than an absent one.
-
-        local_rank  one rank per visible device. The only policy that keeps a ladder off a single
-                    GPU: nothing binds ranks to devices otherwise, and every rank builds its
-                    Context on the default one.
-        openmm      set no DeviceIndex and let OpenMM choose. Right when something outside this
-                    package already partitioned the GPUs -- a scheduler setting
-                    CUDA_VISIBLE_DEVICES per rank, or MPS.
-    """
-    if policy == "openmm":
-        return None
-    if not devices:
-        return None
-    from ..remd.engine import select_device_for_rank
-
-    chosen, _ = select_device_for_rank(int(rank), int(size), list(devices))
-    return chosen
-
-
 def resolve_platform_request(request: PlatformRequest | None = None, *,
                              device_index: int | None = None,
+                             cpu_threads: int | None = None,
                              probe: bool = True) -> PlatformResolution:
     """Turn a request into a real OpenMM Platform, or refuse before any dynamics happen.
 
@@ -209,6 +185,9 @@ def resolve_platform_request(request: PlatformRequest | None = None, *,
         properties["Precision"] = request.precision
         if index is not None:
             properties["DeviceIndex"] = str(index)
+    if request.name == "CPU" and cpu_threads is not None:
+        # A worker bound to a block of CPUs by `md_tools.openmm.placement` gets a pool that size.
+        properties["Threads"] = str(int(cpu_threads))
 
     if request.name == "CUDA" and probe:
         # Listing the platform is not the same as having a usable device: conda-forge ships the

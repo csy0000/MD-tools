@@ -435,10 +435,10 @@ def pytest_collection_modifyitems(config, items):
 
 # --- spreading the suite over every GPU ---------------------------------------------------------
 #
-# `select_device_for_rank` gives a SINGLE process "the first visible device" -- device 0. That is
-# right for one run and wrong for a parallel suite: under `-n 24` every serial CUDA test built its
-# Context on device 0 while devices 1-8 sat idle. Only MPI ladders spread, because `local_rank`
-# hands rank i device i. The symptom was device 0 pinned near its memory ceiling while the rest of
+# Placement gives a SINGLE process "the first visible device" -- device 0. That is right for one
+# run and wrong for a parallel suite: under `-n 24` every serial CUDA test built its Context on
+# device 0 while devices 1-8 sat idle. Only MPI ladders spread, because `local_rank` gives each rank
+# its own device when there are enough (`md_tools.openmm.placement`; ranks sharing one need MPS). The symptom was device 0 pinned near its memory ceiling while the rest of
 # the machine was free, and at least one example test skipping itself with "this machine is too
 # loaded to demonstrate the resume in 45 s".
 #
@@ -465,6 +465,7 @@ MULTI_RANK_MODULES = frozenset({
     "test_runtime_contract_matrix.py", "test_own_replica_exchange.py",
     "test_rest2_equilibration_per_tau_cuda.py",
     "test_hprest2_gpu_evidence.py",
+    "test_placement_cuda.py",
 })
 
 #: Modules that must see the machine EXACTLY as it is, and get no assignment at all.

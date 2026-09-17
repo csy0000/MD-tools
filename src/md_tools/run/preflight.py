@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -213,36 +213,167 @@ def _resolve_machine(machine_config: str | Path | None) -> dict[str, Any]:
 
 
 def _resolve_platform(machine: dict[str, Any], *, cpu: bool, device: Any,
-                      coordination) -> tuple[Any, Any, str]:
-    """Platform, device and the policy that placed it. Proves a Context can be created."""
-    from ..openmm.platform_policy import (PlatformRequest, device_index_for,
-                                          resolve_platform_request)
+                      plan) -> tuple[Any, Any, str]:
+    """Platform and device, CONSUMED from the launch plan. Proves a Context can be created.
 
-    policy = str(machine.get("device_policy") or "local_rank")
+    The device was decided by `md_tools.openmm.placement` from facts every rank gathered; this
+    only turns the decision into a Platform. Deciding it again here, per rank, is how round-robin
+    and a planner would come to disagree about where rank 3 runs.
+    """
+    from ..openmm.platform_policy import PlatformRequest, resolve_platform_request
+
     request = PlatformRequest.from_machine(machine, cpu=cpu)
+    mine = plan.for_rank()
+    index = mine["device"] if request.name == "CUDA" else None
+    if request.name != "CUDA":
+        detail = "not a CUDA platform"
+    else:
+        detail = plan.placement
+        if plan.workers > 1 and index is not None:
+            detail += (f" (rank {plan.this_rank} of {plan.workers}, local rank "
+                       f"{mine['local_rank']} on {mine['host']}, {mine['co_tenants']} worker(s) "
+                       f"on this device)")
+    threads = None
+    if request.name == "CPU" and plan.workers > 1 and not os.environ.get("OPENMM_CPU_THREADS"):
+        # A bound worker running a pool sized for the whole host oversubscribes its own block.
+        threads = len(mine["cpus"])
+    return (resolve_platform_request(request, device_index=index, cpu_threads=threads),
+            index, detail)
 
-    index = device
-    detail = "named on the command line (--device)"
-    if index is None:
-        if request.name != "CUDA":
-            detail = "not a CUDA platform"
-        elif policy == "openmm":
-            detail = "machine.openmm.device_policy: openmm -- OpenMM selects"
-        else:
-            from ..remd.engine import visible_cuda_devices
 
-            index = device_index_for(policy=policy, rank=coordination.rank,
-                                     size=coordination.size,
-                                     devices=visible_cuda_devices(probe=coordination.size > 1))
-            detail = (f"machine.openmm.device_policy: local_rank "
-                      f"(rank {coordination.rank} of {coordination.size})")
-            if index is None and coordination.size > 1:
-                raise PreflightError(
-                    "the CUDA platform was selected under MPI with device_policy: local_rank, "
-                    "but no CUDA device is visible to this rank. Refusing rather than letting "
-                    "every rank fall onto one GPU.")
+def _plan_placement(coordination, machine: dict[str, Any], *, cpu: bool, device: Any,
+                    loaded, topology, system, protocol: str):
+    """CPUs, devices and MPS for every worker of this launch. Collective; refuses before output.
 
-    return resolve_platform_request(request, device_index=index), index, detail
+    In order, because each step needs the one before:
+
+      1. every rank reads its own facts -- affinity, cgroup quota, visible devices, MPS
+      2. the facts are gathered and the CPU rule checked: identical arithmetic on every rank, so
+         a refusal is every rank's refusal without a hang
+      3. each rank binds itself to its block, before any Context exists, so CUDA's host threads
+         inherit the binding and the measurement below runs on the CPUs the run will use
+      4. the first rank on each host measures that host's devices with THIS run's System
+      5. the plan is made from the gathered measurement, identically on every rank
+      6. a rank on a shared device proves it is an MPS client, or the launch is refused
+    """
+    from ..openmm import placement as placing
+    from ..openmm.platform_policy import PlatformRequest
+    from ..remd.engine import visible_cuda_devices
+
+    request = PlatformRequest.from_machine(machine, cpu=cpu)
+    policy = str(machine.get("device_policy") or "local_rank")
+    cuda = request.name == "CUDA"
+
+    def _facts():
+        _fail_here_if_asked(coordination)
+        count = (len(visible_cuda_devices(probe=coordination.size > 1))
+                 if cuda and device is None and policy != "openmm" else 0)
+        return placing.read_worker_facts(coordination.rank, visible_devices=count)
+
+    facts = coordination.allgather(collectively(coordination, _facts,
+                                                what=f"the {protocol} placement facts"))
+    try:
+        cpus = placing.plan_cpus(facts, where=protocol)
+    except placing.PlacementError as refused:
+        raise PreflightError(str(refused)) from None
+
+    def _bind():
+        try:
+            return placing.bind_worker(cpus[coordination.rank]["cpus"])
+        except OSError as failure:
+            raise PreflightError(f"{protocol}: this rank could not be bound to CPUs "
+                                 f"{cpus[coordination.rank]['cpus']}: {failure}") from None
+
+    collectively(coordination, _bind, what=f"the {protocol} CPU binding")
+
+    hosts = placing.needs_measurement(facts, platform=request.name, device_policy=policy,
+                                      explicit_device=device)
+    mine = cpus[coordination.rank]
+
+    def _measure():
+        if mine["host"] not in hosts or mine["local_rank"] != 0:
+            return None
+        if loaded is None and not (topology and system):
+            raise PreflightError(
+                f"{protocol}: placement by measured throughput needs this run's System to "
+                f"measure with, and none was given to the preflight.")
+        pair = loaded if loaded is not None else load_inputs(topology, system)
+        try:
+            return placing.measure_device_throughput(
+                pair.system, pair.pdb.positions, devices=hosts[mine["host"]],
+                precision=request.precision)
+        except Exception as failure:                       # noqa: BLE001 - reported as refusal
+            raise PreflightError(
+                f"{protocol}: measuring device throughput on {mine['host']} failed: "
+                f"{type(failure).__name__}: {failure}. Placement is by measured throughput; "
+                f"without a measurement there is nothing to place by.") from None
+
+    measured = {}
+    for rank, piece in enumerate(coordination.allgather(
+            collectively(coordination, _measure, what=f"the {protocol} device measurement"))):
+        if piece is not None:
+            measured[cpus[rank]["host"]] = piece
+    try:
+        plan = placing.plan_launch(
+            facts, platform=request.name, device_policy=policy,
+            explicit_device=None if device is None else int(device),
+            throughput={host: m["steps_per_second"] for host, m in measured.items()} or None,
+            where=protocol)
+    except placing.PlacementError as refused:
+        raise PreflightError(str(refused)) from None
+    plan = replace(plan, this_rank=coordination.rank, measurement=measured or None)
+
+    mps = next(f.mps for f in facts if f.rank == coordination.rank)
+    if cuda and plan.shared_devices:
+        def _verify():
+            status = _verify_mps(plan.for_rank()["device"], request.precision, mps)
+            try:
+                placing.refuse_unverified_sharing(plan, status, rank=coordination.rank,
+                                                  where=protocol)
+            except placing.PlacementError as refused:
+                raise PreflightError(str(refused)) from None
+            return status
+
+        mps = collectively(coordination, _verify, what=f"the {protocol} MPS verification")
+    return replace(plan, mps=mps)
+
+
+def _verify_mps(device, precision: str, status):
+    """Hold a Context on this rank's device and ask the driver whether we are an MPS client."""
+    import os as _os
+    import sys as _sys
+
+    from openmm import Context, Platform, System, VerletIntegrator, unit
+
+    from ..openmm import placement as placing
+
+    if _os.environ.get(placing.FORCE_MPS_VERDICT):
+        verdict = _os.environ[placing.FORCE_MPS_VERDICT]
+        # LOUD, on the interpreter's own stderr. A forced verdict makes the preflight accept a
+        # configuration the rule refuses, and the run record then reads `verified` beside a daemon
+        # that is not running. Nobody may reach that state without seeing it said.
+        print(f"WARNING: {placing.FORCE_MPS_VERDICT}={verdict} is set: the MPS verdict is being "
+              f"FORCED, not read from the driver. This is a test seam. Any timing or record from "
+              f"this run describes a configuration the rule would refuse.",
+              file=_sys.__stderr__ or _sys.stderr, flush=True)
+        return status.with_verification({"verified": True, "not-a-client": False}.get(verdict),
+                                        f"{placing.FORCE_MPS_VERDICT}={verdict} (test seam)",
+                                        forced=True)
+    system = System()
+    system.addParticle(1.0 * unit.amu)
+    properties = {"Precision": precision}
+    if device is not None:
+        properties["DeviceIndex"] = str(device)
+    try:
+        context = Context(system, VerletIntegrator(0.001), Platform.getPlatformByName("CUDA"),
+                          properties)
+    except Exception as failure:                           # noqa: BLE001 - reported below
+        return status.with_verification(None, f"no Context to verify MPS with: {failure}")
+    try:
+        verdict, why = placing.verify_mps_client(_os.getpid(), xml=placing.nvidia_smi_xml())
+    finally:
+        del context
+    return status.with_verification(verdict, why)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -457,6 +588,9 @@ class ExecutionPreflight:
     device_index: Any
     device_policy: str
     device_policy_detail: str
+    #: Every worker's CPUs and device, the measurement they were placed by, and MPS. From
+    #: `md_tools.openmm.placement`, the one placement authority.
+    placement: Any = None
     particles: int | None = None
     #: The deserialised pair, when the mode needed to look inside it. Handed to the runtime so it
     #: consumes this System rather than deserialising a second one that could differ.
@@ -476,9 +610,14 @@ class ExecutionPreflight:
         from ..openmm.platform_policy import acceleration_record
 
         return dict(
-            acceleration_record(self.acceleration, mpi_rank=self.coordination.rank,
-                                mpi_size=self.coordination.size, local_rank=self.device_index),
-            device_policy_detail=self.device_policy_detail)
+            acceleration_record(
+                self.acceleration, mpi_rank=self.coordination.rank,
+                mpi_size=self.coordination.size,
+                # The rank on this NODE. This field used to carry the device index.
+                local_rank=(self.placement.for_rank()["local_rank"]
+                            if self.placement is not None else None)),
+            device_policy_detail=self.device_policy_detail,
+            placement=self.placement.record() if self.placement is not None else None)
 
 
 @dataclass(frozen=True)
@@ -673,7 +812,7 @@ def _fail_here_if_asked(coordination) -> None:
 
 
 def _common(*, topology, system, outputs, inputs, cpu, device, number_of_groups, replicas,
-            protocol, machine_config, check_particles=True, load=False):
+            protocol, machine_config, check_particles=True, load=False, serial=False):
     """Steps 1-11, in order. Shared by every mode; each mode adds only its own inputs."""
     _check_command_line(cpu=cpu, device=device, number_of_groups=number_of_groups)
 
@@ -686,9 +825,7 @@ def _common(*, topology, system, outputs, inputs, cpu, device, number_of_groups,
 
     machine = _resolve_machine(machine_config)
 
-    def _platform_and_inputs():
-        _fail_here_if_asked(coordination)
-        resolved = _resolve_platform(machine, cpu=cpu, device=device, coordination=coordination)
+    def _inputs():
         # Loaded once when the mode has refusals that need to look inside the System; the
         # particle comparison then comes from the loaded pair rather than a second parse.
         # NO SYSTEM TO LOAD OR TO COMPARE AGAINST on a grouped launch.
@@ -705,14 +842,23 @@ def _common(*, topology, system, outputs, inputs, cpu, device, number_of_groups,
             count = check_topology_matches_system(topology, system)
         else:
             count = None
-        return resolved, prepared, count
+        return prepared, count
 
-    # THE COLLECTIVE POINT. Everything above is a property of the command line or of files every
-    # rank sees identically; everything inside is rank-local -- this rank's device, this rank's
-    # view of the filesystem, this rank's CUDA context.
-    (acceleration, index, detail), loaded, particles = collectively(
-        coordination, _platform_and_inputs, what=f"the {protocol} preflight")
-    return coordination, machine, acceleration, index, detail, particles, loaded
+    loaded, particles = collectively(coordination, _inputs, what=f"the {protocol} inputs")
+    if serial:
+        # A serial protocol under a plural launch is refused before it is placed: the placement
+        # would measure GPUs for workers that must not exist.
+        reject_plural_launch(coordination, what=protocol)
+
+    # THE COLLECTIVE POINTS. Everything above is a property of the command line or of files every
+    # rank sees identically; placement and the platform are rank-local -- this rank's CPUs, this
+    # rank's device, this rank's CUDA context -- and each is made collective.
+    plan = _plan_placement(coordination, machine, cpu=cpu, device=device, loaded=loaded,
+                           topology=topology, system=system, protocol=protocol)
+    acceleration, index, detail = collectively(
+        coordination, lambda: _resolve_platform(machine, cpu=cpu, device=device, plan=plan),
+        what=f"the {protocol} preflight")
+    return coordination, machine, acceleration, index, detail, particles, loaded, plan
 
 
 def preflight_stage(*, topology, system, coordinates=None, trajectory=None, restart=None,
@@ -735,16 +881,15 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
     inventory = _stage_inventory(output=output, log=log, trajectory=trajectory, whole=whole,
                                  restart=restart, segment=segment,
                                  checkpoint=checkpoint, stage=stage)
-    coordination, machine, acceleration, index, detail, particles, loaded = _common(
+    coordination, machine, acceleration, index, detail, particles, loaded, plan = _common(
         topology=topology, system=system,
         outputs=inventory.roles,
         inputs=inputs, cpu=cpu, device=device, number_of_groups=None, replicas=None,
-        protocol=protocol, machine_config=machine_config, load=timestep_fs is not None)
-
-    # A cMD stage is serial by construction. Checked HERE, after the coordination is open and
-    # before anything is created, so a plural launch stops at the preflight with every rank
-    # agreeing rather than partway through with N writers.
-    reject_plural_launch(coordination, what=protocol)
+        protocol=protocol, machine_config=machine_config, load=timestep_fs is not None,
+        # A cMD stage is serial by construction. `_common` refuses a plural launch after the
+        # coordination is open and before placement or anything is created, so it stops at the
+        # preflight with every rank agreeing rather than partway through with N writers.
+        serial=True)
 
     resolved_timestep = None
     prepared: dict[str, Any] = {}
@@ -761,7 +906,8 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
     return StagePreflight(coordination=coordination, machine=machine, acceleration=acceleration,
                           device_index=index,
                           device_policy=str(machine.get("device_policy") or "local_rank"),
-                          device_policy_detail=detail, particles=particles, loaded=loaded,
+                          device_policy_detail=detail, placement=plan, particles=particles,
+                          loaded=loaded,
                           timestep=resolved_timestep, inventory=inventory,
                           trajectory=Path(trajectory) if trajectory else None, **prepared)
 
@@ -1031,6 +1177,7 @@ def report_check(result, *, what: str, extra=()) -> int:
              f"  device            {result.device_index if result.device_index is not None else '-'}"
              f"  [{result.device_policy_detail}]",
              f"  mpi               rank {result.coordination.rank} of {result.coordination.size}",
+             *_placement_lines(result.placement),
              f"  particles         {result.particles}"]
     if result.timestep:
         lines.append(f"  timestep          {result.timestep['timestep_fs']} fs "
@@ -1038,6 +1185,35 @@ def report_check(result, *, what: str, extra=()) -> int:
     lines.extend(f"  {label:<18}{value}" for label, value in extra)
     print("\n".join(lines), file=_sys.stdout)
     return 0
+
+
+def _placement_lines(plan) -> list[str]:
+    if plan is None:
+        return []
+    mine = plan.for_rank()
+    node = next(n for n in plan.nodes if n["host"] == mine["host"])
+    lines = [f"  cpus              {len(mine['cpus'])} bound ({_ranges(mine['cpus'])}) of "
+             f"{node['usable_cpus']} usable on {mine['host']}, {len(node['ranks'])} worker(s)"]
+    measured = (plan.measurement or {}).get(mine["host"])
+    if measured:
+        rates = ", ".join(f"{rate:.0f}" for rate in measured["steps_per_second"])
+        lines.append(f"  throughput        {rates} steps/s by device")
+    if plan.mps is not None:
+        lines.append(f"  mps               {plan.mps.status}"
+                     + (" (required: a device is shared)" if plan.shared_devices else "")
+                     + (f" -- FORCED by {plan.mps.verdict_source}" if plan.mps.forced else ""))
+    return lines
+
+
+def _ranges(cpus) -> str:
+    """`0-5,24-29` rather than twelve numbers."""
+    ordered, spans = sorted(int(c) for c in cpus), []
+    for cpu in ordered:
+        if spans and cpu == spans[-1][1] + 1:
+            spans[-1][1] = cpu
+        else:
+            spans.append([cpu, cpu])
+    return ",".join(f"{a}" if a == b else f"{a}-{b}" for a, b in spans)
 
 
 def _resolve_timestep(loaded: LoadedInputs, requested, *, where: str) -> dict[str, Any]:
@@ -1256,7 +1432,7 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
                                   checkpoint=checkpoint, groupfile=groupfile,
                                   per_tau=bool((ladder or {}).get("per_tau_equilibration")))
 
-    coordination, machine, acceleration, index, detail, particles, loaded = _common(
+    coordination, machine, acceleration, index, detail, particles, loaded, plan = _common(
         topology=topology, system=system,
         outputs=inventory.roles,
         inputs=inputs, cpu=cpu, device=device, number_of_groups=number_of_groups,
@@ -1472,7 +1648,8 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
     return LadderPreflight(coordination=coordination, machine=machine,
                            acceleration=acceleration, device_index=index,
                            device_policy=str(machine.get("device_policy") or "local_rank"),
-                           device_policy_detail=detail, particles=particles, loaded=loaded,
+                           device_policy_detail=detail, placement=plan, particles=particles,
+                           loaded=loaded,
                            timestep=resolved_timestep, replicas=int(replicas),
                            inventory=inventory,
                            force_audit=audit, scaled_system=scaled,
@@ -1687,7 +1864,7 @@ def preflight_ais(*, topology, system, source, topology2=None, system2=None,
                 f"(-p/-s, the state the source ensemble was sampled from) into V1 as "
                 f"V(lambda) = (1 - lambda) V0 + lambda V1.")
 
-    coordination, machine, acceleration, index, detail, particles, loaded = _common(
+    coordination, machine, acceleration, index, detail, particles, loaded, plan = _common(
         topology=topology, system=system,
         outputs={"o": output, "log": log},
         inputs={"source-traj": source, "s2": system2, "p2": topology2}, cpu=cpu, device=device,
@@ -1701,7 +1878,7 @@ def preflight_ais(*, topology, system, source, topology2=None, system2=None,
         return AISPreflight(coordination=coordination, machine=machine, acceleration=acceleration,
                             device_index=index,
                             device_policy=str(machine.get("device_policy") or "local_rank"),
-                            device_policy_detail=detail, particles=particles,
+                            device_policy_detail=detail, placement=plan, particles=particles,
                             source=Path(source), source_format=source_format)
 
     prepared = _prepare_ais(
@@ -1771,7 +1948,8 @@ def preflight_ais(*, topology, system, source, topology2=None, system2=None,
     return AISPreflight(coordination=coordination, machine=machine, acceleration=acceleration,
                         device_index=index,
                         device_policy=str(machine.get("device_policy") or "local_rank"),
-                        device_policy_detail=detail, particles=particles, loaded=loaded,
+                        device_policy_detail=detail, placement=plan, particles=particles,
+                        loaded=loaded,
                         source=Path(source), source_format=source_format,
                         fingerprint=fingerprint, identity=identity,
                         previous_identity=previous_identity, disposition=disposition,
