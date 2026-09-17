@@ -173,8 +173,15 @@ def test_an_exclusion_matching_no_torsion_is_refused(tmp_path):
 @pytest.mark.slow
 @pytest.mark.gpu
 def test_the_scaler_is_the_same_object_for_every_protocol(tmp_path):
-    """`REST2Scaler` builds a fixed rung and a live switcher from ONE selection, which is what
-    makes the shared-scaler claim structural rather than a promise."""
+    """`REST2Scaler` builds every fixed rung from ONE selection, which is what makes the
+    shared-scaler claim structural rather than a promise.
+
+    It also built a live switcher for AIS (`REST2Scaler.switcher()`, a `TauSwitcher`). That half
+    is OBSOLETE: AIS is a linear transformation between two end-state files and scales nothing
+    itself, so the scaler now serves fixed-tau cMD, REST2 and rREST2. What survives is asserted
+    as its absence -- a second scaling path would be a second implementation of the scaled
+    Hamiltonian.
+    """
     import subprocess
     import sys
 
@@ -208,10 +215,11 @@ def test_the_scaler_is_the_same_object_for_every_protocol(tmp_path):
     assert ladder == pytest.approx([0.0, 1/6, 1/3, 0.5], abs=1e-6), ladder
     assert ladder == tau_ladder(4, 0.5), "the scaler's ladder is not the one the runtime uses"
     assert scaler.scaling_factors(0.5) == (0.25, 0.5)
-    # A fixed rung (REST2, fixed-tau cMD) and a live switcher (AIS) from one selection.
+    # A fixed rung (REST2, rREST2, fixed-tau cMD) from one selection -- and nothing that switches.
     assert scaler.scaled_system(0.5).getNumParticles() == base.getNumParticles()
-    switcher = scaler.switcher()
-    assert hasattr(switcher, "set_tau") and hasattr(switcher, "prepared_system")
+    assert not hasattr(scaler, "switcher"), "AIS no longer switches through the REST2 scaler"
+    import md_tools.rest2.scaler as scaler_module
+    assert not hasattr(scaler_module, "TauSwitcher")
     # tau is the only persisted coordinate; s and sqrt(s) are derived on demand.
     identity = scaler.identity(0.5, temperature_k=300.0, ensemble="NVT")
     assert identity["tau"] == 0.5

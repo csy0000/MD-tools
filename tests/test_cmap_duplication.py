@@ -122,34 +122,6 @@ def test_roles_name_all_three_populations():
     assert roles["exclusive_other"] == {2}
 
 
-# --- the live switching path --------------------------------------------------------------------
-
-def test_repeated_switching_neither_accumulates_copies_nor_compounds_scaling():
-    """The switcher rewrites map energies; it must never add a second copy, and each tau must be
-    applied to the UNSCALED energies rather than on top of the previous tau."""
-    system = openmm.System()
-    for _ in range(11):
-        system.addParticle(12.0)
-    system.addForce(_force([4.0], [(0, True), (0, False)]))
-
-    switcher = scaling.TauSwitcher(system, SOLUTE)
-    prepared = switcher.prepared_system(0.0)
-    force = [prepared.getForce(i) for i in range(prepared.getNumForces())][0]
-    assert force.getNumMaps() == 2, "the copy is made once, when the System is prepared"
-
-    reference = [switcher.base.getForce(i) for i in range(switcher.base.getNumForces())][0]
-    duplicates = switcher._cmap_duplicates[0]
-    assert duplicates == {1: 0}
-
-    for tau, expected in ((0.5, 1.0), (0.25, 2.25), (0.5, 1.0)):
-        scaling._restore_cmap(force, reference, duplicates)
-        scaling._scale_cmap(force, SOLUTE, scaling.scaling_for_tau(tau)[0], duplicates)
-        assert force.getNumMaps() == 2, "a switch added a map"
-        assert _energies(force, 0) == [4.0] * 4, "the environment's map must never change"
-        assert _energies(force, 1) == pytest.approx([expected] * 4), (
-            f"tau={tau} must be applied to the unscaled energies, not composed on the previous")
-
-
 # --- unscaled central bonds, recorded as torsions rather than only as a bond -----------------------
 
 def _torsion_system(torsions, n_atoms=8):

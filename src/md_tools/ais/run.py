@@ -1,26 +1,23 @@
-"""Annealed importance sampling: non-equilibrium switching paths from an equilibrium ensemble.
+"""Annealed importance sampling: non-equilibrium switching paths between two end states.
 
-Driven by the `AIS.py` that `md-openmm build-md --config .../AIS.config` generates. The physics is
-the implementation already validated on this branch -- `TauSwitcher`, and the same REST2
-decomposition a fixed-tau walker or a ladder rung uses -- reached from the installed package
-instead of from a copied-in script.
+Driven by the `AIS.py` that `md-openmm build-md --config .../AIS.config` generates, or by
+`md-openmm md-run`. The Hamiltonian is `md_tools.ais.two_state.TwoStateHamiltonian`.
 
 WHAT A PATH IS
 
-The Hamiltonian is annealed from `tau_start` to `tau_end` while the coordinates propagate. The
-temperature never changes: this is Hamiltonian switching, not temperature annealing. tau is the one
-public, persisted protocol coordinate; the solute-solute and solute-environment scale factors are
-derived from it inside the scaler and are deliberately not written as a second coordinate a reader
-could take as authoritative.
+    V(lambda, x) = (1 - lambda) * V0(x) + lambda * V1(x)
+
+lambda moves from 0 to 1 while the coordinates propagate. V0 (`-s`/`-p`) is the state the source
+ensemble was sampled from; V1 (`-s2`/`-p2`) is the other end. The temperature never changes.
+lambda is the one public, persisted protocol coordinate.
 
 THE WORK CONVENTION, STATED ONCE
 
-    delta_W_j = U(tau_{j+1}, x_j) - U(tau_j, x_j)
+    delta_W_j = V(lambda_{j+1}, x_j) - V(lambda_j, x_j) = (lambda_{j+1} - lambda_j) (V1 - V0)(x_j)
 
 The parameters move FIRST, at frozen coordinates; the configuration then propagates under the new
-Hamiltonian. Observation 0 is the source configuration under the source Hamiltonian, before any
-parameter change and before any propagation, so its cumulative work is exactly zero by definition
-rather than nearly zero.
+Hamiltonian. Observation 0 is the source configuration under V0, before any parameter change and
+before any propagation, so its cumulative work is exactly zero by definition.
 
 FIXED VOLUME. No barostat is active during switching and no pressure-volume term enters the work,
 even when the source ensemble was NPT. Each path keeps the box of the frame it started from.
@@ -29,21 +26,14 @@ Paths are independent: each has its own directory, its own deterministic seeds d
 seed and the path index, and its own completion record.
 
 A completed path is skipped -- after its completion manifest and the sha256 of every output it
-claims have been verified, because "status: completed" is a field in a file and the files it
-describes are what a reader will actually load.
+claims have been verified.
 
-An interrupted path RESUMES MID-PATH, from its last committed checkpoint generation. This text
-used to say the opposite -- that a switching path has no meaningful mid-path restart because the
-work integral is only defined along a whole path. The premise is right and the conclusion was
-wrong: the integral is defined along the whole path, and a resume continues the SAME path, with
-the accumulated work, the component accumulators, the Context and every stream counter restored
-to one committed instant. `md_tools.openmm.checkpoint` is what makes that instant well defined,
-and `test_ais_recovery_integration.py` proves a resumed path reproduces an uninterrupted one's
-totals at every transaction and stream boundary.
-
-DECOMPOSITION. Every observation also carries the potential and the work split into the three
-tau-basis groups -- see `md_tools.ais.decomposition` for the identity, the columns, the tolerances
-and what the three extra energy evaluations per update cost.
+An interrupted path RESUMES MID-PATH, from its last committed checkpoint generation: the
+accumulated work, the counters, the Context and every stream counter are restored to one committed
+instant (`md_tools.openmm.checkpoint`). On CUDA the continuation is not bit-for-bit the trajectory
+an uninterrupted run would have taken -- the mixing force's inner Contexts keep state no checkpoint
+captures -- so a resumed path is the same switching process from the same committed state, as a new
+realisation. See `md_tools.ais.two_state`.
 """
 
 from __future__ import annotations
@@ -60,58 +50,25 @@ from typing import Any
 
 from ..build.record import LogWriter, file_facts, openmm_platform_facts, read_record
 from ..openmm.trajectory import check_trajectory_declaration
-from .decomposition import (COMPONENT_SUMMARY_COLUMNS, DECOMPOSITION_SCHEMA, GROUPS,
-                            HS_COLUMNS, OBSERVATION_POTENTIAL_COLUMNS,
-                            DIRECT_POTENTIAL_COLUMN,
-                            component_summary_columns, hs_columns, recorded_mode,
-                            observation_potential_columns, require_mode,
-                            work_component_columns,
-                            RECONSTRUCTION_TOLERANCES, WORK_COMPONENT_COLUMNS, ComponentProbe,
-                            ComponentWork, EvaluationCounters, reconstruction_tolerance,
-                            require_compatible_schema)
+from .two_state import (HS_COLUMNS, OBSERVATION_POTENTIAL_COLUMNS, TWO_STATE_SCHEMA,
+                        EvaluationCounters, SchemaError, require_compatible_schema)
 
-#: One row per observation. `s` and sqrt(s) are absent on purpose: see the module docstring.
+#: One row per observation.
 #:
-#: WHICH INSTANT A ROW DESCRIBES -- and it is two different instants, which is the correction this
-#: schema exists to make.
+#: WHICH INSTANT A ROW DESCRIBES -- and it is two different instants.
 #:
-#:   the WORK columns are the work of the switches since the previous emitted observation. Work is
-#:   defined at the frozen pre-switch coordinate, and that is where its components are measured.
+#:   the WORK columns are the work of the switches since the previous emitted observation, each
+#:   measured at its frozen pre-switch coordinate, where the work is defined.
 #:
 #:   the OBSERVATION POTENTIAL columns are measured at the coordinate this row SAVED, under this
-#:   row's tau. They are present only when `coordinate_frame_index` is, and are empty otherwise --
-#:   never a neighbouring frame's values wearing this row's frame index.
-#:
-#: The previous schema put the pre-switch work basis in columns that read as potentials at the
-#: saved frame, one propagation earlier than the coordinate they named. A Hummer-Szabo
-#: reweighting from those rows pairs the work of one configuration with the energy of another.
-OBSERVATION_COLUMNS_BASE = (
+#:   row's lambda. They are present only when `coordinate_frame_index` is, and are empty otherwise
+#:   -- never a neighbouring frame's values wearing this row's frame index.
+OBSERVATION_COLUMNS = (
     "path_index", "observation_index", "coordinate_frame_index",
-    "source_frame_index", "protocol_step", "switching_time_ps", "tau",
+    "source_frame_index", "protocol_step", "switching_time_ps", "lambda",
     "incremental_work_kj_mol", "cumulative_work_kj_mol", "cumulative_reduced_work",
     "temperature_kelvin", "integrator_seed", "velocity_seed",
-)
-
-
-def observation_columns(mode: str) -> tuple[str, ...]:
-    """`observations.csv`'s header for this work_measurement mode.
-
-    The component columns are ABSENT from a `work`-mode table rather than empty. A reader that
-    wants them fails on a missing key, which is a question; empty cells are an answer, and the
-    wrong one.
-    """
-    return (OBSERVATION_COLUMNS_BASE + work_component_columns(mode)
-            + observation_potential_columns(mode))
-
-
-#: The full header, for callers that describe the schema rather than write a particular run.
-OBSERVATION_COLUMNS = observation_columns("components")
-
-#: The documented defaults for `ais.work_measurement` and `ais.verify_every_updates`. They MIRROR
-#: `build.md`'s Section("ais") rather than importing it -- the runtime must not depend on the
-#: configuration builder -- and a test asserts the two agree.
-AIS_WORK_MEASUREMENT_DEFAULT = "work"
-AIS_VERIFY_EVERY_DEFAULT = 0
+) + OBSERVATION_POTENTIAL_COLUMNS
 
 COMPLETION_NAME = "completed.json"
 OBSERVATIONS_CSV = "observations.csv"
@@ -134,7 +91,7 @@ def cv_sidecar_path(csv_path):
 
     return _shared(csv_path)
 
-CV_COLUMNS = ("path_index", "source_frame_index", "protocol_step", "time_ps", "tau",
+CV_COLUMNS = ("path_index", "source_frame_index", "protocol_step", "time_ps", "lambda",
               "observation_index", "coordinate_frame_index")
 
 #: The aggregate, assembled ONLY from paths whose completion manifest verified. A path that
@@ -142,7 +99,7 @@ CV_COLUMNS = ("path_index", "source_frame_index", "protocol_step", "time_ps", "t
 #: rows from an unfinished switch into the run's headline table.
 CV_TABLE = "AIS_cv.csv"
 
-STATE_COLUMNS = ("path_index", "protocol_step", "switching_time_ps", "tau",
+STATE_COLUMNS = ("path_index", "protocol_step", "switching_time_ps", "lambda",
                  "potential_energy_kj_mol", "kinetic_energy_kj_mol", "total_energy_kj_mol",
                  "temperature_kelvin", "volume_nm3", "density_g_per_ml")
 
@@ -157,7 +114,7 @@ STAGED_TRAJECTORY = "frames.partial.nc"
 #: The run-level identity of an AIS output directory, written once and never rewritten.
 #:
 #: A path's checkpoint fingerprint protects that path. Nothing protected the DIRECTORY: a second
-#: invocation into the same `-odir` with a different source trajectory, a different tau schedule,
+#: invocation into the same `-odir` with a different source trajectory, different end states,
 #: a different seed or a different path count would skip the completed paths, run the rest under
 #: the new settings, and assemble one work table out of two different measurements. The table
 #: reads perfectly and describes no experiment.
@@ -165,7 +122,7 @@ RUN_IDENTITY = "AIS_run.json"
 
 #: The schema of that record. Bumped when the SET of fields changes, so a directory written by an
 #: older build is refused by name rather than compared field by field against a shape it never had.
-RUN_IDENTITY_VERSION = 1
+RUN_IDENTITY_VERSION = 2
 
 #: The global work table rank 0 writes once every path this run owns has finished.
 #:
@@ -177,22 +134,11 @@ RUN_IDENTITY_VERSION = 1
 WORK_TABLE = "AIS_work.csv"
 #:
 #: `delta_work_kj_mol` is the work of every switch since the previous emitted work observation --
-#: one switch when the work and switching cadences agree, and their ratio otherwise. Stated here
-#: and in `DECOMPOSITION_SCHEMA["delta_work_meaning"]` rather than left for a reader to infer from
-#: two interval settings.
-WORK_COLUMNS_BASE = ("path_id", "source_frame", "observation_index", "switch_step",
-                "coordinate_frame_index", "tau_before", "tau_after",
+#: one switch when the work and switching cadences agree, and their ratio otherwise.
+WORK_COLUMNS = ("path_id", "source_frame", "observation_index", "switch_step",
+                "coordinate_frame_index", "lambda_before", "lambda_after",
                 "delta_work_kj_mol", "total_work_kj_mol", "total_reduced_work",
-                "trajectory", "mpi_rank")
-
-
-def work_columns(mode: str) -> tuple[str, ...]:
-    """`AIS_work.csv`'s header for this mode."""
-    return (WORK_COLUMNS_BASE + work_component_columns(mode)
-            + observation_potential_columns(mode))
-
-
-WORK_COLUMNS = work_columns("components")
+                "trajectory", "mpi_rank") + OBSERVATION_POTENTIAL_COLUMNS
 
 #: The frame-aligned Hummer-Szabo table: every row has a saved coordinate, and its potentials were
 #: recomputed at that coordinate. A reader doing HS reweighting wants exactly these rows and would
@@ -206,21 +152,9 @@ DISPOSITIONS = ("already_complete", "resumed_and_completed", "fresh_and_complete
 #: One row per path: the summary a reader wants when the question is about the work DISTRIBUTION
 #: rather than about any individual path's trajectory through it.
 WORK_SUMMARY = "AIS_paths.csv"
-SUMMARY_COLUMNS_BASE = ("path_index", "source_frame_index", "observations",
+SUMMARY_COLUMNS = ("path_index", "source_frame_index", "observations",
                    "total_work_kj_mol", "total_reduced_work", "trajectory",
-                   "integrator_seed", "velocity_seed", "mpi_rank", "work_measurement")
-
-
-def summary_columns(mode: str) -> tuple[str, ...]:
-    """`AIS_paths.csv`'s header for this mode.
-
-    `work_measurement` is on it in BOTH modes, and deliberately: the one column a reader must be
-    able to find without knowing in advance which mode produced the file is the one that says.
-    """
-    return SUMMARY_COLUMNS_BASE + component_summary_columns(mode)
-
-
-SUMMARY_COLUMNS = summary_columns("components")
+                   "integrator_seed", "velocity_seed", "mpi_rank")
 
 
 def ais_parser(description: str) -> argparse.ArgumentParser:
@@ -228,7 +162,15 @@ def ais_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("-p", "--topology", required=True, metavar="PDB",
                         help="topology and reference coordinates (built.pdb)")
     parser.add_argument("-s", "--system", required=True, metavar="XML",
-                        help="serialised OpenMM System (built.xml)")
+                        help="V0: the serialised OpenMM System the source ensemble was sampled "
+                             "from")
+    # Not `required=True` at the parser: the preflight refuses a missing one BY NAME, with what
+    # the flag is for, rather than leaving argparse to say only that it is required.
+    parser.add_argument("-p2", "--topology2", dest="topology2", default=None, metavar="PDB",
+                        help="V1: the second end state's topology, the same atoms as -p")
+    parser.add_argument("-s2", "--system2", dest="system2", default=None, metavar="XML",
+                        help="V1: the second end state's serialised System, the same particles "
+                             "as -s with different parameters")
     parser.add_argument("-source-traj", "-src", "--source", dest="source", default=None,
                         metavar="TRAJ",
                         help="the equilibrium source trajectory these paths are drawn from; "
@@ -481,37 +423,26 @@ def write_work_table(out: Path, chosen: list[int], *, contributions=None,
     cv_rows: list[dict[str, Any]] = []
     cv_costs: dict[int, dict[str, Any]] = {}
     cv_names: list[str] = []
-    mode: str | None = None
-    mode_path: int | None = None
     for path_id in range(len(chosen)):
         directory = out / f"path_{path_id:04d}"
         marker = directory / COMPLETION_NAME
         if not marker.is_file():
             continue
         record = json.loads(marker.read_text(encoding="utf-8"))
-        # The mode is a property of the RUN, taken from the paths rather than from a
-        # configuration this function was not given. A directory holding both kinds of path
-        # cannot be assembled into one table -- half its rows would carry components and the
-        # header would have to claim them for all -- so it is refused by name.
-        this_mode = recorded_mode(record, what=f"path {path_id}'s recorded work_measurement")
-        if mode is None:
-            mode, mode_path = this_mode, path_id
-        elif this_mode != mode:
-            raise SystemExit(
-                f"{out} holds paths measured two different ways: path {mode_path} recorded "
-                f"work_measurement = {mode!r} and path {path_id} recorded {this_mode!r}.\n"
-                f"  One table cannot describe both: a `components` path carries the basis and a "
-                f"`work` path never measured it, so the shared header would promise columns half "
-                f"the rows cannot fill. Assemble them separately, or re-run the minority under "
-                f"the same setting.")
-        summary.append({name: record.get(name) for name in summary_columns(mode)})
+        # A directory holding a path from another AIS cannot be assembled into this table: its
+        # rows describe a different path through a different Hamiltonian.
+        try:
+            require_compatible_schema(record, what=f"path {path_id}'s completion record")
+        except SchemaError as refusal:
+            raise SystemExit(str(refusal)) from None
+        summary.append({name: record.get(name) for name in SUMMARY_COLUMNS})
 
         observations = directory / OBSERVATIONS_CSV
         if not observations.is_file():
             continue
         with observations.open(newline="") as handle:
             entries = list(csv.DictReader(handle))
-        previous_tau = None
+        previous_lambda = None
         for entry in entries:
             row = {
                 "path_id": path_id,
@@ -519,11 +450,12 @@ def write_work_table(out: Path, chosen: list[int], *, contributions=None,
                 "observation_index": entry["observation_index"],
                 "switch_step": int(entry["protocol_step"]),
                 "coordinate_frame_index": entry.get("coordinate_frame_index", ""),
-                # `tau_before` on observation 0 is its own tau: the path has not moved yet, and
-                # writing a blank there would make the first row the only one a reader has to
+                # `lambda_before` on observation 0 is its own lambda: the path has not moved yet,
+                # and writing a blank there would make the first row the only one a reader has to
                 # treat specially.
-                "tau_before": previous_tau if previous_tau is not None else entry["tau"],
-                "tau_after": entry["tau"],
+                "lambda_before": (previous_lambda if previous_lambda is not None
+                                  else entry["lambda"]),
+                "lambda_after": entry["lambda"],
                 "delta_work_kj_mol": entry["incremental_work_kj_mol"],
                 "total_work_kj_mol": entry["cumulative_work_kj_mol"],
                 "total_reduced_work": entry["cumulative_reduced_work"],
@@ -534,7 +466,7 @@ def write_work_table(out: Path, chosen: list[int], *, contributions=None,
             # assembly of what the paths measured; recomputing a column here would let the two
             # files disagree about the same number, and the one a reader trusts would be whichever
             # they opened first.
-            for column in work_component_columns(mode) + observation_potential_columns(mode):
+            for column in OBSERVATION_POTENTIAL_COLUMNS:
                 row[column] = entry.get(column, "")
             rows.append(row)
 
@@ -544,8 +476,8 @@ def write_work_table(out: Path, chosen: list[int], *, contributions=None,
             # in front of a reweighting that has no way to notice.
             if str(entry.get("coordinate_frame_index", "")).strip() != "":
                 hs_rows.append({name: row.get(name, entry.get(name, ""))
-                                for name in hs_columns(mode)})
-            previous_tau = entry["tau"]
+                                for name in HS_COLUMNS})
+            previous_lambda = entry["lambda"]
 
         # The collective-variable series, from the SAME verified-manifest gate as everything else
         # above. A path that crashed mid-write has a plausible-looking cv.csv and no manifest, and
@@ -575,13 +507,11 @@ def write_work_table(out: Path, chosen: list[int], *, contributions=None,
     # one failure a table cannot signal. Written to a temporary and moved into place instead.
     import io
 
-    # No completed path means no mode was learned. The tables are still written, with the
-    # documented default's header, so an interrupted campaign produces empty tables rather than
-    # a traceback -- and an empty table is honest about having no rows.
-    header_mode = mode or "work"
-    tables = [(out / WORK_TABLE, work_columns(header_mode), rows),
-              (out / WORK_SUMMARY, summary_columns(header_mode), summary),
-              (out / HS_TABLE, hs_columns(header_mode), hs_rows)]
+    # An interrupted campaign produces empty tables with their headers rather than a traceback --
+    # and an empty table is honest about having no rows.
+    tables = [(out / WORK_TABLE, WORK_COLUMNS, rows),
+              (out / WORK_SUMMARY, SUMMARY_COLUMNS, summary),
+              (out / HS_TABLE, HS_COLUMNS, hs_rows)]
     if cv_rows:
         # Only when there is something to aggregate: an empty AIS_cv.csv beside a run that never
         # asked for collective variables would suggest reporting had been requested and produced
@@ -594,12 +524,12 @@ def write_work_table(out: Path, chosen: list[int], *, contributions=None,
         writer.writerows(payload)
         write_atomically(path, buffer.getvalue())
     return {"rows": len(rows), "paths": len(summary), "requested": len(chosen),
-            "hs_rows": len(hs_rows), "cv_rows": len(cv_rows), "work_measurement": header_mode,
+            "hs_rows": len(hs_rows), "cv_rows": len(cv_rows),
             "collective_variable_cost": cv_cost}
 
 
-def run_identity_document(*, fingerprint, topology_facts, system_facts, source_facts,
-                          source_format, schedule, ais, dynamics, chosen, reporting,
+def run_identity_document(*, fingerprint, end_state_facts, source_facts, source_format,
+                          schedule, ais, dynamics, chosen, reporting,
                           resolved_config) -> dict[str, Any]:
     """Everything an output directory may not change between invocations.
 
@@ -608,35 +538,34 @@ def run_identity_document(*, fingerprint, topology_facts, system_facts, source_f
     experiment?", and the second question is the one a work table assembled from N directories
     depends on.
     """
-    from .decomposition import DECOMPOSITION_SCHEMA
-
     return {
         "schema": "md-ais-run-identity",
         "schema_version": RUN_IDENTITY_VERSION,
         "fingerprint": fingerprint,
-        "topology": {"name": Path(topology_facts["path"]).name if "path" in topology_facts
-                     else None, "sha256": topology_facts["sha256"]},
-        "system": {"sha256": system_facts["sha256"]},
+        # Both end states, by digest. A second invocation with a different V0 or V1 would skip the
+        # finished paths and run the rest toward another Hamiltonian.
+        "end_states": end_state_facts,
         "source": {"sha256": source_facts["sha256"], "format": source_format},
-        "tau": {"start": float(ais["tau_start"]), "end": float(ais["tau_end"]),
-                "interpolation": "linear"},
+        "lambda": {"start": 0.0, "end": 1.0, "interpolation": "linear"},
         "schedule": {k: v for k, v in schedule.items()
-                     if k not in ("observations", "taus", "note")},
+                     if k not in ("observations", "lambdas", "note")},
         "reporting": {k: int(reporting[k]) for k in sorted(reporting)},
         "seed_policy": {"seed": int(dynamics["seed"]),
                         "derivation": "derive_seed(seed, 'ais', path_index, role)"},
         "number_of_paths": int(ais["number_of_paths"]),
         "selected_frames": [int(f) for f in chosen],
-        # On the identity document, so `require_same_run` refuses an -odir whose finished paths
-        # were measured the other way BEFORE any new path runs into a table it cannot join.
-        "work_measurement": require_mode(ais.get("work_measurement",
-                                                 AIS_WORK_MEASUREMENT_DEFAULT)),
-        "observation_columns": list(observation_columns(
-            ais.get("work_measurement", AIS_WORK_MEASUREMENT_DEFAULT))),
-        "decomposition_schema": {"name": DECOMPOSITION_SCHEMA["name"],
-                                 "version": DECOMPOSITION_SCHEMA["version"]},
+        "observation_columns": list(OBSERVATION_COLUMNS),
+        "ais_schema": {"name": TWO_STATE_SCHEMA["name"], "version": TWO_STATE_SCHEMA["version"]},
         "resolved_config": resolved_config,
     }
+
+
+def _single_topology_note(document) -> str:
+    """Why a v1 identity is refused, when it is one: it is the retired single-topology AIS."""
+    if isinstance(document, dict) and document.get("schema_version") == 1 and "tau" in document:
+        return (" -- v1 is the retired single-topology AIS, which switched one REST2 System along "
+                "tau; its paths cannot be continued by a two-state switch")
+    return ""
 
 
 def require_same_run(out: Path, document: dict[str, Any]) -> None:
@@ -662,7 +591,8 @@ def require_same_run(out: Path, document: dict[str, Any]) -> None:
             f"{path} was written under run-identity schema "
             f"v{existing.get('schema_version')}, and this build writes "
             f"v{RUN_IDENTITY_VERSION}. The set of fields differs, so 'unchanged' cannot be "
-            f"established. Start a new directory rather than extending this one.")
+            f"established{_single_topology_note(existing)}. Start a new directory rather than "
+            f"extending this one.")
 
     differing = sorted(key for key in set(existing) | set(document)
                        if existing.get(key) != document.get(key))
@@ -690,9 +620,9 @@ PATH_TRAJECTORY = re.compile(r"^AIS_traj(\d{4})\.nc$")
 #: crash mid-write, or hand-edited -- is treated the same as one that will not parse: nothing
 #: about the directory it describes can be trusted.
 RUN_IDENTITY_REQUIRED_KEYS = frozenset({
-    "schema", "schema_version", "fingerprint", "topology", "system", "source", "tau",
+    "schema", "schema_version", "fingerprint", "end_states", "source", "lambda",
     "schedule", "reporting", "seed_policy", "number_of_paths", "selected_frames",
-    "observation_columns", "decomposition_schema",
+    "observation_columns", "ais_schema",
 })
 
 #: Names inside a `path_NNNN/` directory that only THIS RUNTIME writes. A directory matching the
@@ -774,8 +704,9 @@ def _read_previous_identity(out: Path) -> dict[str, Any] | None:
     if document.get("schema_version") != RUN_IDENTITY_VERSION:
         raise SystemExit(
             f"{path} was written under run-identity schema v{document.get('schema_version')}, "
-            f"and this build writes v{RUN_IDENTITY_VERSION}. Ownership of {Path(out)} cannot be "
-            f"established from it. Choose a new -odir, or remove its contents by hand.")
+            f"and this build writes v{RUN_IDENTITY_VERSION}{_single_topology_note(document)}. "
+            f"Ownership of {Path(out)} cannot be established from it. Choose a new -odir, or "
+            f"remove its contents by hand.")
     missing = sorted(RUN_IDENTITY_REQUIRED_KEYS - set(document))
     if missing:
         raise SystemExit(
@@ -1033,7 +964,7 @@ def _open_staged_netcdf(path: Path, keep: int):
     return writer
 
 
-def _state_row(simulation, *, index, protocol_step, switching_time_ps, tau, implicit,
+def _state_row(simulation, *, index, protocol_step, switching_time_ps, lam, implicit,
                temperature_unit) -> dict[str, Any]:
     """What the path is doing thermodynamically at this step."""
     from openmm import unit
@@ -1069,7 +1000,7 @@ def _state_row(simulation, *, index, protocol_step, switching_time_ps, tau, impl
         "path_index": index,
         "protocol_step": protocol_step,
         "switching_time_ps": switching_time_ps,
-        "tau": tau,
+        "lambda": lam,
         "potential_energy_kj_mol": potential,
         "kinetic_energy_kj_mol": kinetic,
         "total_energy_kj_mol": potential + kinetic,
@@ -1179,8 +1110,6 @@ def _verified_completion(marker: Path, *, directory: Path, published: Path, fing
       rewritten by a second process;
       counts that do not match the schedule this invocation resolved.
     """
-    from .decomposition import require_compatible_schema
-
     try:
         record = json.loads(marker.read_text(encoding="utf-8"))
     except ValueError:
@@ -1196,8 +1125,10 @@ def _verified_completion(marker: Path, *, directory: Path, published: Path, fing
             f"{marker} was written before this build's completion manifest existed: it carries "
             f"no {', '.join(missing)}. Nothing about it can be verified, so it is refused rather "
             f"than trusted. Delete {directory} to rerun this path.")
-    if recorded_mode(record, what=str(marker)) == "components":
+    try:
         require_compatible_schema(record, what=str(marker))
+    except SchemaError as refusal:
+        raise SystemExit(str(refusal)) from None
 
     for field, expected in (("fingerprint", fingerprint), ("path_index", index),
                             ("source_frame_index", frame), ("trajectory", trajectory_name)):
@@ -1316,20 +1247,20 @@ def _verify_cv_series(path, record, *, schedule, index, frame, marker):
             f"{path.name}: the header names no collective variable after the protocol columns, "
             f"and this path was run with CV reporting enabled.")
 
-    taus: list[float] = []
+    lambdas: list[float] = []
     for position, row in enumerate(rows):
         if int(row[0]) != int(index):
             raise SystemExit(f"{path.name}: row {position} reports path_index {row[0]}")
         if int(row[1]) != int(frame):
             raise SystemExit(f"{path.name}: row {position} reports source frame {row[1]}")
         try:
-            tau = float(row[4])
+            lam = float(row[4])
         except ValueError:
             raise SystemExit(
-                f"{path.name}: row {position} has a non-numeric tau {row[4]!r}") from None
-        if tau != tau:
-            raise SystemExit(f"{path.name}: row {position} has a non-finite tau")
-        taus.append(tau)
+                f"{path.name}: row {position} has a non-numeric lambda {row[4]!r}") from None
+        if lam != lam:
+            raise SystemExit(f"{path.name}: row {position} has a non-finite lambda")
+        lambdas.append(lam)
         # `observation_index` and `coordinate_frame_index` are EMPTY unless this step is also an
         # AIS observation -- that emptiness is load-bearing, because a CV measured at one
         # coordinate and attached to a different saved one is the exact misattribution the
@@ -1357,25 +1288,25 @@ def _verify_cv_series(path, record, *, schedule, index, frame, marker):
         raise SystemExit(f"{sidecar.name} is not readable JSON ({broken}), so {path.name} "
                          f"cannot be interpreted.") from None
 
-    # THE SCHEDULE, in the values themselves. AIS anneals tau from its start to its end and never
-    # back; a series whose taus wander, or whose endpoints are not the ones the sidecar records,
-    # is not this switching path however well-formed its grid is.
-    start = interpretation.get("tau_start")
-    end = interpretation.get("tau_end")
-    if start is not None and abs(taus[0] - float(start)) > 1e-9:
+    # THE SCHEDULE, in the values themselves. AIS moves lambda from 0 to 1 and never back; a series
+    # whose lambdas wander, or whose endpoints are not the ones the sidecar records, is not this
+    # switching path however well-formed its grid is.
+    start = interpretation.get("lambda_start")
+    end = interpretation.get("lambda_end")
+    if start is None or end is None:
         raise SystemExit(
-            f"{path.name}: the first row is at tau {taus[0]} and this path starts at {start}")
-    if end is not None and abs(taus[-1] - float(end)) > 1e-9:
+            f"{sidecar.name} records no lambda_start/lambda_end, so {path.name} is not a series "
+            f"written by the two-state AIS and its schedule cannot be checked.")
+    if abs(lambdas[0] - float(start)) > 1e-9:
         raise SystemExit(
-            f"{path.name}: the last row is at tau {taus[-1]} and this path ends at {end}")
-    if start is not None and end is not None:
-        descending = float(start) >= float(end)
-        ordered = all((taus[i] >= taus[i + 1]) if descending else (taus[i] <= taus[i + 1])
-                      for i in range(len(taus) - 1))
-        if not ordered:
-            raise SystemExit(
-                f"{path.name}: tau is not monotonic from {start} to {end} ({taus[:6]}...), so "
-                f"the rows are not one switching path in schedule order")
+            f"{path.name}: the first row is at lambda {lambdas[0]} and this path starts at {start}")
+    if abs(lambdas[-1] - float(end)) > 1e-9:
+        raise SystemExit(
+            f"{path.name}: the last row is at lambda {lambdas[-1]} and this path ends at {end}")
+    if not all(lambdas[i] <= lambdas[i + 1] for i in range(len(lambdas) - 1)):
+        raise SystemExit(
+            f"{path.name}: lambda is not monotonic from {start} to {end} ({lambdas[:6]}...), so "
+            f"the rows are not one switching path in schedule order")
 
     # THE COST, against the rows it claims to have produced. `cv_evaluations` counts scalar
     # torsions and `cv_observations` counts reporter calls, so for a fixed definition of n_cv
@@ -1422,8 +1353,8 @@ def _validate_cv_prefix(path, entry, *, definition, columns, index, frame, inter
 
 
 def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str, Any],
-                 taus, switcher, simulation_inputs: dict[str, Any], dynamics: dict[str, Any],
-                 ais: dict[str, Any], beta: float, temperature: float, rank: int,
+                 lambdas, hamiltonian, simulation_inputs: dict[str, Any], dynamics: dict[str, Any],
+                 beta: float, temperature: float, rank: int,
                  resume: bool, fingerprint: str, log,
                  cv_definition=None, contributions=None) -> dict[str, Any] | None:
     """Run (or finish) one switching path. Returns its completion record, or None if it failed.
@@ -1527,7 +1458,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
     #
     # To revisit it, the missing piece is a way to restore an integrator's RNG stream to its
     # freshly-seeded state. Without that, this is 20 s well spent.
-    system = switcher.prepared_system(taus[0])
+    system = hamiltonian.system
     integrator = LangevinMiddleIntegrator(
         temperature * unit.kelvin,
         float(dynamics["friction_per_ps"]) / unit.picosecond,
@@ -1536,104 +1467,21 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
     simulation = Simulation(topology, system, integrator,
                             acceleration.platform, acceleration.properties)
 
-    # The component probe drives the SAME switcher the path switches with, so a probe amplitude
-    # and a real tau reach this Context through one implementation.
     counters = EvaluationCounters()
-    probe = ComponentProbe(switcher, system, counters=counters)
-    # WHAT THIS PATH MEASURES, and therefore what it costs. `work` takes the two potentials the
-    # work is defined as the difference of; `components` takes the three-point basis probe and
-    # derives the work from the fit. Per update that is 2 evaluations against 3 -- and the
-    # component run buys, for its extra one, the potential as a FUNCTION of tau.
-    # `.get` with the schema's own defaults, so a caller assembling an `ais` mapping by hand gets
-    # what `build-md` would have resolved for them rather than a KeyError. A resolved config
-    # always carries both. `test_defaults_and_ais_invariants` pins these two literals to
-    # Section("ais"), so the default cannot be changed in one place and not the other.
-    mode = require_mode(ais.get("work_measurement", AIS_WORK_MEASUREMENT_DEFAULT))
-    verify_every = int(ais.get("verify_every_updates", AIS_VERIFY_EVERY_DEFAULT))
-
-    def verifies(update: int) -> bool:
-        """Whether this update also measures the work directly, to check the fit against.
-
-        The FIRST update of every path always does. The three-group identity is a property of the
-        system rather than of the step -- a force carrying tau-dependence outside the basis is
-        outside it at every coordinate -- so one verified update establishes the model the rest of
-        the path leans on. `verify_every_updates` adds the periodic re-check for the case one
-        update cannot cover: a tau-dependence that only appears at a geometry reached later.
-        """
-        if mode != "components":
-            return False
-        return update == 0 or (verify_every > 0 and update % verify_every == 0)
     precision = (acceleration.properties or {}).get("Precision", "mixed")
 
-    def direct_potential() -> float:
-        return simulation.context.getState(getEnergy=True).getPotentialEnergy(
-            ).value_in_unit(unit.kilojoule_per_mole)
+    def observe_potentials(lam: float, *, wrote_frame: bool):
+        """The OBSERVATION probe: V0, V1 and V(lambda) at the coordinate this row saves.
 
-    def measure_components(tau: float, *, what: str, observation: bool = False,
-                           verify: bool = True):
-        """The three basis components at the CURRENT coordinates, checked against U(tau).
-
-        `what` names which coordinate this is -- the frozen pre-switch one, or the saved
-        observation one -- so a refusal says which of the two probes disagreed. They are the same
-        arithmetic at different configurations, and confusing them is precisely the defect this
-        separation exists to prevent.
-
-        The reconstruction is compared with a directly measured potential every time it is taken.
-        That comparison is the whole safety net: it is what would fail if a force ever acquired a
-        tau dependence outside the three-group model, and catching that at the first update is the
-        difference between a refused run and a work integral for a Hamiltonian nothing ran under.
-        """
-        # `verify=False` takes the probe ALONE: the fit already gives U at any tau, so a direct
-        # measurement here is not needed to obtain the work -- it is needed to CHECK the fit, and
-        # that check is what `verify_every_updates` schedules rather than pays for every update.
-        measured = None
-        if verify:
-            measured = direct_potential()
-            if observation:
-                counters.observation_potential_energy_evaluations += 1
-            else:
-                counters.direct_work_energy_evaluations += 1
-        components = probe.measure(simulation.context, restore_tau=tau, observation=observation)
-        if measured is None:
-            return components, None
-        reconstructed = components.total_at(tau)
-        allowed = reconstruction_tolerance(measured, precision=precision)
-        if abs(reconstructed - measured) > allowed:
-            raise SystemExit(
-                f"path {index}: the lambda-basis decomposition does not reproduce the potential "
-                f"at tau = {tau}, measured at {what}. Direct {measured:.6f} kJ/mol, reconstructed "
-                f"{reconstructed:.6f} kJ/mol from "
-                f"U_non_scaled = {components.non_scaled:.6f}, "
-                f"U_sqrt_scaled = {components.sqrt_scaled:.6f}, "
-                f"U_lin_scaled = {components.lin_scaled:.6f}; the difference "
-                f"{reconstructed - measured:.3e} exceeds the {precision}-precision tolerance "
-                f"{allowed:.3e}.\n"
-                f"  U(tau) is a quadratic in (1 - tau) only if every force scales as the REST2 "
-                f"convention says. Refusing rather than recording components that do not add up "
-                f"to the potential the path is actually running under.")
-        return components, measured
-
-    def observe_potentials(tau: float, *, wrote_frame: bool):
-        """The OBSERVATION probe: the basis at the coordinate this row is about to save.
-
-        Returns the five observation-potential columns, or empty strings when this row saved no
-        coordinate. Empty rather than a neighbouring frame's numbers: a row that names no frame
-        has no configuration for a potential to belong to, and filling those cells anyway is
-        exactly how the previous schema came to pair one configuration's work with another's
-        energy.
+        Empty strings when this row saved no coordinate. Empty rather than a neighbouring frame's
+        numbers: a row that names no frame has no configuration for a potential to belong to, and
+        filling those cells anyway pairs one configuration's work with another's energy.
         """
         if not wrote_frame:
-            return {name: "" for name in observation_potential_columns(mode)}
-        if mode != "components":
-            # One evaluation: U at the coordinate this row names, at the tau it names. That is
-            # the whole of what a direct-work run can honestly say about this frame's energy,
-            # and the basis columns are absent rather than filled with a fit nobody computed.
-            measured = direct_potential()
-            counters.observation_potential_energy_evaluations += 1
-            return {DIRECT_POTENTIAL_COLUMN: measured}
-        components, measured = measure_components(tau, what="the saved observation coordinate",
-                                                  observation=True)
-        return components.row(tau, measured)
+            return {name: "" for name in OBSERVATION_POTENTIAL_COLUMNS}
+        counters.observation_potential_energy_evaluations += 2
+        return hamiltonian.observe(simulation.context, lam, precision=precision,
+                                   where=f"path {index}: ")
 
     # -- resume, or start ----------------------------------------------------------------------
     from ..openmm.checkpoint import (clear_committed, commit_generation, fault,
@@ -1670,29 +1518,16 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         # The Context is back; now put the bookkeeping back to exactly the same instant. The
         # streams are cut to the counts the sidecar vouches for, so an interrupted final record
         # is dropped rather than appended to.
-        # Before any accumulator is restored: the components in this checkpoint must have been
-        # measured under the basis this build implements. Adding today's components onto a total
-        # accumulated under another definition would produce a decomposition that sums correctly
-        # and describes no Hamiltonian.
-        checkpoint_mode = recorded_mode(state_of_path, what=f"the checkpoint in {directory}")
-        if checkpoint_mode != mode:
-            raise SystemExit(
-                f"path {index}: the checkpoint in {directory} was written with "
-                f"work_measurement = {checkpoint_mode!r} and this invocation is running "
-                f"{mode!r}. Resuming would append rows the header cannot describe onto rows "
-                f"written under the other convention. Finish the path under {checkpoint_mode!r}, "
-                f"or delete {directory} to rerun it under {mode!r}.")
-        if mode == "components":
+        # Before any accumulator is restored: this checkpoint must have been written by THIS AIS.
+        # A single-topology checkpoint carries work accumulated along a different path, and adding
+        # a two-state switch onto it describes no Hamiltonian at all.
+        try:
             require_compatible_schema(state_of_path, what=f"the checkpoint in {directory}")
+        except SchemaError as refusal:
+            raise SystemExit(f"path {index}: {refusal}") from None
         updates_done = int(state_of_path["updates_completed"])
         cumulative = float(state_of_path["cumulative_work_kj_mol"])
         since = float(state_of_path["work_since_last_observation_kj_mol"])
-        cumulative_components = ComponentWork.from_mapping(
-            state_of_path["cumulative_component_work_kj_mol"]) if mode == "components" \
-            else ComponentWork.zero()
-        since_components = ComponentWork.from_mapping(
-            state_of_path["component_work_since_last_observation_kj_mol"]) \
-            if mode == "components" else ComponentWork.zero()
         # RESTORED AS USEFUL, because that is what they are: those evaluations produced the
         # committed work, observations, frames and state rows this resume is continuing from.
         # They were previously added to `discarded`, which made a resumed path report its own
@@ -1706,11 +1541,13 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         restored = EvaluationCounters.from_record(state_of_path.get("evaluation_counters"))
         restored.discarded_is_complete = False
         counters = restored
-        probe.counters = counters
         rows_emitted = int(state_of_path["work_rows"])
         frames_emitted = int(state_of_path["frames"])
         state_rows_emitted = int(state_of_path["state_rows"])
-        switcher.set_tau(simulation.context, system, taus[updates_done])
+        # `loadCheckpoint` restores the Context's parameters, lambda among them; set again from the
+        # schedule so the Hamiltonian in force is the one the committed update count implies,
+        # whatever the checkpoint format carries.
+        hamiltonian.set_lambda(simulation.context, lambdas[updates_done])
         # THE COMMITTED CV PREFIX, VALIDATED BEFORE A SINGLE STREAM IS TRUNCATED.
         #
         # This used to happen where the CV series is opened, some two hundred lines below and
@@ -1730,8 +1567,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                 columns=list(CV_COLUMNS) + list(cv_definition.names),
                 index=index, frame=frame,
                 interval=int(schedule["cv_interval_steps"]))
-        _truncate_csv(directory / OBSERVATIONS_CSV, rows_emitted,
-                      observation_columns(mode))
+        _truncate_csv(directory / OBSERVATIONS_CSV, rows_emitted, OBSERVATION_COLUMNS)
         _truncate_csv(directory / STATE_CSV, state_rows_emitted, STATE_COLUMNS)
         log(f"  path {index:4d}: resuming at step {updates_done * interval} of "
             f"{schedule['switching_steps']} ({rows_emitted} work row(s), {frames_emitted} "
@@ -1746,11 +1582,11 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         # at the run temperature with its own recorded seed.
         simulation.context.setVelocitiesToTemperature(temperature * unit.kelvin,
                                                       int(velocity_seed))
+        hamiltonian.set_lambda(simulation.context, lambdas[0])
         updates_done = 0
         cumulative = since = 0.0
-        cumulative_components = since_components = ComponentWork.zero()
         rows_emitted = frames_emitted = state_rows_emitted = 0
-        for path, columns in ((directory / OBSERVATIONS_CSV, observation_columns(mode)),
+        for path, columns in ((directory / OBSERVATIONS_CSV, OBSERVATION_COLUMNS),
                               (directory / STATE_CSV, STATE_COLUMNS)):
             with path.open("w", newline="") as handle:
                 csv.DictWriter(handle, fieldnames=list(columns)).writeheader()
@@ -1788,8 +1624,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         fault("after-frame")
 
     def write_observation(observation_index: int, protocol_step: int, switching_time_ps: float,
-                          tau: float, incremental: float, wrote_frame: bool,
-                          increment_components) -> None:
+                          lam: float, incremental: float, wrote_frame: bool) -> None:
         """One observation row: work since the last one, and potentials AT THIS ROW'S COORDINATE.
 
         The observation probe runs HERE, immediately before the row is written and after the
@@ -1801,7 +1636,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         # The potentials first, because they are a measurement and the row is a record of it. If
         # this raises, no row is written -- rather than a row with empty potential cells that
         # looks like a legitimately unaligned observation.
-        potentials = observe_potentials(tau, wrote_frame=wrote_frame)
+        potentials = observe_potentials(lam, wrote_frame=wrote_frame)
 
         fault("before-work-row")
         row = {
@@ -1815,7 +1650,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             "source_frame_index": frame,
             "protocol_step": protocol_step,
             "switching_time_ps": switching_time_ps,
-            "tau": tau,
+            "lambda": lam,
             "incremental_work_kj_mol": incremental,
             "cumulative_work_kj_mol": cumulative,
             "cumulative_reduced_work": beta * cumulative,
@@ -1823,20 +1658,17 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             "integrator_seed": integrator_seed,
             "velocity_seed": velocity_seed,
         }
-        if mode == "components":
-            row.update(increment_components.row("delta_work"))
-            row.update(cumulative_components.row("total_work"))
         row.update(potentials)
-        append(directory / OBSERVATIONS_CSV, observation_columns(mode), row)
+        append(directory / OBSERVATIONS_CSV, OBSERVATION_COLUMNS, row)
         rows_emitted += 1
         fault("after-work-row")
 
-    def write_state(protocol_step: int, switching_time_ps: float, tau: float) -> None:
+    def write_state(protocol_step: int, switching_time_ps: float, lam: float) -> None:
         nonlocal state_rows_emitted
         fault("before-state-row")
         append(directory / STATE_CSV, STATE_COLUMNS,
                _state_row(simulation, index=index, protocol_step=protocol_step,
-                          switching_time_ps=switching_time_ps, tau=tau, implicit=implicit,
+                          switching_time_ps=switching_time_ps, lam=lam, implicit=implicit,
                           temperature_unit=unit.kelvin))
         state_rows_emitted += 1
         fault("after-state-row")
@@ -1860,20 +1692,11 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                 "source_frame_index": frame,
                 "updates_completed": updates_completed,
                 "protocol_step": updates_completed * interval,
-                "tau": taus[updates_completed],
+                "lambda": lambdas[updates_completed],
                 "cumulative_work_kj_mol": cumulative,
                 "work_since_last_observation_kj_mol": since,
-                # The component accumulators are committed with the same transaction as the total.
-                # Committing them separately would let a resume restore a total from one
-                # generation and components from another, and the sum identity would then hold on
-                # every row while describing two different paths.
-                "work_measurement": mode,
-                **({"decomposition_schema": {"name": DECOMPOSITION_SCHEMA["name"],
-                                             "version": DECOMPOSITION_SCHEMA["version"]},
-                    "cumulative_component_work_kj_mol": cumulative_components.mapping(),
-                    "component_work_since_last_observation_kj_mol":
-                        since_components.mapping()}
-                   if mode == "components" else {}),
+                "ais_schema": {"name": TWO_STATE_SCHEMA["name"],
+                               "version": TWO_STATE_SCHEMA["version"]},
                 # Counted into the commit, so a resume knows what the interrupted generation had
                 # already spent and the cost report does not flatter by omitting it.
                 "evaluation_counters": counters.record(),
@@ -1904,18 +1727,18 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             write_frame(0, 0.0)
             wrote = True
         # Observation zero: the source configuration under the source Hamiltonian, with exactly
-        # zero work in every component because nothing has moved yet. Its potentials are measured
+        # exactly zero work because nothing has moved yet. Its potentials are measured
         # by the observation probe like any other row's -- at the coordinate it saved.
-        write_observation(0, 0, 0.0, taus[0], 0.0, wrote, ComponentWork.zero())
+        write_observation(0, 0, 0.0, lambdas[0], 0.0, wrote)
         if state_every:
-            write_state(0, 0.0, taus[0])
+            write_state(0, 0.0, lambdas[0])
 
     # -- the switch ------------------------------------------------------------------------------
     # -- the collective-variable series ---------------------------------------------------------
     #
     # Its cadence is independent of the observation and frame cadences and may be finer than
     # either; it is required to sit on the parameter-update grid and to divide `switching_steps`,
-    # so every row lands at a tau the path actually held rather than between two of them.
+    # so every row lands at a lambda the path actually held rather than between two of them.
     cv_series = None
     cv_every = schedule.get("cv_interval_steps") or 0
     if cv_every and cv_definition is not None:
@@ -1925,7 +1748,8 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             directory / CV_CSV, cv_definition, extra_columns=CV_COLUMNS,
             sidecar_extra={"path_index": index, "source_frame_index": frame,
                            "interval_steps": int(cv_every), "fingerprint": fingerprint,
-                           "tau_start": float(taus[0]), "tau_end": float(taus[-1]),
+                           "lambda_start": float(lambdas[0]),
+                           "lambda_end": float(lambdas[-1]),
                            "observation_index_meaning": (
                                "empty unless this step is also an AIS observation; when present, "
                                "the values were measured on exactly that saved coordinate")})
@@ -1947,7 +1771,7 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
                 {"rows": int(state_of_path.get("cv_rows", 0)), "cost": entry.get("cost")})
         cv_series.open(committed=committed_prefix)
 
-    def write_cv(protocol_step: int, tau_now: float, *,
+    def write_cv(protocol_step: int, lambda_now: float, *,
                  observation_index=None, frame_index=None) -> None:
         """One CV row. `observation_index`/`frame_index` are empty unless this step IS one.
 
@@ -1963,15 +1787,17 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         positions = current.getPositions(asNumpy=True).value_in_unit(unit.nanometer)
         box = None
         if not implicit:
+            import numpy as np
+
             box = np.asarray(current.getPeriodicBoxVectors(asNumpy=True).value_in_unit(
                 unit.nanometer), dtype=float)
         cv_series.write(
-            (index, frame, protocol_step, time_of(protocol_step), float(tau_now),
+            (index, frame, protocol_step, time_of(protocol_step), float(lambda_now),
              observation_index, frame_index),
             cv_series.evaluate(positions, box))
 
     if cv_series is not None and cv_series.rows_written == 0:
-        # STEP 0: the source configuration at tau_start, before any update. Observation 0 is
+        # STEP 0: the source configuration at lambda = 0, before any update. Observation 0 is
         # written at this step too, so the indices are filled rather than empty.
         #
         # Guarded on the SERIES, not on `updates_done`. A path interrupted before its first
@@ -1979,67 +1805,25 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         # 0 from the previous invocation -- so the old guard wrote it a second time, and the
         # committed steps read [0, 0]. The row count is the fact that actually answers "has step
         # 0 been written", and it is the same idempotence rule the ladder uses.
-        write_cv(0, taus[0], observation_index=0, frame_index=0)
+        write_cv(0, lambdas[0], observation_index=0, frame_index=0)
 
     for update in range(updates_done, updates):
-        tau_before, tau_after = taus[update], taus[update + 1]
+        lambda_before, lambda_after = lambdas[update], lambdas[update + 1]
 
-        # ALL of it happens at the FROZEN pre-switch coordinate x_j, which is where the work is
-        # defined. None of it is where this update's observation potentials come from -- those are
-        # measured after the propagation below, at the coordinate the row actually saves.
-        if mode != "components":
-            # TWO evaluations, and the work is their difference. Nothing is derived, so there is
-            # nothing to cross-check it against: in this mode the measurement IS the answer.
-            before = direct_potential()
-            counters.direct_work_energy_evaluations += 1
-            _started = time.perf_counter()
-            switcher.set_tau(simulation.context, system, tau_after)
-            counters.parameter_change_seconds += time.perf_counter() - _started
-            counters.parameter_updates += 1
-            after = direct_potential()
-            counters.direct_work_energy_evaluations += 1
-            increment = after - before
-            increment_components = ComponentWork.zero()
-        else:
-            verify = verifies(update)
-            components, before = measure_components(
-                tau_before, what="the frozen pre-switch coordinate", verify=verify)
-            _started = time.perf_counter()
-            switcher.set_tau(simulation.context, system, tau_after)
-            counters.parameter_change_seconds += time.perf_counter() - _started
-            counters.parameter_updates += 1
-
-            # Derived from the fit. The probe gives U at ANY tau, so both endpoints come from it
-            # and no direct evaluation is needed to obtain the work -- three evaluations, not five.
-            increment_components = components.work_between(tau_before, tau_after)
-            increment = increment_components.total
-
-            if verify:
-                # The independent measurement. `increment` above came from the fit and `measured`
-                # comes from the Context, so requiring them to agree tests something; deriving one
-                # from the other would make the identity true by construction and test nothing.
-                after = direct_potential()
-                counters.direct_work_energy_evaluations += 1
-                measured = after - before
-                allowed = reconstruction_tolerance(max(abs(before), abs(after)),
-                                                   precision=precision)
-                if abs(increment_components.total - measured) > allowed:
-                    raise SystemExit(
-                        f"path {index}, update {update}: the component works do not sum to the "
-                        f"measured work. Measured {measured:.6f} kJ/mol from U({tau_after}) - "
-                        f"U({tau_before}); components sum to {increment_components.total:.6f} "
-                        f"(non_scaled {increment_components.non_scaled:.6f}, "
-                        f"sqrt_scaled {increment_components.sqrt_scaled:.6f}, "
-                        f"lin_scaled {increment_components.lin_scaled:.6f}); the difference "
-                        f"{increment_components.total - measured:.3e} exceeds the "
-                        f"{precision}-precision tolerance {allowed:.3e}.\n"
-                        f"  Refusing rather than writing a decomposition of a work value it does "
-                        f"not reproduce.")
+        # At the FROZEN pre-switch coordinate x_j, which is where the work is defined:
+        #     delta_W_j = V(lambda_{j+1}, x_j) - V(lambda_j, x_j)
+        #               = (lambda_{j+1} - lambda_j) * (V1(x_j) - V0(x_j))
+        # V is linear in lambda, so the difference quotient IS dV/dlambda, and dV/dlambda does not
+        # depend on lambda: one evaluation, taken before the parameter moves.
+        increment = (lambda_after - lambda_before) * hamiltonian.difference(simulation.context)
+        counters.work_derivative_evaluations += 1
+        _started = time.perf_counter()
+        hamiltonian.set_lambda(simulation.context, lambda_after)
+        counters.parameter_change_seconds += time.perf_counter() - _started
+        counters.parameter_updates += 1
 
         cumulative += increment
         since += increment
-        cumulative_components = cumulative_components + increment_components
-        since_components = since_components + increment_components
         simulation.step(interval)
 
         step = (update + 1) * interval
@@ -2048,18 +1832,17 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
             write_frame(step, time_of(step))
             wrote = True
         if step % observe_every == 0:
-            write_observation(step // observe_every, step, time_of(step), tau_after,
-                              since, wrote, since_components)
+            write_observation(step // observe_every, step, time_of(step), lambda_after,
+                              since, wrote)
             since = 0.0
-            since_components = ComponentWork.zero()
         if state_every and step % state_every == 0:
-            write_state(step, time_of(step), tau_after)
+            write_state(step, time_of(step), lambda_after)
         if cv_every and step % cv_every == 0:
             # Written AFTER the frame and the observation for this step, so the indices it
             # records name rows that already exist. `wrote` says whether a frame landed here;
             # `frames_emitted` and `rows_emitted` have already been advanced by those writers, so
             # the index of the record just written is one less than the count.
-            write_cv(step, tau_after,
+            write_cv(step, lambda_after,
                      observation_index=(rows_emitted - 1) if step % observe_every == 0 else None,
                      frame_index=(frames_emitted - 1) if wrote else None)
         if checkpoint_every and step % checkpoint_every == 0:
@@ -2087,23 +1870,9 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         rows = list(csv.DictReader(handle))
     if float(rows[0]["cumulative_work_kj_mol"]) != 0.0:
         raise SystemExit(f"path {index} observation 0 has non-zero work")
-    if float(rows[0]["tau"]) != float(ais["tau_start"]) \
-            or float(rows[-1]["tau"]) != float(ais["tau_end"]):
-        raise SystemExit(f"path {index} does not span tau_start -> tau_end")
-
-    # The identity on the WHOLE path, checked against what was actually written to the file rather
-    # than against the accumulators still in memory. An accumulator that agrees with itself proves
-    # nothing about the row a reader will load.
-    final_total = float(rows[-1]["cumulative_work_kj_mol"])
-    final_components = (sum(float(rows[-1][f"total_work_{group}_kj_mol"]) for group in GROUPS)
-                        if mode == "components" else final_total)
-    allowed = reconstruction_tolerance(final_total, precision=precision) * max(rows_emitted, 1)
-    if abs(final_components - final_total) > allowed:
-        raise SystemExit(
-            f"path {index}: the cumulative component works in {OBSERVATIONS_CSV} sum to "
-            f"{final_components:.6f} kJ/mol but the cumulative total is {final_total:.6f}. "
-            f"The difference {final_components - final_total:.3e} exceeds {allowed:.3e} "
-            f"(per-update {precision} tolerance accumulated over {rows_emitted} rows).")
+    if float(rows[0]["lambda"]) != float(lambdas[0]) \
+            or float(rows[-1]["lambda"]) != float(lambdas[-1]):
+        raise SystemExit(f"path {index} does not span lambda = 0 -> 1")
 
     # --- FINALIZATION, in an order a crash cannot corrupt ---------------------------------------
     #
@@ -2163,19 +1932,8 @@ def run_one_path(*, index: int, chosen: list[int], out: Path, schedule: dict[str
         "collective_variable_cost": (cv_series.cost() if cv_series is not None else None),
         "total_work_kj_mol": cumulative,
         "total_reduced_work": beta * cumulative,
-        # WHAT WAS MEASURED, on the record, so a reader never has to infer it from which columns
-        # happen to be present. A `work` path carries no decomposition and says so, rather than
-        # carrying a schema for components it never took.
-        "work_measurement": mode,
-        **({"decomposition_schema": {"name": DECOMPOSITION_SCHEMA["name"],
-                                     "version": DECOMPOSITION_SCHEMA["version"]},
-            "decomposition_schema_version": DECOMPOSITION_SCHEMA["version"],
-            **cumulative_components.row("total_work")}
-           if mode == "components" else {}),
-        # Four counters and their sum, not one number. `switching_energy_evaluations` counted
-        # basis probes only and silently omitted the two direct evaluations every switch already
-        # performed, so it understated a path's cost by exactly the part that predates the
-        # decomposition.
+        # WHAT WAS MEASURED, on the record, so a reader never has to infer it.
+        "ais_schema": {"name": TWO_STATE_SCHEMA["name"], "version": TWO_STATE_SCHEMA["version"]},
         "evaluation_counters": counters.record(),
         "integrator_seed": integrator_seed,
         "velocity_seed": velocity_seed,
@@ -2294,14 +2052,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     from openmm import LangevinMiddleIntegrator, XmlSerializer, unit
     from openmm.app import PDBFile, Simulation
 
-    from .schedule import switching_schedule
-    from ..openmm.timestep import resolve_timestep_fs
-    from ..md._stages import derive_seed
-    from ..rest2 import TauSwitcher
-    from ..md.stage import solute_atom_indices
-
-    from ..remd.mpi import Coordination
-    from . import path_trajectory_name, paths_for_rank
+    from . import paths_for_rank
 
     ais, source_cfg, dynamics = run["ais"], run["ais_source"], run["dynamics"]
     reporting = run["reporting"]
@@ -2311,6 +2062,8 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     # independent, so `-ng` is simply the worker count, and it must equal the communicator.
     topology_path = Path(args.topology)
     system_path = Path(args.system)
+    topology2_path = Path(args.topology2) if args.topology2 else None
+    system2_path = Path(args.system2) if args.system2 else None
     source_path = Path(args.source or source_cfg["trajectory"] or "")
     out = Path(args.out_dir).resolve()
 
@@ -2319,6 +2072,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     try:
         checked = preflight_ais(
             topology=topology_path, system=system_path, source=source_path,
+            topology2=topology2_path, system2=system2_path,
             number_of_groups=args.number_of_groups,
             output=args.output or out / "AIS.out", log=args.log or out / "AIS.log",
             cpu=bool(args.cpu),
@@ -2345,33 +2099,6 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
     coordination = checked.coordination
     rank, size = coordination.rank, coordination.size
     source_format = checked.source_format
-
-    # THE SOURCE'S OWN tau, AGAINST THE ONE THIS RUN ASSERTS.
-    #
-    # `ais.tau_start` says which ensemble the source frames were drawn from, and until now that
-    # was an assertion nothing could contradict -- the log said as much, "not verifiable from the
-    # trajectory itself", which was true of a DCD and is no longer true of what this repository
-    # writes. An AMBER NetCDF from a stage or a ladder carries the `tau` its reporter recorded
-    # while producing the frames, so a source ensemble at the wrong tau can be caught here rather
-    # than running to completion and being wrong -- which is the failure `source_tau`'s own
-    # docstring warns about, and the one a directory name cannot protect against.
-    #
-    # Silence when the file records nothing: a foreign trajectory is still a legitimate source,
-    # and the assertion stands exactly as before for it.
-    from ..remd.source_ensemble import trajectory_identity
-
-    recorded_identity, _ = trajectory_identity(source_path)
-    recorded_tau = (recorded_identity or {}).get("tau")
-    if recorded_tau is not None and abs(float(recorded_tau) - float(ais["tau_start"])) > 1e-9:
-        print(f"AIS: ais.tau_start is {ais['tau_start']}, but {source_path.name} records that it "
-              f"was sampled at tau = {recorded_tau}.\n"
-              f"  The source ensemble and the path's starting Hamiltonian must be the same one, "
-              f"or every work value measures a switch that did not happen.\n"
-              f"  This is read from the trajectory's own `tau` attribute, written by the run that "
-              f"produced the frames -- not from its filename or its directory.\n"
-              f"  Correct ais.tau_start, or point ais_source.trajectory at the run you meant.",
-              file=sys.stderr)
-        return 2
 
     from ..run.preflight import reject_contradictory_continuation
 
@@ -2401,6 +2128,10 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                    ("switching", f"{schedule['switching_steps']} steps, "
                                  f"{schedule['number_of_updates']} updates, "
                                  f"{schedule['number_of_observations']} observations"),
+                   ("end states", f"V0 {system_path.name}, V1 {system2_path.name}; "
+                                  f"{len(checked.hamiltonian.plan['mixed_forces'])} force(s) "
+                                  f"mixed"),
+                   ("source ensemble", checked.source_ensemble["status"]),
                    ("ensemble", "fixed volume; no barostat")])
 
     # OVERWRITE FIRST, before anything is created, and only on rank 0 with every rank agreeing.
@@ -2452,8 +2183,8 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                                    title=f"AIS: {ais['number_of_paths']} switching paths",
                                    log_path=log_path)
     sim_out.heading("Inputs")
-    sim_out.field("topology", topology_path)
-    sim_out.field("system", system_path)
+    sim_out.field("V0", f"{system_path}  ({topology_path})")
+    sim_out.field("V1", f"{system2_path}  ({topology2_path})")
     sim_out.field("source", f"{source_path} ({source_format.upper()})")
     sim_out.field("output directory", out)
 
@@ -2469,7 +2200,8 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         # unscaled torsions classified and the Force layout audited. Recomputing any of it here would
         # be a second implementation of a policy that already ran, and the one that decides what
         # happens would be this one -- the one nothing refused on.
-        pdb, base = checked.loaded.pdb, checked.loaded.system
+        pdb = checked.loaded.pdb
+        hamiltonian = checked.hamiltonian
         timestep = checked.timestep
         dynamics = dict(dynamics, timestep_fs=timestep["timestep_fs"])
         log.field("timestep", f"{timestep['timestep_fs']} fs (requested "
@@ -2478,12 +2210,17 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
 
         schedule = checked.schedule
         implicit = checked.loaded.implicit
-        solute = list(checked.solute)
-        omega = checked.notes["omega"]
-        excluded = [tuple(int(a) for a in bond) for bond in checked.excluded_bonds]
+
+        log.heading("End states")
+        log.field("V0", f"{system_path}  ({topology_path})  -- the source ensemble's state")
+        log.field("V1", f"{system2_path}  ({topology2_path})")
+        log.field("mixed forces", ", ".join(hamiltonian.plan["mixed_force_classes"]))
+        log.field("shared forces", f"{len(hamiltonian.plan['shared_forces'])} identical in both, "
+                                   f"added once")
+        log.update(end_states=hamiltonian.record())
 
         log.heading("Path")
-        log.field("tau", f"{ais['tau_start']} -> {ais['tau_end']} (linear)")
+        log.field("lambda", "0 -> 1 (linear): V(lambda) = (1 - lambda) V0 + lambda V1")
         log.field("switching", f"{schedule['switching_steps']} steps "
                                f"= {schedule['switching_ps']:g} ps at {dynamics['timestep_fs']} fs")
         log.field("parameter updates", f"{schedule['number_of_updates']} "
@@ -2502,7 +2239,6 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                   "disabled (checkpoint_printout = 0): an interrupted path restarts from its "
                   "source frame")
         log.field("observation 0", "the source configuration, before any work")
-        log.field("unscaled central bonds", f"{len(excluded)}, plus every improper")
         log.field("ensemble", "fixed volume; no barostat")
 
         # --- the source ensemble -----------------------------------------------------------
@@ -2530,19 +2266,16 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                             f"(frames {first}..{last} inclusive"
                             + (f", every {stride}" if stride > 1 else "") + ")")
         log.field("selection", source_cfg["selection"])
-        # VERIFIED when the file says so, asserted when it cannot. An AMBER NetCDF written by
-        # this repository records the `tau` its reporter sampled at, and the preflight above
-        # refuses a run whose `ais.tau_start` disagrees -- so reaching here means they agree, and
-        # the log should say which of the two statements it is making. For a foreign trajectory
-        # that records nothing the old wording is still exactly right, and is kept verbatim.
-        if recorded_tau is not None:
-            log.field("source ensemble", f"tau = {ais['tau_start']}, CONFIRMED against the "
-                                         f"`tau` attribute {source_path.name} recorded when it "
-                                         f"was written")
+        # VERIFIED when the file records the System it was sampled from, ASSERTED when it cannot.
+        # The preflight refused a recorded digest that is not V0's, so reaching here with one
+        # means they agree.
+        evidence = checked.source_ensemble
+        if evidence["status"] == "verified":
+            log.field("source ensemble", f"V0, CONFIRMED: {source_path.name} records the System "
+                                         f"digest {evidence['system_sha256'][:16]}..., which is "
+                                         f"-s")
         else:
-            log.field("asserted ensemble",
-                      f"tau = {ais['tau_start']} (ASSERTED by ais.tau_start, not verifiable "
-                      f"from this trajectory, which records no tau of its own)")
+            log.field("asserted ensemble", f"V0 (ASSERTED, not verifiable: {evidence['reason']})")
         log.field("velocities", "not read from the source; each path draws fresh "
                                 f"Maxwell-Boltzmann momenta at {dynamics['temperature_K']} K "
                                 f"with its own recorded seed")
@@ -2555,8 +2288,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             schedule=schedule,
             source={"trajectory": source_path.name, "format": source_format,
                     "atoms": None if source_atoms is None else int(source_atoms),
-                    "tau_asserted": float(ais["tau_start"]),
-                    "tau_verified_from_file": False,
+                    "ensemble": dict(evidence),
                     "velocity_policy": "resampled_maxwell_boltzmann",
                     "frames_total": n_frames,
                     "first_frame": first, "last_frame": last,
@@ -2564,13 +2296,13 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                     "selection": source_cfg["selection"],
                     "allow_repeated_frames": bool(source_cfg["allow_repeated_frames"]),
                     "chosen_frames": chosen},
-            thermodynamic_states={"source_tau": float(ais["tau_start"]),
-                                  "target_tau": float(ais["tau_end"]),
+            thermodynamic_states={"source": "V0", "target": "V1",
                                   "temperature_K": float(dynamics["temperature_K"]),
                                   "ensemble": "fixed volume (NVT), no barostat"},
-            work_convention="delta_W_j = U(tau_{j+1}, x_j) - U(tau_j, x_j); parameters move at "
-                            "frozen coordinates, then the configuration propagates",
+            work_convention=TWO_STATE_SCHEMA["work_convention"],
             inputs={"topology": file_facts(topology_path), "system": file_facts(system_path),
+                    "topology2": file_facts(topology2_path),
+                    "system2": file_facts(system2_path),
                     "source": source_facts},
             implicit=bool(implicit),
         )
@@ -2626,9 +2358,8 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
                 write_selected_frames(table, chosen, seed=int(dynamics["seed"]))
         coordination.barrier()
 
-        # The switcher the preflight built and audited, not a second one over the same System.
-        switcher = checked.switcher
-        taus = schedule["taus"]
+        # The Hamiltonian the preflight built and audited, not a second one over the same pair.
+        lambdas = schedule["lambdas"]
         interval = schedule["parameter_update_interval_steps"]
         per_observation = schedule["updates_per_observation"]
         temperature = float(dynamics["temperature_K"])
@@ -2667,7 +2398,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         contributions: dict[int, dict] = {}
 
         sim_out.heading("Schedule")
-        sim_out.field("tau", f"{ais['tau_start']} -> {ais['tau_end']} (linear)")
+        sim_out.field("lambda", "0 -> 1 (linear), V0 -> V1")
         sim_out.field("switching", f"{schedule['switching_steps']} steps "
                                    f"= {schedule['switching_ps']:g} ps")
         sim_out.field("work observations", f"{schedule['number_of_observations']} "
@@ -2693,11 +2424,11 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
         for index in wanted:
             record = run_one_path(
                 contributions=contributions,
-                index=index, chosen=chosen, out=out, schedule=schedule, taus=taus,
-                switcher=switcher, simulation_inputs=dict(
+                index=index, chosen=chosen, out=out, schedule=schedule, lambdas=lambdas,
+                hamiltonian=hamiltonian, simulation_inputs=dict(
                     topology=pdb.topology, source_path=source_path, mdtraj_top=top,
                     implicit=implicit, acceleration=acceleration),
-                dynamics=dynamics, ais=ais, beta=beta, temperature=temperature,
+                dynamics=dynamics, beta=beta, temperature=temperature,
                 # THE preflight's decision, not `args.resume` re-read here. `checked.disposition`
                 # is what was actually verified against this directory -- "resume" only when a
                 # compatible run was found AND --resume was given. Passing `args.resume` directly
@@ -2769,19 +2500,7 @@ def ais_main(run: dict[str, Any], argv: list[str] | None = None) -> int:
             platform=openmm_platform_facts(),
             paths=completed,
             outputs=outputs,
-            # What the decomposition cost, measured. Three extra potential-energy evaluations per
-            # switching update and no extra integration steps -- stated with the count and the
-            # seconds so the claim can be checked against the run rather than believed.
-            decomposition={
-                **DECOMPOSITION_SCHEMA,
-                "evaluation_counters": _summed_counters(completed),
-                "reconstruction_tolerance": {
-                    "precision": (acceleration.properties or {}).get("Precision", "mixed"),
-                    "relative_and_floor_kj_mol": list(RECONSTRUCTION_TOLERANCES.get(
-                        str((acceleration.properties or {}).get("Precision", "mixed")).lower(),
-                        RECONSTRUCTION_TOLERANCES["mixed"])),
-                },
-            },
+            evaluation_counters=_summed_counters(completed),
         )
         log.complete()
         log.heading("Summary")

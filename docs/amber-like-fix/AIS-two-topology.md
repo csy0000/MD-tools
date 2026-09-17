@@ -1,6 +1,6 @@
 # AIS as a transformation between two topologies — design for 0.5.4
 
-2026-09-16. **Status: DESIGN, awaiting sign-off. Nothing here is implemented.** It replaces three
+2026-09-16. **Status: SIGNED OFF and IMPLEMENTED on `ais/two-topology`** (the decisions are §11). It replaces three
 scientific invariants in `CLAUDE.md`; the replacement text is in §8, and no code changes until it
 is agreed. Supersedes `docs/backlog.md` entry 15 as the plan; `AIS.md` in this directory remains
 the prior analysis (its dispersion-tail fast path becomes moot, §6).
@@ -51,8 +51,11 @@ The present three-point quadratic basis (`a ∈ {0, ½, 1}`) becomes a **two-poi
   and the direct `V(λ)`. This is what Hummer–Szabo reweighting consumes.
 
 They remain different coordinates and must never share column names. A row with no saved
-coordinate leaves its potentials EMPTY. Both the reconstructed total `(1−λ)V0 + λV1` and the
-direct total are written, so the identity is checkable from the file.
+coordinate leaves its potentials EMPTY. `potential_v0_kj_mol`, `potential_v1_kj_mol` and
+`potential_direct_kj_mol` are written, so `(1−λ)V0 + λV1 = V(λ)` is checkable from the file; at
+run time `V1 − V0` from the derivative kernel is checked against the collective-variable values
+before a row is written. (As implemented: a separate "reconstructed" column would be the same
+arithmetic twice, so it was not added.)
 
 `work_measurement: components` and `verify_every_updates` lose their reason to exist: the
 decomposition is no longer a separate, more expensive mode. **Proposal: retire both keys** with a
@@ -182,9 +185,9 @@ manifests and publication, directory identity and dispositions, MPI coordination
 the step arithmetic of `switching_schedule` and its four cadences, CV reporting and cost
 accounting, `write_work_table` assembly.
 
-**Renamed columns** (proposal): `lambda` for `tau`; `lambda_before`/`lambda_after`;
-`potential_v0_kj_mol`, `potential_v1_kj_mol`, `potential_reconstructed_kj_mol`,
-`potential_direct_kj_mol`; new schema `two-state-linear` v1.
+**Renamed columns** (as implemented): `lambda` for `tau`; `lambda_before`/`lambda_after`;
+`potential_v0_kj_mol`, `potential_v1_kj_mol`, `potential_direct_kj_mol`; schema
+`two-state-linear` v1; run identity schema v2.
 
 ## 7. Preflight refusals — all before any output
 

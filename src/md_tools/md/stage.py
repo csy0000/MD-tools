@@ -92,7 +92,7 @@ class _AmberStreamReporter:
     """
 
     def __init__(self, path, interval, *, n_atoms, atom_subset=None, periodic, from_frame=0,
-                 tau=0.0, temperature_k=0.0, application="cMD"):
+                 tau=0.0, temperature_k=0.0, application="cMD", system_sha256=None):
         from ..remd.amber_trajectory import AmberTrajectoryWriter
 
         self._interval = int(interval)
@@ -109,7 +109,8 @@ class _AmberStreamReporter:
         else:
             self._writer = AmberTrajectoryWriter(
                 path, n_atoms=width, tau=float(tau), temperature_k=float(temperature_k),
-                application=str(application), periodic=bool(periodic))
+                application=str(application), periodic=bool(periodic),
+                system_sha256=system_sha256)
 
     def describeNextReport(self, simulation):                 # noqa: N802 - OpenMM's protocol
         steps = self._interval - simulation.currentStep % self._interval
@@ -490,7 +491,7 @@ def _committed_frames(path, done):
 
 def _coordinate_reporter(path, interval, *, atom_subset=None, append=False, n_atoms=0,
                          periodic=False, from_frame=0, tau=0.0, temperature_k=0.0,
-                         application="cMD"):
+                         application="cMD", system_sha256=None):
     """A trajectory reporter whose FORMAT matches the name it was given.
 
     `-x whatever.dcd` must produce DCD and `-x whatever.nc` must produce AMBER NetCDF. Choosing
@@ -513,7 +514,8 @@ def _coordinate_reporter(path, interval, *, atom_subset=None, append=False, n_at
         return DCDReporter(str(path), int(interval), append=bool(append))
     return _AmberStreamReporter(path, interval, n_atoms=n_atoms, atom_subset=atom_subset,
                                 periodic=periodic, from_frame=int(from_frame),
-                                tau=tau, temperature_k=temperature_k, application=application)
+                                tau=tau, temperature_k=temperature_k, application=application,
+                                system_sha256=system_sha256)
 
 
 def check_trajectory_suffix(path: Path) -> None:
@@ -613,6 +615,11 @@ def _add_refused_flags(parser, protocol_name: str) -> None:
                         default=None, metavar="TRAJ",
                         help=f"refused for {protocol_name}: -source-traj is the equilibrium "
                              f"ensemble AIS draws its starting frames from")
+    for flag, alias, destination in (("-s2", "--system2", "system2"),
+                                     ("-p2", "--topology2", "topology2")):
+        parser.add_argument(flag, alias, dest=destination, default=None, metavar="PATH",
+                            help=f"refused for {protocol_name}: {flag} is the second end state "
+                                 f"of an AIS transformation")
 
 
 #: Fields a continuation may legitimately change, and which are therefore NOT part of the
@@ -799,7 +806,9 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
     # PRODUCTION is decided by the stage NAME -- `cMD` and `umbrella` are what production IS --
     # while the stem every other stage uses is its FILING KEY, so the streams sit beside the
     # restart and log of the same stage rather than under a second spelling of it.
-    production = str(stage.get("name") or "") in ("cMD", "umbrella")
+    from ._stages import PRODUCTION_STAGE_NAMES
+
+    production = str(stage.get("name") or "") in PRODUCTION_STAGE_NAMES
     stem = f"prod{segment}" if production else (key or "stage")
     # BESIDE THE LOG, not beside `base`.
     #
@@ -861,6 +870,7 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
             pending_parent=stage.get("pending_parent"),
             number_of_groups=args.number_of_groups, groupfile=args.groupfile,
             source_trajectory=args.source_trajectory,
+            system2=args.system2, topology2=args.topology2,
             # The System is deserialised once, inside the preflight, and the timestep is resolved
             # against ITS masses -- so 4 fs on hydrogens that were never repartitioned is refused
             # before the `.out` and the `.log` exist rather than after.
@@ -1414,6 +1424,13 @@ def stage_main(stage: dict[str, Any], argv: list[str] | None = None, *, prepared
                     _coordinate_reporter(
                         whole_path, int(stage["whole_interval_steps"]),
                         tau=float(stage.get("tau") or 0.0),
+                        # Only when the Hamiltonian integrated IS -s: no positional restraint
+                        # and no umbrella bias applied in memory (a stage never scales). Otherwise
+                        # the digest would name a Hamiltonian these frames were never sampled
+                        # from, and AIS records its source as asserted rather than verified.
+                        system_sha256=(system_sha if (not checked.restrained
+                                                      and not umbrella_forces)
+                                       else None),
                         temperature_k=float(stage.get("temperature_K") or 0.0),
                         application=str(stage.get("name") or "cMD"),
                         n_atoms=system.getNumParticles(), periodic=not implicit,

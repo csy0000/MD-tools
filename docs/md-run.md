@@ -11,8 +11,8 @@ md-openmm md-run -i min.in -p built.pdb -s built.xml -c prev.xml \
 mpirun -n 8 md-openmm md-run -ng 8 -i REST2.in -p built.pdb -s built.xml \
           -c eq_npt_free.xml -o REST2.out -x REST2.nc -r restart.json -log REST2.log
 
-mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in -p built.pdb -s built.xml \
-          -source-traj ../cMD_tau0p5/tau_0p5.dcd -o AIS.out -log AIS.log -odir ./AIS
+mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in -p built.pdb -s V0.xml -p2 built.pdb -s2 V1.xml \
+          -source-traj ../hot/whole_prod1.nc -o AIS.out -log AIS.log -odir ./AIS
 ```
 
 It is a **surface**, not a second implementation. Every protocol is handed to the same function a
@@ -36,7 +36,8 @@ both. There is no behaviour reachable from one and not the other.
 | `-odir` | where outputs and `resolved.config` are written | — |
 | `-ng` | how many replicas or workers this launch coordinates | `-ng` |
 | `-groupfile` | an Amber-style group file, for a heterogeneous ladder | `-groupfile` |
-| `-source-traj` | AIS only: the equilibrium ensemble the paths start from | — |
+| `-s2` / `-p2` | AIS only: V1, the second end state's System and topology | a second group's `-p` |
+| `-source-traj` | AIS only: the equilibrium ensemble of V0 the paths start from | — |
 | `--cpu` | run this invocation on the CPU — see the platform policy below | — |
 | `--device` | which CUDA device: placement, never platform | — |
 
@@ -326,9 +327,28 @@ wrong.
 ## AIS
 
 ```bash
-mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in -p built.pdb -s built.xml \
-          -source-traj ../cMD_tau0p5/tau_0p5.dcd -o AIS.out -log AIS.log -odir ./AIS
+mpirun -n 8 md-openmm md-run -ng 8 -i AIS.in \
+          -p built.pdb -s ../build/REST2/system_state3.xml \
+          -p2 built.pdb -s2 ../build/built.xml \
+          -source-traj ../hot/whole_prod1.nc -o AIS.out -log AIS.log -odir ./AIS
 ```
+
+AIS transforms one end state into another,
+
+```text
+V(λ) = (1 − λ)·V0 + λ·V1,        λ: 0 → 1, linear
+```
+
+**V0** is `-s`/`-p`, the state the source ensemble was sampled from. **V1** is `-s2`/`-p2`. They must
+hold the same particles in the same order, with the same masses, constraints, virtual sites, force
+layout and long-range treatment — they differ in parameters only, as in sander's no-softcore
+mixing — and a pair that differs in anything else is refused with every difference named, as is a
+barostat in either. For a REST2 switch, V0 is the scaled state the hot run integrated and V1 is the
+unmodified `build/built.xml`. A reverse switch is the same command with the files exchanged. `-s2`
+and `-p2` are refused by name on every other protocol.
+
+`ais.tau_start`, `ais.tau_end`, `ais.work_measurement` and `ais.verify_every_updates` belonged to the
+single-topology AIS, which switched one System along τ, and are refused with the migration.
 
 Paths are independent and never exchange, so `-ng` here is simply how many workers share them.
 `number_of_paths` is the **global** total, not a count per rank.
@@ -343,7 +363,7 @@ AIS_traj0000.nc … AIS_traj0099.nc     one trajectory per path, zero-based, ≥
 AIS_work.csv                          one row per (path, switching step), sorted by that pair
 AIS_paths.csv                         one row per path: the work distribution
 selected_source_frames.csv            which frame each path started from, and with which seeds
-path_NNNN/observations.csv            the work rows for one path
+path_NNNN/observations.csv            the work rows for one path, with V0, V1 and V(λ) at saved frames
 path_NNNN/completed.json              the machine record that says the path finished
 ```
 
@@ -360,13 +380,17 @@ An interrupted path **resumes mid-path**, from its last committed checkpoint gen
 used to say the opposite: that a switching path has no meaningful mid-path restart, because the
 work integral is only defined along a whole path. The premise is right and the conclusion was
 wrong — the integral is defined along the whole path, and a resume continues *that* path, with the
-accumulated work, the three component accumulators, the Context and every stream counter restored
-to one committed instant.
+accumulated work, the Context and every stream counter restored to one committed instant. On CUDA
+the continuation is not bit-for-bit the trajectory an uninterrupted run would have taken: the
+mixing force's inner Contexts keep state no checkpoint captures. The committed state is restored
+exactly and the path continues as a new realisation of the same switching process; on CPU it
+reproduces exactly.
 
 ### The source ensemble
 
-`-source-traj` names a file you already produced, typically a fixed-τ cMD run at `tau_start`. AIS
-anneals away from an equilibrium ensemble; it cannot generate one.
+`-source-traj` names a file you already produced, an equilibrium run of V0 — typically a fixed-τ cMD
+run on the scaled state that is `-s`. AIS switches away from an equilibrium ensemble; it cannot
+generate one.
 
 * a path with a trailing slash fails as *"is a directory, not a file"*, here, rather than obscurely
   inside the trajectory reader;
@@ -381,9 +405,10 @@ anneals away from an equilibrium ensemble; it cannot generate one.
 * `ais_source.frame_stride` takes every Nth frame of the window. Consecutive MD frames are
   correlated; a stride is the honest way to say how far apart samples must be. It does not make
   them independent, it stops them being obviously dependent;
-* **`tau_start` is asserted, not verified.** Nothing in a coordinate trajectory records the
-  Hamiltonian it was sampled under. The log says so in those words, so a reader checks it against
-  the run that produced the file rather than assuming it was checked here;
+* **the source is VERIFIED to be V0's when it can be, and asserted when it cannot.** A stage's
+  whole-system AMBER NetCDF records `system_sha256` when the Hamiltonian it integrated is its `-s`
+  unmodified, and AIS refuses a source whose recorded digest is not `sha256(-s)`. A DCD or a
+  foreign file records nothing, and the log says the ensemble was asserted, in those words;
 * a coordinate trajectory carries no velocities, so each path draws fresh Maxwell–Boltzmann momenta
   at the configured temperature with its own recorded seed. That policy is in the record. Nothing
   pretends an ordinary trajectory contains stored phase space.
@@ -397,9 +422,9 @@ switching_steps % interval == 0
 ```
 
 for `ais.observation_interval_steps`, `reporting.crd_printout_solute`, `reporting.info_printout` and
-`reporting.checkpoint_printout`. A path is a complete object: it starts at `tau_start` and ends at
-`tau_end`, and an interval that does not divide `switching_steps` cannot place a frame on the final
-step. The last frame would fall at some interior τ, and "the end of path A" would not be comparable
+`reporting.checkpoint_printout`. A path is a complete object: it starts at λ = 0 and ends at λ = 1,
+and an interval that does not divide `switching_steps` cannot place a frame on the final step. The
+last frame would fall at some interior λ, and "the end of path A" would not be comparable
 with "the end of path B". That is not a rounding inconvenience, it is a different measurement.
 
 Zero means disabled and is exempt. The refusal names both values and the divisors near the one you
@@ -430,7 +455,7 @@ cadence, which is what every existing project was generated with.
 At `reporting.info_printout`, each path writes a row of `path_NNNN/system.csv`:
 
 ```text
-path_index, protocol_step, switching_time_ps, tau,
+path_index, protocol_step, switching_time_ps, lambda,
 potential_energy_kj_mol, kinetic_energy_kj_mol, total_energy_kj_mol,
 temperature_kelvin, volume_nm3, density_g_per_ml
 ```
@@ -447,20 +472,24 @@ work rows, frames and state rows are on disk. Restoring one without the other re
 into somebody else's bookkeeping, so they are written and validated together.
 
 ```bash
-md-openmm md-run -i AIS.in -p built.pdb -s built.xml \
-          -source-traj ../cMD_tau0p5/tau_0p5.dcd -odir ./AIS --resume
+md-openmm md-run -i AIS.in -p built.pdb -s ../build/REST2/system_state3.xml \
+          -p2 built.pdb -s2 ../build/built.xml \
+          -source-traj ../hot/whole_prod1.nc -odir ./AIS --resume
 ```
 
 On `--resume`, and in this order:
 
-1. **every fingerprint is checked before anything loads** — the System, the topology, the source
-   ensemble, the whole schedule, the path id, its source frame and its seeds. A checkpoint from a
+1. **every fingerprint is checked before anything loads** — both end states, both topologies, the
+   source ensemble, the whole schedule, the path id, its source frame and its seeds. A checkpoint from a
    different run would continue with right-looking numbers for a different measurement;
-2. the Context is restored, and τ is put back to the checkpoint's rung;
+2. the Context is restored, and λ is put back to the committed update's value;
 3. the streams are cut back to the counts the sidecar vouches for, so a record interrupted
    mid-write is dropped rather than appended to;
 4. the path continues, and finishes with exactly the number of observations, frames and state rows
    an uninterrupted run produces.
+
+A checkpoint, manifest or `AIS_run.json` written by the single-topology AIS is refused by name
+rather than continued: its work was measured along a different path.
 
 Frames are staged inside the path directory and published to `AIS_trajNNNN.nc` in one atomic move
 only after the path is complete and validated. Until then there is nothing at the run root that
@@ -471,16 +500,22 @@ With `checkpoint_printout: 0` there are no checkpoints, and an interrupted path 
 source frame — there is nothing committed to resume from. That is the setting, not a property of
 the method: with checkpoints on, an interrupted path continues from the last committed generation.
 
-### The work convention, unchanged
+### The work convention
 
 ```text
-ΔW_j = U(τ_{j+1}, x_j) − U(τ_j, x_j)
+ΔW_j = V(λ_{j+1}, x_j) − V(λ_j, x_j) = (λ_{j+1} − λ_j) · (V1 − V0)(x_j)
 ```
 
 Parameters move first, at frozen coordinates; the configuration then propagates under the new
-Hamiltonian. Observation 0 is the source configuration under the source Hamiltonian, before any
-parameter change and before any propagation, so its work is exactly zero by definition rather than
-nearly zero. Switching is at **fixed volume**; a barostat in the prepared System is refused.
+Hamiltonian. The second equality is exact because V is linear in λ, and it is how the work is
+measured: one evaluation of dV/dλ per switch. It is also exactly Amber's Jarzynski increment
+(§27.8, `(∂U/∂λ)·Δλ`). Observation 0 is the source configuration under V0, before any parameter
+change and before any propagation, so its work is exactly zero by definition rather than nearly
+zero. Switching is at **fixed volume**; a barostat in either end state is refused.
+
+At every observation that saves a frame the row carries `potential_v0_kj_mol`,
+`potential_v1_kj_mol` and `potential_direct_kj_mol`, measured at that frame, with `V1 − V0` checked
+against an independent evaluation before the row is written.
 
 ## What `build-md` generates
 

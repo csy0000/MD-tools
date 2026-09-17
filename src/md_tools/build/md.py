@@ -165,7 +165,18 @@ MD_SCHEMA = Schema(
         Section("collective_variables", [
             Field("file", str, default=None, nullable=True,
                   doc="Path to a cv.yaml defining the torsions to report, resolved relative to "
-                      "THIS configuration file. Null disables collective-variable reporting."),
+                      "THIS configuration file. Null disables collective-variable reporting "
+                      "unless `generate` is set."),
+            Field("generate", str, default=None, nullable=True,
+                  enum=("all_solute_torsions",),
+                  doc="Have `build-md` WRITE the cv.yaml instead of naming one: "
+                      "`all_solute_torsions` lists every proper torsion of the solute (every chain "
+                      "of four bonded solute atoms, hydrogens included), by explicit atom "
+                      "selector, read from build/built.pdb and the bonds of build/built.xml. The "
+                      "generated file is copied in exactly as a named one would be, and "
+                      "`resolved.config` then names that copy in `file` -- so the run measures "
+                      "what an ordinary, readable cv.yaml says. Give `file` or `generate`, not "
+                      "both."),
             Field("interval_steps", int, default=0, minimum=0, unit="steps",
                   doc="Steps between collective-variable observations. Independent of the "
                       "trajectory and state-data intervals, and may be more frequent than "
@@ -233,14 +244,6 @@ MD_SCHEMA = Schema(
             Field("number_of_paths", int, default=100, minimum=1,
                   doc="How many independent switching paths to run. Each gets its own directory, "
                       "its own trajectory, and its own deterministic seeds."),
-            Field("tau_start", float, default=0.5, minimum=0.0, maximum=0.95,
-                  doc="The tau the path starts at. It must equal the tau of the source ensemble: "
-                      "the path begins in the ensemble it anneals away from, and the source's own "
-                      "record is checked against this rather than assumed."),
-            Field("tau_end", float, default=0.0, minimum=0.0, maximum=0.95,
-                  doc="The tau the path ends at. 0.0 is the unmodified physical Hamiltonian. "
-                      "tau_start and tau_end must differ, or the Hamiltonian never changes and "
-                      "every work value would be zero."),
             Field("switching_steps", int, default=50_000, minimum=1, unit="steps",
                   doc="The length of the switching path, as an exact step count. 50000 steps is "
                       "100 ps at 2 fs. WORK IS PATH-LENGTH DEPENDENT: a faster switch does more "
@@ -249,53 +252,37 @@ MD_SCHEMA = Schema(
             Field("observation_interval_steps", int, default=2_500, minimum=1, unit="steps",
                   doc="How often a path is observed: one coordinate frame and one work row. "
                       "switching_steps must divide by this exactly, so the last observation lands "
-                      "at tau_end. 50000/2500 gives 20 intervals and therefore 21 observations, "
+                      "at lambda = 1. 50000/2500 gives 20 intervals and therefore 21 observations, "
                       "counting both endpoints. AN OBSERVATION IS NOT A STEP."),
             Field("parameter_update_interval_steps", int, default=1, minimum=1, unit="steps",
-                  doc="How often tau moves. 1 changes the Hamiltonian every step -- 50000 "
+                  doc="How often lambda moves. 1 changes the Hamiltonian every step -- 50000 "
                       "parameter changes over the path above. observation_interval_steps must "
                       "divide by this, or observations would not sit on the update grid."),
-            Field("work_measurement", str, default="work", enum=("work", "components"),
-                  doc="How the work increment at each parameter update is obtained, and what "
-                      "else is recorded with it. This is a scientific choice AND the dominant "
-                      "cost of an AIS run: everything else here controls what is written, this "
-                      "controls what is computed.\n"
-                      "  work        -- TWO energy evaluations per update, U(tau_k) and "
-                      "U(tau_k+1). The work integral, and nothing more. This is the default "
-                      "because it is what a free energy for the schedule you actually ran "
-                      "needs.\n"
-                      "  components  -- a THREE-point basis probe per update, at amplitudes "
-                      "(0, 0.5, 1), from which the work follows analytically. It also gives the "
-                      "potential as a FUNCTION of tau, which is what reweighting onto a "
-                      "different schedule, a different endpoint, or a Hummer-Szabo estimator "
-                      "evaluated at an unvisited tau requires. A single total work cannot "
-                      "produce that function, and re-running at another tau is not "
-                      "reweighting.\n"
-                      "  Component columns are ABSENT from a `work` path rather than zero, so a "
-                      "reader expecting them fails instead of treating a missing measurement as "
-                      "a measured nought."),
-            Field("verify_every_updates", int, default=0, minimum=0,
-                  doc="In `components` mode, how often the fitted work is checked against a "
-                      "directly measured U(tau_k+1) - U(tau_k). Costs two extra evaluations "
-                      "whenever it fires.\n"
-                      "  0 (the default) verifies the FIRST update of every path and no other. "
-                      "That is not a token check: the three-group identity is a property of the "
-                      "SYSTEM, not of the step -- a force carrying tau-dependence outside the "
-                      "basis is outside it at any coordinate -- so one verified update per path "
-                      "establishes the model the whole path relies on, for two evaluations "
-                      "rather than two thousand.\n"
-                      "  N > 0 re-verifies every N updates as well, for the case the first "
-                      "update cannot cover: a force whose tau-dependence only switches on at "
-                      "some geometry the path reaches later.\n"
-                      "  Ignored in `work` mode, where the work IS the direct measurement and "
-                      "there is nothing to cross-check it against."),
-        ], doc="The switching path. Ignored unless protocol is AIS. Every length is an exact "
-               "integer step count; nothing here is a duration that has to divide by a timestep."),
+        ], doc="The switching path: lambda from 0 to 1, V(lambda) = (1 - lambda) V0 + lambda V1, "
+               "where V0 is `-s`/`-p` (the state the source ensemble was sampled from) and V1 is "
+               "`-s2`/`-p2`. Ignored unless protocol is AIS. Every length is an exact integer "
+               "step count; nothing here is a duration that has to divide by a timestep."),
         Section("ais_source", [
             Field("trajectory", str, default=None, nullable=True,
-                  doc="REQUIRED for AIS. The equilibrium trajectory the paths start from, "
-                      "typically a fixed-tau cMD run at tau = ais.tau_start. Resolved relative to "
-                      "the directory run.sh is invoked from."),
+                  doc="The equilibrium trajectory the paths start from, sampled from V0 -- "
+                      "typically a fixed-tau cMD run whose System is the -s given to AIS. A "
+                      "trajectory that records its System digest is checked against -s. Resolved "
+                      "relative to the directory run.sh is invoked from. Required unless "
+                      "`generate` is true, in which case build-md sets it to the source stage's "
+                      "whole-system trajectory."),
+            Field("generate", bool, default=False,
+                  doc="Generate the source ensemble in this run instead of naming one. build-md "
+                      "then writes a stage chain before AIS: minimisation of the UNSCALED "
+                      "build/built.xml (the shared min/), the equilibration stages and a "
+                      "`source` production stage on V0, then the switching paths from that "
+                      "stage's whole-system trajectory. `run.sh` passes build/built.xml for "
+                      "minimisation and as V1, and the saved scaled state "
+                      "build/AIS/system_state0.xml (V0) for everything else. "
+                      "`stages.production_steps` is the source run's length and "
+                      "`reporting.crd_printout_whole` its frame interval, so both must be set. "
+                      "`dynamics.tau` must be V0's tau, which the stages check against the "
+                      "scaler.yaml beside the state and which makes the equilibration "
+                      "fixed-volume."),
             Field("topology", str, default=None, nullable=True,
                   doc="Topology for reading that trajectory. Null uses the -p topology the run "
                       "was given, which is the usual case. The resolved choice is recorded."),
@@ -379,7 +366,12 @@ def _check_protocol(resolved: dict[str, Any]) -> None:
         raise ConfigError(
             f"ais_source.trajectory is set but protocol is {protocol}. A source ensemble is only "
             f"consumed by AIS; cMD and REST2 generate their own starting state.")
-    if resolved["dynamics"]["tau"] > 0.0 and resolved["protocol"] != "cMD":
+    generates_source = (protocol == "AIS"
+                        and bool((resolved.get("ais_source") or {}).get("generate")))
+    if resolved["dynamics"]["tau"] > 0.0 and resolved["protocol"] != "cMD" \
+            and not generates_source:
+        # An AIS run that generates its source runs fixed-tau stages on V0, and `dynamics.tau`
+        # is then the claim about V0 those stages check -- exactly what it is for a hot cMD run.
         raise ConfigError(
             f"dynamics.tau is {resolved['dynamics']['tau']} but protocol is "
             f"{resolved['protocol']}. A REST2 ladder sets its own tau per rung; a fixed "
@@ -466,6 +458,13 @@ def _check_segments(resolved: dict[str, Any]) -> None:
             f"than one {unit} per segment.")
 
 
+#: What an AIS run that generates its own source ensemble names as its source: the `source`
+#: stage's whole-system stream, in the run root, where `run.sh` and `AIS.py` run from. Spelled by
+#: the same rule `stage_main` names production streams with (`whole_prod<segment>.nc`).
+SOURCE_STAGE = "source"
+GENERATED_SOURCE_TRAJECTORY = "whole_prod1.nc"
+
+
 def _check_ais(resolved: dict[str, Any]) -> None:
     """Everything about an AIS run that is decidable before a path is written.
 
@@ -478,21 +477,42 @@ def _check_ais(resolved: dict[str, Any]) -> None:
     ais = resolved["ais"]
     source = resolved["ais_source"]
 
-    if abs(float(ais["tau_start"]) - float(ais["tau_end"])) < 1e-12:
-        raise ConfigError(
-            f"ais.tau_start and ais.tau_end are both {ais['tau_start']}, so the Hamiltonian never "
-            f"changes and every work value would be zero. A switching path needs distinct "
-            f"endpoints; the usual choice is 0.5 -> 0.0.")
-    if not source["trajectory"]:
+    if source.get("generate"):
+        if source["trajectory"] not in (None, GENERATED_SOURCE_TRAJECTORY):
+            raise ConfigError(
+                f"ais_source.generate is true and ais_source.trajectory is "
+                f"{source['trajectory']!r}. Generating the source means this run produces it, as "
+                f"{GENERATED_SOURCE_TRAJECTORY}; naming another trajectory as well says two "
+                f"different things about where the paths start. Give one.")
+        if not float(resolved["dynamics"]["tau"]) > 0.0:
+            raise ConfigError(
+                "ais_source.generate is true but dynamics.tau is 0. The source stages run on V0, "
+                "the saved scaled state build/AIS/system_state0.xml, and dynamics.tau is the claim "
+                "about it they check -- at 0 they would run the built System, which is V1, and the "
+                "switch would go from V1 to itself. Set dynamics.tau to V0's tau.")
+        steps = int(resolved["stages"]["production_steps"])
+        whole = int(resolved["reporting"]["crd_printout_whole"])
+        if whole <= 0:
+            raise ConfigError(
+                "ais_source.generate is true, so the source stage's whole-system trajectory is "
+                "what the paths start from, but reporting.crd_printout_whole is 0 and it would "
+                "write none. Set the frame interval of the source ensemble.")
+        if steps % whole:
+            raise ConfigError(
+                f"ais_source.generate: stages.production_steps = {steps} is not a whole number of "
+                f"reporting.crd_printout_whole = {whole}, so the source run would not end on a "
+                f"saved frame.")
+    elif not source["trajectory"]:
         raise ConfigError(
             "ais_source.trajectory is required for AIS. It is the equilibrium ensemble the "
-            "switching paths start from -- there is no default, because it is data you produced.")
+            "switching paths start from -- there is no default, because it is data you produced. "
+            "Or set ais_source.generate: true to have this run produce it.")
 
     # EVERY enabled step interval must divide the switching path exactly.
     #
-    # A path is a complete object: it starts at tau_start and ends at tau_end, and an interval
+    # A path is a complete object: it starts at lambda = 0 and ends at lambda = 1, and an interval
     # that does not divide `switching_steps` cannot place a frame on the final step. The last
-    # frame would then be at some interior tau, and a reader comparing "the end of path A" with
+    # frame would then be at some interior lambda, and a reader comparing "the end of path A" with
     # "the end of path B" would be comparing two different points along the switch. That is not a
     # rounding inconvenience; it is a different measurement.
     #
@@ -515,7 +535,7 @@ def _check_ais(resolved: dict[str, Any]) -> None:
                 f"{key} is {interval}, which does not divide ais.switching_steps = {switching} "
                 f"({switching} % {interval} = {switching % interval}).\n"
                 f"  A switching path has to end ON its final step: with this interval the last "
-                f"frame would fall at an interior tau, and the end of one path would not be "
+                f"frame would fall at an interior lambda, and the end of one path would not be "
                 f"comparable with the end of another.\n"
                 f"  Divisors of {switching} near {interval}: "
                 f"{', '.join(str(d) for d in sorted(near)[:12])}.")
@@ -534,7 +554,6 @@ def _check_ais(resolved: dict[str, Any]) -> None:
     # The schedule's own arithmetic, refused with the numbers that would fix it.
     try:
         switching_schedule(
-            tau_start=float(ais["tau_start"]), tau_end=float(ais["tau_end"]),
             switching_steps=int(ais["switching_steps"]),
             parameter_update_interval_steps=int(ais["parameter_update_interval_steps"]),
             observation_interval_steps=int(ais["observation_interval_steps"]),
@@ -624,18 +643,27 @@ def _check_collective_variables(resolved: dict[str, Any]) -> None:
     """
     block = resolved.get("collective_variables") or {}
     path = block.get("file")
+    generate = block.get("generate")
     interval = int(block.get("interval_steps") or 0)
-    if (path is None) == (interval == 0):
+    if path is not None and generate is not None:
+        raise ConfigError(
+            f"collective_variables.file = {path!r} and collective_variables.generate = "
+            f"{generate!r} both say which torsions to report. Give one: a file you wrote, or a "
+            f"file build-md generates.")
+    named = path if path is not None else generate
+    if (named is None) == (interval == 0):
         return                                       # both off, or both on: a complete statement
-    if path is None:
+    if named is None:
         raise ConfigError(
             f"collective_variables.interval_steps = {interval} asks for observations every "
-            f"{interval} steps, but collective_variables.file is null, so there is nothing to "
-            f"measure. Give a cv.yaml, or set interval_steps to 0 to disable reporting.")
+            f"{interval} steps, but collective_variables.file and generate are both null, so "
+            f"there is nothing to measure. Give a cv.yaml, set generate, or set interval_steps to "
+            f"0 to disable reporting.")
+    what = f"file = {path!r}" if path is not None else f"generate = {generate!r}"
     raise ConfigError(
-        f"collective_variables.file = {path!r} names torsions to report, but "
+        f"collective_variables.{what} names torsions to report, but "
         f"collective_variables.interval_steps is 0, which disables reporting. Set an interval, "
-        f"or set file to null to disable reporting deliberately.")
+        f"or leave both null to disable reporting deliberately.")
 
 
 MD_SCHEMA.checks = (_check_protocol, _check_timestep, _check_collective_variables,
@@ -730,6 +758,43 @@ def load_run_config(path: Path | None) -> dict[str, Any]:
     return document
 
 
+#: `ais` keys of the retired single-topology AIS, and what replaced each. Refused by name rather
+#: than as unknown keys: they were not misspelled, the method they configured is gone.
+RETIRED_AIS_KEYS = {
+    "tau_start": "the source end state is now a FILE, -s/-p (V0), not a tau",
+    "tau_end": "the target end state is now a FILE, -s2/-p2 (V1), not a tau",
+    "work_measurement": ("every path now records the work and both end-state potentials in one "
+                         "evaluation; there is no cheaper or richer mode to choose"),
+    "verify_every_updates": ("the two-state identity is checked at every saved observation; "
+                             "there is no separate fitted work to verify"),
+}
+
+
+def _refuse_retired_ais_keys(document: dict[str, Any]) -> None:
+    """The single-topology AIS keys, refused with what replaced them.
+
+    AIS switched ONE System along a REST2 tau until 0.5.4. It is now a linear transformation
+    between two end-state Systems, V(lambda) = (1 - lambda) V0 + lambda V1, and a configuration
+    naming a tau is describing an experiment this build does not run.
+    """
+    ais = document.get("ais")
+    if not isinstance(ais, dict):
+        return
+    stated = [key for key in RETIRED_AIS_KEYS if key in ais]
+    if not stated:
+        return
+    raise ConfigError(
+        f"ais.{', ais.'.join(stated)} {'is' if len(stated) == 1 else 'are'} retired: AIS is no "
+        f"longer a tau switch of one System. It is a linear transformation between two end "
+        f"states,\n"
+        f"      V(lambda) = (1 - lambda) V0 + lambda V1,   lambda 0 -> 1\n"
+        f"  with V0 given as -s/-p (the state the source ensemble was sampled from) and V1 as "
+        f"-s2/-p2.\n"
+        + "".join(f"    ais.{key}: {RETIRED_AIS_KEYS[key]}\n" for key in stated)
+        + "  For a REST2 switch from a scaled state to the physical Hamiltonian, V0 is the scaled "
+          "System the fixed-tau run integrated and V1 is build/built.xml. Delete these keys.")
+
+
 def resolve_md_config(path: Path | None, *, run_config: Path | None = None) -> dict[str, Any]:
     """Resolve a configuration, optionally layered with a per-run override.
 
@@ -746,6 +811,7 @@ def resolve_md_config(path: Path | None, *, run_config: Path | None = None) -> d
             raise ConfigError(f"{path}: no such configuration file")
     _refuse_retired_platform(document)
     _refuse_archived_rrest2(document)
+    _refuse_retired_ais_keys(document)
 
     # MERGED BEFORE `stated` IS TAKEN, not after. `stated` is what
     # `_apply_ais_reporting_defaults` consults to tell a value the user WROTE from one it
@@ -886,10 +952,11 @@ def _stage_plan_entries(resolved: dict[str, Any]) -> list[dict[str, Any]]:
         "collective_variables": dict(resolved.get("collective_variables") or {}),
     }
     plan: list[dict[str, Any]] = []
-    if resolved["protocol"] == "AIS":
+    if resolved["protocol"] == "AIS" and not (resolved.get("ais_source") or {}).get("generate"):
         # Deliberately empty. AIS consumes an equilibrium ensemble that already exists; giving it
         # a minimisation and equilibration chain would run those BEFORE its own input existed, and
-        # would quietly suggest the source is something this run produces.
+        # would quietly suggest the source is something this run produces. `ais_source.generate`
+        # is how a run says the source IS something it produces, and then the chain is real.
         return plan
     # `tau: 0.0` for minimisation, whatever the run's tau: `min/` and `input/min.in` are SHARED by
     # every method on the system, and a stage scales nothing -- minimisation minimises the unscaled
@@ -968,6 +1035,22 @@ def _stage_plan_entries(resolved: dict[str, Any]) -> list[dict[str, Any]]:
                      "umbrella_file": resolved["umbrella"]["file"],
                      "description": "Umbrella sampling: biased production with the restrained "
                                     "collective variables reported."})
+    if resolved["protocol"] == "AIS":
+        # THE SOURCE ENSEMBLE, as a production stage of V0. Named `source`, not `cMD`: its input
+        # `input/source.in` must not collide with a cMD run's production input on the same system,
+        # and the name says what the trajectory is FOR. It is conventional dynamics in every other
+        # respect, and fixed-volume exactly when the equilibration before it is.
+        plan.append({**common, "name": SOURCE_STAGE,
+                     "ensemble": "NVT" if fixed_volume else "NPT",
+                     "steps": stages["production_steps"],
+                     "restraint_kcal_per_mol_A2": 0.0,
+                     "phase_space_interval_steps": 0,
+                     "trajectory_interval_steps": rep["crd_printout_solute"],
+                     "whole_interval_steps": rep["crd_printout_whole"],
+                     "state_interval_steps": rep["info_printout"],
+                     "checkpoint_interval_steps": rep["checkpoint_printout"],
+                     "description": "The AIS source ensemble: production dynamics of V0, whose "
+                                    "whole-system trajectory the switching paths start from."})
     if resolved["protocol"] == "cMD":
         plan.append({**common, "name": "cMD",
                      "ensemble": "NVT" if fixed_volume else "NPT",
@@ -1060,7 +1143,9 @@ _IN_SECTIONS = {
     "REST2": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables",
                          "umbrella")),
               ("remd", ("rest2",))),
-    "AIS": (("cntrl", ("", "dynamics", "reporting", "collective_variables")),
+    # `stages` for AIS too: an AIS run that generates its own source ensemble runs a stage chain,
+    # and an `.in` without the stage lengths would not resolve back to its `resolved.config`.
+    "AIS": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables")),
             ("AIS", ("ais", "ais_source"))),
     # Umbrella is cMD with biases, so it writes cMD's block and adds the restraint file.
     "umbrella": (("cntrl", ("", "dynamics", "stages", "reporting", "collective_variables",
@@ -1371,8 +1456,15 @@ def _script_directories(plan: list[dict[str, Any]], *, run, dataset,
     directories: list[tuple[Path, dict[str, Any], str]] = []
     names = [stage["name"] for stage in plan]
     if "min" in names:
+        # NO COLLECTIVE VARIABLES, matching `input/min.in`, which omits them
+        # (`_NOT_IN_MINIMISATION_INPUT`): minimisation produces no series. Declaring them here
+        # while the input omits them made `md-run -i ../input/min.in -odir ../min` refuse every
+        # CV-enabled run at its first stage -- `collective_variables.file: was 'cv.<digest>.yaml',
+        # now None` -- because the declaration and the input it is compared against disagreed.
+        minimisation = dict(_method_neutral(resolved),
+                            collective_variables=_schema_defaults("collective_variables"))
         directories.append(
-            (dataset.min, _method_neutral(resolved),
+            (dataset.min, minimisation,
              "SHARED by every run on this system, so it carries no method identity: "
              "minimisation is the same physics whichever method follows it.", True))
     if any(name.startswith("eq_") for name in names):
@@ -1437,6 +1529,46 @@ def _place_definitions(directory: Path, copies: list[tuple[str, bytes]], *,
         path.write_bytes(payload)
         if note is not None:
             note(path)
+
+
+def _generated_cv_text(dataset, generator: str) -> str:
+    """The cv.yaml `collective_variables.generate` asks for, from this dataset's built System.
+
+    The bond graph is read from the SERIALISED System -- its bonds and its constraints -- rather
+    than from the PDB's CONECT records, because the System is what the run integrates and a PDB
+    writer is free to omit bonds a template supplied. The solute is `solute_atom_indices`, the one
+    definition every other part of a run means by "solute".
+    """
+    from openmm import HarmonicBondForce, XmlSerializer
+    from openmm.app import PDBFile
+
+    from ..cv.generate import GENERATORS, cv_document, cv_yaml_text, solute_torsions
+    from ..md.stage import solute_atom_indices
+
+    if generator not in GENERATORS:
+        raise ConfigError(f"collective_variables.generate = {generator!r}; this build generates "
+                          f"{list(GENERATORS)}")
+    topology = PDBFile(str(dataset.built("pdb"))).topology
+    system = XmlSerializer.deserialize(dataset.built("xml").read_text(encoding="utf-8"))
+    bonds: set[tuple[int, int]] = set()
+    for force in system.getForces():
+        if isinstance(force, HarmonicBondForce):
+            for index in range(force.getNumBonds()):
+                a, b, *_ = force.getBondParameters(index)
+                bonds.add((min(a, b), max(a, b)))
+    for index in range(system.getNumConstraints()):
+        a, b, _ = system.getConstraintParameters(index)
+        bonds.add((min(a, b), max(a, b)))
+    atoms = [{"name": atom.name, "residue_name": atom.residue.name,
+              "residue_id": atom.residue.id, "chain_id": atom.residue.chain.id}
+             for atom in topology.atoms()]
+    solute = solute_atom_indices(topology)
+    torsions = solute_torsions(atoms, bonds, solute)
+    if not torsions:
+        raise ConfigError(
+            f"collective_variables.generate = {generator!r} found no torsion in the solute of "
+            f"{dataset.built('pdb')} ({len(solute)} atoms): there is nothing to report.")
+    return cv_yaml_text(cv_document(atoms, torsions, source=generator))
 
 
 def _write_shared_input(path: Path, text: str, *, overwrite: bool) -> None:
@@ -1591,23 +1723,33 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
              '  echo "run.sh: no system at ${SYSTEM}" >&2; exit 2',
              'fi',
              '']
-    if protocol == "AIS":
+    generates_source = protocol == "AIS" and bool((resolved.get("ais_source") or {})
+                                                   .get("generate"))
+    if protocol == "AIS" and not generates_source:
         lines += [
             '# AIS starts from an equilibrium ensemble you have ALREADY produced. There is no',
             '# default for it: a wrong source is not a slower run, it is a different measurement.',
             'if [[ -z "${SOURCE}" ]]; then',
-            '  echo "usage: ./run.sh TOPOLOGY SYSTEM SOURCE_TRAJECTORY" >&2',
+            '  echo "usage: ./run.sh V0_TOPOLOGY V0_SYSTEM SOURCE_TRAJECTORY" >&2',
+            '  echo "       V1_TOPOLOGY=... V1_SYSTEM=... ./run.sh ...   (default: ../build/built.*)" >&2',
             '  echo "" >&2',
-            '  echo "AIS anneals away from an equilibrium ensemble and cannot generate one." >&2',
-            '  echo "Give it a finished fixed-tau run, for example ../hot/cMD.nc." >&2',
+            '  echo "AIS transforms V0, the state SOURCE was sampled from, into V1." >&2',
+            '  echo "Give it a finished run of V0, for example ../hot/whole_prod1.nc." >&2',
             '  exit 2',
             'fi',
             'if [[ ! -f "${SOURCE}" ]]; then',
             '  echo "run.sh: no source trajectory at ${SOURCE}" >&2; exit 2',
             'fi',
+            '# V1, the second end state. From the environment rather than a fourth positional',
+            '# argument, so everything after SOURCE is still forwarded to md-run unchanged.',
+            'V1_TOPOLOGY="${V1_TOPOLOGY:-${HERE}/../build/built.pdb}"',
+            'V1_SYSTEM="${V1_SYSTEM:-${HERE}/../build/built.xml}"',
+            'for file in "${V1_TOPOLOGY}" "${V1_SYSTEM}"; do',
+            '  if [[ ! -f "${file}" ]]; then echo "run.sh: no V1 file at ${file}" >&2; exit 2; fi',
+            'done',
             '',
             '# Paths are independent, so this parallelises by simply giving each worker its own:',
-            '#   NPROC=8 ./run.sh ../built.pdb ../built.xml ../hot/cMD.nc',
+            '#   NPROC=8 ./run.sh V0.pdb V0.xml ../hot/whole_prod1.nc',
             '# Which global path owns which AIS_trajNNNN.nc does not depend on NPROC.',
             'NPROC="${NPROC:-1}"',
             'LAUNCH=()',
@@ -1625,7 +1767,8 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
             # shared input is `dataset.stage_input("AIS")`, one level up from the run directory
             # this script sits in, which is what that resolves to for every protocol.
             '"${LAUNCH[@]}" md-openmm md-run -i ../input/AIS.in \\',
-            '  -p "${TOPOLOGY}" -s "${SYSTEM}" -source-traj "${SOURCE}" \\',
+            '  -p "${TOPOLOGY}" -s "${SYSTEM}" -p2 "${V1_TOPOLOGY}" -s2 "${V1_SYSTEM}" \\',
+            '  -source-traj "${SOURCE}" \\',
             '  -o AIS.out -log AIS.log "$@"',
             '']
     else:
@@ -1663,6 +1806,22 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
                 call.insert(2, f'  -c {previous} \\')
             lines += [f'echo "== {target["key"]} =="'] + call + ['']
             previous = target["restart_rel"]
+        if generates_source:
+            # THE SWITCHING PATHS, from the source stage this chain just ran. V0 is the saved
+            # scaled state the hot stages integrated; V1 is the built System minimisation used.
+            # No -source-traj: `resolved.config` names the source stage's own stream.
+            lines += [
+                '# Paths are independent, so this parallelises by giving each worker its own:',
+                '#   NPROC=8 ./run.sh',
+                'NPROC="${NPROC:-1}"',
+                'LAUNCH=()',
+                'if [[ "${NPROC}" -gt 1 ]]; then LAUNCH=(mpirun -n "${NPROC}"); fi',
+                '',
+                'echo "== AIS =="',
+                '"${LAUNCH[@]}" md-openmm md-run -i ../input/AIS.in \\',
+                '  -p "${TOPOLOGY}" -s "${SCALED_SYSTEM}" -p2 "${TOPOLOGY}" -s2 "${SYSTEM}" \\',
+                '  -o AIS.out -log AIS.log "$@"',
+                '']
         if protocol == "REST2":
             lines += ['# One rank per thermodynamic state. Any other world size is refused rather',
                       '# than silently reinterpreted: a ladder run in fewer processes than it has',
@@ -1701,19 +1860,19 @@ def _run_sh(plan: list[dict[str, Any]], *, protocol: str,
 
 
 _AIS_SCRIPT = '''#!/usr/bin/env python
-"""AIS: {paths} independent switching paths, tau {tau_start} -> {tau_end}.
+"""AIS: {paths} independent switching paths, V0 -> V1, V(lambda) = (1 - lambda) V0 + lambda V1.
 
-Generated by `md-openmm build-md`. An ENTRY POINT: the switching, the work convention and the tau
-scaling are the validated implementation in the installed md_tools package, and the settings are
-in `resolved.config` beside this file.
+Generated by `md-openmm build-md`. An ENTRY POINT: the switching and the work convention are the
+validated implementation in the installed md_tools package, and the settings are in
+`resolved.config` beside this file.
 
 AIS CONSUMES AN EQUILIBRIUM ENSEMBLE THAT ALREADY EXISTS. It has no minimisation or equilibration
 chain, because running one would produce a starting state that is not the ensemble the path is
-defined to begin in. Point -src at a finished fixed-tau run at tau = {tau_start}.
+defined to begin in. -s/-p are V0, the state -src was sampled from; -s2/-p2 are V1.
 
-    python AIS.py -p built.pdb -s built.xml -src ../hot/whole_prod1.nc
-    python AIS.py -p built.pdb -s built.xml -src ../hot/whole_prod1.nc --check     # validate only
-    python AIS.py -p built.pdb -s built.xml -src ../hot/whole_prod1.nc --paths 0-9
+    python AIS.py -p V0.pdb -s V0.xml -p2 V1.pdb -s2 V1.xml -src ../hot/whole_prod1.nc
+    python AIS.py ... --check          # validate only
+    python AIS.py ... --paths 0-9
 
 Each path is independent and has its own seeds. A completed path is skipped and never appended to;
 an interrupted one RESUMES from its last committed checkpoint generation, continuing the same
@@ -1878,6 +2037,11 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
     # provenance -- no stage name, key, ensemble, timestep or path depends on it -- so what is
     # validated here is what is generated below. Kept under separate names so neither pass can be
     # mistaken for the other.
+    if resolved["protocol"] == "AIS" and resolved["ais_source"].get("generate"):
+        # The source is this run's own `source` stage, so the resolved configuration names it --
+        # `resolved.config` then states where the paths start rather than leaving it to run.sh.
+        resolved["ais_source"] = dict(resolved["ais_source"],
+                                      trajectory=GENERATED_SOURCE_TRAJECTORY)
     chain_plan = stage_plan(resolved)
     chain_targets = _stage_targets(chain_plan, run=run, dataset=dataset)
     from ..run.preflight import PreflightError, validate_generated_chain
@@ -1955,6 +2119,18 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
     definition_copies: list[tuple[str, bytes]] = []
     cv_provenance = None
     cv_block = resolved.get("collective_variables") or {}
+    if cv_block.get("generate"):
+        # GENERATED, then treated exactly as a named file: written to the run root, parsed by the
+        # same loader, copied in content-addressed, and named in `file`. `generate` is cleared in
+        # the resolved configuration, so `resolved.config` states the definition the run measures
+        # rather than an instruction md-run could not carry out -- it has no built System to read.
+        generated_text = _generated_cv_text(dataset, str(cv_block["generate"]))
+        generated_source = out_dir / "cv.generated.yaml"
+        generated_source.write_text(generated_text, encoding="utf-8")
+        cv_block = dict(cv_block, file=str(generated_source), generate=None)
+        cv_generated_from = str(resolved["collective_variables"]["generate"])
+    else:
+        cv_generated_from = None
     if cv_block.get("file"):
         from ..cv import load_cv_definition
 
@@ -1963,10 +2139,18 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
             source = (Path(config_path).parent / source).resolve()
         # Parsed here, so a malformed definition is refused at BUILD time rather than by every
         # generated script at run time -- and refused once, with the path the person wrote.
-        definition = load_cv_definition(source)
+        from openmm.app import PDBFile
+
+        definition = load_cv_definition(
+            source, topology=PDBFile(str(dataset.built("pdb"))).topology
+            if cv_generated_from else None)
         copied = out_dir / f"cv.{definition.digest[:12]}.yaml"
         copied.write_bytes(source.read_bytes())
         definition_copies.append((copied.name, copied.read_bytes()))
+        if cv_generated_from:
+            # The copy IS the generated definition; the unaddressed draft it was parsed from would
+            # be a second copy of the same bytes under a name nothing reads.
+            source.unlink()
         # Only `file` changes in the resolved configuration -- it is a SETTINGS document, and its
         # schema rightly refuses keys that are not settings. Where the definition came from and
         # what it hashed to are provenance of the BUILD, and are recorded in the build record
@@ -1976,6 +2160,7 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
             "source_path": str(source),
             "source_sha256": definition.digest,
             "copied_as": copied.name,
+            "generated": cv_generated_from,
             "collective_variables": list(definition.names),
         }
 
@@ -2060,16 +2245,14 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
         # No `run` dict is embedded any more: the AIS script reads `resolved.config` beside it,
         # which is the single declaration of the workflow.
         path = out_dir / "AIS.py"
-        path.write_text(_AIS_SCRIPT.format(
-            paths=resolved["ais"]["number_of_paths"],
-            tau_start=resolved["ais"]["tau_start"], tau_end=resolved["ais"]["tau_end"]),
-            encoding="utf-8")
+        path.write_text(_AIS_SCRIPT.format(paths=resolved["ais"]["number_of_paths"]),
+                        encoding="utf-8")
         note(path)
         observations = (resolved["ais"]["switching_steps"]
                         // resolved["ais"]["observation_interval_steps"] + 1)
         log.heading("AIS")
         log.field("paths", resolved["ais"]["number_of_paths"])
-        log.field("tau", f"{resolved['ais']['tau_start']} -> {resolved['ais']['tau_end']}")
+        log.field("lambda", "0 -> 1: V0 (-s/-p) -> V1 (-s2/-p2), linear")
         switching_steps = resolved["ais"]["switching_steps"]
         log.field("switching", (f"{switching_steps} steps = "
                                 f"{switching_steps * numeric / 1000.0:g} ps") if numeric
@@ -2145,14 +2328,14 @@ def build_scripts(*, config_path: Path | None, out_dir: Path,
     # as repeats: if two methods on one system need different equilibration they are not
     # comparable and belong under a different `<system>`.
     if protocol == "AIS":
-        # AIS reads neither `min.in` nor `eq_*.in`: a switching campaign starts from a source
-        # ensemble that already exists, so it has no preparation chain of its own.
+        # A switching campaign that names its source reads neither `min.in` nor `eq_*.in`; one
+        # that generates it has the chain below as well, written like any other method's.
         _write_shared_input(
             dataset.stage_input("AIS"),
             in_file_text(resolved, heading=f"AIS: {resolved['ais']['number_of_paths']} switching "
                                            f"paths"), overwrite=overwrite)
         note(dataset.stage_input("AIS"))
-    else:
+    if plan:
         for stage in plan:
             target = targets[stage["name"]]
             # ONLY THE PREPARATION STAGES ARE WRITTEN IN THE SHARED FORM, and getting this wrong

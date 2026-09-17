@@ -4,9 +4,10 @@ These tests invoke the actual command, not a helper that bypasses it. AIS used t
 through `sys-config` + `md-gen`, and that retired route was the sole reason contract v1 and the old
 generator survived; a test that reached past the CLI would have let the same gap reopen quietly.
 
-The scientific contract asserted here is the one the previous implementation established:
-tau-only coordinates, an exact integer-step schedule including both endpoints, observation 0 before
-any work, independent per-path seeds, fixed volume, and a completed path that is never appended to.
+The scientific contract asserted here: lambda as the one public coordinate, running 0 -> 1 between
+two end-state files; an exact integer-step schedule including both endpoints; observation 0 before
+any work; independent per-path seeds; fixed volume; and a completed path that is never appended to.
+The single-topology tau switch this replaced is refused by name, never silently reinterpreted.
 """
 from __future__ import annotations
 
@@ -47,7 +48,7 @@ def _base(**patch) -> dict:
         "protocol": "AIS",
         "solvent": "implicit",
         "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "seed": 7},
-        "ais": {"number_of_paths": 3, "tau_start": 0.5, "tau_end": 0.0,
+        "ais": {"number_of_paths": 3,
                 "switching_steps": 200, "observation_interval_steps": 40,
                 "parameter_update_interval_steps": 1},
         "ais_source": {"trajectory": "../source.dcd"},
@@ -133,23 +134,52 @@ def test_run_sh_requires_the_source_explicitly(tmp_path):
     assert result.returncode == 2, result.stdout + result.stderr
     combined = result.stdout + result.stderr
     assert "SOURCE_TRAJECTORY" in combined, combined
-    assert "cannot generate one" in combined, combined
+    # ...and the usage says which end state the source belongs to, and where V1 comes from.
+    assert "V0_TOPOLOGY V0_SYSTEM SOURCE_TRAJECTORY" in combined, combined
+    assert "V1_TOPOLOGY" in combined and "V1_SYSTEM" in combined, combined
 
 
 # --- coordinates and the schedule ---------------------------------------------------------------
 
-def test_the_public_coordinate_is_tau_and_there_is_no_second_one(tmp_path):
-    """`s` may be derived inside the scaler; it is not an alternative persisted coordinate."""
-    _build_md(tmp_path, _base())
-    resolved = yaml.safe_load((tmp_path / "AIS-run1" / "resolved.config").read_text())
-    assert "tau_start" in resolved["ais"] and "tau_end" in resolved["ais"]
-    text = yaml.safe_dump(resolved["ais"])
-    for forbidden in ("\ns:", "sqrt_s", "lambda"):
-        assert forbidden not in text, f"the AIS config exposes {forbidden!r} as a coordinate"
+def test_lambda_is_the_one_public_coordinate_and_no_tau_is_persisted_in_the_ais_block(tmp_path):
+    """The schedule runs lambda 0 -> 1 and nothing else is a coordinate.
 
-    from md_tools.ais.run import OBSERVATION_COLUMNS
-    assert "tau" in OBSERVATION_COLUMNS
-    assert "s" not in OBSERVATION_COLUMNS and "sqrt_s" not in OBSERVATION_COLUMNS
+    Resolved through the real resolver rather than read back from a generated bundle, so the claim
+    does not depend on a build existing. `tau` is REST2's coordinate: a tau in the `ais` block would
+    describe the retired single-topology switch, and `s` or `sqrt(s)` were only ever derived from
+    it. Neither is resolved, and neither is a column.
+    """
+    path = tmp_path / "AIS.config"
+    path.write_text(yaml.safe_dump(_base(), sort_keys=False), encoding="utf-8")
+    resolved = resolve_md_config(path)
+    text = yaml.safe_dump({"ais": resolved["ais"], "ais_source": resolved["ais_source"]})
+    for forbidden in ("tau", "\ns:", "sqrt_s", "work_measurement", "verify_every_updates"):
+        assert forbidden not in text, f"the resolved AIS block persists {forbidden!r}"
+
+    from md_tools.ais.run import CV_COLUMNS, OBSERVATION_COLUMNS, STATE_COLUMNS, WORK_COLUMNS
+    assert "lambda" in OBSERVATION_COLUMNS
+    assert {"lambda_before", "lambda_after"} <= set(WORK_COLUMNS)
+    for columns in (OBSERVATION_COLUMNS, WORK_COLUMNS, STATE_COLUMNS, CV_COLUMNS):
+        assert not {"tau", "tau_before", "tau_after", "s", "sqrt_s"} & set(columns), columns
+
+
+@pytest.mark.parametrize("key, value", [
+    ("tau_start", 0.5), ("tau_end", 0.0), ("work_measurement", "work"),
+    ("verify_every_updates", 0),
+])
+def test_a_retired_single_topology_ais_key_is_refused_with_the_migration(tmp_path, key, value):
+    """A configuration naming a tau describes an experiment this build does not run.
+
+    Refused by name -- not as an unknown key, because it was not misspelled -- and told what
+    replaced it: two end-state files given as -s/-p and -s2/-p2. Through the real command, so the
+    refusal is the one a user sees, and before any output exists.
+    """
+    result = _build_md(tmp_path, _base(ais={key: value}))
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert f"ais.{key}" in combined and "retired" in combined, combined
+    assert "-s2/-p2" in combined, combined
+    assert not (tmp_path / "AIS-run1").exists()
 
 
 def test_every_length_is_an_integer_step_count(tmp_path):
@@ -166,17 +196,15 @@ def test_every_length_is_an_integer_step_count(tmp_path):
 def test_the_schedule_includes_both_endpoints_and_observation_zero_precedes_work():
     from md_tools.ais import switching_schedule
 
-    schedule = switching_schedule(tau_start=0.5, tau_end=0.0, switching_steps=200,
-                                  parameter_update_interval_steps=1,
+    schedule = switching_schedule(switching_steps=200, parameter_update_interval_steps=1,
                                   observation_interval_steps=40, timestep_fs=2.0)
     assert schedule["number_of_observations"] == 6
-    assert schedule["observations"][0]["tau"] == 0.5
-    assert schedule["observations"][-1]["tau"] == 0.0
+    assert schedule["observations"][0]["lambda"] == 0.0
+    assert schedule["observations"][-1]["lambda"] == 1.0
     assert schedule["observation_zero_precedes_all_work"] is True
 
 
 @pytest.mark.parametrize("patch, expected", [
-    ({"ais": {"tau_start": 0.5, "tau_end": 0.5}}, "never changes"),
     ({"ais": {"switching_steps": 15, "observation_interval_steps": 2}},
      "observation_interval_steps"),
     ({"ais": {"switching_steps": 12, "parameter_update_interval_steps": 2,
@@ -250,7 +278,13 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
         cwd=work, capture_output=True, text=True, timeout=1800)
     assert build.returncode == 0, build.stdout + build.stderr
 
-    # A short fixed-tau source ensemble at tau = 0.5: the ensemble AIS anneals away from.
+    # V0 is a SAVED scaled state (0.5.4): the scaler writes build/cMD/system_state0.xml, the hot
+    # run integrates it as it is, and AIS transforms from that same file to the physical built.xml.
+    from .conftest import make_scaled_state
+
+    v0 = make_scaled_state(work, tau=0.5, method="cMD")
+
+    # A short fixed-tau source ensemble at tau = 0.5: the V0 ensemble AIS transforms from.
     hot = work / "hot.config"
     hot.write_text(yaml.safe_dump({
         "protocol": "cMD", "solvent": "implicit",
@@ -264,28 +298,34 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
         "reporting": {"crd_printout_solute": 20, "crd_printout_whole": 20,
                       "info_printout": 100, "checkpoint_printout": 200},
     }, sort_keys=False), encoding="utf-8")
-    assert subprocess.run(
+    generated = subprocess.run(
         [sys.executable, "-m", "md_tools.cli.md_openmm", "build-md", "-odir", "./hot-run1",
-         "--config", str(hot)], cwd=work, capture_output=True, text=True).returncode == 0
-    ran = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml"],
-                         cwd=work / "hot-run1", capture_output=True, text=True, timeout=3600)
+         "--config", str(hot)], cwd=work, capture_output=True, text=True)
+    assert generated.returncode == 0, generated.stdout + generated.stderr
+    ran = subprocess.run(["bash", "run.sh"], cwd=work / "hot-run1", capture_output=True,
+                         text=True, timeout=3600)
     assert ran.returncode == 0, ran.stdout[-3000:] + ran.stderr[-3000:]
 
     result = _build_md(work, _base(ais_source={"trajectory": "../hot-run1/whole_prod1.nc"},
                                    dynamics={}))
     assert result.returncode == 0, result.stdout + result.stderr
 
-    ais = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml", "../hot-run1/whole_prod1.nc"],
+    assert v0 == work / "build" / "cMD" / "system_state0.xml"
+    ais = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/cMD/system_state0.xml",
+                          "../hot-run1/whole_prod1.nc"],
                          cwd=work / "AIS-run1", capture_output=True, text=True, timeout=3600)
     assert ais.returncode == 0, ais.stdout[-3000:] + ais.stderr[-3000:]
 
     record = read_record(work / "AIS-run1" / "AIS.log")
     assert record["status"] == "completed"
     assert record["platform"]["name"] in (None, "CUDA")
-    assert record["thermodynamic_states"]["source_tau"] == 0.5
-    assert record["thermodynamic_states"]["target_tau"] == 0.0
+    assert record["thermodynamic_states"]["source"] == "V0"
+    assert record["thermodynamic_states"]["target"] == "V1"
     assert "no barostat" in record["thermodynamic_states"]["ensemble"]
-    assert "U(tau_{j+1}, x_j) - U(tau_j, x_j)" in record["work_convention"]
+    assert "V(lambda_{j+1}, x_j) - V(lambda_j, x_j)" in record["work_convention"]
+    # The unrestrained hot production integrated -s unmodified, so its whole stream records V0's
+    # digest and the source is VERIFIED rather than asserted.
+    assert record["source"]["ensemble"]["status"] == "verified", record["source"]["ensemble"]
 
     totals = []
     for index in range(3):
@@ -295,19 +335,19 @@ def test_ais_runs_through_the_real_cli_and_keeps_its_work_contract(tmp_path):
 
         # Observation 0 is the source configuration, before any parameter change: exactly zero.
         assert float(rows[0]["cumulative_work_kj_mol"]) == 0.0
-        assert float(rows[0]["tau"]) == 0.5
-        assert float(rows[-1]["tau"]) == 0.0
+        assert float(rows[0]["lambda"]) == 0.0
+        assert float(rows[-1]["lambda"]) == 1.0
 
-        # tau decreases monotonically and the cumulative work is the running sum of increments.
-        taus = [float(r["tau"]) for r in rows]
-        assert taus == sorted(taus, reverse=True)
+        # lambda increases monotonically and the cumulative work is the running sum of increments.
+        lambdas = [float(r["lambda"]) for r in rows]
+        assert lambdas == sorted(lambdas)
         running = 0.0
         for row in rows[1:]:
             running += float(row["incremental_work_kj_mol"])
             assert float(row["cumulative_work_kj_mol"]) == pytest.approx(running, rel=1e-9)
 
-        # tau is the only persisted coordinate.
-        assert "s" not in rows[0] and "sqrt_s" not in rows[0]
+        # lambda is the only persisted coordinate.
+        assert not {"tau", "s", "sqrt_s"} & set(rows[0])
 
         # The reduced work is W / RT and nothing else. It was once W times the box's beta ANGLE:
         # the trajectory writer unpacked `a, b, c, alpha, beta, gamma`, which made `beta` local to

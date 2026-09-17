@@ -27,6 +27,7 @@ and hands the work to the same function a generated script calls — `stage_main
 ```text
 -i mdin   -o mdout   -p topology   -c input restart   -r output restart   -x trajectory
 -s the serialised OpenMM System (no Amber counterpart)   -log the provenance record
+-s2 / -p2  AIS only: the second end state V1 (sander's second group; refused by name elsewhere)
 ```
 
 `-x` is never the System. `-s` is required, `-x` is optional with a protocol default, and both
@@ -83,7 +84,8 @@ resolver at execution, and bound into the checkpoint fingerprint.
 
 ONE REST2 scaler, and it runs in ONE place: `md-openmm build-top --rest2-scaler`, which writes
 every scaled Hamiltonian a run will integrate as a file (see the invariants below). A stage and a
-ladder never scale. `md_tools/openmm/templates/` is gone —
+ladder never scale, and AIS scales nothing: it mixes two end-state Systems it is given.
+`md_tools/openmm/templates/` is gone —
 it held installed runtime code, not templates. `md_tools.runtime` is compatibility-only: it
 re-exports and defines nothing, and new work must not import from it.
 
@@ -155,26 +157,33 @@ Do not change these without a failing test that demonstrates a defect.
   launches from the run directory with `-odir .` -- and any other `-odir` is refused before
   output. A REST2 reference bundle carries the saved states byte for byte, with `scaler.yaml` and
   the built System that `verify_rungs.py` re-derives them from.
-* **AIS**: `tau` is the only public, persisted coordinate — never persist `s` or `sqrt(s)`.
-  Work is `ΔW_j = U(τ_{j+1}, x_j) − U(τ_j, x_j)`: parameters move at frozen coordinates, then the
+* **AIS**: a transformation between two end-state Systems with identical particles, masses and
+  constraints, `V(λ) = (1−λ)V0 + λV1`. V0 is `-s`/`-p`, the state the source ensemble was sampled
+  from; V1 is `-s2`/`-p2`. `λ` is the only public, persisted coordinate and runs 0 → 1 — a reverse
+  switch exchanges the files, never runs the schedule downhill. Work is
+  `ΔW_j = V(λ_{j+1}, x_j) − V(λ_j, x_j)`: parameters move at frozen coordinates, then the
   configuration propagates. Observation 0 precedes all work and has exactly zero. Switching is at
-  fixed volume; a barostat in the System is refused.
-* **The potential is exactly quadratic in `a = 1 − τ`, and there are TWO probes of it.** With
-  `λ = a²`: unscaled terms carry `λ⁰`, solute–environment terms `sqrt(λ) = a`, solute–solute terms
-  `λ = a²`, so
-  `U(τ,x) = U_non_scaled + sqrt(λ)·U_sqrt_scaled + λ·U_lin_scaled` is an IDENTITY — including the
-  PME reciprocal sum, the Ewald self-energy and the dispersion correction. `md_tools.ais.
-  decomposition` measures it with three energy evaluations at `a ∈ {0, ½, 1}` and one exact
-  quadratic.
+  fixed volume; a barostat in either System is refused. A pair that differs in anything but
+  parameters — particles, masses, constraints, force layout, long-range treatment — is refused;
+  atom mapping and softcore are not implemented. A source trajectory recording a System digest
+  must record V0's. `ais.tau_start`, `tau_end`, `work_measurement` and `verify_every_updates` are
+  retired and refused with the migration.
+* **The potential is exactly linear in λ, and there are TWO probes of it.**
+  `V(λ, x) = (1−λ)V0(x) + λV1(x)` is an IDENTITY at every coordinate, PME and dispersion correction
+  included, because each end state is evaluated exactly as its own System would evaluate it
+  (`md_tools.ais.two_state`: shared forces once, differing force pairs as the collective variables
+  of one `CustomCVForce`, `λ` a Context parameter). `dV/dλ = V1 − V0`, so
+  `ΔW_j = (λ_{j+1} − λ_j)·(V1 − V0)(x_j)` exactly — one evaluation per switch. The finite
+  difference stays the DEFINITION so a future non-linear schedule cannot change what work means.
   The **work-basis probe** runs at the frozen pre-switch `x_j`, which is where the work convention
   defines work. The **observation-potential probe** runs at the coordinate a row SAVES, under that
-  row's τ, which is what Hummer–Szabo reweighting consumes. They are different coordinates and
+  row's λ, which is what Hummer–Szabo reweighting consumes. They are different coordinates and
   must never be confused: writing the first under names that read as the second pairs the work of
   one configuration with the energy of another, silently. A row naming a `coordinate_frame_index`
-  carries potentials recomputed at that frame; a row with no saved coordinate leaves them EMPTY
-  rather than borrowing a neighbour's. `AIS_hs.csv` is the frame-aligned subset.
-  Both totals are written — `potential_reconstructed_kj_mol` and `potential_direct_kj_mol` — so
-  the identity is checkable from the file.
+  carries `potential_v0_kj_mol`, `potential_v1_kj_mol` and `potential_direct_kj_mol` measured at
+  that frame, with `V1 − V0` checked against an independent evaluation; a row with no saved
+  coordinate leaves them EMPTY rather than borrowing a neighbour's. `AIS_hs.csv` is the
+  frame-aligned subset.
 * **One cMD resume contract, and `--resume` is not required.** An INTERRUPTED stage — one whose
   committed checkpoint is short of its step count — continues automatically, with every appendable
   stream (DCD, state CSV, phase-space NetCDF) truncated to the counts that generation vouches for.
@@ -186,7 +195,10 @@ Do not change these without a failing test that demonstrates a defect.
 * **An interrupted AIS path resumes mid-path**, from its last committed generation. The older
   claim that a switching path has no meaningful mid-path restart had the premise right (the work
   integral is defined along a whole path) and the conclusion wrong: a resume continues *that*
-  path. A completed path is skipped only after its manifest and the sha256 of every output it
+  path. Resume is exact in COMMITTED STATE — λ, accumulated work, counters, positions,
+  velocities, stream counts — and not in trajectory on CUDA: the mixing force's inner Contexts
+  keep atom-ordering state no checkpoint captures, so the continuation is a new realisation of the
+  same switching process (decided 2026-09-16). On CPU and Reference it reproduces exactly. A completed path is skipped only after its manifest and the sha256 of every output it
   claims verify.
 * **Lengths are integer step counts**, everywhere. Logs derive ps/ns for the reader. A schedule
   that would have to be rounded is refused with the arithmetic that would fix it.
@@ -220,8 +232,8 @@ Do not change these without a failing test that demonstrates a defect.
   wrapper: it makes the unsafe path look tested. "Calls the preflight and ignores what it returns"
   is the same defect wearing a better name — if a runtime re-resolves the platform, the machine
   settings or the MPI world, there are two policies again.
-* **An output directory has ONE identity.** `AIS_run.json` records the source digest, the tau
-  schedule, the seed policy, the selected frames, the reporting schema, the path count and the
+* **An output directory has ONE identity.** `AIS_run.json` records the source digest, both
+  end-state digests, the λ schedule, the seed policy, the selected frames, the reporting schema, the path count and the
   column schema. A second invocation into the same `-odir` with any of those changed is refused by
   name: the completed paths would be skipped, the rest run under the new settings, and the work
   table assembled out of two different experiments — readable, and describing neither.

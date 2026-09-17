@@ -69,8 +69,7 @@ def scaling_for_tau(tau):
 
 #: The coupling amplitude `a = 1 - tau`. Every scale factor in this convention is a power of it:
 #: solute-environment terms carry `a`, solute-solute terms `a^2`, and everything else `a^0`. That
-#: makes the potential an exact quadratic polynomial in `a` at frozen coordinates, which is what
-#: `md_tools.ais.decomposition` measures.
+#: makes the potential an exact quadratic polynomial in `a` at frozen coordinates.
 def amplitude_for_tau(tau):
     """`a = 1 - tau`, the coupling amplitude. The one conversion; never stored as a coordinate."""
     return 1.0 - float(tau)
@@ -440,15 +439,12 @@ def audit_force_classes(system, where="tau scaling"):
 
 
 def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=(),
-                        prepare_for_switching=False, unscaled_impropers=True):
+                        unscaled_impropers=True):
     """A copy of `base_system` with the solute Hamiltonian scaled for this rung.
 
-    `prepare_for_switching` matters only at tau = 0, where s = 1 and the scaling arithmetic is a
-    no-op. A REST2 rung there wants the untouched System and gets it. An AIS path there needs the
-    System to already carry the CustomGBForce global scale parameter, because the energy
-    expressions that reference it are compiled when the Context is created and cannot be rewritten
-    afterwards -- so a path that starts at tau = 0 and moves away from it would have no way to
-    scale the generalised-Born energy at all.
+    At tau = 0 the result is an untouched clone. (A `prepare_for_switching` flag used to make that
+    clone carry the CustomGBForce scale parameter for the single-topology AIS, which switched tau
+    on a live Context; it was retired with that AIS in 0.5.4.)
     """
     solute_solute, solute_environment = scaling_for_tau(tau)
     # Before touching anything: refuse a System carrying an energy term that cannot be placed.
@@ -456,7 +452,7 @@ def build_scaled_system(base_system, solute_indices, tau, excluded_bonds=(),
     # half-scaled System that looks finished.
     audit_force_classes(base_system)
     system = clone_system(base_system)
-    if solute_solute == 1.0 and not prepare_for_switching:
+    if solute_solute == 1.0:
         return system                              # the cold replica is the unmodified system
     solute = set(int(i) for i in solute_indices)
     excluded = {frozenset((int(a), int(b))) for a, b in excluded_bonds}

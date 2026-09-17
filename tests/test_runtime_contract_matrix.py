@@ -25,7 +25,7 @@ import pytest
 # `tests` is a package, so the harness is imported relatively. Shared rather than copied: two
 # copies of `_refused` would drift, and the copy that stopped rejecting argparse errors would be
 # the one whose tests still passed.
-from .test_direct_runtime_preflight import (ENTRY, MODES, PROTOCOL_ONLY,  # noqa: F401
+from .test_direct_runtime_preflight import (ENTRY, MODES, PROTOCOL_ONLY, V1,  # noqa: F401
                                             VALID_USER, _config, _launch, _refused, _run,
                                             _snapshot, workspace)
 
@@ -385,13 +385,15 @@ def _identity_document(**overrides):
 
     document = {
         "schema": "md-ais-run-identity", "schema_version": RUN_IDENTITY_VERSION,
-        "fingerprint": "f" * 64, "topology": {"name": "t.pdb", "sha256": "t" * 64},
-        "system": {"sha256": "s" * 64}, "source": {"sha256": "x" * 64, "format": "dcd"},
-        "tau": {"start": 0.5, "end": 0.0, "interpolation": "linear"},
+        "fingerprint": "f" * 64,
+        "end_states": {"V0": {"system": "s" * 64, "topology": "t" * 64},
+                       "V1": {"system": "u" * 64, "topology": "t" * 64}},
+        "source": {"sha256": "x" * 64, "format": "dcd"},
+        "lambda": {"start": 0.0, "end": 1.0, "interpolation": "linear"},
         "schedule": {"switching_steps": 10}, "reporting": {"crd_printout_solute": 5},
         "seed_policy": {"seed": 1, "derivation": "derive_seed(seed, 'ais', path_index, role)"},
         "number_of_paths": 2, "selected_frames": [0, 1],
-        "observation_columns": [], "decomposition_schema": {"name": "ais", "version": 1},
+        "observation_columns": [], "ais_schema": {"name": "two-state-linear", "version": 1},
         "resolved_config": None,
     }
     document.update(overrides)
@@ -520,8 +522,8 @@ def test_an_incompatible_ais_source_refuses_without_creating_the_directory(works
     mdtraj.join([frames] * 5).save_dcd(str(other))          # a different length, so a different digest
 
     done = _run([sys.executable, str(workspace / ENTRY["AIS"][0]),
-                 "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination),
-                 "-source-traj", str(other), *PROTOCOL_ONLY],
+                 "-p", "../build/built.pdb", "-s", "../build/built.xml", *V1,
+                 "-odir", str(destination), "-source-traj", str(other), *PROTOCOL_ONLY],
                 cwd=workspace / Path(ENTRY["AIS"][0]).parent, environment=good_config)
     _refused(done, fragment="different AIS run")
     _untouched(destination, before)
@@ -543,10 +545,12 @@ def test_an_ais_refusal_on_a_fresh_directory_leaves_it_absent(workspace, tmp_pat
     mdtraj.join([sliced] * 4).save_dcd(str(wrong))
 
     done = _run([sys.executable, str(workspace / ENTRY["AIS"][0]),
-                 "-p", "../build/built.pdb", "-s", "../build/built.xml", "-odir", str(destination),
-                 "-source-traj", str(wrong), *PROTOCOL_ONLY],
+                 "-p", "../build/built.pdb", "-s", "../build/built.xml", *V1,
+                 "-odir", str(destination), "-source-traj", str(wrong), *PROTOCOL_ONLY],
                 cwd=workspace / Path(ENTRY["AIS"][0]).parent, environment=good_config)
-    assert done.returncode != 0, done.stdout + done.stderr
+    # Refused for the source of the wrong system, not for a missing -s2: without V1 the launch
+    # never reaches the source at all, and this test would pass on a refusal it is not about.
+    _refused(done, fragment="wrong.dcd")
     assert not destination.exists(), sorted(p.name for p in destination.iterdir())
 
 

@@ -70,6 +70,10 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         # Torsion collective-variable reporting. `cv_file` rather than `file`, because a bare
         # `file` in an &cntrl block reads as "the input file" to anyone who has written an mdin.
         "cv_file": "collective_variables.file",
+        # Expressible so the language covers the model, and REFUSED when set (see
+        # `parse_run_input`): generating a definition needs the built System, which is
+        # `build-md`'s input, not a run's.
+        "cv_generate": "collective_variables.generate",
         "cv_interval_steps": "collective_variables.interval_steps",
         # Beside the CV keys deliberately: an umbrella restraint names a variable
         # from `cv_file`, so the two are read together or the restraint has nothing
@@ -94,14 +98,15 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
     },
     "AIS": {
         "number_of_paths": "ais.number_of_paths",
-        "tau_start": "ais.tau_start",
-        "tau_end": "ais.tau_end",
         "switching_steps": "ais.switching_steps",
         "observation_interval_steps": "ais.observation_interval_steps",
         "parameter_update_interval_steps": "ais.parameter_update_interval_steps",
-        # Spelled out. This one decides what the run COSTS and what it can be reweighted with
-        # afterwards, and an abbreviation would make the most consequential line in an AIS input
-        # the least readable one.
+        # RETIRED with the single-topology AIS. Still mapped, so an old input reaches
+        # `build.md._refuse_retired_ais_keys` and is told what replaced each one, rather than
+        # being refused as four unknown words. Never written: a resolved config has no value
+        # for them.
+        "tau_start": "ais.tau_start",
+        "tau_end": "ais.tau_end",
         "work_measurement": "ais.work_measurement",
         "verify_every_updates": "ais.verify_every_updates",
         "source_frame_start": "ais_source.first_frame",
@@ -110,6 +115,8 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         "source_frame_selection": "ais_source.selection",
         "allow_repeated_frames": "ais_source.allow_repeated_frames",
         "source_traj": "ais_source.trajectory",
+        # true: this run's own `source` stage produced the trajectory above (build-md sets it).
+        "source_generate": "ais_source.generate",
         "source_topology": "ais_source.topology",
         # accepted in this section too, so an AIS input reads as one block
         "timestep_fs": "dynamics.timestep_fs",
@@ -122,6 +129,10 @@ SECTION_KEYS: dict[str, dict[str, str]] = {
         # Torsion collective-variable reporting. `cv_file` rather than `file`, because a bare
         # `file` in an &cntrl block reads as "the input file" to anyone who has written an mdin.
         "cv_file": "collective_variables.file",
+        # Expressible so the language covers the model, and REFUSED when set (see
+        # `parse_run_input`): generating a definition needs the built System, which is
+        # `build-md`'s input, not a run's.
+        "cv_generate": "collective_variables.generate",
         "cv_interval_steps": "collective_variables.interval_steps",
         # Beside the CV keys deliberately: an umbrella restraint names a variable
         # from `cv_file`, so the two are read together or the restraint has nothing
@@ -333,5 +344,12 @@ def parse_run_input(path: str | Path, *, source_trajectory: str | None = None,
         # Re-point the message at the file the user actually wrote.
         raise ConfigError(str(invalid).replace(str(projected), str(path))) from None
 
+    if (resolved.get("collective_variables") or {}).get("generate"):
+        raise ConfigError(
+            f"{path}: cv_generate = {resolved['collective_variables']['generate']} asks for a "
+            f"collective-variable definition to be GENERATED, and that happens in `md-openmm "
+            f"build-md`, which reads the built System. A run input names the definition it "
+            f"measures: set cv_file to the generated cv.<digest>.yaml, or regenerate with "
+            f"build-md.")
     return RunInput(path=path, protocol=resolved["protocol"], stage=stage, resolved=resolved,
                     sections=tuple(seen_sections))

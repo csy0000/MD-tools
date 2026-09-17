@@ -4,7 +4,8 @@ The gate on `resolved.config` compared two resolved documents as dictionaries, s
 at all refused. That is the wrong instrument, and it failed in the field: `ais.work_measurement`
 and `ais.verify_every_updates` were added to the schema with defaults, and every REST2
 `resolved.config` written before that commit therefore differs from every one written after -- by
-two settings a REST2 run never reads.
+two settings a REST2 run never reads. (Both are retired now, with the single-topology AIS; a
+`resolved.config` written while they existed still carries them, so the regression still applies.)
 
 The consequence was not cosmetic. Every in-flight ladder became unresumable, the only exit being
 `--overwrite`, which destroys the outputs. Three 500 ns ladders were restarted from zero. An
@@ -137,15 +138,18 @@ def test_the_schema_version_is_never_itself_a_difference():
 def test_an_ais_run_compares_its_own_sections_and_a_rest2_run_does_not():
     """Section relevance is per protocol, and it comes from one place.
 
-    `ais.work_measurement` is invisible to REST2 and decisive for AIS -- the same field, and the
-    difference is which run is being resumed.
+    `ais.switching_steps` is invisible to REST2 and decisive for AIS -- the same field, and the
+    difference is which run is being resumed. (This used `ais.work_measurement`, retired with the
+    single-topology AIS; the claim is about section relevance, not about that field.)
     """
     stored_ais = {"schema_version": resume_identity.SCHEMA_VERSION, "protocol": "AIS",
                   "solvent": "explicit", "dynamics": {}, "reporting": {},
                   "collective_variables": {},
-                  "ais": {"work_measurement": "components"}, "ais_source": {}}
-    changed = dict(stored_ais, ais={"work_measurement": "work"})
-    assert resume_identity.differences(stored_ais, changed) == ["ais.work_measurement"]
+                  "ais": {"switching_steps": 250}, "ais_source": {}}
+    changed = dict(stored_ais, ais={"switching_steps": 500})
+    assert resume_identity.differences(stored_ais, changed) == ["ais.switching_steps"]
+    assert resume_identity.differences(
+        dict(stored_ais, protocol="REST2", rest2={}), dict(changed, protocol="REST2", rest2={})) == []
 
     assert "rest2" not in resume_identity.sections_for("AIS")
     assert "ais" not in resume_identity.sections_for("REST2")

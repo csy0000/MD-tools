@@ -46,12 +46,27 @@ def project(tmp_path_factory):
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
     root = tmp_path_factory.mktemp("ais-cv-damage")
+    # `build/` beside the run: `build-md` validates the chain against the dataset's built System.
+    (root / "build").mkdir()
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
+
+    # V1, the second end state: the REST2 scaling of `built.xml` at tau = 0.5, a parameter-only
+    # edit of this very System. A copy of `built.xml` would be refused as the same Hamiltonian.
+    from openmm import XmlSerializer
+    from openmm.app import PDBFile
+
+    from md_tools.md.stage import solute_atom_indices
+    from md_tools.rest2.hamiltonian import build_scaled_system
+
+    base = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
+    solute = solute_atom_indices(PDBFile(str(root / "build" / "built.pdb")).topology)
+    (root / "build" / "V1.xml").write_text(
+        XmlSerializer.serialize(build_scaled_system(base, solute, 0.5)), encoding="utf-8")
     (root / "cv.yaml").write_text(
         "schema_version: 1\ncollective_variables:\n"
         "  - {name: phi, type: torsion, atom_indices: [4, 6, 8, 14]}\n", encoding="utf-8")
@@ -72,7 +87,7 @@ def project(tmp_path_factory):
 
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
     return root
 
@@ -87,7 +102,8 @@ def _run(project: Path, destination: Path, *extra, expect=0):
     base["MD_TOOLS_CONFIG"] = str(user)
     done = subprocess.run(
         [sys.executable, str(project / "AIS" / "AIS.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
+         "-p2", str(project / "build" / "built.pdb"), "-s2", str(project / "build" / "V1.xml"),
          "-source-traj", str(project / "source.dcd"),
          "-odir", str(destination), "--cpu", *extra],
         cwd=project / "AIS", capture_output=True, text=True, timeout=1800, env=base)

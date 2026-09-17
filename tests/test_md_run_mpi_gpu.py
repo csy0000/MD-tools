@@ -61,7 +61,21 @@ def built(tmp_path_factory):
     done = _cli(work, "build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
                 "-log", "build/built.log", "--config", str(work / "sys.config"))
     assert done.returncode == 0, done.stdout + done.stderr
+
+    # V0 FOR THE AIS CAMPAIGNS: the SAVED REST2 state at tau = 0.5 of `built.xml`
+    # (`build/cMD/system_state0.xml`, from the one scaler), which is the Hamiltonian the `source`
+    # ensemble below integrates as it is. V1 is `built.xml` itself, so each campaign transforms the
+    # tau = 0.5 ensemble into the unscaled one. Written into `build/` before any campaign copies it.
+    from .conftest import make_scaled_state
+
+    make_scaled_state(work, tau=0.5, method="cMD")
     return work
+
+
+#: The two AIS end states, relative to a campaign's run directory. V0 is the source ensemble's
+#: Hamiltonian; V1 is the unscaled built System.
+END_STATES = ("-p", "../build/built.pdb", "-s", "../build/cMD/system_state0.xml",
+              "-p2", "../build/built.pdb", "-s2", "../build/built.xml")
 
 
 # --- a two-rank REST2 ladder ------------------------------------------------------------------
@@ -193,7 +207,7 @@ def _ais_project(built: Path, name: str, paths: int, source: Path) -> Path:
     config.write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit",
         "dynamics": {"seed": 5},
-        "ais": {"number_of_paths": paths, "tau_start": 0.5, "tau_end": 0.0,
+        "ais": {"number_of_paths": paths,
                 "switching_steps": 10, "observation_interval_steps": 5},
         "ais_source": {"trajectory": str(source)}}, sort_keys=False),
         encoding="utf-8")
@@ -220,7 +234,7 @@ def source(built):
                       "info_printout": 100,
                       "checkpoint_printout": 1000}}, sort_keys=False), encoding="utf-8")
     assert _cli(root, "build-md", "-odir", "./source-run1", "--config", str(config)).returncode == 0
-    done = subprocess.run(["bash", "run.sh", "../build/built.pdb", "../build/built.xml"],
+    done = subprocess.run(["bash", "run.sh"],
                           cwd=root / "source-run1", capture_output=True, text=True, timeout=3600)
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
     return root / "source-run1" / "whole_prod1.nc"
@@ -230,7 +244,7 @@ def source(built):
 def hundred(built, source):
     _require_mpi()
     out = _ais_project(built, "ais100", 100, source)
-    done = _md_run(out, "-ng", "4", "-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
+    done = _md_run(out, "-ng", "4", "-i", "../input/AIS.in", *END_STATES,
                    "-source-traj", str(source), "-odir", ".", "-log", "AIS.log",
                    ranks=4)
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
@@ -253,7 +267,7 @@ def test_every_path_trajectory_holds_its_endpoints(hundred):
         assert trajectory.n_frames == 3, (path_id, trajectory.n_frames)
         rows = list(csv.DictReader((hundred / f"path_{path_id:04d}" / "observations.csv").open()))
         assert [int(r["protocol_step"]) for r in rows] == [0, 5, 10], rows
-        assert float(rows[0]["tau"]) == 0.5 and float(rows[-1]["tau"]) == 0.0
+        assert float(rows[0]["lambda"]) == 0.0 and float(rows[-1]["lambda"]) == 1.0
 
 
 def test_the_work_table_is_complete_uniquely_keyed_and_deterministically_ordered(hundred):
@@ -296,8 +310,8 @@ def test_path_identity_does_not_depend_on_the_worker_count(built, source):
     tables = {}
     for ranks in (1, 3):
         out = _ais_project(built, f"ais_n{ranks}", 12, source)
-        done = _md_run(out, "-ng", str(ranks), "-i", "../input/AIS.in", "-p", "../build/built.pdb",
-                       "-s", "../build/built.xml", "-source-traj", str(source),
+        done = _md_run(out, "-ng", str(ranks), "-i", "../input/AIS.in", *END_STATES,
+                       "-source-traj", str(source),
                        "-odir", ".", "-log", "AIS.log", ranks=ranks)
         assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
         tables[ranks] = {r["path_index"]: r
@@ -321,7 +335,7 @@ def test_a_rerun_does_not_touch_a_path_that_already_completed(built, source):
     no-op, and that is what is asserted here; `--overwrite` gets its own test below.
     """
     out = _ais_project(built, "ais_restart", 4, source)
-    argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
+    argv = ("-i", "../input/AIS.in", *END_STATES,
             "-source-traj", str(source), "-odir", ".", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
 
@@ -347,7 +361,7 @@ def test_overwrite_starts_the_ais_directory_over(built, source):
     adopted.
     """
     out = _ais_project(built, "ais_overwrite", 4, source)
-    argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
+    argv = ("-i", "../input/AIS.in", *END_STATES,
             "-source-traj", str(source), "-odir", ".", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
     assert len(sorted(out.glob("AIS_traj*.nc"))) == 4
@@ -506,7 +520,7 @@ def test_a_source_whose_suffix_and_contents_disagree_is_refused(built, source, t
     mislabelled = built / "mislabelled.dcd"
     mislabelled.write_bytes(source.read_bytes())
     out = _ais_project(built, "ais_mislabelled", 2, source)
-    done = _md_run(out, "-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
+    done = _md_run(out, "-i", "../input/AIS.in", *END_STATES,
                    "-source-traj", "../mislabelled.dcd", "-odir", ".",
                    "-o", "AIS.out", "-log", "AIS.log")
     assert done.returncode != 0
@@ -527,7 +541,7 @@ def _cadence_project(built: Path, name: str, source: Path) -> Path:
     config = root / f"{name}.config"
     config.write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit", "dynamics": {"seed": 5},
-        "ais": {"number_of_paths": 2, "tau_start": 0.5, "tau_end": 0.0,
+        "ais": {"number_of_paths": 2,
                 "switching_steps": 1000, "parameter_update_interval_steps": 1,
                 "observation_interval_steps": 100},
         "ais_source": {"trajectory": str(source)},
@@ -547,7 +561,7 @@ def test_each_ais_cadence_controls_its_own_stream(built, source):
     import mdtraj
 
     out = _cadence_project(built, "cadences", source)
-    done = _md_run(out, "-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
+    done = _md_run(out, "-i", "../input/AIS.in", *END_STATES,
                    "-source-traj", str(source), "-odir", ".",
                    "-o", "AIS.out", "-log", "AIS.log")
     assert done.returncode == 0, done.stdout[-3000:] + done.stderr[-3000:]
@@ -572,7 +586,15 @@ def test_each_ais_cadence_controls_its_own_stream(built, source):
 
 
 def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, source):
-    """Crash a real run mid-path DETERMINISTICALLY, resume it, and compare with an uninterrupted one.
+    """Crash a real run mid-path DETERMINISTICALLY, resume it, and check what it continued from.
+
+    EXACT RESTORATION, NOT A BIT-IDENTICAL CONTINUATION. On CUDA the two-state mixing force's
+    inner Contexts keep atom-ordering state no checkpoint captures, so a resumed path is the same
+    switching process continued from the same committed instant -- a new realisation past that
+    point, not the uninterrupted trajectory (decided 2026-09-16). What IS exact, and asserted:
+    the committed rows and frames survive byte for byte, lambda is the schedule's value at the
+    committed update, the cumulative work carries across the boundary unchanged, the counters
+    only grow, and the finished path is complete and valid.
 
     The interruption is injected at a checkpoint transaction boundary rather than produced by a
     stopwatch. An earlier version killed the process after a fixed number of seconds and skipped
@@ -587,7 +609,7 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
     from md_tools.openmm.checkpoint import FAULT_ENVIRONMENT
 
     out = _cadence_project(built, "resume", source)
-    argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
+    argv = ("-i", "../input/AIS.in", *END_STATES,
             "-source-traj", str(source), "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
 
     crashed = subprocess.run(["md-openmm", "md-run", *argv], cwd=out, capture_output=True,
@@ -605,6 +627,16 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
     # Nothing is published until a path is complete and validated.
     assert not (out / committed["state"]["trajectory"]).exists(), \
         "a half-written path was published under its final name"
+
+    # THE COMMITTED INSTANT, taken before the resume touches anything: the generation's state,
+    # the observation rows it vouches for, and the staged frames it vouches for.
+    snapshots = {}
+    for directory in interrupted:
+        state = read_committed(directory)["state"]
+        rows = list(csv.DictReader((directory / "observations.csv").open()))
+        with mdtraj.formats.NetCDFTrajectoryFile(str(directory / "frames.partial.nc")) as handle:
+            staged = handle.read()[0][:int(state["frames"])]
+        snapshots[int(state["path_index"])] = (state, rows[:int(state["work_rows"])], staged)
 
     # `--resume` ALONE. This passed `--overwrite` as well, which was harmless when overwrite did
     # almost nothing and is now a contradiction -- one says continue, the other says start over --
@@ -632,10 +664,49 @@ def test_an_interrupted_path_resumes_exactly_and_duplicates_nothing(built, sourc
             running += float(row["incremental_work_kj_mol"])
             assert abs(running - float(row["cumulative_work_kj_mol"])) < 1e-6, (path_id, row)
         assert float(observations[0]["cumulative_work_kj_mol"]) == 0.0
-        assert float(observations[-1]["tau"]) == 0.0
+        assert float(observations[-1]["lambda"]) == 1.0
+        for row in observations:
+            assert float(row["lambda"]) == int(row["protocol_step"]) / 1000, row
+
+        completion = json.loads((directory / "completed.json").read_text())
+        assert completion["platform"] == "CUDA", completion["platform"]
+        assert abs(float(completion["total_work_kj_mol"])
+                   - float(observations[-1]["cumulative_work_kj_mol"])) < 1e-6
+
+        if path_id in snapshots:
+            state, prefix, staged = snapshots[path_id]
+            assert completion["resumed"] is True
+            # The committed rows, byte for byte: nothing the generation vouched for was rewritten.
+            assert observations[:len(prefix)] == prefix, f"path {path_id}: committed rows changed"
+            # lambda restored to the schedule's value at the committed update.
+            assert float(state["lambda"]) == int(state["protocol_step"]) / 1000, state
+            # The work integral carried across the boundary: the committed cumulative is the last
+            # committed row's plus whatever accumulated since it, and the first row written after
+            # the resume starts from exactly that.
+            carried = float(state["cumulative_work_kj_mol"]) - float(
+                state["work_since_last_observation_kj_mol"])
+            assert abs(carried - float(prefix[-1]["cumulative_work_kj_mol"])) < 1e-6, state
+            following = observations[len(prefix)]
+            assert abs(float(following["cumulative_work_kj_mol"])
+                       - float(following["incremental_work_kj_mol"]) - carried) < 1e-6
+            # The committed frames, exactly as they were staged -- read in the file's own units,
+            # so the comparison is of the stored values rather than of a unit conversion.
+            import numpy
+
+            with mdtraj.formats.NetCDFTrajectoryFile(
+                    str(out / f"AIS_traj{path_id:04d}.nc")) as handle:
+                published = handle.read()[0]
+            assert numpy.array_equal(published[:len(staged)], staged), (
+                f"path {path_id}: a committed frame changed across the resume")
+            # Counters only grow from the committed generation.
+            before, after = state["evaluation_counters"], completion["evaluation_counters"]
+            for name in ("work_derivative_evaluations", "observation_potential_energy_evaluations",
+                         "parameter_updates"):
+                assert int(after[name]) >= int(before[name]), (path_id, name)
+            assert int(after["work_derivative_evaluations"]) > int(
+                before["work_derivative_evaluations"]), (path_id, before, after)
 
         # Identity survived: same source frame, same seeds, same filename.
-        completion = json.loads((directory / "completed.json").read_text())
         assert completion["trajectory"] == f"AIS_traj{path_id:04d}.nc"
         assert completion["source_frame_index"] == int(observations[0]["source_frame_index"])
         # And the transaction is gone, so nothing invites a resume of finished work.
@@ -651,7 +722,7 @@ def test_a_completed_path_is_not_touched_by_a_resume(built, source):
     reasons, which is the wrong signal in the wrong place.
     """
     out = _cadence_project(built, "untouched", source)
-    argv = ("-i", "../input/AIS.in", "-p", "../build/built.pdb", "-s", "../build/built.xml",
+    argv = ("-i", "../input/AIS.in", *END_STATES,
             "-source-traj", str(source), "-odir", ".", "-o", "AIS.out", "-log", "AIS.log")
     assert _md_run(out, *argv).returncode == 0
 

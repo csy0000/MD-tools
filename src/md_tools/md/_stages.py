@@ -274,7 +274,10 @@ def dcd_frame_count(path):
 # disagreed, a stage that had completed correctly failed its own verification because the
 # verifier looked for `<stage>.csv` while the run had written `mdout_<stage>.csv`. The rule
 # lives here so there is one of it.
-PRODUCTION_STAGE_NAMES = frozenset({"cMD", "umbrella"})
+#: `source` is the production stage of an AIS run that generates its own source ensemble
+#: (`ais_source.generate`): it IS production dynamics, and its whole-system stream is what the
+#: switching paths are drawn from.
+PRODUCTION_STAGE_NAMES = frozenset({"cMD", "umbrella", "source"})
 
 
 def info_csv_name(stage_name: str, segment: int = 1) -> str:

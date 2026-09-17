@@ -1,16 +1,16 @@
-"""Annealed importance sampling: non-equilibrium switching paths and their work.
+"""Annealed importance sampling: non-equilibrium switching paths between two end states.
 
-AIS scales the Hamiltonian with the SAME `md_tools.rest2.REST2Scaler` that REST2 uses. There is no
-second AIS scaler, which is what makes "the same scaling everywhere" true rather than intended:
-a correction to the scaling rules cannot reach the ladder and miss the switching paths.
+    V(lambda, x) = (1 - lambda) V0(x) + lambda V1(x),        lambda 0 -> 1
 
-What is specific to AIS is the *schedule* and the *work convention*, and those live here:
+V0 is `-s`/`-p`, the state the source ensemble was sampled from; V1 is `-s2`/`-p2`, the same
+particles with different parameters (`md_tools.ais.two_state`). AIS scales nothing itself: a REST2
+switch is a pair of files, the scaled System and the physical one.
 
-    dW_j = U(tau_{j+1}, x_j) - U(tau_j, x_j)
+    dW_j = V(lambda_{j+1}, x_j) - V(lambda_j, x_j)
 
 Parameters move at frozen coordinates, and only then does the configuration propagate. Observation
-0 precedes all work and is exactly zero. Switching is at fixed volume and a barostat in the
-prepared System is refused.
+0 precedes all work and is exactly zero. Switching is at fixed volume and a barostat in either end
+state is refused.
 
 A generated AIS script is an entry point:
 

@@ -364,11 +364,6 @@ def build_rung_systems(base_system, solute_indices, taus, *, excluded_bonds=(),
 
     Two implementations of "what System is rung i" is two answers waiting to disagree, and the
     disagreement would be invisible: both produce a plausible ladder, and only the numbers differ.
-    One subtlety makes that concrete -- `build_scaled_system`'s `prepare_for_switching` changes
-    what rung 0 IS (an untouched clone, versus one carrying the CustomGBForce global parameter),
-    and it is deliberately left at its default here. A caller that reached for
-    `check_scaling_plan` instead, which passes `prepare_for_switching=True` because AIS needs it,
-    would build a DIFFERENT rung 0 while looking like it had built the same one.
     """
     audit = audit_force_classes(base_system, where="REST2 ladder construction")
     if pressure_bar is not None:

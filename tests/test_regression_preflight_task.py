@@ -196,7 +196,9 @@ def test_a_generated_wrapper_refuses_a_plural_world_without_mpi4py(protocol, gen
     argv = [sys.executable, str(project / f"{protocol}.py"),
             "-p", "missing.pdb", *system, "-odir", str(destination)]
     if protocol == "AIS":
-        argv += ["-source-traj", "missing.dcd"]
+        # Both end states are named, so the refusal reached is the plural world rather than the
+        # missing-flag refusal that precedes it.
+        argv += ["-p2", "missing.pdb", "-s2", "missing2.xml", "-source-traj", "missing.dcd"]
 
     done = _run(argv, cwd=project, environment=FAKE_LAUNCH)
     assert done.returncode != 0, done.stdout

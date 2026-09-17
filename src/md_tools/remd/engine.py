@@ -226,14 +226,10 @@ class ReplicaEngine:
         entirely plausible.
 
         WHAT IS NOT REFUSED, so the next person does not read the above as more than it says: the
-        potential IS exactly quadratic in `a` at frozen coordinates, and `md_tools.ais.
-        decomposition` reconstructs it from three evaluations as an identity, not an
-        approximation. Obtaining every cross energy of a ladder that way is sound ARITHMETIC
-        where the three-term basis is available -- which is the real constraint, because under
-        PME with the long-range dispersion correction the scaler declines global switching
-        altogether (see `global_switching_refusal`: the tail term is computed from stored
-        epsilons and does not follow a parameter offset). This method evaluates directly because
-        it must serve every case, not because reconstruction is unsound.
+        potential IS exactly quadratic in `a` at frozen coordinates, so every cross energy could
+        in principle be reconstructed from three evaluations as an identity rather than an
+        approximation. This method evaluates directly because it must serve every case, not
+        because reconstruction is unsound.
 
         The context's own configuration is restored afterwards. That restoration is EXACT at double
         precision and approximate at mixed: measured on CUDA with the tau-scaled System, installing

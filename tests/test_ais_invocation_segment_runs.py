@@ -73,10 +73,11 @@ def project(tmp_path_factory):
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
     root = tmp_path_factory.mktemp("ais-invocation")
+    (root / "build").mkdir(exist_ok=True)
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     assert subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800).returncode == 0
     (root / "cv.yaml").write_text(CV_YAML, encoding="utf-8")
     (root / "AIS.config").write_text(yaml.safe_dump({
@@ -96,8 +97,22 @@ def project(tmp_path_factory):
 
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
+
+    # The two end states: V0 is the REST2 state at tau = 0.5 of `built.xml`, V1 is `built.xml`.
+    # What is under test is accounting, so any parameter-only pair would do; this one is the pair
+    # the retired tau switch travelled.
+    from openmm import XmlSerializer
+    from openmm.app import PDBFile
+
+    from md_tools.md.stage import solute_atom_indices
+    from md_tools.rest2.hamiltonian import build_scaled_system
+
+    base = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
+    solute = solute_atom_indices(PDBFile(str(root / "build" / "built.pdb")).topology)
+    (root / "build" / "V0.xml").write_text(
+        XmlSerializer.serialize(build_scaled_system(base, solute, 0.5)), encoding="utf-8")
     return root
 
 
@@ -113,7 +128,8 @@ def _run(project: Path, destination: Path, *extra, environment=None, expect=0):
     base.update(environment or {})
     done = subprocess.run(
         [sys.executable, str(project / "AIS" / "AIS.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "V0.xml"),
+         "-p2", str(project / "build" / "built.pdb"), "-s2", str(project / "build" / "built.xml"),
          "-source-traj", str(project / "source.dcd"),
          "-odir", str(destination), "--cpu", *extra],
         cwd=project / "AIS", capture_output=True, text=True, timeout=1800, env=base)

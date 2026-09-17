@@ -199,7 +199,8 @@ class AmberTrajectoryWriter:
     """One Amber NetCDF trajectory, for one fixed thermodynamic state."""
 
     def __init__(self, path, *, n_atoms, tau, temperature_k, periodic, state_index=None,
-                 application="REST2", program="md-tools", program_version="0"):
+                 application="REST2", program="md-tools", program_version="0",
+                 system_sha256=None):
         import netCDF4
 
         self.path = Path(path)
@@ -230,6 +231,11 @@ class AmberTrajectoryWriter:
             dataset.title = f"{application} tau={float(tau):g}"
         dataset.tau = float(tau)
         dataset.temperature_k = float(temperature_k)
+        # The digest of the serialised System these frames were integrated under, when the writer
+        # was given one -- only when the file on disk IS that System, never a digest of a file the
+        # run then modified in memory. AIS reads it to verify its source ensemble is V0's.
+        if system_sha256:
+            dataset.system_sha256 = str(system_sha256)
 
         dataset.createDimension("frame", None)
         dataset.createDimension("spatial", 3)

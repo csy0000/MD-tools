@@ -4,7 +4,7 @@ WHY THIS FILE
 
     The full scientific validation of a path's CV series -- its row count against the schedule,
     its switching-step grid, the path and source-frame identity every row carries, the
-    finiteness of every value, the column order, the tau schedule, the sidecar -- ran in exactly
+    finiteness of every value, the column order, the lambda schedule, the sidecar -- ran in exactly
     one place: when a LATER invocation skipped an already completed path. That is the wrong half
     of a path's life. By then `completed.json` is committed and authoritative, the trajectory is
     published under its stable name, and a series that was already wrong at the moment it was
@@ -69,12 +69,27 @@ def project(tmp_path_factory):
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
     root = tmp_path_factory.mktemp("ais-precompletion")
+    # `build/` beside the run: `build-md` validates the chain against the dataset's built System.
+    (root / "build").mkdir()
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
+
+    # V1, the second end state: the REST2 scaling of `built.xml` at tau = 0.5, a parameter-only
+    # edit of this very System. A copy of `built.xml` would be refused as the same Hamiltonian.
+    from openmm import XmlSerializer
+    from openmm.app import PDBFile
+
+    from md_tools.md.stage import solute_atom_indices
+    from md_tools.rest2.hamiltonian import build_scaled_system
+
+    base = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
+    solute = solute_atom_indices(PDBFile(str(root / "build" / "built.pdb")).topology)
+    (root / "build" / "V1.xml").write_text(
+        XmlSerializer.serialize(build_scaled_system(base, solute, 0.5)), encoding="utf-8")
     (root / "cv.yaml").write_text(CV_TWO, encoding="utf-8")
 
     (root / "AIS.config").write_text(yaml.safe_dump({
@@ -95,7 +110,7 @@ def project(tmp_path_factory):
 
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
     return root
 
@@ -114,7 +129,8 @@ def _run(project: Path, destination: Path, *extra, environment=None, expect=0):
     base.update(environment or {})
     done = subprocess.run(
         [sys.executable, str(project / "AIS" / "AIS.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
+         "-p2", str(project / "build" / "built.pdb"), "-s2", str(project / "build" / "V1.xml"),
          "-source-traj", str(project / "source.dcd"),
          "-odir", str(destination), "--cpu", *extra],
         cwd=project / "AIS", capture_output=True, text=True, timeout=1800, env=base)
@@ -229,12 +245,44 @@ def test_a_non_finite_value_is_refused(finished, tmp_path):
     _expect_refusal(directory, "non-finite")
 
 
-def test_a_tau_schedule_running_the_wrong_way_is_refused(finished, tmp_path):
-    """AIS anneals tau one way and never back. A wandering tau is not a switching path."""
+def test_a_lambda_schedule_running_the_wrong_way_is_refused(finished, tmp_path):
+    """AIS moves lambda from 0 to 1 and never back. A wandering lambda is not a switching path.
+
+    MIGRATED from the tau schedule, which ran DOWN from tau_start to tau_end; lambda runs up, so
+    the doctored row is moved BELOW its predecessor rather than above it.
+    """
     directory = _copy(finished, tmp_path)
     rows = _rows(_cv(directory))
-    _edit(directory, row=1, column="tau", value=f"{float(rows[0]['tau']) + 0.25:.6f}")
+    assert float(rows[1]["lambda"]) > float(rows[0]["lambda"]), "the fixture schedule must move"
+    _edit(directory, row=2, column="lambda", value=f"{float(rows[0]['lambda']):.6f}")
     _expect_refusal(directory, "not monotonic")
+
+
+def test_a_single_topology_sidecar_is_refused_by_name(finished, tmp_path):
+    """A `cv.json` written by the tau-switching AIS records tau_start/tau_end and no lambda.
+
+    Its rows are a different switching path's, so its schedule cannot be checked against this
+    one; accepting it would let a completion marker vouch for a series of another experiment.
+    """
+    from md_tools.ais.run import CV_CSV
+
+    directory = _copy(finished, tmp_path)
+    sidecar = (directory / "path_0000" / CV_CSV).with_suffix(".json")
+    document = json.loads(sidecar.read_text(encoding="utf-8"))
+
+    def retire(node):
+        if isinstance(node, dict):
+            if "lambda_start" in node:
+                node.pop("lambda_start")
+                node.pop("lambda_end", None)
+                node["tau_start"], node["tau_end"] = 0.5, 0.0
+                return True
+            return any(retire(value) for value in node.values())
+        return False
+
+    assert retire(document), f"no lambda_start in {sidecar.name}: {document}"
+    sidecar.write_text(json.dumps(document), encoding="utf-8")
+    _expect_refusal(directory, "lambda_start/lambda_end")
 
 
 def test_a_frame_reference_that_is_neither_empty_nor_an_index_is_refused(finished, tmp_path):

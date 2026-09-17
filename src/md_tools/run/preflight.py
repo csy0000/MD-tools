@@ -273,8 +273,12 @@ class LoadedInputs:
         return not self.implicit
 
 
-def load_inputs(topology, system) -> LoadedInputs:
-    """Read `-p` and `-s`, and refuse a pair that does not describe the same particles."""
+def load_inputs(topology, system, *, flags=("-p", "-s")) -> LoadedInputs:
+    """Read `-p` and `-s`, and refuse a pair that does not describe the same particles.
+
+    `flags` names the pair in a refusal. AIS reads a second pair, `-p2`/`-s2`, and a message about
+    the wrong flag sends a person to fix a file that is fine.
+    """
     from openmm import XmlSerializer
     from openmm.app import PDBFile
 
@@ -284,12 +288,12 @@ def load_inputs(topology, system) -> LoadedInputs:
     try:
         pdb = PDBFile(str(topology_path))
     except Exception as broken:
-        raise PreflightError(f"-p {topology_path} is not a PDB this build can read: "
+        raise PreflightError(f"{flags[0]} {topology_path} is not a PDB this build can read: "
                              f"{type(broken).__name__}: {broken}") from None
     try:
         base = XmlSerializer.deserialize(system_path.read_text(encoding="utf-8"))
     except Exception as broken:
-        raise PreflightError(f"-s {system_path} is not a serialised OpenMM System: "
+        raise PreflightError(f"{flags[1]} {system_path} is not a serialised OpenMM System: "
                              f"{type(broken).__name__}: {broken}") from None
 
     atoms, particles = pdb.topology.getNumAtoms(), base.getNumParticles()
@@ -425,8 +429,7 @@ def check_scaling_plan(loaded: LoadedInputs, *, solute_indices, excluded_bonds=(
     except UnclassifiedForceError as unknown:
         raise PreflightError(str(unknown)) from None
     try:
-        scaled = build_scaled_system(loaded.system, solute_indices, float(tau),
-                                     excluded_bonds, prepare_for_switching=True)
+        scaled = build_scaled_system(loaded.system, solute_indices, float(tau), excluded_bonds)
     except Exception as broken:
         raise PreflightError(
             f"{where}: the scaled System at tau = {tau} could not be constructed: "
@@ -545,14 +548,16 @@ class AISPreflight(ExecutionPreflight):
     source_format: str | None = None
     #: Everything the path loop needs, decided before the run directory exists.
     schedule: dict[str, Any] | None = None
-    solute: tuple = ()
-    excluded_bonds: tuple = ()
-    switcher: Any = None
+    #: V1, `-p2`/`-s2`, loaded and checked against V0 (`loaded`).
+    end_state_1: Any = None
+    #: `md_tools.ais.two_state.TwoStateHamiltonian`: V0 and V1 mixed, built once, audited.
+    hamiltonian: Any = None
+    #: Whether the source ensemble was shown to be V0's: "verified", or "asserted" with the reason.
+    source_ensemble: dict[str, Any] | None = None
     chosen_frames: tuple = ()
     eligible_frames: int = 0
     source_frames: int = 0
     source_atoms: int | None = None
-    force_audit: dict[str, Any] | None = None
     #: The source trajectory's digest and size, computed ONCE here. The runtime reuses it for the
     #: record and for the fingerprint rather than reading a production-sized file a second time.
     source_facts: dict[str, Any] | None = None
@@ -715,13 +720,13 @@ def preflight_stage(*, topology, system, coordinates=None, trajectory=None, rest
                     machine_config=None, protocol="this stage", pending_parent=None,
                     timestep_fs=None, ensemble=None, tau=0.0, stage=None,
                     number_of_groups=None, groupfile=None, whole=None, segment=1,
-                    source_trajectory=None) -> StagePreflight:
+                    source_trajectory=None, system2=None, topology2=None) -> StagePreflight:
     """A conventional stage, run on its own or planned as one link of a chain."""
     from ..md.stage import check_trajectory_suffix
 
     _reject_flags_outside_their_protocol(
         protocol_name="a cMD stage", number_of_groups=number_of_groups, groupfile=groupfile,
-        source_trajectory=source_trajectory)
+        source_trajectory=source_trajectory, system2=system2, topology2=topology2)
 
     if trajectory:
         check_trajectory_suffix(Path(trajectory))
@@ -1085,7 +1090,8 @@ def reject_plural_launch(coordination, *, what: str) -> None:
 
 def _reject_flags_outside_their_protocol(*, protocol_name, number_of_groups=None, groupfile=None,
                                          source_trajectory=None, trajectory=None,
-                                         coordinates=None, restart=None, checkpoint=None):
+                                         coordinates=None, restart=None, checkpoint=None,
+                                         system2=None, topology2=None):
     """Every accepted flag must do its documented job here, or be refused before any output.
 
     A flag that a protocol parses and then ignores is worse than one it rejects: the run
@@ -1107,6 +1113,12 @@ def _reject_flags_outside_their_protocol(*, protocol_name, number_of_groups=None
             f"-source-traj names the equilibrium ensemble AIS draws its starting frames from, "
             f"and {protocol_name} draws none. Refusing it rather than accepting a trajectory "
             f"nothing will read.")
+    for value, flag in ((system2, "-s2"), (topology2, "-p2")):
+        if value is not None:
+            raise PreflightError(
+                f"{flag} names the second end state of an AIS transformation, and "
+                f"{protocol_name} has one Hamiltonian. Refusing it rather than accepting a file "
+                f"nothing will read.")
     for value, flag, what in ((trajectory, "-x", "its own per-path trajectory names"),
                               (coordinates, "-c", "no continuation"),
                               (restart, "-r", "no single output restart"),
@@ -1119,7 +1131,15 @@ def _reject_flags_outside_their_protocol(*, protocol_name, number_of_groups=None
 
 
 def _ligand_sdf_beside(system):
-    """`<system stem>.sdf`, when `build-top` retained one for a SMILES-built solute.
+    """The prepared molecule `build-top` retained beside the System, or None.
+
+    Two layouts, read in this order:
+
+    * `<system stem>.sdf` -- `built.sdf`, which every build before 0.5.4 wrote;
+    * `<RESNAME>.sdf` -- what `build-top` writes now, named for the solute's residue. RESNAME is
+      read from `<system stem>.pdb`: the ONE residue that is neither solvent nor an ion. A
+      topology with several such residues is a peptide or a complex, not a molecule `build-top`
+      named, so it resolves to nothing.
 
     Returns None for a peptide build, which writes no SDF -- so this cannot turn a protein run
     into a ligand run, and the absence is as meaningful as the presence.
@@ -1127,20 +1147,45 @@ def _ligand_sdf_beside(system):
     if not system:
         return None
     candidate = Path(system).with_suffix(".sdf")
-    return candidate if candidate.is_file() else None
+    if candidate.is_file():
+        return candidate
+    topology = Path(system).with_suffix(".pdb")
+    if not topology.is_file():
+        return None
+    from ..md.stage import SOLVENT_RESIDUES
+
+    # Residue names straight from the records, columns 18-20 keyed by chain and number: reading a
+    # solvated box through OpenMM's PDB parser to learn one name would cost seconds per call.
+    solute: dict[str, str] = {}
+    with topology.open(encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if line.startswith(("ATOM", "HETATM")):
+                name = line[17:20].strip()
+                if name.upper() not in SOLVENT_RESIDUES:
+                    solute.setdefault(line[21:27], name)
+    names = set(solute.values())
+    if len(solute) != 1 or len(names) != 1:
+        return None
+    named = Path(system).with_name(f"{names.pop()}.sdf")
+    return named if named.is_file() else None
 
 def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=None,
                      trajectory=None, restart=None, checkpoint=None, output=None, log=None,
                      number_of_groups=None, cpu=False, device=None, machine_config=None,
                      protocol="this ladder", pending_parent=None, timestep_fs=None,
-                     ensemble=None, tau=0.0, source_trajectory=None,
-                     ladder=None, out_dir=None) -> LadderPreflight:
+                     ensemble=None, tau=0.0, source_trajectory=None, system2=None,
+                     topology2=None, ladder=None, out_dir=None) -> LadderPreflight:
     """A REST2 ladder. `-ng`, the configured state count and the world must agree.
 
     Since 0.5.4 a ladder reads `-s` ONLY from its group file, and every line must name a saved
     scaled state (`md-openmm build-top --rest2-scaler`). Refused here, in the shared runtime guard,
     whichever surface launched it.
     """
+    # Flags of another protocol first, by name: they are wrong whatever else is.
+    if source_trajectory is not None or system2 is not None or topology2 is not None:
+        _reject_flags_outside_their_protocol(protocol_name="a REST2 ladder",
+                                             source_trajectory=source_trajectory,
+                                             system2=system2, topology2=topology2)
     if system is not None:
         raise PreflightError(
             f"{protocol}: -s {system} was given. A REST2 ladder reads -s only from its "
@@ -1150,9 +1195,6 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
         raise PreflightError(
             f"{protocol}: no group file was given. A REST2 ladder reads -s only from its "
             f"group file (0.5.4); `build-md` writes remd_groupfile.<segment>.")
-    if source_trajectory is not None:
-        _reject_flags_outside_their_protocol(protocol_name="a REST2 ladder",
-                                             source_trajectory=source_trajectory)
 
     inputs: dict[str, Any] = dict(_continuation_inputs(coordinates, pending_parent,
                                                        where=protocol))
@@ -1264,8 +1306,8 @@ def preflight_ladder(*, topology, system, replicas, coordinates=None, groupfile=
     # an intermediate rung was found in the worst possible place.
     #
     # These are built through `build_rung_systems` -- the SAME function `Protocol.build_systems`
-    # delegates to -- and not through `check_scaling_plan`, whose `prepare_for_switching=True`
-    # makes a different rung 0. The driver consumes exactly these.
+    # delegates to -- so the preflight and the driver cannot build two different ladders. The
+    # driver consumes exactly these.
     # -- restraints on every rung, resolved BEFORE the rungs are built --------------------------
     #
     # A ladder may carry torsion restraints -- the same ones on every rung, which is what keeps
@@ -1614,19 +1656,21 @@ def _ladder_inventory(*, protocol, replicas, output, log, trajectory, restart, c
     return OutputInventory(roles=roles, resumable=frozenset({"checkpoints"}))
 
 
-def preflight_ais(*, topology, system, source, number_of_groups=None, output=None, log=None,
+def preflight_ais(*, topology, system, source, topology2=None, system2=None,
+                  number_of_groups=None, output=None, log=None,
                   cpu=False, device=None, machine_config=None, dynamics=None, ais=None,
                   reporting=None, source_config=None, groupfile=None, trajectory=None,
                   coordinates=None, restart=None, checkpoint=None,
                   out_dir=None, resolved_config=None, overwrite=False,
                   resume=False, collective_variables=None) -> AISPreflight:
-    """AIS switching paths. The source ensemble is validated by CONTENT, not by suffix.
+    """AIS switching paths between two end states. The source is validated by CONTENT.
 
-    When the resolved configuration is supplied -- which the runtime always does -- every
-    remaining refusal happens here too: the timestep against the masses, the barostat, the
-    switching and reporting divisibility, the source window, the source's own atom count, the
-    force classification, the scaled System, and the frame selection. The result carries all of
-    it, so `ais_main` runs the schedule it validated rather than building a second one.
+    `-p`/`-s` are V0, the state the source ensemble was sampled from; `-p2`/`-s2` are V1. When the
+    resolved configuration is supplied -- which the runtime always does -- every remaining refusal
+    happens here too: the timestep against the masses, the end-state pair, the barostat, the
+    switching and reporting divisibility, the source window, the source's own atom count and
+    System digest, and the frame selection. The result carries all of it, so `ais_main` runs the
+    schedule it validated rather than building a second one.
     """
     from ..openmm.trajectory import check_trajectory_declaration
 
@@ -1635,11 +1679,18 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
     _reject_flags_outside_their_protocol(
         protocol_name="AIS", groupfile=groupfile, trajectory=trajectory,
         coordinates=coordinates, restart=restart, checkpoint=checkpoint)
+    for value, flag, what in ((system2, "-s2", "serialised System"),
+                              (topology2, "-p2", "topology (PDB)")):
+        if value is None:
+            raise PreflightError(
+                f"AIS needs {flag}, the {what} of the second end state V1. AIS transforms V0 "
+                f"(-p/-s, the state the source ensemble was sampled from) into V1 as "
+                f"V(lambda) = (1 - lambda) V0 + lambda V1.")
 
     coordination, machine, acceleration, index, detail, particles, loaded = _common(
         topology=topology, system=system,
         outputs={"o": output, "log": log},
-        inputs={"source-traj": source}, cpu=cpu, device=device,
+        inputs={"source-traj": source, "s2": system2, "p2": topology2}, cpu=cpu, device=device,
         number_of_groups=number_of_groups, replicas=None, protocol="AIS",
         machine_config=machine_config, load=dynamics is not None)
 
@@ -1654,7 +1705,8 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
                             source=Path(source), source_format=source_format)
 
     prepared = _prepare_ais(
-        loaded, source=Path(source), dynamics=dynamics, ais=ais,
+        loaded, topology2=Path(topology2), system2=Path(system2),
+        source=Path(source), dynamics=dynamics, ais=ais,
         reporting=reporting, source_config=source_config,
         collective_variables=collective_variables,
         # Beside `resolved.config` -- the generated directory holding the content-addressed
@@ -1675,11 +1727,11 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
     prepared["inventory"] = _ais_inventory(output=output, log=log,
                                            paths=len(prepared["chosen_frames"]),
                                            ranks=coordination.size)
-    fingerprint = _ais_fingerprint(loaded, prepared, dynamics=dynamics,
+    facts = prepared.pop("_facts")
+    fingerprint = _ais_fingerprint(facts, prepared, dynamics=dynamics,
                                    resolved_config=resolved_config)
     identity = run_identity_document(
-        fingerprint=fingerprint,
-        topology_facts=prepared["_topology_facts"], system_facts=prepared["_system_facts"],
+        fingerprint=fingerprint, end_state_facts=facts,
         source_facts=prepared["source_facts"], source_format=source_format,
         schedule=prepared["schedule"], ais=ais, dynamics=dynamics,
         chosen=list(prepared["chosen_frames"]), reporting=reporting,
@@ -1689,10 +1741,7 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
         # Read-only: an absent directory is fresh, an orphaned one (owned-looking artefacts with
         # no readable identity to prove what owns them) is refused, a compatible one with an
         # unfinished path requires --resume, and --resume against nothing is refused. See
-        # `decide_run_disposition` for the complete state machine this single call replaces --
-        # it used to be "if overwrite: overwrite; elif the identity file exists: resume;
-        # else: fresh", which adopted an unidentified directory as fresh and labelled every
-        # compatible directory "resume" whether or not --resume was actually given.
+        # `decide_run_disposition` for the complete state machine.
         try:
             return decide_run_disposition(
                 directory, identity, resume=resume, overwrite=overwrite,
@@ -1703,9 +1752,6 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
 
     disposition, previous_identity = collectively(coordination, _decide,
                                                   what="the AIS run-identity check")
-
-    prepared.pop("_topology_facts")
-    prepared.pop("_system_facts")
 
     # EVERY SELECTED PATH, before work begins on any of them -- and before `-odir`, the `.out`,
     # the `.log` or `resolved.config` is created or replaced. Validating lazily meant an invalid
@@ -1732,23 +1778,26 @@ def preflight_ais(*, topology, system, source, number_of_groups=None, output=Non
                         **prepared)
 
 
-def _ais_fingerprint(loaded, prepared, *, dynamics, resolved_config) -> str:
+def _ais_fingerprint(facts, prepared, *, dynamics, resolved_config) -> str:
     """What a mid-path checkpoint has to match before it may be resumed from.
 
     Built here rather than in the runtime so the identity that decides whether this directory may
-    be written to is the same string the checkpoints are stamped with. Two derivations of one
-    fingerprint is two chances to disagree, and the one that decides is whichever runs later.
+    be written to is the same string the checkpoints are stamped with. Both end states are in it:
+    a checkpoint taken under one V1 continued under another would add work along a path that
+    changed destination half way.
     """
     import hashlib
     import json as _json
 
+    from ..ais.two_state import TWO_STATE_SCHEMA
+
     schedule = prepared["schedule"]
     return hashlib.sha256(_json.dumps({
-        "system": prepared["_system_facts"]["sha256"],
-        "topology": prepared["_topology_facts"]["sha256"],
+        "end_states": facts,
         "source": prepared["source_facts"]["sha256"],
         "schedule": {k: v for k, v in schedule.items()
-                     if k not in ("observations", "taus", "note")},
+                     if k not in ("observations", "lambdas", "note")},
+        "ais_schema": [TWO_STATE_SCHEMA["name"], TWO_STATE_SCHEMA["version"]],
         "temperature_K": float(dynamics["temperature_K"]),
         "friction_per_ps": float(dynamics["friction_per_ps"]),
         "seed": int(dynamics["seed"]),
@@ -1800,30 +1849,73 @@ def _ais_inventory(*, output, log, paths: int, ranks: int = 1) -> OutputInventor
                                "cv_table", "selected_frames"}))
 
 
-def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting, source_config,
-                 collective_variables=None, config_directory=None):
-    """Every AIS refusal that needs the System or the source file, before any output exists."""
+def _topology_differences(first, second) -> list[str]:
+    """Where two topologies disagree about which atom is which, in words. Empty when they agree."""
+    atoms0, atoms1 = list(first.atoms()), list(second.atoms())
+    if len(atoms0) != len(atoms1):
+        return [f"-p has {len(atoms0)} atom(s) and -p2 has {len(atoms1)}"]
+    for position, (a, b) in enumerate(zip(atoms0, atoms1)):
+        if (a.name, a.residue.name, a.residue.index) != (b.name, b.residue.name, b.residue.index):
+            return [f"atom {position} is {a.residue.name}{a.residue.index}:{a.name} in -p and "
+                    f"{b.residue.name}{b.residue.index}:{b.name} in -p2"]
+    return []
+
+
+def _source_ensemble_evidence(source: Path, system_sha256: str) -> dict[str, Any]:
+    """Whether the source frames were sampled from V0, from what the trajectory records ITSELF.
+
+    A stage writes the digest of the System it integrated into its AMBER NetCDF. When the source
+    carries one, it must be V0's: frames from any other Hamiltonian make every work value the cost
+    of a switch that did not start where the record says. A source that records none -- a DCD, a
+    foreign file, a trajectory from before the attribute existed -- is still legitimate, and the
+    run says it ASSERTED the ensemble rather than claiming to have verified it.
+    """
+    from ..remd.source_ensemble import trajectory_identity
+
+    recorded, reason = trajectory_identity(source)
+    digest = (recorded or {}).get("system_sha256")
+    if digest is None:
+        return {"status": "asserted",
+                "reason": reason or f"{Path(source).name} records no System digest"}
+    if digest != system_sha256:
+        raise PreflightError(
+            f"-source-traj {Path(source).name} records that it was sampled from a System with "
+            f"sha256 {digest[:16]}..., and -s hashes to {system_sha256[:16]}.... The source "
+            f"ensemble must be V0's, or every work value measures a switch from a state the frames "
+            f"were never in. Pass the System that run integrated as -s, or point -source-traj at "
+            f"the run you meant.")
+    return {"status": "verified", "system_sha256": digest}
+
+
+def _prepare_ais(loaded: LoadedInputs, *, topology2: Path, system2: Path, source: Path, dynamics,
+                 ais, reporting, source_config, collective_variables=None, config_directory=None):
+    """Every AIS refusal that needs the end states or the source file, before any output exists."""
     import mdtraj
 
     from ..ais.run import _source_atom_count, choose_frames
     from ..ais.schedule import switching_schedule
-    from ..md.stage import solute_atom_indices
-    from ..openmm.system import UnclassifiedTorsionError, unscaled_torsions
+    from ..ais.two_state import EndStateError, TwoStateHamiltonian
+    from ..build.record import file_facts
 
     where = "AIS"
     timestep = _resolve_timestep(loaded, dynamics["timestep_fs"], where=where)
 
-    # FIXED VOLUME, decided before the run directory exists. A pressure-volume term in the work
-    # would make the path measure something the Jarzynski/Crooks relations are not written for.
-    if loaded.barostats:
+    # THE SECOND END STATE, and the pair. Every way two Systems can fail to be a parameter-only
+    # pair is named at once -- particles, masses, constraints, virtual sites, a barostat in either,
+    # the force layout, the long-range treatment -- because each produces a plausible work table.
+    end_state_1 = load_inputs(topology2, system2, flags=("-p2", "-s2"))
+    mismatch = _topology_differences(loaded.pdb.topology, end_state_1.pdb.topology)
+    if mismatch:
         raise PreflightError(
-            "the prepared System carries a barostat. AIS switches at FIXED VOLUME: each path "
-            "keeps the box of the frame it started from, and no pressure-volume term enters the "
-            "work. Build the System without a barostat.")
+            f"{where}: -p and -p2 do not describe the same atoms: {mismatch[0]}. V0 and V1 are "
+            f"mixed particle by particle, so the two topologies must agree on every atom.")
+    try:
+        hamiltonian = TwoStateHamiltonian(loaded.system, end_state_1.system)
+    except EndStateError as refusal:
+        raise PreflightError(f"{where}: {refusal}") from None
 
     try:
         schedule = switching_schedule(
-            tau_start=float(ais["tau_start"]), tau_end=float(ais["tau_end"]),
             switching_steps=int(ais["switching_steps"]),
             parameter_update_interval_steps=int(ais["parameter_update_interval_steps"]),
             observation_interval_steps=int(ais["observation_interval_steps"]),
@@ -1853,21 +1945,13 @@ def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting
         except CVDefinitionError as refusal:
             raise PreflightError(f"{where}: {refusal}") from None
 
-    solute = solute_atom_indices(loaded.pdb.topology)
-    try:
-        omega = unscaled_torsions(loaded.pdb.topology, solute,
-                                 ligand_sdf=_ligand_sdf_beside(loaded.system_path))
-    except UnclassifiedTorsionError as refusal:
-        raise PreflightError(f"{where}: {refusal}") from None
-    excluded = tuple(tuple(int(a) for a in bond)
-                     for bond in omega["unscaled_central_bonds"])
-    audit, _scaled = check_scaling_plan(loaded, solute_indices=solute, excluded_bonds=excluded,
-                                        tau=float(ais["tau_start"]), where="AIS tau switching")
-    from ..rest2.scaler import TauSwitcher
-
-    switcher = TauSwitcher(loaded.system, solute, excluded)
+    facts = {"V0": {"system": file_facts(loaded.system_path)["sha256"],
+                    "topology": file_facts(loaded.topology_path)["sha256"]},
+             "V1": {"system": file_facts(end_state_1.system_path)["sha256"],
+                    "topology": file_facts(end_state_1.topology_path)["sha256"]}}
 
     # -- the source ensemble, read before anything is written ----------------------------------
+    source_ensemble = _source_ensemble_evidence(source, facts["V0"]["system"])
     top = mdtraj.Topology.from_openmm(loaded.pdb.topology)
     try:
         n_frames = sum(chunk.n_frames for chunk in mdtraj.iterload(str(source), top=top, chunk=50))
@@ -1908,15 +1992,10 @@ def _prepare_ais(loaded: LoadedInputs, *, source: Path, dynamics, ais, reporting
     # Hashed ONCE, here. A production source is large and is already read frame by frame above;
     # digesting it twice would double that for a number that has one value -- and the runtime
     # needs the same number for the record AND for the fingerprint.
-    from ..build.record import file_facts
-
-    return {"timestep": timestep, "schedule": schedule, "solute": tuple(int(i) for i in solute),
-            "cv_definition": cv_definition,
-            "excluded_bonds": excluded, "switcher": switcher, "chosen_frames": tuple(chosen),
+    return {"timestep": timestep, "schedule": schedule, "cv_definition": cv_definition,
+            "end_state_1": end_state_1, "hamiltonian": hamiltonian,
+            "source_ensemble": source_ensemble, "chosen_frames": tuple(chosen),
             "eligible_frames": len(eligible), "source_frames": n_frames,
-            "source_atoms": source_atoms, "force_audit": audit,
-            "source_facts": file_facts(source),
-            "_topology_facts": file_facts(loaded.topology_path),
-            "_system_facts": file_facts(loaded.system_path),
-            "notes": {"omega": omega, "first_frame": first, "last_frame": last,
-                      "frame_stride": stride}}
+            "source_atoms": source_atoms, "source_facts": file_facts(source),
+            "_facts": facts,
+            "notes": {"first_frame": first, "last_frame": last, "frame_stride": stride}}

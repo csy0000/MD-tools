@@ -7,10 +7,10 @@ Split by cost, as elsewhere in this suite:
     gpu         energies, forces or dynamics. CUDA, and nowhere else.
 
 The scientific claim this file has to support is narrow and specific: a Context switched along the
-tau path is, at every tau, the same Hamiltonian as a separately constructed static REST2 rung, and
-the work columns beside the coordinates are the work of the switching that produced them. Both are
-checked against something independent -- a separately built System, and an analytic telescoping
-sum -- rather than against themselves.
+lambda path is, at every lambda, exactly `(1 - lambda) V0 + lambda V1` of two separately
+constructed end-state Systems, and the work columns beside the coordinates are the work of the
+switching that produced them. Both are checked against something independent -- separately
+evaluated end states, and an analytic telescoping sum -- rather than against themselves.
 """
 from __future__ import annotations
 
@@ -39,12 +39,12 @@ SMOKE_TRAJECTORIES = 2
 
 
 def test_the_schedule_is_evenly_spaced_endpoint_inclusive_and_exact():
-    """21 observations are 20 equal intervals in tau, and both endpoints are exact."""
+    """21 observations are 20 equal intervals in lambda, 0 -> 1, and both endpoints are exact."""
     from md_tools import ais
 
     # 40 steps, observed every 2 -> 21 observations counting both endpoints.
     schedule = ais.switching_schedule(
-        tau_start=0.5, tau_end=0.0, switching_steps=40,
+        switching_steps=40,
         parameter_update_interval_steps=1, observation_interval_steps=2, timestep_fs=2.0)
 
     assert schedule["switching_steps"] == 40
@@ -52,19 +52,22 @@ def test_the_schedule_is_evenly_spaced_endpoint_inclusive_and_exact():
     assert schedule["updates_per_observation"] == 2
     observations = schedule["observations"]
     assert len(observations) == 21
-    assert observations[0]["tau"] == 0.5 and observations[0]["protocol_step"] == 0
-    # Exactly, not nearly: the last row is reported as the work of reaching tau_end.
-    assert observations[-1]["tau"] == 0.0
+    assert observations[0]["lambda"] == 0.0 and observations[0]["protocol_step"] == 0
+    # Exactly, not nearly: the last row is reported as the work of reaching V1.
+    assert observations[-1]["lambda"] == 1.0
     assert observations[-1]["protocol_step"] == 40
 
-    spacing = [observations[i + 1]["tau"] - observations[i]["tau"] for i in range(20)]
-    assert all(abs(step - spacing[0]) < 1e-12 for step in spacing), "tau steps are not equal"
+    spacing = [observations[i + 1]["lambda"] - observations[i]["lambda"] for i in range(20)]
+    assert all(abs(step - spacing[0]) < 1e-12 for step in spacing), "lambda steps are not equal"
+    assert spacing[0] > 0, "lambda runs 0 -> 1, never downhill"
+    assert schedule["lambdas"][0] == 0.0 and schedule["lambdas"][-1] == 1.0
 
-    # tau is the ONE persisted protocol coordinate. The scale factors are derived inside the
-    # scaler; persisting them too would offer a reader a second coordinate to take as
-    # authoritative, and s and tau disagreeing would then be a real possibility.
+    # lambda is the ONE persisted protocol coordinate. A second one -- the tau of the retired
+    # single-topology switch, or its scale factors -- would offer a reader another coordinate to
+    # take as authoritative, and the two disagreeing would then be a real possibility.
     for entry in observations:
-        assert "s" not in entry and "sqrt_s" not in entry
+        assert not {"tau", "s", "sqrt_s"} & set(entry)
+    assert "taus" not in schedule
 
     # Observation 0 is the source configuration before any parameter change and before any
     # propagation, which is what makes its work exactly zero rather than nearly zero.
@@ -79,7 +82,7 @@ def test_the_schedule_is_evenly_spaced_endpoint_inclusive_and_exact():
     # under test is the one that fires.
     #
     # 15 steps, update every 1 (15 % 1 == 0), observe every 2 -> 15 % 2 != 0, so the last
-    # observation would not land at tau_end.
+    # observation would not land at lambda = 1.
     (15, 1, 2, "observation_interval_steps"),
     # 20 steps, update every 3 -> 20 % 3 != 0, so the final parameter change lands mid-interval.
     (20, 3, 5, "parameter_update_interval_steps"),
@@ -93,7 +96,7 @@ def test_a_schedule_that_would_have_to_be_rounded_is_refused(steps, update_inter
     from md_tools import ais
 
     with pytest.raises(ValueError) as error:
-        ais.switching_schedule(tau_start=0.5, tau_end=0.0, switching_steps=steps,
+        ais.switching_schedule(switching_steps=steps,
                                parameter_update_interval_steps=update_interval,
                                observation_interval_steps=observe_interval, timestep_fs=2.0)
     assert expected in str(error.value)
@@ -180,47 +183,86 @@ def _excluded_bonds(project):
     return [tuple(int(a) for a in bond) for bond in omega.get("unscaled_central_bonds", [])]
 
 
-@pytest.mark.slow
-def test_the_switching_system_carries_no_barostat(ais_project):
-    """Fixed volume is a property of the System, not a runtime flag."""
+def _end_states(project):
+    """The pair the previous AIS switched between, expressed as two files' worth of Systems.
+
+    V0 is the REST2 System at tau = 0.5, the ensemble the old tau switch started from, built by the
+    same `build_scaled_system` a REST2 rung is built with; V1 is the physical System. AIS itself
+    scales nothing: it mixes whatever two end states it is given.
+    """
     from openmm import XmlSerializer
 
-    scaling = _generated_scaling(ais_project)
-    base = XmlSerializer.deserialize((ais_project / "built.xml").read_text())
-    switcher = scaling.TauSwitcher(base, _solute_indices(ais_project), [])
-    system = switcher.prepared_system(0.5)
+    scaling = _generated_scaling(project)
+    base = XmlSerializer.deserialize((Path(project) / "built.xml").read_text())
+    v0 = scaling.build_scaled_system(base, _solute_indices(project), 0.5,
+                                     _excluded_bonds(project))
+    return v0, base
+
+
+@pytest.mark.slow
+def test_the_switching_system_carries_no_barostat(ais_project):
+    """Fixed volume is a property of the System, not a runtime flag.
+
+    `built.xml` carries the NPT chain's barostat, so the explicit fixture's physical System is
+    exactly the case the rule exists for: a pair containing one is refused, and the mixed System
+    built from a pair without one carries none.
+    """
+    from md_tools.ais.two_state import EndStateError, TwoStateHamiltonian
+
+    v0, v1 = _end_states(ais_project)
+    barostats = [i for i in range(v1.getNumForces())
+                 if "Barostat" in v1.getForce(i).__class__.__name__]
+    if barostats:
+        with pytest.raises(EndStateError, match="barostat"):
+            TwoStateHamiltonian(v0, v1)
+        v0, v1 = _without_barostat(v0), _without_barostat(v1)
+    system = TwoStateHamiltonian(v0, v1).system
     names = [system.getForce(i).__class__.__name__ for i in range(system.getNumForces())]
     assert not any("Barostat" in name for name in names), names
 
 
-# --- dynamic switching against static REST2 ---------------------------------------------------
+def _without_barostat(system):
+    for index in reversed(range(system.getNumForces())):
+        if "Barostat" in system.getForce(index).__class__.__name__:
+            system.removeForce(index)
+    return system
+
+
+# --- the two-state switch against its end states, on CUDA -----------------------------------
 
 @pytest.mark.gpu
 @pytest.mark.slow
-@pytest.mark.parametrize("tau", [0.0, 0.25, 0.5])
-def test_dynamic_switching_reproduces_a_static_rest2_system(ais_project, tau):
-    """The Hamiltonian must actually change through force parameters, and match a built rung.
+@pytest.mark.parametrize("lam", [0.0, 0.25, 0.5, 1.0])
+def test_dynamic_switching_reproduces_the_static_end_state_mixture(ais_project, lam):
+    """The Hamiltonian must actually change through a Context parameter, and match the end states.
 
-    This is what separates exact switching from interpolating between two endpoint energies: a
-    separately constructed `build_scaled_system(..., tau)` -- the same function REST2 uses to build
-    a rung -- and the live switched Context are compared on the total energy AND on every atom's
-    force. Forces are the stronger test: an energy can agree by cancellation, a full force array
-    cannot.
+    This is what separates exact switching from interpolating between two endpoint energies
+    after the fact: the separately constructed end-state Systems -- V0 from `build_scaled_system`,
+    the function REST2 builds a rung with, and V1 the physical System -- are evaluated in their own
+    Contexts, and the live switched Context is compared with `(1 - lambda) V0 + lambda V1` on the
+    total energy AND on every atom's force. Forces are the stronger test: an energy can agree by
+    cancellation, a full force array cannot.
     """
     import numpy as np
-    from openmm import Context, Platform, VerletIntegrator, XmlSerializer, unit
+    from openmm import Context, Platform, VerletIntegrator, unit
     from openmm.app import PDBFile
 
-    scaling = _generated_scaling(ais_project)
-    base = XmlSerializer.deserialize((ais_project / "built.xml").read_text())
+    from md_tools.ais.two_state import TwoStateHamiltonian
+
+    v0, v1 = (_without_barostat(system) for system in _end_states(ais_project))
     pdb = PDBFile(str(ais_project / "built.pdb"))
-    solute = _solute_indices(ais_project)
-    omega = _excluded_bonds(ais_project)
-    assert omega, "the ALA fixture should have omega bonds to exclude"
+    assert _excluded_bonds(ais_project), "the ALA fixture should have omega bonds to exclude"
 
     platform = Platform.getPlatformByName("CUDA")
     # Double precision so the comparison is limited by the Hamiltonians, not by the platform.
     properties = {"Precision": "double"}
+
+    def context_for(system):
+        context = Context(system, VerletIntegrator(0.001 * unit.femtosecond), platform,
+                          properties)
+        context.setPeriodicBoxVectors(*system.getDefaultPeriodicBoxVectors())
+        context.setPositions(pdb.positions)
+        return context
 
     def measure(context):
         result = context.getState(getEnergy=True, getForces=True)
@@ -228,72 +270,71 @@ def test_dynamic_switching_reproduces_a_static_rest2_system(ais_project, tau):
                 np.array(result.getForces().value_in_unit(
                     unit.kilojoule_per_mole / unit.nanometer)))
 
-    static = scaling.build_scaled_system(base, solute, tau, omega)
-    reference = Context(static, VerletIntegrator(0.001 * unit.femtosecond), platform, properties)
-    reference.setPeriodicBoxVectors(*static.getDefaultPeriodicBoxVectors())
-    reference.setPositions(pdb.positions)
-    static_energy, static_forces = measure(reference)
+    reference = context_for(v0)
+    e0, f0 = measure(reference)
     del reference
+    reference = context_for(v1)
+    e1, f1 = measure(reference)
+    del reference
+    static_energy = (1.0 - lam) * e0 + lam * e1
+    static_forces = (1.0 - lam) * f0 + lam * f1
 
-    switcher = scaling.TauSwitcher(base, solute, omega)
-    live = switcher.prepared_system(0.5)
-    context = Context(live, VerletIntegrator(0.001 * unit.femtosecond), platform, properties)
-    context.setPeriodicBoxVectors(*live.getDefaultPeriodicBoxVectors())
-    context.setPositions(pdb.positions)
-    switcher.set_tau(context, live, tau)
+    hamiltonian = TwoStateHamiltonian(v0, v1)
+    context = context_for(hamiltonian.system)
+    hamiltonian.set_lambda(context, lam)
     dynamic_energy, dynamic_forces = measure(context)
 
-    assert dynamic_energy == pytest.approx(static_energy, abs=1e-6, rel=0)
-    assert np.abs(dynamic_forces - static_forces).max() < 1e-6
+    tolerance = 1e-9 * max(abs(e0), abs(e1))
+    assert dynamic_energy == pytest.approx(static_energy, abs=max(1e-6, tolerance), rel=0)
+    assert np.abs(dynamic_forces - static_forces).max() < 1e-5
 
-    # ...and switching away and back must land on the same Hamiltonian, not on a compounded one:
-    # every set_tau restores the unscaled parameters before scaling.
-    switcher.set_tau(context, live, 0.4)
-    switcher.set_tau(context, live, tau)
+    # ...and switching away and back must land on the same Hamiltonian, not on a compounded one.
+    hamiltonian.set_lambda(context, 0.4)
+    hamiltonian.set_lambda(context, lam)
     again_energy, again_forces = measure(context)
-    assert again_energy == pytest.approx(static_energy, abs=1e-6, rel=0)
-    assert np.abs(again_forces - static_forces).max() < 1e-6
+    assert again_energy == pytest.approx(static_energy, abs=max(1e-6, tolerance), rel=0)
+    assert np.abs(again_forces - static_forces).max() < 1e-5
 
 
-@pytest.mark.gpu
 @pytest.mark.slow
-def test_omega_excluded_torsions_are_left_alone_by_the_dynamic_switcher(ais_project):
-    """The same omega bonds REST2 leaves unscaled, checked on the switched force parameters."""
-    from openmm import PeriodicTorsionForce, XmlSerializer
-    from openmm.app import PDBFile
+def test_unscaled_torsions_are_left_alone_in_the_scaled_end_state(ais_project):
+    """The torsions REST2 leaves unscaled, checked on the V0 an AIS switch starts from.
 
-    from openmm import unit
+    AIS no longer scales anything, so the unscaled-torsion rule cannot be enforced by the switch;
+    it has to already be true of the end-state file. Each torsion of the REST2-built V0 is checked
+    against the physical System through `torsion_is_scaled`, the ONE rule every scaler asks -- so
+    under convention v3 an improper (e.g. C-N-CA-H) is expected unscaled, exactly as an amide
+    omega is, rather than being reported as a torsion the scaler forgot.
+    """
+    from openmm import PeriodicTorsionForce, unit
 
-    scaling = _generated_scaling(ais_project)
-    base = XmlSerializer.deserialize((ais_project / "built.xml").read_text())
+    from md_tools.rest2.hamiltonian import system_bond_graph, torsion_is_scaled
+
+    v0, base = _end_states(ais_project)
     solute = set(_solute_indices(ais_project))
-    omega = {frozenset((int(a), int(b))) for a, b in _excluded_bonds(ais_project)}
+    unscaled_bonds = {frozenset((int(a), int(b))) for a, b in _excluded_bonds(ais_project)}
+    bonds = system_bond_graph(base)
 
     def torsions(system):
         force = next(system.getForce(i) for i in range(system.getNumForces())
                      if isinstance(system.getForce(i), PeriodicTorsionForce))
         return [force.getTorsionParameters(i) for i in range(force.getNumTorsions())]
 
-    unscaled = torsions(base)
-    switched = torsions(scaling.TauSwitcher(base, solute, omega).prepared_system(0.5))
-
-    excluded_seen = scaled_seen = 0
-    for original, now in zip(unscaled, switched):
-        i, j, k, l = original[:4]
+    unscaled_seen = scaled_seen = 0
+    for original, now in zip(torsions(base), torsions(v0)):
+        atoms = original[:4]
         # Stripped of units so the comparison is between numbers, not Quantities.
         k_before = original[6].value_in_unit(unit.kilojoule_per_mole)
         k_after = now[6].value_in_unit(unit.kilojoule_per_mole)
-        in_solute = all(a in solute for a in (i, j, k, l))
-        if in_solute and frozenset((int(j), int(k))) in omega:
-            assert k_after == k_before, f"omega torsion {i}-{j}-{k}-{l} was scaled"
-            excluded_seen += 1
-        elif in_solute:
+        label = "-".join(str(a) for a in atoms)
+        if torsion_is_scaled(atoms, solute, unscaled_bonds, bonds):
             assert k_after == pytest.approx(k_before * 0.25), \
-                f"solute torsion {i}-{j}-{k}-{l} was not scaled by s"
+                f"solute torsion {label} was not scaled by s"
             scaled_seen += 1
         else:
-            assert k_after == k_before, "an environment torsion was scaled"
-    assert excluded_seen and scaled_seen, (excluded_seen, scaled_seen)
+            assert k_after == k_before, f"torsion {label} was scaled but the rule leaves it alone"
+            unscaled_seen += int(all(a in solute for a in atoms))
+    assert unscaled_seen and scaled_seen, (unscaled_seen, scaled_seen)
 
 
 @pytest.mark.gpu
@@ -301,34 +342,33 @@ def test_omega_excluded_torsions_are_left_alone_by_the_dynamic_switcher(ais_proj
 def test_frozen_coordinate_work_telescopes_to_the_endpoint_energy_difference(ais_project):
     """With coordinates held fixed, the summed increments must be exactly the endpoint difference.
 
-    delta_W_j = U(tau_{j+1}, x) - U(tau_j, x) with x unchanged, so every intermediate term cancels
-    and the total is U(tau_end, x) - U(tau_start, x). Anything else means the increments are not
-    the quantity the record calls work.
+    delta_W_j = V(lambda_{j+1}, x) - V(lambda_j, x) with x unchanged, so every intermediate term
+    cancels and the total is V1(x) - V0(x). Anything else means the increments are not the quantity
+    the record calls work.
     """
-    from openmm import Context, Platform, VerletIntegrator, XmlSerializer, unit
+    from openmm import Context, Platform, VerletIntegrator, unit
     from openmm.app import PDBFile
 
-    scaling = _generated_scaling(ais_project)
-    base = XmlSerializer.deserialize((ais_project / "built.xml").read_text())
-    pdb = PDBFile(str(ais_project / "built.pdb"))
-    solute = _solute_indices(ais_project)
-    omega = _excluded_bonds(ais_project)
+    from md_tools.ais.two_state import TwoStateHamiltonian
 
-    # The schedule is computed, not read from a generated file: `path_definition.yaml` belonged
-    # to the retired route, and `switching_schedule` is the one implementation of the arithmetic.
+    v0, v1 = (_without_barostat(system) for system in _end_states(ais_project))
+    pdb = PDBFile(str(ais_project / "built.pdb"))
+
+    # The schedule is computed, not read from a generated file: `switching_schedule` is the one
+    # implementation of the arithmetic.
     from md_tools.ais import switching_schedule
 
-    schedule = switching_schedule(tau_start=0.5, tau_end=0.0, switching_steps=40,
-                                  parameter_update_interval_steps=1,
+    schedule = switching_schedule(switching_steps=40, parameter_update_interval_steps=1,
                                   observation_interval_steps=2, timestep_fs=2.0)
-    taus = schedule["taus"]
+    lambdas = schedule["lambdas"]
 
-    switcher = scaling.TauSwitcher(base, solute, omega)
-    live = switcher.prepared_system(taus[0])
+    hamiltonian = TwoStateHamiltonian(v0, v1)
+    live = hamiltonian.system
     context = Context(live, VerletIntegrator(0.001 * unit.femtosecond),
                       Platform.getPlatformByName("CUDA"), {"Precision": "double"})
     context.setPeriodicBoxVectors(*live.getDefaultPeriodicBoxVectors())
     context.setPositions(pdb.positions)
+    hamiltonian.set_lambda(context, lambdas[0])
 
     def energy():
         return context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
@@ -336,35 +376,37 @@ def test_frozen_coordinate_work_telescopes_to_the_endpoint_energy_difference(ais
 
     start_energy = energy()
     cumulative = 0.0
-    for index in range(len(taus) - 1):
+    for index in range(len(lambdas) - 1):
         before = energy()                        # no propagation: x is frozen
-        switcher.set_tau(context, live, taus[index + 1])
+        hamiltonian.set_lambda(context, lambdas[index + 1])
         cumulative += energy() - before
     end_energy = energy()
 
     assert cumulative == pytest.approx(end_energy - start_energy, abs=1e-6, rel=0)
+    # ...and the endpoint difference is the one the derivative reads in a single evaluation.
+    assert end_energy - start_energy == pytest.approx(hamiltonian.difference(context),
+                                                      abs=1e-5, rel=1e-9)
 
 
 @pytest.mark.gpu
 @pytest.mark.slow
-def test_a_constant_tau_diagnostic_path_does_zero_work(ais_project):
+def test_a_constant_lambda_diagnostic_path_does_zero_work(ais_project):
     """A path that never changes the Hamiltonian does no work, whatever the coordinates do.
 
-    The public forward configuration refuses tau_start == tau_end, and this is why that refusal is
-    a configuration rule rather than a physical impossibility: the diagnostic is meaningful and it
-    is what pins the work convention to the parameter change rather than to the propagation.
+    The public schedule always runs 0 -> 1, and this is why a constant-lambda path is a diagnostic
+    rather than a configuration: it is what pins the work convention to the parameter change
+    rather than to the propagation.
     """
-    from openmm import (Context, LangevinMiddleIntegrator, Platform, XmlSerializer, unit)
+    from openmm import Context, LangevinMiddleIntegrator, Platform, unit
     from openmm.app import PDBFile
 
-    scaling = _generated_scaling(ais_project)
-    base = XmlSerializer.deserialize((ais_project / "built.xml").read_text())
-    pdb = PDBFile(str(ais_project / "built.pdb"))
-    solute = _solute_indices(ais_project)
-    omega = _excluded_bonds(ais_project)
+    from md_tools.ais.two_state import TwoStateHamiltonian
 
-    switcher = scaling.TauSwitcher(base, solute, omega)
-    live = switcher.prepared_system(0.5)
+    v0, v1 = (_without_barostat(system) for system in _end_states(ais_project))
+    pdb = PDBFile(str(ais_project / "built.pdb"))
+
+    hamiltonian = TwoStateHamiltonian(v0, v1)
+    live = hamiltonian.system
     integrator = LangevinMiddleIntegrator(300 * unit.kelvin, 1.0 / unit.picosecond,
                                           2.0 * unit.femtoseconds)
     integrator.setRandomNumberSeed(20260827)
@@ -373,6 +415,7 @@ def test_a_constant_tau_diagnostic_path_does_zero_work(ais_project):
     context.setPeriodicBoxVectors(*live.getDefaultPeriodicBoxVectors())
     context.setPositions(pdb.positions)
     context.setVelocitiesToTemperature(300 * unit.kelvin, 4242)
+    hamiltonian.set_lambda(context, 0.5)
 
     def energy():
         return context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
@@ -381,7 +424,7 @@ def test_a_constant_tau_diagnostic_path_does_zero_work(ais_project):
     cumulative = 0.0
     for _ in range(20):
         before = energy()
-        switcher.set_tau(context, live, 0.5)     # the same tau, every time
+        hamiltonian.set_lambda(context, 0.5)     # the same lambda, every time
         cumulative += energy() - before
         integrator.step(2)                       # and the coordinates DO move
     assert cumulative == pytest.approx(0.0, abs=1e-6)
@@ -391,7 +434,7 @@ def test_a_constant_tau_diagnostic_path_does_zero_work(ais_project):
 
 @pytest.fixture(scope="module")
 def ais_run(ais_project):
-    """The common chain, a fixed-tau cMD source at tau = 0.5, and two AIS paths. On CUDA."""
+    """The common chain, a cMD source sampled under V0, and two AIS paths. On CUDA."""
     pytest.importorskip("mdtraj", reason="the AIS runtime reads its source trajectory with MDTraj")
     from .conftest import run_stage
 

@@ -274,6 +274,17 @@ def replica_parser(description: str = "one coordinated replica-exchange ladder")
     parser.add_argument("--check", action="store_true",
                         help="validate the launch, the inputs, the Force layout and the platform, "
                              "then exit. READ-ONLY: it creates nothing, not even -odir")
+    # Accepted and REFUSED BY NAME in the preflight. Left off the parser, argparse reads `-s2 X`
+    # as `-s 2` and dies on "unrecognized arguments: X", which names neither the flag nor why --
+    # and puts the rule where `md-run` and this script can disagree about it.
+    parser.add_argument("-source-traj", "--source-traj", dest="source_trajectory", default=None,
+                        metavar="TRAJ",
+                        help="refused for a ladder: the equilibrium ensemble AIS draws from")
+    for flag, alias, destination in (("-s2", "--system2", "system2"),
+                                     ("-p2", "--topology2", "topology2")):
+        parser.add_argument(flag, alias, dest=destination, default=None, metavar="PATH",
+                            help=f"refused for a ladder: {flag} is the second end state of an "
+                                 f"AIS transformation")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--verify-only", action="store_true")
     parser.add_argument("--extend", type=int, default=0, metavar="N")
@@ -485,6 +496,8 @@ def replica_main(ladder: dict[str, Any], argv: list[str] | None = None) -> int:
             number_of_groups=args.number_of_groups, cpu=bool(args.cpu),
             device=int(args.device) if args.device is not None else None,
             protocol=protocol_name,
+            source_trajectory=args.source_trajectory,
+            system2=args.system2, topology2=args.topology2,
             # The timestep against the masses in THIS System, and the Force classification and
             # scaled-System construction, all before `solute.yaml`, `_protocol.py` or the group
             # file exists. An unclassifiable force used to surface with three files on disk.

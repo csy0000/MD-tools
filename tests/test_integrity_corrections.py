@@ -81,12 +81,42 @@ def test_the_fingerprint_binds_the_source_the_system_and_the_schedule():
     # MIGRATED with the fingerprint itself, which is built in the preflight now: the string that
     # decides whether this directory may be written to has to exist before the directory does,
     # and deriving it in two places is two chances for the two to disagree.
-    preflight = PREFLIGHT_SOURCE.read_text(encoding="utf-8")
-    fingerprint = preflight[preflight.index("def _ais_fingerprint("):]
-    fingerprint = fingerprint[:fingerprint.index(").hexdigest()")]
-    for bound in ('"system"', '"topology"', '"source"', '"schedule"', '"seed"',
-                  '"resolved_config"'):
-        assert bound in fingerprint, f"{bound} is not bound into the resume fingerprint"
+    #
+    # MIGRATED AGAIN for the two-state AIS, and made behavioural. "The system" is now TWO end
+    # states, and a checkpoint taken toward one V1 continued toward another adds work along a
+    # path that changed destination half way -- so each digest of each end state has to move the
+    # fingerprint on its own. A text search for `"system"` could not say that.
+    import copy
+
+    from md_tools.run.preflight import _ais_fingerprint
+
+    facts = {"V0": {"system": "a" * 64, "topology": "b" * 64},
+             "V1": {"system": "c" * 64, "topology": "d" * 64}}
+    prepared = {"schedule": {"switching_steps": 10, "parameter_update_interval_steps": 1},
+                "source_facts": {"sha256": "e" * 64}}
+    dynamics = {"temperature_K": 300.0, "friction_per_ps": 1.0, "seed": 7}
+    baseline = _ais_fingerprint(facts, prepared, dynamics=dynamics, resolved_config={"x": 1})
+
+    def changed(edit):
+        f, p, d, r = copy.deepcopy(facts), copy.deepcopy(prepared), dict(dynamics), {"x": 1}
+        r = edit(f, p, d, r) or r
+        return _ais_fingerprint(f, p, dynamics=d, resolved_config=r)
+
+    edits = {
+        "V0 system": lambda f, p, d, r: f["V0"].update(system="0" * 64),
+        "V0 topology": lambda f, p, d, r: f["V0"].update(topology="0" * 64),
+        "V1 system": lambda f, p, d, r: f["V1"].update(system="0" * 64),
+        "V1 topology": lambda f, p, d, r: f["V1"].update(topology="0" * 64),
+        "source": lambda f, p, d, r: p["source_facts"].update(sha256="0" * 64),
+        "schedule": lambda f, p, d, r: p["schedule"].update(switching_steps=20),
+        "seed": lambda f, p, d, r: d.update(seed=8),
+        "resolved_config": lambda f, p, d, r: {"x": 2},
+    }
+    for bound, edit in edits.items():
+        assert changed(edit) != baseline, f"{bound} is not bound into the resume fingerprint"
+
+    # The expanded per-frame schedule is not identity -- it is derived from what is bound.
+    assert changed(lambda f, p, d, r: p["schedule"].update(lambdas=[0.0, 1.0])) == baseline
     # And the runtime uses that one rather than building a second.
     assert "path_fingerprint = checked.fingerprint" in AIS_SOURCE.read_text(), (
         "the runtime derives its own fingerprint instead of consuming the plan's")
@@ -116,7 +146,7 @@ def _truncate_bytes(path, *, drop):
 # It asserted that `dcd_header_frames` documented a DCD header's frame count as untrustworthy,
 # because that script wrote its own DCD and then re-read it. The live runtime does not write a
 # trajectory it must re-count: it validates a finished path against the schedule itself -- row
-# count, both tau endpoints, and exactly zero cumulative work at observation 0 -- which is what
+# count, both lambda endpoints, and exactly zero cumulative work at observation 0 -- which is what
 # `test_ais_runs_through_the_real_cli_and_keeps_its_work_contract` exercises end to end.
 
 

@@ -118,7 +118,7 @@ readable without the topology or the definition that produced it.
 |---|---|---|
 | cMD | `<key>.cv.csv` + `<key>.cv.json` (the stage's FILING key: `eq_1`, `min`, `cMD`) | `step,time_ps,trajectory_frame_index` |
 | REST2 | `cv_state<N>.csv` + `cv_state<N>.json` | `step,time_ps,exchange_attempt,state_index,tau,walker_index,exchange_phase,trajectory_frame_index` |
-| AIS | `path_NNNN/cv.csv` | `path_index,source_frame_index,protocol_step,time_ps,tau,observation_index,coordinate_frame_index` |
+| AIS | `path_NNNN/cv.csv` | `path_index,source_frame_index,protocol_step,time_ps,lambda,observation_index,coordinate_frame_index` |
 | AIS | `AIS_cv.csv` | the aggregate, same columns |
 
 The CV names follow, in definition order.

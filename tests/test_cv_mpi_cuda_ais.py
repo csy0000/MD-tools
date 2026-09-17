@@ -1,4 +1,4 @@
-"""AIS with CV reporting and the work decomposition, under a REAL launcher on real CUDA.
+"""AIS with CV reporting and the two-state Hamiltonian, under a REAL launcher on real CUDA.
 
 WHY A SEPARATE FILE
 
@@ -17,10 +17,18 @@ WHY A SEPARATE FILE
 
 WHAT IS COMPARED
 
-    Everything, against an uninterrupted reference: every per-path CV CSV, the work table, each
-    completion manifest, and the final aggregate. Not step grids -- values. A continuation that
-    restored coordinates but not the integrator stream writes a different path onto a grid that
-    lines up perfectly.
+    A path that was never interrupted is compared with nothing but itself: a CUDA run is not
+    promised to be bit-identical to another process's. A path completed BEFORE an interruption
+    must survive the resume byte for byte. A path interrupted mid-switch must continue from
+    EXACTLY its committed generation -- every stream prefix it vouches for, lambda, the carried
+    cumulative work, the counters -- and finish complete and valid. Past the resume point it is a
+    new realisation of the same switching process: the two-state mixing force's inner Contexts
+    keep atom-ordering state no checkpoint captures, so row-for-row equality with an
+    uninterrupted CUDA reference is not a property this runtime has (decided 2026-09-16).
+
+    Against the uninterrupted reference, what must match is IDENTITY and STRUCTURE: source frames,
+    seeds, trajectory names, fingerprints, the step and lambda grids, which rows carry a saved
+    coordinate, and the CV and work accounting.
 
 Every subprocess call carries a timeout, and a hang is a failure rather than a wait.
 """
@@ -42,6 +50,9 @@ ALA = REPO / "tests" / "data" / "ALA.pdb"
 CLI = [sys.executable, "-m", "md_tools.cli.md_openmm"]
 
 pytestmark = [pytest.mark.gpu, pytest.mark.slow]
+
+from tests.test_cv_cuda_lanes import (  # noqa: E402 - the one definition of exact restoration
+    assert_restored_and_complete, committed_instant, write_scaled_v0)
 
 LAUNCH_TIMEOUT = 1800
 
@@ -94,7 +105,6 @@ def project(tmp_path_factory):
     (root / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit",
         "ais": {"number_of_paths": PATHS, "switching_steps": SWITCHING,
-                "work_measurement": "components",
                 "observation_interval_steps": OBSERVE_EVERY,
                 "parameter_update_interval_steps": UPDATE_EVERY},
         "ais_source": {"trajectory": "../source.dcd"},
@@ -112,7 +122,16 @@ def project(tmp_path_factory):
 
     frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
+    # V0 = the REST2 state at tau = 0.5 of built.xml, V1 = built.xml: the two end states.
+    write_scaled_v0(root)
     return root
+
+
+#: `-p/-s` is V0, `-p2/-s2` is V1, as absolute paths under the project root.
+def _end_states(project: Path) -> list[str]:
+    return ["-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "V0.xml"),
+            "-p2", str(project / "build" / "built.pdb"),
+            "-s2", str(project / "build" / "built.xml")]
 
 
 def _launch(project: Path, destination: Path, *extra, ranks=RANKS, environment=None, expect=0):
@@ -127,7 +146,7 @@ def _launch(project: Path, destination: Path, *extra, ranks=RANKS, environment=N
     base.update(environment or {})
     done = subprocess.run(
         ["mpirun", "-n", str(ranks), sys.executable, str(project / "AIS-run1" / "AIS.py"),
-         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
+         *_end_states(project),
          "-source-traj", str(project / "source.dcd"),
          "-ng", str(ranks), "-odir", str(destination), *extra],
         cwd=project / "AIS-run1", capture_output=True, text=True, timeout=LAUNCH_TIMEOUT, env=base)
@@ -147,27 +166,82 @@ def _completion(destination: Path, path_index: int) -> dict:
         (destination / f"path_{path_index:04d}" / "completed.json").read_text(encoding="utf-8"))
 
 
-#: Keys that record HOW a path was produced rather than WHAT it is, dropped before two runs are
-#: compared. `*_seconds` are measured durations -- requiring two runs to agree on microseconds
-#: asserts that the machine is idle, not that the science is right. `discarded_is_complete` says
-#: whether this invocation threw away an uncommitted generation, which is true of a resume and
-#: false of a run that was never interrupted, by definition. Everything else must match exactly.
-EXECUTION_DETAIL = ("discarded_is_complete",)
-
-
-def _scrub(value):
-    if isinstance(value, dict):
-        return {key: _scrub(item) for key, item in value.items()
-                if not key.endswith("_seconds") and key not in EXECUTION_DETAIL}
-    if isinstance(value, list):
-        return [_scrub(item) for item in value]
-    return value
-
-
 def _record(destination: Path) -> dict:
     from md_tools.build.record import read_record
 
     return read_record(destination / "AIS.log")
+
+
+#: What a path IS, independent of how it was integrated: compared exactly against a reference.
+IDENTITY_FIELDS = ("status", "path_index", "source_frame_index", "observations", "frames",
+                   "state_rows", "cv_rows", "ais_schema", "integrator_seed", "velocity_seed",
+                   "trajectory", "fingerprint", "platform")
+
+#: The work table's STRUCTURE: every column that does not carry a value a CUDA continuation
+#: legitimately changes. Which rows name a saved coordinate is structure too, so the emptiness of
+#: the potential cells is compared rather than their values.
+WORK_STRUCTURE = ("path_id", "source_frame", "observation_index", "switch_step",
+                  "coordinate_frame_index", "lambda_before", "lambda_after", "trajectory")
+
+
+def _work_structure(rows):
+    return [tuple(row[name] for name in WORK_STRUCTURE)
+            + (row["potential_direct_kj_mol"] == "",) for row in rows]
+
+
+def _cv_structure(rows):
+    return [(row["path_index"], row["source_frame_index"], row["protocol_step"], row["lambda"],
+             row["observation_index"], row["coordinate_frame_index"]) for row in rows]
+
+
+def _path_files(destination: Path, index: int) -> dict:
+    """A completed path's scientific files, by content, for 'this path was not touched'."""
+    directory = destination / f"path_{index:04d}"
+    names = ["completed.json", "observations.csv", "cv.csv", "system.csv"]
+    found = {name: (directory / name).read_bytes() for name in names
+             if (directory / name).is_file()}
+    found["trajectory"] = (destination / f"AIS_traj{index:04d}.nc").read_bytes()
+    return found
+
+
+def _before_resume(destination: Path):
+    """Each path's state before a resume: completed files, a committed instant, or nothing."""
+    completed_files, instants = {}, {}
+    for index in range(PATHS):
+        directory = destination / f"path_{index:04d}"
+        if (directory / "completed.json").is_file():
+            completed_files[index] = _path_files(destination, index)
+        else:
+            instants[index] = committed_instant(directory)
+    return completed_files, instants
+
+
+def _assert_resumed_campaign(destination: Path, reference: Path, completed_files, instants):
+    """The whole resumed campaign against what it was before the resume and the reference."""
+    for index in range(PATHS):
+        if index in completed_files:
+            assert _path_files(destination, index) == completed_files[index], (
+                f"path {index} was complete before the resume and was rewritten by it")
+            assert_restored_and_complete(destination, index, None, switching_steps=SWITCHING)
+        else:
+            assert_restored_and_complete(destination, index, instants[index],
+                                         switching_steps=SWITCHING)
+        got, want = _completion(destination, index), _completion(reference, index)
+        for field in IDENTITY_FIELDS:
+            assert got[field] == want[field], (
+                f"path {index}: {field!r} differs from the uninterrupted reference")
+        assert _cv_structure(_rows(destination / f"path_{index:04d}" / "cv.csv")) \
+            == _cv_structure(_rows(reference / f"path_{index:04d}" / "cv.csv")), (
+                f"path {index}'s CV grid differs from the uninterrupted reference")
+    assert _work_structure(_rows(destination / "AIS_work.csv")) \
+        == _work_structure(_rows(reference / "AIS_work.csv")), "the work table's structure differs"
+    assert _cv_structure(_rows(destination / "AIS_cv.csv")) \
+        == _cv_structure(_rows(reference / "AIS_cv.csv")), "the CV aggregate's structure differs"
+    # The aggregate tables are assembled from the per-path files, value for value.
+    totals = {int(row["path_index"]): float(row["total_work_kj_mol"])
+              for row in _rows(destination / "AIS_paths.csv")}
+    for index in range(PATHS):
+        assert totals[index] == float(_completion(destination, index)["total_work_kj_mol"])
 
 
 @pytest.fixture(scope="module")
@@ -202,32 +276,37 @@ def test_every_path_wrote_its_own_cv_series(completed):
             == list(range(0, SWITCHING + 1, CV_EVERY))
 
 
-def test_the_work_table_keeps_the_three_scaling_groups_for_hummer_szabo(completed):
-    """Non-scaled, square-root-scaled and linearly-scaled, with units and accumulated totals.
+def test_the_work_table_keeps_the_end_state_potentials_for_hummer_szabo(completed):
+    """V0, V1 and the direct potential at every saved coordinate, with units, under MPI on CUDA.
 
-    These are the components a later Hummer-Szabo reweighting needs: the basis
-    `U = U_non_scaled + sqrt(lambda) U_sqrt_scaled + lambda U_lin_scaled` cannot be re-evaluated
-    at another lambda from a total alone.
+    These are what a later Hummer-Szabo reweighting needs: the potential at another lambda is
+    `(1 - lambda) V0 + lambda V1`, which a total alone cannot give. The mixture is checked against
+    the direct CUDA potential on every aligned row, at the precision the run recorded; a row with
+    no saved coordinate carries none of the three.
     """
-    from md_tools.ais.decomposition import GROUPS
+    from md_tools.ais.two_state import OBSERVATION_POTENTIAL_COLUMNS, identity_tolerance
 
     rows = _rows(completed / "AIS_work.csv")
     assert rows, "the work table is empty"
     header = set(rows[0])
+    assert set(OBSERVATION_POTENTIAL_COLUMNS) <= header, sorted(header)
+    assert {"lambda_before", "lambda_after", "delta_work_kj_mol", "total_work_kj_mol"} <= header
+    assert all(name.endswith("_kj_mol") for name in OBSERVATION_POTENTIAL_COLUMNS)
 
-    for group in GROUPS:
-        delta = f"delta_work_{group}_kj_mol"
-        total = f"total_work_{group}_kj_mol"
-        assert delta in header, f"{delta} is missing: the per-update component was not retained"
-        assert total in header, f"{total} is missing: the accumulated component was not retained"
-        # Units are in the column names, and the values are real numbers rather than blanks.
-        assert delta.endswith("_kj_mol") and total.endswith("_kj_mol")
-        assert all(row[total] not in ("", None) for row in rows)
-
-    # The identity the schema states: the components sum to the total, per row.
-    for row in rows[:20]:
-        components = sum(float(row[f"delta_work_{group}_kj_mol"]) for group in GROUPS)
-        assert abs(components - float(row["delta_work_kj_mol"])) < 1e-3, row
+    precision = (_record(completed)["acceleration"].get("cuda_precision") or "mixed")
+    aligned = 0
+    for row in rows:
+        assert row["total_work_kj_mol"] not in ("", None)
+        if row["coordinate_frame_index"] == "":
+            assert all(row[name] == "" for name in OBSERVATION_POTENTIAL_COLUMNS), row
+            continue
+        lam = float(row["lambda_after"])
+        v0, v1 = float(row["potential_v0_kj_mol"]), float(row["potential_v1_kj_mol"])
+        direct = float(row["potential_direct_kj_mol"])
+        allowed = identity_tolerance(max(abs(v0), abs(v1), abs(direct)), precision=precision)
+        assert abs((1.0 - lam) * v0 + lam * v1 - direct) <= allowed, row
+        aligned += 1
+    assert aligned >= PATHS, f"only {aligned} frame-aligned row(s) across {PATHS} paths"
 
 
 def test_per_path_and_aggregate_cv_cost_are_correct(completed):
@@ -260,19 +339,16 @@ def test_the_aggregate_table_holds_every_path(completed):
     assert len(rows) == PATHS * EXPECTED_ROWS
 
 
-def test_interruption_and_resume_under_mpi_reproduce_every_output(project, tmp_path):
-    """The whole promise, compared against an uninterrupted reference.
+def test_interruption_and_resume_under_mpi_restore_exactly_and_complete(project, tmp_path):
+    """The whole promise, under MPI: exact restoration, complete paths, a consistent aggregate.
 
-    Every per-path CV series, the work table, each completion manifest and the final aggregate.
     A resume may schedule a path onto a different rank than ran it first; path identity and the
-    aggregate must not depend on which rank that was, so `mpi_rank` is the one field allowed to
-    differ.
+    aggregate must not depend on which rank that was. Each path is held to what it was just
+    before the resume -- untouched if it had completed, continued from exactly its committed
+    generation if it had not -- and to the uninterrupted reference's identity and structure.
     """
     reference = tmp_path / "reference"
     _launch(project, reference)
-    want_cv = {index: _rows(reference / f"path_{index:04d}" / "cv.csv") for index in range(PATHS)}
-    want_work = _rows(reference / "AIS_work.csv")
-    want_aggregate = _rows(reference / "AIS_cv.csv")
     want_manifest = {index: _completion(reference, index) for index in range(PATHS)}
 
     from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
@@ -282,30 +358,16 @@ def test_interruption_and_resume_under_mpi_reproduce_every_output(project, tmp_p
                       environment={FAULT_ENVIRONMENT: "after-work-row",
                                    FAULT_AFTER_ENVIRONMENT: "2"})
     assert crashed.returncode != 0
+    completed_files, instants = _before_resume(destination)
+    assert any(instant is not None for instant in instants.values()), (
+        "no interrupted path had a committed generation, so exact restoration is untested")
     _launch(project, destination, "--resume")
 
-    for index in range(PATHS):
-        assert _rows(destination / f"path_{index:04d}" / "cv.csv") == want_cv[index], (
-            f"path {index}'s CV series differs from the uninterrupted reference")
+    _assert_resumed_campaign(destination, reference, completed_files, instants)
 
-    assert _rows(destination / "AIS_work.csv") == want_work, "the work table differs"
-    assert _rows(destination / "AIS_cv.csv") == want_aggregate, "the CV aggregate differs"
-
-    # `mpi_rank` and `resumed` are allowed to differ: they describe HOW the path was produced,
-    # not what it is. So is `wall_seconds` inside the CV cost -- it is a measured duration, and
-    # requiring two runs to spend the same number of microseconds would be asserting that the
-    # machine is idle rather than that the science is right. The COUNTERS in that block are
-    # compared exactly, below.
-    ignore = {"mpi_rank", "resumed", "outputs", "collective_variable_cost"}
     split: list[bool] = []
     for index in range(PATHS):
         got = _completion(destination, index)
-        for field, value in want_manifest[index].items():
-            if field in ignore:
-                continue
-            assert _scrub(got[field]) == _scrub(value), (
-                f"path {index}: completion manifest field {field!r} differs from the reference")
-
         cost = got["collective_variable_cost"]
         wanted = want_manifest[index]["collective_variable_cost"]
         assert cost["cumulative"]["cv_observations"] \
@@ -337,22 +399,20 @@ def test_a_resume_under_a_different_rank_count_keeps_path_identity_and_the_aggre
     the suite used the same rank count it crashed with, which is precisely the case where a
     reshuffle cannot show up.
 
-    Every per-path series, the work table and the aggregate must match a reference produced in
-    one uninterrupted two-rank run.
+    Every path's identity, grid and structure must match a reference produced in one uninterrupted
+    two-rank run, and every path must continue from exactly what it had committed.
     """
     from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
 
     reference = tmp_path / "reference"
     _launch(project, reference)
-    want_cv = {index: _rows(reference / f"path_{index:04d}" / "cv.csv") for index in range(PATHS)}
-    want_aggregate = _rows(reference / "AIS_cv.csv")
-    want_work = _rows(reference / "AIS_work.csv")
 
     destination = tmp_path / "rescheduled"
     crashed = _launch(project, destination, ranks=2, expect=1,
                       environment={FAULT_ENVIRONMENT: "after-work-row",
                                    FAULT_AFTER_ENVIRONMENT: "2"})
     assert crashed.returncode != 0
+    completed_files, instants = _before_resume(destination)
 
     # FOUR ranks now, for four paths: one path each, a different division of the same work.
     _launch(project, destination, "--resume", ranks=4)
@@ -360,28 +420,10 @@ def test_a_resume_under_a_different_rank_count_keeps_path_identity_and_the_aggre
     ranks = {int(_completion(destination, index)["mpi_rank"]) for index in range(PATHS)}
     assert len(ranks) > 1, f"the resumed run put every path on rank(s) {sorted(ranks)}"
 
-    for index in range(PATHS):
-        assert _completion(destination, index)["path_index"] == index, (
-            f"path {index}'s directory holds another path's manifest after rescheduling")
-        assert _rows(destination / f"path_{index:04d}" / "cv.csv") == want_cv[index], (
-            f"path {index} differs from the reference after being rescheduled onto another rank")
-
-    assert _rows(destination / "AIS_cv.csv") == want_aggregate, (
-        "the aggregate changed when the work was divided differently")
-
-    # The work table carries an `mpi_rank` column, which is a record of WHICH worker produced a
-    # row and must change when the work is divided differently -- that is the whole point of
-    # rescheduling. Asserting that it is the ONLY column that changes is the stronger claim:
-    # every measured quantity, every identifier and every accumulated total is independent of
-    # how the paths were distributed.
-    got_work = _rows(destination / "AIS_work.csv")
-    assert len(got_work) == len(want_work), "the work table changed length"
-    differing = {column
-                 for mine, theirs in zip(got_work, want_work)
-                 for column in mine
-                 if mine[column] != theirs[column]}
-    assert differing <= {"mpi_rank"}, (
-        f"rescheduling changed {sorted(differing)} in the work table; only mpi_rank may differ")
+    # Path identity after rescheduling, each path's exact continuation, and the aggregate's
+    # structure. `mpi_rank` is a record of WHICH worker produced a row and must change when the
+    # work is divided differently; it is deliberately outside every comparison.
+    _assert_resumed_campaign(destination, reference, completed_files, instants)
 
 
 def _rank_scoped_wrapper(tmp_path: Path, rank: int, boundary: str, allowed: str) -> Path:
@@ -439,7 +481,7 @@ def test_one_rank_dying_fails_the_campaign_and_invents_no_completed_paths(projec
     done = subprocess.run(
         ["mpirun", "-n", str(RANKS), str(shim), sys.executable,
          str(project / "AIS-run1" / "AIS.py"),
-         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "built.xml"),
+         *_end_states(project),
          "-source-traj", str(project / "source.dcd"),
          "-ng", str(RANKS), "-odir", str(destination)],
         cwd=project / "AIS-run1", capture_output=True, text=True, timeout=LAUNCH_TIMEOUT, env=base)
@@ -569,8 +611,10 @@ def test_d_two_rank_interruption_resumed_under_four_ranks_on_cuda(project, tmp_p
     Four paths under TWO ranks, interrupted so that at least one path is fully complete and at
     least one has a committed partial prefix, then finished under FOUR. Path identity does not
     depend on the worker count -- global path n always writes AIS_traj000n.nc from its own source
-    frame under its own seeds -- so every scientific table must equal an uninterrupted
-    two-rank reference, and only execution metadata may differ.
+    frame under its own seeds -- so identity and structure must equal an uninterrupted two-rank
+    reference, and every path must continue from exactly what it had committed. (On CUDA a
+    continuation past its committed generation is a new realisation, so values after a resume
+    point are not compared with the reference.)
 
     The accounting assertion is the point: the four-rank invocation must credit itself with the
     CVs it actually evaluated, not with the work the two-rank invocation did before it. Under the
@@ -581,11 +625,7 @@ def test_d_two_rank_interruption_resumed_under_four_ranks_on_cuda(project, tmp_p
 
     reference = tmp_path / "reference"
     _launch(project, reference, ranks=2)
-    want_cv = {index: _rows(reference / f"path_{index:04d}" / "cv.csv") for index in range(PATHS)}
-    want_work = _rows(reference / "AIS_work.csv")
-    want_aggregate = _rows(reference / "AIS_cv.csv")
     want_frames = (reference / "selected_source_frames.csv").read_text(encoding="utf-8")
-    want_manifests = {index: _completion(reference, index) for index in range(PATHS)}
 
     # TWO ranks, interrupted part-way. `after-work-row` with a count that lets the first path
     # finish and stops the next one mid-switch, so the resume meets both an already-complete
@@ -603,6 +643,7 @@ def test_d_two_rank_interruption_resumed_under_four_ranks_on_cuda(project, tmp_p
                       and (destination / f"path_{index:04d}" / "cv.csv").is_file()}
     assert complete_before, "the interruption left no completed path, so nothing is skipped later"
     assert partial_before, "the interruption left no partial path, so no prefix is carried later"
+    completed_files, instants = _before_resume(destination)
 
     # THE ORACLE, taken from the interrupted tree BEFORE the resume touches it.
     starting, expected_new = _starting_dispositions(destination, PATHS)
@@ -678,33 +719,14 @@ def test_d_two_rank_interruption_resumed_under_four_ranks_on_cuda(project, tmp_p
     assert cost["segment"]["cv_evaluations"] == 2 * cost["segment"]["cv_observations"], (
         "two torsions per observation")
 
-    # And the science is the two-rank reference's, exactly.
-    for index in range(PATHS):
-        assert _rows(destination / f"path_{index:04d}" / "cv.csv") == want_cv[index], (
-            f"path {index} changed when the campaign was divided differently")
-    assert _rows(destination / "AIS_cv.csv") == want_aggregate
+    # And the science: completed paths untouched, partial ones continued exactly, every path
+    # complete, and identity and structure the two-rank reference's.
+    _assert_resumed_campaign(destination, reference, completed_files, instants)
     assert (destination / "selected_source_frames.csv").read_text(encoding="utf-8") \
         == want_frames, "the source-frame selection moved with the worker count"
-
-    got_work = _rows(destination / "AIS_work.csv")
-    assert len(got_work) == len(want_work)
-    differing = {column for mine, theirs in zip(got_work, want_work)
-                 for column in mine if mine[column] != theirs[column]}
-    assert differing <= {"mpi_rank"}, (
-        f"resuming under four ranks changed {sorted(differing)} in the work table")
-
-    # Every path kept its source frame, seeds, filenames and work values.
-    ignore = {"mpi_rank", "resumed", "outputs", "collective_variable_cost"}
     for index in range(PATHS):
-        got = _completion(destination, index)
         assert (destination / f"AIS_traj{index:04d}.nc").is_file(), (
             f"path {index} did not write its own trajectory name")
-        for field, value in want_manifests[index].items():
-            if field in ignore:
-                continue
-            assert _scrub(got[field]) == _scrub(value), (
-                f"path {index}: {field!r} changed under a different worker count")
-        assert got["platform"] == "CUDA", got["platform"]
 
 
 def _aggregate_cost_record(destination: Path) -> dict:

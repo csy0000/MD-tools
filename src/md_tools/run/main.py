@@ -139,6 +139,12 @@ def md_run_parser() -> argparse.ArgumentParser:
                              "Rarely needed -- an ordinary homogeneous ladder shares one topology "
                              "and one System, and restating the same two paths N times is a way "
                              "to get one of them wrong")
+    parser.add_argument("-s2", "--system2", dest="system2", default=None, metavar="XML",
+                        help="for AIS: V1, the second end state's serialised System -- the same "
+                             "particles as -s with different parameters. -s is V0, the state the "
+                             "source ensemble was sampled from")
+    parser.add_argument("-p2", "--topology2", dest="topology2", default=None, metavar="PDB",
+                        help="for AIS: V1's topology, the same atoms as -p")
     parser.add_argument("-source-traj", "--source-traj", dest="source_traj", default=None,
                         metavar="TRAJ",
                         help="for AIS: the equilibrium trajectory the switching paths are drawn "
@@ -427,9 +433,10 @@ def md_run_main(argv: list[str] | None = None) -> int:
 
     try:
         checked = None
-        if protocol == "AIS":
+        if protocol == "AIS" and run_input.stage is None:
             checked = preflight_ais(
                 topology=args.topology, system=args.system, source=source,
+                topology2=args.topology2, system2=args.system2,
                 number_of_groups=args.number_of_groups,
                 output=args.output, log=args.log, cpu=bool(args.cpu),
                 device=int(args.device) if args.device is not None else None)
@@ -441,14 +448,14 @@ def md_run_main(argv: list[str] | None = None) -> int:
                 output=args.output, log=args.log,
                 number_of_groups=args.number_of_groups, cpu=bool(args.cpu),
                 device=int(args.device) if args.device is not None else None,
-                protocol=protocol)
+                protocol=protocol, system2=args.system2, topology2=args.topology2)
         else:
             checked = preflight_stage(
                 topology=args.topology, system=args.system, coordinates=args.coordinates,
                 trajectory=args.trajectory, restart=args.restart, checkpoint=args.checkpoint,
                 output=args.output, log=args.log, cpu=bool(args.cpu),
                 device=int(args.device) if args.device is not None else None,
-                protocol=protocol)
+                protocol=protocol, system2=args.system2, topology2=args.topology2)
 
         # The COMPLETE inventory, not `resolved.config` alone. An `-odir` that already holds a
         # run is a run that happened; writing into it leaves a tree that is half one run and half
@@ -628,6 +635,11 @@ def _run_ais(args, resolved: dict[str, Any], config_path: Path) -> int:
         "ais_source": dict(resolved["ais_source"]),
         "dynamics": dict(resolved["dynamics"]),
         "reporting": dict(resolved["reporting"]),
+        # The collective-variable block, as `run_generated_ais` passes it. It was missing here, so
+        # an AIS run through `md-run` -- which is what run.sh uses -- resolved a CV definition,
+        # validated it, and then reported nothing: `AIS_cv.csv` was never written while
+        # `resolved.config` beside the run said reporting was on.
+        "collective_variables": dict(resolved.get("collective_variables") or {}),
         "resolved_config": str(config_path),
     }
     # `-ng` means the same thing here as for a ladder: how many workers this launch coordinates.
@@ -652,6 +664,9 @@ def _run_ais(args, resolved: dict[str, Any], config_path: Path) -> int:
     # mode a checkpoint exists to prevent. Re-appending it here said otherwise about where the
     # decision lives.
     argv = _forward(args, names=("log", "output", "out_dir", "device"))
+    for flag, value in (("-s2", args.system2), ("-p2", args.topology2)):
+        if value is not None:
+            argv += [flag, str(value)]
     source = args.source_traj or resolved["ais_source"]["trajectory"]
     if source:
         argv += ["-source-traj", str(source)]

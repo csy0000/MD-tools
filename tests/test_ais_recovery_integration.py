@@ -43,7 +43,7 @@ from md_tools.openmm.checkpoint import (BOUNDARIES, STREAM_BOUNDARIES, Checkpoin
                                      FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT, POINTER_NAME,
                                      read_committed)
 from md_tools.ais.schedule import switching_schedule
-from md_tools.ais.decomposition import GROUPS
+from md_tools.ais.two_state import TwoStateHamiltonian
 
 #: Deliberately different cadences, so a stream that resumed to the wrong count is distinguishable
 #: from the others rather than hidden by a shared number.
@@ -74,10 +74,10 @@ class _TinySimulation:
 
         # The System AND the integrator the runner handed us, not fresh ones.
         #
-        # The System matters because `TauSwitcher.set_amplitude` pushes parameters through
-        # `updateParametersInContext`, which writes through the Force objects the Context already
-        # holds: a Context built from a different System of the same size would accept every call
-        # and change nothing, and every component would read zero while the test reported success.
+        # The System matters because `TwoStateHamiltonian` reads its collective-variable values
+        # through the `CustomCVForce` of the System the Context was built from, and moves lambda
+        # as a parameter of that Context: a Context built from a different System of the same size
+        # would have no `ais_lambda` at all, or report end-state energies nothing ran under.
         #
         # The integrator matters because `run_one_path` seeds the one it constructs. Building a
         # replacement here left it at OpenMM's seed 0, which means "choose a random seed" -- so
@@ -123,36 +123,69 @@ class _FourAtomTopology:
         return topology
 
 
-def _switcher():
-    """The REAL `TauSwitcher`, over four particles carrying a real NonbondedForce.
+def _end_state(scale: float):
+    """Four particles, one NonbondedForce and one bond; `scale` weakens particles 0 and 1.
 
-    This used to be a stub that recorded the tau and did nothing. That was enough while the path
-    loop only needed a System handed back -- and it stopped being enough the moment the loop began
-    measuring the Hamiltonian, because a switcher that changes no parameters produces a potential
-    that is zero at every amplitude, three identical probe energies, and components that are all
-    zero. Every identity in this file would then hold, and none of them would mean anything.
-
-    Two of the four particles are solute, so the three basis groups are all non-empty: the
-    environment-environment pair is unscaled, the two cross pairs are linear, and the
-    solute-solute pair is quadratic. The component accumulators a crash has to preserve are
-    therefore genuinely different numbers rather than three zeros.
+    The bond is IDENTICAL in both end states, so the mixed System carries a shared force as well
+    as a mixed one -- both halves of `pair_plan` are on the path under test.
     """
-    from openmm import NonbondedForce, System, unit
+    from openmm import HarmonicBondForce, NonbondedForce, System, unit
 
-    from md_tools.rest2.scaler import TauSwitcher
-
-    base = System()
+    system = System()
     for _ in range(ATOMS):
-        base.addParticle(12.0 * unit.dalton)
+        system.addParticle(12.0 * unit.dalton)
     nonbonded = NonbondedForce()
     for index in range(ATOMS):
-        nonbonded.addParticle(0.5 if index % 2 == 0 else -0.5, 0.3, 0.6)
-    base.addForce(nonbonded)
-    return TauSwitcher(base, SOLUTE_ATOMS)
+        factor = scale if index in PERTURBED_ATOMS else 1.0
+        nonbonded.addParticle((0.5 if index % 2 == 0 else -0.5) * factor, 0.3, 0.6 * factor)
+    system.addForce(nonbonded)
+    bond = HarmonicBondForce()
+    bond.addBond(2, 3, 0.5, 1000.0)
+    system.addForce(bond)
+    return system
 
 
-#: Which of the four particles are the enhanced region.
-SOLUTE_ATOMS = (0, 1)
+def _hamiltonian():
+    """The REAL `TwoStateHamiltonian`, over four particles whose two end states genuinely differ.
+
+    This used to be a tau switcher, and before that a stub that recorded the tau and did nothing.
+    A stub stopped being enough the moment the path loop began measuring the Hamiltonian: one that
+    changes nothing produces zero work, identical end-state potentials, and every identity in this
+    file then holds without meaning anything. V1 halves the charges and epsilons of two
+    particles, so V1 - V0 is tens of kJ/mol at the source configuration and the work a crash has
+    to preserve is a genuinely non-zero number.
+    """
+    return TwoStateHamiltonian(_end_state(1.0), _end_state(0.5))
+
+
+#: Which of the four particles V1 changes.
+PERTURBED_ATOMS = (0, 1)
+
+
+def _run_path(out: Path, tmp_path: Path, schedule, **kwargs):
+    """`run_one_path` exactly as `ais_main` calls it, for this harness's four particles."""
+    import md_tools.openmm.checkpoint as _checkpoint
+
+    _checkpoint._passed.clear()
+    return ais_run.run_one_path(
+        index=0, chosen=[7, 9], out=out, schedule=schedule, lambdas=schedule["lambdas"],
+        hamiltonian=_hamiltonian(),
+        simulation_inputs={"topology": object(), "source_path": tmp_path / "source.dcd",
+                           "mdtraj_top": object(), "implicit": False,
+                           "acceleration": _Acceleration()},
+        dynamics={"seed": 3, "friction_per_ps": 1.0, "timestep_fs": 2.0,
+                  "temperature_K": 300.0},
+        beta=0.4, temperature=300.0,
+        rank=0, fingerprint="fixed-fingerprint", log=lambda *a: None, **kwargs)
+
+
+def _schedule(**overrides):
+    arguments = dict(
+        switching_steps=SWITCHING, parameter_update_interval_steps=UPDATE,
+        observation_interval_steps=OBSERVE, timestep_fs=2.0, trajectory_interval_steps=FRAME,
+        state_interval_steps=STATE, checkpoint_interval_steps=CHECKPOINT)
+    arguments.update(overrides)
+    return switching_schedule(**arguments)
 
 
 @pytest.fixture
@@ -166,25 +199,18 @@ def harness(tmp_path, monkeypatch):
     # The integrator is left real: `run_one_path` only constructs one and hands it over, so a stub
     # would test less while looking like it tested the same thing.
 
-    schedule = switching_schedule(
-        tau_start=0.5, tau_end=0.0, switching_steps=SWITCHING,
-        parameter_update_interval_steps=UPDATE, observation_interval_steps=OBSERVE,
-        timestep_fs=2.0, trajectory_interval_steps=FRAME, state_interval_steps=STATE,
-        checkpoint_interval_steps=CHECKPOINT)
+    schedule = _schedule()
 
     out = tmp_path / "AIS"
     out.mkdir()
 
-    def call(*, resume=False, fault=None, after=1, mode="components", verify_every=0):
+    def call(*, resume=False, fault=None, after=1):
         """`after=1` by default: let the boundary pass once, so a generation is always committed.
 
         A fault at the FIRST occurrence leaves nothing committed, which is a real case but not the
         interesting one -- the interesting one is resuming from a good generation while a newer,
         half-written one lies beside it. `after=0` reaches the first case.
         """
-        import md_tools.openmm.checkpoint as _checkpoint
-
-        _checkpoint._passed.clear()
         previous = os.environ.get(FAULT_ENVIRONMENT)
         previous_after = os.environ.get(FAULT_AFTER_ENVIRONMENT)
         if fault:
@@ -194,17 +220,7 @@ def harness(tmp_path, monkeypatch):
             os.environ.pop(FAULT_ENVIRONMENT, None)
             os.environ.pop(FAULT_AFTER_ENVIRONMENT, None)
         try:
-            return ais_run.run_one_path(
-                index=0, chosen=[7, 9], out=out, schedule=schedule, taus=schedule["taus"],
-                switcher=_switcher(),
-                simulation_inputs={"topology": object(), "source_path": tmp_path / "source.dcd",
-                                   "mdtraj_top": object(), "implicit": False,
-                                   "acceleration": _Acceleration()},
-                dynamics={"seed": 3, "friction_per_ps": 1.0, "timestep_fs": 2.0,
-                          "temperature_K": 300.0},
-                ais={"work_measurement": mode, "verify_every_updates": verify_every,
-                     "tau_start": 0.5, "tau_end": 0.0}, beta=0.4, temperature=300.0,
-                rank=0, resume=resume, fingerprint="fixed-fingerprint", log=lambda *a: None)
+            return _run_path(out, tmp_path, schedule, resume=resume)
         finally:
             for key, value in ((FAULT_ENVIRONMENT, previous),
                                (FAULT_AFTER_ENVIRONMENT, previous_after)):
@@ -463,17 +479,18 @@ def test_a_checkpoint_from_a_different_run_is_refused(harness, tmp_path):
         call(resume=True)
 
 
-# --- the tau-basis component accumulators survive an interruption ------------------------------
+# --- the accumulated work survives an interruption ----------------------------------------------
 #
-# The components are accumulated in the same loop as the total and committed by the same
-# transaction. That makes them subject to exactly the failure the transaction exists to prevent --
-# a resume that restores a Context from one generation and accumulators from another -- with one
-# extra way to go wrong: an accumulator that is simply not restored starts again from zero, and
-# the resulting file still satisfies `dW_u + dW_l + dW_q == dW_total` on every INDIVIDUAL row
-# while the cumulative columns are short by everything before the crash.
-
-COMPONENT_TOTALS = ("total_work_non_scaled_kj_mol", "total_work_sqrt_scaled_kj_mol",
-                    "total_work_lin_scaled_kj_mol")
+# The work is accumulated in the same loop that propagates and committed by the same transaction.
+# That makes it subject to exactly the failure the transaction exists to prevent -- a resume that
+# restores a Context from one generation and the accumulator from another -- and every row after
+# it would still satisfy "cumulative is the running sum of incremental" while the whole column is
+# offset by the work before the crash.
+#
+# MIGRATED from the tau-basis component accumulators. Components mode and the three-group
+# decomposition are deleted with the single-topology AIS; the one accumulator left is the total,
+# and on the Reference platform a resumed path reproduces an uninterrupted one exactly, so the
+# check is equality row for row rather than three sums.
 
 
 def _final_row(out: Path):
@@ -481,152 +498,185 @@ def _final_row(out: Path):
     return rows[-1]
 
 
-def test_the_components_sum_to_the_total_on_every_row_of_an_uninterrupted_path(harness):
-    call, out, schedule = harness
-    call()
-    for row in _counts(out)["observations"]:
-        parts = sum(float(row[name]) for name in
-                    ("delta_work_non_scaled_kj_mol", "delta_work_sqrt_scaled_kj_mol",
-                     "delta_work_lin_scaled_kj_mol"))
-        assert abs(parts - float(row["incremental_work_kj_mol"])) < 1e-6, row["protocol_step"]
-        cumulative = sum(float(row[name]) for name in COMPONENT_TOTALS)
-        assert abs(cumulative - float(row["cumulative_work_kj_mol"])) < 1e-6, row["protocol_step"]
+def _saved_positions(out: Path, frame_index: int):
+    """The coordinate a frame-aligned row names, read back from the path's trajectory, in nm."""
+    import mdtraj
+
+    staged = out / "path_0000" / "frames.partial.nc"
+    trajectory = staged if staged.is_file() else out / "AIS_traj0000.nc"
+    with mdtraj.formats.NetCDFTrajectoryFile(str(trajectory)) as handle:
+        xyz = handle.read()[0]
+    return numpy.asarray(xyz[frame_index], dtype=float) / 10.0      # AMBER NetCDF is in angstrom
 
 
-def test_the_unscaled_component_work_is_zero_on_every_row(harness):
-    """The column a nonzero value would condemn. Written, so it can be read rather than assumed."""
-    call, out, schedule = harness
-    call()
-    for row in _counts(out)["observations"]:
-        assert float(row["delta_work_non_scaled_kj_mol"]) == 0.0, row["protocol_step"]
-        assert float(row["total_work_non_scaled_kj_mol"]) == 0.0, row["protocol_step"]
+def _end_state_energy(system, positions_nm):
+    from openmm import Context, Platform, VerletIntegrator, unit
+
+    context = Context(system, VerletIntegrator(0.001), Platform.getPlatformByName("Reference"))
+    context.setPositions(positions_nm * unit.nanometer)
+    return context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
+        unit.kilojoule_per_mole)
 
 
-def test_the_observation_potentials_reconstruct_and_match_a_direct_measurement(harness):
-    """Both identities, on every row that has a saved coordinate.
+def test_the_observation_potentials_are_the_end_states_at_the_saved_coordinate(harness):
+    """Both identities, on every row that has a saved coordinate -- checked independently.
 
-    `potential_reconstructed_kj_mol` from the three groups, and `potential_direct_kj_mol` from a
-    separate `getState(getEnergy=True)` at the same coordinate and tau. Two independent numbers in
-    the file, so a reader checks the identity themselves instead of trusting that somebody did.
+    `potential_direct_kj_mol` must be `(1 - lambda) V0 + lambda V1` of the row's own V0 and V1,
+    and V0 and V1 must be what the two END-STATE Systems, in Contexts of their own, evaluate at the
+    frame the row names. That second check reads the coordinate back from the trajectory, so a row
+    carrying a neighbouring configuration's potentials fails it. A row with no saved coordinate
+    carries empty potential cells by schema, never a neighbour's.
+
+    MIGRATED from the three-group reconstruction of the single-topology AIS.
     """
     call, out, schedule = harness
     call()
     checked = 0
     for row in _counts(out)["observations"]:
         if row["coordinate_frame_index"] == "":
-            # No saved coordinate: the potential cells are empty by schema, never a neighbour's.
-            for name in ("potential_non_scaled_kj_mol", "potential_sqrt_scaled_kj_mol",
-                         "potential_lin_scaled_kj_mol", "potential_reconstructed_kj_mol",
+            for name in ("potential_v0_kj_mol", "potential_v1_kj_mol",
                          "potential_direct_kj_mol"):
                 assert row[name] == "", (name, row["protocol_step"])
             continue
-        tau = float(row["tau"])
-        amplitude = 1.0 - tau
-        reconstructed = (float(row["potential_non_scaled_kj_mol"])
-                         + amplitude * float(row["potential_sqrt_scaled_kj_mol"])
-                         + amplitude * amplitude * float(row["potential_lin_scaled_kj_mol"]))
-        assert abs(reconstructed - float(row["potential_reconstructed_kj_mol"])) < 1e-6
-        assert abs(reconstructed - float(row["potential_direct_kj_mol"])) < 1e-6, (
-            f"step {row['protocol_step']}: reconstructed {reconstructed} against direct "
+        lam = float(row["lambda"])
+        v0, v1 = float(row["potential_v0_kj_mol"]), float(row["potential_v1_kj_mol"])
+        mixed = (1.0 - lam) * v0 + lam * v1
+        assert abs(mixed - float(row["potential_direct_kj_mol"])) < 1e-6, (
+            f"step {row['protocol_step']}: mixed {mixed} against direct "
             f"{row['potential_direct_kj_mol']}")
+
+        positions = _saved_positions(out, int(row["coordinate_frame_index"]))
+        # The trajectory stores float32 angstroms, so the independent evaluation is at a
+        # coordinate rounded to ~1e-5 A; a millijoule is far below any misattributed frame.
+        for label, system, value in (("V0", _end_state(1.0), v0), ("V1", _end_state(0.5), v1)):
+            independent = _end_state_energy(system, positions)
+            assert abs(independent - value) < 1e-2, (
+                f"step {row['protocol_step']}: {label} {value} in the row against {independent} "
+                f"from the end-state System at frame {row['coordinate_frame_index']}")
         checked += 1
     assert checked >= 2, "no frame-aligned row was checked"
 
 
-def test_the_components_are_non_trivial_so_these_checks_can_fail(harness):
-    """Guard on the guards: three zeros would satisfy every identity above."""
+def test_the_work_and_the_end_state_difference_are_non_trivial_so_these_checks_can_fail(harness):
+    """Guard on the guards: a V1 equal to V0 would satisfy every identity in this file."""
     call, out, schedule = harness
-    call()
+    record = call()
     row = _final_row(out)
-    assert abs(float(row["total_work_sqrt_scaled_kj_mol"])) > 1e-9
-    assert abs(float(row["total_work_lin_scaled_kj_mol"])) > 1e-9
-    assert abs(float(row["potential_lin_scaled_kj_mol"])) > 1e-9
+    assert abs(float(row["cumulative_work_kj_mol"])) > 1e-3
+    assert abs(record["total_work_kj_mol"]) > 1e-3
+    assert abs(float(row["potential_v1_kj_mol"]) - float(row["potential_v0_kj_mol"])) > 1e-3
 
 
 @pytest.mark.parametrize("boundary", BOUNDARIES)
-def test_a_resumed_path_reproduces_the_uninterrupted_component_totals(boundary, harness,
-                                                                     tmp_path, monkeypatch):
-    """Crash, resume, and land on the same three component totals as an uninterrupted run.
+def test_a_resumed_path_reproduces_the_uninterrupted_work(boundary, harness, tmp_path,
+                                                          monkeypatch):
+    """Crash, resume, and land on the same work as an uninterrupted run, row for row.
 
-    Same seeds, same source frame, same schedule, so the paths are the same trajectory -- and a
-    resume that dropped or double-counted a component would move exactly one of these three
-    numbers while leaving the total right, because the total is measured independently.
+    Same seeds, same source frame, same schedule, and the Reference platform, where a restored
+    committed generation continues bit-for-bit -- so the two paths are the same trajectory, and a
+    resume that dropped or double-counted the work since the last observation would move the
+    cumulative column from that row on. (On CUDA a resume is NOT bit-for-bit, by the decision of
+    2026-09-16; that lane asserts exact restoration and a complete valid path instead.)
+
+    MIGRATED from the three component totals of the single-topology AIS.
     """
     call, out, schedule = harness
     reference = call()
-    reference_row = _final_row(out)
+    reference_rows = _counts(out)["observations"]
 
     # A second, identical path in a fresh directory, interrupted at this boundary.
     second = tmp_path / "AIS-again"
     second.mkdir()
     _read_frame_source(monkeypatch)
-    import md_tools.openmm.checkpoint as _checkpoint
-
-    def run(**kwargs):
-        _checkpoint._passed.clear()
-        return ais_run.run_one_path(
-            index=0, chosen=[7, 9], out=second, schedule=schedule, taus=schedule["taus"],
-            switcher=_switcher(),
-            simulation_inputs={"topology": object(), "source_path": tmp_path / "source.dcd",
-                               "mdtraj_top": object(), "implicit": False,
-                               "acceleration": _Acceleration()},
-            dynamics={"seed": 3, "friction_per_ps": 1.0, "timestep_fs": 2.0,
-                      "temperature_K": 300.0},
-            ais={"work_measurement": "components", "tau_start": 0.5, "tau_end": 0.0}, beta=0.4, temperature=300.0,
-            rank=0, fingerprint="fixed-fingerprint", log=lambda *a: None, **kwargs)
 
     monkeypatch.setenv(FAULT_ENVIRONMENT, boundary)
     monkeypatch.setenv(FAULT_AFTER_ENVIRONMENT, "1")
     with pytest.raises(RuntimeError):
-        run(resume=False)
+        _run_path(second, tmp_path, schedule, resume=False)
     monkeypatch.delenv(FAULT_ENVIRONMENT)
     monkeypatch.delenv(FAULT_AFTER_ENVIRONMENT)
 
-    resumed = run(resume=True)
+    resumed = _run_path(second, tmp_path, schedule, resume=True)
     assert resumed["status"] == "completed" and resumed["resumed"] is True
-    resumed_row = _final_row(second)
+    rows = _counts(second)["observations"]
 
-    for name in COMPONENT_TOTALS + ("cumulative_work_kj_mol",):
-        assert abs(float(resumed_row[name]) - float(reference_row[name])) < 1e-6, (
-            f"{boundary}: {name} differs between the uninterrupted and the resumed path")
-    assert abs(sum(float(resumed_row[n]) for n in COMPONENT_TOTALS)
-               - float(resumed_row["cumulative_work_kj_mol"])) < 1e-6
+    assert len(rows) == len(reference_rows), boundary
+    for mine, theirs in zip(rows, reference_rows):
+        for name in ("lambda", "incremental_work_kj_mol", "cumulative_work_kj_mol",
+                     "potential_v0_kj_mol", "potential_v1_kj_mol", "potential_direct_kj_mol"):
+            assert mine[name] == theirs[name], (
+                f"{boundary}: {name} at step {mine['protocol_step']} differs between the "
+                f"uninterrupted ({theirs[name]}) and the resumed ({mine[name]}) path")
+    assert resumed["total_work_kj_mol"] == reference["total_work_kj_mol"], boundary
 
 
-def test_a_checkpoint_without_a_decomposition_schema_is_refused_on_resume(harness):
-    """An old checkpoint has no components to continue, and is refused rather than zero-filled."""
-    call, out, schedule = harness
+def _commit_then_edit_the_checkpoint_schema(call, out, edit):
     with pytest.raises(RuntimeError):
         call(fault="after-pointer-replace")
-
     sidecar = Path(read_committed(out / "path_0000")["sidecar"])
     document = json.loads(sidecar.read_text(encoding="utf-8"))
-    document["state"].pop("decomposition_schema")
+    edit(document["state"])
     sidecar.write_text(json.dumps(document), encoding="utf-8")
-    with pytest.raises(Exception, match="no component-decomposition schema"):
+
+
+def test_a_checkpoint_without_an_ais_schema_is_refused_on_resume(harness):
+    """A checkpoint that does not say what it measured is refused rather than continued.
+
+    MIGRATED from the refusal of a checkpoint with no component-decomposition schema.
+    """
+    call, out, schedule = harness
+    _commit_then_edit_the_checkpoint_schema(call, out, lambda state: state.pop("ais_schema"))
+    with pytest.raises(SystemExit, match="records no AIS schema"):
         call(resume=True)
 
 
-def test_a_checkpoint_from_another_basis_version_is_refused_on_resume(harness):
+def test_a_checkpoint_from_another_schema_version_is_refused_on_resume(harness):
     call, out, schedule = harness
-    with pytest.raises(RuntimeError):
-        call(fault="after-pointer-replace")
-
-    sidecar = Path(read_committed(out / "path_0000")["sidecar"])
-    document = json.loads(sidecar.read_text(encoding="utf-8"))
-    document["state"]["decomposition_schema"]["version"] = 99
-    sidecar.write_text(json.dumps(document), encoding="utf-8")
-    with pytest.raises(Exception, match="not one this build implements"):
+    _commit_then_edit_the_checkpoint_schema(
+        call, out, lambda state: state["ais_schema"].update(version=99))
+    with pytest.raises(SystemExit, match="not one this build implements"):
         call(resume=True)
 
 
-def test_the_completion_record_carries_the_component_totals_and_the_evaluation_count(harness):
+def test_a_single_topology_checkpoint_is_refused_by_name_on_resume(harness):
+    """A generation the tau-switching AIS committed is not continued by a two-state switch.
+
+    Its accumulated work was measured along a different Hamiltonian path; adding linear two-state
+    work onto it describes nothing. The refusal names the retired AIS, and leaves the committed
+    generation exactly where it was.
+    """
+    call, out, schedule = harness
+
+    def single_topology(state):
+        state.pop("ais_schema")
+        state.pop("lambda", None)
+        state["tau"] = 0.25
+        state["work_measurement"] = "components"
+        state["decomposition_schema"] = {"name": "rest2-lambda-basis", "version": 2}
+
+    _commit_then_edit_the_checkpoint_schema(call, out, single_topology)
+    committed = read_committed(out / "path_0000")
+    before = {name: Path(committed[name]).read_bytes() for name in ("checkpoint", "sidecar")}
+    rows_before = (out / "path_0000" / "observations.csv").read_bytes()
+
+    with pytest.raises(SystemExit) as refusal:
+        call(resume=True)
+    message = str(refusal.value)
+    assert "rest2-lambda-basis/v2" in message and "single-topology" in message, message
+    assert {name: Path(committed[name]).read_bytes()
+            for name in ("checkpoint", "sidecar")} == before
+    assert (out / "path_0000" / "observations.csv").read_bytes() == rows_before, (
+        "the refused resume truncated a stream before refusing")
+
+
+def test_the_completion_record_carries_the_schema_and_the_evaluation_count(harness):
     call, out, schedule = harness
     record = call()
-    assert record["decomposition_schema"]["version"] == 2
+    assert record["ais_schema"] == {"name": "two-state-linear", "version": 1}
+    assert "decomposition_schema" not in record and "work_measurement" not in record
     counters = record["evaluation_counters"]
-    # One WORK probe per update. The observation probes are per FRAME-ALIGNED OBSERVATION ROW,
-    # which is a third cadence again -- and getting that arithmetic right is the correction.
+    # One WORK derivative per update, at the frozen pre-switch coordinate. The observation
+    # potentials are per FRAME-ALIGNED OBSERVATION ROW, which is a third cadence again.
     #
     # This harness switches every 10 steps, observes every 20 and writes a frame every 50, over
     # 200 steps. Frames land at 0, 50, 100, 150, 200; observations at every multiple of 20. Only
@@ -638,20 +688,11 @@ def test_the_completion_record_carries_the_component_totals_and_the_evaluation_c
                                       schedule["observation_interval_steps"])
                if step % schedule["trajectory_interval_steps"] == 0]
     assert len(aligned) == 3, aligned
-    # Each probe is three evaluations; the WORK probe runs once per update, the OBSERVATION
-    # probe once per frame-aligned row, and each observation adds one direct evaluation too.
-    assert counters["work_basis_probe_energy_evaluations"] == 3 * schedule["number_of_updates"]
-    assert counters["observation_potential_energy_evaluations"] == 4 * len(aligned)
-    # TWO, for the whole path -- not two per update. The basis probe already gives U at both
-    # endpoints, so `components` mode derives the work from the fit and measures it directly only
-    # where it VERIFIES the fit: the first update of the path, and every `verify_every_updates`
-    # after it. This harness leaves that at 0, so only the first update verifies, and the path
-    # costs 3 evaluations per update instead of the 5 it used to.
-    assert schedule.get("verify_every_updates", 0) == 0
-    assert counters["direct_work_energy_evaluations"] == 2
+    assert counters["work_derivative_evaluations"] == schedule["number_of_updates"]
+    # V and dV/dlambda in one call, plus the collective-variable values that check them: two.
+    assert counters["observation_potential_energy_evaluations"] == 2 * len(aligned)
     assert counters["useful_total_energy_evaluations"] == (
-        counters["direct_work_energy_evaluations"]
-        + counters["work_basis_probe_energy_evaluations"]
+        counters["work_derivative_evaluations"]
         + counters["observation_potential_energy_evaluations"]
         + counters["other_useful_energy_evaluations"])
     assert counters["paid_total_energy_evaluations"] == (
@@ -660,18 +701,21 @@ def test_the_completion_record_carries_the_component_totals_and_the_evaluation_c
     # An uninterrupted path knows its whole cost.
     assert counters["known_discarded_energy_evaluations"] == 0
     assert counters["discarded_is_complete"] is True
-    assert counters["parameter_updates"] > counters["work_basis_probe_energy_evaluations"]
-    assert counters["probe_seconds"] > 0.0
-    assert abs(sum(record[name] for name in COMPONENT_TOTALS)
-               - record["total_work_kj_mol"]) < 1e-6
+    assert counters["parameter_updates"] == schedule["number_of_updates"]
 
 
-def test_an_observation_interval_wider_than_the_update_interval_sums_several_updates(harness):
+def test_an_observation_interval_wider_than_the_update_interval_sums_several_updates(
+        harness, tmp_path, monkeypatch):
     """The two cadences are independent, and a row must carry the work of EVERY update it covers.
 
     This harness observes every 20 steps and updates every 10, so each row after the first spans
-    two parameter changes. A component accumulator that was reset per update instead of per
-    observation would halve these numbers and still satisfy the per-row sum identity.
+    two parameter changes. A `since` accumulator that was reset per update instead of per
+    observation would halve these numbers and still satisfy the running-sum identity -- so the
+    same path is run again observing at EVERY update, and each coarse row must equal the sum of
+    the two fine rows it spans. Observation reads energies and draws no random numbers, so on the
+    Reference platform the two runs are the same trajectory.
+
+    MIGRATED: it used to check per-component running sums.
     """
     call, out, schedule = harness
     assert schedule["observation_interval_steps"] > schedule["parameter_update_interval_steps"], \
@@ -681,19 +725,25 @@ def test_an_observation_interval_wider_than_the_update_interval_sums_several_upd
     assert updates_per_row == 2
 
     call()
-    rows = _counts(out)["observations"]
-    # Reconstruct each row's linear work from the tau it spans. The linear component work over an
-    # observation is sum_j (a_{j+1} - a_j) * U_linear(x_j), which is NOT (a_end - a_start) * U_l
-    # unless the coordinates were frozen -- so the check here is the cheaper, sharper one: the
-    # cumulative columns must be the running sum of the incremental ones, per component.
-    running = {"non_scaled": 0.0, "sqrt_scaled": 0.0, "lin_scaled": 0.0}
-    for row in rows[1:]:
-        for name in running:
-            running[name] += float(row[f"delta_work_{name}_kj_mol"])
-            assert abs(running[name] - float(row[f"total_work_{name}_kj_mol"])) < 1e-9, (
-                f"{name} at step {row['protocol_step']}")
-    # And the last row's totals are the path's totals.
-    assert abs(sum(running.values()) - float(rows[-1]["cumulative_work_kj_mol"])) < 1e-6
+    coarse = _counts(out)["observations"]
+    running = 0.0
+    for row in coarse[1:]:
+        running += float(row["incremental_work_kj_mol"])
+        assert abs(running - float(row["cumulative_work_kj_mol"])) < 1e-9, row["protocol_step"]
+
+    fine_out = tmp_path / "AIS-fine"
+    fine_out.mkdir()
+    _read_frame_source(monkeypatch)
+    _run_path(fine_out, tmp_path, _schedule(observation_interval_steps=UPDATE), resume=False)
+    fine = {int(row["protocol_step"]): float(row["incremental_work_kj_mol"])
+            for row in _counts(fine_out)["observations"]}
+    for row in coarse[1:]:
+        step = int(row["protocol_step"])
+        spanned = fine[step] + fine[step - UPDATE]
+        assert abs(float(row["incremental_work_kj_mol"]) - spanned) < 1e-9, (
+            f"step {step}: the coarse row carries {row['incremental_work_kj_mol']} and the two "
+            f"updates it spans sum to {spanned}")
+    assert abs(float(coarse[-1]["cumulative_work_kj_mol"]) - sum(fine.values())) < 1e-6
 
 
 # --- the run-level identity of an output directory ----------------------------------------------
@@ -775,80 +825,119 @@ def test_the_completion_manifest_lands_atomically(harness):
     assert not leftovers, f"a staging file survived the commit: {leftovers}"
 
 
+def test_a_single_topology_completion_record_is_refused_by_name(harness):
+    """A path the tau-switching AIS completed is not skipped as though this build had run it.
+
+    Skipping it would put a work value measured along a different Hamiltonian path into this
+    run's work table, where nothing distinguishes it from its neighbours.
+    """
+    call, out, schedule = harness
+    call()
+    marker = out / "path_0000" / "completed.json"
+    record = json.loads(marker.read_text(encoding="utf-8"))
+    record.pop("ais_schema")
+    record["work_measurement"] = "components"
+    record["decomposition_schema"] = {"name": "rest2-lambda-basis", "version": 2}
+    marker.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(SystemExit) as refusal:
+        call()
+    message = str(refusal.value)
+    assert "rest2-lambda-basis/v2" in message and "single-topology" in message, message
+
+
+def _identity(*, seed=3, paths=2, where=None, v1="u", schedule=None):
+    from md_tools.ais.run import run_identity_document
+
+    return run_identity_document(
+        fingerprint="f",
+        end_state_facts={"V0": {"system": "s", "topology": "t"},
+                         "V1": {"system": v1, "topology": "t"}},
+        source_facts={"sha256": "x"}, source_format="dcd",
+        schedule=schedule or {"switching_steps": 200},
+        ais={"number_of_paths": paths}, dynamics={"seed": seed}, chosen=list(range(paths)),
+        reporting={"crd_printout_solute": 5}, resolved_config=where)
+
+
 def test_the_run_identity_document_names_every_field_that_may_not_change():
     """A unit check on the document, so the fields are asserted rather than merely produced."""
-    from md_tools.ais.run import RUN_IDENTITY_VERSION, run_identity_document
+    from md_tools.ais.run import (OBSERVATION_COLUMNS, RUN_IDENTITY_REQUIRED_KEYS,
+                                  RUN_IDENTITY_VERSION)
 
-    document = run_identity_document(
-        fingerprint="f", topology_facts={"sha256": "t"}, system_facts={"sha256": "s"},
-        source_facts={"sha256": "x"}, source_format="dcd",
-        schedule={"switching_steps": 200, "taus": [1, 2], "observations": [], "note": "n"},
-        ais={"work_measurement": "components", "tau_start": 0.5, "tau_end": 0.0, "number_of_paths": 2},
-        dynamics={"seed": 3}, chosen=[7, 9],
-        reporting={"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5},
-        resolved_config="/somewhere/resolved.config")
+    document = _identity(
+        schedule={"switching_steps": 200, "lambdas": [0.0, 1.0], "observations": [], "note": "n"},
+        where="/somewhere/resolved.config")
     assert document["schema_version"] == RUN_IDENTITY_VERSION
-    for field in ("source", "tau", "schedule", "reporting", "seed_policy", "number_of_paths",
-                  "selected_frames", "observation_columns", "decomposition_schema"):
+    for field in ("end_states", "source", "lambda", "schedule", "reporting", "seed_policy",
+                  "number_of_paths", "selected_frames", "observation_columns", "ais_schema"):
         assert field in document, field
-    # The derived, per-invocation parts of the schedule are excluded: `taus` is a list of floats
-    # derived from tau_start/tau_end/updates, and comparing it would report a difference twice.
-    assert "taus" not in document["schedule"] and "observations" not in document["schedule"]
+    assert RUN_IDENTITY_REQUIRED_KEYS <= set(document)
+    assert set(document["end_states"]) == {"V0", "V1"}
+    assert document["lambda"] == {"start": 0.0, "end": 1.0, "interpolation": "linear"}
+    assert document["observation_columns"] == list(OBSERVATION_COLUMNS)
+    assert "tau" not in document and "decomposition_schema" not in document
+    # The derived, per-invocation parts of the schedule are excluded: `lambdas` is a list of
+    # floats derived from the update count, and comparing it would report a difference twice.
+    assert "lambdas" not in document["schedule"] and "observations" not in document["schedule"]
 
 
 def test_a_directory_holding_another_run_is_refused_by_naming_what_differs(tmp_path):
-    from md_tools.ais.run import RUN_IDENTITY, require_same_run, run_identity_document
+    from md_tools.ais.run import RUN_IDENTITY, require_same_run
 
-    def document(seed, paths):
-        return run_identity_document(
-            fingerprint="f", topology_facts={"sha256": "t"}, system_facts={"sha256": "s"},
-            source_facts={"sha256": "x"}, source_format="dcd",
-            schedule={"switching_steps": 200},
-            ais={"work_measurement": "components", "tau_start": 0.5, "tau_end": 0.0, "number_of_paths": paths},
-            dynamics={"seed": seed}, chosen=list(range(paths)),
-            reporting={"crd_printout_solute": 5}, resolved_config=None)
-
-    (tmp_path / RUN_IDENTITY).write_text(json.dumps(document(3, 2)), encoding="utf-8")
-    require_same_run(tmp_path, document(3, 2))                    # unchanged: accepted
+    (tmp_path / RUN_IDENTITY).write_text(json.dumps(_identity(seed=3, paths=2)),
+                                         encoding="utf-8")
+    require_same_run(tmp_path, _identity(seed=3, paths=2))              # unchanged: accepted
 
     with pytest.raises(SystemExit) as refusal:
-        require_same_run(tmp_path, document(4, 2))
+        require_same_run(tmp_path, _identity(seed=4, paths=2))
     assert "seed_policy" in str(refusal.value)
 
     with pytest.raises(SystemExit) as refusal:
-        require_same_run(tmp_path, document(3, 5))
+        require_same_run(tmp_path, _identity(seed=3, paths=5))
     message = str(refusal.value)
     assert "number_of_paths" in message and "selected_frames" in message
 
+    # A different V1 is a different transformation, not a different setting of the same one.
+    with pytest.raises(SystemExit) as refusal:
+        require_same_run(tmp_path, _identity(v1="another V1"))
+    assert "end_states" in str(refusal.value)
+
 
 def test_an_older_run_identity_schema_is_refused_rather_than_compared(tmp_path):
-    from md_tools.ais.run import RUN_IDENTITY, require_same_run, run_identity_document
+    from md_tools.ais.run import RUN_IDENTITY, require_same_run
 
-    document = run_identity_document(
-        fingerprint="f", topology_facts={"sha256": "t"}, system_facts={"sha256": "s"},
-        source_facts={"sha256": "x"}, source_format="dcd", schedule={"switching_steps": 1},
-        ais={"work_measurement": "components", "tau_start": 0.5, "tau_end": 0.0, "number_of_paths": 1},
-        dynamics={"seed": 1}, chosen=[0], reporting={}, resolved_config=None)
+    document = _identity()
     old = dict(document, schema_version=0)
     (tmp_path / RUN_IDENTITY).write_text(json.dumps(old), encoding="utf-8")
     with pytest.raises(SystemExit, match="schema"):
         require_same_run(tmp_path, document)
 
 
+def test_a_single_topology_run_identity_is_refused_by_name(tmp_path):
+    """Run-identity v1 with a `tau` block is what the tau-switching AIS wrote.
+
+    Refused, and refused as THAT -- "schema v1" alone sends a person to diff two JSON files for a
+    reason the build already knows.
+    """
+    from md_tools.ais.run import RUN_IDENTITY, require_same_run
+
+    document = _identity()
+    old = {key: value for key, value in document.items()
+           if key not in ("end_states", "lambda", "ais_schema")}
+    old.update(schema_version=1, tau={"start": 0.5, "end": 0.0, "interpolation": "linear"},
+               topology={"name": "t.pdb", "sha256": "t"}, system={"sha256": "s"},
+               decomposition_schema={"name": "rest2-lambda-basis", "version": 2})
+    (tmp_path / RUN_IDENTITY).write_text(json.dumps(old), encoding="utf-8")
+    with pytest.raises(SystemExit, match="single-topology"):
+        require_same_run(tmp_path, document)
+
+
 def test_a_resolved_config_path_alone_does_not_make_it_a_different_run(tmp_path):
     """Where the file lives is not a property of the experiment. Moving a project is allowed."""
-    from md_tools.ais.run import RUN_IDENTITY, require_same_run, run_identity_document
+    from md_tools.ais.run import RUN_IDENTITY, require_same_run
 
-    def document(where):
-        return run_identity_document(
-            fingerprint="f", topology_facts={"sha256": "t"}, system_facts={"sha256": "s"},
-            source_facts={"sha256": "x"}, source_format="dcd", schedule={"switching_steps": 1},
-            ais={"work_measurement": "components", "tau_start": 0.5, "tau_end": 0.0, "number_of_paths": 1},
-            dynamics={"seed": 1}, chosen=[0], reporting={}, resolved_config=where)
-
-    (tmp_path / RUN_IDENTITY).write_text(json.dumps(document("/old/resolved.config")),
+    (tmp_path / RUN_IDENTITY).write_text(json.dumps(_identity(where="/old/resolved.config")),
                                          encoding="utf-8")
-    require_same_run(tmp_path, document("/new/resolved.config"))
+    require_same_run(tmp_path, _identity(where="/new/resolved.config"))
 
 
 # --- the cost accounting, and what cannot be known after a crash --------------------------------
@@ -872,20 +961,9 @@ def test_a_resumed_path_restores_its_useful_counters_rather_than_calling_them_di
     second = tmp_path / "AIS-resumed"
     second.mkdir()
     _read_frame_source(monkeypatch)
-    import md_tools.openmm.checkpoint as _checkpoint
 
     def run(**kwargs):
-        _checkpoint._passed.clear()
-        return ais_run.run_one_path(
-            index=0, chosen=[7, 9], out=second, schedule=schedule, taus=schedule["taus"],
-            switcher=_switcher(),
-            simulation_inputs={"topology": object(), "source_path": tmp_path / "source.dcd",
-                               "mdtraj_top": object(), "implicit": False,
-                               "acceleration": _Acceleration()},
-            dynamics={"seed": 3, "friction_per_ps": 1.0, "timestep_fs": 2.0,
-                      "temperature_K": 300.0},
-            ais={"work_measurement": "components", "tau_start": 0.5, "tau_end": 0.0}, beta=0.4, temperature=300.0,
-            rank=0, fingerprint="fixed-fingerprint", log=lambda *a: None, **kwargs)
+        return _run_path(second, tmp_path, schedule, **kwargs)
 
     monkeypatch.setenv(FAULT_ENVIRONMENT, "after-pointer-replace")
     monkeypatch.setenv(FAULT_AFTER_ENVIRONMENT, "1")
@@ -899,8 +977,8 @@ def test_a_resumed_path_restores_its_useful_counters_rather_than_calling_them_di
     counters = resumed["evaluation_counters"]
 
     # THE POINT: the same useful total as the uninterrupted path, component by component.
-    for name in ("direct_work_energy_evaluations", "work_basis_probe_energy_evaluations",
-                 "observation_potential_energy_evaluations", "useful_total_energy_evaluations"):
+    for name in ("work_derivative_evaluations", "observation_potential_energy_evaluations",
+                 "useful_total_energy_evaluations", "parameter_updates"):
         assert counters[name] == reference_counters[name], (
             f"{name}: resumed {counters[name]} against uninterrupted "
             f"{reference_counters[name]}")
@@ -921,8 +999,7 @@ def test_the_counter_identities_hold_on_every_completion_record(harness):
     record = call()
     counters = record["evaluation_counters"]
     assert counters["useful_total_energy_evaluations"] == sum(
-        counters[name] for name in ("direct_work_energy_evaluations",
-                                    "work_basis_probe_energy_evaluations",
+        counters[name] for name in ("work_derivative_evaluations",
                                     "observation_potential_energy_evaluations",
                                     "other_useful_energy_evaluations"))
     assert counters["paid_total_energy_evaluations"] == (
@@ -960,20 +1037,9 @@ def test_a_crash_at_a_finalization_boundary_finishes_identically_on_the_next_inv
     second = tmp_path / f"final-{boundary}"
     second.mkdir()
     _read_frame_source(monkeypatch)
-    import md_tools.openmm.checkpoint as _checkpoint
 
     def run(**kwargs):
-        _checkpoint._passed.clear()
-        return ais_run.run_one_path(
-            index=0, chosen=[7, 9], out=second, schedule=schedule, taus=schedule["taus"],
-            switcher=_switcher(),
-            simulation_inputs={"topology": object(), "source_path": tmp_path / "source.dcd",
-                               "mdtraj_top": object(), "implicit": False,
-                               "acceleration": _Acceleration()},
-            dynamics={"seed": 3, "friction_per_ps": 1.0, "timestep_fs": 2.0,
-                      "temperature_K": 300.0},
-            ais={"work_measurement": "components", "tau_start": 0.5, "tau_end": 0.0}, beta=0.4, temperature=300.0,
-            rank=0, fingerprint="fixed-fingerprint", log=lambda *a: None, **kwargs)
+        return _run_path(second, tmp_path, schedule, **kwargs)
 
     monkeypatch.setenv(FAULT_ENVIRONMENT, boundary)
     monkeypatch.setenv(FAULT_AFTER_ENVIRONMENT, "0")
@@ -1061,126 +1127,30 @@ def test_a_completion_manifest_with_an_unknown_key_is_refused(harness):
 
 
 # =================================================================================================
-#  ais.work_measurement -- the two ways a path may measure its work
+#  ais.work_measurement -- RETIRED
 #
-#  `work` measures U at both endpoints of every update and subtracts: two evaluations, and the
-#  work integral is all it produces. `components` takes the three-point basis probe, derives the
-#  work from the fit, and additionally obtains the potential as a FUNCTION of tau -- which is what
-#  reweighting onto an unvisited tau needs and a single work value cannot supply.
-#
-#  The two must agree on the work. That is the claim that makes the default safe, and it is the
-#  first test below.
+#  The single-topology AIS offered two ways to measure a path's work: `work` (U at both endpoints
+#  of every update) and `components` (a three-point basis probe fitted to a quadratic in 1 - tau,
+#  verified every `verify_every_updates`). Both, the component columns, and the refusal to resume
+#  under the other mode are gone with the tau switch: the two-state potential is LINEAR in lambda,
+#  so one derivative per update IS the work and there is nothing to decompose. The tests that lived
+#  here -- both modes agreeing, their 2N / 3N+2 costs, a work path carrying no component columns, a
+#  components path naming itself, the cross-mode resume refusal, and the verification dial -- are
+#  OBSOLETE with `ais.work_measurement`, `ais.verify_every_updates` and
+#  `md_tools.ais.decomposition`. What survives of their intent is below.
 # =================================================================================================
 
-def _work_rows(directory):
-    with (directory / "path_0000" / "observations.csv").open(newline="") as handle:
-        return list(csv.DictReader(handle))
+def test_the_observation_table_has_one_column_set_and_no_tau(harness):
+    """One schema, whatever the run: no mode-dependent columns, no tau, no component columns.
 
-
-def test_both_modes_measure_the_same_work_on_the_same_path(harness):
-    """The default may be cheaper, but it may not be a different measurement.
-
-    Same seeds, same schedule, same source frame, so the two runs propagate the identical
-    trajectory and differ only in how the work at each update is obtained -- subtraction of two
-    measured potentials, or the quadratic fitted through three probe amplitudes. The three-group
-    identity is exact, so these are two arithmetics for one number and they must agree to
-    numerical precision rather than merely correlate.
+    A reweighting script must fail on a key rather than read a column this build never measures,
+    and the record must not claim a measurement mode that no longer exists.
     """
     call, out, _ = harness
-    components = call(mode="components")
-    (out / "path_0000").rename(out / "components_path")
-    direct = call(mode="work")
-
-    assert abs(components["total_work_kj_mol"] - direct["total_work_kj_mol"]) < 1e-6, (
-        f"components {components['total_work_kj_mol']!r} vs work "
-        f"{direct['total_work_kj_mol']!r}")
-
-    # Not just the total: every row, so a pair of compensating per-update errors cannot pass.
-    with (out / "components_path" / "observations.csv").open(newline="") as handle:
-        component_rows = list(csv.DictReader(handle))
-    for left, right in zip(component_rows, _work_rows(out)):
-        assert abs(float(left["cumulative_work_kj_mol"])
-                   - float(right["cumulative_work_kj_mol"])) < 1e-6
-
-
-def test_a_work_path_costs_two_evaluations_per_update_and_a_component_path_three(harness):
-    """The whole point of the setting, stated as arithmetic.
-
-    `work` pays two direct evaluations per update and takes no probe at all. `components` pays
-    three probe evaluations per update plus the two that verify the first update -- so it is
-    3N + 2 against 2N, and it was 5N before the fit was trusted to supply the endpoints.
-    """
-    call, out, schedule = harness
-    updates = schedule["number_of_updates"]
-
-    components = call(mode="components")["evaluation_counters"]
-    (out / "path_0000").rename(out / "components_path")
-    direct = call(mode="work")["evaluation_counters"]
-
-    assert direct["work_basis_probe_energy_evaluations"] == 0
-    assert direct["direct_work_energy_evaluations"] == 2 * updates
-    assert components["work_basis_probe_energy_evaluations"] == 3 * updates
-    assert components["direct_work_energy_evaluations"] == 2
-
-    # The observation rows differ too: a `work` observation is one potential, a `components`
-    # observation is that potential plus a three-amplitude probe.
-    assert components["observation_potential_energy_evaluations"] == (
-        4 * direct["observation_potential_energy_evaluations"])
-
-
-def test_a_work_path_carries_no_component_columns_at_all(harness):
-    """Absent, not zero. A reweighting script must fail on a key, not read a fabricated nought."""
-    call, out, _ = harness
-    record = call(mode="work")
-
-    header = set(_work_rows(out)[0])
-    for group in GROUPS:
-        assert f"delta_work_{group}_kj_mol" not in header
-        assert f"total_work_{group}_kj_mol" not in header
-        assert f"potential_{group}_kj_mol" not in header
-    assert "potential_reconstructed_kj_mol" not in header
-    # The one potential a direct run legitimately has: U at the coordinate the row names.
-    assert "potential_direct_kj_mol" in header
-
-    # And the record says which mode produced it, so nothing has to be inferred from the columns.
-    assert record["work_measurement"] == "work"
-    assert "decomposition_schema" not in record
-    assert "total_work_non_scaled_kj_mol" not in record
-
-
-def test_a_components_path_still_says_so_on_its_record(harness):
-    call, _, _ = harness
-    record = call(mode="components")
-    assert record["work_measurement"] == "components"
-    assert record["decomposition_schema"]["version"] == 2
-
-
-def test_a_path_cannot_be_resumed_under_the_other_mode(harness):
-    """Half a path measured each way is not a path. The resume is refused by name."""
-    call, out, _ = harness
-    with pytest.raises(RuntimeError):
-        call(fault="after-checkpoint-sync", after=1)
-    with pytest.raises(SystemExit) as refusal:
-        call(resume=True, mode="work")
-    message = str(refusal.value)
-    assert "work_measurement" in message
-    assert "'components'" in message and "'work'" in message
-
-
-def test_verify_every_updates_buys_more_checks_and_costs_exactly_two_each(harness):
-    """`verify_every_updates: N` is a dial on confidence with a stated price."""
-    call, out, schedule = harness
-    updates = schedule["number_of_updates"]
-
-    once = call(mode="components")["evaluation_counters"]
-    (out / "path_0000").rename(out / "once")
-    often = call(mode="components", verify_every=5)["evaluation_counters"]
-
-    assert once["direct_work_energy_evaluations"] == 2
-    # Updates 0, 5, 10, 15 for a 20-update path: the first plus every fifth.
-    expected = 2 * (1 + len([u for u in range(1, updates) if u % 5 == 0]))
-    assert often["direct_work_energy_evaluations"] == expected
-    # Verification costs evaluations and nothing else -- the probe count is untouched.
-    assert often["work_basis_probe_energy_evaluations"] == \
-        once["work_basis_probe_energy_evaluations"]
-
+    record = call()
+    with (out / "path_0000" / "observations.csv").open(newline="") as handle:
+        header = next(csv.reader(handle))
+    assert tuple(header) == ais_run.OBSERVATION_COLUMNS
+    assert "tau" not in header
+    assert not [name for name in header if "scaled" in name or "reconstructed" in name]
+    assert "work_measurement" not in record

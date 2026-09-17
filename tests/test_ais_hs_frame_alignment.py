@@ -15,24 +15,26 @@ self-consistent before, and wrong. Instead:
 
   1. run a real AIS path and let it write real `AIS_trajNNNN.nc` files and real CSVs;
   2. REOPEN the trajectory and read the coordinates of the exact frame a row names;
-  3. build a FRESH OpenMM Context, put those coordinates in it, set the row's tau;
-  4. recompute the three basis groups and the direct potential from scratch;
+  3. build FRESH OpenMM Contexts for V0 and V1 -- the plain end-state Systems, not the mixed one --
+     and put those coordinates in them;
+  4. recompute V0(x), V1(x) and V(lambda, x) = (1 - lambda) V0(x) + lambda V1(x) from scratch;
   5. compare with the row.
 
 Step 3 is the point. The recomputation shares no state with the run: a different Context, built
 after the fact, from coordinates that came off the disk. If the row's potentials belonged to a
 different coordinate, these numbers would not match, and under the old schema they did not.
 
-The identity checked is
+The recomputation does not even share the mixing mechanism with the run: the run evaluates one
+System carrying a `CustomCVForce` over the differing forces, and the check evaluates the two end
+states separately and mixes the numbers by hand.
 
-    U(tau, x) = U_non_scaled(x) + sqrt(lambda) U_sqrt_scaled(x) + lambda U_lin_scaled(x)
-
-with `a = 1 - tau` and `lambda = a^2`, so `sqrt(lambda) = a`.
+The end states are the REST2 pair the previous tau switch travelled along, now as two files:
+V0 = `build_scaled_system(built, solute, 0.5)` and V1 = `built.xml` itself. They differ in charges,
+Lennard-Jones well depths, torsions and GB parameters and in nothing structural.
 
 PLATFORM_POLICY_EXEMPTION: these run on whatever `machine.openmm.platform` resolves to. What is
 under test is which COORDINATE a number was measured at, which is identical on every platform. The
-same recomputation is performed on real CUDA, for implicit and explicit PME alike, in
-`tests/test_cuda_coverage_matrix.py`.
+AIS lane of `tests/test_cuda_coverage_matrix.py` runs the two-state Hamiltonian on real CUDA.
 """
 from __future__ import annotations
 
@@ -76,7 +78,7 @@ CHECKPOINT_EVERY = 15
 def frame_roundtrip_tolerance(energy: float) -> float:
     """How far a recomputation from a SAVED frame may sit from the value recorded during the run.
 
-    This is not the decomposition's tolerance and it is not the platform's. It is the cost of the
+    This is not the two-state identity tolerance and it is not the platform's. It is the cost of the
     round trip through the file: AMBER NetCDF stores coordinates as float32 in angstrom, so a
     frame read back differs from the in-memory double coordinates by ~1e-7 relative, and a
     potential evaluated at the perturbed coordinates differs accordingly.
@@ -86,13 +88,10 @@ def frame_roundtrip_tolerance(energy: float) -> float:
     it: the number below is what the format costs, and the assertion is that the misalignment
     being tested for is orders of magnitude larger than that.
 
-    Scaled by the TOTAL energy of the system, not by the individual component being compared.
-    That distinction matters and is easy to get wrong: each basis value is a linear combination of
-    three probe energies, each of order the total potential, with fit coefficients of magnitude 1,
-    3 and 4. So the absolute error on a small component is set by the size of the LARGEST energy
-    that went into it -- a solvated `sqrt_scaled` of -9 kJ/mol inherits the round-trip error of a
-    -1.6e4 kJ/mol total, and a bound proportional to 9 would fail for a reason that has nothing to
-    do with the alignment under test.
+    Scaled by the LARGEST energy that went into the recorded number. The run records V(lambda) and
+    dV/dlambda and derives V0 and V1 from them, so an end-state potential inherits the round-trip
+    error of whichever of the two is larger; a bound proportional to a small V0 would fail for a
+    reason that has nothing to do with the alignment under test.
     """
     return max(abs(float(energy)) * 5.0e-5, 1.0e-3)
 
@@ -116,22 +115,23 @@ def implicit_run(tmp_path_factory):
         pytest.skip("no ALA fixture")
     root = tmp_path_factory.mktemp("hs-implicit")
 
+    (root / "build").mkdir(exist_ok=True)
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
 
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
+    _write_end_states(root)
 
     (root / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit",
         "ais": {"number_of_paths": 2, "switching_steps": SWITCHING_STEPS,
-                "work_measurement": "components",
                 "observation_interval_steps": OBSERVE_EVERY,
                 "parameter_update_interval_steps": UPDATE_EVERY},
         "ais_source": {"trajectory": "../source.dcd"},
@@ -142,74 +142,75 @@ def implicit_run(tmp_path_factory):
                                capture_output=True, text=True, timeout=600)
     assert generated.returncode == 0, generated.stdout + generated.stderr
 
-    done = subprocess.run(
-        [sys.executable, str(root / "project" / "AIS.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
-         "-source-traj", str(root / "source.dcd"), "-odir", str(root / "run"), "--cpu"],
-        cwd=root, capture_output=True, text=True, timeout=3600, env=_environment(root))
+    done = _run_ais(root, root / "run")
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]
     return root
 
 
-# --- the independent recomputation ----------------------------------------------------------------
+def _write_end_states(root: Path) -> None:
+    """V0.xml = the REST2 state at tau = 0.5 of `built.xml`; V1 = `built.xml` unchanged.
 
-def recompute_at_frame(root: Path, run: Path, *, path_id: int, frame_index: int, tau: float):
-    """Rebuild a Context from a SAVED frame and recompute the three groups and U(tau).
-
-    Shares nothing with the run that produced the file: a fresh System, a fresh Context, and
-    coordinates read off the disk. That independence is the whole point -- a row's numbers being
-    consistent with the runtime's other numbers proves nothing about which coordinate they belong
-    to, which is how the previous schema was self-consistent and wrong.
+    The pair the retired tau switch travelled (0.5 -> 0), as the two files the two-state AIS
+    needs. Serialised to disk because the run and the recomputation must read the same bytes.
     """
-    import mdtraj
-    from openmm import Platform, VerletIntegrator, XmlSerializer, unit
+    from openmm import XmlSerializer
     from openmm.app import PDBFile
 
-    from md_tools.ais.decomposition import BASIS_PROBE_AMPLITUDES, Components
     from md_tools.md.stage import solute_atom_indices
-    from md_tools.openmm.system import classify_unscaled_torsions
-    from md_tools.rest2.scaler import TauSwitcher
+    from md_tools.rest2.hamiltonian import build_scaled_system
 
-    pdb = PDBFile(str(root / "built.pdb"))
-    base = XmlSerializer.deserialize((root / "built.xml").read_text(encoding="utf-8"))
-    solute = solute_atom_indices(pdb.topology)
-    omega = classify_unscaled_torsions(pdb.topology, solute)
-    excluded = [tuple(int(a) for a in bond) for bond in omega.get("unscaled_central_bonds", [])]
+    base = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
+    solute = solute_atom_indices(PDBFile(str(root / "build" / "built.pdb")).topology)
+    (root / "build" / "V0.xml").write_text(
+        XmlSerializer.serialize(build_scaled_system(base, solute, 0.5)), encoding="utf-8")
 
-    switcher = TauSwitcher(base, solute, excluded)
-    system = switcher.prepared_system(tau)
-    context = Platform.getPlatformByName("Reference")
-    from openmm import Context
 
-    handle = Context(system, VerletIntegrator(0.001), context)
+# --- the independent recomputation ----------------------------------------------------------------
+
+def recompute_at_frame(root: Path, run: Path, *, path_id: int, frame_index: int, lam: float):
+    """Rebuild V0 and V1 Contexts from a SAVED frame and recompute `(V0, V1, V(lambda))`.
+
+    Shares nothing with the run that produced the file: fresh Systems read from the two end-state
+    files, fresh Contexts, and coordinates read off the disk. That independence is the whole
+    point -- a row's numbers being consistent with the runtime's other numbers proves nothing about
+    which coordinate they belong to, which is how the previous schema was self-consistent and
+    wrong.
+    """
+    import mdtraj
+    import numpy
+    from openmm import Context, Platform, VerletIntegrator, XmlSerializer, unit
+    from openmm.app.internal.unitcell import computePeriodicBoxVectors
 
     trajectory = run / f"AIS_traj{path_id:04d}.nc"
     with mdtraj.formats.NetCDFTrajectoryFile(str(trajectory)) as reader:
         reader._frame_index = frame_index
         coordinates, _time, lengths, angles = reader.read(1)
     positions = coordinates[0] / 10.0                       # angstrom -> nanometre
-    if lengths is not None:
-        from openmm.app.internal.unitcell import computePeriodicBoxVectors
-        import numpy
-
-        radians = numpy.radians(angles[0])
-        handle.setPeriodicBoxVectors(*computePeriodicBoxVectors(
-            float(lengths[0][0]) / 10.0, float(lengths[0][1]) / 10.0,
-            float(lengths[0][2]) / 10.0,
-            float(radians[0]), float(radians[1]), float(radians[2])))
-    handle.setPositions(positions * unit.nanometer)
 
     energies = []
-    for amplitude in BASIS_PROBE_AMPLITUDES:
-        switcher.set_amplitude(handle, system, amplitude)
+    for name in ("V0.xml", "built.xml"):
+        system = XmlSerializer.deserialize((root / "build" / name).read_text(encoding="utf-8"))
+        handle = Context(system, VerletIntegrator(0.001), Platform.getPlatformByName("Reference"))
+        if lengths is not None:
+            radians = numpy.radians(angles[0])
+            handle.setPeriodicBoxVectors(*computePeriodicBoxVectors(
+                float(lengths[0][0]) / 10.0, float(lengths[0][1]) / 10.0,
+                float(lengths[0][2]) / 10.0,
+                float(radians[0]), float(radians[1]), float(radians[2])))
+        handle.setPositions(positions * unit.nanometer)
         energies.append(handle.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
             unit.kilojoule_per_mole))
-    components = Components.from_probe(BASIS_PROBE_AMPLITUDES, energies)
+        del handle
+    v0, v1 = energies
+    return v0, v1, (1.0 - float(lam)) * v0 + float(lam) * v1
 
-    switcher.set_tau(handle, system, tau)
-    direct = handle.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
-        unit.kilojoule_per_mole)
-    return components, direct
+
+def _scale(row) -> float:
+    return max(abs(float(row[name])) for name in POTENTIALS)
+
+
+#: The observation potentials, by the names the file uses.
+POTENTIALS = ("potential_v0_kj_mol", "potential_v1_kj_mol", "potential_direct_kj_mol")
 
 
 def _hs_rows(run: Path):
@@ -252,15 +253,13 @@ def test_rows_without_a_saved_coordinate_carry_no_potentials(implicit_run):
     assert unaligned, "these cadences should leave some observations without a frame"
     assert aligned, "these cadences should leave some observations with one"
     for row in unaligned:
-        for name in ("potential_non_scaled_kj_mol", "potential_sqrt_scaled_kj_mol",
-                     "potential_lin_scaled_kj_mol", "potential_reconstructed_kj_mol",
-                     "potential_direct_kj_mol"):
+        for name in POTENTIALS:
             assert row[name] == "", (row["protocol_step"], name)
     # And the work columns are present on every row, aligned or not: work does not depend on a
     # coordinate having been saved.
     for row in rows:
         assert row["cumulative_work_kj_mol"] != ""
-        assert row["total_work_sqrt_scaled_kj_mol"] != ""
+        assert row["incremental_work_kj_mol"] != ""
 
 
 def test_the_hs_table_holds_exactly_the_frame_aligned_rows(implicit_run):
@@ -270,9 +269,7 @@ def test_the_hs_table_holds_exactly_the_frame_aligned_rows(implicit_run):
     assert len(hs) == len(aligned), (len(hs), len(aligned))
     for row in hs:
         assert row["coordinate_frame_index"] != ""
-        for name in ("potential_non_scaled_kj_mol", "potential_sqrt_scaled_kj_mol",
-                     "potential_lin_scaled_kj_mol", "potential_reconstructed_kj_mol",
-                     "potential_direct_kj_mol", "total_work_kj_mol", "tau"):
+        for name in (*POTENTIALS, "total_work_kj_mol", "lambda"):
             assert row[name] != "", name
 
 
@@ -288,33 +285,21 @@ def test_every_hs_row_matches_an_independent_recomputation_at_its_own_frame(impl
     rows = _hs_rows(run)
     assert rows, "no HS rows were written"
 
-    worst = {"non_scaled": 0.0, "sqrt_scaled": 0.0, "lin_scaled": 0.0,
-             "reconstructed": 0.0, "direct": 0.0}
+    worst = dict.fromkeys(POTENTIALS, 0.0)
     for row in rows:
-        tau = float(row["tau"])
-        components, direct = recompute_at_frame(
+        recomputed = dict(zip(POTENTIALS, recompute_at_frame(
             root, run, path_id=int(row["path_id"]),
-            frame_index=int(row["coordinate_frame_index"]), tau=tau)
+            frame_index=int(row["coordinate_frame_index"]), lam=float(row["lambda"]))))
 
-        # One scale for the whole row: the total potential, which is what every probe energy
-        # behind these components was of the order of.
-        allowed = frame_roundtrip_tolerance(float(row["potential_direct_kj_mol"]))
-        for group in ("non_scaled", "sqrt_scaled", "lin_scaled"):
-            recorded = float(row[f"potential_{group}_kj_mol"])
-            error = abs(recorded - getattr(components, group))
-            worst[group] = max(worst[group], error)
+        # One scale for the whole row: the largest potential behind any of its numbers.
+        allowed = frame_roundtrip_tolerance(_scale(row))
+        for name in POTENTIALS:
+            recorded = float(row[name])
+            error = abs(recorded - recomputed[name])
+            worst[name] = max(worst[name], error)
             assert error < allowed, (
-                f"path {row['path_id']} frame {row['coordinate_frame_index']}: {group} recorded "
-                f"{recorded}, recomputed {getattr(components, group)}")
-
-        error = abs(float(row["potential_reconstructed_kj_mol"]) - components.total_at(tau))
-        worst["reconstructed"] = max(worst["reconstructed"], error)
-        assert error < allowed
-
-        error = abs(float(row["potential_direct_kj_mol"]) - direct)
-        worst["direct"] = max(worst["direct"], error)
-        assert error < allowed, (
-            "the row's direct potential does not match a fresh evaluation at its own frame")
+                f"path {row['path_id']} frame {row['coordinate_frame_index']}: {name} recorded "
+                f"{recorded}, recomputed {recomputed[name]}")
 
     print(f"\nmax |recorded - independently recomputed| over {len(rows)} HS rows: {worst}")
 
@@ -332,12 +317,11 @@ def test_the_potentials_are_not_those_of_the_previous_frame(implicit_run):
 
     disagreements = 0
     for row in rows:
-        tau = float(row["tau"])
-        shifted, _direct = recompute_at_frame(
+        _v0, v1, _direct = recompute_at_frame(
             root, run, path_id=int(row["path_id"]),
-            frame_index=int(row["coordinate_frame_index"]) - 1, tau=tau)
-        allowed = frame_roundtrip_tolerance(float(row["potential_direct_kj_mol"]))
-        if abs(float(row["potential_lin_scaled_kj_mol"]) - shifted.lin_scaled) > allowed:
+            frame_index=int(row["coordinate_frame_index"]) - 1, lam=float(row["lambda"]))
+        allowed = frame_roundtrip_tolerance(_scale(row))
+        if abs(float(row["potential_v1_kj_mol"]) - v1) > allowed:
             disagreements += 1
     assert disagreements == len(rows), (
         f"{len(rows) - disagreements} of {len(rows)} rows agree with the PREVIOUS frame's "
@@ -345,45 +329,24 @@ def test_the_potentials_are_not_those_of_the_previous_frame(implicit_run):
         f"cannot detect the misalignment it exists for")
 
 
-def test_the_work_identity_holds_independently_at_every_switch(implicit_run):
-    """`dW_total == dW_non + dW_sqrt + dW_lin` on every emitted work observation."""
-    from md_tools.ais.decomposition import reconstruction_tolerance
-    from md_tools.build.record import read_record
+def test_the_recorded_lambdas_are_the_linear_schedule_and_observation_zero_has_no_work(
+        implicit_run):
+    """What replaced the per-group work identity: the coordinate the work is integrated along.
 
-    # The precision the run ACTUALLY used, read from its own record rather than assumed. The CPU
-    # platform is not double: its nonbonded sums are single-precision, so asserting a
-    # double-precision bound here would be holding the run to a promise it never made.
-    precision = (read_record(implicit_run / "run" / "AIS.log")["acceleration"].get(
-        "cuda_precision") or "single")
-
+    The single-topology AIS split every work increment into three tau groups and checked they
+    summed to the total. A two-state switch has one group -- the work is `dlambda * (V1 - V0)` --
+    so that identity has nothing left to add up, and the unit identity is in
+    `tests/test_ais_two_state.py`. What a file CAN still get wrong is lambda itself: every row's
+    lambda must be exactly `protocol_step / switching_steps`, and observation 0 must precede all
+    work.
+    """
     rows = _observations(implicit_run / "run")
-    # Each emitted row covers `OBSERVE_EVERY / UPDATE_EVERY` switches, and each switch carries the
-    # decomposition's own documented tolerance. The bound is that tolerance times the number of
-    # switches in the row -- the runtime's own per-switch bound, accumulated, rather than a
-    # tighter number invented here that the runtime never promised.
-    per_row = OBSERVE_EVERY // UPDATE_EVERY
-    worst_delta = worst_total = 0.0
+    assert float(rows[0]["lambda"]) == 0.0 and float(rows[-1]["lambda"]) == 1.0
+    assert float(rows[0]["cumulative_work_kj_mol"]) == 0.0
+    assert float(rows[0]["incremental_work_kj_mol"]) == 0.0
     for row in rows:
-        parts = sum(float(row[f"delta_work_{group}_kj_mol"])
-                    for group in ("non_scaled", "sqrt_scaled", "lin_scaled"))
-        measured = float(row["incremental_work_kj_mol"])
-        allowed = reconstruction_tolerance(
-            max(abs(measured), abs(float(row["cumulative_work_kj_mol"]))),
-            precision=precision) * per_row
-        worst_delta = max(worst_delta, abs(parts - measured))
-        assert abs(parts - measured) <= max(allowed, 1e-4), row["protocol_step"]
-        cumulative = sum(float(row[f"total_work_{group}_kj_mol"])
-                         for group in ("non_scaled", "sqrt_scaled", "lin_scaled"))
-        total = float(row["cumulative_work_kj_mol"])
-        worst_total = max(worst_total, abs(cumulative - total))
-        assert abs(cumulative - total) <= max(
-            reconstruction_tolerance(total, precision=precision) * len(rows) * per_row,
-            1e-4), (
-            row["protocol_step"])
-    print(f"\nmax |sum of components - measured work| at {precision} precision: "
-          f"delta {worst_delta:.3e}, cumulative {worst_total:.3e} kJ/mol")
-    # The non-scaled work is identically zero: that group has no tau dependence.
-    assert all(float(row["delta_work_non_scaled_kj_mol"]) == 0.0 for row in rows)
+        expected = int(row["protocol_step"]) / SWITCHING_STEPS
+        assert abs(float(row["lambda"]) - expected) < 1e-12, (row["protocol_step"], row["lambda"])
 
 
 def test_delta_work_is_the_sum_since_the_previous_observation_not_one_switch(implicit_run):
@@ -397,11 +360,6 @@ def test_delta_work_is_the_sum_since_the_previous_observation_not_one_switch(imp
     schedule = record["schedule"]
     assert schedule["observation_interval_steps"] != schedule["parameter_update_interval_steps"]
 
-    from md_tools.ais.decomposition import DECOMPOSITION_SCHEMA
-
-    assert "sum of every switch since the previous emitted work observation" in (
-        DECOMPOSITION_SCHEMA["delta_work_meaning"])
-
     rows = _observations(implicit_run / "run")
     running = 0.0
     for row in rows[1:]:
@@ -412,11 +370,13 @@ def test_delta_work_is_the_sum_since_the_previous_observation_not_one_switch(imp
 # --- interruption and resume ----------------------------------------------------------------------
 
 def _run_ais(root: Path, destination: Path, *, environment=None, extra=()):
+    """V0 = `V0.xml` (-s), V1 = `built.xml` (-s2), one topology for both."""
     base = _environment(root)
     base.update(environment or {})
     return subprocess.run(
         [sys.executable, str(root / "project" / "AIS.py"),
-         "-p", str(root / "built.pdb"), "-s", str(root / "built.xml"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "V0.xml"),
+         "-p2", str(root / "build" / "built.pdb"), "-s2", str(root / "build" / "built.xml"),
          "-source-traj", str(root / "source.dcd"), "-odir", str(destination), "--cpu", *extra],
         cwd=root, capture_output=True, text=True, timeout=3600, env=base)
 
@@ -462,19 +422,23 @@ def test_a_resumed_path_produces_no_duplicate_or_mismatched_hs_rows(boundary, im
 
     # And every row still describes the frame it names, after the truncation renumbered nothing.
     for row in rows:
-        tau = float(row["tau"])
-        components, direct = recompute_at_frame(
+        _v0, _v1, direct = recompute_at_frame(
             implicit_run, destination, path_id=int(row["path_id"]),
-            frame_index=int(row["coordinate_frame_index"]), tau=tau)
+            frame_index=int(row["coordinate_frame_index"]), lam=float(row["lambda"]))
         recorded = float(row["potential_direct_kj_mol"])
-        assert abs(recorded - direct) < frame_roundtrip_tolerance(recorded), (
+        assert abs(recorded - direct) < frame_roundtrip_tolerance(_scale(row)), (
             f"{boundary}: path {row['path_id']} frame {row['coordinate_frame_index']} does not "
             f"match a recomputation at that frame")
 
 
 def test_a_resumed_run_reaches_the_same_final_work_as_an_uninterrupted_one(implicit_run,
                                                                            tmp_path):
-    """Same seeds, same source, same schedule: the science must not depend on the interruption."""
+    """Same seeds, same source, same schedule: the science must not depend on the interruption.
+
+    On the CPU platform a resumed path reproduces the uninterrupted one, so the totals are compared
+    path for path. (On CUDA the mixing force's inner Contexts make a resume a new realisation of
+    the same process, and the CUDA lane asserts exact restoration instead -- not this.)
+    """
     destination = tmp_path / "resume-work"
     destination.mkdir()
     crashed = _run_ais(implicit_run, destination,
@@ -512,24 +476,25 @@ def explicit_run(tmp_path_factory):
         pytest.skip("no ALA fixture")
     root = tmp_path_factory.mktemp("hs-explicit")
 
+    (root / "build").mkdir(exist_ok=True)
     (root / "sys.config").write_text("solvent:\n  model: TIP3P\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=3600)
     assert built.returncode == 0, built.stdout + built.stderr
 
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 4).save_dcd(str(root / "source.dcd"))
+    _write_end_states(root)
 
     # Shorter than the implicit run: a solvated box is two orders of magnitude more particles, and
     # what this fixture has to demonstrate is the identity through PME, not a long path.
     (root / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "explicit",
         "ais": {"number_of_paths": 1, "switching_steps": 20,
-                "work_measurement": "components",
                 "observation_interval_steps": 5, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
         "reporting": {"crd_printout_solute": 10, "info_printout": 20,
@@ -559,42 +524,40 @@ def test_explicit_pme_hs_rows_match_an_independent_recomputation(explicit_run):
     worst = 0.0
     scale = 0.0
     for row in rows:
-        tau = float(row["tau"])
-        components, direct = recompute_at_frame(
+        recomputed = dict(zip(POTENTIALS, recompute_at_frame(
             root, run, path_id=int(row["path_id"]),
-            frame_index=int(row["coordinate_frame_index"]), tau=tau)
-        allowed = frame_roundtrip_tolerance(float(row["potential_direct_kj_mol"]))
-        for group in ("non_scaled", "sqrt_scaled", "lin_scaled"):
-            recorded = float(row[f"potential_{group}_kj_mol"])
-            scale = max(scale, abs(float(row["potential_direct_kj_mol"])))
-            error = abs(recorded - getattr(components, group))
+            frame_index=int(row["coordinate_frame_index"]), lam=float(row["lambda"]))))
+        allowed = frame_roundtrip_tolerance(_scale(row))
+        scale = max(scale, _scale(row))
+        for name in POTENTIALS:
+            recorded = float(row[name])
+            error = abs(recorded - recomputed[name])
             worst = max(worst, error)
             assert error < allowed, (
-                f"explicit frame {row['coordinate_frame_index']}: {group} recorded {recorded}, "
-                f"recomputed {getattr(components, group)}")
-        error = abs(float(row["potential_direct_kj_mol"]) - direct)
-        worst = max(worst, error)
-        assert error < allowed
+                f"explicit frame {row['coordinate_frame_index']}: {name} recorded {recorded}, "
+                f"recomputed {recomputed[name]}")
     print(f"\nexplicit PME: max |recorded - recomputed| = {worst:.3e} kJ/mol on potentials up to "
           f"{scale:.3e} kJ/mol over {len(rows)} HS rows")
 
 
-def test_explicit_pme_reconstruction_matches_the_direct_potential_in_the_file(explicit_run):
-    """Both numbers are in the row; a reader checks the identity without recomputing anything."""
-    from md_tools.ais.decomposition import reconstruction_tolerance
+def test_explicit_pme_end_states_mix_to_the_direct_potential_in_the_file(explicit_run):
+    """All three numbers are in the row; a reader checks the mixture without recomputing anything.
+
+    `V = (1 - lambda) V0 + lambda V1` is exact through PME, the self-energy and the dispersion
+    correction, because each end state is evaluated as its own System would evaluate it.
+    """
+    from md_tools.ais.two_state import identity_tolerance
     from md_tools.build.record import read_record
 
     precision = (read_record(explicit_run / "run" / "AIS.log")["acceleration"].get(
         "cuda_precision") or "single")
     worst = 0.0
     for row in _hs_rows(explicit_run / "run"):
-        tau = float(row["tau"])
-        amplitude = 1.0 - tau
-        reconstructed = (float(row["potential_non_scaled_kj_mol"])
-                         + amplitude * float(row["potential_sqrt_scaled_kj_mol"])
-                         + amplitude * amplitude * float(row["potential_lin_scaled_kj_mol"]))
+        lam = float(row["lambda"])
+        mixed = ((1.0 - lam) * float(row["potential_v0_kj_mol"])
+                 + lam * float(row["potential_v1_kj_mol"]))
         direct = float(row["potential_direct_kj_mol"])
-        worst = max(worst, abs(reconstructed - direct))
-        assert abs(reconstructed - direct) <= reconstruction_tolerance(
-            direct, precision=precision), (row["switch_step"], reconstructed, direct)
-    print(f"\nexplicit PME: max |reconstructed - direct| in the file = {worst:.3e} kJ/mol")
+        worst = max(worst, abs(mixed - direct))
+        assert abs(mixed - direct) <= identity_tolerance(_scale(row), precision=precision), (
+            row["switch_step"], mixed, direct)
+    print(f"\nexplicit PME: max |mixed - direct| in the file = {worst:.3e} kJ/mol")

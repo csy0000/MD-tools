@@ -47,10 +47,11 @@ def project(tmp_path_factory):
     if not ALA.is_file():
         pytest.skip("no ALA fixture")
     root = tmp_path_factory.mktemp("ais-cv")
+    (root / "build").mkdir(exist_ok=True)
     (root / "sys.config").write_text("solvent:\n  model: GBn2\n", encoding="utf-8")
     built = subprocess.run(
-        CLI + ["build-top", "-i", str(ALA), "-os", "built.xml", "-op", "built.pdb",
-               "-log", "built.log", "--config", str(root / "sys.config")],
+        CLI + ["build-top", "-i", str(ALA), "-os", "build/built.xml", "-op", "build/built.pdb",
+               "-log", "build/built.log", "--config", str(root / "sys.config")],
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
 
@@ -71,8 +72,22 @@ def project(tmp_path_factory):
 
     import mdtraj
 
-    frames = mdtraj.load(str(root / "built.pdb"))
+    frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
+
+    # The two end states. V0 is the REST2 state at tau = 0.5 of `built.xml` and V1 is `built.xml`
+    # itself: the pair the retired tau switch travelled, as the two files AIS now transforms
+    # between. A parameter-only pair, so the paths integrate the same particles throughout.
+    from openmm import XmlSerializer
+    from openmm.app import PDBFile
+
+    from md_tools.md.stage import solute_atom_indices
+    from md_tools.rest2.hamiltonian import build_scaled_system
+
+    base = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
+    solute = solute_atom_indices(PDBFile(str(root / "build" / "built.pdb")).topology)
+    (root / "build" / "V0.xml").write_text(
+        XmlSerializer.serialize(build_scaled_system(base, solute, 0.5)), encoding="utf-8")
     return root
 
 
@@ -88,7 +103,8 @@ def completed(project, tmp_path_factory):
     base["MD_TOOLS_CONFIG"] = str(user)
     done = subprocess.run(
         [sys.executable, str(project / "AIS" / "AIS.py"),
-         "-p", str(project / "built.pdb"), "-s", str(project / "built.xml"),
+         "-p", str(project / "build" / "built.pdb"), "-s", str(project / "build" / "V0.xml"),
+         "-p2", str(project / "build" / "built.pdb"), "-s2", str(project / "build" / "built.xml"),
          "-source-traj", str(project / "source.dcd"),
          "-odir", str(destination), "--cpu"],
         cwd=project / "AIS", capture_output=True, text=True, timeout=1800, env=base)
@@ -109,7 +125,7 @@ def test_each_path_writes_its_own_series(completed):
 def test_the_columns_are_the_documented_ones(completed):
     with (completed / "path_0000" / "cv.csv").open(newline="") as handle:
         header = next(csv.reader(handle))
-    assert header == ["path_index", "source_frame_index", "protocol_step", "time_ps", "tau",
+    assert header == ["path_index", "source_frame_index", "protocol_step", "time_ps", "lambda",
                       "observation_index", "coordinate_frame_index", "phi"]
 
 
@@ -119,10 +135,11 @@ def test_the_series_lands_on_the_update_grid_including_both_endpoints(completed)
     assert steps == [0, 5, 10, 15, 20], steps
 
 
-def test_tau_moves_from_tau_start_to_tau_end_along_the_series(completed):
-    taus = [float(row["tau"]) for row in _rows(completed / "path_0000" / "cv.csv")]
-    assert taus[0] == 0.5 and taus[-1] == 0.0
-    assert taus == sorted(taus, reverse=True), taus
+def test_lambda_moves_from_v0_to_v1_along_the_series(completed):
+    """lambda is 0 at the source configuration and 1 at the end, never decreasing between."""
+    lambdas = [float(row["lambda"]) for row in _rows(completed / "path_0000" / "cv.csv")]
+    assert lambdas[0] == 0.0 and lambdas[-1] == 1.0
+    assert lambdas == sorted(lambdas), lambdas
 
 
 def test_rows_off_the_observation_grid_have_empty_indices(completed):
@@ -142,7 +159,7 @@ def test_an_aligned_row_was_measured_on_exactly_the_saved_coordinate(completed, 
 
     trajectories = sorted(completed.glob("AIS_traj*.nc"))
     assert trajectories, "no published path trajectory to check alignment against"
-    frames = mdtraj.load(str(trajectories[0]), top=str(project / "built.pdb"))
+    frames = mdtraj.load(str(trajectories[0]), top=str(project / "build" / "built.pdb"))
 
     checked = 0
     for row in _rows(completed / "path_0000" / "cv.csv"):
@@ -193,17 +210,19 @@ def test_a_path_without_a_verified_manifest_is_absent_from_the_aggregate(complet
 def test_the_sidecar_records_the_path_and_the_alignment_rule(completed):
     body = json.loads((completed / "path_0000" / "cv.json").read_text(encoding="utf-8"))
     assert body["path_index"] == 0
-    assert body["tau_start"] == 0.5 and body["tau_end"] == 0.0
+    assert body["lambda_start"] == 0.0 and body["lambda_end"] == 1.0
+    assert "tau_start" not in body and "tau_end" not in body
     assert "exactly that saved coordinate" in body["observation_index_meaning"]
 
 
 def test_a_cv_interval_off_the_update_grid_is_refused(project, tmp_path):
-    """tau is piecewise constant across an update: a row between two would name a tau never held."""
+    """lambda is piecewise constant across an update: a row between two would name a lambda never
+    held."""
     configuration = yaml.safe_load((project / "AIS.config").read_text(encoding="utf-8"))
     configuration["collective_variables"]["interval_steps"] = 4       # 4 % 5 != 0
     (tmp_path / "bad.config").write_text(yaml.safe_dump(configuration), encoding="utf-8")
     done = subprocess.run(
-        CLI + ["build-md", "-odir", str(tmp_path / "bad"),
+        CLI + ["build-md", "-odir", str(project / "bad"),
                "--config", str(tmp_path / "bad.config")],
         cwd=project, capture_output=True, text=True, timeout=600)
     message = done.stdout + done.stderr

@@ -379,7 +379,133 @@ def test_rest2_cv_runs_on_cuda_fresh_and_resumed(ladder_project, tmp_path):
         assert [int(r["step"]) for r in _rows(resumed / f"cv_state{index}.csv")] == EXPECTED
 
 
-# --- 5: AIS on CUDA with the three-group decomposition ----------------------------------------
+# --- 5: AIS on CUDA, two end states --------------------------------------------------------------
+
+def write_scaled_v0(root: Path, tau: float = 0.5) -> Path:
+    """`build/V0.xml`: the REST2 state at `tau` of `build/built.xml`. V1 is `built.xml` itself.
+
+    The pair the retired single-topology AIS switched along tau, as the two files the two-state
+    AIS transforms between -- a parameter-only edit of the same particles.
+    """
+    from openmm import XmlSerializer
+    from openmm.app import PDBFile
+
+    from md_tools.md.stage import solute_atom_indices
+    from md_tools.rest2.hamiltonian import build_scaled_system
+
+    base = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
+    solute = solute_atom_indices(PDBFile(str(root / "build" / "built.pdb")).topology)
+    target = root / "build" / "V0.xml"
+    target.write_text(XmlSerializer.serialize(build_scaled_system(base, solute, float(tau))),
+                      encoding="utf-8")
+    return target
+
+
+def committed_instant(directory: Path) -> dict | None:
+    """What an interrupted AIS path's committed generation vouches for, read BEFORE a resume.
+
+    The state record, and the exact prefix of every appendable stream it counts: observation
+    rows, CV rows, state rows and staged frames. None when nothing was committed.
+    """
+    from md_tools.openmm.checkpoint import read_committed
+
+    committed = read_committed(directory) if directory.is_dir() else None
+    if committed is None:
+        return None
+    state = committed["state"]
+
+    def prefix(name, count):
+        path = directory / name
+        return _rows(path)[:int(count)] if path.is_file() else []
+
+    frames = None
+    staged = directory / "frames.partial.nc"
+    if staged.is_file() and int(state["frames"]) > 0:
+        import mdtraj
+
+        with mdtraj.formats.NetCDFTrajectoryFile(str(staged)) as handle:
+            frames = handle.read()[0][:int(state["frames"])].copy()
+    return {"state": state, "observations": prefix("observations.csv", state["work_rows"]),
+            "cv": prefix("cv.csv", state["cv_rows"]),
+            "system": prefix("system.csv", state["state_rows"]), "frames": frames}
+
+
+def assert_restored_and_complete(run: Path, path_index: int, instant, *, switching_steps: int):
+    """A path finished on CUDA is COMPLETE AND VALID, and continued EXACTLY from `instant`.
+
+    Not row-for-row equality with an uninterrupted CUDA run past the resume point: the two-state
+    mixing force's inner Contexts keep atom-ordering state no checkpoint captures, so on CUDA a
+    resume continues the same switching process from the same committed instant as a new
+    realisation (decided 2026-09-16). Everything the committed generation vouches for is
+    asserted exactly: the stream prefixes byte for byte, lambda at the committed update, the
+    cumulative work carried across the boundary, and counters that only grow from it.
+    """
+    import numpy
+
+    directory = run / f"path_{path_index:04d}"
+    completion = json.loads((directory / "completed.json").read_text(encoding="utf-8"))
+    assert completion["status"] == "completed"
+    assert completion["platform"] == "CUDA", completion["platform"]
+
+    # -- complete and valid, on its own terms -----------------------------------------------------
+    observations = _rows(directory / "observations.csv")
+    assert len(observations) == int(completion["observations"])
+    steps = [int(row["protocol_step"]) for row in observations]
+    assert steps == sorted(set(steps)) and steps[0] == 0 and steps[-1] == switching_steps, steps
+    for row in observations:
+        assert abs(float(row["lambda"]) - int(row["protocol_step"]) / switching_steps) < 1e-12, row
+    assert float(observations[0]["cumulative_work_kj_mol"]) == 0.0
+    running = 0.0
+    for row in observations[1:]:
+        running += float(row["incremental_work_kj_mol"])
+        total = float(row["cumulative_work_kj_mol"])
+        assert abs(running - total) <= 1e-9 * max(1.0, abs(total)), (path_index, row)
+    assert float(completion["total_work_kj_mol"]) == float(
+        observations[-1]["cumulative_work_kj_mol"])
+    cv_path = directory / "cv.csv"
+    if cv_path.is_file():
+        cv_steps = [int(row["protocol_step"]) for row in _rows(cv_path)]
+        assert len(cv_steps) == len(set(cv_steps)) == int(completion["cv_rows"]), cv_steps
+
+    if instant is None:
+        return completion
+
+    # -- restored exactly ----------------------------------------------------------------------------
+    state = instant["state"]
+    assert completion["resumed"] is True
+    for name, prefix in (("observations.csv", instant["observations"]),
+                         ("cv.csv", instant["cv"]), ("system.csv", instant["system"])):
+        if prefix:
+            assert _rows(directory / name)[:len(prefix)] == prefix, (
+                f"path {path_index}: a committed row of {name} changed across the resume")
+    assert abs(float(state["lambda"]) - int(state["protocol_step"]) / switching_steps) < 1e-12
+    carried = (float(state["cumulative_work_kj_mol"])
+               - float(state["work_since_last_observation_kj_mol"]))
+    committed_rows = instant["observations"]
+    if committed_rows:
+        last = float(committed_rows[-1]["cumulative_work_kj_mol"])
+        assert abs(carried - last) <= 1e-9 * max(1.0, abs(last)), (state, committed_rows[-1])
+        if len(observations) > len(committed_rows):
+            following = observations[len(committed_rows)]
+            restart = (float(following["cumulative_work_kj_mol"])
+                       - float(following["incremental_work_kj_mol"]))
+            assert abs(restart - last) <= 1e-9 * max(1.0, abs(last)), (
+                f"path {path_index}: the work after the resume does not start from the committed "
+                f"cumulative {last}")
+    if instant["frames"] is not None:
+        import mdtraj
+
+        with mdtraj.formats.NetCDFTrajectoryFile(
+                str(run / completion["trajectory"])) as handle:
+            published = handle.read()[0]
+        assert numpy.array_equal(published[:len(instant["frames"])], instant["frames"]), (
+            f"path {path_index}: a committed frame changed across the resume")
+    before, after = state["evaluation_counters"], completion["evaluation_counters"]
+    for name in ("work_derivative_evaluations", "observation_potential_energy_evaluations",
+                 "other_useful_energy_evaluations", "parameter_updates"):
+        assert int(after[name]) >= int(before[name]), (path_index, name, before, after)
+    return completion
+
 
 @pytest.fixture(scope="module")
 def ais_project(tmp_path_factory):
@@ -393,10 +519,10 @@ def ais_project(tmp_path_factory):
 
     frames = mdtraj.load(str(root / "build" / "built.pdb"))
     mdtraj.join([frames] * 8).save_dcd(str(root / "source.dcd"))
+    write_scaled_v0(root)
     _generate(root, "AIS", {
         "protocol": "AIS", "solvent": "implicit",
         "ais": {"number_of_paths": 2, "switching_steps": 20,
-                "work_measurement": "components",
                 "observation_interval_steps": 10, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
         "reporting": {"crd_printout_solute": 10, "crd_printout_whole": 10,
@@ -414,7 +540,8 @@ def ais_project(tmp_path_factory):
 def _run_ais(root, destination, *extra, environment=None, expect=0):
     done = subprocess.run(
         [sys.executable, str(root / "AIS-run1" / "AIS.py"),
-         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
+         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "V0.xml"),
+         "-p2", str(root / "build" / "built.pdb"), "-s2", str(root / "build" / "built.xml"),
          "-source-traj", str(root / "source.dcd"), "-odir", str(destination), *extra],
         cwd=root / "AIS-run1", capture_output=True, text=True, timeout=2400,
         env={**_environment(root), **(environment or {})})
@@ -424,33 +551,46 @@ def _run_ais(root, destination, *extra, environment=None, expect=0):
     return done
 
 
-GROUPS = ("non_scaled", "sqrt_scaled", "lin_scaled")
+def test_ais_cv_and_two_state_on_cuda_fresh_and_resumed(ais_project, tmp_path):
+    """The lane the matrix wrongly attributed to a `--cpu` file -- with the two-state Hamiltonian.
 
-
-def test_ais_cv_and_decomposition_on_cuda_fresh_and_resumed(ais_project, tmp_path):
-    """The lane the matrix wrongly attributed to a `--cpu` file."""
+    Fresh: CV rows on their grid, and on every frame-aligned observation the mixture
+    `(1 - lambda) V0 + lambda V1` equal to the direct potential the CUDA Context evaluated, at the
+    precision the run used. Resumed: exact restoration of the committed generation, and a
+    complete valid path -- not row-for-row equality with the fresh run, which CUDA does not give.
+    """
+    from md_tools.ais.two_state import identity_tolerance
+    from md_tools.build.record import read_record
     from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
 
     fresh = tmp_path / "fresh"
     _run_ais(ais_project, fresh)
-    record = json.loads((fresh / "path_0000" / "completed.json").read_text(encoding="utf-8"))
-    assert record["platform"] == "CUDA", record["platform"]
+    record = assert_restored_and_complete(fresh, 0, None, switching_steps=20)
     assert record["cv_rows"] == 20 // 5 + 1
     steps = [int(r["protocol_step"]) for r in _rows(fresh / "path_0000" / "cv.csv")]
     assert steps == list(range(0, 21, 5))
 
-    observations = _rows(fresh / "path_0000" / "observations.csv")
-    for row in observations:
-        total = float(row["cumulative_work_kj_mol"])
-        parts = sum(float(row[f"total_work_{group}_kj_mol"]) for group in GROUPS)
-        assert abs(total - parts) <= max(1e-3, 1e-6 * abs(total)), row
+    precision = read_record(fresh / "AIS.log")["acceleration"].get("cuda_precision") or "mixed"
+    aligned = 0
+    for row in _rows(fresh / "path_0000" / "observations.csv"):
+        if row["coordinate_frame_index"] == "":
+            assert row["potential_direct_kj_mol"] == "", row
+            continue
+        lam = float(row["lambda"])
+        v0, v1 = float(row["potential_v0_kj_mol"]), float(row["potential_v1_kj_mol"])
+        direct = float(row["potential_direct_kj_mol"])
+        allowed = identity_tolerance(max(abs(v0), abs(v1), abs(direct)), precision=precision)
+        assert abs((1.0 - lam) * v0 + lam * v1 - direct) <= allowed, row
+        assert v0 != v1, "V0 and V1 agree at a saved coordinate: the pair switches nothing"
+        aligned += 1
+    assert aligned >= 2, f"only {aligned} frame-aligned observation(s)"
 
     resumed = tmp_path / "resumed"
     _run_ais(ais_project, resumed, expect=1,
              environment={FAULT_ENVIRONMENT: "after-work-row", FAULT_AFTER_ENVIRONMENT: "1"})
+    instant = committed_instant(resumed / "path_0000")
     _run_ais(ais_project, resumed, "--resume")
-    again = json.loads((resumed / "path_0000" / "completed.json").read_text(encoding="utf-8"))
-    assert again["platform"] == "CUDA"
+    again = assert_restored_and_complete(resumed, 0, instant, switching_steps=20)
     assert again["cv_rows"] == record["cv_rows"]
     assert [int(r["protocol_step"]) for r in _rows(resumed / "path_0000" / "cv.csv")] == steps
 
@@ -559,6 +699,14 @@ def test_rest2_cv_survives_two_interruptions_on_cuda(ladder_project, tmp_path):
 
 
 def test_ais_cv_survives_two_interruptions_on_cuda(ais_project, tmp_path):
+    """Two interruptions, each resumed from EXACTLY its committed generation, on a device.
+
+    Past each resume point a CUDA continuation is a new realisation of the same switching process
+    (the two-state mixing force's inner Contexts are not checkpointed), so the path is not
+    compared with an uninterrupted reference row for row. Each committed instant is captured
+    before the resume that continues it, and every stream prefix it vouches for must survive
+    both later invocations unchanged.
+    """
     from md_tools.openmm.checkpoint import FAULT_AFTER_ENVIRONMENT, FAULT_ENVIRONMENT
 
     reference = tmp_path / "ais-reference"
@@ -569,18 +717,42 @@ def test_ais_cv_survives_two_interruptions_on_cuda(ais_project, tmp_path):
     # crash before the path's first commit is a different case -- the path restarts from its
     # source frame, and its final segment then legitimately equals its cumulative, which would
     # make the carrying assertion below vacuous rather than failing loudly.
+    #
+    # The counts are chosen for that. The first crash lands after path 0's step-10 row, past its
+    # step-10 commit. The resuming invocation then writes path 0's last row (1), finishes it, and
+    # writes path 1's rows at steps 0 and 10 (2, 3) -- so the second crash lands in PATH 1, past
+    # its own step-10 commit. The count used to be 1, which crashed path 1 at step 0 with nothing
+    # committed, and the "second carried prefix" was a fresh restart that the old row-for-row
+    # comparison could not tell apart.
     resumed = tmp_path / "ais-twice"
-    _run_ais(ais_project, resumed, expect=1,
-             environment={FAULT_ENVIRONMENT: "after-work-row", FAULT_AFTER_ENVIRONMENT: "2"})
-    _run_ais(ais_project, resumed, "--resume", expect=1,
-             environment={FAULT_ENVIRONMENT: "after-work-row", FAULT_AFTER_ENVIRONMENT: "1"})
+    paths = 2
+    instants = []
+    for attempt, allowed in enumerate(("2", "3")):
+        _run_ais(ais_project, resumed, *(("--resume",) if attempt else ()), expect=1,
+                 environment={FAULT_ENVIRONMENT: "after-work-row",
+                              FAULT_AFTER_ENVIRONMENT: allowed})
+        # Captured for EVERY path: the second interruption may land in a later path than the
+        # first, once the first path has finished inside the resuming invocation.
+        instants += [(index, committed_instant(resumed / f"path_{index:04d}"))
+                     for index in range(paths)
+                     if not (resumed / f"path_{index:04d}" / "completed.json").is_file()]
+    carried = [(index, instant) for index, instant in instants if instant is not None]
+    assert len(carried) >= 2, (
+        f"only {len(carried)} committed generation(s) were interrupted, so a second carried "
+        f"prefix was never exercised")
     _run_ais(ais_project, resumed, "--resume")
 
+    # Every committed instant, not only the last: a prefix carried by the first resume must also
+    # survive the second.
+    for index, instant in carried:
+        assert_restored_and_complete(resumed, index, instant, switching_steps=20)
+    for index in range(paths):
+        assert_restored_and_complete(resumed, index, None, switching_steps=20)
     record = json.loads(
         (resumed / "path_0000" / "completed.json").read_text(encoding="utf-8"))
-    assert record["platform"] == "CUDA", record["platform"]
-    assert _rows(resumed / "path_0000" / "cv.csv") == want, (
-        "after two interruptions on CUDA the path differs from the uninterrupted reference")
+    got = _rows(resumed / "path_0000" / "cv.csv")
+    assert [r["protocol_step"] for r in got] == [r["protocol_step"] for r in want], (
+        "after two interruptions on CUDA the CV grid differs from the uninterrupted reference")
 
     cost = record["collective_variable_cost"]
     assert cost["cumulative"]["cv_evaluations"] == len(want) * N_CV

@@ -285,7 +285,7 @@ def test_the_ais_schedule_carries_the_four_independent_cadences():
     from md_tools.ais.schedule import switching_schedule
 
     schedule = switching_schedule(
-        tau_start=0.5, tau_end=0.0, switching_steps=250,
+        switching_steps=250,
         parameter_update_interval_steps=1, observation_interval_steps=10,
         timestep_fs=2.0, trajectory_interval_steps=25, state_interval_steps=50,
         checkpoint_interval_steps=125)
@@ -293,6 +293,8 @@ def test_the_ais_schedule_carries_the_four_independent_cadences():
     assert schedule["number_of_frames"] == 11               # steps 0, 25 … 250
     assert schedule["number_of_state_rows"] == 6            # steps 0, 50 … 250
     assert schedule["checkpoint_steps"] == [125, 250]
+    # The cadences are independent of the coordinate, which always runs lambda 0 -> 1.
+    assert schedule["lambdas"][0] == 0.0 and schedule["lambdas"][-1] == 1.0
 
 
 # --- 5. genuine formats -----------------------------------------------------------------------

@@ -121,6 +121,22 @@ def workspace(tmp_path_factory):
         cwd=root, capture_output=True, text=True, timeout=1800)
     assert built.returncode == 0, built.stdout + built.stderr
 
+    # V1, THE SECOND END STATE AIS NEEDS. AIS transforms V0 (`-s`) into V1 (`-s2`), and the pair
+    # is checked particle by particle before any output exists, so V1 has to be a genuine
+    # parameter-only edit of this very System -- here the REST2 scaling at tau = 0.5, which
+    # changes charges, epsilons, torsions and GB parameters and nothing structural. A copy of
+    # `built.xml` would be refused as the same Hamiltonian, and the tests would pass for that.
+    from openmm import XmlSerializer
+    from openmm.app import PDBFile
+
+    from md_tools.md.stage import solute_atom_indices
+    from md_tools.rest2.hamiltonian import build_scaled_system
+
+    base = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
+    solute = solute_atom_indices(PDBFile(str(root / "build" / "built.pdb")).topology)
+    (root / "build" / "V1.xml").write_text(
+        XmlSerializer.serialize(build_scaled_system(base, solute, 0.5)), encoding="utf-8")
+
     tiny = {"minimization_iterations": 5, "restrained_nvt_steps": 5,
             "restrained_npt_steps": 5, "unrestrained_npt_steps": 5, "production_steps": 5}
     reporting = {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5}
@@ -170,6 +186,10 @@ def workspace(tmp_path_factory):
     return root
 
 
+#: The second end state, which every AIS invocation needs and nothing else accepts. Relative to a
+#: run directory, as `run.sh` passes it.
+V1 = ["-p2", "../build/built.pdb", "-s2", "../build/V1.xml"]
+
 #: Which script each mode is launched through, and the flags it needs beyond -p/-s.
 #: mode -> (the generated entry point, relative to the dataset root; extra flags it requires)
 #:
@@ -181,7 +201,7 @@ ENTRY = {
     # A ladder reads -s only from its group file (0.5.4), so it is launched with the one
     # `build-md` wrote rather than with -s.
     "REST2": ("REST2-run1/REST2.py", ["--groupfile", "remd_groupfile.1"]),
-    "AIS": ("AIS-run1/AIS.py", ["-source-traj", "../source.dcd"]),
+    "AIS": ("AIS-run1/AIS.py", ["-source-traj", "../source.dcd", *V1]),
 }
 MODES = sorted(ENTRY)
 
@@ -324,7 +344,7 @@ def test_an_ais_source_that_is_not_a_trajectory_is_refused_before_output(workspa
     done = _run([sys.executable, str(workspace / ENTRY["AIS"][0]),
                  "-p", "../build/built.pdb", "-s", "../build/built.xml",
                  "-odir", str(destination),
-                 "-source-traj", str(mislabelled), *PROTOCOL_ONLY],
+                 "-source-traj", str(mislabelled), *V1, *PROTOCOL_ONLY],
                 cwd=workspace / Path(ENTRY["AIS"][0]).parent)
     _refused(done, fragment="neither a DCD nor a NetCDF")
     assert _snapshot(destination) is None
@@ -335,9 +355,45 @@ def test_a_missing_ais_source_is_refused_before_output(workspace, tmp_path):
     done = _run([sys.executable, str(workspace / ENTRY["AIS"][0]),
                  "-p", "../build/built.pdb", "-s", "../build/built.xml",
                  "-odir", str(destination),
-                 "-source-traj", str(tmp_path / "absent.dcd")],
+                 "-source-traj", str(tmp_path / "absent.dcd"), *V1],
                 cwd=workspace / Path(ENTRY["AIS"][0]).parent)
     _refused(done, fragment="does not exist")
+    assert _snapshot(destination) is None
+
+
+@pytest.mark.parametrize("missing", ["-s2", "-p2"])
+def test_ais_without_its_second_end_state_is_refused_by_name_before_output(missing, workspace,
+                                                                           tmp_path):
+    """AIS is a transformation V0 -> V1, and without V1 there is nothing to switch to.
+
+    The refusal must name the flag. A run that fell back to something -- V0 against itself, or
+    the retired tau switch -- would write a work table for a transformation nobody declared.
+    """
+    extra = list(V1)
+    at = extra.index(missing)
+    del extra[at:at + 2]
+    destination = tmp_path / "never"
+    done = _run([sys.executable, str(workspace / ENTRY["AIS"][0]),
+                 "-p", "../build/built.pdb", "-s", "../build/built.xml",
+                 "-odir", str(destination), "-source-traj", "../source.dcd",
+                 *extra, *PROTOCOL_ONLY],
+                cwd=workspace / Path(ENTRY["AIS"][0]).parent)
+    _refused(done, fragment=f"AIS needs {missing}")
+    assert _snapshot(destination) is None
+
+
+@pytest.mark.parametrize("mode", ["split", "REST2"])
+@pytest.mark.parametrize("flag, value", [("-s2", "../build/V1.xml"),
+                                         ("-p2", "../build/built.pdb")])
+def test_a_second_end_state_given_to_a_single_hamiltonian_run_is_refused_by_name(
+        mode, flag, value, workspace, tmp_path):
+    """A stage or a ladder has one Hamiltonian; `-s2` there is a file nothing would read.
+
+    Accepting it silently is how a person believes they ran against V1 when they ran V0.
+    """
+    destination = tmp_path / "never"
+    done = _launch(workspace, mode, destination, flag, value, *PROTOCOL_ONLY)
+    _refused(done, fragment=f"{flag} names the second end state")
     assert _snapshot(destination) is None
 
 

@@ -159,56 +159,6 @@ def test_the_charge_independent_gb_term_is_scaled_too():
 
 # --- live switching ---------------------------------------------------------------------
 
-@pytest.mark.parametrize("tau", TAUS)
-def test_live_switching_reaches_the_same_energies_as_a_cloned_state(tau):
-    system = _implicit_system()
-    positions = _positions()
-    cloned = _group_energies(scaling.build_scaled_system(system, range(4), tau), positions)
-
-    switcher = scaling.TauSwitcher(system, range(4))
-    prepared = switcher.prepared_system(0.0)
-    integrator = openmm.VerletIntegrator(0.001)
-    context = openmm.Context(prepared, integrator,
-                             openmm.Platform.getPlatformByName("Reference"))
-    context.setPositions(positions)
-    switcher.set_tau(context, prepared, tau)
-
-    live = {}
-    for name, group in (("nonbonded", NONBONDED_GROUP), ("gb", GB_GROUP)):
-        live[name] = context.getState(getEnergy=True, groups={group}).getPotentialEnergy(
-            ).value_in_unit(unit.kilojoule_per_mole)
-    del context, integrator
-
-    assert live["gb"] == pytest.approx(cloned["gb"], rel=1e-9)
-    assert live["nonbonded"] == pytest.approx(cloned["nonbonded"], rel=1e-9)
-
-
-def test_repeated_switching_does_not_compound_the_gb_factor():
-    """Every switch restores from the unscaled reference first, so 0.5 -> 0.25 -> 0.5 lands back
-    on the same energy rather than on 0.5 applied twice."""
-    system = _implicit_system()
-    positions = _positions()
-    reference = _group_energies(system, positions)
-
-    switcher = scaling.TauSwitcher(system, range(4))
-    prepared = switcher.prepared_system(0.0)
-    integrator = openmm.VerletIntegrator(0.001)
-    context = openmm.Context(prepared, integrator,
-                             openmm.Platform.getPlatformByName("Reference"))
-    context.setPositions(positions)
-
-    seen = []
-    for tau in (0.5, 0.25, 0.5):
-        switcher.set_tau(context, prepared, tau)
-        seen.append(context.getState(getEnergy=True, groups={GB_GROUP}).getPotentialEnergy(
-            ).value_in_unit(unit.kilojoule_per_mole))
-    del context, integrator
-
-    assert seen[0] == pytest.approx(reference["gb"] * 0.5, rel=1e-9)
-    assert seen[1] == pytest.approx(reference["gb"] * 0.75, rel=1e-9)
-    assert seen[2] == pytest.approx(seen[0], rel=1e-9), "the factor was compounded"
-
-
 def test_tau_zero_leaves_the_energies_untouched():
     system = _implicit_system()
     positions = _positions()

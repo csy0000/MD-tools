@@ -14,8 +14,9 @@ So this file holds two things:
 
 2. **THE LANES.** Real runs on real GPUs for the branches the other GPU files do not reach:
    the three CUDA precisions, HMR and non-HMR timesteps, explicit `--device` placement, a NetCDF
-   source ensemble, and the tau-basis decomposition -- whose whole claim is an identity between
-   energies, and single precision is exactly where an identity stops holding.
+   source ensemble, and the two-state AIS Hamiltonian -- whose claim is an identity between
+   energies (`V = (1 - lambda) V0 + lambda V1`, `dV/dlambda = V1 - V0`), and single and mixed
+   precision are exactly where an identity stops holding.
 
 `docs/release-notes/cuda-coverage-matrix.md` is generated from this file by
 `python -m pytest tests/test_cuda_coverage_matrix.py --cuda-evidence=<path>`, so the published
@@ -59,7 +60,7 @@ CUDA_SITES = {
         # NOT `test_ais_cv_output.py`: that file invokes `--cpu`, so it exercises this function
         # on the CPU platform and is not CUDA evidence for it. It was cited here anyway, which is
         # worse than an empty cell -- a gap invites work, a false entry closes the question.
-        "test_cv_cuda_lanes.py::test_ais_cv_and_decomposition_on_cuda_fresh_and_resumed"),
+        "test_cv_cuda_lanes.py::test_ais_cv_and_two_state_on_cuda_fresh_and_resumed"),
     "md/stage.py::_EnergyDecompositionProbe.energies": (
         "the explicit-solvent half of the energy decomposition. Where a System carries no usable "
         "force groups -- which is every System built through `ForceField.createSystem`, i.e. all "
@@ -111,29 +112,38 @@ CUDA_SITES = {
         "consumes the preflight platform; no second resolution",
         "test_md_run_mpi_gpu.py::test_each_rank_kept_its_own_record_and_ran_on_cuda"),
     "ais/run.py::run_one_path": (
-        "AIS switching: parameter updates, work energies, the three basis probes, frames, "
-        "state rows and checkpoint generations, all on CUDA",
-        "test_md_run_mpi_gpu.py, test_ais_decomposition_lane"),
-    "rest2/scaler.py::TauSwitcher.set_amplitude": (
-        "pushes scaled parameters into a live CUDA Context via updateParametersInContext",
-        "test_ais_decomposition_lane"),
+        "AIS switching between two end states: the mixed System's Context, lambda updates, "
+        "work from dV/dlambda, observation potentials, frames, state rows and checkpoint "
+        "generations, all on CUDA",
+        "test_md_run_mpi_gpu.py, test_ais_two_state_lane"),
 
     # --- operations the constructor-only inventory never saw ---------------------------------
-    "ais/decomposition.py::ComponentProbe.measure": (
-        "three CUDA energy evaluations per probe, at controlled amplitudes",
-        "test_ais_decomposition_lane, test_ais_on_explicit_solvent"),
-    "ais/run.py::run_one_path.direct_potential": (
-        "the direct CUDA energy behind every work value and every observation row",
-        "test_ais_decomposition_lane, test_hs_rows_match_recomputation_on_cuda"),
+    "ais/two_state.py::TwoStateHamiltonian.set_lambda": (
+        "pushes lambda into a live CUDA Context with `Context.setParameter` -- the one global of "
+        "the CustomCVForce that mixes V0 and V1. Nothing is re-uploaded, for any System",
+        "test_ais_two_state_lane (in-process on CUDA, and through a run), "
+        "test_ais_on_explicit_solvent"),
+    "ais/two_state.py::TwoStateHamiltonian.difference": (
+        "one CUDA `getState(getParameterDerivatives=True)` per switch at the frozen pre-switch "
+        "coordinate: dV/dlambda = V1 - V0, from the inner CUDA Contexts of both end states -- "
+        "the number every work value is made of",
+        "test_ais_two_state_lane (against V1 - V0 from separate CUDA Contexts, and against the "
+        "finite difference at frozen coordinates), test_ais_on_explicit_solvent"),
+    "ais/two_state.py::TwoStateHamiltonian.observe": (
+        "the observation potentials at a saved coordinate: V(lambda) and dV/dlambda in one CUDA "
+        "`getState`, checked against the CustomCVForce collective-variable values the inner CUDA "
+        "Contexts evaluate, then V0 and V1 derived from them",
+        "test_ais_two_state_lane, test_ais_on_explicit_solvent, "
+        "test_hs_rows_match_recomputation_on_cuda"),
     "ais/run.py::run_one_path.write_frame": (
         "reads CUDA positions and box vectors into the path trajectory",
-        "test_ais_reads_a_netcdf_source_on_cuda, test_ais_decomposition_lane"),
+        "test_ais_reads_a_netcdf_source_on_cuda, test_ais_two_state_lane"),
     "ais/run.py::run_one_path.save_checkpoint": (
         "saves a CUDA Context into a committed checkpoint generation",
         "test_md_run_mpi_gpu.py resume tests, test_hs_rows_match_recomputation_on_cuda"),
     "ais/run.py::_state_row": (
         "reads CUDA potential, kinetic and box state into system.csv",
-        "test_ais_decomposition_lane (info_printout is set in every AIS lane)"),
+        "test_ais_two_state_lane (info_printout is set in every AIS lane)"),
     "md/_stages.py::set_restraint": (
         "pushes the positional-restraint force constant into a live CUDA Context",
         "test_cmd_cuda_smoke.py, test_cuda_precision_lane (restrained NVT)"),
@@ -506,6 +516,81 @@ def _machine(platform="CUDA", precision="mixed", device_policy="local_rank") -> 
                                    "device_policy": device_policy}}}
 
 
+def _end_states(root: Path) -> list[str]:
+    """`-p/-s` V0 and `-p2/-s2` V1 for an AIS lane on the system under `root`.
+
+    V0 is `build/V0.xml`, the REST2 state at tau = 0.5 of `build/built.xml`, written on first use;
+    V1 is `built.xml` itself. The pair the retired single-topology AIS switched along tau, as the
+    two files the two-state AIS transforms between.
+    """
+    v0 = root / "build" / "V0.xml"
+    if not v0.is_file():
+        from md_tools.rest2.hamiltonian import build_scaled_system
+        from md_tools.md.stage import solute_atom_indices
+        from openmm import XmlSerializer
+        from openmm.app import PDBFile
+
+        base = XmlSerializer.deserialize((root / "build" / "built.xml").read_text(encoding="utf-8"))
+        solute = solute_atom_indices(PDBFile(str(root / "build" / "built.pdb")).topology)
+        v0.write_text(XmlSerializer.serialize(build_scaled_system(base, solute, 0.5)),
+                      encoding="utf-8")
+    return ["-p", str(root / "build" / "built.pdb"), "-s", str(v0),
+            "-p2", str(root / "build" / "built.pdb"), "-s2", str(root / "build" / "built.xml")]
+
+
+def _ais_system(root: Path, work: Path) -> list[str]:
+    """Make `work` a system root of its own for an AIS lane, and return its end-state flags.
+
+    `build-md` validates the whole chain at generation and reads `<system>/build/`, and
+    `-odir work/project` makes `work` the system root -- so the built System (and V0 beside it)
+    is copied in, exactly as the ladder lanes do.
+    """
+    import shutil
+
+    _end_states(root)
+    shutil.copytree(root / "build", work / "build")
+    return _end_states(work)
+
+
+def _counter_detail(counters: dict) -> str:
+    return (f"{counters['paid_total_energy_evaluations']} energy evaluations "
+            f"({counters['work_derivative_evaluations']} dV/dlambda, "
+            f"{counters['observation_potential_energy_evaluations']} observation), "
+            f"{counters['parameter_updates']} lambda updates in "
+            f"{counters['parameter_change_seconds']:.6f} s")
+
+
+def _assert_two_state_rows(rows, *, precision: str) -> tuple[int, float]:
+    """The two-state identity on every frame-aligned work row; emptiness on every other one.
+
+    Returns (aligned rows, worst |mixture - direct|). Also the running sum of the per-path work.
+    """
+    from md_tools.ais.two_state import OBSERVATION_POTENTIAL_COLUMNS, identity_tolerance
+
+    aligned, worst, running = 0, 0.0, {}
+    for row in rows:
+        path = row["path_id"]
+        running[path] = running.get(path, 0.0) + float(row["delta_work_kj_mol"])
+        total = float(row["total_work_kj_mol"])
+        assert abs(running[path] - total) <= 1e-9 * max(1.0, abs(total)), (
+            f"path {path} step {row['switch_step']}: the work does not telescope")
+        if str(row.get("coordinate_frame_index", "")).strip() == "":
+            for name in OBSERVATION_POTENTIAL_COLUMNS:
+                assert row[name] == "", (row["switch_step"], name)
+            continue
+        lam = float(row["lambda_after"])
+        v0, v1 = float(row["potential_v0_kj_mol"]), float(row["potential_v1_kj_mol"])
+        direct = float(row["potential_direct_kj_mol"])
+        error = abs((1.0 - lam) * v0 + lam * v1 - direct)
+        worst = max(worst, error)
+        assert error <= identity_tolerance(max(abs(v0), abs(v1), abs(direct)),
+                                           precision=precision), (
+            f"step {row['switch_step']}: (1 - {lam}) V0 + {lam} V1 = "
+            f"{(1.0 - lam) * v0 + lam * v1} against direct {direct} at {precision} precision")
+        aligned += 1
+    return aligned, worst
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     """One implicit ALA system, built once. Small enough to run many lanes against."""
@@ -731,18 +816,70 @@ def test_explicit_device_placement_lane(built, hardware, tmp_path):
             detail=f"{visible} of {len(hardware)} devices visible; ran on the last")
 
 
-# --- the tau-basis decomposition, on CUDA ---------------------------------------------------------
+# --- the two-state AIS Hamiltonian, on CUDA ----------------------------------------------------------
 
-def test_ais_decomposition_lane(built, hardware, tmp_path):
-    """The three-group identity holds on a real GPU, at the precision a run actually uses.
+def test_ais_two_state_lane(built, hardware, tmp_path):
+    """`TwoStateHamiltonian` on a real GPU, in process and through a run, at mixed precision.
 
-    The decomposition's whole claim is an identity between energies. On the Reference platform
-    that identity is exact to 1e-7 and the test is about the algebra; here it is about the
-    PLATFORM, because single- and mixed-precision nonbonded sums are exactly where an identity
-    stops holding to the tolerance somebody assumed on a CPU.
+    The Hamiltonian's whole claim is a pair of identities between energies:
+    `V(lambda) = (1 - lambda) V0 + lambda V1` and `dV/dlambda = V1 - V0`. On the Reference platform
+    they are algebra; here they are about the PLATFORM -- the CustomCVForce's inner Contexts and
+    the energy-parameter derivative kernel are CUDA code, and mixed precision is exactly where an
+    identity stops holding to a tolerance somebody assumed on a CPU.
+
+    IN PROCESS: the class itself, on a CUDA Context, against V0 and V1 each evaluated in a
+    separate plain CUDA Context, and the work convention's finite difference at frozen
+    coordinates. THROUGH A RUN: the counters and the identity columns of the work table the run
+    wrote.
     """
+    import csv
+
+    from openmm import Context, Platform, VerletIntegrator, XmlSerializer, unit
+    from openmm.app import PDBFile
+
+    from md_tools.ais.two_state import TWO_STATE_SCHEMA, TwoStateHamiltonian, identity_tolerance
+    from md_tools.build.record import read_record
+
+    _end_states(built)
+
+    # -- in process -------------------------------------------------------------------------------
+    cuda = Platform.getPlatformByName("CUDA")
+    properties = {"Precision": "mixed"}
+    v0_system = XmlSerializer.deserialize((built / "build" / "V0.xml").read_text(encoding="utf-8"))
+    v1_system = XmlSerializer.deserialize((built / "build" / "built.xml").read_text(
+        encoding="utf-8"))
+    positions = PDBFile(str(built / "build" / "built.pdb")).positions
+
+    def plain(system):
+        context = Context(system, VerletIntegrator(0.001), cuda, properties)
+        context.setPositions(positions)
+        return context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(
+            unit.kilojoule_per_mole)
+
+    v0, v1 = plain(v0_system), plain(v1_system)
+    hamiltonian = TwoStateHamiltonian(v0_system, v1_system)
+    assert hamiltonian.plan["mixed_forces"], "the pair mixes nothing"
+    context = Context(hamiltonian.system, VerletIntegrator(0.001), cuda, properties)
+    assert context.getPlatform().getName() == "CUDA"
+    context.setPositions(positions)
+    allowed = identity_tolerance(max(abs(v0), abs(v1)), precision="mixed")
+    energies = {}
+    for lam in (0.0, 0.25, 1.0):
+        hamiltonian.set_lambda(context, lam)
+        observed = hamiltonian.observe(context, lam, precision="mixed", where="CUDA lane: ")
+        assert abs(observed["potential_v0_kj_mol"] - v0) <= allowed, (lam, observed, v0)
+        assert abs(observed["potential_v1_kj_mol"] - v1) <= allowed, (lam, observed, v1)
+        assert abs(observed["potential_direct_kj_mol"]
+                   - ((1.0 - lam) * v0 + lam * v1)) <= allowed, (lam, observed)
+        assert abs(hamiltonian.difference(context) - (v1 - v0)) <= allowed, lam
+        energies[lam] = observed["potential_direct_kj_mol"]
+    # The work convention, at one frozen coordinate: V(0.25) - V(0) = 0.25 (V1 - V0).
+    assert abs((energies[0.25] - energies[0.0]) - 0.25 * (v1 - v0)) <= 2 * allowed
+
+    # -- through a run ----------------------------------------------------------------------------
     work = tmp_path / "ais"
     work.mkdir()
+    argv = _ais_system(built, work)
 
     import mdtraj
 
@@ -752,7 +889,6 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
     (work / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit",
         "ais": {"number_of_paths": 2, "switching_steps": 20,
-                "work_measurement": "components",
                 "observation_interval_steps": 5,
                 "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
@@ -764,97 +900,51 @@ def test_ais_decomposition_lane(built, hardware, tmp_path):
     assert generated.returncode == 0, generated.stdout + generated.stderr
 
     done = subprocess.run(
-        [sys.executable, str(work / "project" / "AIS.py"),
-         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
+        [sys.executable, str(work / "project" / "AIS.py"), *argv,
          "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run")],
         cwd=work, capture_output=True, text=True, timeout=1800,
         env=_environment(work, **_machine()))
     assert done.returncode == 0, done.stdout + done.stderr
 
-    import csv
-
-    from md_tools.build.record import read_record
-
     record = read_record(work / "run" / "AIS.log")
     assert record["acceleration"]["resolved_platform"] == "CUDA", record["acceleration"]
-    decomposition = record["decomposition"]
-    assert decomposition["potential_energy_evaluations_per_probe"] == 3
-    counters = decomposition["evaluation_counters"]
-    # The counters, on a real CUDA run, in the relationship the record itself states. The two
-    # probe counters are separate because they are taken at DIFFERENT COORDINATES: the work-basis
-    # probe at the frozen pre-switch x_j, the observation probe at the saved coordinate x_t. A
-    # single "probe" count could not tell those apart, and the old one also omitted the two
-    # direct evaluations every switch already performs.
-    assert counters["work_basis_probe_energy_evaluations"] > 0
+    assert record["end_states"]["schema"] == {"name": TWO_STATE_SCHEMA["name"],
+                                              "version": TWO_STATE_SCHEMA["version"]}
+    assert record["end_states"]["mixed_forces"], record["end_states"]
+    counters = record["evaluation_counters"]
+    # The counters, on a real CUDA run, in the relationship the record itself states.
+    assert counters["work_derivative_evaluations"] > 0
     assert counters["observation_potential_energy_evaluations"] > 0
-    assert counters["direct_work_energy_evaluations"] > 0
-    useful = (counters["direct_work_energy_evaluations"]
-              + counters["work_basis_probe_energy_evaluations"]
+    useful = (counters["work_derivative_evaluations"]
               + counters["observation_potential_energy_evaluations"]
               + counters["other_useful_energy_evaluations"])
     assert counters["useful_total_energy_evaluations"] == useful, counters
-    assert counters["paid_total_energy_evaluations"] == useful + counters["known_discarded_energy_evaluations"], (
-        counters)
+    assert counters["paid_total_energy_evaluations"] == (
+        useful + counters["known_discarded_energy_evaluations"]), counters
     # An uninterrupted run observed all of its own cost; nothing was thrown away unseen.
     assert counters["known_discarded_energy_evaluations"] == 0, counters
     assert counters["discarded_is_complete"] is True, counters
     assert counters["parameter_updates"] > 0
-    assert counters["probe_seconds"] > 0.0
 
     with (work / "run" / "AIS_work.csv").open(newline="") as handle:
         rows = list(csv.DictReader(handle))
     assert rows, "the work table is empty"
-    # The identity, on every row the GPU produced, at the tolerance this precision documents.
-    from md_tools.ais.decomposition import reconstruction_tolerance
-
     precision = record["acceleration"].get("cuda_precision") or "mixed"
-    checked = aligned = 0
-    for row in rows:
-        total = float(row["total_work_kj_mol"])
-        parts = sum(float(row[name]) for name in
-                    ("total_work_non_scaled_kj_mol", "total_work_sqrt_scaled_kj_mol",
-                     "total_work_lin_scaled_kj_mol"))
-        allowed = reconstruction_tolerance(total, precision=precision) * len(rows)
-        assert abs(parts - total) <= max(allowed, 1e-6), (
-            f"step {row['switch_step']}: components sum to {parts} against a measured "
-            f"{total} at {precision} precision")
-        # The observation potentials are present only on rows whose coordinate was SAVED. An
-        # unaligned row has them empty by schema -- that is the correction, not a gap -- so the
-        # identity is checked where it applies and the emptiness is asserted where it does not.
-        if str(row.get("coordinate_frame_index", "")).strip() == "":
-            for name in ("potential_non_scaled_kj_mol", "potential_sqrt_scaled_kj_mol",
-                         "potential_lin_scaled_kj_mol", "potential_reconstructed_kj_mol",
-                         "potential_direct_kj_mol"):
-                assert row[name] == "", (row["switch_step"], name)
-            continue
-        amplitude = 1.0 - float(row["tau_after"])
-        expected = (float(row["potential_non_scaled_kj_mol"])
-                    + amplitude * float(row["potential_sqrt_scaled_kj_mol"])
-                    + amplitude * amplitude * float(row["potential_lin_scaled_kj_mol"]))
-        direct = float(row["potential_direct_kj_mol"])
-        assert abs(expected - float(row["potential_reconstructed_kj_mol"])) < 1e-3
-        assert abs(expected - direct) <= reconstruction_tolerance(direct, precision=precision), (
-            f"step {row['switch_step']}: reconstructed {expected} against direct {direct}")
-        aligned += 1
-        checked += 1
-    assert checked >= 2
-    assert aligned >= 1, "no frame-aligned row carried observation potentials"
-    _record("test_ais_decomposition_lane",
-            feature="AIS implicit, three-group decomposition and work-sum identity",
+    aligned, worst = _assert_two_state_rows(rows, precision=precision)
+    assert aligned >= 2, "fewer than two frame-aligned rows carried observation potentials"
+    _record("test_ais_two_state_lane",
+            feature="AIS implicit, TwoStateHamiltonian in process and through a run",
             precision=precision, device=record["acceleration"].get("cuda_device_index") or "-",
-            detail=f"{checked} rows checked, {aligned} frame-aligned; "
-                   f"{counters['paid_total_energy_evaluations']} energy evaluations "
-                   f"({counters['work_basis_probe_energy_evaluations']} work-basis probe, "
-                   f"{counters['direct_work_energy_evaluations']} work, "
-                   f"{counters['observation_potential_energy_evaluations']} observation), "
-                   f"{counters['parameter_updates']} parameter updates in "
-                   f"{counters['probe_seconds']:.3f} s")
+            detail=f"in process: V0, V1, V(lambda) and dV/dlambda against plain CUDA Contexts; "
+                   f"run: {len(rows)} rows, {aligned} frame-aligned, worst |mixture - direct| = "
+                   f"{worst:.3e} kJ/mol; " + _counter_detail(counters))
 
 
 def test_ais_reads_a_netcdf_source_on_cuda(built, hardware, tmp_path):
     """The other supported source format. DCD is covered in test_md_run_mpi_gpu.py."""
     work = tmp_path / "netcdf"
     work.mkdir()
+    argv = _ais_system(built, work)
 
     import mdtraj
 
@@ -864,7 +954,6 @@ def test_ais_reads_a_netcdf_source_on_cuda(built, hardware, tmp_path):
     (work / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit",
         "ais": {"number_of_paths": 2, "switching_steps": 10,
-                "work_measurement": "components",
                 "observation_interval_steps": 5, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.nc"},
         "reporting": {"crd_printout_solute": 5, "info_printout": 5, "checkpoint_printout": 5}}),
@@ -875,8 +964,7 @@ def test_ais_reads_a_netcdf_source_on_cuda(built, hardware, tmp_path):
     assert generated.returncode == 0, generated.stdout + generated.stderr
 
     done = subprocess.run(
-        [sys.executable, str(work / "project" / "AIS.py"),
-         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
+        [sys.executable, str(work / "project" / "AIS.py"), *argv,
          "-source-traj", str(work / "source.nc"), "-odir", str(work / "run")],
         cwd=work, capture_output=True, text=True, timeout=1800,
         env=_environment(work, **_machine()))
@@ -887,6 +975,8 @@ def test_ais_reads_a_netcdf_source_on_cuda(built, hardware, tmp_path):
     record = read_record(work / "run" / "AIS.log")
     assert record["acceleration"]["resolved_platform"] == "CUDA"
     assert record["source"]["format"] == "netcdf", record["source"]
+    # mdtraj writes no System digest, so the ensemble is ASSERTED to be V0's, and says so.
+    assert record["source"]["ensemble"]["status"] == "asserted", record["source"]
     assert (work / "run" / "AIS_traj0000.nc").is_file()
     _record("test_ais_reads_a_netcdf_source_on_cuda",
             feature="AIS implicit, NetCDF source ensemble",
@@ -1295,14 +1385,16 @@ def test_a_genuinely_unimportable_mpi4py_stops_a_plural_launch(built, hardware, 
 
 
 def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):
-    """AIS over a PME system on CUDA, and the decomposition identity with it.
+    """AIS over a PME system on CUDA, and the two-state identity with it.
 
     Every other AIS lane is implicit. The identity's claim is that it survives the PME reciprocal
-    sum, the Ewald self-energy and the long-range dispersion correction -- and none of those exist
-    in an implicit system, so no implicit lane tests the part of the claim most likely to be wrong.
+    sum, the Ewald self-energy and the long-range dispersion correction -- each end state is
+    evaluated as its own System would be -- and none of those exist in an implicit system, so no
+    implicit lane tests the part of the claim most likely to be wrong.
     """
     work = tmp_path / "ais-explicit"
     work.mkdir()
+    argv = _ais_system(built_explicit, work)
 
     import mdtraj
 
@@ -1312,7 +1404,6 @@ def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):
     (work / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "explicit",
         "ais": {"number_of_paths": 2, "switching_steps": 10,
-                "work_measurement": "components",
                 "observation_interval_steps": 5, "parameter_update_interval_steps": 5},
         "ais_source": {"trajectory": "../source.dcd"},
         "reporting": {"crd_printout_solute": 5, "info_printout": 5,
@@ -1323,8 +1414,7 @@ def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):
     assert generated.returncode == 0, generated.stdout + generated.stderr
 
     done = subprocess.run(
-        [sys.executable, str(work / "project" / "AIS.py"),
-         "-p", str(built_explicit / "build" / "built.pdb"), "-s", str(built_explicit / "build" / "built.xml"),
+        [sys.executable, str(work / "project" / "AIS.py"), *argv,
          "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run")],
         cwd=work, capture_output=True, text=True, timeout=3600,
         env=_environment(work, **_machine()))
@@ -1332,54 +1422,40 @@ def test_ais_on_explicit_solvent(built_explicit, hardware, tmp_path):
 
     import csv
 
-    from md_tools.ais.decomposition import reconstruction_tolerance
     from md_tools.build.record import read_record
 
     record = read_record(work / "run" / "AIS.log")
     assert record["acceleration"]["resolved_platform"] == "CUDA"
     assert record["implicit"] is False, "this lane is meant to be the explicit one"
+    assert "NonbondedForce" in record["end_states"]["mixed_force_classes"], record["end_states"]
     precision = record["acceleration"].get("cuda_precision") or "mixed"
 
     with (work / "run" / "AIS_work.csv").open(newline="") as handle:
         rows = list(csv.DictReader(handle))
     assert rows
-    worst = 0.0
-    for row in rows:
-        total = float(row["total_work_kj_mol"])
-        parts = sum(float(row[name]) for name in
-                    ("total_work_non_scaled_kj_mol", "total_work_sqrt_scaled_kj_mol",
-                     "total_work_lin_scaled_kj_mol"))
-        worst = max(worst, abs(parts - total))
-        allowed = reconstruction_tolerance(total, precision=precision) * len(rows)
-        assert abs(parts - total) <= max(allowed, 1e-6), (
-            f"explicit, step {row['switch_step']}: components sum to {parts} against {total}")
+    aligned, worst = _assert_two_state_rows(rows, precision=precision)
+    assert aligned >= 2, "fewer than two frame-aligned rows carried observation potentials"
 
-    decomposition = record["decomposition"]
+    counters = record["evaluation_counters"]
     particles = record["inputs"]["system"].get("particles") if isinstance(
-        record["inputs"].get("system"), dict) else None
+        record.get("inputs", {}).get("system"), dict) else None
     _record("test_ais_on_explicit_solvent",
-            feature="AIS explicit (PME), three-group identity through the reciprocal sum",
+            feature="AIS explicit (PME), two-state identity through the reciprocal sum",
             precision=precision, device=record["acceleration"].get("cuda_device_index") or "-",
-            detail=f"{len(rows)} rows, worst |sum - total| = {worst:.3e} kJ/mol; "
-                   f"{decomposition['evaluation_counters']['paid_total_energy_evaluations']}"
-                   f" energy evaluations, "
-                   f"{decomposition['evaluation_counters']['parameter_updates']} parameter "
-                   f"updates in "
-                   f"{decomposition['evaluation_counters']['probe_seconds']:.3f} s"
+            detail=f"{len(rows)} rows, {aligned} frame-aligned, worst |mixture - direct| = "
+                   f"{worst:.3e} kJ/mol; " + _counter_detail(counters)
                    + (f"; {particles} particles" if particles else ""))
 
 
-def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_explicit, hardware,
-                                                              tmp_path):
-    """What the three extra evaluations per update actually cost, implicit against explicit.
+def test_the_two_state_switch_cost_is_measured_on_a_large_system(built, built_explicit,
+                                                                hardware, tmp_path):
+    """What a lambda update and its work cost, implicit against explicit, every step.
 
     "The overhead is acceptable" is only a claim if it comes with a number, and a number from a
-    22-particle implicit system says nothing about a solvated one -- where the parameter pushes
-    (`updateParametersInContext` over every particle and every exception) dominate, not the energy
-    evaluation.
+    22-particle implicit system says nothing about a solvated one -- where the differing
+    NonbondedForce is evaluated twice, once per end state, as Amber computes the reciprocal sum
+    twice.
     """
-    import csv
-
     from md_tools.build.record import read_record
 
     measured = {}
@@ -1387,6 +1463,7 @@ def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_expli
                                  ("explicit", built_explicit, "explicit")):
         work = tmp_path / f"cost-{label}"
         work.mkdir()
+        argv = _ais_system(root, work)
 
         import mdtraj
 
@@ -1395,7 +1472,6 @@ def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_expli
         (work / "AIS.config").write_text(yaml.safe_dump({
             "protocol": "AIS", "solvent": solvent,
             "ais": {"number_of_paths": 1, "switching_steps": 20,
-                    "work_measurement": "components",
                     "observation_interval_steps": 5,
                     "parameter_update_interval_steps": 1},
             "ais_source": {"trajectory": "../source.dcd"},
@@ -1405,8 +1481,7 @@ def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_expli
                                      "--config", str(work / "AIS.config")],
                               capture_output=True, text=True, timeout=600).returncode == 0
         done = subprocess.run(
-            [sys.executable, str(work / "project" / "AIS.py"),
-             "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
+            [sys.executable, str(work / "project" / "AIS.py"), *argv,
              "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run")],
             cwd=work, capture_output=True, text=True, timeout=3600,
             env=_environment(work, **_machine()))
@@ -1414,19 +1489,21 @@ def test_the_decomposition_cost_is_measured_on_a_large_system(built, built_expli
 
         record = read_record(work / "run" / "AIS.log")
         assert record["acceleration"]["resolved_platform"] == "CUDA"
-        counters = record["decomposition"]["evaluation_counters"]
+        counters = record["evaluation_counters"]
         evaluations = int(counters["paid_total_energy_evaluations"])
+        derivatives = int(counters["work_derivative_evaluations"])
         pushes = int(counters["parameter_updates"])
-        seconds = float(counters["probe_seconds"])
-        assert evaluations > 0 and pushes > 0 and seconds > 0.0
-        measured[label] = (evaluations, pushes, seconds, seconds / max(evaluations, 1))
+        seconds = float(counters["parameter_change_seconds"])
+        assert evaluations > 0 and derivatives > 0 and pushes > 0 and seconds >= 0.0
+        measured[label] = (evaluations, derivatives, pushes, seconds)
 
-    for label, (evaluations, pushes, seconds, each) in measured.items():
-        _record("test_the_decomposition_cost_is_measured_on_a_large_system",
-                feature=f"decomposition overhead, AIS {label}, update interval 1 step",
+    for label, (evaluations, derivatives, pushes, seconds) in measured.items():
+        _record("test_the_two_state_switch_cost_is_measured_on_a_large_system",
+                feature=f"two-state switch cost, AIS {label}, update interval 1 step",
                 precision="mixed", device="-",
-                detail=f"{evaluations} energy evaluations and {pushes} parameter updates in "
-                       f"{seconds:.3f} s of probing ({each * 1000:.2f} ms per evaluation)")
+                detail=f"{evaluations} energy evaluations ({derivatives} dV/dlambda) and "
+                       f"{pushes} lambda updates; {seconds:.6f} s in parameter changes "
+                       f"({seconds / max(pushes, 1) * 1e6:.1f} us per update)")
     # Not a performance assertion -- hardware varies and a threshold here would be a flaky test
     # pretending to be a measurement. What is asserted is that the number EXISTS for both sizes,
     # which is what "measured and documented" requires.
@@ -1451,6 +1528,7 @@ def test_hs_rows_match_recomputation_on_cuda(solvent, built, built_explicit, har
     root = built if solvent == "implicit" else built_explicit
     work = tmp_path / f"hs-cuda-{solvent}"
     work.mkdir()
+    argv = _ais_system(root, work)
 
     import mdtraj
 
@@ -1461,7 +1539,6 @@ def test_hs_rows_match_recomputation_on_cuda(solvent, built, built_explicit, har
     (work / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": solvent,
         "ais": {"number_of_paths": 1, "switching_steps": 60,
-                "work_measurement": "components",
                 "observation_interval_steps": 6, "parameter_update_interval_steps": 2},
         "ais_source": {"trajectory": "../source.dcd"},
         "reporting": {"crd_printout_solute": 10, "info_printout": 20,
@@ -1471,8 +1548,7 @@ def test_hs_rows_match_recomputation_on_cuda(solvent, built, built_explicit, har
                           capture_output=True, text=True, timeout=600).returncode == 0
 
     done = subprocess.run(
-        [sys.executable, str(work / "project" / "AIS.py"),
-         "-p", str(root / "build" / "built.pdb"), "-s", str(root / "build" / "built.xml"),
+        [sys.executable, str(work / "project" / "AIS.py"), *argv,
          "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run")],
         cwd=work, capture_output=True, text=True, timeout=3600,
         env=_environment(work, **_machine()))
@@ -1488,34 +1564,26 @@ def test_hs_rows_match_recomputation_on_cuda(solvent, built, built_explicit, har
     assert rows, "the CUDA run produced no frame-aligned HS rows"
 
     worst = 0.0
+    names = ("potential_v0_kj_mol", "potential_v1_kj_mol", "potential_direct_kj_mol")
     for row in rows:
-        # `root / "build"`, because the HELPER reads `<root>/built.pdb` and `<root>/built.xml`
-        # flat -- `test_ais_hs_frame_alignment` builds its own trees that way and calls it four
-        # times with them, so the helper is right and must not move. The systems in THIS module
-        # live under `build/`, so the call site supplies that directory rather than the fixture
-        # root, which is what made this fail with `.../cuda-matrix0/built.pdb` not found.
-        components, direct = recompute_at_frame(
-            root / "build", work / "run", path_id=int(row["path_id"]),
-            frame_index=int(row["coordinate_frame_index"]), tau=float(row["tau"]))
-        allowed = frame_roundtrip_tolerance(float(row["potential_direct_kj_mol"]))
-        for group in ("non_scaled", "sqrt_scaled", "lin_scaled"):
-            error = abs(float(row[f"potential_{group}_kj_mol"]) - getattr(components, group))
+        # The helper reads `<work>/build/V0.xml` and `<work>/build/built.xml` -- the same layout
+        # `_ais_system` copies here -- and evaluates each on the Reference platform, so the CUDA
+        # numbers are checked by a Context that shares neither the platform nor the mixing force.
+        recomputed = recompute_at_frame(
+            work, work / "run", path_id=int(row["path_id"]),
+            frame_index=int(row["coordinate_frame_index"]), lam=float(row["lambda"]))
+        allowed = frame_roundtrip_tolerance(max(abs(float(row[name])) for name in names))
+        for name, value in zip(names, recomputed):
+            error = abs(float(row[name]) - value)
             worst = max(worst, error)
-            assert error < allowed, (solvent, group, row["coordinate_frame_index"])
-        error = abs(float(row["potential_direct_kj_mol"]) - direct)
-        worst = max(worst, error)
-        assert error < allowed
-    counters = record["decomposition"]["evaluation_counters"]
+            assert error < allowed, (solvent, name, row["coordinate_frame_index"])
+    counters = record["evaluation_counters"]
     _record("test_hs_rows_match_recomputation_on_cuda",
             feature=f"AIS {solvent}, HS rows recomputed at their own saved frames",
             precision=record["acceleration"].get("cuda_precision") or "mixed",
             device=record["acceleration"].get("cuda_device_index") or "-",
             detail=f"{len(rows)} rows, max |recorded - recomputed| = {worst:.3e} kJ/mol; "
-                   f"{counters['paid_total_energy_evaluations']} energy evaluations "
-                   f"({counters['work_basis_probe_energy_evaluations']} work-basis probe, "
-                   f"{counters['direct_work_energy_evaluations']} work, "
-                   f"{counters['observation_potential_energy_evaluations']} observation), "
-                   f"{counters['parameter_updates']} parameter updates")
+                   + _counter_detail(counters))
 
 
 # --- a hundred paths, and multi-rank ownership ------------------------------------------------
@@ -1538,6 +1606,7 @@ def test_a_hundred_paths_under_real_mpi_produce_exactly_their_own_files(built, h
 
     work = tmp_path / "hundred"
     work.mkdir()
+    argv = _ais_system(built, work)
 
     import mdtraj
 
@@ -1547,7 +1616,6 @@ def test_a_hundred_paths_under_real_mpi_produce_exactly_their_own_files(built, h
     (work / "AIS.config").write_text(yaml.safe_dump({
         "protocol": "AIS", "solvent": "implicit",
         "ais": {"number_of_paths": 100, "switching_steps": 4,
-                "work_measurement": "components",
                 "observation_interval_steps": 2, "parameter_update_interval_steps": 2},
         "ais_source": {"trajectory": "../source.dcd", "allow_repeated_frames": True},
         "reporting": {"crd_printout_solute": 2, "info_printout": 4,
@@ -1558,8 +1626,7 @@ def test_a_hundred_paths_under_real_mpi_produce_exactly_their_own_files(built, h
 
     done = subprocess.run(
         ["mpirun", "-n", "4", sys.executable, str(work / "project" / "AIS.py"),
-         "-p", str(built / "build" / "built.pdb"), "-s", str(built / "build" / "built.xml"),
-         "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run"), "-ng", "4"],
+         *argv, "-source-traj", str(work / "source.dcd"), "-odir", str(work / "run"), "-ng", "4"],
         cwd=work, capture_output=True, text=True, timeout=7200,
         env=_environment(work, **_machine()))
     assert done.returncode == 0, done.stdout[-4000:] + done.stderr[-4000:]

@@ -75,7 +75,7 @@ The evidence for every default, classified by strength, is in
 | implicit, Sage small molecule | **experimental**, recorded as such in `forcefield.json` | §6 — mbondi3 reduces to mbondi2 for a one-residue ligand, and any element outside {H, C, N, O, S} gets GB-Neck2's unfitted fallback |
 | 2 fs, unmodified hydrogen masses | supported baseline | §11.1 |
 | 4 fs with HMR at 3.024 amu | supported for stability and equilibrium free energies; **not** for kinetics | §11.3 |
-| AIS switching along the REST2 tau path | implemented and tested against a static REST2 rung to 0 kJ/mol and 0 kJ/mol/nm; **no free-energy estimator, forward only, fixed volume, no pV work** | [the AIS page](openmm_methods/AIS/README.md) |
+| AIS: linear switching between two end-state Systems, V(λ) = (1 − λ)V0 + λV1 | implemented in 0.5.4; the mixed energy, forces and dV/dλ equal the linear combination of the two Systems exactly on Reference and to ≤1e-6 kJ/mol on CUDA double; **parameters-only pairs, no softcore or atom mapping, no free-energy estimator, forward only, fixed volume, no pV work** | [the AIS page](openmm_methods/AIS/README.md) |
 
 ## Scientific status, which portability does not address
 

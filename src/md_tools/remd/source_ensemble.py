@@ -253,6 +253,7 @@ def trajectory_identity(trajectory):
                 "times_ps": ([float(value) for value in dataset.variables["time"][:]]
                              if "time" in dataset.variables else None),
                 "title": getattr(dataset, "title", None),
+                "system_sha256": getattr(dataset, "system_sha256", None),
             }
         return identity, None
     except Exception as failure:                              # noqa: BLE001 - evidence, not flow

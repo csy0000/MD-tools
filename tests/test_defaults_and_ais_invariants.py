@@ -6,8 +6,8 @@ never about the contract at all:
 
   * the force fields the defaults ACTUALLY load, checked against a built System rather than against
     the label in a configuration;
-  * the AIS invariants that hold whatever generates the run -- the source tau must be established
-    rather than assumed, the runtime must stream the source instead of loading it whole, and a
+  * the AIS invariants that hold whatever generates the run -- the source ensemble must be V0's,
+    verified from the digest the source records rather than assumed, the runtime must stream the source instead of loading it whole, and a
     prepared source must not claim to hold velocities a DCD cannot carry.
 
 Contract v2 and registration are tested in test_registration.py; AIS through the public command is
@@ -22,6 +22,7 @@ import shutil
 import struct
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -126,30 +127,123 @@ def test_the_ais_runtime_never_walks_the_storage_root_or_hashes_a_trajectory():
     assert "MD_DATA" not in source, "the runtime must not resolve a managed storage root"
 
 
-# --- AIS source tau -----------------------------------------------------------------------------
+# --- AIS source ensemble -------------------------------------------------------------------------
 
-def test_the_path_start_must_equal_the_source_ensemble_tau():
-    """A path must begin in the ensemble it anneals away from.
+def _two_state_inputs(work: Path, *, recorded_digest):
+    """V0, V1 and a two-frame AMBER NetCDF source, all on disk, in vacuum so the CPU is enough.
 
-    The retired `methods:` model carried a second, user-declared `AIS.source.source_tau` that
-    configuration validated against the path start. There is no such field now, and that is the
-    improvement: a user restating the source's tau could restate it WRONGLY, and configuration had
-    no way to tell. `ais.tau_start` is the single declaration, and the source's OWN record is
-    checked against it at run time -- see `runtime/ais.py`, which refuses a source whose recorded
-    tau disagrees, and which records `thermodynamic_states.source_tau` from `ais.tau_start`.
+    `recorded_digest` is what the source says about ITSELF: a callable of V0's sha256 giving the
+    digest to record, or None for a source that records nothing.
+    """
+    import hashlib
+
+    from openmm import NonbondedForce, XmlSerializer
+    from openmm.app import ForceField, HBonds, NoCutoff, PDBFile
+
+    from md_tools.remd.amber_trajectory import AmberTrajectoryWriter
+
+    pdb = PDBFile(str(REPO_ROOT / "tests" / "data" / "ALA.pdb"))
+    v0 = ForceField("amber14-all.xml").createSystem(pdb.topology, nonbondedMethod=NoCutoff,
+                                                    constraints=HBonds)
+    v1 = XmlSerializer.deserialize(XmlSerializer.serialize(v0))
+    for force in v1.getForces():
+        if isinstance(force, NonbondedForce):
+            for i in range(force.getNumParticles()):
+                q, sigma, epsilon = force.getParticleParameters(i)
+                force.setParticleParameters(i, q * 0.7, sigma, epsilon)
+    topology = work / "built.pdb"
+    with topology.open("w") as handle:
+        PDBFile.writeFile(pdb.topology, pdb.positions, handle)
+    (work / "V0.xml").write_text(XmlSerializer.serialize(v0))
+    (work / "V1.xml").write_text(XmlSerializer.serialize(v1))
+    v0_sha = hashlib.sha256((work / "V0.xml").read_bytes()).hexdigest()
+
+    import numpy as np
+    from openmm import unit
+    positions = np.array(pdb.positions.value_in_unit(unit.nanometer))
+    writer = AmberTrajectoryWriter(
+        work / "source.nc", n_atoms=len(positions), tau=0.0, temperature_k=300.0,
+        periodic=False, application="cMD",
+        system_sha256=None if recorded_digest is None else recorded_digest(v0_sha))
+    for frame in range(4):
+        writer.append(positions, time_ps=float(frame))
+    writer.close()
+    return topology, work / "V0.xml", work / "V1.xml", work / "source.nc", v0_sha
+
+
+def _preflight_two_state(work: Path, monkeypatch, *, recorded_digest):
+    import yaml
+
+    from md_tools.build.md import resolve_md_config
+    from md_tools.run.preflight import preflight_ais
+
+    # No machine configuration at all -- absent, which is valid -- so nothing on this machine
+    # decides what the preflight reads. `--cpu` is the per-run override, and nothing here is
+    # CUDA evidence: the question is a digest comparison, not a platform.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(work / "xdg"))
+    monkeypatch.delenv("MD_TOOLS_CONFIG", raising=False)
+
+    topology, v0, v1, source, v0_sha = _two_state_inputs(work, recorded_digest=recorded_digest)
+    config = work / "AIS.config"
+    config.write_text(yaml.safe_dump({
+        "protocol": "AIS", "solvent": "implicit",
+        "dynamics": {"timestep_fs": 2.0, "temperature_K": 300.0, "seed": 7},
+        "ais": {"number_of_paths": 2, "switching_steps": 20, "observation_interval_steps": 10,
+                "parameter_update_interval_steps": 1},
+        "ais_source": {"trajectory": str(source)},
+        "reporting": {"crd_printout_solute": 10, "info_printout": 0, "checkpoint_printout": 0},
+    }), encoding="utf-8")
+    resolved = resolve_md_config(config)
+    checked = preflight_ais(
+        topology=topology, system=v0, source=source, topology2=topology, system2=v1,
+        output=work / "run" / "AIS.out", log=work / "run" / "AIS.log", cpu=True,
+        dynamics=resolved["dynamics"], ais=resolved["ais"], reporting=resolved["reporting"],
+        source_config=resolved["ais_source"], out_dir=work / "run")
+    return checked, v0_sha
+
+
+@pytest.mark.parametrize("recorded, status", [
+    (lambda v0_sha: v0_sha, "verified"),
+    (None, "asserted"),
+])
+def test_a_source_ensemble_is_verified_against_v0_when_it_records_its_system(
+        tmp_path, monkeypatch, recorded, status):
+    """A path must begin in the ensemble it transforms from, and that ensemble is V0's.
+
+    The single-topology AIS declared the source's tau in `ais.tau_start` and checked the `tau`
+    attribute a trajectory recorded against it. There is no tau to declare now: V0 is a FILE, and
+    the source's own record of the System it was integrated under is compared with the digest of
+    `-s`. A source that records a digest is VERIFIED; one that records none (a DCD, a foreign file,
+    a run whose Hamiltonian was modified in memory) is ASSERTED, and the run says which.
+    """
+    checked, v0_sha = _preflight_two_state(tmp_path, monkeypatch, recorded_digest=recorded)
+    assert checked.source_ensemble["status"] == status, checked.source_ensemble
+    if status == "verified":
+        assert checked.source_ensemble["system_sha256"] == v0_sha
+    # Nothing written by a preflight, accepted or not.
+    assert not (tmp_path / "run").exists()
+
+
+def test_a_source_sampled_from_another_system_is_refused_before_any_output(tmp_path, monkeypatch):
+    """Frames from any Hamiltonian other than V0 make every work value the cost of a different switch.
+
+    The configuration model carries no second declaration of the source ensemble -- no
+    `source_tau`, no retired `tau_start` -- because a user restating it could restate it WRONGLY.
+    The file's own record is the one statement, and a disagreement is a refusal naming both digests.
     """
     from md_tools.build.md import MD_SCHEMA
+    from md_tools.run.preflight import PreflightError
 
-    ais = MD_SCHEMA.sections["ais"]
-    fields = ais.fields
-    assert "source_tau" not in fields, (
-        "a second, user-declared source tau reintroduces the disagreement this removed")
-    assert fields["tau_start"].default == 0.5
-    assert "record is checked against this" in fields["tau_start"].doc
+    fields = MD_SCHEMA.sections["ais"].fields
+    for retired in ("source_tau", "tau_start", "tau_end"):
+        assert retired not in fields, (
+            f"ais.{retired} is a second, user-declared statement of the source ensemble")
 
-    runtime = (REPO_ROOT / "src" / "md_tools" / "ais" / "run.py").read_text(encoding="utf-8")
-    assert '"source_tau": float(ais["tau_start"])' in runtime, \
-        "the run no longer records which ensemble its paths started in"
+    with pytest.raises(PreflightError) as refusal:
+        _preflight_two_state(tmp_path, monkeypatch, recorded_digest=lambda v0_sha: "0" * 64)
+    message = str(refusal.value)
+    assert "must be V0's" in message and "0000000000000000" in message, message
+    assert not (tmp_path / "run").exists()
 
 
 
@@ -419,20 +513,22 @@ def clean_checkout():
 
 
 
-def test_the_runtime_work_measurement_defaults_match_the_configuration_schema():
-    """Two files state the same default; a test is what keeps them one default.
+def test_no_work_measurement_mode_survives_in_the_schema_or_the_runtime():
+    """The two-state AIS has ONE measurement, so there is no default for two files to agree on.
 
-    `ais/run.py` must not import the configuration builder -- the runtime is usable without it --
-    so it repeats the two literals. A default changed in `build/md.py` alone would then take
-    effect for anyone who ran `build-md` and NOT for a caller handing `run_one_path` a mapping,
-    and the two would disagree about what an unspecified setting means.
+    This used to check that `ais/run.py` and `build/md.py` stated the same default for
+    `work_measurement` and `verify_every_updates`. Both settings chose between a cheap work
+    measurement and a three-point components basis of the single-topology switch; the two-state
+    Hamiltonian reads V0 and V1 in the evaluation that measures the work, so neither choice exists.
+    What must not survive is either half of the old pair: a schema field with no runtime meaning
+    is accepted and inert, and a runtime constant with no schema field is a default nobody can set.
     """
-    from md_tools.ais.run import AIS_VERIFY_EVERY_DEFAULT, AIS_WORK_MEASUREMENT_DEFAULT
-    from md_tools.build.md import MD_SCHEMA
+    import md_tools.ais.run as runtime
+    from md_tools.build.md import MD_SCHEMA, RETIRED_AIS_KEYS
 
     fields = MD_SCHEMA.sections["ais"].fields
-    assert fields["work_measurement"].default == AIS_WORK_MEASUREMENT_DEFAULT
-    assert fields["verify_every_updates"].default == AIS_VERIFY_EVERY_DEFAULT
-    assert fields["work_measurement"].enum == ("work", "components")
-    # And the default is `work`: the cheap, direct measurement, as documented.
-    assert AIS_WORK_MEASUREMENT_DEFAULT == "work"
+    for retired in ("work_measurement", "verify_every_updates"):
+        assert retired not in fields, retired
+        assert retired in RETIRED_AIS_KEYS, f"ais.{retired} is not refused with its migration"
+    for constant in ("AIS_WORK_MEASUREMENT_DEFAULT", "AIS_VERIFY_EVERY_DEFAULT"):
+        assert not hasattr(runtime, constant), constant

@@ -28,7 +28,7 @@ from typing import Any, Iterable, Sequence
 
 from .identity import (HamiltonianMismatch, canonical_system_xml, force_summary, identity_record,
                        require_same_hamiltonian, system_fingerprint)
-from .scaler import (UNSCALED_TORSION_DETECTOR_VERSION, REST2_IMPLEMENTATION, TauSwitcher,
+from .scaler import (UNSCALED_TORSION_DETECTOR_VERSION, REST2_IMPLEMENTATION,
                      UnclassifiedForceError,
                      audit_force_classes, build_scaled_system, clone_system, linear_tau_ladder,
                      require_compatible_implementation, scaling_for_tau, torsion_exclusion_report)
@@ -39,7 +39,7 @@ __all__ = [
     "ScalingSelection",
     # the pieces the runtimes and tests reach for by name
     "SelectionError", "SELECTION_FORMAT", "resolve_selection",
-    "TauSwitcher", "build_scaled_system", "scaling_for_tau", "linear_tau_ladder",
+    "build_scaled_system", "scaling_for_tau", "linear_tau_ladder",
     "audit_force_classes", "UnclassifiedForceError", "torsion_exclusion_report",
     "clone_system", "REST2_IMPLEMENTATION", "require_compatible_implementation",
     "UNSCALED_TORSION_DETECTOR_VERSION",
@@ -49,15 +49,11 @@ __all__ = [
 
 
 class REST2Scaler:
-    """Scale a System in tau, either once or repeatedly on a live Context.
+    """Scale a System in tau.
 
-    One object, two modes, because they are the same Hamiltonian reached two ways:
-
-    * :meth:`scaled_system` builds a System at a fixed tau. A REST2 ladder makes one per rung and a
-      fixed-tau cMD run makes exactly one.
-    * :meth:`switcher` returns a :class:`TauSwitcher` that moves tau on an already-built Context,
-      which is what AIS needs, because a switching path changes tau thousands of times and
-      rebuilding the System each time would be both slow and a different calculation.
+    :meth:`scaled_system` builds a System at a fixed tau. A REST2 ladder makes one per rung and a
+    fixed-tau cMD run makes exactly one. (A live tau switcher served the single-topology AIS and was
+    retired with it in 0.5.4.)
 
     The selection -- which atoms are solute, which torsions keep their barrier -- is supplied once
     and reused for every tau, so a ladder cannot end up with rungs that disagree about what the
@@ -69,8 +65,8 @@ class REST2Scaler:
                  excluded_bonds: Iterable[Sequence[int]] = ()) -> None:
         """Take either a resolved :class:`ScalingSelection` or the two raw lists.
 
-        The raw form exists because the replica driver and the AIS runtime already hold indices at
-        the point they build a scaler; the selection form is what a generated run uses, because it
+        The raw form exists because the replica driver already holds indices at the point it
+        builds a scaler; the selection form is what a generated run uses, because it
         carries the topology digest that makes the indices checkable.
         """
         if selection is None:
@@ -85,18 +81,11 @@ class REST2Scaler:
 
     # -- the two ways to reach a scaled Hamiltonian ---------------------------------------------
 
-    def scaled_system(self, tau: float, *, prepare_for_switching: bool = False):
+    def scaled_system(self, tau: float):
         """A new System at this tau. The base System is never mutated."""
         arguments = self.selection.as_scaler_arguments()
         return build_scaled_system(self.base_system, arguments["solute_indices"], float(tau),
-                                   excluded_bonds=arguments["excluded_bonds"],
-                                   prepare_for_switching=prepare_for_switching)
-
-    def switcher(self) -> TauSwitcher:
-        """A live tau switcher over an unmodified base System, for AIS."""
-        arguments = self.selection.as_scaler_arguments()
-        return TauSwitcher(self.base_system, arguments["solute_indices"],
-                           excluded_bonds=arguments["excluded_bonds"])
+                                   excluded_bonds=arguments["excluded_bonds"])
 
     def ladder(self, n_states: int, tau_max: float) -> list[float]:
         """The linear tau ladder. State 0 is always the unmodified physical Hamiltonian."""
